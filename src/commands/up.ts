@@ -74,7 +74,7 @@ import { launchLineFinding, launchedCliBinary } from '../launch/line.ts';
 import { launchRefusal, readEntityModelRule, type EntityModelRule } from '../launch/model-guard.ts';
 import { charterGate } from '../charter/check.ts';
 import { charterFolderPretrust, grantedFolderPretrust, lobbyPretrustLine, projectRootPretrust } from '../launch/pretrust.ts';
-import { formatPlan, launchWillRun, managedCodexLaunch, registryLaunches, upPlan, type Op, type UpSeat } from '../launch/plan.ts';
+import { codexCommandHasFlag, formatPlan, launchWillRun, managedCodexLaunch, registryLaunches, upPlan, type Op, type UpSeat } from '../launch/plan.ts';
 import { runPause, type PauseHost, type PauseInput } from '../launch/pause.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { unreadIdle } from '../launch/unread.ts';
@@ -924,12 +924,11 @@ function seatPlan(
         };
       }
       if (drift.kind === 'hold') return { ...planned, stage: 'ready', driftHold: drift.detail };
-      // The recorded managed endpoint died with the host (or with the process): the pane's CLI
-      // is not the seat's running form any more. It is exited in place and the seat is launched
-      // again there through its own line — the launch starts a fresh endpoint and attaches to
-      // it — carrying the conversation this proof names where the line can. A live endpoint,
-      // an absent or invalid record, or a reading this build cannot take leaves the pane
-      // adopted as it is: the repair is never made on a guess.
+      // The recorded managed endpoint died, or the seat is live with no usable record: the
+      // pane's CLI is not the seat's running form any more. It is exited in place and the seat
+      // is launched again there through its own line — the launch starts a fresh endpoint and
+      // attaches to it — carrying the conversation this proof names where the line can. A live
+      // endpoint, or a reading this build cannot take, leaves the pane adopted as it is.
       if (endpointRelaunch(seat, recorded, planned.launch)) {
         const held = replacedScreenRefusal(seat, recorded.pane, screenOf, onRecordedPane?.status);
         if (held) {
@@ -1024,9 +1023,10 @@ function seatPlan(
         resume: continuitySession,
       };
     } else if ((proof.kind === 'session' || proof.kind === 'cli') && endpointRelaunch(seat, recorded, planned.launch)) {
-      // A Codex seat whose recorded managed endpoint died with the host is not adopted on the
-      // endpoint it lost: the CLI is exited in place and the seat's own launch line runs there,
-      // starting a fresh endpoint and attaching to it. The weak (`cli`) proof is enough — the
+      // A Codex seat whose recorded managed endpoint died, or that is live with no usable
+      // record, is not adopted on the endpoint it lost: the CLI is exited in place and the
+      // seat's own launch line runs there, starting a fresh endpoint and attaching to it. The
+      // weak (`cli`) proof is enough — the
       // exit is for the endpoint, not for a conversation — and the strong one carries its
       // conversation. The pane guards are item 7's own: a working or unsent pane is held before
       // any key is typed, and a line that cannot carry a proven conversation stops here.
@@ -2361,19 +2361,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   });
   const seats: UpSeat[] = [];
   const refused = new Set<string>();
-  // Whether a restored seat's managed Codex endpoint is provably gone. The record must be one a
-  // launch wrote for the seat's current binding, its socket must be missing, its pid dead or
-  // handed to another process since (the same chain `team check` reports), and the seat's own
-  // launch line must be one that would start a managed endpoint now. Only a proven loss
-  // relaunches the seat; an absent record, a policy that plans no endpoint, or a reading this
-  // build cannot take keeps the pane adopted.
+  // Whether a restored seat must be launched again for its managed endpoint. The seat's own
+  // launch line must be one that would start a managed endpoint now. A usable record that is
+  // provably dead is relaunched, and so is a ready seat whose record is absent or unusable,
+  // including a recorded line that carries the --no-daemon a failed start appended. A policy
+  // that plans no endpoint, or a live record this build cannot prove dead, keeps the pane.
   const endpointRelaunch = (seat: Seat, held: SeatState, launch: string): boolean => {
     const liveness = sources.codexEndpoint;
     if (liveness === undefined || sources.launch?.codexEndpoint === undefined) return false;
     const profile = profileFor(seat.cli);
     if (profile === null) return false;
-    const record = readRecordedCodexEndpoint(held.codex_endpoint, held.presence_binding);
-    if (record === null) return false;
     const daemon = codexDaemonForSeat({ home: sources.home, root, team, seat: seat.name, session });
     if (!managedCodexLaunch({
       cli: profile.cli,
@@ -2383,6 +2380,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       launch,
       command: launch,
     })) return false;
+    const record = readRecordedCodexEndpoint(held.codex_endpoint, held.presence_binding);
+    if (record === null) return true;
+    if (held.launch_line !== undefined && codexCommandHasFlag(held.launch_line, '--no-daemon')) return true;
     const read = recordedEndpointState({
       dir,
       session,

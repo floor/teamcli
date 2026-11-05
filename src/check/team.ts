@@ -15,7 +15,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, isAbsolute, relative, resolve } from 'node:path';
 import { notInForce, sessionDefaultMoveNotes } from '../approve/approval.ts';
-import { readRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
+import { inspectRecordedCodexEndpoint, readRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
 import {
   isSocketFile,
   ownedSocketPath,
@@ -23,7 +23,7 @@ import {
   recordStartMatches,
   unmanagedEndpointNotes,
 } from '../launch/codex-endpoint.ts';
-import { codexCommandHasFlag, codexCommandRemoteUrl, codexEndpointConfig } from '../launch/plan.ts';
+import { codexCommandHasFlag, codexCommandRemoteUrl, codexEndpointConfig, managedCodexLaunch } from '../launch/plan.ts';
 import { unfinishedWebhookNotes, webhookDeliveryNotes } from '../bus/webhook-notes.ts';
 import { rulesOriginOf } from '../launch/rules.ts';
 import { declaredUnreadAfter, UNREAD_AFTER_WAKEABLE_SECONDS, unreadWindowSeconds, watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
@@ -89,6 +89,7 @@ import {
   readTeamPolicySource,
   type PolicyLoadRefusal,
 } from '../policy/index.ts';
+import { codexDaemonForSeat } from '../policy/codex-daemon.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { findAgent, updateAgent, type Agent } from '../registry/agents.ts';
 import { continuityIdsOf, continuitySessionOf } from '../registry/resume.ts';
@@ -603,6 +604,10 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // A Codex seat whose last launch fell back to an unmanaged line, in the same words `team
     // status` prints: the fallback is a reading worth acting on, never a silent state.
     ...unmanagedEndpointNotes(team.seats, state),
+    // Every ready Codex seat whose policy would manage an endpoint and whose record is absent,
+    // unusable, or a recorded line carrying --no-daemon. One line, naming each seat and the
+    // restore. A policy that is off, or a file that already names its own remote, stays off it.
+    ...missingEndpointRecordNotes(team, state, dir, root, sources.home, session),
     // A seat whose last webhook delivery did not arrive, in the same words `team status` prints:
     // the send could not have known, so the outcome is read here.
     ...webhookDeliveryNotes(team.seats, state),
@@ -1499,6 +1504,50 @@ function endpointContainsConfig(recorded: readonly string[], needed: readonly st
     if (!found) return false;
   }
   return true;
+}
+
+/** One note naming every ready Codex seat whose policy would manage an endpoint and whose
+ *  record is absent, unusable, or a recorded launch line carrying `--no-daemon`. The restore
+ *  is `team up` in that seat's project. A file that already names `--remote` or `--no-daemon`,
+ *  or a policy that is off, is unmanaged and is not listed. */
+function missingEndpointRecordNotes(
+  team: TeamFile,
+  state: SessionState,
+  dir: string,
+  root: string,
+  home: string | undefined,
+  session: string,
+): string[] {
+  if (home === undefined) return [];
+  const gaps: string[] = [];
+  for (const seat of team.seats) {
+    if (seat.cli !== 'codex' || seat.stopped || seat.human === true) continue;
+    const held = state.seats[seat.name];
+    if (held?.stage !== 'ready') continue;
+    const profile = profileFor(seat.cli);
+    if (profile === null) continue;
+    const launch = seat.launch ?? '';
+    const daemon = codexDaemonForSeat({ home, root, team, seat: seat.name, session });
+    if (!managedCodexLaunch({
+      cli: profile.cli,
+      binary: profile.binary,
+      codexDaemon: daemon,
+      stateDir: dir,
+      launch,
+      command: launch,
+    })) continue;
+    const recordedLine = held.launch_line;
+    const noDaemon = recordedLine !== undefined && codexCommandHasFlag(recordedLine, '--no-daemon');
+    const record = inspectRecordedCodexEndpoint(held.codex_endpoint, held.presence_binding);
+    if (record.kind === 'ok' && !noDaemon) continue;
+    const why = noDaemon
+      ? 'launch line carries --no-daemon'
+      : record.kind === 'invalid' ? 'unusable' : 'absent';
+    gaps.push(`${seat.name} (${why})`);
+  }
+  if (gaps.length === 0) return [];
+  gaps.sort();
+  return [`no usable Codex endpoint record: ${gaps.join(', ')}; team up restores the endpoint`];
 }
 
 function unmanagedCodexServerDifferences(

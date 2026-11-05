@@ -74,7 +74,7 @@ async function plannedLaunch(launch: string, options: {
   daemon?: 'on' | 'off';
   managed?: Host['managedCodexEndpoint'];
   dir: string;
-}): Promise<string> {
+}): Promise<string | null> {
   const seat: UpSeat = {
     name: SEAT, cli: 'codex', launch, cwd: base, label: SEAT,
     repairLine: 'team restart worker', stopped: false, rules: 'Synthetic rules.',
@@ -93,6 +93,7 @@ async function plannedLaunch(launch: string, options: {
   };
   const lines: string[] = [];
   await executePlan([create, launchStep!], SESSION, fakeHost(lines, options.managed));
+  if (lines.length === 0) return null;
   expect(lines).toHaveLength(1);
   return lines[0]!;
 }
@@ -126,6 +127,8 @@ describe('independent managed endpoint launch contract', () => {
     expect(spawned).toHaveLength(1);
     expect(spawned[0]!.config).toEqual(expect.arrayContaining(CONFIG));
     expect(readState(dir).sessions[SESSION]!.seats[SEAT]!.codex_endpoint?.config).toEqual(spawned[0]!.config);
+    expect(line).not.toBeNull();
+    if (line === null) return;
     expect(line.endsWith(`--remote ${spawned[0]!.url}${quote}`)).toBe(true);
     expect(codexCommandRemoteUrl(line)).toBe(spawned[0]!.url);
   });
@@ -179,17 +182,22 @@ describe('independent managed endpoint launch contract', () => {
         dir, resume, daemon: kind === 'disabled' ? 'off' : 'on',
         ...(kind === 'no host' ? {} : { managed }),
       });
-      if (resume) {
-        expect(line).toContain('resume');
-        expect(line).toContain(THREAD);
+      if (kind === 'managed' || kind === 'disabled') {
+        expect(line).not.toBeNull();
+        if (resume) {
+          expect(line).toContain('resume');
+          expect(line).toContain(THREAD);
+        }
       }
       if (kind === 'managed') {
-        expect(codexCommandRemoteUrl(line)).toBe(own);
+        expect(codexCommandRemoteUrl(line ?? '')).toBe(own);
         expect(line).not.toContain('--no-daemon');
-      } else {
-        expect(codexCommandRemoteUrl(line)).toBeNull();
+      } else if (kind === 'disabled') {
+        expect(codexCommandRemoteUrl(line ?? '')).toBeNull();
         expect(line).toContain('--no-daemon');
-        expect(codexCommandHasFlag(line, '--no-daemon')).toBe(true);
+        expect(codexCommandHasFlag(line ?? '', '--no-daemon')).toBe(true);
+      } else {
+        expect(line).toBeNull();
       }
     });
   }

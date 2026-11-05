@@ -101,16 +101,16 @@ describe('the launch and the managed Codex endpoint', () => {
     expect(said.join('')).not.toContain('managed Codex endpoint');
   });
 
-  test('a host that starts no endpoint launches the plain line and says so once', async () => {
+  test('a host that starts no endpoint leaves the seat out and says so once', async () => {
     const calls: string[] = [];
     const said: string[] = [];
     const host = hostOf({ calls, said, logged: [] });
     await executePlan(launchStep({ dir: STATE_DIR }), 'acme', host);
-    expect(calls).toEqual(['paneRun:codex --no-daemon']);
-    expect(said.join('')).toContain('coder: the managed Codex endpoint was not started: this launch starts no managed Codex endpoint');
+    expect(calls).toEqual([]);
+    expect(said.join('')).toContain('coder: left out: the managed Codex endpoint was not started: this launch starts no managed Codex endpoint');
   });
 
-  test('a refusal is one line under the seat, and the seat still launches on its own line', async () => {
+  test('a refusal is one line under the seat, and the seat is left out', async () => {
     const calls: string[] = [];
     const said: string[] = [];
     const host = hostOf({
@@ -118,8 +118,8 @@ describe('the launch and the managed Codex endpoint', () => {
       managed: () => ({ kind: 'unmanaged', why: 'the seat records no valid presence binding' }),
     });
     await executePlan(launchStep({ dir: STATE_DIR }), 'acme', host);
-    expect(calls).toEqual(['managed', 'paneRun:codex --no-daemon']);
-    expect(said.join('')).toContain('coder: the managed Codex endpoint was not started: the seat records no valid presence binding');
+    expect(calls).toEqual(['managed']);
+    expect(said.join('')).toContain('coder: left out: the managed Codex endpoint was not started: the seat records no valid presence binding');
   });
 
   test('notes from the start are said under the seat', async () => {
