@@ -372,7 +372,17 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
         jsonEnvelope('team.status.project', {
           format: 1 as const,
           project: { id: 'beacon', name: 'beacon', entity: 'floor', lead: null },
-          teams: [{ name: 'beacon', session: 'beacon', lifecycle: 'running', seats: 2 }],
+          teams: [{
+            name: 'beacon',
+            membership: 'home',
+            session: 'beacon',
+            lifecycle: 'running',
+            seats: 2,
+            running: true,
+            active: { ready: 1, working: 1, waiting: 0, stopped: 0 },
+            roster: [{ team: 'beacon', name: 'lead', state: 'working', model: 'Claude Opus 5.5' }],
+          }],
+          active_agents: 2,
         }),
       ],
       'team.seats': [

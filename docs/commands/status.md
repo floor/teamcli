@@ -118,7 +118,7 @@ repair.
 
 ## Synopsis
 
-    team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]
+    team status [--session <name>] [--file <path>] [--project <name> [--watch]] [--all] [--json]
     team status --client <grant-file> --key <client-key> [--team <team>] [--json]
 
 ## Flags
@@ -127,7 +127,8 @@ repair.
 | --- | --- | --- |
 | `--session` | `<name>` | the herdr session to read, instead of `team.session`; the owner's |
 | `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's |
-| `--project` | `<name>` | cover the project the name holds — its teams, read from the registry — instead of one team's reading; anyone may aim it, from any folder |
+| `--project` | `<name>` | cover the project the name holds — its teams, read from the registry — instead of one team's reading, with each team's seats read live and a total of active agents; anyone may aim it, from any folder |
+| `--watch` | — | with `--project`, redraw the reading every two seconds until the wait stops (plain passes when stdout is not a terminal); refused without `--project`, and refused with `--json` |
 | `--all` | — | render the expanded seat registry columns (`SEAT`, `NICKNAME`, `ID`, `ROLE`, `CLI`, `MODEL`, `EFFORT`, `STATUS`, `STATE`, `SOURCE`, `LAST ACTIVE`, `PANE`); those expanded columns print in the table under `--all` alone, while every `--json` row carries the seat's own reading as `seat_state` and `seat_state_source` either way |
 | `--client` | `<grant-file>` | the client form: an owner-signed bundle grant that carries `status`, see [A client's status](#a-clients-status) |
 | `--key` | `<client-key>` | the client's private key file; required with `--client`, refused without it |
@@ -153,6 +154,37 @@ the one the owner signed: a file edit does not end a grant's status. Each run wr
 client is. A refusal is `status.client-refused` (exit 1). The exit is otherwise the status's own:
 0 when the session agrees with the file, 1 when it differs.
 
+## A project's status
+
+`team status --project <name>` reads the project level with the project's teams. Each team is
+marked `home` when the team record's `project_id` names this project, and `serves` when its home
+is another project — one team may serve several projects — and each running session's seats are
+read through the live reader [`team list --seats`](list.md) uses:
+
+- one line per team: its session, lifecycle and seat count, `home` or `serves`, and `running` or
+  `stopped` — a session herdr does not list as running, or lists no session for because herdr is
+  down, reads `stopped`, never an error; a team no record holds reads `not registered`;
+- one `TEAM SEAT STATE MODEL` table row per seat, in team order: the seat's team, its name, the
+  live reader's state (`ready`, `working`, `waiting`, `idle`, `done`, `stopped`) and its model
+  (`-` when no source names one, which is the case for a stopped session's seats, since the
+  registry records no model);
+- the project's total: `n active agents` counting every seat that is ready, working or waiting,
+  or `? active agents` when a running session's roster could not be read, and when herdr could not
+  be asked at all — the total never claims a count it does not have. A stopped session contributes
+  none. When herdr did not answer, one line above the total says
+  `herdr is not running: the live seat reading is unavailable`; a session herdr lists as down is a
+  complete reading and still contributes none.
+
+`--json` carries the same reading: the project record, each team's `membership`, `session`,
+`lifecycle`, `seats`, `running`, `active` (`ready`, `working`, `waiting`, `stopped`; null for a
+team no record holds) and `roster` (`team`, `name`, `state`, `model`), and the document's
+`active_agents` (a number or null).
+
+`--watch` redraws it every two seconds until the wait stops: on a terminal it clears the screen
+and leads with `Every 2s: team status --project <name>  <instant>`; when stdout is not a
+terminal it prints each pass plainly. `--watch` needs `--project`, and cannot be used with
+`--json` — both are invocation refusals, exit 2.
+
 ## Who may run it
 
 | Caller | May |
@@ -167,10 +199,13 @@ client is. A refusal is `status.client-refused` (exit 1). The exit is otherwise 
 this, from a terminal outside herdr` for a run with no terminal — and exit 1. And herdr has to
 answer once the caller has passed the gate: without it, `status` can't say anything and exits 2.
 
-`--project` is the exception to that gate: it reads the project level, out of the registry — no
-team file, no herdr, no caller check — the way [team projects](projects.md) reads. `--session`
-and `--file` name one team's readings and do not apply beside it: aiming them together is the
-invocation refusal, exit 2.
+`--project` is the exception to that gate: it reads the project level out of the registry — no
+team file, no caller check — the way [team projects](projects.md) reads it, and each team's seats
+through the same live reader [`team list --seats`](list.md) uses, never a second reader. A team
+whose session is down — not listed as running, or not listed at all because herdr is down —
+reads `stopped`, not an error; when herdr cannot be asked at all, the active count reads `?`
+rather than `0`. `--session` and `--file` name one team's readings and do not apply
+beside it: aiming them together is the invocation refusal, exit 2.
 
 ## Output and exit codes
 
@@ -192,7 +227,8 @@ queues are not configured.
 | at least one difference | the same, then one `difference:` line with its `  repair:` and `  who:` lines under it per difference, and the count: `1 difference`, or `2 differences, 1 for the owner` when a repair is the owner's | 1 |
 | a flag the caller may not aim | the refusal every command gives it | 1 |
 | `--project` with a name no project holds | `team status: no project named "<name>"; nothing to show` | 1 |
-| `--project` covering a project | the project's name, id, entity and lead, then one line per team: its session, lifecycle and seat count, or `not registered` for a team no record holds | 0 |
+| `--project` covering a project | the project's name, id, entity and lead, then one line per team: its session, lifecycle, seat count, `home` or `serves`, and `running` or `stopped` (or `not registered` for a team no record holds), then one `TEAM SEAT STATE MODEL` row per seat, then `n active agents` (`? active agents` when a running session's roster could not be read, or when herdr could not be asked, with the line `herdr is not running: the live seat reading is unavailable`) | 0 |
+| `--watch` without `--project`, or beside `--json` | the invocation refusal: `team status: --watch needs --project <name>`, or `team status: --watch and --json can't be used together` | 2 |
 | the invocation or the team file can't be read, herdr doesn't answer, or the caller may not read this team | `team status: <problem>`, `team status: herdr doesn't answer; is it installed and running?`, or the one fixed sentence | 2 |
 
 `--json` prints the reading as one document and nothing else, with the same exit code; a caller
@@ -361,9 +397,11 @@ Each difference names both the repair command (`repair:`) and the role that runs
 The `what 0.5.0 must not pretend:` block and its first line live on
 `team --about` and [`team doctor`](doctor.md), not on every status read.
 
-`--project` covers the teams the registry lists under a project, wherever they run. A team no
-record holds reads as `not registered`; `--json` prints the project record and each team's
-reading as one document instead:
+`--project` covers the teams the registry lists under a project, wherever they run: the team
+record's `project_id` names its home, so a team whose home is another project is marked `serves`.
+A team no record holds reads as `not registered`. Its seats are read through the live reader
+`team list --seats` uses; herdr is down in this example, so every seat reads `stopped`. `--json`
+prints the project record and each team's reading as one document instead:
 
 ```yaml file=../../.config/team/projects.yaml
 projects:
@@ -373,13 +411,51 @@ projects:
     lead: null
     teams: ["7a8b9c0d1e2f", "3d4e5f607182"]
     provenance: { registered_by: team, registered_at: "2026-10-05T04:00:00.000Z", updated_at: "2026-10-05T04:00:00.000Z" }
+  beacon-io:
+    name: Beacon IO
+    entity: acme
+    lead: null
+    teams: ["3d4e5f607182"]
+    provenance: { registered_by: team, registered_at: "2026-10-05T04:00:00.000Z", updated_at: "2026-10-05T04:00:00.000Z" }
+```
+
+```yaml file=../../.config/team/teams.yaml
+teams:
+  7a8b9c0d1e2f:
+    project: beacon
+    project_id: beacon
+    entity: acme
+    session: beacon
+    root: /work/beacon
+    lobby: /home/lobby
+    roster:
+      - { agent: agt_0123456789ab, seat: claude-keeper, role: coordinator }
+      - { agent: agt_ba9876543210, seat: claude-beacon, role: implementer }
+    lifecycle: defined
+    provenance: { registered_by: owner, registered_at: "2026-10-05T04:00:00.000Z", updated_at: "2026-10-05T04:00:00.000Z" }
+  3d4e5f607182:
+    project: beacon-io
+    project_id: beacon-io
+    entity: acme
+    session: beacon-io
+    root: /work/beacon-io
+    lobby: /home/lobby
+    roster:
+      - { agent: agt_cd9876543210, seat: web, role: implementer }
+    lifecycle: defined
+    provenance: { registered_by: owner, registered_at: "2026-10-05T04:00:00.000Z", updated_at: "2026-10-05T04:00:00.000Z" }
 ```
 
 ```console
 $ team status --project Beacon ; echo "exit $?"
 project Beacon  beacon  entity acme  lead -
-  7a8b9c0d1e2f  not registered
-  3d4e5f607182  not registered
+  7a8b9c0d1e2f  session "beacon"  defined  2 seats  home  stopped
+  3d4e5f607182  session "beacon-io"  defined  1 seat  serves  stopped
+  TEAM          SEAT           STATE    MODEL
+  7a8b9c0d1e2f  claude-keeper  stopped  -
+  7a8b9c0d1e2f  claude-beacon  stopped  -
+  3d4e5f607182  web            stopped  -
+0 active agents
 exit 0
 $ team status --project nope ; echo "exit $?"
 team status: no project named "nope"; nothing to show

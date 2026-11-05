@@ -416,7 +416,7 @@ export const STATUS_OUTPUT_SCHEMA: CommandSchemaSpec = {
     {
       type: 'object',
       additionalProperties: false,
-      required: ['schema', 'format', 'project', 'teams'],
+      required: ['schema', 'format', 'project', 'teams', 'active_agents'],
       properties: {
         schema: schemaTagFragment('team.status.project', 1),
         format: { type: 'integer', const: 1 },
@@ -426,15 +426,54 @@ export const STATUS_OUTPUT_SCHEMA: CommandSchemaSpec = {
           items: {
             type: 'object',
             additionalProperties: false,
-            required: ['name', 'session', 'lifecycle', 'seats'],
+            required: ['name', 'membership', 'session', 'lifecycle', 'seats', 'running', 'active', 'roster'],
             properties: {
               name: { type: 'string' },
+              // Where the team stands in the project: its home (the one its chain inherits
+              // from), or a project it serves (item 0's many-to-many membership).
+              membership: { type: 'string', enum: ['home', 'serves'] },
               session: { type: ['string', 'null'] },
               lifecycle: { type: ['string', 'null'] },
               seats: { type: ['integer', 'null'] },
+              // Whether the team's session runs now, from the same machine-wide read
+              // `team list --seats` takes; a session herdr does not list reads stopped.
+              running: { type: 'boolean' },
+              // The live seats by the four words the reader and `team list --seats` share.
+              // Null when a running session's roster could not be read, and for a team no
+              // record holds.
+              active: {
+                type: ['object', 'null'],
+                additionalProperties: false,
+                required: ['ready', 'working', 'waiting', 'stopped'],
+                properties: {
+                  ready: { type: 'integer' },
+                  working: { type: 'integer' },
+                  waiting: { type: 'integer' },
+                  stopped: { type: 'integer' },
+                },
+              },
+              // One entry per seat the reading names: the live roster for a running session,
+              // the registry's roster read as stopped for a down one.
+              roster: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['team', 'name', 'state', 'model'],
+                  properties: {
+                    team: { type: 'string' },
+                    name: { type: ['string', 'null'] },
+                    state: { type: ['string', 'null'] },
+                    model: { type: ['string', 'null'] },
+                  },
+                },
+              },
             },
           },
         },
+        // The project's active agents: ready, working and waiting across its teams. Null when
+        // a registered team's live roster could not be read, never a partial count.
+        active_agents: { type: ['integer', 'null'] },
       },
     },
   ],

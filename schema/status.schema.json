@@ -432,7 +432,8 @@
         "schema",
         "format",
         "project",
-        "teams"
+        "teams",
+        "active_agents"
       ],
       "properties": {
         "schema": {
@@ -467,13 +468,24 @@
             "additionalProperties": false,
             "required": [
               "name",
+              "membership",
               "session",
               "lifecycle",
-              "seats"
+              "seats",
+              "running",
+              "active",
+              "roster"
             ],
             "properties": {
               "name": {
                 "type": "string"
+              },
+              "membership": {
+                "type": "string",
+                "enum": [
+                  "home",
+                  "serves"
+                ]
               },
               "session": {
                 "type": [
@@ -492,9 +504,81 @@
                   "integer",
                   "null"
                 ]
+              },
+              "running": {
+                "type": "boolean"
+              },
+              "active": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "required": [
+                  "ready",
+                  "working",
+                  "waiting",
+                  "stopped"
+                ],
+                "properties": {
+                  "ready": {
+                    "type": "integer"
+                  },
+                  "working": {
+                    "type": "integer"
+                  },
+                  "waiting": {
+                    "type": "integer"
+                  },
+                  "stopped": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "roster": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "team",
+                    "name",
+                    "state",
+                    "model"
+                  ],
+                  "properties": {
+                    "team": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "state": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "model": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
               }
             }
           }
+        },
+        "active_agents": {
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       }
     }
