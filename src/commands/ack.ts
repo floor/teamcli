@@ -203,6 +203,7 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
   if (lookup.kind === 'refused') return refused(io, json, lookup.why);
   const found = lookup.found;
   const acknowledged = found.record.payload;
+  const resolvedId = acknowledged.id;
 
   // A record a client wrote carries the grant that opened its thread. A plain grant's read
   // belongs to the client inbox, as it always has. A bundle grant whose signed op list carries
@@ -216,7 +217,7 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
       return refused(io, json, `the record's originating grant ${acknowledged.from_client.grant_id} does not verify in the canonical store: ${origin.why}; nothing was written`);
     }
     if (origin.kind === 'grant') {
-      return refused(io, json, `record ${id} was written by a client; its read belongs to the client inbox, not to this command`);
+      return refused(io, json, `record ${resolvedId} was written by a client; its read belongs to the client inbox, not to this command`);
     }
     const grant = origin.grant;
     if (grant.clientId !== acknowledged.from_client.client_id) {
@@ -228,10 +229,10 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
       return refused(io, json, `the record's bundle grant ${grant.grantId} carries ${grant.ops.join(', ') || 'no op'}, not ack; only a bundle that carries ack admits this acknowledgement; nothing was written`);
     }
     if (acknowledged.thread !== acknowledged.id) {
-      return refused(io, json, `record ${id} answers another record; a client thread is the client's own opening record, and only it is acknowledged; nothing was written`);
+      return refused(io, json, `record ${resolvedId} answers another record; a client thread is the client's own opening record, and only it is acknowledged; nothing was written`);
     }
     if (acknowledged.to_id === null) {
-      return refused(io, json, `record ${id} carries no to_id; the seat the bundle grant reaches cannot be matched to it; nothing was written`);
+      return refused(io, json, `record ${resolvedId} carries no to_id; the seat the bundle grant reaches cannot be matched to it; nothing was written`);
     }
     const resolved = resolveBundleSendTarget(host.home, grant, acknowledged.to);
     if (!resolved.ok) return refused(io, json, `the bundle grant's recipient cannot be resolved: ${resolved.why}; nothing was written`);
@@ -240,7 +241,7 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
       return refused(io, json, `the bundle grant's recipient lives in another checkout or session than this record; nothing was written`);
     }
     if (acknowledged.to !== target.recipientSeat || acknowledged.to_id !== target.recipientId) {
-      return refused(io, json, `record ${id} is addressed to "${acknowledged.to}" (${acknowledged.to_id}), not to the recipient the bundle grant reaches, "${target.recipientSeat}" (${target.recipientId}); nothing was written`);
+      return refused(io, json, `record ${resolvedId} is addressed to "${acknowledged.to}" (${acknowledged.to_id}), not to the recipient the bundle grant reaches, "${target.recipientSeat}" (${target.recipientId}); nothing was written`);
     }
     if (me !== target.recipientSeat) {
       return refused(io, json, `seat ${me} is not the recipient of the client thread; only ${target.recipientSeat} acknowledges it; nothing was written`);
@@ -251,19 +252,19 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
   // receipt against that binding: a plain receipt here would hold the receipt name the seat's own
   // turn-start reader needs, so the brief would never be served. Read it there, not here.
   if (isGeneralBriefRecord(acknowledged)) {
-    return refused(io, json, `record ${id} is the general seat brief; it is read by the seat's own turn-start reader, not acknowledged`);
+    return refused(io, json, `record ${resolvedId} is the general seat brief; it is read by the seat's own turn-start reader, not acknowledged`);
   }
   if (acknowledged.session !== session) {
-    return refused(io, json, `record ${id} is bound to session "${acknowledged.session}", not to "${session}"`);
+    return refused(io, json, `record ${resolvedId} is bound to session "${acknowledged.session}", not to "${session}"`);
   }
   if (!samePath(acknowledged.root, root)) {
-    return refused(io, json, `record ${id} is bound to another checkout`);
+    return refused(io, json, `record ${resolvedId} is bound to another checkout`);
   }
 
   const at = host.now().toISOString();
   const publish = () => publishRecordRead({
     dropDir: recordDir(root, session, found.seat),
-    id,
+    id: resolvedId,
     to: found.seat,
     root,
     session,
@@ -303,35 +304,35 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
     outcome = settled.outcome;
   }
   if (outcome.kind === 'held') {
-    const where = receiptPath(session, found.seat, id, outcome.status);
+    const where = receiptPath(session, found.seat, resolvedId, outcome.status);
     const what = outcome.entry === 'file'
       ? `the ${outcome.status} receipt name is held by a file that does not verify for this message`
       : `the ${outcome.status} receipt path is held by something that is not a file`;
     return refused(
       io,
       json,
-      `${id}: not marked read: ${what}`,
+      `${resolvedId}: not marked read: ${what}`,
       `inspect ${where}: it is left as it is, because it may record a read that already happened`,
     );
   }
   if (outcome.kind === 'unwritten') {
     if (outcome.reason === 'changed') {
-      return refused(io, json, `${id}: not marked read: the read receipt name changed while it was being published; run team ack again`);
+      return refused(io, json, `${resolvedId}: not marked read: the read receipt name changed while it was being published; run team ack again`);
     }
     if (outcome.reason === 'write') {
-      return refused(io, json, `${id}: not marked read: the read receipt could not be written; run team ack again once the receipt folder can be written`);
+      return refused(io, json, `${resolvedId}: not marked read: the read receipt could not be written; run team ack again once the receipt folder can be written`);
     }
-    return refused(io, json, `${id}: not marked read: the read receipt could not be made durable; leave it in place, it already records this read`);
+    return refused(io, json, `${resolvedId}: not marked read: the read receipt could not be made durable; leave it in place, it already records this read`);
   }
 
-  const summary = `${id}: read`;
+  const summary = `${resolvedId}: read`;
   return written(io, json, {
     format: 1,
     status: 'read',
     action_summary: summary,
     project: team.project,
     session,
-    record: id,
+    record: resolvedId,
     to: found.seat,
     thread: acknowledged.thread,
     written: outcome.kind === 'published',

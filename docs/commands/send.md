@@ -573,10 +573,10 @@ declaration is re-confirmed. No leg writes a second record: each write accepts t
 same id, and a frame the socket takes writes no receipt — only the seat writes a read receipt, so
 the record stays unread until the seat's own read, and the watch re-wakes it like any other
 message. The frame
-opens with the sender attributed, `[attributed sender: <caller>]` on its own line — every sender
-a reader displays is an attribution, never a verification — then names its sender `Message from Grok Bot (owner)`, with the
-owner's reply target as its reply line, so the receiving seat reads a person's message and not a
-seat address. The walk's ending
+opens with the compact client header `Grok Bot, a client (owner relay):` — every sender
+a reader displays is an attribution, never a verification — followed by the body and the one-line
+reader footer `↩ team reply <prefix> "…" · team ack <prefix>`, so the receiving seat reads a
+person's client message and not a seat address. The walk's ending
 never changes the invocation: the drop is on disk, the confirmation already printed, and the
 client's two streams carry only their own lines. A leg's reason is recorded in the receiving
 team's log and history.
@@ -633,20 +633,23 @@ so it cannot deliver what a refusal refused.
 ## The sender header
 
 Every record's body opens with a header, and the record's payload carries the same facts apart:
-the sender's seat and its agent id, and the reach above or the grant that admitted the send. The
-header itself carries no id: it names the sender as the receiving team's
-[`sender_name`](../team-file.md#sender_name) word asks — the nickname inside its own team, and
-`seat@team` from another under the default — and the owner's reads `from the owner`. A sender the
-registry holds no record for is spelled as the file's seat instead — `from the file's seat <name>
-(no registry record yet) — admitted by: <rule>` — so a receiver reads why the id is absent. A handoff prints the body with
-that header, so the sender's own call carries it too. A socket frame opens with the sender's
-identity line and then the signed body with that header, and the body the message history keeps
-carries it too. The receiver reads who sent a message and why that sender
-was let through; the record carries the sender's ids from day one.
+the sender's seat and its agent id, and the reach above or the grant that admitted the send (`rule`,
+which also surfaces in [`team trace`](trace.md) on `message.staged`). The signed record keeps its
+`from <sender> — admitted by: <rule>` line unchanged, and a handoff or history line keeps those
+bytes too. When a reader renders the message (a socket frame, `team drops --read`, `inbox_read`, or
+`team messages` text), it folds the sender and admission rule into one compact header line:
+`from <name> (<short rule>):` for a Claude seat or the owner (`from the owner (owner):`),
+`<Display>, a client (owner relay):` for a client, and `Gemini seat <name> (<short rule>):`,
+`Codex seat <name> (<short rule>):`, or `Grok seat <name> (<short rule>):` when the sender is a
+non-Claude seat so the first words say what it is (the host agent wrapper labels every socket
+delivery as coming from another session of its own kind). A body without a standard header still
+opens with `[attributed sender: <caller>]`. A sender the
+registry holds no record for is spelled as the file's seat in the signed record — `from the file's seat <name>
+(no registry record yet) — admitted by: <rule>` — so a receiver inspecting the record reads why the id is absent.
 
 Two internal senders are named by reserved words instead of a seat: the watch's own direct-work
-sends read `from the watch — admitted by: the watch's direct-work authority`, and the machine
-daemon's reminder sends read `from the daemon — admitted by: the daemon's reminder authority`.
+sends read `from the watch — admitted by: the watch's direct-work authority` (`from the watch (direct-work):` when rendered), and the machine
+daemon's reminder sends read `from the daemon — admitted by: the daemon's reminder authority` (`from the daemon (reminder):` when rendered).
 Neither carries an agent id, and neither may address the owner. A reminder's sender is not a
 seat, so a recipient cannot reply to `daemon`.
 
@@ -690,17 +693,16 @@ naming the message its frame carried, because either act settles that exact reco
 `zeus-message-path`, D3).
 
 A socket frame is not a message-display line. The frame an agent seat receives opens with the
-attribution banner `[attributed sender: <caller>]` — every frame's sender is attributed, and the
-mark is always present so its absence never reads as verification — then a blank line, the sender's identity line,
-`Message from <name> (<seat>@<team>)` — the nickname the registry holds, the name the seat's
-written label carries before the middle dot, or its seat name, with no summary and no rule — then
-a blank line, the signed body with its own `from … — admitted by: …` header, and the reader line
-ADR `zeus-message-path`, D3 pins:
-`Answer with team reply <id> "…" (this marks it read), or team ack <id> if no answer is needed.`
-The id is the record's own and appears once; `team reply <id>` answers and marks it read,
-`team ack <id>` marks it read with no answer. The line is the same for every sender, the owner
-included, and carries no address — no entity or owner-reply target is resolved for it. An
-ordinary send never frames a human's seat: a
+single compact header line (`from <name> (<short rule>):`, `<Display>, a client (owner relay):`, or
+`<Kind> seat <name> (<short rule>):` for a Gemini, Codex or Grok seat, where `<name>` is the
+nickname the registry holds, the name the seat's written label carries before the middle dot, or its
+seat name), then a blank line, the message body, and the one-line reader footer ADR
+`zeus-message-path`, D3 pins:
+`↩ team reply <prefix> "…" · team ack <prefix>`
+`<prefix>` is the shortest unique prefix of the record's id in that mailbox (at least 8 characters);
+`team reply <prefix>` answers and marks it read, `team ack <prefix>` marks it read with no answer.
+The line is the same for every sender, the owner included, and carries no address — no entity or
+owner-reply target is resolved for it. An ordinary send never frames a human's seat: a
 `human: true` seat walks the drop leg alone, so no frame is dialed for it.
 
 A running watch builds the same header for the oldest waiting message; in this build the ring

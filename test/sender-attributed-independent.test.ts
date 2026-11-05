@@ -136,7 +136,7 @@ describe('1. team messages — FROM cell, served body mark, and JSON sender_attr
     expect(await runMessages([], ioText, { home: f.home, now: () => NOW })).toBe(0);
     expect(ioText.out).toContain('orchestrator (attributed)');
     expect(ioText.out).not.toContain('(unattributed)');
-    expect(ioText.out).toContain(`from orchestrator@acme (attributed) — admitted by: ${RULE}`);
+    expect(ioText.out).toContain('from orchestrator@acme (team lead):');
     expect(ioText.out).toContain(QUOTE);
     expect(readFileSync(path, 'utf8')).toBe(rawOnDisk);
 
@@ -452,7 +452,7 @@ describe('2. team drops — table, --follow, --read, and --json with all three s
     const ioRead = testIo(f.root, { kind: 'seat', name: 'worker', pane: PANE_WORKER, session: 'acme' });
     const readCode = await runDrops(['--read', '--seat', 'worker', '--session', 'acme'], ioRead, { home: f.home });
     expect(readCode).toBe(0);
-    expect(ioRead.out).toContain(`from orchestrator@acme (attributed) — admitted by: ${RULE}`);
+    expect(ioRead.out).toContain('from orchestrator@acme (team lead):');
     expect(ioRead.out).toContain(QUOTE);
     expect(ioRead.out).not.toContain('outsider');
     expect(ioRead.err).toContain('1 drop(s) are not signed records and are not served');
@@ -550,7 +550,7 @@ describe('3. inbox_check (listUnread) and inbox_read (readMessage)', () => {
     const readOk = readMessage({ dropDir: f.dropDir, root: f.root, seat: 'worker', session: 'acme' }, idSigned, f.home);
     expect(readOk.ok).toBe(true);
     if (readOk.ok) {
-      expect(readOk.body).toBe(`from the owner (attributed) — admitted by: the owner\n\n${QUOTE}\n`);
+      expect(readOk.body).toBe(`from the owner (owner):\n\n${QUOTE}\n`);
     }
     const readBad = readMessage({ dropDir: f.dropDir, root: f.root, seat: 'worker', session: 'acme' }, idTampered, f.home);
     expect(readBad.ok).toBe(false);
@@ -587,7 +587,7 @@ describe('4. socket frame opens with the attributed sender banner', () => {
     expect(await runSend(['lead', 'hello from owner'], owner(made.root), host)).toBe(0);
     expect(frames).toHaveLength(1);
     const frameOwner = JSON.parse(frames[0]!) as { message: { content: string } };
-    expect(frameOwner.message.content.startsWith('[attributed sender: owner]\n\n')).toBe(true);
+    expect(frameOwner.message.content.startsWith('from the owner (owner):\n\n')).toBe(true);
     expect(frameOwner.message.content).not.toContain('unverified sender');
     expect(frameOwner.message.content).toContain('hello from owner');
 
@@ -608,7 +608,7 @@ describe('4. socket frame opens with the attributed sender banner', () => {
     ).toBe(0);
     expect(frames).toHaveLength(2);
     const frameHelper = JSON.parse(frames[1]!) as { message: { content: string } };
-    expect(frameHelper.message.content.startsWith('[attributed sender: helper]\n\n')).toBe(true);
+    expect(frameHelper.message.content.startsWith('from helper (to orchestrator):\n\n')).toBe(true);
     expect(frameHelper.message.content).not.toContain('unverified sender');
     expect(frameHelper.message.content).toContain('hello from helper');
   });
@@ -762,7 +762,7 @@ describe('6. launch general seat brief attribution — launch-brief when matchin
       expect(served.body).toBe(
         generalBriefBody().replace(
           `from ${GENERAL_BRIEF_FROM} — admitted by: ${GENERAL_BRIEF_RULE}`,
-          `from ${GENERAL_BRIEF_FROM} (attributed) — admitted by: ${GENERAL_BRIEF_RULE}`,
+          `from ${GENERAL_BRIEF_FROM} (launch brief):`,
         ),
       );
     }

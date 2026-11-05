@@ -60,10 +60,10 @@ test('a socket-delivered message opens with the sender attributed', async () => 
   expect(code).toBe(0);
   expect(frames).toHaveLength(1);
   const frame = JSON.parse(frames[0] as string) as { message: { content: string } };
-  expect(frame.message.content.startsWith('[attributed sender: owner]\n')).toBe(true);
-  // The display header and the body follow the mark, in that order.
+  expect(frame.message.content.startsWith('from the owner (owner):\n')).toBe(true);
+  // The compact header and the body appear in that order.
   expect(frame.message.content).toContain('a note');
   expect(frame.message.content.indexOf('a note')).toBeGreaterThan(
-    frame.message.content.indexOf('[attributed sender: owner]'),
+    frame.message.content.indexOf('from the owner (owner):'),
   );
 });

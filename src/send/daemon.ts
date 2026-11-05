@@ -53,9 +53,9 @@ import { bindPane, deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE } from './deliv
 import { quotaOutDetail, quotaOutOf } from './quota-out.ts';
 import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
 import { openReplyListener, readReply } from './reply.ts';
-import { attributionBanner } from './sender-claim.ts';
+import { attributedBody } from './sender-claim.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from './uds.ts';
-import { frameFor, readerLine } from './frame.ts';
+import { existingRecordIdsIn, frameFor, readerLine } from './frame.ts';
 import {
   declaredInboundOf, heldSocketPath, inboundStaleReason, readHeldSocket, socketEligible, socketHeldReason,
   socketSkipReason,
@@ -1616,10 +1616,15 @@ async function executeSocketSend(
   // No caller attestation exists yet: the frame names the claim the daemon was asked to deliver
   // for and marks it attributed, so the receiving seat never reads the displayed name as proof.
   // The mark is its own line; the display header and the body follow in their usual order.
-  const content = header === ''
-    ? `${attributionBanner(from)}\n\n${body}`
-    : `${attributionBanner(from)}\n\n${header}\n\n${body}`;
-  const frame = frameFor(content, msgId, personPane ? null : readerLine(msgId));
+  const dropDir = join(dir, 'send-drops', team.session, seatName);
+  const displayName =
+    /^Message from ([^\n(]+?) \([^)\n]+\)$/.exec(header)?.[1] ?? (header === '' ? null : header);
+  const content = attributedBody(body, from, {
+    home: host.home,
+    root,
+    displayName: displayName === 'owner' ? 'the owner' : displayName,
+  });
+  const frame = frameFor(content, msgId, personPane ? null : readerLine(msgId, existingRecordIdsIn(dropDir)));
   if (frame.length > FRAME_LIMIT) {
     return {
       v: 1,

@@ -19,6 +19,7 @@ import { existsSync } from 'node:fs';
 import { listUnacked } from '../../src/commands/messages.ts';
 import { runDrops } from '../../src/commands/drops.ts';
 import { runSend } from '../../src/commands/send.ts';
+import { readerLine } from '../../src/send/frame.ts';
 import { readTriggerLine } from '../../src/send/native.ts';
 import { reportedPath, reportUnreadDrops, wakePath, wakeUnreadDrops } from '../../src/watch/unread.ts';
 import { testIo } from '../helpers.ts';
@@ -69,9 +70,9 @@ test('an accepted socket frame writes no receipt and leaves the record unread', 
   expect(code).toBe(0);
   expect(host.frames.length).toBe(1);
   const record = recordOf(drops);
-  // The frame's own last line names the record's id, once: the reader line ADR D3 pins.
+  // The frame's own last line names the record's shortest unique id prefix, once.
   const content = frameOf(host.frames).content;
-  const reader = `Answer with team reply ${record.id} "…" (this marks it read), or team ack ${record.id} if no answer is needed.`;
+  const reader = readerLine(record.id);
   expect(content.split('\n').at(-1)).toBe(reader);
   expect(content.split('\n').filter((line) => line === reader)).toHaveLength(1);
   // The frame was taken: that is the delivery, and it writes no receipt. Only the seat writes a
@@ -187,20 +188,16 @@ test('an accepted socket frame names a seat sender by nickname and seat address'
   const frame = frameOf(host.frames);
   const record = recordOf(drops);
   expect(frame.id).toBe(record.id);
-  // The frame opens with the unverified-claim banner; the display header follows it alone on its
-  // line: no colon, no summary, no rule.
+  // The frame opens with the compact header; the signed record keeps its own attribution line.
   const lines = frame.content.split('\n');
-  expect(lines[0]).toBe('[attributed sender: helper]');
+  expect(lines[0]).toBe('from Bea (to orchestrator):');
   expect(lines[1]).toBe('');
-  expect(lines[2]).toBe('Message from Bea (helper@acme)');
-  expect(lines[3]).toBe('');
-  // Display only: the signed record keeps its own attribution line, and the header is not in it.
   expect(record.body.startsWith('from Bea — admitted by: ')).toBe(true);
   expect(record.raw).not.toContain('Message from Bea');
-  // The unchanged body follows the header under one blank line.
-  expect(frame.content).toContain(`Message from Bea (helper@acme)\n\n${record.body}`);
-  // And the frame closes with the reader line naming the record's own id.
-  expect(frame.content.split('\n').at(-1)).toBe(`Answer with team reply ${record.id} "…" (this marks it read), or team ack ${record.id} if no answer is needed.`);
+  // The message body follows the compact header under one blank line.
+  expect(frame.content).toContain('from Bea (to orchestrator):\n\na note');
+  // And the frame closes with the reader line naming the record's own id prefix.
+  expect(frame.content.split('\n').at(-1)).toBe(readerLine(record.id));
 });
 
 test('an accepted socket frame falls back to the seat name when no nickname stands', async () => {
@@ -216,8 +213,8 @@ test('an accepted socket frame falls back to the seat name when no nickname stan
   expect(code).toBe(0);
   const frame = frameOf(host.frames);
   const record = recordOf(drops);
-  expect(frame.content.split('\n')[2]).toBe('Message from helper (helper@acme)');
-  expect(frame.content.split('\n').at(-1)).toBe(`Answer with team reply ${record.id} "…" (this marks it read), or team ack ${record.id} if no answer is needed.`);
+  expect(frame.content.split('\n')[0]).toBe('from helper (to orchestrator):');
+  expect(frame.content.split('\n').at(-1)).toBe(readerLine(record.id));
   expect(record.body.startsWith('from helper — admitted by: ')).toBe(true);
   expect(record.raw).not.toContain('Message from helper');
 });

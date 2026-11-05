@@ -14,14 +14,61 @@
 // every sender — the owner included — because both commands address the record by id, never by
 // the sender's name.
 
+import { readdirSync } from 'node:fs';
+import { recordNameOk } from './record.ts';
+
+export const MIN_ID_PREFIX_LEN = 8;
+
 /**
- * The line every socket frame ends with. It names the message id twice — once for the answer
- * that marks the message read, once for the acknowledgement that needs no answer — so a reader
- * who saw the frame can settle it with the record they were given. One line, exactly:
- * `Answer with team reply <id> "…" (this marks it read), or team ack <id> if no answer is needed.`
+ * The shortest prefix of `id` (at least `MIN_ID_PREFIX_LEN` characters when `id` is that long)
+ * that no other record id in `existingIds` shares.
  */
-export function readerLine(msgId: string): string {
-  return `Answer with team reply ${msgId} "…" (this marks it read), or team ack ${msgId} if no answer is needed.`;
+export function shortIdPrefix(id: string, existingIds: Iterable<string> = []): string {
+  const others: string[] = [];
+  for (const candidate of existingIds) {
+    if (candidate !== id) others.push(candidate);
+  }
+  let len = Math.min(id.length, MIN_ID_PREFIX_LEN);
+  while (len < id.length) {
+    const prefix = id.slice(0, len);
+    if (!others.some((other) => other.startsWith(prefix))) return prefix;
+    len += 1;
+  }
+  return id;
+}
+
+/**
+ * Every record filename currently in `dropDir`, excluding sidecar files (`.read.json`,
+ * `.replied.json`, `.closed.json`, `.pending`, `.woken`, `.reported`). Returns `[]` when the
+ * folder does not exist yet.
+ */
+export function existingRecordIdsIn(dropDir: string): string[] {
+  try {
+    return readdirSync(dropDir).filter(
+      (name) =>
+        recordNameOk(name) &&
+        !name.endsWith('.pending') &&
+        !name.endsWith('.taken') &&
+        !name.endsWith('.read') &&
+        !name.endsWith('.woken') &&
+        !name.endsWith('.reported') &&
+        !name.endsWith('.json') &&
+        !name.startsWith('work-'),
+    );
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The line every socket frame ends with. It names the shortest unique message id prefix twice —
+ * once for the answer that marks the message read, once for the acknowledgement that needs no
+ * answer — so a reader who saw the frame can settle it with the record they were given. One line:
+ * `↩ team reply <prefix> "…" · team ack <prefix>`
+ */
+export function readerLine(msgId: string, existingIds: Iterable<string> = []): string {
+  const prefix = shortIdPrefix(msgId, existingIds);
+  return `↩ team reply ${prefix} "…" · team ack ${prefix}`;
 }
 
 /** The one frame this channel carries: `type:"user"`, the whole body, the reader line as its own

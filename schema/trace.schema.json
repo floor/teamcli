@@ -91,6 +91,9 @@
           "thread": {
             "type": "string"
           },
+          "rule": {
+            "type": "string"
+          },
           "via": {
             "type": "string"
           },

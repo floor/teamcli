@@ -1092,9 +1092,9 @@ describe('the client send walk', () => {
     const frame = JSON.parse(host.frames[0] as string) as { type: string; message: { role: string; content: string }; msg_id: string };
     expect(frame.type).toBe('user');
     expect(frame.msg_id).toBe('drop-1');
-    // The client's claim is unattested, so the frame opens with it marked before the display name.
+    // The client's socket frame opens with the compact client header and closes with the one-line footer.
     expect(frame.message.content).toBe(
-      '[attributed sender: client:grok-bot]\n\nMessage from Grok Bot (owner)\n\nhello orchestrator\n\nAnswer with team reply drop-1 "…" (this marks it read), or team ack drop-1 if no answer is needed.',
+      'Grok Bot, a client (owner relay):\n\nhello orchestrator\n\n↩ team reply drop-1 "…" · team ack drop-1',
     );
     // One signed record and no receipt: only the seat writes a read receipt, so the taken frame
     // leaves the record unread and the watch re-wakes it like any other message.
@@ -1196,7 +1196,7 @@ describe('the client send walk', () => {
     if (messageKey.kind === 'key') expect(verifyRecord(parsed, messageKey.key)).toBe(true);
     // The frame names the sender as the person's client, never as a seat address.
     const frame = JSON.parse(host.frames[0] as string) as { message: { content: string } };
-    expect(frame.message.content).toContain('Message from Grok Bot (owner)');
+    expect(frame.message.content).toContain('Grok Bot, a client (owner relay):');
     expect(frame.message.content).not.toContain('client:grok-bot@');
   });
 });

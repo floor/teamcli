@@ -50,7 +50,7 @@ test('a blank written label falls back to the seat name', async () => {
   expect(await runSend(['lead', 'a note'], helperIo(one), host)).toBe(0);
   const frame = frameOf(host.frames);
   const record = recordOf(drops);
-  expect(frame.content.split('\n')[2]).toBe('Message from helper (helper@acme)');
+  expect(frame.content.split('\n')[0]).toBe('from helper (to orchestrator):');
   expect(record.body.startsWith('from helper — admitted by: ')).toBe(true);
 });
 
@@ -66,7 +66,7 @@ test('a padded written label is trimmed before it is read', async () => {
   expect(await runSend(['lead', 'a note'], helperIo(one), host)).toBe(0);
   const frame = frameOf(host.frames);
   const record = recordOf(drops);
-  expect(frame.content.split('\n')[2]).toBe('Message from Bea (helper@acme)');
+  expect(frame.content.split('\n')[0]).toBe('from Bea (to orchestrator):');
   // Display only: the body keeps the seat name when no nickname stands.
   expect(record.body.startsWith('from helper — admitted by: ')).toBe(true);
   expect(record.raw).not.toContain('Bea');
@@ -85,6 +85,6 @@ test('the CLI display, model and version are never the label name', async () => 
   expect(await runSend(['lead', 'a note'], helperIo(one), host)).toBe(0);
   const frame = frameOf(host.frames);
   const record = recordOf(drops);
-  expect(frame.content.split('\n')[2]).toBe('Message from helper (helper@acme)');
+  expect(frame.content.split('\n')[0]).toBe('from helper (to orchestrator):');
   expect(record.body.startsWith('from helper — admitted by: ')).toBe(true);
 });

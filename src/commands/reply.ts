@@ -37,7 +37,7 @@
 import { randomUUID, type KeyObject } from 'node:crypto';
 import { readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { ensureClientInbox, scanClientInbox, writeClientInboxFile } from '../client/inbox.ts';
@@ -265,7 +265,8 @@ export function recordHits(root: string, session: string, id: string): { seat: s
     const path = join(root, '.agents', 'send-drops', session, seat, id);
     if (isFile(path)) hits.push({ seat, path });
   }
-  return hits;
+  if (hits.length > 0 || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return hits;
+  return candidatesOf(root, session).filter((candidate) => basename(candidate.path).startsWith(id));
 }
 
 /**
@@ -278,30 +279,37 @@ export function recordHits(root: string, session: string, id: string): { seat: s
 export function findRecord(hits: { seat: string; path: string }[], root: string, session: string, id: string, me: string, key: KeyObject): Lookup {
   const verified: Found[] = [];
   for (const hit of hits) {
-    const read = readRecord(hit.path, id);
-    if (!read.ok) return { kind: 'refused', why: `record ${id} cannot be read: ${read.reason}` };
+    const hitId = basename(hit.path);
+    const read = readRecord(hit.path, hitId);
+    if (!read.ok) return { kind: 'refused', why: `record ${hitId} cannot be read: ${read.reason}` };
     if (read.record === null) continue;
     if (!verifyRecord(read.record, key)) {
       // A signature that holds over a record this version cannot read is refused on its own
       // ground: it authenticated, and the refusal is the schema, not the key.
       const auth = recordAuthOfSealed(sealedOfRecord(read.record), key);
       if (auth.kind === 'unsupported') {
-        return { kind: 'refused', why: `record ${id} is signed, and this version cannot read it: ${auth.reason}` };
+        return { kind: 'refused', why: `record ${hitId} is signed, and this version cannot read it: ${auth.reason}` };
       }
-      return { kind: 'refused', why: `record ${id} does not verify against this message key` };
+      return { kind: 'refused', why: `record ${hitId} does not verify against this message key` };
     }
     verified.push({ seat: hit.seat, path: hit.path, record: read.record });
   }
   if (verified.length === 0) return legacyHolds(root, id) ? { kind: 'legacy' } : { kind: 'none' };
   const mine = verified.filter((found) => found.record.payload.to === me);
   if (mine.length === 0) {
-    return { kind: 'refused', why: `record ${id} is addressed to ${verified[0]?.record.payload.to ?? 'nobody'}, not to ${me}` };
+    return { kind: 'refused', why: `record ${verified[0]?.record.payload.id ?? id} is addressed to ${verified[0]?.record.payload.to ?? 'nobody'}, not to ${me}` };
   }
   const seated = mine.filter((found) => samePath(recordDir(root, session, me), dirname(found.path)));
   if (seated.length === 0) {
-    return { kind: 'refused', why: `record ${id} is addressed to ${me}, and it waits in another seat's folder` };
+    return { kind: 'refused', why: `record ${mine[0]?.record.payload.id ?? id} is addressed to ${me}, and it waits in another seat's folder` };
   }
-  if (seated.length > 1) return { kind: 'refused', why: `two records hold the id ${id}` };
+  if (seated.length > 1) {
+    const ids = [...new Set(seated.map((found) => found.record.payload.id))].sort();
+    if (ids.length > 1) {
+      return { kind: 'refused', why: `record prefix "${id}" is ambiguous in ${me}'s mailbox (${ids.join(', ')}); pass a longer prefix` };
+    }
+    return { kind: 'refused', why: `two records hold the id ${id}` };
+  }
   const found = seated[0] as Found;
   return { kind: 'found', found };
 }

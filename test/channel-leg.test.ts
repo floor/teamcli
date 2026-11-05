@@ -524,8 +524,8 @@ describe('the channel redelivery', () => {
 
     expect(frames).toHaveLength(1);
     const content = (JSON.parse(frames[0] as string) as { message: { content: string } }).message.content;
-    expect(content).toContain(BODY);
-    expect(content.split('\n').at(-1)).toBe(`Answer with team reply ${SOCKET_ID} "…" (this marks it read), or team ack ${SOCKET_ID} if no answer is needed.`);
+    expect(content).toContain('from the owner (owner):\n\nhello');
+    expect(content.split('\n').at(-1)).toBe(`↩ team reply ${SOCKET_ID.slice(0, 8)} "…" · team ack ${SOCKET_ID.slice(0, 8)}`);
     // Only the seat writes a read receipt: the taken frame leaves the record unread for the
     // seat's own read, and the watch's unread pass re-wakes it like any other message.
     expect(existsSync(receiptPath(dir, SOCKET_ID))).toBe(false);

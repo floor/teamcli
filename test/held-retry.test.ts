@@ -1392,11 +1392,10 @@ describe('the turn-start read, end to end', () => {
     });
     const envelope = JSON.parse(out) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };
     expect(envelope.hookSpecificOutput.hookEventName).toBe('UserPromptSubmit');
-    // The record's own bytes carry the attribution line; the reader serves it marked, because
-    // the sender's claim is an attribution, not an identity.
+    // The record's own bytes carry the attribution line; the reader serves the compact header.
     const served = body.replace(
       'from the owner — admitted by: the owner\n\n',
-      'from the owner (attributed) — admitted by: the owner\n\n',
+      'from the owner (owner):\n\n',
     );
     expect(envelope.hookSpecificOutput.additionalContext).toBe(served);
 

@@ -104,7 +104,9 @@ for it, with `thread`, `in-reply-to` and the leg's `via`.
     team reply <id> <text> [--json]
     team reply <id> --close [--json]
 
-`<id>` is the record being answered, as it is named in the caller's folder. `<text>` is every
+`<id>` is the record being answered, as it is named in the caller's folder (or an unambiguous
+prefix of at least 8 characters in that mailbox; an ambiguous prefix is refused naming the
+matching ids). `<text>` is every
 remaining word, joined with single spaces; `--close` takes no text. A reply's text is required and
 must not be empty.
 

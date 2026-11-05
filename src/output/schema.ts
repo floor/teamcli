@@ -1571,6 +1571,7 @@ export const TRACE_OUTPUT_SCHEMA: CommandSchemaSpec = {
           to: { type: 'string' },
           seat: { type: 'string' },
           thread: { type: 'string' },
+          rule: { type: 'string' },
           // The route a leg tried (`leg.tried`) or the leg a retry used (`wake.retried`).
           via: { type: 'string' },
           // The writer's machine word: the walk's outcome, the webhook post's, or the retry's.

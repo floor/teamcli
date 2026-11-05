@@ -29,8 +29,8 @@ is skipped without a receipt and without a refusal.
 `team drops --read` is the same folder served to the launch's own turn-start hook: the launch
 line names the seat and session, each waiting record is verified with the checkout's message
 key, its signed `<id>.read.json` receipt is written before its body is printed, and at most ten
-bodies are handed over a run, newest first. A served body is printed with its sender attributed:
-its `from … — admitted by: …` line gains `(attributed)` after the claimed name, and a body with
+bodies are handed over a run, newest first. A served body is printed with its compact sender header:
+its `from … — admitted by: …` line is folded into `from <name> (<short rule>):` (or `<Display>, a client (owner relay):` for a client, or `<Kind> seat <name> (<short rule>):` for a Gemini, Codex or Grok seat), and a body with
 no such line opens with `[attributed sender: <sender>]`. The words of the message itself are
 never rewritten. A plain-text drop an earlier build wrote cannot be
 verified at all: the read skips it, reports it by count on stderr, and leaves it in place, and it

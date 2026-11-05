@@ -55,6 +55,7 @@ export type StepFields = {
   from: string;
   to: string;
   thread?: string;
+  rule?: string;
   ts: string;
 };
 
@@ -75,6 +76,7 @@ export function stagedStep(fields: StepFields): StepResult {
     ...base(fields),
     kind: 'message.staged',
     record_id: stepRecordId(fields.id, 'staged'),
+    ...(fields.rule === undefined ? {} : { rule: fields.rule }),
   });
 }
 

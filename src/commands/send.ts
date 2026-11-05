@@ -42,7 +42,7 @@ import { appendHistory } from '../send/history.ts';
 import { markAnsweredBySend } from '../send/answered-by-send.ts';
 import { noteUnread } from '../send/unread-hint.ts';
 import { ensureRecord, readRecord, recordTextOf, signReceiptPayload, signRecord, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
-import { attributionBanner } from '../send/sender-claim.ts';
+import { attributedBody, attributionBanner } from '../send/sender-claim.ts';
 import { legStep, stagedStep, webhookStep, type StepFields } from '../send/steps.ts';
 import { isPublicOnly, scanPublicBody, type PrivateListPaths } from '../send/public-only.ts';
 import { realRepoRead, type RepoRead } from '../send/repo-visibility.ts';
@@ -73,7 +73,7 @@ import { markTaken } from '../send/taken.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
 import { quotaOutDetail, quotaOutOf } from '../send/quota-out.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
-import { frameFor, readerLine } from '../send/frame.ts';
+import { existingRecordIdsIn, frameFor, readerLine } from '../send/frame.ts';
 import {
   declaredInboundOf, heldSocketPath, inboundStaleReason, preciseSocketSkipReason, readHeldSocket,
   socketEligible, socketHeldReason, socketIneligibleReason, socketSkipReason,
@@ -3227,6 +3227,7 @@ async function stageSendRecord(
     from: payload.from,
     to: payload.to,
     thread: payload.thread,
+    rule: payload.rule,
     ts,
   });
   if (staged.receipt.existing) {
@@ -5878,14 +5879,18 @@ async function deliverSocketFrame(
   // and both write its own signed read receipt (ADR D3). It addresses the record, never the
   // sender, so an owner-origin frame needs no reply target and no sending team. A person-pane
   // seat has no reader line at all: a person answers in their own client.
-  const reply = personPane ? null : readerLine(msgId);
-  // The frame opens with the sender's display line, then the signed record's own body: the
-  // header is display, and the body it precedes still carries the attribution line a reader
-  // judges. One blank line separates them, so no body line can pass for the header.
-  // Nothing attests the caller yet, so the frame opens with the attribution mark first: the
-  // receiving seat never reads the displayed name as proof of who sent it, and the mark is always
-  // present so its absence never reads as verification.
-  const content = `${attributionBanner(from)}\n\n${header === '' ? body : `${header}\n\n${body}`}`;
+  const dropDir = join(to.dir, 'send-drops', to.session, to.seat);
+  const reply = personPane ? null : readerLine(msgId, existingRecordIdsIn(dropDir));
+  const displayName =
+    /^Message from ([^\n(]+?) \([^)\n]+\)$/.exec(header)?.[1] ?? (header === '' ? null : header);
+  const normalizedDisplay = displayName === 'owner' ? 'the owner' : displayName;
+  const content = attributedBody(body, from, {
+    record: payload,
+    home: host.home,
+    root: to.root,
+    displayName: normalizedDisplay,
+    rule: payload.rule,
+  });
   // The record's exact text is signed here for the two stores that do not write the copy first:
   // `signRecord` has no clock and no nonce, so these are the same bytes the walk's own staging
   // writes. Under `none` they ride inside the frame — the frame is the only copy — and under
