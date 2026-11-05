@@ -1,6 +1,6 @@
 // `team usage` reads files: no pane, no CLI's own session file, no lab's credential. The caller
 // is handed in below, so placing it — the process-table read the command's own page documents —
-// is not part of what this run records, and the one command here is the root resolution. The run
+// is not part of what this run records, and the only command here is the root resolution. The run
 // in test/usage-traps-run.ts records every path `readFileSync` opens and every command spawned,
 // over a home holding trap files where those CLI files would live, with a herdr whose every
 // function would fail the run if it were called. This is the whole claim: the record below names
@@ -53,6 +53,11 @@ test('usage opens no CLI session file, no CLI credential, and runs nothing but t
     expect(allowed.some((prefix) => path.startsWith(prefix)), `${path} is outside the tool's own files`).toBe(true);
   }
 
-  // The one command run is the root resolution; no pane, no CLI, no shell was touched.
-  expect(parsed.ran).toEqual(['git rev-parse --path-format=absolute --git-common-dir']);
+  // The only commands run are the root resolutions: one per team the report reads — the caller's
+  // own project and the store's root, each through the config seam every other command resolves a
+  // team with. No pane, no CLI, no shell was touched.
+  expect(parsed.ran).toEqual([
+    'git rev-parse --path-format=absolute --git-common-dir',
+    'git rev-parse --path-format=absolute --git-common-dir',
+  ]);
 });
