@@ -73,6 +73,7 @@ import { endpointCleanupHost } from '../launch/endpoint-cleanup.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { executePlan, launchKind, restoreSummaryOf, type Report, type RestoreSweepSummary } from '../launch/execute.ts';
+import { channelLobbyFolder } from '../mcp/launch-config.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
 import { isSocketFile, launchCodexEndpoint, processStartOf, recordedEndpointState, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { bindCodexSeatThread } from '../launch/codex-thread-binding.ts';
@@ -2660,7 +2661,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     else if ('path' in gate) {
       verifiedLobby = gate.path;
       lobbySeen = { path: gate.path, dev: gate.dev, ino: gate.ino, files: gate.files };
-      for (const seat of seats) if (seat.lobby) seat.cwd = gate.path;
+      for (const seat of seats) if (seat.lobby) seat.cwd = channelLobbyFolder(gate.path, seat);
     } else if (launchingIntoLobby) createLobby = !dry;
   }
   // The team's event bus: started beside the watch unless the file sets `bus.autostart: false`,
@@ -3127,7 +3128,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       if ('path' in gate) {
         verifiedLobby = gate.path;
         lobbySeen = { path: gate.path, dev: gate.dev, ino: gate.ino, files: gate.files };
-        for (const seat of seats) if (seat.lobby) seat.cwd = gate.path;
+        for (const seat of seats) if (seat.lobby) seat.cwd = channelLobbyFolder(gate.path, seat);
       }
     }
     // A stopped session this team's state records is cleared here, under the run lock, before
@@ -3522,7 +3523,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
           const last_active = patch.stage === 'ready'
             ? now().toISOString()
             : (prior.last_active ?? retained?.last_active);
-          let start_cwd = prior.start_cwd;
+          let start_cwd = patch.start_cwd ?? prior.start_cwd;
           if (!start_cwd && patch.createdWorkspace) {
             const planned = seats.find((item) => item.name === name);
             if (planned?.lobby) {

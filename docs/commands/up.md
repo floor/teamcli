@@ -9,6 +9,13 @@ into — and its sidebar is rewritten from the file either way. A seat the file 
 is a human's own pane: the plan skips it — nothing is launched into it or typed into it; left as
 it is — and it does not count as short of ready.
 
+A Claude seat whose launch enables the `team-inbox` development channel starts in its own
+`<lobby>/<seat>/` folder, including a lead seat. The lobby must already be registered and trusted.
+After the launch claim exists and before workspace creation and Claude startup, TeamCLI writes
+that folder's `.mcp.json` with the exact claimed epoch. It preserves other server entries and
+keys, refuses conflicting or unsafe config paths, and makes no new CLI trust entry. A failed
+start leaves the bounded config for the next launch and releases only its own config claim.
+
 The watch is read against both records: the watch the session's state carries and the hosted watch
 the machine daemon records for this route. A hosted watch that is not standing by is already
 watching the session, so the run starts no pane watch beside it; a standing-by hosted watch yields

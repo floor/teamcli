@@ -24,6 +24,13 @@ channel push, so a seat stopped, moved or relaunched while an old process lives 
 by it: no list, no body and no receipt, and no push marker. One window remains: a declaration
 that changes between that last look and the body or notification it guards.
 
+For a channel-enabled Claude launch, TeamCLI generates a seat-scoped project `.mcp.json` in
+`<lobby>/<seat>/` after the actual claim and before starting Claude. The `team-inbox` entry uses
+the launching install's runner and entry script, `--seat`, `--session` and the exact `--epoch`.
+It resolves the team through the registry, without a shared lobby config or a team-file guess
+from its starting folder. A relaunch updates only the generated entry; an unowned entry with
+that name is refused. Starting an old config after a new claim still fails the epoch guard.
+
 When the seat's own launch carries the development-channels flag naming this server
 (`--dangerously-load-development-channels server:team-inbox`), `serve` also declares the
 `claude/channel` capability, gives its client one instruction — acknowledge the id from a channel

@@ -2018,7 +2018,7 @@ function hostOf(input: {
         const last_active = patch.stage === 'ready'
           ? input.now().toISOString()
           : (prior.last_active ?? retained?.last_active);
-        const start_cwd = prior.start_cwd ?? (patch.createdWorkspace ? input.startCwd : undefined);
+        const start_cwd = patch.start_cwd ?? prior.start_cwd ?? (patch.createdWorkspace ? input.startCwd : undefined);
         const { waiting: written, effort: patchedEffort, ...rest } = patch;
         const seatState: SeatState = {
           ...prior,

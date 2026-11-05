@@ -4,6 +4,8 @@ import type { Seat, TeamFile } from '../file/types.ts';
 import { profileFor } from '../profiles/index.ts';
 import { lobbyPath } from '../worktree/place.ts';
 import { shellScriptWordOf } from './cli-scope.ts';
+import { channelLobbyFolder, claudeChannelSeat } from '../mcp/launch-config.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
 import { shellWordsReason, shellWordSources } from './shell-words.ts';
 
 // A launch line is not shell-parsed: `team` splits it the way it always has, on whitespace, and
@@ -318,7 +320,8 @@ export function launchLineFinding(
   const words = launch.trim().split(/\s+/).filter((word) => word !== '');
   const program = launchBinary(launch);
   if (program === null) return note('its launch line names no command');
-  const folder = start?.folder ?? startFolder(team, seat);
+  const folder = start?.folder ?? (claudeChannelSeat(seat)
+    ? channelLobbyFolder(lobbyOf(sources.home, root, team), seat) : startFolder(team, seat));
   const cwd = start?.cwd ?? resolve(root, folder);
   const naked = nakedWord(program);
   const missing = programFinding(naked, program, profileFor(seat.cli)?.binary ?? null, cwd, folder, sources);

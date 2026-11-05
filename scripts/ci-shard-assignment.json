@@ -133,6 +133,7 @@
     "test/caller.test.ts": 3,
     "test/cascade-legs.test.ts": 0,
     "test/channel-bus.test.ts": 1,
+    "test/channel-launch-config.test.ts": 3,
     "test/channel-leg.test.ts": 1,
     "test/charter.test.ts": 0,
     "test/check-bus-log-cap.test.ts": 1,

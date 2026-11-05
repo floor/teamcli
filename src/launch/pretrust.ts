@@ -9,11 +9,13 @@ import { isAbsolute, join } from 'node:path';
 import { charterCoversFolder } from '../charter/check.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { profileFor } from '../profiles/index.ts';
+import { channelLaunchEnabled } from '../mcp/channel.ts';
 import { assertNoLink, tomlString, writePrivate } from './private-file.ts';
 
 /** The fields a launch seat needs for the lobby trust decision. */
 export interface PretrustSeat {
   cli: string;
+  launch?: string;
   cwd: string;
   lobby?: boolean;
   launchProblem?: string;
@@ -36,6 +38,8 @@ export function lobbyPretrustLine(
   home: string,
   opts: { write: boolean; now: Date },
 ): string | null {
+  // A channel opens a child of an already-trusted lobby; no CLI-home trust read or write.
+  if (seat.cli === 'claude-code' && channelLaunchEnabled(seat.launch)) return null;
   if (!launchesIntoLobby(seat)) return null;
   const writer = WRITERS[seat.cli];
   // A shipped CLI with no captured record still starts. Inventing its file would be a guess,
