@@ -26,6 +26,7 @@ import { recordedSeatSession } from '../src/registry/resume.ts';
 import { setRoster, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { registerLaunch } from '../src/registry/sync.ts';
 import { approvalOf } from '../src/approve/approval.ts';
+import { unverifiedRecordSentence } from '../src/approve/unverified-record.ts';
 import { recordedGeneration } from '../src/store/keys.ts';
 import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import { gateVerdict } from '../src/permissions/who.ts';
@@ -3673,19 +3674,6 @@ describe('independent checks: restart clears unsent /exit on refused or swallowe
   });
 });
 
-/** The sentence a stored approval that does not verify is named by. The product helper prints
- *  this same wording; the scene below is the contract for it. */
-function unverifiedRecordSentence(record: string, file: string): string {
-  const lines = file.split('\n').map((line) => line.trimEnd()).filter((line) => line.trim() !== '');
-  const preview = lines.length === 0 ? '' : ` (${lines.slice(0, 3).map((line) => JSON.stringify(line)).join('; ')})`;
-  const noun = lines.length === 1 ? 'line' : 'lines';
-  const scalar = lines.map((line) => /^([A-Za-z0-9_.-]+):\s+(\S.*)$/.exec(line.trim())).find((match) => match !== null);
-  const path = scalar?.[1] ?? '<path>';
-  const value = scalar?.[2] ?? '<value>';
-  const set = `team config set ${path} ${value}`;
-  return `${record} does not verify: ${lines.length} unverified ${noun}${preview}; re-sign with ${set} --request, then ${set} --approval <id>`;
-}
-
 const SIGNATURE_WHY = 'the record does not carry a valid signature: it was changed after approval, or written without the key';
 
 /** A signed approval in the fixture home, then one flipped signature byte. The stored file is
@@ -3721,6 +3709,16 @@ function plantUnverifiedApproval(fixture: Fixture): { approval: string; bytes: s
 }
 
 describe('a stored approval that does not verify', () => {
+  test('the sentence names the record, the first lines, and the re-sign command', () => {
+    const file = 'format: 1\nproject: acme\ncoordinator: lead\n';
+    expect(unverifiedRecordSentence("acme's approval record", file)).toBe(
+      'acme\'s approval record does not verify: 3 unverified lines ("format: 1"; "project: acme"; "coordinator: lead"); re-sign with team config set format 1 --request, then team config set format 1 --approval <id>',
+    );
+    expect(unverifiedRecordSentence('the approval record', 'rules: read this\n')).toBe(
+      'the approval record does not verify: 1 unverified line ("rules: read this"); re-sign with team config set rules \'read this\' --request, then team config set rules \'read this\' --approval <id>',
+    );
+  });
+
   function ready(fixture: Fixture): RestartSources {
     updateState(fixture.dir, (state) => {
       const session = (state.sessions.acme ??= emptySession());
@@ -3739,6 +3737,22 @@ describe('a stored approval that does not verify', () => {
     expect(await runRestart(['worker'], io, sources), io.err).toBe(0);
     expect(io.err).toBe(`team restart: ${sentence}\n`);
     expect(io.out).toContain('restarted worker');
+    expect(readFileSync(planted.approval, 'utf8')).toBe(planted.bytes);
+    expect(recordedGeneration(planted.root, fixture.home)?.generation).toBe(planted.generation);
+  });
+
+  test('dev mode keeps the sentence on the document and leaves stdout as that document', async () => {
+    const fixture = makeFixture();
+    const planted = plantUnverifiedApproval(fixture);
+    const sources = ready(fixture);
+    const io = testIo(fixture.root, { kind: 'owner' });
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    const sentence = unverifiedRecordSentence("acme's approval record", planted.file);
+    expect(await runRestart(['worker', '--json'], io, sources), io.err).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out.startsWith('{')).toBe(true);
+    const doc = JSON.parse(io.out) as { notes?: string[] };
+    expect(doc.notes).toContain(sentence);
     expect(readFileSync(planted.approval, 'utf8')).toBe(planted.bytes);
     expect(recordedGeneration(planted.root, fixture.home)?.generation).toBe(planted.generation);
   });

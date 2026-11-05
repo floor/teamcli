@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { auditClientRefusal, authorizeClientRun, clientFormProblem, verifyClientForm, type ClientRun } from '../client/client-form.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { budgetsInForceOf, ceilingsOf, notInForce } from '../approve/approval.ts';
+import { unverifiedRecordSentence } from '../approve/unverified-record.ts';
 import { readArgs } from '../args.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
@@ -91,7 +92,7 @@ import { ensureSeatLine, registerEnd, registerLaunch } from '../registry/sync.ts
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { bannerModel, modelDiffers, seatModel, wrapperSeat } from '../status/statusline.ts';
-import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
+import { approvalStanding, findStore, readApproval, type Ceilings, type Standing } from '../store/store.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
@@ -393,7 +394,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   const { caller, shown, session } = judged;
   // Dev mode, from the file this run restarts against: a `dev-mode` value anywhere in the
   // caller's chain governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value the
-  // variable set to exactly `1` keeps its behaviour. Only the caller line below is ever folded.
+  // variable set to exactly `1` keeps its behaviour. The caller line below is folded, and so is
+  // a stored approval that does not verify: dev mode says that once and continues, and never
+  // signs.
   const dev = resolveDevMode('restart', io, { home: sources.home, team, root, now: sources.now() });
   if (!dry) logDevModeState(dir, 'restart', describeCaller(caller), dev, sources.now());
   let devFolded = false;
@@ -403,7 +406,16 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
 
   const standing = sources.standing?.(root) ?? approvalStanding(root, sources.home);
   if (standing.kind !== 'verified' && standing.kind !== 'none') {
-    return callerRefused(out, json, notInForce(standing));
+    // Outside dev mode the refusal is the standing's own line, exactly as before. In dev mode
+    // the fold is the one `check` and `up` already apply: say it and continue. The sentence is
+    // the stored copy's lines and the re-sign command. Nothing here writes an approval.
+    if (!dev.on) return callerRefused(out, json, notInForce(standing));
+    const store = findStore(root, home);
+    const file = store === null ? '' : (readApproval(store)?.file ?? '');
+    const sentence = unverifiedRecordSentence(`${team.project}'s approval record`, file);
+    if (json) notes.push(sentence);
+    else if (dry) out.stdout(`! ${sentence}\n`);
+    else out.stderr(`team restart: ${plainText(sentence)}\n`);
   }
   // The live file is the record: the roster, the ceilings and the grant all read from it, and a
   // file that changed since the last approval is not a refusal.
@@ -416,9 +428,10 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   const mainOrchestrator = entityMainOrchestrator(io, { home, root, entity: team.entity });
   // The who-may-run-it gate: the caller, its placement, and the owner rule. Set to exactly
   // `1`, dev mode says this gate once, as a warning, and the restart continues — exactly as
-  // `up` does. Every other refusal stays a refusal: the target placement, the CLI, the
-  // records, the approvals and trust. The warning is logged where this call runs; a dry run
-  // says it beside the dry answer and decides nothing.
+  // `up` does. A stored approval that does not verify was already said above. Every other
+  // refusal stays a refusal: the target placement, the CLI, the records, and trust. The
+  // warning is logged where this call runs; a dry run says it beside the dry answer and
+  // decides nothing.
   const mayRun = clientRun !== null || mainOrchestrator !== null ? null : mayChange.kind === 'no-pane' ? noPaneRefusal(mayChange.name)
     : mayChange.kind === 'another-pane' ? anotherPaneRefusal(mayChange.name, mayChange.recordedPane)
       : mayChange.kind === 'refused' ? `only the owner or \`leads\` restarts a seat; this call is ${plainLine(describeCaller(shown))}${devModeExpiryNote(dev)}`
@@ -871,6 +884,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   for (const finding of doctorFindings(doctorTeam, root, dir, session, sources.doctor, [], standing, team, [], [], input.rulesOrigin ?? 'file')) {
     if (blocksLaunch(finding)) {
       if (finding.text.includes('team approve') || finding.text.includes('never approved')) continue;
+      // Dev mode already said this standing and is continuing. The preflight must not refuse
+      // the same record a second time. Nothing here signs.
+      if (dev.on && standing.kind !== 'verified' && standing.kind !== 'none' && finding.text === notInForce(standing)) continue;
       if (finding.text.includes(' is read at start by ')) continue;
       return { kind: 'not-ready', message: finding.text };
     }
