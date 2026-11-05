@@ -1477,15 +1477,17 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           // The stuck report runs before the wake: it names every seat whose oldest unread has
           // waited past twice its window without a fresh proven working word, whatever the screen
           // says — and its episode marker is what keeps the wake path's own blocked notice from
-          // saying the same thing twice.
+          // saying the same thing twice. The unread report below reads the same reading: the
+          // lead's generic word stays out while that episode speaks or a young turn may read it.
+          const stuckReading = {
+            workingSince: workingSinceNow,
+            stuckAfterSeconds: inForce.stuckAfter,
+            stalePresence: unprovenPresenceNow,
+          };
           reportStuckSeats(
             { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say, ...(mail === undefined ? {} : { mail }) },
             { unreadAfter: inForce.unreadAfter, seatWindow: unreadWindowOf },
-            {
-              workingSince: workingSinceNow,
-              stuckAfterSeconds: inForce.stuckAfter,
-              stalePresence: unprovenPresenceNow,
-            },
+            stuckReading,
           );
           await wakeUnreadDrops(
             { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow, ...(mail === undefined ? {} : { mail }) },
@@ -1494,6 +1496,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           reportUnreadDrops(
             { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say, ...(mail === undefined ? {} : { mail }) },
             { unreadAfter: inForce.unreadAfter, seatWindow: unreadWindowOf },
+            stuckReading,
           );
         }
         if (result.mailboxNote) tell(result.mailboxNote, true);
