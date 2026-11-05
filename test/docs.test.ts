@@ -74,7 +74,7 @@ describe('the sender vocabulary in the docs', () => {
     for (const path of markdownPages(DOCS)) {
       const lines = readFileSync(path, 'utf8').split('\n');
       for (const [index, line] of lines.entries()) {
-        if (/unverified (sender|author)|\(unverified\)/.test(line)) {
+        if (/(?:un)?verified (sender|author)|\((?:un)?verified\)/.test(line)) {
           offenders.push(`${relative(DOCS, path)}:${String(index + 1)}: ${line.trim()}`);
         }
       }
