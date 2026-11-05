@@ -12,7 +12,7 @@ import { getAgent, isAgentId } from '../registry/agents.ts';
 import { getTeam, teamIdOf } from '../registry/teams.ts';
 import { messageDisplayInForce } from '../settings/message-display-policy.ts';
 import { messageKeyState } from '../store/keys.ts';
-import { namingFor, senderDisplayName } from './names.ts';
+import { namingFor, senderDisplayName, type SenderNaming } from './names.ts';
 import type { TriggerSender } from './native.ts';
 import { readRecord, verifyRecord, type RecordPayload } from './record.ts';
 
@@ -109,33 +109,98 @@ function ageMsOf(at: string, now: Date | undefined): number {
 }
 
 /**
+ * The names and template one pass's wakes share. A pass rings many messages from few seats; the
+ * registry's naming, the receiving team's `message-display` template and each distinct writer's
+ * resolved sender are the same for every message it rings, so they are read once for the pass
+ * rather than once per message. A sender that cannot be pinned is kept as null: nothing in the
+ * pass may name it later either.
+ */
+export type WakeWords = {
+  /** The naming read once for the pass, or null when the registry could not answer. */
+  naming: SenderNaming | null;
+  /** The receiving team's `message-display` template in force for the pass. */
+  template: string;
+  /** Each distinct record writer's sender, by `from` and `from_id`. */
+  senders: Map<string, TriggerSender | null>;
+};
+
+/**
+ * The words one pass reads: the receiving team's naming (the seat name standing when the registry
+ * cannot answer, as a failed read always left it) and its `message-display` template. Both are
+ * tolerant reads; neither ever fails the pass.
+ */
+export function wakeWordsFor(home: string, receiving: WakeReceiver, now?: Date): WakeWords {
+  let naming: SenderNaming | null;
+  try {
+    naming = { ...namingFor({ home, root: receiving.root, file: receiving.team }), mode: 'nickname' };
+  } catch {
+    naming = null;
+  }
+  return {
+    naming,
+    template: messageDisplayInForce({
+      home,
+      root: receiving.root,
+      team: receiving.team,
+      ...(now === undefined ? {} : { now }),
+    }),
+    senders: new Map(),
+  };
+}
+
+/** The sender for one record under the pass's words, resolved through the registries the first
+ *  time the pass rings that writer. */
+function senderIn(
+  words: WakeWords,
+  payload: Pick<RecordPayload, 'from' | 'from_id'>,
+  home: string,
+  receiving: WakeReceiver,
+): TriggerSender | null {
+  const key = `${payload.from}\u0000${payload.from_id ?? ''}`;
+  const held = words.senders.get(key);
+  if (held !== undefined) return held;
+  const sender = wakeSender(payload, home, receiving);
+  words.senders.set(key, sender);
+  return sender;
+}
+
+/**
  * The typed wake's sender and words, from the record alone: the verified seat and team, the
  * seat's nickname (its seat name when the file writes none), and the receiving team's
  * `message-display` template in force. Everything the line shows is the record's; the summary is
  * the body's first content line, never a rewrite. A receiver whose registry or chain cannot be
  * read leaves the shipped name and template — a wake always opens with a readable header.
+ * `words` is the pass's prepared reading: when a caller rings more than one message it hands one
+ * in, and the registries are read once for the pass instead of once per message.
  */
 export function wakeTrigger(
   payload: Pick<RecordPayload, 'from' | 'from_id' | 'body' | 'at'> & { subject?: string },
   home: string,
   receiving: WakeReceiver,
   now?: Date,
+  words?: WakeWords,
 ): TriggerSender | null {
-  const sender = wakeSender(payload, home, receiving);
+  const sender = words === undefined ? wakeSender(payload, home, receiving) : senderIn(words, payload, home, receiving);
   if (sender === null) return null;
   let name = sender.seat;
   try {
-    const naming = { ...namingFor({ home, root: receiving.root, file: receiving.team }), mode: 'nickname' as const };
-    name = senderDisplayName({ seat: payload.from, id: payload.from_id ?? undefined }, naming) || sender.seat;
+    const naming = words === undefined
+      ? { ...namingFor({ home, root: receiving.root, file: receiving.team }), mode: 'nickname' as const }
+      : words.naming;
+    if (naming !== null) {
+      name = senderDisplayName({ seat: payload.from, id: payload.from_id ?? undefined }, naming) || sender.seat;
+    }
   } catch {
     // A registry that cannot answer leaves the seat name; a wake still names its sender.
   }
-  const template = messageDisplayInForce({
-    home,
-    root: receiving.root,
-    team: receiving.team,
-    ...(now === undefined ? {} : { now }),
-  });
+  const template = words === undefined
+    ? messageDisplayInForce({
+      home,
+      root: receiving.root,
+      team: receiving.team,
+      ...(now === undefined ? {} : { now }),
+    })
+    : words.template;
   return {
     ...sender,
     name,

@@ -17,7 +17,6 @@
 // session or the seat refuses service; an id is a lowercase UUID — or the `unread-<uuid>` name a
 // build before 0.5.3 wrote for a runtime report to a lead — and nothing else, so no id can name a
 // path; a drop or receipt that is a link is refused, never followed.
-import type { KeyObject } from 'node:crypto';
 import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -35,13 +34,14 @@ import { dropMessage } from '../send/native.ts';
 import { readState } from '../state.ts';
 import {
   isRead,
-  readRecord,
   readSealedRecord,
   receiptFile,
   recordAuthOfSealed,
   signReceiptPayload,
-  verifyRecord,
+  verifiedRecordAt,
   type ReceiptPayload,
+  type RecordPayload,
+  type RecordReader,
   type StatusContext,
 } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
@@ -342,17 +342,6 @@ function markerOf(dropDir: string, id: string): { from?: string; ts?: string } {
   }
 }
 
-/** The time a message's own record names when that record verifies with this checkout's key, and
- *  null otherwise. The `.pending` marker beside a message is unsigned, and a file's mtime is the
- *  filesystem's: neither may date a record the key signed, so a listing counts from this when it
- *  is there and falls back only for a record this key cannot vouch for. */
-function signedTimeOf(path: string, id: string, key: KeyObject): string | null {
-  const looked = readRecord(path, id);
-  if (!looked.ok || looked.record === null || !verifyRecord(looked.record, key)) return null;
-  const at = looked.record.payload.at;
-  return typeof at === 'string' && Number.isFinite(Date.parse(at)) ? at : null;
-}
-
 /** The current claim of one seat's general seat brief, read from the checkout's state; null when
  *  the state cannot be read or holds no current claim. */
 export function currentClaimIn(root: string, session: string, seat: string): CurrentBriefClaim | null {
@@ -363,31 +352,35 @@ export function currentClaimIn(root: string, session: string, seat: string): Cur
   }
 }
 
-/** Whether a verified launch brief in this inbox is the one the current claim can serve. The
- *  bounded `superseded` list is only a convenience for recent ids: a fresh launch starts a new
- *  list, while the reader still refuses every earlier brief by comparing it with the current
- *  claim. Keep the waiting list on that same rule so the watch never rings for mail its read
- *  cannot serve. */
-function generalBriefStatusAt(
-  path: string,
+/** The time a verified record names, and null when its own `at` is not one this build can read.
+ *  The `.pending` marker beside a message is unsigned, and a file's mtime is the filesystem's:
+ *  neither may date a record the key signed, so a listing counts from this when it is there and
+ *  falls back only for a record this key cannot vouch for. */
+function signedTimeIn(payload: RecordPayload): string | null {
+  const at = payload.at;
+  return typeof at === 'string' && Number.isFinite(Date.parse(at)) ? at : null;
+}
+
+/** Whether a verified payload is an earlier delivery of the seat's general seat brief: the same
+ *  brief family, addressed to this inbox, and not the record the current claim names. The bounded
+ *  `superseded` list is only a convenience for recent ids: a fresh launch starts a new list,
+ *  while the reader still refuses every earlier brief by comparing it with the current claim.
+ *  Keep the waiting list on that same rule so the watch never rings for mail its read cannot
+ *  serve. */
+function supersededBrief(
+  payload: RecordPayload,
   id: string,
   context: StatusContext,
   claim: CurrentBriefClaim | null,
-  key: KeyObject,
-): 'current' | 'superseded' | 'other' {
-  const looked = readRecord(path, id);
-  if (!looked.ok || looked.record === null || !verifyRecord(looked.record, key)) return 'other';
-  const payload = looked.record.payload;
+): boolean {
   if (!isGeneralBriefRecord(payload)
     || payload.to !== context.to
     || payload.session !== context.session
-    || !sameRoot(payload.root, context.root)) return 'other';
-  return claim !== null
+    || !sameRoot(payload.root, context.root)) return false;
+  return !(claim !== null
     && claim.id === id
     && payload.incarnation === claim.incarnation
-    && payload.brief_sha256 === claim.sha256
-    ? 'current'
-    : 'superseded';
+    && payload.brief_sha256 === claim.sha256);
 }
 
 /**
@@ -402,11 +395,21 @@ function generalBriefStatusAt(
  * delivery — or an ordinary one — never hides the delivery the claim names: the drop is listed,
  * and the read refuses the occupied name with no body.
  *
+ * The receipt is checked before the record is read: a message already read needs no body, and a
+ * pass over a large folder opens only the records that still wait. A waiting record is read once,
+ * for both the superseded-brief rule and its own signed `at`; `records` lets a caller scanning
+ * several folders in one pass hand in the reader that keeps that read for the pass.
+ *
  * A message whose record verifies is dated by the record's own signed `at`. The `.pending` marker
  * beside it is unsigned, and the file's mtime is the filesystem's; neither can age a record this
  * checkout's key signed, so a planted marker cannot make a message due for a wake or a report.
  */
-export function listUnread(dropDir: string, context: StatusContext, home: string): InboxMessage[] {
+export function listUnread(
+  dropDir: string,
+  context: StatusContext,
+  home: string,
+  records?: RecordReader,
+): InboxMessage[] {
   let names: string[];
   try {
     names = readdirSync(dropDir);
@@ -414,6 +417,9 @@ export function listUnread(dropDir: string, context: StatusContext, home: string
     return [];
   }
   const key = messageKeyState(home);
+  const readRecordAt: RecordReader | null = key.kind !== 'key'
+    ? null
+    : records ?? ((path, id) => verifiedRecordAt(path, id, key.key));
   const claim = currentClaimIn(context.root, context.session, context.to);
   const superseded = new Set(claim?.superseded ?? []);
   const messages: InboxMessage[] = [];
@@ -422,9 +428,10 @@ export function listUnread(dropDir: string, context: StatusContext, home: string
     if (superseded.has(name)) continue;
     const at = join(dropDir, name);
     if (heldAt(at).kind !== 'file') continue;
-    if (key.kind === 'key' && generalBriefStatusAt(at, name, context, claim, key.key) === 'superseded') continue;
     const binding = claim !== null && name === claim.id ? briefBindingOf(claim) : undefined;
     if (key.kind === 'key' && isRead(dropDir, name, context, key.key, binding)) continue;
+    const payload = readRecordAt === null ? null : readRecordAt(at, name);
+    if (payload !== null && supersededBrief(payload, name, context, claim)) continue;
     let size = 0;
     let mtime: number;
     try {
@@ -438,11 +445,10 @@ export function listUnread(dropDir: string, context: StatusContext, home: string
     const marker = markerOf(dropDir, name);
     // A record this key signed is dated by its own `at`; an unsigned marker or the file's mtime
     // dates only a record the key cannot vouch for.
-    const signed = key.kind === 'key' ? signedTimeOf(at, name, key.key) : null;
     messages.push({
       id: name,
       ...(marker.from !== undefined ? { from: marker.from } : {}),
-      ts: signed ?? marker.ts ?? new Date(mtime).toISOString(),
+      ts: (payload === null ? null : signedTimeIn(payload)) ?? marker.ts ?? new Date(mtime).toISOString(),
       bytes: size,
     });
   }

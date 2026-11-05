@@ -74,12 +74,13 @@ import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from 
 import { appendHistory, readHistory, type HistoryEntry } from '../send/history.ts';
 import { dropMessage, readTriggerLine, socketWakeHint } from '../send/native.ts';
 import { pendingDropPath } from '../send/pending.ts';
-import { readRecord, signRecord, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
+import { isRead, readRecord, signRecord, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
 import { markTaken } from '../send/taken.ts';
 import { legClassOf, type WalkLeg } from '../send/walk-cascade.ts';
-import { wakeTrigger } from '../send/wake.ts';
+import { wakeTrigger, wakeWordsFor, type WakeWords } from '../send/wake.ts';
 import { DELIVERY_LEGS } from '../settings/inherit.ts';
 import { messageKeyState } from '../store/keys.ts';
+import { MailPass } from './mail-pass.ts';
 import type { RetryScene } from './retry.ts';
 import { readScreen } from './screen.ts';
 
@@ -492,6 +493,14 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
   if (options.noNudge === true) return;
   const key = messageKeyState(home);
   if (key.kind !== 'key') return;
+  // The pass's own mail reading: this reader and the report that follows share the pass's lists,
+  // so each drop folder is scanned once and each record read once. Callers that hold a pass (the
+  // watch) hand it in; a caller that does not gets the same reading, taken here.
+  const mail = scene.mail ?? new MailPass({ dir: scene.dir, root: scene.root, session: scene.session, home });
+  // The words every wake this pass types shares: read on the first message that reaches a wake,
+  // never per message.
+  let words: WakeWords | undefined;
+  const wordsNow = (): WakeWords => (words ??= wakeWordsFor(home, { root: scene.root, session: scene.session, team: scene.team }, scene.now));
   catchUpBlockedSeatEvents(scene, home);
   // The receiving team's `message-display` template is the same for every seat this pass wakes.
   const nowMs = scene.now.getTime();
@@ -516,14 +525,27 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     const retry = watchRetryOf(seat);
     const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
     const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session };
-    const unread = listUnread(dropDir, context, home);
-    if (unread.length === 0) continue;
+    const unread = mail.unread(seat.name);
+    // The folder as it is now, not only as the scan saw it. A message that landed after the
+    // scan is in none of the pass's lists, and a pass on a big tree can outlast the window, so
+    // it would wait a whole sweep. The look lists the folder's names and opens only the records
+    // this pass has not read yet (the pass's reader answers the others), and it runs for every
+    // seat: an empty list, or a list the webhook empties, is no reason not to see a late message.
+    const fresh = listUnread(dropDir, context, home, mail.recordAt);
+    if (unread.length === 0 && fresh.length === 0) continue;
     // The seat's class is read only for a seat something waits at: the window is the one its
     // delivery class earns, and a seat with nothing unread costs no read.
     const unreadAfter = windowForSeat(options, seat);
+    const scanned = new Set(unread.map((one) => one.id));
     const due = unread
       .filter((message) => dueForWake(dropDir, message, nowMs, unreadAfter, retry === null ? null : retry.tries));
-    if (due.length === 0) continue;
+    // A message the scan did not list is new here, and it is due now if its window has passed.
+    // One the cascade would take by webhook waits for the pass that reaches the webhook first:
+    // this pass types no line ahead of a leg it has not walked for the message.
+    const arrived = fresh.filter((one) => !scanned.has(one.id)
+      && dueForWake(dropDir, one, nowMs, unreadAfter, retry === null ? null : retry.tries)
+      && !(seat.webhook !== undefined && webhookNext(seat, linesNow().get(one.id))));
+    if (due.length === 0 && arrived.length === 0) continue;
     // The cascade's next leg below the one the send's walk took, per message: the adapter is
     // tried before any pane is looked for, because a post is no keystroke and needs none. A
     // message whose walk moves on stays due for the typed line below, with the failed leg kept
@@ -558,7 +580,17 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
           typedDue.push(message);
         }
       }
-      if (typedDue.length === 0) continue;
+      // The posts above took time, and a message that landed while they ran is in no list this
+      // pass took. With the webhook leaving nothing to type, the folder's names are read once
+      // more, after the posts, before the seat is left to a later pass; only an unseen id is
+      // opened, and one the cascade would take by webhook waits for that leg as before.
+      if (typedDue.length === 0) {
+        const after = listUnread(dropDir, context, home, mail.recordAt);
+        const late = after.filter((one) => !scanned.has(one.id)
+          && dueForWake(dropDir, one, nowMs, unreadAfter, retry === null ? null : retry.tries)
+          && !(seat.webhook !== undefined && webhookNext(seat, linesNow().get(one.id))));
+        if (late.length === 0) continue;
+      }
     }
     // A typed line that follows a webhook the walk tried names the leg that did not take the
     // send, so the history line reads as the walk it was (ADR zeus-message-path, D2).
@@ -597,16 +629,27 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       // and a message whose wake is already reserved is a spent attempt of its own: it is not
       // woken again, and it does not stand in the way of the messages behind it.
       // A receipt that landed after the pass listed the folder is the read itself: the folder is
-      // read again under the seat's lock, so an already-read message is not reminded.
-      const unreadNow = new Set(listUnread(dropDir, context, home).map((one) => one.id));
-      const wakeable = typedDue.filter((one) => unreadNow.has(one.id) && !existsSync(wakePath(dropDir, one.id)));
+      // read again under the seat's lock, so an already-read message is not reminded. The same
+      // look finishes the pass's listing rather than only narrowing it, with the webhook rule
+      // above: a message that landed even after the look at the wake step is new under the lock
+      // and is woken by this pass instead of waiting for the next one. The pass's reader already
+      // holds every record it read, so only the new names are opened.
+      const freshNow = listUnread(dropDir, context, home, mail.recordAt);
+      const unreadNow = new Set(freshNow.map((one) => one.id));
+      const arrivedNow = freshNow.filter((one) => !scanned.has(one.id)
+        && dueForWake(dropDir, one, nowMs, unreadAfter, retry === null ? null : retry.tries)
+        && !(seat.webhook !== undefined && webhookNext(seat, linesNow().get(one.id))));
+      const wakeable = [
+        ...typedDue.filter((one) => unreadNow.has(one.id) && !existsSync(wakePath(dropDir, one.id))),
+        ...arrivedNow,
+      ];
       const audited = wakeable.map((message) => ({ message, payload: payloadOf(dropDir, message.id, home) }))
         .find((one) => one.payload !== null);
       if (audited === undefined || audited.payload === null) continue;
       // The wake's header names the sender the signed record carries, resolved through this
       // home's registries. A sender that cannot be pinned is not typed nameless: the message
       // stays unread, its reservations are never taken, and the report pass says why.
-      const sender = wakeTrigger(audited.payload, home, { root: scene.root, session: scene.session, team: scene.team }, scene.now);
+      const sender = wakeTrigger(audited.payload, home, { root: scene.root, session: scene.session, team: scene.team }, scene.now, wordsNow());
       if (sender === null) continue;
       // A socket delivery's re-wake names the message the frame carried: answer it or ack it
       // (ADR `zeus-message-path`, D3). Any other message keeps the profile's read sentence.
@@ -1264,6 +1307,9 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void
   if (home === undefined) return;
   const key = messageKeyState(home);
   if (key.kind !== 'key') return;
+  // The pass's own mail reading, as the wake pass takes it: a caller that ran the wake with a
+  // pass hands it in, and each folder is listed once for the whole pass.
+  const mail = scene.mail ?? new MailPass({ dir: scene.dir, root: scene.root, session: scene.session, home });
   const nowMs = scene.now.getTime();
   const at = scene.now.toISOString();
   const leadName = scene.team.orchestrator !== '' ? scene.team.orchestrator : scene.team.operator;
@@ -1290,7 +1336,7 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void
     const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
     const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session };
     // The seat's class is read only for a seat something waits at, as the wake pass reads it.
-    const unread = listUnread(dropDir, context, home);
+    const unread = mail.unread(seat.name);
     if (unread.length === 0) continue;
     // Twice this seat's own window: the wake at N and the report at 2N read one value.
     const threshold = windowForSeat(window, seat) * 1000 * 2;
@@ -1298,6 +1344,12 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void
       const age = nowMs - Date.parse(message.ts);
       if (!(age >= threshold)) continue;
       if (existsSync(reportedPath(dropDir, message.id))) continue;
+      // The pass listed this folder before the seat could read it: a receipt that landed since
+      // is the read itself, and reporting the message as queued, not woken would tell its
+      // sender of a loss it never suffered. The read is checked again for the few messages past
+      // the window, never for the whole folder, with the same claim binding the listing applied
+      // so a stale brief receipt cannot count here either.
+      if (isRead(dropDir, message.id, context, key.key, claimBindingIn(scene.root, scene.session, seat.name, message.id))) continue;
       const woke = wakeMarkOf(dropDir, message.id);
       // A message whose blocked screen was already reported to the lead within 2N counts as
       // delivered-but-blocked, not lost: it never seeds a 2N queued-not-woken report.
