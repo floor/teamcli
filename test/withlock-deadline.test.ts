@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { LOCK_FILE, withLock } from '../src/state.ts';
+import { LOCK_FILE, LockBusyError, withLock } from '../src/state.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 
 const base = mkdtempSync(join(tmpdir(), 'withlock-deadline-'));
@@ -42,6 +42,38 @@ async function attempt(dir: string, waitMs: number): Promise<Attempt> {
 function outcome(result: Attempt): { word: string; ms: number } {
   const [word, ms] = result.out.trim().split(' ');
   return { word: word ?? '', ms: Number(ms) };
+}
+
+/** A process that stays alive until `end`, so a lock can name a holder that really runs. */
+function sleeper(): { pid: number; end: () => Promise<void> } {
+  const child = Bun.spawn(['sleep', '30'], { stdout: 'ignore', stderr: 'ignore' });
+  return {
+    pid: child.pid,
+    end: async () => {
+      child.kill('SIGKILL');
+      await child.exited;
+    },
+  };
+}
+
+/** Runs `work` with `Atomics.wait` counted, so a scene proves whether the call slept rather than
+ *  inferring it from elapsed time under whatever load the machine carries. */
+function recordWaits<T>(work: () => T): { value: T | undefined; error: unknown; waits: number } {
+  const realWait = Atomics.wait;
+  let waits = 0;
+  (Atomics as unknown as { wait: typeof Atomics.wait }).wait = ((array: Int32Array, index: number, value: number, timeout?: number) => {
+    waits += 1;
+    return realWait(array, index, value, timeout);
+  }) as typeof Atomics.wait;
+  try {
+    try {
+      return { value: work(), error: undefined, waits };
+    } catch (error) {
+      return { value: undefined, error, waits };
+    }
+  } finally {
+    (Atomics as unknown as { wait: typeof Atomics.wait }).wait = realWait;
+  }
 }
 
 test('an unremovable lock held by a dead process throws LockBusyError at the deadline', async () => {
@@ -114,3 +146,86 @@ test('a dead holder is still taken over with waitMs 0, on the pass after the tak
   expect(stale).toEqual([dead]);
   expect(existsSync(join(dir, LOCK_FILE))).toBe(false);
 });
+
+// `waitMs: 0` is one attempt, not a short wait: a caller that asked for none must not sleep in
+// `Atomics.wait` on the way to its refusal. The count is the mechanism itself, so these scenes do
+// not depend on the machine's pace the way an elapsed-milliseconds bound would.
+test('waitMs 0 answers a key it cannot read without waiting', () => {
+  const dir = join(base, 'unreadable-key-immediate');
+  mkdirSync(dir, { mode: 0o700 });
+  // A folder where the key file belongs: reading it fails with EISDIR, not ENOENT.
+  mkdirSync(join(dir, LOCK_FILE));
+  const run = recordWaits(() => withLock(dir, () => 'ran', { waitMs: 0 }));
+  expect(run.error).toBeInstanceOf(LockBusyError);
+  expect((run.error as Error).message).toContain('not readable yet');
+  expect(run.waits).toBe(0);
+});
+
+test('waitMs 0 refuses an unremovable dead-holder lock without waiting', () => {
+  const dir = join(base, 'unremovable-immediate');
+  mkdirSync(dir, { mode: 0o700 });
+  writeFileSync(join(dir, LOCK_FILE), `${String(deadPid())}\n`);
+  // No write on the folder: the dead holder's key cannot be renamed aside, so the takeover is
+  // refused, and the refusal must not pause first.
+  chmodSync(dir, 0o500);
+  try {
+    const run = recordWaits(() => withLock(dir, () => 'ran', { waitMs: 0 }));
+    expect(run.error).toBeInstanceOf(LockBusyError);
+    expect(run.waits).toBe(0);
+  } finally {
+    chmodSync(dir, 0o700);
+  }
+});
+
+test('waitMs 0 refuses a young holderless key without waiting', () => {
+  const dir = join(base, 'young-immediate');
+  mkdirSync(dir, { mode: 0o700 });
+  const key = join(dir, LOCK_FILE);
+  writeFileSync(key, '');
+  const ahead = new Date(Date.now() + 60_000);
+  utimesSync(key, ahead, ahead);
+  const run = recordWaits(() => withLock(dir, () => 'ran', { waitMs: 0 }));
+  expect(run.error).toBeInstanceOf(LockBusyError);
+  expect(run.waits).toBe(0);
+});
+
+// A refusal names the holder the key shows now, never one that has departed: the message is read
+// by someone deciding what to retry, and a dead pid sends them at a process that no longer exists.
+test('a refusal does not name a holder that has since died', async () => {
+  const dir = join(base, 'departed-holder');
+  mkdirSync(dir, { mode: 0o700 });
+  const key = join(dir, LOCK_FILE);
+  const holder = sleeper();
+  writeFileSync(key, `${String(holder.pid)}\n`);
+  const attemptPromise = attempt(dir, 1_000);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  await holder.end();
+  // The key now names nobody and reads young forever, so only the deadline ends the wait.
+  writeFileSync(key, '');
+  const ahead = new Date(Date.now() + 60_000);
+  utimesSync(key, ahead, ahead);
+  const result = await attemptPromise;
+  expect(result.hung).toBe(false);
+  expect(outcome(result).word).toBe('LockBusyError');
+  expect(result.out).toContain('not readable yet');
+  expect(result.out).not.toContain(`pid ${String(holder.pid)})`);
+}, 6_000);
+
+test('a refusal names the live holder the key shows when it is made', async () => {
+  const dir = join(base, 'replaced-holder');
+  mkdirSync(dir, { mode: 0o700 });
+  const key = join(dir, LOCK_FILE);
+  const first = sleeper();
+  writeFileSync(key, `${String(first.pid)}\n`);
+  const attemptPromise = attempt(dir, 1_000);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const second = sleeper();
+  writeFileSync(key, `${String(second.pid)}\n`);
+  const result = await attemptPromise;
+  await first.end();
+  await second.end();
+  expect(result.hung).toBe(false);
+  expect(outcome(result).word).toBe('LockBusyError');
+  expect(result.out).toContain(`pid ${String(second.pid)})`);
+  expect(result.out).not.toContain(`pid ${String(first.pid)})`);
+}, 6_000);
