@@ -40,10 +40,11 @@ export type Op =
       /**
        * The seat's own recorded pane is reused: the command runs there, nothing is created and
        * nothing is closed. The value is the process identity the seat's record holds; the live
-       * run reads the pane, its workspace and its process again immediately before the launch.
-       * Only a pane the workspace still lists and that reads `gone` against that identity is
-       * launched in — a pane back at the recorded CLI is the seat's again, and a pane holding
-       * anything else leaves the seat out with nothing launched.
+       * run reads the pane, its workspace, its process and the agent list again immediately
+       * before the launch. Only a pane the workspace still lists, whose own shell is the only
+       * process in front and that the host does not name for another seat, is launched in — a
+       * pane back at the recorded CLI is the seat's again, and a pane holding anything else
+       * leaves the seat out with nothing launched.
        */
       reuse?: LaunchedIdentity;
       /** The workspace the reused pane sits in; read again with the pane before the launch. */
@@ -173,8 +174,10 @@ export type Op =
     }
   /** A seat relaunched in a fresh workspace had a recorded pane the host did not restore. Its
    *  recorded workspace is closed only here, after the seat is ready on its replacement, and only
-   *  when a fresh reading still shows that workspace holding the one old pane with no CLI in it.
-   *  Every other reading leaves the workspace and says why. */
+   *  when a fresh reading still shows that workspace holding the one old pane, bare at its own
+   *  shell and not named for another seat. Every other reading — an unreadable pane, one with a
+   *  process beside its shell, a name the host gives another seat — leaves the workspace and
+   *  says why. */
   | { do: 'close-leftover'; seat: string; pane: string; workspace: string; cli?: string }
   /**
    * The host restored the seat's pane and cleared its name. Re-read the host, re-run the same

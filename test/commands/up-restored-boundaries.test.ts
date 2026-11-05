@@ -1015,7 +1015,14 @@ describe('team up, a restored session: boundaries', () => {
     writeState('kept', true);
     const { sameProcess, list, workspaces } = baseline();
     const made = world();
-    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? null : sameProcess(pane));
+    // The plan's reading finds nothing in the recorded pane; by the close the host has it back
+    // at its shell, and that fresh reading is the one the close is judged by.
+    let oldReads = 0;
+    made.launch.processInfo = (_session, pane) => {
+      if (pane !== RECORDED_PANE) return sameProcess(pane);
+      oldReads += 1;
+      return oldReads === 1 ? null : { shell: SEATS['deepseek-acme'].shell, foreground: [SEATS['deepseek-acme'].shell] };
+    };
     const live = () => list().filter((item) => item.name !== 'deepseek-acme');
     made.launch.agents = live;
     const io = testIo(root, { kind: 'owner' });

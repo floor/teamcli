@@ -7,7 +7,9 @@
 // - a pane the host did not restore gets its replacement created first, launched and made
 //   ready, and only then is the recorded workspace closed — never before;
 // - a recorded workspace the host still lists with another pane in it is left exactly as it
-//   is, and the run says so instead of closing it.
+//   is, and the run says so instead of closing it;
+// - a pane that is not its own bare shell — another process beside it, a name the host gives
+//   another seat — is never typed into, and a pane the close cannot read is never closed.
 //
 // Every pane, workspace, process reading, screen and conversation here is a synthetic fixture:
 // no live terminal host, registry, provider or pane is read. The pane's model and the
@@ -339,6 +341,15 @@ test('a pane the host did not restore is replaced first, and its workspace close
   // The recorded pane is still listed by the host but holds no process at all: the restore did
   // not bring its program back. The workspace is still listed beside it.
   const made = makeWorld({ process: null });
+  // The plan's reading finds nothing in the old pane; by the close the host has the pane back
+  // at its shell. The close re-reads the pane, and only that fresh reading decides the close.
+  const read = made.sources.launch!.processInfo!;
+  let reads = 0;
+  made.sources.launch!.processInfo = (session, pane) => {
+    if (pane !== PANE) return read(session, pane);
+    reads += 1;
+    return reads === 1 ? null : { shell: RECORDED.shell, foreground: [RECORDED.shell] };
+  };
   let readyAtClose: { stage?: string; pane?: string; workspace?: string } = {};
   const closer = made.sources.launch!.closeWorkspace;
   made.sources.launch!.closeWorkspace = (session, workspace) => {
@@ -378,4 +389,83 @@ test('a recorded workspace holding another pane is left as it is, and the run sa
   expect(made.trace.created).toHaveLength(1);
   expect(seatState()?.stage).toBe('ready');
   expect(`${io.out}${io.err}`).toContain(`its recorded workspace ${SPACE} holds other panes; left as it is`);
+});
+
+test('a pane with another process beside its own shell is not typed into', async () => {
+  recordReady();
+  // The recorded shell is in front, and so is a process the record does not name. `gone` holds
+  // for this reading, but the pane is not bare: a launch line typed here would land in whatever
+  // that other process is.
+  const made = makeWorld({ process: { shell: RECORDED.shell, foreground: [RECORDED.shell, 900] } });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), `up said:\n${io.out}\n${io.err}`).toBe(1);
+
+  // Nothing was typed, created or closed, and the record is exactly as it was.
+  expect(made.trace.runs).toEqual([]);
+  expect(made.trace.created).toEqual([]);
+  expect(made.trace.closed).toEqual([]);
+  expect(seatState()).toMatchObject({ stage: 'ready', pane: PANE, launched: RECORDED });
+  expect(`${io.out}${io.err}`)
+    .toContain('the process in its pane is not the one team launched; nothing launched, nothing closed');
+});
+
+test('a recorded pane whose process cannot be read is never closed', async () => {
+  recordReady();
+  // The recorded pane did not come back: the seat is replaced first, and the recorded workspace
+  // is left to close last. The close's own reading finds nothing in the old pane — it cannot be
+  // read — so the workspace is left exactly as it is.
+  const made = makeWorld({ process: null });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), `up said:\n${io.out}\n${io.err}`).toBe(0);
+
+  expect(made.trace.created).toHaveLength(1);
+  expect(made.trace.closed).toEqual([]);
+  expect(`${io.out}${io.err}`)
+    .toContain(`its recorded workspace ${SPACE} holds a pane that could not be read; left as it is`);
+  expect(seatState()).toMatchObject({ stage: 'ready', pane: NEW_PANE, workspace: NEW_SPACE });
+});
+
+test('a pane the host names for another seat is not typed into', async () => {
+  recordReady();
+  // The recorded pane is back at its own shell, and the host names another seat on it: the
+  // pane is that seat's, and this seat's launch line is never typed there.
+  const made = makeWorld({ process: { shell: RECORDED.shell, foreground: [RECORDED.shell] }, name: 'fixture-other-seat' });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), `up said:\n${io.out}\n${io.err}`).toBe(1);
+
+  expect(made.trace.runs).toEqual([]);
+  expect(made.trace.created).toEqual([]);
+  expect(made.trace.closed).toEqual([]);
+  expect(seatState()).toMatchObject({ stage: 'ready', pane: PANE, launched: RECORDED });
+  expect(`${io.out}${io.err}`).toContain('its pane is named for another seat; nothing launched, nothing closed');
+});
+
+test('a pane the host names for another seat is never closed', async () => {
+  recordReady();
+  // The plan sees the old pane gone; by the close the host has it back at its shell and names
+  // another seat on it. The close re-reads the pane and the list, and the workspace is left.
+  const made = makeWorld({ process: null });
+  const read = made.sources.launch!.processInfo!;
+  let reads = 0;
+  made.sources.launch!.processInfo = (session, pane) => {
+    if (pane !== PANE) return read(session, pane);
+    reads += 1;
+    return reads === 1 ? null : { shell: RECORDED.shell, foreground: [RECORDED.shell] };
+  };
+  const agentsNow = made.sources.launch!.agents;
+  made.sources.launch!.agents = (session) => {
+    const seen = agentsNow(session) ?? [];
+    // Once this run has made the replacement, the host also names another seat on the old pane.
+    return made.trace.created.length > 0
+      ? [...seen, { name: 'fixture-other-seat', agent: 'claude', pane: PANE, workspace: SPACE, status: 'idle', cwd: root }]
+      : seen;
+  };
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), `up said:\n${io.out}\n${io.err}`).toBe(0);
+
+  expect(made.trace.created).toHaveLength(1);
+  expect(made.trace.closed).toEqual([]);
+  expect(`${io.out}${io.err}`)
+    .toContain(`its recorded workspace ${SPACE} holds a pane named for another seat; left as it is`);
+  expect(seatState()).toMatchObject({ stage: 'ready', pane: NEW_PANE, workspace: NEW_SPACE });
 });

@@ -385,6 +385,15 @@ test('a replacement whose name lands moves the agent to the pane that is running
   // lands and the rules rode the launch line, so nothing is left to type: the seat reaches
   // `ready` on the live pane, and only then is the recorded workspace closed.
   const made = sources({ missing: true });
+  // The plan's reading finds nothing in the old pane; by the close the host has it back at its
+  // shell, and that fresh reading is the one the close is judged by.
+  const read = made.sources.launch!.processInfo!;
+  let oldReads = 0;
+  made.sources.launch!.processInfo = (session, pane) => {
+    if (pane !== OLD_PANE) return read(session, pane);
+    oldReads += 1;
+    return oldReads === 1 ? null : { shell: OLD_LAUNCHED.shell, foreground: [OLD_LAUNCHED.shell] };
+  };
   const io = testIo(root, { kind: 'owner' });
   expect(await runUp([], io, made.sources)).toBe(0);
 

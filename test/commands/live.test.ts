@@ -2621,9 +2621,17 @@ describe('team up, a session that was restored', () => {
     const made = world();
     made.session = 'running';
     // The recorded pane did not come back: the replacement is created and launched first, and
-    // the recorded workspace is closed only once the seat is ready on the replacement. This
-    // close fails, and the workspace is left — the seat keeps its replacement.
-    made.launch.processInfo = (_session, pane) => (pane === restoredState['claude-coordinator-acme'].pane ? null : { shell: 700, foreground: [700, 701] });
+    // the recorded workspace is closed only once the seat is ready on the replacement. The
+    // plan's reading finds nothing in the old pane; by the close the host has it back at its
+    // shell, and the close re-reads it before trying. This close fails, and the workspace is
+    // left — the seat keeps its replacement.
+    const gone = restoredState['claude-coordinator-acme'];
+    let reads = 0;
+    made.launch.processInfo = (_session, pane) => {
+      if (pane !== gone.pane) return { shell: 700, foreground: [700, 701] };
+      reads += 1;
+      return reads === 1 ? null : { shell: gone.shell, foreground: [gone.shell] };
+    };
     made.launch.agents = () => [];
     made.launch.closeWorkspace = () => false;
     const io = quietIo();
