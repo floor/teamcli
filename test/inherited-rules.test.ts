@@ -359,6 +359,16 @@ describe('inherited entity-wide and project-wide rules', () => {
     expect(text).not.toContain('served-proj');
     expect(text).not.toContain('Served project rule MUST NOT apply.');
 
+    // When `team.inProject` is null, `homeProjectIdOf` still resolves `home-proj` from the team
+    // registry record's `project_id` in `teams.yaml` (ignoring `served-proj` in `projects[]`):
+    const { team: registeredOnlyTeam } = makeTeam({
+      project: 'alpha',
+      entity: 'acme-corp',
+      inProject: null,
+      rules: ['Team rule applies.'],
+    });
+    expect(homeProjectIdOf(home, teamRoot, registeredOnlyTeam)).toBe('home-proj');
+
     // Also when a team has NO home project (project_id: null) and only serves served-proj:
     writeTeamsYaml(
       [
@@ -390,6 +400,24 @@ describe('inherited entity-wide and project-wide rules', () => {
     expect(unassignedText).not.toContain('Project rules');
     expect(unassignedText).not.toContain('Served project rule MUST NOT apply.');
     expect(unassignedText).not.toContain('Home project rule applies.');
+
+    // Even when teams.yaml is absent and projects.yaml lists only one project with `teams: [id]`,
+    // a team with `inProject: null` has no home project (`homeProjectIdOf` keys only on
+    // `team.inProject` or `teams.yaml` `project_id`, never `projects.yaml` `teams[]`):
+    unlinkSync(join(home, '.config', 'team', 'teams.yaml'));
+    writeProjectsYaml(
+      [
+        'projects:',
+        '  served-proj:',
+        '    name: ServedProj',
+        '    entity: acme-corp',
+        `    teams: [${id}]`,
+        '    rules:',
+        '      - "Served project rule MUST NOT apply."',
+        '',
+      ].join('\n'),
+    );
+    expect(homeProjectIdOf(home, teamRoot, unassignedTeam)).toBeNull();
   });
 
   test('4. hash changes when an entity rule changes and drift is reported by status and doctor', () => {
@@ -1030,10 +1058,42 @@ describe('inherited entity-wide and project-wide rules', () => {
     const unsetIo = testIo(teamRoot, { kind: 'owner' });
     expect(await runConfig(['unset', '@composed.rules'], unsetIo, { home })).toBe(2);
     expect(unsetIo.err).toContain('is a view');
+
+    // A project literally named `composed` also keeps `project.composed.rules` for its own stored rules,
+    // while `project.@composed.rules` is refused as an invalid name.
+    writeProjectsYaml(
+      [
+        'projects:',
+        '  composed:',
+        '    name: Composed Project',
+        '    entity: composed',
+        '',
+      ].join('\n'),
+    );
+    const setProjComposedIo = testIo(teamRoot, { kind: 'owner' });
+    expect(
+      await runConfig(
+        ['set', 'project.composed.rules', JSON.stringify(['Stored on project composed.'])],
+        setProjComposedIo,
+        { home },
+      ),
+    ).toBe(0);
+    const getProjComposedIo = testIo(teamRoot, { kind: 'owner' });
+    expect(await runConfig(['get', 'project.composed.rules', '--json'], getProjComposedIo, { home })).toBe(0);
+    expect(JSON.parse(getProjComposedIo.out)).toMatchObject({
+      path: 'project.composed.rules',
+      source: 'project',
+      value: ['Stored on project composed.'],
+    });
+
+    const badProjAtIo = testIo(teamRoot, { kind: 'owner' });
+    expect(await runConfig(['get', 'project.@composed.rules'], badProjAtIo, { home })).toBe(2);
+    expect(badProjAtIo.err).toContain('"@composed" is not an entity name');
   });
 
   test('11. rules paths refuse --request and --approval, and a wildcard general grant still writes them', async () => {
     writeEntitiesYaml(['entities:', '  acme-corp:', '    name: Acme Corp', ''].join('\n'));
+    writeProjectsYaml(['projects:', '  beacon:', '    name: Beacon', ''].join('\n'));
 
     const entityRequest = testIo(teamRoot, { kind: 'owner' });
     expect(await runConfig(['set', 'acme-corp.rules', '[ "one" ]', '--request'], entityRequest, { home })).toBe(2);
@@ -1047,6 +1107,10 @@ describe('inherited entity-wide and project-wide rules', () => {
     expect(await runConfig(['set', 'project.beacon.rules', '[ "one" ]', '--request'], projectRequest, { home })).toBe(2);
     expect(projectRequest.err).toContain("a project's rules take no --request or --approval");
 
+    const projectApproval = testIo(teamRoot, { kind: 'owner' });
+    expect(await runConfig(['set', 'project.beacon.rules', '[ "one" ]', '--approval', 'oa_missing'], projectApproval, { home })).toBe(2);
+    expect(projectApproval.err).toContain("a project's rules take no --request or --approval");
+
     // The door the refusal names: a wildcard general grant admitting config writes the same path.
     const base = fixtureBase('.inherited-rules-grant-');
     try {
@@ -1055,6 +1119,10 @@ describe('inherited entity-wide and project-wide rules', () => {
       writeFileSync(
         join(grantHome, '.config', 'team', 'entities.yaml'),
         ['entities:', '  acme-corp:', '    name: Acme Corp', ''].join('\n'),
+      );
+      writeFileSync(
+        join(grantHome, '.config', 'team', 'projects.yaml'),
+        ['projects:', '  beacon:', '    name: Beacon', ''].join('\n'),
       );
       const pair = newClientKeyPair();
       const keys = writeClientKeyFiles(join(grantHome, '.config', 'team-client', 'client-a'), pair);
@@ -1078,6 +1146,16 @@ describe('inherited entity-wide and project-wide rules', () => {
       expect(code, io.err).toBe(0);
       expect(io.err).toContain('admitted by general grant');
       expect(entityRules(grantHome, 'acme-corp')).toEqual(['Admitted by the wildcard grant.']);
+
+      const projIo = testIo(teamRoot, { kind: 'seat', name: 'builder-9', pane: 'pane1' });
+      const projCode = await runConfig(
+        ['set', 'project.beacon.rules', JSON.stringify(['Project rule admitted by the wildcard grant.']), '--general', grant.path, '--key', keys.keyPath],
+        projIo,
+        { home: grantHome, now: () => now },
+      );
+      expect(projCode, projIo.err).toBe(0);
+      expect(projIo.err).toContain('admitted by general grant');
+      expect(projectRules(grantHome, 'beacon')).toEqual(['Project rule admitted by the wildcard grant.']);
     } finally {
       rmSync(base, { recursive: true, force: true });
     }

@@ -39,7 +39,6 @@ const RULES_KEY = 'rules';
  *  take (`isEntityName` starts with a letter or a digit), so the view cannot shadow an entity
  *  called `composed`, and `composed.rules` stays that entity's own stored rules. */
 const COMPOSED_PATH = '@composed.rules';
-const COMPOSED_NAME = '@composed';
 type EntityKey = typeof NAMES_KEY | typeof REMINDERS_KEY | typeof RULES_KEY;
 const FORM: Record<EntityKey, string> = {
   [NAMES_KEY]: `team config set <entity>.${NAMES_KEY} <word>`,
@@ -172,7 +171,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   const targetName = isProjectRules ? entityName.replace(/^projects?\./, '') : entityName;
   let why: string | null = args.error ?? null;
   if (why === null && key === null) why = `a path names an entity's ${NAMES_KEY}, ${REMINDERS_KEY}, or ${RULES_KEY}`;
-  if (why === null && verb !== 'get' && key === RULES_KEY && targetName === COMPOSED_NAME) {
+  if (why === null && verb !== 'get' && path === COMPOSED_PATH) {
     why = `${COMPOSED_PATH} is a view of the rules in force, not a stored value: it takes no set or unset; \`team config get ${COMPOSED_PATH}\` reads it`;
   }
   if (why === null && verb === 'unset') {
@@ -200,7 +199,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   }
   if (why === null && (args.values.general !== undefined) !== (args.values.key !== undefined)) why = '--general and --key go together';
   if (why === null && args.values.general !== undefined && verb === 'get') why = '--general takes set';
-  if (why === null && !(key === RULES_KEY && targetName === COMPOSED_NAME) && !isEntityName(targetName)) {
+  if (why === null && path !== COMPOSED_PATH && !isEntityName(targetName)) {
     why = `"${targetName}" is not an entity name: letters, digits, ".", "_" and "-", starting with a letter or a digit, 128 at most`;
   }
   if (why !== null) return usageRefused(io, json, why, usage);

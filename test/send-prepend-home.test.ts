@@ -14,6 +14,7 @@ import { recordBody } from './helpers.ts';
 import { fake, owner, world, type World } from './send-native-fixtures.ts';
 
 const ENTITY_RULE = 'A prepend seat reads its entity rules on every brief.';
+const PROJECT_RULE = 'A prepend seat reads its home-project rules on every brief.';
 
 let made: World | null = null;
 
@@ -74,12 +75,12 @@ function registerSeat(seat: string, cli: string): void {
 }
 
 describe('team send: a prepend seat composes the receiving home’s rules', () => {
-  test('the brief carries the entity rules declared under the host home', async () => {
+  test('the brief carries the entity and home-project rules declared under the host home', async () => {
     made = world(['mcp-inbox', 'typed'], [
       { name: 'prepend-seat', role: 'implementer', cli: 'jules', launch: 'jules' },
     ]);
-    // The file names the entity whose rules the composed text carries.
-    appendFileSync(join(made.root, '.agents', 'team.yaml'), 'entity: ent-a\n');
+    // The file names the entity and home project whose rules the composed text carries.
+    appendFileSync(join(made.root, '.agents', 'team.yaml'), 'entity: ent-a\nin_project: Beacon\n');
     mkdirSync(join(made.home, '.config', 'team'), { recursive: true });
     writeFileSync(
       join(made.home, '.config', 'team', 'entities.yaml'),
@@ -89,6 +90,18 @@ describe('team send: a prepend seat composes the receiving home’s rules', () =
         '    name: Ent A',
         '    rules:',
         `      - ${JSON.stringify(ENTITY_RULE)}`,
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(
+      join(made.home, '.config', 'team', 'projects.yaml'),
+      [
+        'projects:',
+        '  beacon:',
+        '    name: Beacon',
+        '    entity: ent-a',
+        '    rules:',
+        `      - ${JSON.stringify(PROJECT_RULE)}`,
         '',
       ].join('\n'),
     );
@@ -103,6 +116,8 @@ describe('team send: a prepend seat composes the receiving home’s rules', () =
     const body = recordBody(path);
     expect(body).toContain('Entity rules (ent-a):');
     expect(body).toContain(`- ${ENTITY_RULE}`);
+    expect(body).toContain('Project rules (beacon):');
+    expect(body).toContain(`- ${PROJECT_RULE}`);
     expect(body).toContain('hello');
   });
 });

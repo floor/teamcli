@@ -8,6 +8,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runUp } from '../src/commands/up.ts';
 import { declaredEntityRules, entityRules, writeEntityRulesSet } from '../src/entities.ts';
+import { validateTeamFile } from '../src/file/validate.ts';
+import { rulesOf } from '../src/launch/rules.ts';
 import { declaredProjectRules, projectRules, setProjectRules } from '../src/registry/projects.ts';
 import { currentRunMemo, enterRunMemo, leaveRunMemo } from '../src/run-memo.ts';
 import { testIo } from './helpers.ts';
@@ -143,5 +145,69 @@ describe('a team up run holds the memo', () => {
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((held) => held)).toBe(true);
     expect(currentRunMemo()).toBeNull();
+  });
+
+  test('composes identical entity and home-project rules across multiple seats even if files change mid-run', () => {
+    const parsed = validateTeamFile(
+      [
+        'format: 1',
+        'project: alpha',
+        'entity: ent-a',
+        'in_project: Beacon',
+        'coordinator: lead-a',
+        'operator: lead-a',
+        'session: alpha',
+        'workspace:',
+        '  mode: shared',
+        'seats:',
+        '  - role: coordinator',
+        '    name: lead-a',
+        '    cli: claude-code',
+        '    vendor: anthropic',
+        '    model: Claude Opus 4.6',
+        '    version: "1"',
+        '    launch: claude',
+        '  - role: builder',
+        '    name: seat-b',
+        '    cli: claude-code',
+        '    vendor: anthropic',
+        '    model: Claude Opus 4.6',
+        '    version: "1"',
+        '    launch: claude',
+        '',
+      ].join('\n'),
+    );
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+    const [seat1, seat2] = parsed.team.seats;
+
+    writeEntities('Entity rule v1');
+    writeFileSync(
+      join(home, '.config', 'team', 'projects.yaml'),
+      [
+        'projects:',
+        '  beacon-id:',
+        '    name: Beacon',
+        '    rules:',
+        '      - "Project rule v1"',
+        '',
+      ].join('\n'),
+    );
+
+    enterRunMemo();
+    try {
+      const firstSeatRules = rulesOf(parsed.team, seat1!, '/tmp/root-a', undefined, 'file', home);
+      // Simulate the owner editing entities.yaml and projects.yaml on disk mid-plan between seats:
+      writeEntities('Entity rule v2');
+      writeFileSync(join(home, '.config', 'team', 'projects.yaml'), 'projects: {}\n');
+      const secondSeatRules = rulesOf(parsed.team, seat2!, '/tmp/root-a', undefined, 'file', home);
+
+      expect(firstSeatRules).toContain('Entity rules (ent-a):\n- Entity rule v1');
+      expect(firstSeatRules).toContain('Project rules (beacon-id):\n- Project rule v1');
+      expect(secondSeatRules).toContain('Entity rules (ent-a):\n- Entity rule v1');
+      expect(secondSeatRules).toContain('Project rules (beacon-id):\n- Project rule v1');
+      expect(secondSeatRules).not.toContain('Entity rule v2');
+    } finally {
+      leaveRunMemo();
+    }
   });
 });
