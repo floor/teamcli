@@ -1211,14 +1211,13 @@ async function runUpAll(
   noLaunch: boolean,
   jsonNotes: string[],
   stderrLine: (text: string) => void,
-  internal?: UpInternal,
-): Promise<number> {
+): Promise<0 | 1 | 2> {
   const home = sources.home ?? homedir();
   const now = sources.now?.() ?? new Date();
   const refusal = 'only the owner or a lead in development mode runs team up --all';
 
   if (args.values.general === undefined) {
-    const walked = internal?.caller ?? walkCaller(io);
+    const walked = walkCaller(io);
     if (walked.kind === 'owner-no-tty') {
       const detached = detachedRefusal(walked, {
         who: 'the owner or a lead in development mode',
@@ -1330,7 +1329,6 @@ async function runUpAll(
   const teamEntries: UpAllTeamEntry[] = [];
 
   for (const record of activeRecords) {
-    if (internal?.isClosing?.() === true) break;
     const state = resolveState(sources, record.session);
     if (state === null) {
       nullStateCount += 1;
@@ -1444,7 +1442,6 @@ async function runUpAll(
         caller: { kind: 'owner' },
         lockHeld: !dry,
         nonInteractive: true,
-        ...(internal?.isClosing ? { isClosing: internal.isClosing } : {}),
         onReport: (next) => {
           seen.report = next;
         },
@@ -1607,16 +1604,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     else out.stderr(text);
   };
   const clientProblem = args.error === undefined && args.rest.length === 0 ? clientInvocationProblem(args) : null;
-  if (args.error || args.rest.length || clientProblem !== null) {
-    refuse(io, json, 'up', {
-      id: 'up.invocation',
-      message: plainText(args.error ?? (args.rest.length ? `unexpected "${args.rest[0]}"` : clientProblem!)),
-      repair: null,
-      usage: USAGE,
-    });
-    // exit: up.invocation
-    return 2;
-  }
+  const badInvocation = Boolean(args.error || args.rest.length || clientProblem !== null);
   const dry = args.flags.has('dry-run');
   // `--no-launch`: seats get their rules and nothing else — no general seat brief is dropped in
   // their folder and no launch-line inbox route names a brief epoch.
@@ -1626,7 +1614,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // folder alone — a no-terminal owner launch that never prompts, whose seats are the signed team
   // file's and no others. Every other caller goes through the ordinary gates below, unchanged.
   let clientUp: { grant: ClientUpGrantRecord; signature: string; requestId: string } | null = null;
-  if (args.values.client !== undefined) {
+  if (!badInvocation && args.values.client !== undefined) {
     stderrLine(`${KEY_ISOLATION_LINE}\n`);
     const clientNow = sources.now?.() ?? new Date();
     const verified = verifyClientUp({
@@ -1669,7 +1657,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // admitted run is a no-terminal owner launch: it never prompts and never types into a pane.
   // A general grant (src/client/general-grant.ts): the owner signed this principal once for this
   // entity, so the run is admitted as an owner-seat approval would admit it, with no request.
-  if (args.values.general !== undefined) {
+  if (!badInvocation && args.values.general !== undefined) {
     let entity: string | null = null;
     if (!args.flags.has('all')) {
       try {
@@ -1685,16 +1673,28 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     }
     stderrLine(`team up: admitted by general grant ${general.grant.grant_id} (${general.grant.client_id})\n`);
   }
-  const allCode = args.flags.has('all')
-    ? await runUpAll(args, io, out, sources, json, dry, noLaunch, jsonNotes, stderrLine, internal)
+  const allCode = !badInvocation && args.flags.has('all')
+    ? await runUpAll(args, io, out, sources, json, dry, noLaunch, jsonNotes, stderrLine)
     : null;
-  const seatStep = allCode !== null
+  const seatStep = badInvocation || allCode !== null
     ? { kind: 'pass' as const }
     : args.values.general !== undefined
     ? { kind: 'admitted' as const }
     : clientUp !== null && (args.flags.has('request') || args.values.approval !== undefined)
     ? (refuse(io, json, 'up', { id: 'up.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
     : ownerSeatStep('up', 'team-up', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason }, io, sources);
+  if (badInvocation || allCode === 2) {
+    if (badInvocation) {
+      refuse(io, json, 'up', {
+        id: 'up.invocation',
+        message: plainText(args.error ?? (args.rest.length ? `unexpected "${args.rest[0]}"` : clientProblem!)),
+        repair: null,
+        usage: USAGE,
+      });
+    }
+    // exit: up.invocation
+    return 2;
+  }
   if (allCode === 0 || seatStep.kind === 'requested') {
     // exit: up.approval-requested
     return 0;
@@ -1710,14 +1710,14 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   const detached = clientUp !== null || seatApproved ? undefined : detachedRefusal(walked, { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
   // The owner's run on a team still only in its file imports it first, with a notice
   // (docs/commands/up.md): moving to the registry never stands between the owner and a launch.
-  const imported = allCode === null && clientUp === null && detached === undefined && (walked.kind === 'owner' || seatApproved) && !args.values.file
+  const imported = clientUp === null && detached === undefined && (walked.kind === 'owner' || seatApproved) && !args.values.file
     ? importForUp(io.cwd, sources.home, dry, sources.now?.() ?? new Date())
     : null;
   if (imported !== null) {
     if (dry && !json) out.stdout(`${imported}\n`);
     else stderrLine(`team up: ${imported}\n`);
   }
-  const defaultLoad = allCode !== null || mayLaunchSeats(walked) || detached !== undefined ? null : readTeamConfig(io.cwd, { home: sources.home });
+  const defaultLoad = mayLaunchSeats(walked) || detached !== undefined ? null : readTeamConfig(io.cwd, { home: sources.home });
   // Dev mode, as the default live file's chain states it: this folder's own file is the caller's
   // place, never a file the caller names. The aimed branch below decides before that file is
   // mounted, so it reads this verdict; the run's own, after the load, is the one every later
@@ -1740,7 +1740,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // into an ordinary one on the file's own session. This folder's own file, with no
   // `--session`, continues below.
   const otherFile = args.values.file !== undefined && resolve(io.cwd, args.values.file) !== resolve(io.cwd, TEAM_FILE);
-  const aimed = allCode === null && (otherFile || args.values.session !== undefined);
+  const aimed = otherFile || args.values.session !== undefined;
   if (detached !== undefined && aimed) {
     refuse(io, json, 'up', { id: 'up.detached', message: detached, repair: null });
     // exit: up.detached
@@ -1875,37 +1875,33 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // file its delegation was read from — and otherwise today's load, `--file` honoured exactly
   // as before.
   const loaded =
-    allCode !== null
-      ? ({ ok: false as const, errors: [] })
-      : delegateTeam ??
-        (defaultLoad !== null && !args.values.file
-          ? defaultLoad
-          : readTeamConfig(io.cwd, {
-              ...(args.values.file ? { file: args.values.file } : {}),
-              home: sources.home,
-              // The session this run addresses: the placement check reads that session's recorded
-              // lobby, which `up --session alt` records apart from the file's own.
-              ...(args.values.session !== undefined ? { session: args.values.session } : {}),
-            }));
+    delegateTeam ??
+    (defaultLoad !== null && !args.values.file
+      ? defaultLoad
+      : readTeamConfig(io.cwd, {
+          ...(args.values.file ? { file: args.values.file } : {}),
+          home: sources.home,
+          // The session this run addresses: the placement check reads that session's recorded
+          // lobby, which `up --session alt` records apart from the file's own.
+          ...(args.values.session !== undefined ? { session: args.values.session } : {}),
+        }));
   if (!loaded.ok) {
-    if (allCode === null) {
-      // A file that does not load refuses both runs, one voice each: the real one stops in
-      // `team up`'s own words, the dry one says what a real run would stop on (`! up would
-      // refuse:`, the dry run's line for every refusal it reaches) and prints no plan, because
-      // this file builds none. Both exit as the file error does, and neither launches anything.
-      const said = loaded.errors.map(
-        (problem) => `${problem.line ? `line ${problem.line}: ` : ''}${plainText(problem.message)}`,
-      );
-      if (json) {
-        const id = loaded.errors.some((problem) => problem.message.startsWith('not inside a git repository'))
-          ? 'up.not-a-repo'
-          : loaded.errors.some((problem) => problem.line > 0) ? 'up.file-invalid' : 'up.file';
-        refuse(io, true, 'up', { id, message: said.join('; '), repair: null });
-      } else {
-        for (const problem of said) {
-          if (dry) out.stdout(`! up would refuse: ${problem}\n`);
-          else out.stderr(`team up: ${problem}\n`);
-        }
+    // A file that does not load refuses both runs, one voice each: the real one stops in
+    // `team up`'s own words, the dry one says what a real run would stop on (`! up would
+    // refuse:`, the dry run's line for every refusal it reaches) and prints no plan, because
+    // this file builds none. Both exit as the file error does, and neither launches anything.
+    const said = loaded.errors.map(
+      (problem) => `${problem.line ? `line ${problem.line}: ` : ''}${plainText(problem.message)}`,
+    );
+    if (json) {
+      const id = loaded.errors.some((problem) => problem.message.startsWith('not inside a git repository'))
+        ? 'up.not-a-repo'
+        : loaded.errors.some((problem) => problem.line > 0) ? 'up.file-invalid' : 'up.file';
+      refuse(io, true, 'up', { id, message: said.join('; '), repair: null });
+    } else {
+      for (const problem of said) {
+        if (dry) out.stdout(`! up would refuse: ${problem}\n`);
+        else out.stderr(`team up: ${problem}\n`);
       }
     }
     // exit: up.not-a-repo

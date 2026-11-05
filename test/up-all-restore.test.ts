@@ -3,14 +3,16 @@
 // isolating per-team failures and refusing a false all-clear when no session is running.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
+import { readChildMessage, readHostMessage } from '../src/daemon/chores/protocol.ts';
 import { daemonLogPath } from '../src/daemon/paths.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
+import { answerDaemonRequest, parseDaemonRequest } from '../src/daemon/protocol.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { HerdrAgent, SessionState } from '../src/herdr.ts';
 import { acquireRunLock } from '../src/launch/run-lock.ts';
@@ -566,6 +568,127 @@ describe('team up --all single-command multi-team restore', () => {
       expect(log).not.toContain('restore: pending');
     } finally {
       await started.daemon.close();
+    }
+  });
+
+  test('returns 2 immediately when the registry cannot be read and never falls through into single-team up or accepts UpInternal on --all', async () => {
+    const registryFile = join(home, '.config', 'team', 'teams.yaml');
+    const savedRegistry = readFileSync(registryFile, 'utf8');
+    try {
+      writeFileSync(registryFile, ': : bad yaml [\n');
+      let singleTeamGateCalled = false;
+      let sessionProbed = false;
+      const baseSources = buildMultiSources();
+      const sources: UpSources = {
+        ...baseSources.sources,
+        sessionState: (s) => {
+          sessionProbed = true;
+          return baseSources.sources.sessionState!(s);
+        },
+        delegateGate: () => {
+          singleTeamGateCalled = true;
+          return { kind: 'refused', id: 'up.delegate', text: 'not delegated' };
+        },
+      };
+      // Run from inside a valid team checkout (`alphaTeam.root`) to prove `--all` exit 2 stops immediately
+      // at the `--all` dispatch site without falling through into single-team `walkCaller`/`callerOf`.
+      const io = testIo(alphaTeam.root, { kind: 'owner' });
+      let callerReads = 0;
+      Object.defineProperty(io, 'caller', {
+        get() {
+          callerReads += 1;
+          return { kind: 'owner' as const };
+        },
+      });
+      expect(await runUp(['--all'], io, sources)).toBe(2);
+      // 1 read in cleanedIo(io) + 2 reads in runUpAll's walkCaller(io); 0 reads in single-team runUp after exit 2.
+      expect(callerReads).toBe(3);
+      expect(sessionProbed).toBe(false);
+      expect(singleTeamGateCalled).toBe(false);
+      expect(baseSources.trace.renamedBySession).toEqual([]);
+    } finally {
+      writeFileSync(registryFile, savedRegistry);
+    }
+
+    // Even if `UpInternal.caller` is passed directly to `runUp` with `--all`, `runUpAll` ignores it
+    // and enforces the `--all` caller gate against the real `io` caller.
+    const { sources, trace } = buildMultiSources();
+    const seatIo = testIo(alphaTeam.root, { kind: 'seat', name: 'worker-1', pane: 'w-alpha:p9', session: 'alpha' });
+    expect(await runUp(['--all'], seatIo, sources, { caller: { kind: 'owner' } })).toBe(1);
+    expect(seatIo.err).toContain('only the owner or a lead in development mode runs team up --all');
+    expect(trace.renamedBySession).toEqual([]);
+  });
+
+  test('pins runRestoreSweepForRoute and UpInternal to the daemon startup path only and refuses socket or chores requests naming restore', () => {
+    const srcRoot = join(import.meta.dir, '..', 'src');
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith('.ts')) files.push(full);
+      }
+    };
+    walk(srcRoot);
+
+    const relOf = (full: string): string => full.slice(srcRoot.length + 1).replaceAll('\\', '/');
+    const callersOfSweep: string[] = [];
+    const callersOfWriteToken: string[] = [];
+    const callersOfSpawnChild: string[] = [];
+    const filesWithUpInternal: string[] = [];
+
+    for (const file of files) {
+      const rel = relOf(file);
+      const text = readFileSync(file, 'utf8');
+      if (text.includes('runRestoreSweepForRoute(') && rel !== 'launch/restore-sweep.ts') {
+        callersOfSweep.push(rel);
+      }
+      if (text.includes('writeRestoreInherit(') && rel !== 'daemon/restore/token.ts') {
+        callersOfWriteToken.push(rel);
+      }
+      if (text.includes('runRestoreSweepInChild(') && rel !== 'daemon/restore/spawn.ts') {
+        callersOfSpawnChild.push(rel);
+      }
+      if (text.includes('UpInternal')) {
+        filesWithUpInternal.push(rel);
+      }
+    }
+
+    // 1. Single-caller chain: startMachineDaemon (daemon/host.ts) -> runRestoreSweepInChild (daemon/restore/spawn.ts)
+    //    -> writeRestoreInherit + entry.ts (daemon/restore/entry.ts) -> runRestoreSweepForRoute (launch/restore-sweep.ts).
+    expect(callersOfSweep).toEqual(['daemon/restore/entry.ts']);
+    expect(callersOfWriteToken).toEqual(['daemon/restore/spawn.ts']);
+    expect(callersOfSpawnChild).toEqual(['daemon/host.ts']);
+    expect(filesWithUpInternal).toEqual(['commands/up.ts']);
+
+    const entryText = readFileSync(join(srcRoot, 'daemon/restore/entry.ts'), 'utf8');
+    expect(entryText).toContain('readRestoreInherit(home, nonce)');
+
+    // 2. Daemon socket protocol refuses any request naming restore or up.
+    const dummyHealth = {
+      pid: 1,
+      uid: 501,
+      since: '2026-11-05T04:00:00Z',
+      startedBy: 'test',
+      version: '0.5.12',
+      heartbeatAt: '2026-11-05T04:00:00Z',
+      stuck: [],
+      features: { send: 'on' as const, bus: 'on' as const, broker: 'absent' as const },
+    };
+    for (const op of ['restore', 'restore-sweep', 'runRestoreSweepForRoute', 'up']) {
+      const parsed = parseDaemonRequest(JSON.stringify({ v: 2, id: `req-${op}`, op }));
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) {
+        const res = answerDaemonRequest(parsed.request, dummyHealth);
+        expect(res.ok).toBe(false);
+        if (!res.ok) expect(res.error.code).toBe('daemon.unsupported-op');
+      }
+    }
+
+    // 3. Chores protocol rejects any host or child frame naming restore or up.
+    for (const type of ['restore', 'restore-sweep', 'runRestoreSweepForRoute', 'up']) {
+      expect(readHostMessage({ type, id: '1', root: '/tmp', at: '2026-11-05T04:00:00Z' })).toBeNull();
+      expect(readChildMessage({ type, root: '/tmp', at: '2026-11-05T04:00:00Z' })).toBeNull();
     }
   });
 });
