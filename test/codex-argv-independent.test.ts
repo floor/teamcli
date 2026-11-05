@@ -1,7 +1,7 @@
 // Independent scenes: what a codex launch line
 // hands the CLI itself, measured as argv by a FAKE codex — a plain script that logs every
 // argument it receives; the real codex is never run. Every shape is executed end-to-end: the
-// command the launcher builds runs under /bin/sh with the fake first on PATH, and the scenes
+// command the launcher builds runs under bash with the fake first on PATH, and the scenes
 // read the argv back. Plain, quoted and nested (a zsh -lc script) lines must land every added
 // option BEFORE the CLI's own '--' and the rules line LAST, with the line's own words kept
 // whole; a decodable ANSI-C delimiter still splits; and a line whose unread part could spell
@@ -11,7 +11,7 @@ import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { profileFor } from '../src/profiles/index.ts';
 import { launchCommandOrRefusal } from '../src/profiles/profile.ts';
 
@@ -34,19 +34,33 @@ function fakeCodex(): { bin: string; log: string } {
   return { bin, log };
 }
 
+/** The probe runs under bash, the shell these ANSI-C scenes were measured on. */
+function probeShell(): string {
+  return existsSync('/bin/bash') ? '/bin/bash' : '/usr/bin/bash';
+}
+
+/** The host zsh, when one resolves. The nested scene names that shell; a host without it skips that scene only. */
+function resolvedZsh(): string | null {
+  const out = spawnSync(probeShell(), ['-c', 'command -v zsh'], { encoding: 'utf8' });
+  const found = out.stdout.trim();
+  if (out.status !== 0 || !found.startsWith('/') || !existsSync(found)) return null;
+  return found;
+}
+
 /** The launcher's command, run as a pane would run it; the fake codex's argv. */
-function argvOf(launch: string): string[] | null {
+function argvOf(launch: string, extraDir?: string): string[] | null {
   const { bin, log } = fakeCodex();
   const built = launchCommandOrRefusal(PROFILE, launch, 'Rules.', undefined, undefined, undefined, undefined, RULES);
   expect(built.refusal).toBeUndefined();
-  const out = spawnSync('/bin/sh', ['-c', built.command], { env: { PATH: `${bin}:/usr/bin:/bin`, HOME: join(bin, '..') }, encoding: 'utf8' });
+  const path = extraDir === undefined ? `${bin}:/usr/bin:/bin` : `${bin}:${extraDir}:/usr/bin:/bin`;
+  const out = spawnSync(probeShell(), ['-c', built.command], { env: { PATH: path, HOME: join(bin, '..') }, encoding: 'utf8' });
   expect(out.status).toBe(0);
   if (!existsSync(log)) return null;
   return readFileSync(log, 'utf8').replace(/\n$/, '').split('\n');
 }
 
-function launches(launch: string, expected: string[]): void {
-  const argv = argvOf(launch)!;
+function launches(launch: string, expected: string[], extraDir?: string): void {
+  const argv = argvOf(launch, extraDir)!;
   expect(argv).toEqual(expected);
   const delimiter = argv.indexOf('--');
   expect(delimiter).toBeGreaterThan(0);
@@ -68,16 +82,15 @@ test('a quoted line: quoted words arrive whole, options still before the --', ()
   ]);
 });
 
-// Known for 0.5.12.1: nested zsh -lc on /usr/bin:/bin and ANSI-C $'--' under /bin/sh assume macOS.
-const offDarwin = process.platform !== 'darwin';
+const zsh = resolvedZsh();
 
-test.skipIf(offDarwin)('a nested script line: the additions ride inside the script the CLI reads', () => {
+test.skipIf(zsh === null)('a nested script line, when zsh resolves: the additions ride inside the script the CLI reads', () => {
   launches(`zsh -lc 'codex --skip-git-repo-check -- a nested task'`, [
     '--skip-git-repo-check', ...ADDED, '--', 'a', 'nested', 'task', RULES,
-  ]);
+  ], dirname(zsh!));
 });
 
-test.skipIf(offDarwin)('a decodable ANSI-C delimiter still splits: the options stand before it', () => {
+test('a decodable ANSI-C delimiter still splits: the options stand before it', () => {
   launches(`codex exec $'--' plain task`, [
     'exec', ...ADDED, '--', 'plain', 'task', RULES,
   ]);
