@@ -24,6 +24,8 @@ import {
 import { dirname, join } from 'node:path';
 import { editedRecordText, withValue } from '../config/team-record.ts';
 import type { RulesEditPlan } from '../entities.ts';
+import { getTeam, membershipsOf, readTeams, TeamsError } from './teams.ts';
+import { withRegistryLock } from './locks.ts';
 import {
   DELIVERY_LEGS,
   isLivenessSeconds,
@@ -58,7 +60,7 @@ export type ProjectRecord = {
    * in this build, but a hand-written one reads, and an upsert keeps it.
    */
   leadSeat?: string;
-  /** The team IDs this project groups. */
+  /** Team IDs derived from team-record memberships in list/get/byName/ofTeam. */
   teams: string[];
   /**
    * The project's word on the delivery order — the legs a send walks before the team file's own
@@ -143,7 +145,8 @@ function cloneProjects(records: Record<string, ProjectRecord>): Record<string, P
   return out;
 }
 
-/** Every registered project, by project ID. A missing file is no projects; a file that cannot
+/** Raw project metadata, including legacy stored team lists for diagnostics. Views derive membership.
+ *  Every registered project, by project ID. A missing file is no projects; a file that cannot
  *  be read — a corrupt one, or one under a folder this user cannot search — throws
  *  `ProjectsError`, so no reader takes an unreadable registry as an empty one (a team no
  *  project names reads as its own project) and no writer replaces a file it could not read. */
@@ -198,14 +201,19 @@ export function readProjects(home: string): Record<string, ProjectRecord> {
 /** The projects of the registry, ID order, so a view reads the same twice. */
 export function list(home: string): ProjectRecord[] {
   const projects = readProjects(home);
+  let teams: ReturnType<typeof readTeams>;
+  try { teams = readTeams(home); } catch (error) {
+    if (error instanceof TeamsError) throw new ProjectsError(error.message);
+    throw error;
+  }
   return Object.keys(projects)
     .sort()
-    .map((id) => projects[id] as ProjectRecord);
+    .map(id => ({ ...projects[id]!, teams: Object.keys(teams).sort().filter(teamId => membershipsOf(teams[teamId]!).includes(id)) }));
 }
 
 /** One project by ID, or null. */
 export function get(home: string, id: string): ProjectRecord | null {
-  return readProjects(home)[id] ?? null;
+  return list(home).find(project => project.id === id) ?? null;
 }
 
 /** The one project whose display name is exactly `name` — the name a team file writes — or null.
@@ -218,15 +226,11 @@ export function byName(home: string, name: string): ProjectRecord | null {
   return found[0] ?? null;
 }
 
-/** The project a team belongs to: the one whose `teams` names it, or null — and callers read
- *  null as this team being its own project. A team two projects both name is the state
- *  `team check` refuses; it is refused here too, naming both, so no reader picks one silently. */
+/** The home project alone supplies the team's settings, policies and rules chain. */
 export function ofTeam(home: string, teamId: string): ProjectRecord | null {
-  const found = list(home).filter((project) => project.teams.includes(teamId));
-  if (found.length > 1) {
-    throw new ProjectsError(`team ${teamId} is named in ${found.length} projects: ${found.map((project) => project.id).join(', ')}`);
-  }
-  return found[0] ?? null;
+  const projects = list(home);
+  const team = getTeam(home, teamId);
+  return projects.find(project => project.id === team?.projectId) ?? null;
 }
 
 /** The ID a project name gets: the name lowercased, every run of characters outside letters,
@@ -257,8 +261,8 @@ export type ProjectPatch = Partial<Omit<ProjectRecord, 'id' | 'provenance'>> & {
  *  is the key and never moves: a rename writes `name` and keeps `byName` answering for the new
  *  one. A name another project already holds is refused, so `byName` stays an answer.
  *
- *  A team two projects would both name is not refused here — a file can be edited into that
- *  state, and it is `team check` that refuses it; `ofTeam` refuses to answer it either way. */
+ *  The legacy `teams` patch is accepted for compatibility but never stored or used for membership;
+ *  only the team record writes that link. */
 export function upsertProject(home: string, id: string, patch: ProjectPatch): ProjectRecord {
   return locked(home, () => {
     const projects = readProjects(home);
@@ -351,10 +355,12 @@ export function upsertProject(home: string, id: string, patch: ProjectPatch): Pr
     for (const [other, held] of Object.entries(projects)) {
       if (other !== id && held.name === record.name) throw new ProjectsError(`a project named ${record.name} is already ${other}`);
     }
+    const teamRecords = readTeams(home);
+    const memberIds = Object.keys(teamRecords).sort().filter(teamId => membershipsOf(teamRecords[teamId]!).includes(id));
     delete record.id;
     projects[id] = record;
     write(home, projects);
-    return { ...record, id };
+    return { ...record, id, teams: memberIds };
   });
 }
 
@@ -366,45 +372,15 @@ function definedOnly<T extends object>(fields: T): Partial<T> {
 // Fixed lock order with `entities.yaml`: if a caller ever holds both locks, `entities.yaml.lock`
 // (`lockedEntities` in `src/entities.ts`) is acquired before `projects.yaml.lock` (`locked`).
 
-const LOCK_WAIT_MS = 5000;
-const LOCK_STALE_MS = 15000;
-
 function locked<T>(home: string, work: () => T): T {
-  const path = `${projectsFile(home)}.lock`;
-  mkdirSync(dirname(path), { recursive: true });
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  for (;;) {
-    try {
-      const fd = openSync(path, 'wx');
-      writeSync(fd, `${process.pid}\n`);
-      closeSync(fd);
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      // A holder that died leaves its file behind: one older than any write takes is not held.
-      try {
-        if (Date.now() - statSync(path).mtimeMs > LOCK_STALE_MS) unlinkSync(path);
-      } catch {
-        // gone already, or taken by another waiter: look again
-      }
-      if (Date.now() > deadline) throw new ProjectsError(`${path} is held by another run`);
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
-    }
-  }
-  try {
+  return withRegistryLock(home, 'projects', () => {
     const memo = currentRunMemo();
     if (memo !== null) {
       memo.projects.delete(home);
       memo.projectsRaw.delete(home);
     }
     return work();
-  } finally {
-    try {
-      unlinkSync(path);
-    } catch {
-      // already removed as stale
-    }
-  }
+  }, message => new ProjectsError(message));
 }
 
 function write(home: string, projects: Record<string, ProjectRecord>): void {
@@ -486,7 +462,7 @@ function emit(projects: Record<string, ProjectRecord>): string {
     lines.push(`    entity: ${nullable(project.entity)}`);
     lines.push(`    lead: ${nullable(project.lead)}`);
     if (project.leadSeat !== undefined) lines.push(`    lead_seat: ${scalar(project.leadSeat)}`);
-    lines.push(project.teams.length ? `    teams: [${project.teams.map(scalar).join(', ')}]` : '    teams: []');
+    // Membership is stored only on team records; legacy teams lists are never rewritten.
     // Only when the project declares one: a registry written before the field keeps its bytes,
     // so a record read and written back is the file it was.
     if (project.deliveryOrder) lines.push(`    delivery_order: [${project.deliveryOrder.map(scalar).join(', ')}]`);

@@ -18,10 +18,12 @@ tighten, and loosen only where the level above allows it.
 
 A team names its project in its team file, `in_project`, holding the project's display name;
 today's `project:` field keeps meaning the team, so every file written before this build loads
-unchanged, and a team that names no project is its own project. A team belongs to one project at
-most: when the registry names a team in two, [`team check`](check.md) refuses it, naming both
-projects, and the repair is the registry file; and a file that sets `project_lead: true` without
-naming a project is refused as the file loads.
+unchanged, and a team that names no home project inherits no project defaults. The team record's
+`project_id` names its home; its `projects` list holds all memberships, home included. A record
+written before `projects` existed reads as the home alone, or an empty list when it has no home.
+Only the home supplies settings, policies and rules; project views list both home and served
+memberships. The team-file declarations and checks for served projects are a separate change.
+A file that sets `project_lead: true` without naming a project is refused as the file loads.
 
 ## Synopsis
 
@@ -29,14 +31,18 @@ naming a project is refused as the file loads.
 
 ## What it reads and writes
 
-Reads `~/.config/team/projects.yaml`, a map of project IDs to records:
+Reads project metadata from `~/.config/team/projects.yaml`, a map of project IDs to records:
 
     projects:
       teamcli:
         name: TeamCLI
         entity: floor
         lead: agt_2b9f
-        teams: ["1a2b3c4d5e6f", "6f5e4d3c2b1a"]
+
+Team IDs in the output are derived from `~/.config/team/teams.yaml`; legacy `teams` lists in
+project records do not determine membership. Project writers omit those lists. Reads change
+neither registry. Membership updates take the team lock before the project lock, ensure project
+metadata exists, then write the team record; there is no second membership write to interrupt.
 
 The ID is the display name lowercased, every run of characters outside letters, digits, `.`, `_`
 and `-` written as one `-` and nothing left at either end: `TeamCLI` is `teamcli`, `Team CLI` is
@@ -71,7 +77,7 @@ A missing file is no projects — every team is its own project — and prints t
 `0 projects`. A
 file that does not read as a project registry (not a map with a `projects` key, a project without
 a name, a provenance that is not a map of three instants) is refused with the file's path and what
-is wrong; nothing is listed. Reads no team file and needs no caller. Writes nothing.
+is wrong; nothing is listed. Reads team registry records, no team file, and needs no caller. Writes nothing.
 
 The project level's other view is `team status --project <name>`, which covers every team the
 project names; the teams of one project are read there. `team send --list` prints each seat's
@@ -111,7 +117,7 @@ $ team projects --json ; echo "exit $?"
 exit 0
 ```
 
-A registry with two projects — the one this project belongs to, and one whose entity and lead are
+With team records assigning the displayed teams to these projects, project metadata — the one this project belongs to, and one whose entity and lead are
 not recorded — prints one line per project, shorter values padded:
 
 ```yaml file=../../.config/team/projects.yaml
@@ -120,13 +126,11 @@ projects:
     name: Beacon
     entity: acme
     lead: null
-    teams: ["7a8b9c0d1e2f"]
     provenance: { registered_by: team, registered_at: "2026-10-05T04:00:00.000Z", updated_at: "2026-10-05T04:00:00.000Z" }
   teamcli:
     name: TeamCLI
     entity: floor
     lead: agt_2b9f
-    teams: ["1a2b3c4d5e6f", "6f5e4d3c2b1a"]
     provenance: { registered_by: team, registered_at: "2026-10-05T04:00:00.000Z", updated_at: "2026-10-05T04:00:00.000Z" }
 ```
 

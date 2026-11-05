@@ -96,6 +96,7 @@ describe('the registry file', () => {
         '  abcdef012345:',
         '    project: acme',
         '    project_id: null',
+        '    projects: []',
         '    entity: acme',
         '    session: acme',
         '    root: /work/acme',
@@ -119,6 +120,7 @@ describe('the registry file', () => {
         id: 'abcdef012345',
         project: 'acme',
         projectId: null,
+        projects: [],
         entity: null,
         session: 'acme',
         root: '/work/acme',
@@ -493,7 +495,7 @@ describe('noteTeam and the project level', () => {
     noteTeam(home, cli(), seedOf('TeamCLI'), 'defined', 'owner');
     noteTeam(home, site(), seedOf('TeamCLI'), 'defined', 'owner');
     expect(listProjects(home)).toHaveLength(1);
-    expect(getProject(home, 'teamcli')?.teams).toEqual([teamIdOf(cli()), teamIdOf(site())]);
+    expect(getProject(home, 'teamcli')?.teams).toEqual([teamIdOf(cli()), teamIdOf(site())].sort());
   });
 
   test('a team moved to another project leaves the one that named it', () => {
@@ -518,12 +520,12 @@ describe('noteTeam and the project level', () => {
     expect(getProject(home, 'teamcli')?.teams).toEqual([teamIdOf(cli())]);
   });
 
-  test('a project registry that cannot be written is its own line, and the team record is still written', () => {
+  test('an unreadable project registry is reported before changing membership', () => {
     mkdirSync(join(home, '.config', 'team'), { recursive: true });
     writeFileSync(projectsFile(home), 'projects: [1]\n');
     const said = noteTeam(home, cli(), seedOf('TeamCLI'), 'defined', 'owner');
     expect(said).toMatch(/^the project registry was not updated: .*"projects" must be a map/);
-    expect(getTeam(home, teamIdOf(cli()))?.projectId).toBe('teamcli');
+    expect(getTeam(home, teamIdOf(cli()))).toBeNull();
   });
 
   test('a project name with nothing to keep is a line, and nothing is written at all', () => {
@@ -817,16 +819,18 @@ describe('a team record names its issue tracker', () => {
     }
   });
 
-  test('a team that names none reads as before: no field, and a rewrite leaves the file byte for byte', () => {
+  test('a team that names no tracker keeps it absent when a rewrite records memberships', () => {
     mkdirSync(join(home, '.config', 'team'), { recursive: true });
     writeFileSync(teamsFile(home), OLD_FILE);
     const read = getTeam(home, id);
     expect(read).not.toBeNull();
     expect(read).not.toHaveProperty('issueTracker');
-    // A write that changes nothing but the lifecycle it already holds moves only updated_at.
+    // A legacy record gains the explicit membership list; no tracker is added.
     const later = '2026-10-17T08:00:00.000Z';
     upsertTeam(home, id, { lifecycle: 'running', at: later });
-    expect(readFileSync(teamsFile(home), 'utf8')).toBe(OLD_FILE.replace(`updated_at: "${AT}"`, `updated_at: "${later}"`));
+    expect(readFileSync(teamsFile(home), 'utf8')).toBe(OLD_FILE
+      .replace('    project_id: null\n', '    project_id: null\n    projects: []\n')
+      .replace(`updated_at: "${AT}"`, `updated_at: "${later}"`));
     expect(readFileSync(teamsFile(home), 'utf8')).not.toContain('issue_tracker');
   });
 
