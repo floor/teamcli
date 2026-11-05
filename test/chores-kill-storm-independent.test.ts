@@ -18,13 +18,20 @@
 //    apart as a hung loop and never withdrawn by a beat during its grace.
 // Fakes only (fake clock, fake child, fake CPU probe); single test file; throwaway HOME; no real
 // processes spawned.
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import type { spawn as nodeSpawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { ChoresPolicy } from '../src/daemon/chores/policy.ts';
 import type { ChoresChildConfig, ChoresChildMessage, ChoresHostMessage } from '../src/daemon/chores/protocol.ts';
+import {
+  CPU_PROGRESS_EPSILON_MS,
+  spawnChoresChild,
+  type ChoresChild,
+  type ChoresChildEvent,
+} from '../src/daemon/chores/spawn.ts';
 import { createChoresFleet, type ChoresRouteInput } from '../src/daemon/chores/supervisor.ts';
 import { routeOf } from '../src/daemon/routes.ts';
 import type { TeamFile } from '../src/file/types.ts';
@@ -43,29 +50,24 @@ type FakeSpawnedProcess = EventEmitter & {
 const spawnedProcesses: FakeSpawnedProcess[] = [];
 let nextSpawnPid = 9100;
 
-mock.module('node:child_process', () => ({
-  spawn: () => {
-    const proc = new EventEmitter() as FakeSpawnedProcess;
-    proc.pid = nextSpawnPid++;
-    proc.stdin = new PassThrough();
-    proc.stdout = new PassThrough();
-    proc.stderr = new PassThrough();
-    proc.signals = [];
-    proc.kill = (signal?: NodeJS.Signals | number) => {
-      proc.signals.push(signal);
-      if (signal === 'SIGKILL') {
-        proc.emit('exit', null, 'SIGKILL');
-        proc.emit('close', null, 'SIGKILL');
-      }
-      return true;
-    };
-    spawnedProcesses.push(proc);
-    return proc;
-  },
-}));
-
-const { CPU_PROGRESS_EPSILON_MS, spawnChoresChild } = await import('../src/daemon/chores/spawn.ts');
-import type { ChoresChild, ChoresChildEvent } from '../src/daemon/chores/spawn.ts';
+const fakeSpawn = (() => {
+  const proc = new EventEmitter() as FakeSpawnedProcess;
+  proc.pid = nextSpawnPid++;
+  proc.stdin = new PassThrough();
+  proc.stdout = new PassThrough();
+  proc.stderr = new PassThrough();
+  proc.signals = [];
+  proc.kill = (signal?: NodeJS.Signals | number) => {
+    proc.signals.push(signal);
+    if (signal === 'SIGKILL') {
+      proc.emit('exit', null, 'SIGKILL');
+      proc.emit('close', null, 'SIGKILL');
+    }
+    return true;
+  };
+  spawnedProcesses.push(proc);
+  return proc;
+}) as unknown as typeof nodeSpawn;
 
 const TEAM_YAML = `format: 1
 entity: corp
@@ -563,6 +565,7 @@ describe('chores kill-storm independent verification', () => {
         config,
         entry: import.meta.path,
         cpuTimeOf: () => Promise.resolve(probeReading),
+        spawn: fakeSpawn,
       });
       const proc = spawnedProcesses[0]!;
       expect(proc).toBeDefined();
@@ -618,6 +621,7 @@ describe('chores kill-storm independent verification', () => {
         config,
         entry: import.meta.path,
         cpuTimeOf: () => Promise.resolve(probeReading),
+        spawn: fakeSpawn,
       });
       const nullBaseProc = spawnedProcesses[1]!;
       nullBaseHandle.kill('the child missed 2 heartbeats', 2_000);
@@ -644,6 +648,7 @@ describe('chores kill-storm independent verification', () => {
         config,
         entry: import.meta.path,
         cpuTimeOf: () => Promise.resolve(probeReading),
+        spawn: fakeSpawn,
       });
       const answeringProc = spawnedProcesses[2]!;
       const answeringNotes: string[] = [];

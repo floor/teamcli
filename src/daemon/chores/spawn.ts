@@ -65,6 +65,9 @@ export type SpawnChoresInput = {
    *  injects a fake because its fixture child's own CPU would make the decision depend on the
    *  machine; that fake may answer at once. */
   cpuTimeOf?: ProcessCpuTimeProbe;
+  /** Starts the child process. Defaults to `node:child_process`'s `spawn`; a test may inject a
+   *  synthetic child process handle without replacing `node:child_process` across the runner. */
+  spawn?: typeof spawn;
 };
 
 /** How long a terminated child gets before it is forced. */
@@ -164,9 +167,10 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
     return refuse(`the chores token could not be written: ${error instanceof Error ? error.message : String(error)}`);
   }
 
+  const spawnProcess = input.spawn ?? spawn;
   let child: ReturnType<typeof spawn>;
   try {
-    child = spawn(process.execPath, [entry, '--inherited', nonce], {
+    child = spawnProcess(process.execPath, [entry, '--inherited', nonce], {
       cwd: input.config.routes[0]?.root ?? dirname(entry),
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, HOME: input.config.home, ...input.env },
