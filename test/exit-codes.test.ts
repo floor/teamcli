@@ -8947,7 +8947,7 @@ leadTest('under the registry source, remove takes the seat out of the registry r
 describe('owner-seat approval admits import, add and up for a seat', () => {
   const requestId = (ran: Ran) => /owner-seat request (oa_[0-9a-f]{24})/.exec(ran.out)?.[1] ?? '';
 
-  test('up: request, answer, a dry run that spends nothing, the launch, and a refused replay', async () => {
+  leadTest('up: request, answer, a dry run that spends nothing, the launch, and a refused replay', async () => {
     const place = layout(true);
     try {
       approve(place, TEAM);
@@ -8975,7 +8975,7 @@ describe('owner-seat approval admits import, add and up for a seat', () => {
     }
   }, 120_000);
 
-  test('up: an approval for other arguments is refused, and the seat without one is denied as before', async () => {
+  leadTest('up: an approval for other arguments is refused, and the seat without one is denied as before', async () => {
     const place = layout(true);
     try {
       approve(place, TEAM);
@@ -8993,7 +8993,7 @@ describe('owner-seat approval admits import, add and up for a seat', () => {
     }
   }, 120_000);
 
-  test('add: request, answer, the add as asked', async () => {
+  leadTest('add: request, answer, the add as asked', async () => {
     const place = layout(true);
     try {
       approve(place, TWO);
@@ -9011,7 +9011,7 @@ describe('owner-seat approval admits import, add and up for a seat', () => {
     }
   }, 120_000);
 
-  test('import: request, answer, the import, and a refused replay', async () => {
+  leadTest('import: request, answer, the import, and a refused replay', async () => {
     const place = layout(true);
     try {
       write(place, TEAM);
@@ -9032,7 +9032,7 @@ describe('owner-seat approval admits import, add and up for a seat', () => {
     }
   }, 120_000);
 
-  test('init and up in one request: one answer creates the team and starts it', async () => {
+  leadTest('init and up in one request: one answer creates the team and starts it', async () => {
     const place = layout(true);
     try {
       const store = seatOwner(place.home);
