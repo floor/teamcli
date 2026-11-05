@@ -1,10 +1,12 @@
-// The stuck-episode report: a seat whose mail is held — behind an unrecognised screen, or behind
-// a presence that has said "working" for too long — is named to the lead once per stuck episode,
-// with the seat, the class, the count of every held message and the oldest one's age. It is a
-// report only: it types nothing, takes no seat lock, and changes no pending marker.
+// The stuck-episode report: a seat whose oldest unread message has waited past twice its window
+// is named to the lead once per episode, unless a proven working presence younger than
+// watch.stuck_after says a turn is running. The notice names what the watch sees — an unknown
+// screen, a proven working word past the bound, an unhealthy presence channel with the state it
+// last showed, or a recognised screen no wake reached — with the count and the oldest age. It is
+// a report only: it types nothing, takes no seat lock, and changes no pending marker.
 //
-// Red first: `reportStuckSeats` does not exist in the watch yet. The scenes here are the
-// contract the fix must meet; the pane is a scripted screen and no live session is touched.
+// Red first: the recognised-screen and unproven-presence scenes below fail on the 0.5.12 report;
+// the pane is a scripted screen and no live session is touched.
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -172,14 +174,24 @@ function scripts(one: Pane): RetrySources {
   };
 }
 
-function liveWith(status = 'idle'): Live {
-  const agents: HerdrAgent[] = [
-    { name: 'worker', agent: 'agy', pane: 'pane-worker', workspace: 'first', status, cwd: null },
-  ];
-  return { running: true, agents, workspaces: [], screens: {} };
+function liveWith(status = 'idle', agents = true): Live {
+  const list: HerdrAgent[] = agents
+    ? [{ name: 'worker', agent: 'agy', pane: 'pane-worker', workspace: 'first', status, cwd: null }]
+    : [];
+  return { running: true, agents: list, workspaces: [], screens: {} };
 }
 
-type Reading = { now?: Date; workingSince?: string; status?: string };
+/** What the watch measured about a native presence it could not prove: the channel's own reason
+ *  and the projection it last showed. */
+type StalePresence = { word: string; state: string; since: string };
+
+type Reading = {
+  now?: Date;
+  workingSince?: string;
+  status?: string;
+  stale?: StalePresence;
+  noAgents?: boolean;
+};
 
 function sceneOf(
   made: World,
@@ -194,7 +206,7 @@ function sceneOf(
     root: made.root,
     home: made.home,
     team,
-    live: liveWith(reading.status),
+    live: liveWith(reading.status, reading.noAgents !== true),
     ownPane: null,
     sources: scripts(one),
     now: reading.now ?? NOW,
@@ -212,10 +224,13 @@ function report(
   const workingSince = reading.workingSince === undefined
     ? new Map<string, string>()
     : new Map([['worker', reading.workingSince]]);
+  const stalePresence = reading.stale === undefined
+    ? new Map<string, StalePresence>()
+    : new Map<string, StalePresence>([['worker', reading.stale]]);
   reportStuckSeats(
     sceneOf(made, team, one, said, reading),
     { unreadAfter: N },
-    { workingSince, stuckAfterSeconds: T },
+    { workingSince, stuckAfterSeconds: T, stalePresence },
   );
 }
 
@@ -351,7 +366,7 @@ test('a presence that has said working for less than T is not named, and is name
   expect(first[0]).toContain('4 messages wait');
 });
 
-test('a recognised screen closes the episode; the same screen again starts a new one', () => {
+test('an open episode stands while its messages are unread, whatever the screen now says', () => {
   const made = world();
   const team = teamOf(made);
   fourHeld(made);
@@ -361,15 +376,83 @@ test('a recognised screen closes the episode; the same screen again starts a new
   report(made, team, one, said);
   expect(leadNotices(made)).toHaveLength(1);
 
-  // The screen is recognised again: the episode is over, though no message was read.
+  // The screen is recognised now: the named messages still stand, so the episode is not over.
   one.screen = ANTIGRAVITY_IDLE;
   report(made, team, one, said, { now: new Date(NOW.getTime() + MIN) });
   expect(leadNotices(made)).toHaveLength(1);
+});
 
-  // Unrecognised again: a new episode, and a new notice.
-  one.screen = ANTIGRAVITY_SURVEY;
-  report(made, team, one, said, { now: new Date(NOW.getTime() + 2 * MIN) });
-  expect(leadNotices(made)).toHaveLength(2);
+test('a recognised idle screen with mail past 2N is named, not excused', () => {
+  const made = world();
+  const team = teamOf(made);
+  fourHeld(made);
+  const one = pane(ANTIGRAVITY_IDLE);
+  const said: string[] = [];
+
+  expect(readScreen('antigravity', ANTIGRAVITY_IDLE).kind).toBe('idle');
+  report(made, team, one, said);
+
+  const first = leadNotices(made);
+  expect(first).toHaveLength(1);
+  expect(first[0]).toContain('worker');
+  expect(first[0]).toContain('screen idle, no wake reached it');
+  expect(first[0]).toContain('4 messages wait');
+  expect(first[0]).toContain('oldest 120 min');
+  expect(said).toHaveLength(1);
+  expect(one.typed).toEqual([]);
+  expect(one.enters).toBe(0);
+});
+
+test('an unhealthy presence channel is named with its reason and the state it last showed', () => {
+  const made = world();
+  const team = teamOf(made);
+  fourHeld(made);
+  // A recognised screen does not excuse an unproven presence: this is operator-3's shape.
+  const one = pane(ANTIGRAVITY_IDLE);
+  const said: string[] = [];
+  const since = new Date(NOW.getTime() - 20 * 60 * MIN).toISOString();
+
+  report(made, team, one, said, {
+    stale: { word: 'presence channel unhealthy (transport-error)', state: 'working', since },
+  });
+
+  const first = leadNotices(made);
+  expect(first).toHaveLength(1);
+  expect(first[0]).toContain('worker');
+  expect(first[0]).toContain('presence channel unhealthy (transport-error)');
+  expect(first[0]).toContain(`last seen working since ${since}`);
+  expect(first[0]).toContain('4 messages wait');
+  expect(first[0]).toContain('oldest 120 min');
+  expect(first[0]).not.toContain('screen not recognised');
+  expect(one.typed).toEqual([]);
+  expect(one.enters).toBe(0);
+});
+
+test('a pull-only seat with old runtime notices is named once, not once per message', () => {
+  const made = world();
+  const team = teamOf(made);
+  for (const id of [OLD_1, OLD_2, OLD_3]) seed(made, 'worker', id, 90 * MIN, 'runtime');
+  const one = pane(null);
+  const said: string[] = [];
+
+  // No live pane: the wake path has no screen to reach, and the notice says what was read.
+  report(made, team, one, said, { noAgents: true, status: 'done' });
+
+  const first = leadNotices(made);
+  expect(first).toHaveLength(1);
+  expect(first[0]).toContain('worker');
+  expect(first[0]).toContain('no live pane');
+  expect(first[0]).toContain('3 messages wait');
+  expect(first[0]).toContain('oldest 90 min');
+  expect(said).toHaveLength(1);
+
+  // A second pass inside the episode adds no word per message.
+  report(made, team, one, said, {
+    noAgents: true,
+    status: 'done',
+    now: new Date(NOW.getTime() + MIN),
+  });
+  expect(leadNotices(made)).toHaveLength(1);
 });
 
 test('a read receipt closes the episode; the messages still waiting are named again', () => {
