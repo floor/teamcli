@@ -110,11 +110,12 @@ nor refused.
 
 A restored pane that runs the bare CLI where the seat's own launch line starts a wrapper — an
 alternate endpoint — is the exception: adopting it would leave every turn without the wrapper's
-settings. `team up` exits the bare CLI in its own recorded pane, with the CLI's own exit word or
-key and nothing else, and launches the seat again in that same pane through its own launch line,
-resuming the proven conversation. A pane that is working, holds unsent text, cannot be exited, or
-does not come back to its shell in time is left exactly as it is; a launch line that cannot carry
-the conversation stops the run before any key is typed.
+settings. `team up` lets the bare CLI exit cleanly in its own recorded pane — the CLI's own exit
+word and Enter, or its own exit keys, and nothing else — and launches the seat again in that same
+pane through its own launch line, resuming the proven conversation; the pane's workspace is
+neither closed nor replaced. A pane that is working, holds unsent text, cannot be exited, or does
+not come back to its shell in time is left exactly as it is; a launch line that cannot carry the
+conversation stops the run before any key is typed.
 
 A seat whose recorded pane no longer holds the process team launched is launched again. When the
 pane is back at its shell, the seat is launched in the same pane — `its recorded pane <pane> was
