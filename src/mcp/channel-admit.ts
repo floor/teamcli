@@ -133,10 +133,10 @@ function judge(
   return admitSend(caller, target, records, grant, context);
 }
 
-/** The live agent holding the receiving seat, when the registry has one. A record that names a
- *  recipient id must name that agent. A seat with no agent yet is judged as the declared seat. */
+/** Ordinary records bind a named recipient to both the current agent and a unique roster entry.
+ *  Only the reserved owner/launch principals retain the declared-seat/null-id exceptions. */
 function receivingSide(
-  input: { home: string; root: string; session: string; seat: string; team: TeamFile; payload: { to_id?: string | null } },
+  input: { home: string; root: string; session: string; seat: string; team: TeamFile; payload: { from: string; from_id: string | null; rule: string; to_id?: string | null } },
   receivingId: string,
 ): SendSide | ChannelAdmission {
   let live;
@@ -146,9 +146,29 @@ function receivingSide(
     return { ok: false, why: 'the recipient registry cannot be read' };
   }
   const named = input.payload.to_id;
+  const reserved = (input.payload.from === OWNER_MAILBOX && input.payload.from_id === null)
+    || (input.payload.from === GENERAL_BRIEF_FROM && input.payload.from_id === null && input.payload.rule === GENERAL_BRIEF_RULE);
+  if (!reserved && (typeof named !== 'string' || !isAgentId(named))) {
+    return { ok: false, why: 'an ordinary channel record must name its recipient agent id' };
+  }
   if (typeof named === 'string' && named !== '') {
     if (!isAgentId(named) || live === null || live.id !== named || live.reach.seat !== input.seat || live.reach.session !== input.session) {
       return { ok: false, why: `the signed record names recipient ${JSON.stringify(named)}, which is not the live agent for ${input.seat}` };
+    }
+    if (!reserved) {
+      let record;
+      try {
+        record = getTeam(input.home, receivingId);
+      } catch {
+        return { ok: false, why: 'the recipient team registry cannot be read' };
+      }
+      if (record === null || record.root === '' || !sameFolder(record.root, input.root)
+        || teamIdOf(record.root) !== receivingId
+        || record.roster.filter((entry) => entry.agent === named && entry.seat === input.seat).length !== 1
+        || record.roster.filter((entry) => entry.agent === named).length !== 1
+        || record.roster.filter((entry) => entry.seat === input.seat).length !== 1) {
+        return { ok: false, why: `recipient ${named} is not the unique current roster binding for ${input.seat}` };
+      }
     }
     return live;
   }
@@ -385,6 +405,15 @@ function foreignTeam(
   const agents = record.roster.filter((entry) => entry.seat === seat);
   if (pair.length !== 1 || seats.length !== 1 || agents.length !== 1) {
     return { ok: false, why: `agent ${agentId} is not one seat of team ${JSON.stringify(teamId)}` };
+  }
+  let holder;
+  try {
+    holder = findAgent(home, { team: teamId, seat });
+  } catch {
+    return { ok: false, why: 'the foreign sender registry cannot be read' };
+  }
+  if (holder === null || holder.id !== agentId || holder.reach.session !== session) {
+    return { ok: false, why: `agent ${agentId} is not the current holder of foreign seat ${JSON.stringify(seat)}` };
   }
   const loaded = readTeamConfig(record.root, { home });
   if (!loaded.ok) {
