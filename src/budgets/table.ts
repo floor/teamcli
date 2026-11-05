@@ -19,6 +19,9 @@ export type BudgetRow = {
   state: BudgetState;
   /** True when a subscription's left figure is at or inside its reserve. */
   inside: boolean;
+  /** True when the counted reading is older than its own window: the figure describes a window
+   *  instance that has passed, so no figure is shown for it; the age and source still print. */
+  expired: boolean;
   /** The reserve the row was read against, or null: the line and the JSON can't disagree. */
   reserve: number | null;
 };
@@ -26,6 +29,14 @@ export type BudgetRow = {
 /** The windows this tool writes, in the order a row's windows sort. Exported so a reader that
  *  binds a stored reading against the tool's own vocabulary asks the same list. */
 export const WINDOWS: WindowName[] = ['session', 'daily', 'weekly'];
+
+/** Each window's own length. A reading older than its window has seen that window reset (or
+ *  should have), so it is a reading of a previous instance and never a current figure. */
+export const WINDOW_MS: Record<WindowName, number> = {
+  session: 5 * 60 * 60 * 1000,
+  daily: 24 * 60 * 60 * 1000,
+  weekly: 7 * 24 * 60 * 60 * 1000,
+};
 
 /** Rows for the accounts the budgets in force name, and for any reading still in the state. */
 export function budgetTable(budgets: TeamFile['budgets'], list: readonly Seen[], now: number): BudgetRow[] {
@@ -63,13 +74,45 @@ export function reserveOf(budgets: TeamFile['budgets'], account: string): number
   return entry?.kind === 'subscription' ? entry.reserve : null;
 }
 
+/** The plain words a figure's source prints in human text: where the owner can see the reading,
+ *  or that it is an estimate. The model keeps its own spelling (`status_line`, `check`,
+ *  `cli_usage`, `machine_reading`, `state record`) for `--json`, where a script reads it; the
+ *  text says one of three things — a seat's status bar, the CLI itself, or `estimated` — and the
+ *  reading's age prints beside it. Exported so the quota block, the account table and the seat
+ *  lines spell a source the same way, one vocabulary for every face. */
+export function sourceText(source: string | null | undefined): string {
+  switch (source) {
+    case 'status_line':
+    case 'status line':
+      return 'read from a seat’s status bar';
+    case 'cli_usage':
+    case 'cli usage':
+    case 'quota screen':
+      return 'read from the CLI';
+    case 'check':
+    case 'machine_reading':
+    case 'machine reading':
+    case 'state record':
+      return 'estimated';
+    default:
+      return 'unknown source';
+  }
+}
+
 export function budgetLine(row: BudgetRow): string {
+  const from = sourceText(row.source);
+  const source = row.fallback ? `${from} (fallback)` : from;
+  if (row.expired) {
+    // The figure is of a window instance that passed: the age and its source are the facts, the
+    // percentage is not the current window's, and the state word says so once.
+    return [row.account, row.window, 'no fresh reading', row.seat ?? '-', `last seen ${row.age} ago`, source, 'expired'].filter((part) => part).join('  ');
+  }
   if (row.state === 'unknown' || row.left === null || row.used === null) {
     return [row.account, row.window, 'unknown'].filter((part) => part).join('  ');
   }
-  const reset = row.resetsIn === null ? 'resets unknown' : `resets in ${row.resetsIn}`;
-  const from = row.source === 'status_line' ? 'status line' : row.source === 'check' ? 'check' : 'unknown source';
-  const source = row.fallback ? `${from} (fallback)` : from;
+  // The reading's source printed the figure and no reset: the reset is not unknown to the CLI,
+  // it is off the surface this tool reads, and the line says which fact it has.
+  const reset = row.resetsIn === null ? 'resets not printed' : `resets in ${row.resetsIn}`;
   const state = row.inside && row.reserve !== null ? `${row.state}, inside reserve ${row.reserve}%` : row.state;
   return `${row.account}  ${row.window}  left ${row.left}%  used ${row.used}%  ${reset}  ${row.seat ?? '-'}  ${whenWord(row)} ${row.age} ago  ${source}  ${state}`;
 }
@@ -101,6 +144,7 @@ export function budgetRowOf(
 ): BudgetRow {
   const reading = result.reading;
   const inside = reserve !== null && reading.left <= reserve;
+  const expired = now - reading.changedAt >= WINDOW_MS[reading.window];
   const state: BudgetState = result.kind === 'unconfirmed'
     ? 'unconfirmed'
     : now - reading.changedAt < staleAfterMs
@@ -118,6 +162,7 @@ export function budgetRowOf(
     fallback,
     state,
     inside,
+    expired,
     reserve,
   };
 }
@@ -135,6 +180,7 @@ function blank(account: string, reserve: number | null): BudgetRow {
     fallback: false,
     state: 'unknown',
     inside: false,
+    expired: false,
     reserve,
   };
 }

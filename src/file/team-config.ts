@@ -131,7 +131,9 @@ export function noteRegistryRead(
 }
 
 function withSource(result: LoadResult, source: TeamConfigSource): LoadResult {
-  return result.ok ? { ...result, source } : result;
+  // A failure carries it too: a reader with only the result (the usage report's block) tells the
+  // record a failed read was about from the source, not from the conventional team-file path.
+  return { ...result, source };
 }
 
 /** A team file left beside a registry team: present, and whether it says what the registry says.

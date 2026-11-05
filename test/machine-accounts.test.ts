@@ -5,7 +5,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { machineAccountsByEntityOf, machineAccountsOf, machineAccountsPath, ownerEntityOf, payingAccountOf } from '../src/information/machine-accounts.ts';
+import { machineAccountsByEntityOf, machineAccountsOf, machineAccountsPath, machineCreditsOf, ownerEntityOf, payingAccountOf } from '../src/information/machine-accounts.ts';
 
 /** A seat-shaped input, the four fields the mapping reads. */
 function seat(cli: string, launch: string, vendor = cli, account?: string) {
@@ -116,6 +116,50 @@ describe('machine accounts', () => {
         expect([...ownerEntityOf(machineAccountsByEntityOf(home)).entries()]).toEqual([]);
         expect(machineAccountsOf(home)).toEqual(['xai']);
       });
+    });
+  });
+
+  describe('the credits the owner wrote down', () => {
+    /** One temp home holding one file's bytes, read inside, wiped after — the file itself is the
+     *  owner's own and no test reads it. */
+    const withFile = (text: string, read: (home: string) => void) => {
+      const base = mkdtempSync(join(tmpdir(), 'team-accounts-'));
+      const home = join(base, 'home');
+      mkdirSync(join(home, '.config', 'team'), { recursive: true });
+      writeFileSync(machineAccountsPath(home), text);
+      try {
+        read(home);
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
+    };
+
+    test('a credits map reads its account’s available money, currency, cap and reload state', () => {
+      withFile('accounts:\n  - anthropic\ncredits:\n  anthropic:\n    available: 260.50\n    currency: EUR\n    cap: 300\n    autoReload: false\n', (home) => {
+        expect([...machineCreditsOf(home).entries()]).toEqual([
+          ['anthropic', { available: 260.5, currency: 'EUR', cap: 300, autoReload: false }],
+        ]);
+      });
+    });
+
+    test('an entry with no amount or no currency is skipped, never guessed', () => {
+      withFile('credits:\n  no-amount:\n    currency: EUR\n  no-currency:\n    available: 12\n  not-a-map: yes\n  plain:\n    available: 1\n    currency: eur\n', (home) => {
+        expect([...machineCreditsOf(home).entries()]).toEqual([['plain', { available: 1, currency: 'EUR' }]]);
+      });
+    });
+
+    test('a field that is no figure is left out, and the rest of the entry still reads', () => {
+      withFile('credits:\n  anthropic:\n    available: 260.50\n    currency: EUR\n    cap: a lot\n    autoReload: maybe\n', (home) => {
+        expect([...machineCreditsOf(home).entries()]).toEqual([['anthropic', { available: 260.5, currency: 'EUR' }]]);
+      });
+    });
+
+    test('an absent file, a file that does not parse and a file with no credits map read as no credits', () => {
+      for (const text of ['accounts:\n  - anthropic\n', 'credits: 5\n', 'credits: [anthropic]\n', 'not: [valid\n']) {
+        withFile(text, (home) => {
+          expect([...machineCreditsOf(home).entries()], text).toEqual([]);
+        });
+      }
     });
   });
 

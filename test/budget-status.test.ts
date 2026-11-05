@@ -41,7 +41,7 @@ describe('the budgets table', () => {
     expect(row?.state).toBe('fresh');
     expect(row?.inside).toBe(false);
     expect(row?.reserve).toBe(10);
-    expect(budgetLine(row!)).toBe('openai  weekly  left 40%  used 60%  resets in 44m  one  changed 1m ago  status line  fresh');
+    expect(budgetLine(row!)).toBe('openai  weekly  left 40%  used 60%  resets in 44m  one  changed 1m ago  read from a seat’s status bar  fresh');
   });
 
   test('a fresh reading inside the reserve says so, and stays fresh', () => {
@@ -71,7 +71,7 @@ describe('the budgets table', () => {
     // Well outside — more than the reserve again — the room last seen is still shown.
     const lastSeen = budgetTable(team(10).budgets, [reading({ ...at, left: 70, used: 30 })], now)[0];
     expect(lastSeen?.state).toBe('stale');
-    expect(budgetLine(lastSeen!)).toBe('openai  weekly  left 70%  used 30%  resets unknown  one  last seen 30m ago  status line  stale');
+    expect(budgetLine(lastSeen!)).toBe('openai  weekly  left 70%  used 30%  resets not printed  one  last seen 30m ago  read from a seat’s status bar  stale');
   });
 
   test('a named account with no reading is its own unknown row', () => {
@@ -95,8 +95,8 @@ describe('the budgets table', () => {
       reading({ window: 'weekly', left: 5, used: 95 }),
     ], now);
     expect(rows.map((row) => budgetLine(row))).toEqual([
-      'openai  session  left 40%  used 60%  resets in 44m  -  read 1m ago  check  fresh',
-      'openai  weekly  left 5%  used 95%  resets in 44m  one  changed 1m ago  status line (fallback)  fresh, inside reserve 20%',
+      'openai  session  left 40%  used 60%  resets in 44m  -  read 1m ago  estimated  fresh',
+      'openai  weekly  left 5%  used 95%  resets in 44m  one  changed 1m ago  read from a seat’s status bar (fallback)  fresh, inside reserve 20%',
     ]);
   });
 

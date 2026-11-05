@@ -87,7 +87,7 @@ lstart Sun Oct 18 07:48:47 2026
 - **Where:**
   - `<home>/.config/team/entities.yaml`: owner-signed file holding `<entity>.roots` and `<entity>.policies` (`src/entities.ts`, `src/policy/sources.ts`; shipped in `0.5.0`).
   - `<home>/.config/team/entities/<entity>/accounts.yaml`: unsigned mode `0600` operational file holding per-entity provider launch accounts (planned for `0.5.1`; never holds `roots` or `policies`).
-  - `<home>/.config/team/accounts.yaml`: machine-level billing subscriptions (`src/information/machine-accounts.ts`; shipped in `0.5.0`).
+  - `<home>/.config/team/accounts.yaml`: machine-level billing subscriptions (`src/information/machine-accounts.ts`; shipped in `0.5.0`). An optional top-level `plans:` map beside `accounts:` names each account’s plan in the owner’s own words (`google-antigravity: Google AI Ultra`); no CLI prints a subscription’s plan, so this owner-written entry is the only source the usage labels read. An optional top-level `credits:` map beside them records each account’s available credit and currency, with optional `cap` and `autoReload`; the usage report prints those figures with its overage answer, and no CLI measures them.
 
 | Field in `entities/<entity>/accounts.yaml` | Type | Required | Default | Since | Meaning & environment / argv mapping |
 |---|---|---|---|---|---|

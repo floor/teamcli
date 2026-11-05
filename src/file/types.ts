@@ -442,4 +442,15 @@ export type LoadResult =
        *  says what the registry's record says. The file is not read as the team either way. */
       leftover?: { path: string; matches: boolean };
     }
-  | { ok: false; errors: Problem[]; path?: string };
+  | {
+      ok: false;
+      errors: Problem[];
+      /** The path the failed read was pointed at: the team file's conventional place for a file
+       *  read, and the conventional place too for a registry read whose record was the
+       *  definition (the record itself lives under the home; `source` says which one failed). */
+      path?: string;
+      /** Where the failed read was pointed. The registry record when the record was the
+       *  definition being read, the team file when the file was. Absent when the read failed
+       *  before either could be chosen. */
+      source?: 'registry' | 'team-file';
+    };
