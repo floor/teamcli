@@ -20,8 +20,8 @@ jobs:
   # Pull requests: typecheck, one build (via pack), every fast check and the signature check
   # in one job; the tests the diff can reach in parallel shards. See scripts/ci-select-tests.ts.
   # Pushes to main (merge time), the nightly schedule and workflow_dispatch run the static
-  # stages once per system in `static`, then the whole suite as four shards per system in
-  # `full-tests`, so anything the selection misses is caught there.
+  # stages once per system in `static` and the whole suite in parallel as four shards per
+  # system in `full-tests`, so anything the selection misses is caught there.
   checks:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -235,7 +235,6 @@ jobs:
 
   full-tests:
     if: github.event_name != 'pull_request'
-    needs: static
     strategy:
       fail-fast: false
       matrix:
