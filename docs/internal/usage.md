@@ -85,8 +85,15 @@ transcript or input box is not a reading. The supported screen grammars are:
   are subscription percentages used for the session and weekly windows. This is a constructed,
   tested formatter contract, not a claim about the CLI's default status-line configuration.
 
-Antigravity's screen fixtures do not provide a quota percentage. Accounts without a supported
-screen grammar or a recorded figure print `unknown  not readable from a CLI screen`. Readable
+Antigravity's screen fixtures do not provide a quota percentage, but its own usage print
+(`agy --print /usage`) does, so a team seat on the Antigravity CLI keeps that account readable.
+Readable is decided by the CLI kinds the machine's teams declare: a seat's CLI either has a
+pattern that names the account, or is a CLI whose own usage print measures it. A shipped quota
+profile is the tool's knowledge of a CLI, not a screen — with no seat on that CLI here, nothing
+answers for it. An account outside that set and with no recorded figure prints
+`unknown  not readable from a CLI screen`, the truth about where its figure could come from,
+never a bare `unknown` that reads as a figure not yet seen; the same account with a recorded
+machine reading still shows it, because the store is machine-wide and outlives a seat. Readable
 accounts without an observation print `unknown`. A lab no screen reads and no reading reached is
 not an account row at all in the text face: it is one line `deepseek  not readable from a screen
 (11 seats)`, its seat count in place of an `unknown` row that would read as a figure not yet seen.
@@ -132,8 +139,9 @@ table and that line, never the table alone; the flag changes no JSON key. The mo
 `information/quota.ts`; the live readers in `information/quota-observe.ts`; `reportOf` builds the
 block from the labs it already shows, so a lab or account this view hides can never reach it.
 
-A window line prints the used and left percentages, the reset (a countdown, or the words a wall
-screen showed), the margin, and the source with the reading's age. Observations are stamped when
+A window line prints the used and left percentages, the reset (a countdown, `resets not printed`
+when the source gave no reset moment, or the words a wall screen showed), the margin, and the
+source with the reading's age. Observations are stamped when
 read, and the newest observation per account, pool and window wins. Two sources print no
 percentage: the watch's machine cache (`source: machine reading`) and the live readers.
 
@@ -143,20 +151,30 @@ Antigravity usage print names as `Five Hour Limit`); the weekly window is seven 
 that prints its own margin — Claude Code's `W: 12% (+13.3%)` — is believed as printed; otherwise
 the figure is computed from the reset when it is known and still ahead. A reading older than five
 minutes, or one whose reset has passed, prints marked `stale`, carries no margin, and its state
-is `unknown`. States are `walled` (a live wall screen, or 100% used), `near cap` (90% used or
-above, or a fresh margin at or below −50%), `ok` below both, and `unknown` when nothing fresh is
-observed. The account table's `STATE` column prints the same words — the quota view is where the
-figures come from, not where the state first appears — and marks a stale reading `stale`. The
-margin test matters as much as the used figure: an account 89% used with a −71.6% margin is
-spending far ahead of its window and prints `near cap`, not `ok`.
+is `unknown`. States are `walled` (a live wall screen, or 100% used), `near cap` (a fresh margin
+at or below −10% — the window is on course to empty before it resets — or, when the source printed
+no reset moment so no margin can be read, 90% used or above), `ok` below both, and `unknown` when
+nothing fresh is observed. A figure whose source printed no reset says `resets not printed` in
+place of a countdown: the source answered the percentage and gave no clock — the Codex status
+cell is one, and the reset there lives in the CLI's own status view, which this tool does not
+press keys to read. A wall keeps `resets unknown` when its rejection named no lift time, because
+that word is about a limit whose end nothing on the screen states. The account table's `STATE`
+column prints the same words — the quota view is where the figures come from, not where the state
+first appears — and marks a stale reading `stale`. The margin test matters as much as the used figure: an account
+89% used with a −71.6% margin is spending far ahead of its window and prints `near cap`, not `ok`.
 
 The advice line is built only from what the block already shows. With walls, it names the seats
 on each walled account (up to two) and the account with the best fresh margin at or above +10% as
 the destination, or says that no other account has headroom. With no walls, it names the
 near-cap accounts, worst margin first (up to two), with a headroom account as the destination when
 one exists; failing a near cap, it names the accounts with that headroom. When figures exist but
-none has headroom and none is near cap, it says so; when nothing has answered, it says that. A restricted caller's advice can only name accounts and seats the restricted view
-already shows: another team's seats are counted (`+N on another team`), never named.
+none has headroom and none is near cap, it says so; when nothing has answered, it says that. A
+fresh figure whose source printed no reset, so that no margin can be read, is named with where
+its clock is printed — the CLI's own status view — appended to whichever sentence the line
+carries; a window whose row printed its own margin needs no such route, and a walled account's
+advice is the move, not an errand for a clock. A restricted caller's advice can only name accounts
+and seats the restricted view already shows: another team's seats are counted
+(`+N on another team`), never named.
 
 The live readers are observable only, and none opens a credential, key or CLI session file:
 

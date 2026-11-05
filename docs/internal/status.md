@@ -390,7 +390,7 @@ team beacon, session "beacon"
   claude-beacon  working  Claude Opus 5.5  w1:p1  socket
 budgets:
   openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh
-  openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
+  openai  daily  left 70%  used 30%  resets not printed  claude-beacon  last seen 40m ago  status line (fallback)  stale
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
 difference: claude-keeper is in the file and is not running
   repair: team restart claude-keeper
@@ -507,7 +507,7 @@ team beacon, session "beacon"
   claude-beacon  working  Claude Opus 5.5  w1:p1  socket
 budgets:
   openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh
-  openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
+  openai  daily  left 70%  used 30%  resets not printed  claude-beacon  last seen 40m ago  status line (fallback)  stale
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
 no differences
 exit 0

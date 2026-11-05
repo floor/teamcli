@@ -62,10 +62,12 @@ readable pane falls back to the file's vendor. A file's stale `vendor:` never ov
 model. Quota figures come from recorded screen readings or configured checks, never from seat
 counts, and a machine reading is shown only under an account a shipped screen or usage print
 measures: a figure the watch stored under any other account is not printed as that account's.
-An account with no screen parser and no recorded figure reads `unknown  not readable from a CLI
-screen`; a lab its seats draw on that no screen reads is one line instead of an account row —
-`deepseek  not readable from a screen  (11 seats)` — so the seat count is the fact, not an
-`unknown` row that reads as a figure not yet seen.
+An account no seat's CLI here can read — none of the seats' screen patterns names it and no seat
+runs a CLI whose own usage print measures it — and that has no recorded figure prints
+`unknown  not readable from a CLI screen`; a shipped profile says the tool knows that CLI, not
+that a screen for it runs on this machine. A lab its seats draw on that no screen reads is one
+line instead of an account row — `deepseek  not readable from a screen  (11 seats)` — so the seat
+count is the fact, not an `unknown` row that reads as a figure not yet seen.
 
 ## Who may run it
 
@@ -179,11 +181,13 @@ block per lab and per account, and one advice line.
           weekly  used 12%  left 88%  resets in 125h26m  margin +13.3%  (status line, read 1m ago)
       xai  walled
         xai  walled  resets at 3pm  seats: scout
-          weekly  used 100%  left 0%  resets unknown  margin not known  (machine reading, read 1m ago)
+          weekly  used 100%  left 0%  resets not printed  margin not known  (machine reading, read 1m ago)
     advice: swap scout off xai (walled) to anthropic (weekly used 12%, margin +13.3%)
 
 Each window line carries the percentage used and left, when it resets, the margin, and where the
-figure came from. The margin is the window's own clock minus the spend: 125h26m to reset leaves
+figure came from. The reset is a countdown, `resets not printed` when the source gave no reset
+moment, or the words a wall screen printed. The margin is the window's own clock minus the spend:
+ 125h26m to reset leaves
 42h34m of a seven-day window gone, 25.3%, so 12% used reads `margin +13.3%`. A status row that
 prints its own margin (`W: 12% (+13.3%)`) is believed as printed; a row that prints none is read
 against the window's length (five hours for the session window, seven days for the weekly one). A
@@ -203,15 +207,17 @@ reset words the screen showed.
 
 An account's state is `walled` at 100% used or on a live wall, `near cap` when a fresh margin is
 at or below −10% — the window is on course to empty before it resets — `ok` otherwise, whatever
-the used percentage: a window at 96% used and on pace is ok. A window whose reset moment is
-unknown gives no margin to read, so it falls back to the used figure, 90% or above reading
-`near cap`. Nothing fresh reads `unknown`. The same words print in the default account table's
+the used percentage: a window at 96% used and on pace is ok. A window with no reset moment to
+read — its source printed none — gives no margin, so it falls back to the used figure, 90% or
+above reading `near cap`. Nothing fresh reads `unknown`. The same words print in the default account table's
 `STATE` column, so `near cap` is never hidden behind `--tree`; the table marks a stale reading
 `stale` beside its state, and `fresh`/`stale` stay the team rows' own pace words. The one `advice:`
 line — printed with or without `--tree` — names the accounts with headroom (a fresh margin of at
 least +10%), or the walled seats and the healthiest account to move them to, or the near-cap
 accounts, worst margin first, with the account that still has headroom beside them, or says that
-no readings have answered.
+no readings have answered. A fresh figure whose source printed no reset has no margin to read: the
+line also names that window and says the reset is in the CLI's own status view, so `not printed`
+in a cell always comes with the route to the clock it says is off-screen.
 
 The sources are all observable, and the block reads none of them from a credential, a key or a
 CLI session file: the watch's machine-wide readings
