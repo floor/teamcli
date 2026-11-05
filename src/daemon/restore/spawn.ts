@@ -278,7 +278,10 @@ export async function runRestoreSweepInChild(input: SpawnRestoreInput): Promise<
     const how = code === null ? `signal ${signal ?? 'unknown'}` : `code ${String(code)}`;
     settleFailure(`the restore child left before it reported (${how})${lastError === '' ? '' : `: ${lastError}`}`);
   };
-  child.on('exit', gone);
+  // 'close' is emitted only after the child's stdio streams have closed, so every stderr chunk
+  // the child wrote has been read by the time lastError is used. 'exit' can be delivered while
+  // that data is still queued, which drops the diagnostic exactly when a child fails fast. A
+  // child whose 'close' never arrives is still bounded by the deadline timer above.
   child.on('close', gone);
 
   const door = child.stdio[3];

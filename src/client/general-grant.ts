@@ -285,6 +285,10 @@ export const OP_RELEASE_GROUPS: readonly { tag: string; at: string; ops: readonl
   // Measured against the 0.5.11 release commit (chore(release): 0.5.11, 8dbb7ee13): between
   // v0.5.10 and that commit the dispatcher gained exactly one route, `peek`, and lost none.
   { tag: 'v0.5.11', at: '2026-11-02T12:21:36+01:00', ops: ['peek'] },
+  // Measured against the 0.5.12 release commit (the merge of release/0.5.12, 61931295e): between
+  // v0.5.11 and that commit the dispatcher gained exactly four routes, `fallback`, `order`, `trace`
+  // and `waits`, and lost none.
+  { tag: 'v0.5.12', at: '2026-11-05T23:50:33+01:00', ops: ['fallback', 'order', 'trace', 'waits'] },
 ];
 /** The first release that shipped each op, or null while no release ships it. */
 export const OP_FIRST_SHIPPED: Readonly<Record<GeneralOp, OpRelease | null>> = (() => {
