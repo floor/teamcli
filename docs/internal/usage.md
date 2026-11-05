@@ -197,10 +197,16 @@ prints `near cap`, not `ok`.
 
 The advice line is built only from what the block already shows. With walls, it names the seats
 on each walled account (up to two) and the account with the best fresh margin at or above +10% as
-the destination, or says that no other account has headroom. With no walls, it names the
-near-cap accounts, worst margin first (up to two), with a headroom account as the destination when
-one exists; failing a near cap, it names the accounts with that headroom. When figures exist but
-none has headroom and none is near cap, it says so; when nothing has answered, it says that. A
+the destination, or says that no other account has headroom. With no walls, each near-cap account
+is one action, worst margin first (up to two): the window that made it near cap with its used
+figure and its clock in the window line's words (`nearFigureOf`, `nearClock`); the credits answer
+when `QuotaOptions.credits` carries the account's figures — `credits <amount> cover the overage`,
+or `until they are spent, <amount> short of the monthly cap`; and `or move <seats> off <account>`
+with a headroom account as the destination, or `no other account has headroom`. The seats are
+`ReportQuotaAccount.seats`, the same list the block prints, so a restricted view never names a
+seat it hides; an account with no seat gets the headroom sentence instead. Failing a near cap, it
+names the accounts with that headroom. When figures exist but none has headroom and none is near
+cap, it says so; when nothing has answered, it says that. A
 fresh figure whose source printed no reset, so that no margin can be read, is named with where
 its clock is printed — the CLI's own status view — appended to whichever sentence the line
 carries; a window whose row printed its own margin needs no such route, and a walled account's

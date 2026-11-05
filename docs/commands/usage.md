@@ -270,9 +270,14 @@ used figure, 90% or above reading `near cap`. Nothing fresh reads `unknown`. The
 `STATE` column, so `near cap` is never hidden behind `--tree`; the table marks a stale reading
 `stale` beside its state, and `fresh`/`stale` stay the team rows' own pace words. The one `advice:`
 line — printed with or without `--tree` — names the accounts with headroom (a fresh reading a band
-or more ahead of its clock), or the walled seats and the healthiest account to move them to, or
-the near-cap accounts, worst first, with the account that still has headroom beside them, or says
-that no readings have answered. A fresh figure whose source printed no reset has no pace word: the
+or more ahead of its clock), or the walled seats and the healthiest account to move them to; a
+near-cap account is an action, worst first: the window that made it near cap with its used figure
+and clock in words (`anthropic weekly 47.1% used, runs out in about 20h12m, before the reset in
+150h`), the answer the owner's `credits:` figures give about the overage (`credits €260.50 cover
+the overage`), and the seats on it by name, moved to an account that still has headroom — never a
+seat or a destination the view does not show (`or move lead, coda off anthropic: no other account
+has headroom`). With no figures at all the line says no readings have answered. A fresh figure
+whose source printed no reset has no pace word: the
 line also names that window and says the reset is in the CLI's own status view, so `not printed`
 in a cell always comes with the route to the clock it says is off-screen.
 
