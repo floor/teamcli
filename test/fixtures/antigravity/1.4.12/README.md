@@ -15,6 +15,11 @@ footer, at the widths the panes drew them.
 - `exit-completion-unsent.txt`: `/exit` typed at the idle box, never submitted: the box holds
   `/exit` between its rules, and the CLI's completion row `> /exit  Exit the CLI` sits below the
   closing rule. It reads as `unsent`, and the box holds `/exit` — never the empty idle prompt.
+- `feedback-survey.txt`: the post-turn CLI experience survey (`How's the CLI experience so far?
+  Help us improve:` / `[1] Good  [2] Fine  [3] Bad  [0] Skip`) drawn in the composer's place at
+  the bottom of the pane above the `? for shortcuts … Gemini 4 Argon · high` footer. It reads as
+  `feedback survey`, and the typed wake answers it with `0` (`Skip`) once before re-reading for
+  an empty idle prompt.
 
 The three screens the typed wake reads back (empty idle box, box holding text, working row) are
 pinned by `test/antigravity-typed-wake.test.ts`. The trigger line that test draws into the idle

@@ -1065,6 +1065,52 @@ describe("the watch's typed wake retry", () => {
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
   });
 
+  test('an Antigravity seat on the two-row feedback survey sends Skip 0 once, waits for two idle reads, and delivers the typed wake without marking the seat blocked', async () => {
+    const made = world();
+    const team = teamOf(typedTeamText(made.root, lobbyDir(made.home), 'antigravity'));
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    const survey = readFileSync(new URL('./fixtures/antigravity/1.4.12/feedback-survey.txt', import.meta.url), 'utf8');
+    const idle = readFileSync(new URL('./fixtures/antigravity/1.4.12/idle.txt', import.meta.url), 'utf8');
+    const working = readFileSync(new URL('./fixtures/antigravity/1.4.12/working-synthetic.txt', import.meta.url), 'utf8');
+    const one = pane(survey, 'done');
+    const live = liveWith('helper', 'helper-pane', 'done');
+    const keys: string[] = [];
+    const typed: string[] = [];
+    let enters = 0;
+    const sources = typedSources(one, (paneId, line, cli) => deliverTypedWake({
+      read: () => one.screen,
+      key: (_p, k) => {
+        keys.push(k);
+        one.screen = idle;
+        return true;
+      },
+      type: (_p, text) => {
+        typed.push(text);
+        one.screen = idle.replace(/\n>\n(─+)\n/, (_match, rule: string) => `\n> ${text}\n${rule}\n`);
+        return true;
+      },
+      enter: () => {
+        enters += 1;
+        one.screen = working;
+        return true;
+      },
+      wait: async () => {},
+    }, paneId, line, cli, { settleMs: 1, enterSettleMs: 1, pollMs: 1, verifyMs: 1 }));
+    const said: string[] = [];
+
+    await wakeUnreadDrops(sceneOf(made, team, one, said, { sources, live, now: NOW }), { unreadAfter: N });
+
+    expect(keys).toEqual(['0']);
+    expect(typed).toHaveLength(1);
+    expect(enters).toBe(1);
+    expect(said).toEqual([
+      'helper: a message from owner was unread and one typed wake line was delivered (the working screen showed after 1 Enter)',
+    ]);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+    const events = readEvents('acme', made.root, made.home);
+    expect(events.ok && events.events.filter((e) => e.payload.kind === 'seat.blocked')).toHaveLength(0);
+  });
+
   test('the wait doubles from five seconds and stops at a minute', () => {
     expect([1, 2, 3, 4, 5, 6, 9].map((tries) => wakeBackoffMs(tries))).toEqual([5_000, 10_000, 20_000, 40_000, 60_000, 60_000, 60_000]);
     expect(wakeBackoffMs(0)).toBe(5_000);

@@ -13,7 +13,7 @@ import { listUnread } from '../src/mcp/inbox.ts';
 import { profileFor } from '../src/profiles/index.ts';
 import { readHistory } from '../src/send/history.ts';
 import { deliverTypedWake, type TypedWakeHost } from '../src/send/typed-wake.ts';
-import { readBox, readScreen, type Screen } from '../src/watch/screen.ts';
+import { readBox, readScreen, screenData, screenWord, type Screen } from '../src/watch/screen.ts';
 import { fake, filed, owner, world } from './send-native-fixtures.ts';
 import { recordBody } from './helpers.ts';
 import { withoutSendId } from './helpers/output.ts';
@@ -25,6 +25,16 @@ const IDLE = readFileSync(join(FIXTURES, 'idle.txt'), 'utf8');
 const IDLE_COMPACTED = readFileSync(join(FIXTURES, 'idle-compacted.txt'), 'utf8');
 const WORKING = readFileSync(join(FIXTURES, 'working-synthetic.txt'), 'utf8');
 const EXIT_UNSENT = readFileSync(join(FIXTURES, 'exit-completion-unsent.txt'), 'utf8');
+const FEEDBACK_SURVEY = readFileSync(join(FIXTURES, 'feedback-survey.txt'), 'utf8');
+const SURVEY_PROMPT = "  How's the CLI experience so far? Help us improve:";
+const SURVEY_CHOICES = '  [1] Good  [2] Fine  [3] Bad  [0] Skip';
+const BARE_FEEDBACK_SURVEY = [
+  '● Explored 1 file (implementer.md)',
+  '  ready',
+  '',
+  SURVEY_PROMPT,
+  SURVEY_CHOICES,
+].join('\n');
 const PERMISSION_DIALOG = readFileSync(join(FIXTURES_142, 'permission.txt'), 'utf8');
 const QUESTION_DIALOG = readFileSync(join(FIXTURES_142, 'question.txt'), 'utf8');
 const TRUST_DIALOG = readFileSync(join(FIXTURES_142, 'trust.txt'), 'utf8');
@@ -57,13 +67,14 @@ function workingHolding(text: string): string {
  *  The trigger a send composes is not known until the send runs, so a scene that wants the box
  *  to read back the line draws the text the wake itself typed. `wait` costs nothing. */
 function wakeFake(
-  screen: (read: number, enters: number, typed: readonly string[]) => string | null,
-  options: { typeOk?: boolean; enterOk?: boolean } = {},
-): { host: TypedWakeHost; typed: string[]; enters: number; reads: number } {
+  screen: (read: number, enters: number, typed: readonly string[], keys: readonly string[]) => string | null,
+  options: { typeOk?: boolean; enterOk?: boolean; keyOk?: boolean; key?: boolean } = {},
+): { host: TypedWakeHost; typed: string[]; keys: string[]; enters: number; reads: number } {
   const typed: string[] = [];
+  const keys: string[] = [];
   const state = { enters: 0, reads: 0 };
   const host: TypedWakeHost = {
-    read: () => screen(state.reads++, state.enters, typed),
+    read: () => screen(state.reads++, state.enters, typed, keys),
     type: (_pane: string, text: string) => {
       typed.push(text);
       return options.typeOk ?? true;
@@ -74,9 +85,16 @@ function wakeFake(
     },
     wait: async () => {},
   };
+  if (options.key !== false) {
+    host.key = (_pane: string, key: string) => {
+      keys.push(key);
+      return options.keyOk ?? true;
+    };
+  }
   return {
     host,
     typed,
+    keys,
     get enters() {
       return state.enters;
     },
@@ -102,6 +120,43 @@ describe('the 1.4.12 frames the wake reads back', () => {
     // The trigger drawn into the captured idle box reads back as exactly that line.
     expect(readScreen('antigravity', holding(LINE)).kind).toBe('unsent');
     expect(boxHoldsText('antigravity', LINE, holding(LINE))).toBe(true);
+    // The post-turn feedback survey at the bottom of the pane reads as a known dialog whose
+    // single answer is '0' (Skip).
+    expect((screenData('antigravity') as { feedbackSurvey?: { skipKey?: string } } | null)?.feedbackSurvey?.skipKey).toBe('0');
+    expect(readScreen('antigravity', FEEDBACK_SURVEY).kind as string).toBe('feedback survey');
+    expect(readScreen('antigravity', BARE_FEEDBACK_SURVEY).kind as string).toBe('feedback survey');
+    expect(readScreen('antigravity', `${BARE_FEEDBACK_SURVEY}\n\n\n`).kind as string).toBe('feedback survey');
+    expect(screenWord(readScreen('antigravity', FEEDBACK_SURVEY))).toBe('blocked');
+  });
+
+  test('only the exact two survey rows at the bottom of the pane match; transcript quotes and partial or altered rows never match', () => {
+    expect(readScreen('antigravity', FEEDBACK_SURVEY).kind as string).toBe('feedback survey');
+    expect(readScreen('antigravity', BARE_FEEDBACK_SURVEY).kind as string).toBe('feedback survey');
+    // Quoted in the transcript above an idle or unsent composer box.
+    const quotedAboveIdle = IDLE.replace('  ready\n', `  ready\n${SURVEY_PROMPT}\n${SURVEY_CHOICES}\n`);
+    expect(readScreen('antigravity', quotedAboveIdle).kind).toBe('idle');
+    const quotedAboveUnsent = holding(LINE).replace('  ready\n', `  ready\n${SURVEY_PROMPT}\n${SURVEY_CHOICES}\n`);
+    expect(readScreen('antigravity', quotedAboveUnsent).kind).toBe('unsent');
+
+    // Followed by any other non-blank transcript row at the bottom of the pane.
+    expect(readScreen('antigravity', `${BARE_FEEDBACK_SURVEY}\n  Done.`).kind).toBe('unknown');
+    expect(readScreen('antigravity', `${FEEDBACK_SURVEY.trimEnd()}\n  Done.`).kind).toBe('unknown');
+
+    // Separated by a blank row, reversed, single-line, or altered options/wording.
+    expect(readScreen('antigravity', `● Done.\n${SURVEY_PROMPT}\n\n${SURVEY_CHOICES}`).kind).toBe('unknown');
+    expect(readScreen('antigravity', `● Done.\n${SURVEY_CHOICES}\n${SURVEY_PROMPT}`).kind).toBe('unknown');
+    expect(readScreen('antigravity', `● Done.\n${SURVEY_PROMPT}`).kind).toBe('unknown');
+    expect(readScreen('antigravity', `● Done.\n${SURVEY_CHOICES}`).kind).toBe('unknown');
+    expect(readScreen('antigravity', `● Done.\n${SURVEY_PROMPT.trim()} ${SURVEY_CHOICES.trim()}`).kind).toBe('unknown');
+    expect(readScreen('antigravity', `● Done.\n${SURVEY_PROMPT}\n  [1] Good  [2] Fine  [3] Bad`).kind).toBe('unknown');
+    expect(readScreen('antigravity', `● Done.\n  How's the CLI experience so far?\n${SURVEY_CHOICES}`).kind).toBe('unknown');
+
+    // Caution stages (working, permission, question, trust, confirmation) keep their own reading.
+    expect(readScreen('antigravity', `${WORKING}\n${SURVEY_PROMPT}\n${SURVEY_CHOICES}`).kind).toBe('working');
+    expect(readScreen('antigravity', `${PERMISSION_DIALOG}\n${SURVEY_PROMPT}\n${SURVEY_CHOICES}`).kind).toBe('permission');
+    expect(readScreen('antigravity', `${QUESTION_DIALOG}\n${SURVEY_PROMPT}\n${SURVEY_CHOICES}`).kind).toBe('question');
+    expect(readScreen('antigravity', `${TRUST_DIALOG}\n${SURVEY_PROMPT}\n${SURVEY_CHOICES}`).kind).toBe('trust');
+    expect(readScreen('antigravity', `${CONFIRMATION_DIALOG}\n${SURVEY_PROMPT}\n${SURVEY_CHOICES}`).kind).toBe('confirmation');
   });
 });
 
@@ -328,9 +383,88 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
       const afterType = wakeFake((read) => (read < 2 ? IDLE : frame));
       const outAfter = await deliverTypedWake(afterType.host, 'pane-1', LINE, 'antigravity', FAST);
       expect(outAfter).toEqual({ delivered: false, typed: true, tries: 0, reason: `the screen read ${kind} after the line was typed; no Enter was pressed` });
+      expect(afterType.keys).toEqual([]);
       expect(afterType.typed).toEqual([LINE]);
       expect(afterType.enters).toBe(0);
     }
+  });
+
+  test('the feedback survey is answered once with 0 (Skip), then two idle reads and guarded Enter deliver', async () => {
+    for (const survey of [FEEDBACK_SURVEY, BARE_FEEDBACK_SURVEY]) {
+      const screens = [survey, IDLE, IDLE, holding(LINE), holding(LINE), WORKING];
+      const pane = wakeFake((read) => screens[Math.min(read, screens.length - 1)] ?? null);
+      const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
+      expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+      expect(pane.keys).toEqual(['0']);
+      expect(pane.typed).toEqual([LINE]);
+      expect(pane.enters).toBe(1);
+    }
+  });
+
+  test('the feedback survey is never answered a second time if 0 does not reveal an empty idle prompt', async () => {
+    // Still showing the feedback survey after '0'.
+    const staysSurvey = wakeFake(() => FEEDBACK_SURVEY);
+    const outStays = await deliverTypedWake(staysSurvey.host, 'pane-1', LINE, 'antigravity', FAST);
+    expect(outStays).toEqual({
+      delivered: false,
+      typed: true,
+      tries: 0,
+      reason: 'the screen read feedback survey after the skip key, not an empty idle prompt; no wake line was typed',
+    });
+    expect(staysSurvey.keys).toEqual(['0']);
+    expect(staysSurvey.typed).toEqual([]);
+    expect(staysSurvey.enters).toBe(0);
+
+    // Reveals an unsent draft after '0'.
+    const revealsDraft = wakeFake((read) => (read === 0 ? FEEDBACK_SURVEY : holding('an owner draft')));
+    const outDraft = await deliverTypedWake(revealsDraft.host, 'pane-1', LINE, 'antigravity', FAST);
+    expect(outDraft).toEqual({
+      delivered: false,
+      typed: true,
+      tries: 0,
+      reason: 'the screen read unsent after the skip key, not an empty idle prompt; no wake line was typed',
+    });
+    expect(revealsDraft.keys).toEqual(['0']);
+    expect(revealsDraft.typed).toEqual([]);
+    expect(revealsDraft.enters).toBe(0);
+
+    // Second idle read after '0' is not idle.
+    const secondNotIdle = wakeFake((read) => (read === 0 ? FEEDBACK_SURVEY : read === 1 ? IDLE : FEEDBACK_SURVEY));
+    const outSecond = await deliverTypedWake(secondNotIdle.host, 'pane-1', LINE, 'antigravity', FAST);
+    expect(outSecond).toEqual({
+      delivered: false,
+      typed: true,
+      tries: 0,
+      reason: 'the screen read feedback survey on the second idle read, not an empty idle prompt; nothing was typed',
+    });
+    expect(secondNotIdle.keys).toEqual(['0']);
+    expect(secondNotIdle.typed).toEqual([]);
+    expect(secondNotIdle.enters).toBe(0);
+
+    // Host without key binding or key rejected refuses without typing.
+    const unbound = wakeFake(() => FEEDBACK_SURVEY, { key: false });
+    const outUnbound = await deliverTypedWake(unbound.host, 'pane-1', LINE, 'antigravity', FAST);
+    expect(outUnbound).toEqual({
+      delivered: false,
+      typed: false,
+      tries: 0,
+      reason: 'the screen is at a feedback survey and no skip key is bound; nothing was typed',
+    });
+    expect(unbound.keys).toEqual([]);
+    expect(unbound.typed).toEqual([]);
+    expect(unbound.enters).toBe(0);
+
+    const rejected = wakeFake(() => FEEDBACK_SURVEY, { keyOk: false });
+    const outRejected = await deliverTypedWake(rejected.host, 'pane-1', LINE, 'antigravity', FAST);
+    expect(outRejected).toEqual({
+      delivered: false,
+      typed: false,
+      tries: 0,
+      reason: 'the pane did not take the skip key; nothing was typed',
+    });
+    expect(rejected.keys).toEqual(['0']);
+    expect(rejected.typed).toEqual([]);
+    expect(rejected.enters).toBe(0);
   });
 });
 
@@ -434,6 +568,26 @@ describe('team send: the antigravity typed wake', () => {
         'typed: the first read showed permission, not an empty idle prompt; nothing was typed',
       ]);
     }
+  });
+
+  test('a feedback survey frame in team send is skipped once with 0, then woken and delivered', async () => {
+    const made = agyWorld();
+    const pane = wakeFake((_read, enters, typed, keys) => {
+      if (enters > 0) return WORKING;
+      if (typed.length > 0) return holding(typed[typed.length - 1] ?? '');
+      if (keys.length > 0) return IDLE;
+      return FEEDBACK_SURVEY;
+    });
+    const host = fake(made, {
+      agents: () => [{ name: 'agy', pane: 'pane-1' }],
+      typedWake: () => pane.host,
+    });
+    const io = owner(made.root);
+    expect(await runSend(['agy', 'hello'], io, host)).toBe(0);
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nagy: delivered (typed wake)\n');
+    expect(pane.keys).toEqual(['0']);
+    expect(pane.typed).toEqual(['Message from owner (owner@acme): hello Read it with: call inbox_check now.']);
+    expect(pane.enters).toBe(1);
   });
 
   test('a long summary and multi-line body on Antigravity truncates the header to fit <= 80 chars, keeps call inbox_check now whole, and never types the body', async () => {
