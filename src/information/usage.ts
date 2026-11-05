@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { budgetsInForceOf, notInForce, watchInForceOf } from '../approve/approval.ts';
 import { describe } from '../approve/fingerprint.ts';
 import { checkOf, countedFor, paceFrom, recall, recallSpend, screenOf, type ReadingSource, type Seen, type SpendReading } from '../budgets/readings.ts';
-import { budgetTable, budgetLine, reserveOf, sourcesOf, span, whenWord, WINDOWS, WINDOW_MS, type BudgetRow, type BudgetState } from '../budgets/table.ts';
+import { budgetTable, budgetLine, reserveOf, sourceText, sourcesOf, span, whenWord, WINDOWS, WINDOW_MS, type BudgetRow, type BudgetState } from '../budgets/table.ts';
 import { money } from '../budgets/gate.ts';
 import { walkCaller } from '../caller.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -2270,11 +2270,11 @@ function creditText(entry: { account: string; plan?: string }, credit: MachineCr
 }
 
 /** One team's per-seat figures, under its seat table in the tree: the run the seats belong to,
- *  one line per figure with its window, reset, margin and mark, one spend line per seat, and
- *  `unknown  no reading for this seat` where neither this run nor the watch's record has a
- *  figure. A quota figure a screen printed is `measured`; one read from the watch's per-seat
- *  record is `estimated`; a spend a screen printed is `measured`, and one no screen printed is
- *  `unknown` with its reason — never `0`. */
+ *  one line per figure with its window, reset, margin and where it was read, one spend line per
+ *  seat, and `unknown  no reading for this seat` where neither this run nor the watch's record
+ *  has a figure. A quota figure a screen printed says so in the plain words every face shares
+ *  (`sourceText`); one read from the watch's per-seat record is `estimated`; a spend a screen
+ *  printed says where, and one no screen printed is `unknown` with its reason — never `0`. */
 function seatFiguresText(block: ReportTeamBlock): string[] {
   // The run rides the rows (`run`, `--json`), not a line of its own: the block's header is the
   // team the caller already read, and a session name here would be one more line to keep true.
@@ -2285,20 +2285,20 @@ function seatFiguresText(block: ReportTeamBlock): string[] {
     for (const one of seat.windows) {
       const account = accountLabel(one);
       if (one.expired) {
-        lines.push(`  ${seat.seat}  ${seat.cli}  ${account}  ${one.window}  no fresh reading  ${one.mark}  ${one.source}  read ${one.age} ago`);
+        lines.push(`  ${seat.seat}  ${seat.cli}  ${account}  ${one.window}  no fresh reading  ${sourceText(one.source)}, ${one.age} ago`);
         continue;
       }
       const left = one.left === null ? 'left unknown' : `left ${one.left}%`;
       const used = one.used === null ? 'used unknown' : `used ${one.used}%`;
       const reset = one.resetsIn === null ? 'resets not printed' : `resets in ${one.resetsIn}`;
       const stale = one.stale ? '  stale' : '';
-      lines.push(`  ${seat.seat}  ${seat.cli}  ${account}  ${one.window}  ${left}  ${used}  ${reset}  ${marginWord(one.margin)}  ${one.mark}  ${one.source}  read ${one.age} ago${stale}`);
+      lines.push(`  ${seat.seat}  ${seat.cli}  ${account}  ${one.window}  ${left}  ${used}  ${reset}  ${marginWord(one.margin)}  ${sourceText(one.source)}, ${one.age} ago${stale}`);
     }
     // The spend line belongs to its seat: the amount is the pane's own session, so two seats on
     // one account print their own figures, and one no screen answered for prints `unknown`.
     const cost = seat.cost.source === 'unknown' || seat.cost.amount === null
       ? `unknown  ${seat.cost.why ?? SEAT_COST_UNREAD}`
-      : `$${seat.cost.amount}  ${seat.cost.source}  ${seat.cost.readFrom ?? 'status line'}${seat.cost.age === undefined ? '' : `  read ${seat.cost.age} ago`}`;
+      : `$${seat.cost.amount}  ${sourceText(seat.cost.readFrom ?? 'status line')}${seat.cost.age === undefined ? '' : `, ${seat.cost.age} ago`}`;
     lines.push(`  ${seat.seat}  ${seat.cli}  ${label}  cost  ${cost}`);
   }
   return lines;
@@ -2332,7 +2332,7 @@ function accountCells(entry: ReportAccount, report: UsageReport): string[] {
         ? `read by another team, ${m.age} ago`
         : `read by ${m.team}, ${m.age} ago`
       : `read ${m.age} ago`;
-    return [account, 'spend', `${money(m.amount)} ${m.currency}`, '-', '-', '-', read, 'check', m.state];
+    return [account, 'spend', `${money(m.amount)} ${m.currency}`, '-', '-', '-', read, sourceText(m.source ?? 'check'), m.state];
   }
   const m = entry.machine;
   const source = sourceWordOf(m);
@@ -2382,13 +2382,11 @@ function accountCells(entry: ReportAccount, report: UsageReport): string[] {
   return [account, m.window ?? '-', `${m.left}%`, `${m.used}%`, reset, reserve, provenanceOf(m, report), source, cell];
 }
 
-/** The SOURCE cell: where the machine line's figure was read, with the fallback clause the
- *  budget rows carry. One spelling for the fresh and the expired line alike. */
+/** The SOURCE cell: where the machine line's figure was read, in the plain words every face
+ *  shares (`sourceText`), with the fallback clause the budget rows carry. One spelling for the
+ *  fresh and the expired line alike. */
 function sourceWordOf(m: ReportMachine): string {
-  const from = m.source === 'status_line' ? 'status line'
-    : m.source === 'check' ? 'check'
-      : m.source === 'cli_usage' ? 'cli usage'
-        : m.source === 'machine_reading' ? 'machine reading' : 'unknown source';
+  const from = sourceText(m.source);
   return m.fallback ? `${from} (fallback)` : from;
 }
 
@@ -2472,7 +2470,7 @@ function teamRowText(row: ReportTeamRow): string {
 }
 
 function spendRowText(account: string, row: ReportSpendRow): string {
-  return `  ${account}  ${row.team}  spend  ${money(row.reading.amount)} ${row.reading.currency} left  read ${row.reading.age} ago  check  ${row.reading.state}${borrowedClause(row.borrowedFrom)}`;
+  return `  ${account}  ${row.team}  spend  ${money(row.reading.amount)} ${row.reading.currency} left  read ${row.reading.age} ago  ${sourceText(row.reading.source)}  ${row.reading.state}${borrowedClause(row.borrowedFrom)}`;
 }
 
 /** The borrowing clause a team's row carries: the owning entity, in the parenthesised tail the

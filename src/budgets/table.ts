@@ -74,8 +74,33 @@ export function reserveOf(budgets: TeamFile['budgets'], account: string): number
   return entry?.kind === 'subscription' ? entry.reserve : null;
 }
 
+/** The plain words a figure's source prints in human text: where the owner can see the reading,
+ *  or that it is an estimate. The model keeps its own spelling (`status_line`, `check`,
+ *  `cli_usage`, `machine_reading`, `state record`) for `--json`, where a script reads it; the
+ *  text says one of three things — a seat's status bar, the CLI itself, or `estimated` — and the
+ *  reading's age prints beside it. Exported so the quota block, the account table and the seat
+ *  lines spell a source the same way, one vocabulary for every face. */
+export function sourceText(source: string | null | undefined): string {
+  switch (source) {
+    case 'status_line':
+    case 'status line':
+      return 'read from a seat’s status bar';
+    case 'cli_usage':
+    case 'cli usage':
+    case 'quota screen':
+      return 'read from the CLI';
+    case 'check':
+    case 'machine_reading':
+    case 'machine reading':
+    case 'state record':
+      return 'estimated';
+    default:
+      return 'unknown source';
+  }
+}
+
 export function budgetLine(row: BudgetRow): string {
-  const from = row.source === 'status_line' ? 'status line' : row.source === 'check' ? 'check' : 'unknown source';
+  const from = sourceText(row.source);
   const source = row.fallback ? `${from} (fallback)` : from;
   if (row.expired) {
     // The figure is of a window instance that passed: the age and its source are the facts, the

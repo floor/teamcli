@@ -11,7 +11,7 @@
 // against the window's length. The session window is five hours, the length the sibling CLI's own
 // usage report names (`Five Hour Limit`).
 import { money } from '../budgets/gate.ts';
-import { span, WINDOW_MS } from '../budgets/table.ts';
+import { sourceText, span, WINDOW_MS } from '../budgets/table.ts';
 import type { MachineCredit } from './machine-accounts.ts';
 
 export const QUOTA_WINDOWS = ['session', 'weekly'] as const;
@@ -568,7 +568,8 @@ export function marginWord(margin: number | null): string {
 }
 
 /** One window's line, under the account's own line: the two percentages, the reset, the margin,
- *  and where the figure came from. A wall prints as a wall — no percentage is invented for it.
+ *  and where the figure came from in the plain words every face shares (`sourceText`) with its
+ *  age. A wall prints as a wall — no percentage is invented for it.
  *  A window running ahead of its clock by the headroom band prints the run-out sentence in place
  *  of the reset countdown and the margin, which it already carries both hours of. */
 function windowText(one: ReportQuotaWindow): string {
@@ -577,7 +578,7 @@ function windowText(one: ReportQuotaWindow): string {
   const reset = one.wall
     ? (one.resetsIn === null ? 'resets unknown' : `resets in ${one.resetsIn}`)
     : (one.resetsIn === null ? 'resets not printed' : `resets in ${one.resetsIn}`);
-  const from = `(${one.source}, read ${one.age} ago)`;
+  const from = `(${sourceText(one.source)}, ${one.age} ago)`;
   if (one.wall) return `${one.window}  walled  ${reset}  ${from}`;
   // A reading older than its own window is of a passed instance: the words, the age and the
   // source are the line; the figure and its reset are not the current window's.

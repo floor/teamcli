@@ -81,15 +81,15 @@ const READINGS = {
 // the second face (`--tree`, `REPORT` below): the default report is this table alone (owner,
 // 2026-10-17).
 const TABLE = [
-  'ACCOUNT    WINDOW   LEFT  USED  RESETS       RESERVE             READ                     SOURCE                  STATE',
-  'anthropic  -        -     -     -            -                   -                        -                       unknown',
-  'openai     session  40%   60%   in 44m       -                   -  read 2m ago           check                   ok  pace not known  (no watch is recording for acme)',
-  'openai     daily    70%   30%   not printed  -                   lead  last seen 40m ago  status line (fallback)  unknown  pace not known  stale  (no watch is recording for acme)',
-  'openai     weekly   5%    95%   in 44m       inside reserve 20%  lead  changed 2m ago     status line (fallback)  near cap  pace 5.3%/h  (no watch is recording for acme)',
+  'ACCOUNT    WINDOW   LEFT  USED  RESETS       RESERVE             READ                     SOURCE                                    STATE',
+  'anthropic  -        -     -     -            -                   -                        -                                         unknown',
+  'openai     session  40%   60%   in 44m       -                   -  read 2m ago           estimated                                 ok  pace not known  (no watch is recording for acme)',
+  'openai     daily    70%   30%   not printed  -                   lead  last seen 40m ago  read from a seat’s status bar (fallback)  unknown  pace not known  stale  (no watch is recording for acme)',
+  'openai     weekly   5%    95%   in 44m       inside reserve 20%  lead  changed 2m ago     read from a seat’s status bar (fallback)  near cap  pace 5.3%/h  (no watch is recording for acme)',
   '  anthropic  acme  unknown  pace not known',
-  '  openai  acme  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh  pace not known',
-  '  openai  acme  daily  left 70%  used 30%  resets not printed  lead  last seen 40m ago  status line (fallback)  stale  pace not known',
-  '  openai  acme  weekly  left 5%  used 95%  resets in 44m  lead  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace 5.3%/h',
+  '  openai  acme  session  left 40%  used 60%  resets in 44m  -  read 2m ago  estimated  fresh  pace not known',
+  '  openai  acme  daily  left 70%  used 30%  resets not printed  lead  last seen 40m ago  read from a seat’s status bar (fallback)  stale  pace not known',
+  '  openai  acme  weekly  left 5%  used 95%  resets in 44m  lead  changed 2m ago  read from a seat’s status bar (fallback)  fresh, inside reserve 20%  pace 5.3%/h',
   'advice: no readings yet: no seat status line and no CLI usage command has answered',
   '',
   'acme',
@@ -121,8 +121,8 @@ const ADVICE = 'advice: no readings yet: no seat status line and no CLI usage co
 // the lead's openai daily and weekly readings (the state `withState()` writes), both estimated,
 // one stale; no live source answered, and the spend is unknown with its reason.
 const SEAT_FIGURES = [
-  '  lead  claude-code  openai  daily  left 70%  used 30%  resets not printed  pace not known  estimated  state record  read 40m ago  stale',
-  '  lead  claude-code  openai  weekly  left 5%  used 95%  resets in 44m  on pace  estimated  state record  read 2m ago',
+  '  lead  claude-code  openai  daily  left 70%  used 30%  resets not printed  pace not known  estimated, 40m ago  stale',
+  '  lead  claude-code  openai  weekly  left 5%  used 95%  resets in 44m  on pace  estimated, 2m ago',
   "  lead  claude-code  anthropic  cost  unknown  no money cost was read from this seat's screen this run",
 ].join('\n');
 const REPORT = TABLE.replace(`${ADVICE}\n`, '')
@@ -665,18 +665,18 @@ describe('team usage', () => {
     });
     const mine = await usageAt(root, SEAT);
     expect(mine.code).toBe(0);
-    expect(mine.out).toContain('openai     session  40%   60%   in 44m       -                   -  read 2m ago           check                   ok  pace not known  (no watch is recording for acme)');
-    expect(mine.out).toContain('openai     daily    70%   30%   not printed  -                   lead  last seen 40m ago  status line (fallback)  unknown  pace not known  stale  (no watch is recording for acme)');
+    expect(mine.out).toContain('openai     session  40%   60%   in 44m       -                   -  read 2m ago           estimated                                 ok  pace not known  (no watch is recording for acme)');
+    expect(mine.out).toContain('openai     daily    70%   30%   not printed  -                   lead  last seen 40m ago  read from a seat’s status bar (fallback)  unknown  pace not known  stale  (no watch is recording for acme)');
     // The one record whose point stands reads its figure — the positive control the refusals
     // above need: not the stale record's real 14.0%/h, and not a 0.0 the zero-distance pair could
     // fake if the rule were only "a point is present".
-    expect(mine.out).toContain('openai     weekly   5%    95%   in 44m       inside reserve 20%  lead  changed 2m ago     status line (fallback)  near cap  pace 5.3%/h  (no watch is recording for acme)');
+    expect(mine.out).toContain('openai     weekly   5%    95%   in 44m       inside reserve 20%  lead  changed 2m ago     read from a seat’s status bar (fallback)  near cap  pace 5.3%/h  (no watch is recording for acme)');
     expect(mine.out).not.toContain('14.0%/h');
     expect(mine.out).not.toContain('0.0%/h');
     // A machine row with no figure carries no word either: `anthropic` reads `unknown`, where
     // the caller's row under the table reads `pace not known` like every row of a subscription
     // account.
-    expect(mine.out).toContain('anthropic  -        -     -     -            -                   -                        -                       unknown\n');
+    expect(mine.out).toContain('anthropic  -        -     -     -            -                   -                        -                                         unknown\n');
     expect(mine.out).toContain('  anthropic  acme  unknown  pace not known\n');
 
     // The window-change face, through the real fold: a figure that moved while a different window
@@ -687,7 +687,7 @@ describe('team usage', () => {
     const stored = (JSON.parse(readFileSync(join(root, '.agents', 'team.state.json'), 'utf8')) as { budgets: Record<string, Record<string, unknown>> }).budgets['openai/weekly/lead'] as Record<string, unknown>;
     expect('was' in stored).toBe(false);
     const after = await usageAt(root, SEAT);
-    expect(after.out).toContain('openai     weekly   3%    97%   in 1h44m     inside reserve 20%  lead  changed 0m ago     status line (fallback)  near cap  pace not known  (no watch is recording for acme)');
+    expect(after.out).toContain('openai     weekly   3%    97%   in 1h44m     inside reserve 20%  lead  changed 0m ago     read from a seat’s status bar (fallback)  near cap  pace not known  (no watch is recording for acme)');
   });
 
   test("the machine line takes the newest team's pace, and each row its own", async () => {
@@ -713,15 +713,15 @@ describe('team usage', () => {
 
     const seat = await usageAt(root, SEAT);
     expect(seat.code).toBe(0);
-    expect(seat.out).toContain('openai     weekly   30%   70%   in 44m       read by another team, 1m ago  status line             ok    (no watch is recording for it)');
+    expect(seat.out).toContain('openai     weekly   30%   70%   in 44m       read by another team, 1m ago  read from a seat’s status bar             ok    (no watch is recording for it)');
     const seatLine = seat.out.split('\n').find((text) => /^openai\s+weekly/.test(text));
     expect(seatLine).not.toContain('pace');
-    expect(seat.out).toContain('  openai  acme  weekly  left 5%  used 95%  resets in 44m  lead  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace 5.3%/h');
+    expect(seat.out).toContain('  openai  acme  weekly  left 5%  used 95%  resets in 44m  lead  changed 2m ago  read from a seat’s status bar (fallback)  fresh, inside reserve 20%  pace 5.3%/h');
 
     const owner = await usageAt(root, OWNER, '--all');
     expect(owner.code).toBe(0);
-    expect(owner.out).toContain('openai     weekly   30%   70%   in 44m       read by zeta-4WX, 1m ago  status line             ok  pace 60.0%/h  (no watch is recording for zeta-4WX)');
-    expect(owner.out).toContain(`  openai  ${project}  weekly  left 30%  used 70%  resets in 44m  scout  changed 1m ago  status line  fresh  pace 60.0%/h`);
+    expect(owner.out).toContain('openai     weekly   30%   70%   in 44m       read by zeta-4WX, 1m ago  read from a seat’s status bar             ok  pace 60.0%/h  (no watch is recording for zeta-4WX)');
+    expect(owner.out).toContain(`  openai  ${project}  weekly  left 30%  used 70%  resets in 44m  scout  changed 1m ago  read from a seat’s status bar  fresh  pace 60.0%/h`);
 
     // The same split in the allow-list: the machine's `pace` is the newest reading's in the full
     // view — with the newest reading's team beside it — and null on the restricted line that
@@ -1342,7 +1342,7 @@ describe('team usage', () => {
     const mine = await usageAt(root, SEAT, '--tree');
     const raw = (await usageAt(root, SEAT, '--json')).out;
     expect(mine.code).toBe(0);
-    expect(mine.out).toContain(`\n${name}  -        -     -     -            -                   -                        -                       unknown  not readable from a CLI screen\n`);
+    expect(mine.out).toContain(`\n${name}  -        -     -     -            -                   -                        -                                         unknown  not readable from a CLI screen\n`);
     expect(mine.out).toContain(`  ${name}  acme  unknown  pace not known\n`);
     // The name is the only absolute-looking string in either face, however often it repeats in
     // the document — in the text, at each place the document names the account: its table row,
@@ -1361,7 +1361,7 @@ describe('team usage', () => {
     // who wrote the string, never about who is reading it.
     const owner = await usageAt(root, OWNER);
     expect(owner.code).toBe(0);
-    expect(owner.out).toContain(`${name}  -        -     -     -            -                   -                        -                       unknown  not readable from a CLI screen\n`);
+    expect(owner.out).toContain(`${name}  -        -     -     -            -                   -                        -                                         unknown  not readable from a CLI screen\n`);
     expect(owner.out).toContain(`  ${name}  acme  unknown  pace not known\n`);
   });
 
@@ -1529,11 +1529,11 @@ describe('team usage', () => {
     const doc = JSON.parse(raw) as { labs: { accounts: { machine: { seat?: unknown } }[] }[] };
     expect(mine.code).toBe(0);
     expect(mine.out).toBe([
-      'ACCOUNT    WINDOW  LEFT  USED  RESETS  RESERVE             READ                   SOURCE                  STATE',
-      'anthropic  -       -     -     -       -                   -                      -                       unknown',
-      'openai     weekly  5%    95%   in 44m  inside reserve 20%  ghost  changed 2m ago  status line (fallback)  near cap  pace not known  (no watch is recording for acme)',
+      'ACCOUNT    WINDOW  LEFT  USED  RESETS  RESERVE             READ                   SOURCE                                    STATE',
+      'anthropic  -       -     -     -       -                   -                      -                                         unknown',
+      'openai     weekly  5%    95%   in 44m  inside reserve 20%  ghost  changed 2m ago  read from a seat’s status bar (fallback)  near cap  pace not known  (no watch is recording for acme)',
       '  anthropic  acme  unknown  pace not known',
-      '  openai  acme  weekly  left 5%  used 95%  resets in 44m  ghost  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace not known',
+      '  openai  acme  weekly  left 5%  used 95%  resets in 44m  ghost  changed 2m ago  read from a seat’s status bar (fallback)  fresh, inside reserve 20%  pace not known',
       '',
       'quota',
       '  anthropic  unknown',
@@ -1550,7 +1550,7 @@ describe('team usage', () => {
       '  ghost  claude-code  anthropic',
       '  lead  claude-code  anthropic  unknown  no reading for this seat',
       "  lead  claude-code  anthropic  cost  unknown  no money cost was read from this seat's screen this run",
-      '  ghost  claude-code  openai  weekly  left 5%  used 95%  resets in 44m  on pace  estimated  state record  read 2m ago',
+      '  ghost  claude-code  openai  weekly  left 5%  used 95%  resets in 44m  on pace  estimated, 2m ago',
       "  ghost  claude-code  anthropic  cost  unknown  no money cost was read from this seat's screen this run",
       '',
       'usage on this machine, 1 team, 2 labs, 2 accounts',
@@ -1706,11 +1706,11 @@ describe('team usage', () => {
     const doc = JSON.parse(raw) as { labs: { lab: string; accounts: { machine: { window: string | null; seat?: unknown } }[] }[]; notes: unknown[] };
     expect(mine.code).toBe(0);
     expect(mine.out).toBe([
-      'ACCOUNT    WINDOW  LEFT  USED  RESETS  RESERVE             READ               SOURCE                  STATE',
-      'anthropic  -       -     -     -       -                   -                  -                       unknown',
-      'openai     weekly  5%    95%   in 44m  inside reserve 20%  -  changed 2m ago  status line (fallback)  near cap  pace not known  (no watch is recording for acme)',
+      'ACCOUNT    WINDOW  LEFT  USED  RESETS  RESERVE             READ               SOURCE                                    STATE',
+      'anthropic  -       -     -     -       -                   -                  -                                         unknown',
+      'openai     weekly  5%    95%   in 44m  inside reserve 20%  -  changed 2m ago  read from a seat’s status bar (fallback)  near cap  pace not known  (no watch is recording for acme)',
       '  anthropic  acme  unknown  pace not known',
-      '  openai  acme  weekly  left 5%  used 95%  resets in 44m  -  changed 2m ago  status line (fallback)  fresh, inside reserve 20%  pace not known',
+      '  openai  acme  weekly  left 5%  used 95%  resets in 44m  -  changed 2m ago  read from a seat’s status bar (fallback)  fresh, inside reserve 20%  pace not known',
       '',
       'quota',
       '  anthropic  unknown',
@@ -1887,13 +1887,13 @@ describe('team usage', () => {
     // seat's vendor: its zero-config account prints, and the other teams' accounts in it are the
     // count beside the lab, never a name.
     expect(seat.out).toBe([
-      'ACCOUNT         WINDOW  LEFT  USED  RESETS       RESERVE             READ                          SOURCE       STATE',
-      'acme-only-8ZKQ  weekly  9%    91%   not printed  inside reserve 10%  -  changed 2m ago             status line  near cap  pace not known  (no watch is recording for acme-7QK)',
-      'anthropic       -       -     -     -            -                   -                             -            unknown',
-      'openai          weekly  88%   12%   in 44m       -                   read by another team, 1m ago  status line  ok    (no watch is recording for it)',
-      '  acme-only-8ZKQ  acme-7QK  weekly  left 9%  used 91%  resets not printed  -  changed 2m ago  status line  fresh, inside reserve 10%  pace not known',
+      'ACCOUNT         WINDOW  LEFT  USED  RESETS       RESERVE             READ                          SOURCE                         STATE',
+      'acme-only-8ZKQ  weekly  9%    91%   not printed  inside reserve 10%  -  changed 2m ago             read from a seat’s status bar  near cap  pace not known  (no watch is recording for acme-7QK)',
+      'anthropic       -       -     -     -            -                   -                             -                              unknown',
+      'openai          weekly  88%   12%   in 44m       -                   read by another team, 1m ago  read from a seat’s status bar  ok    (no watch is recording for it)',
+      '  acme-only-8ZKQ  acme-7QK  weekly  left 9%  used 91%  resets not printed  -  changed 2m ago  read from a seat’s status bar  fresh, inside reserve 10%  pace not known',
       'anthropic: 1 other account',
-      '  openai  acme-7QK  weekly  left 5%  used 95%  resets in 44m  lead  changed 10m ago  status line  fresh, inside reserve 20%  pace not known',
+      '  openai  acme-7QK  weekly  left 5%  used 95%  resets in 44m  lead  changed 10m ago  read from a seat’s status bar  fresh, inside reserve 20%  pace not known',
       '',
       'quota',
       '  acme-only-8ZKQ  unknown',
@@ -1912,7 +1912,7 @@ describe('team usage', () => {
       '  lead  claude-code  anthropic',
       // The caller's own state holds this seat's weekly record; it is old enough to be stale, so
       // the margin is not read from it, and the spend is unknown with its reason.
-      '  lead  claude-code  openai  weekly  left 5%  used 95%  resets in 44m  pace not known  estimated  state record  read 10m ago  stale',
+      '  lead  claude-code  openai  weekly  left 5%  used 95%  resets in 44m  pace not known  estimated, 10m ago  stale',
       "  lead  claude-code  anthropic  cost  unknown  no money cost was read from this seat's screen this run",
       "note: acme-7QK: a stored reading names an account this team's file does not: not shown",
       "note: 2 teams' states cannot be read (not valid JSON; move it aside and run the command again)",
@@ -2052,7 +2052,7 @@ describe('team usage', () => {
     const mine = await usageAt(root, SEAT);
     const raw = (await usageAt(root, SEAT, '--json')).out;
     const line = mine.out.split('\n').find((text) => /^openai\s+weekly/.test(text));
-    expect(line).toBe('openai     weekly  88%   12%   in 44m  read by another team, 1m ago  status line  ok    (no watch is recording for it)');
+    expect(line).toBe('openai     weekly  88%   12%   in 44m  read by another team, 1m ago  read from a seat’s status bar  ok    (no watch is recording for it)');
     const entries = (JSON.parse(raw) as { labs: { accounts: { account: string; machine: Record<string, unknown> }[] }[] }).labs.flatMap((lab) => lab.accounts);
     const openai = entries.find((entry) => entry.account === 'openai');
     expect(openai?.machine.other).toBe(true);
@@ -2142,8 +2142,8 @@ describe('team usage', () => {
     const older = await usageAt(root, SEAT);
     const owner = await usageAt(root, OWNER);
     for (const face of [older.out, owner.out]) {
-      expect(face).toContain('changed 1h30m ago  status line (fallback)  refusing, inside reserve 20%');
-      expect(face).toContain('last seen 1h30m ago  status line (fallback)  stale');
+      expect(face).toContain('changed 1h30m ago  read from a seat’s status bar (fallback)  refusing, inside reserve 20%');
+      expect(face).toContain('last seen 1h30m ago  read from a seat’s status bar (fallback)  stale');
     }
   });
 
@@ -2163,8 +2163,8 @@ describe('team usage', () => {
       state.spend = { deepseek: { account: 'deepseek', amount: 12.4, currency: 'USD', at: '2026-10-04T08:56:00Z' } } as never;
     });
     const mine = await usageAt(root, SEAT);
-    expect(mine.out).toContain('deepseek   spend   12.40 USD  -     -       read 4m ago  check   fresh\n');
-    expect(mine.out).toContain('  acme  spend  12.40 USD left  read 4m ago  check  fresh\n');
+    expect(mine.out).toContain('deepseek   spend   12.40 USD  -     -       read 4m ago  estimated  fresh\n');
+    expect(mine.out).toContain('  acme  spend  12.40 USD left  read 4m ago  estimated  fresh\n');
     // The pace word never rides a spend line (§ 3.4): money has no window and no stored point, so
     // both of the account's lines are whole — the two `contains` above would fail on any word.
     const spendLines = mine.out.split('\n').filter((line) => line.includes(' spend '));
@@ -2241,9 +2241,9 @@ describe('team usage', () => {
     // the watch clause already sit in, so the account keeps its one line; every other row of the
     // report is byte for byte what it was.
     const mine = await usageAt(root, OWNER);
-    expect(mine.out).toContain('anthropic  -        -     -     -            -                   -                        -                       unknown\n');
+    expect(mine.out).toContain('anthropic  -        -     -     -            -                   -                        -                                         unknown\n');
     expect(mine.out).toContain('  anthropic  acme  unknown  pace not known  (borrowed from globex)\n');
-    expect(mine.out).toContain('  openai  acme  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh  pace not known\n');
+    expect(mine.out).toContain('  openai  acme  session  left 40%  used 60%  resets in 44m  -  read 2m ago  estimated  fresh  pace not known\n');
     // One fact, one place: the restricted reader reads the same clause, and the document carries
     // it as its own key — absent, never null, for an account no entity claims.
     expect((await usageAt(root, SEAT)).out).toContain('  anthropic  acme  unknown  pace not known  (borrowed from globex)');
@@ -2469,6 +2469,27 @@ describe('team usage', () => {
     expect(io.out).toContain('advice: anthropic weekly 47.1% used, runs out in about 20h12m, before the reset in 150h; credits €260.50 cover the overage until they are spent, €39.50 short of the monthly cap; or move lead off anthropic to openai (session used 10%, ahead of pace by 30%)\n');
   });
 
+  test('the SOURCE cell and the seat lines name where a figure was read in plain words, with its age', async () => {
+    // Item 12 (the owner's run, 2026-11-05): `status line`, `check` and `state record` are the
+    // tool's own words. The table says where the owner can see the figure — a seat’s status bar,
+    // the CLI itself — or that it is an estimate, and the READ column beside it carries the age;
+    // the tree's seat lines say the same. `--json` keeps the model's own spelling for scripts.
+    withState();
+    const io = testIo(root, OWNER);
+    expect(await runUsage(['--tree'], io, { home, now: () => NOW })).toBe(0);
+    expect(io.out).toContain("read from a seat’s status bar (fallback)");
+    expect(io.out).not.toContain('status line (fallback)');
+    expect(io.out).not.toContain('state record');
+    expect(io.out).not.toContain('machine reading');
+    expect(io.out).not.toContain('check');
+    expect(io.out).toContain('  lead  claude-code  openai  weekly  left 5%  used 95%  resets in 44m  on pace  estimated, 2m ago\n');
+    expect(io.out).toContain('  lead  claude-code  openai  daily  left 70%  used 30%  resets not printed  pace not known  estimated, 40m ago  stale\n');
+    const json = testIo(root, OWNER);
+    expect(await runUsage(['--json'], json, { home, now: () => NOW })).toBe(0);
+    const doc = JSON.parse(json.out) as { teams: { seats: { windows: { mark: string; source: string }[] }[] }[] };
+    expect(doc.teams[0]?.seats[0]?.windows.some((one) => one.mark === 'estimated' && one.source === 'state record')).toBe(true);
+  });
+
   test('a spend a seat’s own row printed is measured for that seat and its run, and never for another run', async () => {
     // The live case the owner asked for: the seat's row prints `S: $5.8`, and the report records
     // it per seat and per run — measured, with the screen it came from — while a seat the screen
@@ -2487,7 +2508,7 @@ describe('team usage', () => {
     const io = testIo(root, SEAT);
     const code = await runUsage(['--tree'], io, { home, now: () => NOW, observe: () => ({ observations: [], costs: [cost('acme-web')], notes: [] }) });
     expect(code).toBe(0);
-    expect(io.out).toContain('  lead  claude-code  anthropic  cost  $5.8  measured  status line  read 0m ago');
+    expect(io.out).toContain('  lead  claude-code  anthropic  cost  $5.8  read from a seat’s status bar, 0m ago');
     const json = testIo(root, SEAT);
     expect(await runUsage(['--json'], json, { home, now: () => NOW, observe: () => ({ observations: [], costs: [cost('acme-web')], notes: [] }) })).toBe(0);
     const doc = JSON.parse(json.out) as { teams: { seats: { cost: Record<string, unknown> }[] }[] };

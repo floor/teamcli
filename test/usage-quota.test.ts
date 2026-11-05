@@ -192,12 +192,41 @@ describe('the quota model', () => {
       'quota',
       '  anthropic  walled',
       '    anthropic  ok  seats: lead',
-      '      session  used 40%  left 60%  resets in 3h  on pace  (status line, read 1m ago)',
-      '      weekly  used 12%  left 88%  resets in 125h26m  ahead of pace by 13.3%  (status line, read 1m ago)',
+      '      session  used 40%  left 60%  resets in 3h  on pace  (read from a seat’s status bar, 1m ago)',
+      '      weekly  used 12%  left 88%  resets in 125h26m  ahead of pace by 13.3%  (read from a seat’s status bar, 1m ago)',
       '    openai  walled  resets 2h  seats: scout, +2 on another team',
-      '      weekly  used 95%  left 5%  resets not printed  pace not known  (machine reading, read 2m ago)',
+      '      weekly  used 95%  left 5%  resets not printed  pace not known  (estimated, 2m ago)',
       'advice: swap scout off anthropic/openai (walled) to anthropic (weekly used 12%, ahead of pace by 13.3%)',
     ]);
+  });
+
+  test('a window line says where its figure was read in plain words, with the age', () => {
+    // Item 12 (the owner's run, 2026-11-05): `status line`, `cli usage` and `machine reading` are
+    // the tool's own words for where a figure was observed. The line says what the owner can see
+    // — a seat’s status bar, the CLI itself, or an estimate — and keeps the age beside it; the
+    // model keeps its own spelling in `--json` for scripts.
+    const quota = quotaOf({
+      labs: [
+        { lab: 'anthropic', accounts: [{ account: 'anthropic', seats: [] }] },
+        { lab: 'google', accounts: [{ account: 'google-antigravity', pool: 'gemini', seats: [] }] },
+      ],
+      observations: [
+        observed({ account: 'anthropic', window: 'weekly', used: 12, left: 88, resetsAt: NOW + 125 * HOUR }),
+        observed({ account: 'anthropic', window: 'session', used: 40, left: 60, source: 'machine reading', observedAt: NOW - 2 * 60_000 }),
+        observed({ account: 'google-antigravity', pool: 'gemini', window: 'weekly', used: 11, left: 89, resetsAt: NOW + 150 * HOUR, source: 'cli usage' }),
+      ],
+      accountsFile: 'accounts.yaml',
+      now: NOW,
+    });
+    const text = quotaText(quota).join('\n');
+    expect(text).toContain("(read from a seat’s status bar, 1m ago)");
+    expect(text).toContain('(estimated, 2m ago)');
+    expect(text).toContain('(read from the CLI, 1m ago)');
+    for (const word of ['status line', 'cli usage', 'machine reading']) expect(text).not.toContain(word);
+    // The sentence changes, the data a script reads does not: `--json` keeps the model's words.
+    const sources = quota.labs.flatMap((lab) => lab.accounts.flatMap((account) => account.windows.map((one) => one.source)));
+    expect(sources).toContain('machine reading');
+    expect(sources).toContain('cli usage');
   });
 
   test('a stale reading prints marked, carries no margin, and is never grounds for advice', () => {
@@ -210,7 +239,7 @@ describe('the quota model', () => {
     expect(quota.labs[0]?.accounts[0]?.state).toBe('unknown');
     expect(quota.labs[0]?.accounts[0]?.windows[0]).toMatchObject({ stale: true, margin: null, age: '6m' });
     expect(quotaText(quota)).toContain(
-      '      weekly  used 40%  left 60%  resets in 24h  pace not known  (status line, read 6m ago)  stale',
+      '      weekly  used 40%  left 60%  resets in 24h  pace not known  (read from a seat’s status bar, 6m ago)  stale',
     );
     expect(quota.advice).toBe('no account has headroom yet (no fresh reading is ahead of pace by 10% or more)');
   });
@@ -635,7 +664,7 @@ seats:
       'quota',
       '  anthropic  ok',
       '    anthropic  ok  seats: lead',
-      '      weekly  used 12%  left 88%  resets in 125h26m  ahead of pace by 13.3%  (status line, read 1m ago)',
+      '      weekly  used 12%  left 88%  resets in 125h26m  ahead of pace by 13.3%  (read from a seat’s status bar, 1m ago)',
       '  openai  unknown',
       '    openai  unknown',
       '      not known: no reading yet',
@@ -855,7 +884,7 @@ seats:
     expect(seat.out).toContain([
       '  zai  ok',
       '    zai  ok',
-      '      weekly  used 12%  left 88%  resets in 125h26m  ahead of pace by 13.3%  (status line, read 1m ago)',
+      '      weekly  used 12%  left 88%  resets in 125h26m  ahead of pace by 13.3%  (read from a seat’s status bar, 1m ago)',
     ].join('\n'));
     expect(seat.out).toContain('advice: headroom on zai (weekly used 12%, ahead of pace by 13.3%)\n');
     expect(seat.out).toContain('usage on this machine, 1 team, 3 labs, 3 accounts\n');
