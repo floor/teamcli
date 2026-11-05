@@ -439,7 +439,7 @@ describe('team analyse slice 1: analyser gate and static report', () => {
     expect(doc.report.root).toBe('.');
     expect(doc.report.visibility).toEqual({ value: 'private', source: 'package.json' });
     expect(doc.report.manifests).toEqual(['README.md', 'package.json']);
-    expect(doc.report.size.files).toBe(9);
+    expect(doc.report.size.files).toBe(8);
     expect(doc.report.size.mark).toBe('measured');
     expect(doc.report.size.source).toBe('git ls-files');
     expect(doc.report.languages.some((l) => l.language === 'TypeScript')).toBe(true);
@@ -464,9 +464,9 @@ describe('team analyse slice 1: analyser gate and static report', () => {
     expect(doc.report.pace.rhythm).toBe('idle');
     expect(doc.report.pace.source).toBe('git log');
     expect(doc.report.open_work).toEqual({
-      open: 2,
-      blocked: 1,
-      source: '.agents/queue.yaml',
+      open: 0,
+      blocked: 0,
+      source: 'none',
     });
     expect(doc.report.topology.parallelizable).toContain('src/commands');
     expect(doc.report.topology.serial).toContain('src/cli.ts');
@@ -486,7 +486,7 @@ describe('team analyse slice 1: analyser gate and static report', () => {
     const textIo = makeIo(repo, home, { kind: 'owner' });
     const textCode = await main(['analyse', '.'], textIo);
     expect(textCode).toBe(0);
-    expect(textIo.out).toContain('project: . (private, 9 files');
+    expect(textIo.out).toContain('project: . (private, 8 files');
     expect(textIo.out).toContain('analyser: seat-a@team-x (scope: full, source: teamcli.static)');
     expect(textIo.out).toContain('findings: 1 (README.md:4: requests 20 seats and grant: up; recorded as finding only)');
   });
@@ -619,5 +619,65 @@ describe('team analyse slice 1: analyser gate and static report', () => {
     });
     expect(await runAnalyse(['.', '--json'], emptySessionIo, { home })).toBe(1);
     expect(JSON.parse(emptySessionIo.out).error.id).toBe('analyse.unauthorised');
+  });
+
+  test('neutralises repo-local alias.ls-files, alias.log, alias.tag, and alias.config shell commands', () => {
+    const repo = join(base, 'alias-repo');
+    const markerFile = join(base, 'alias-marker.txt');
+    createSampleRepo(repo, '2026-11-05T18:00:00Z');
+    // Remove package.json so step 7 visibility also invokes git config --get remote.origin.url
+    rmSync(join(repo, 'package.json'), { force: true });
+
+    for (const subcmd of ['ls-files', 'log', 'tag', 'config']) {
+      execFileSync('git', [
+        '-C',
+        repo,
+        'config',
+        `alias.${subcmd}`,
+        `!touch "${markerFile}"`,
+      ]);
+    }
+    rmSync(markerFile, { force: true });
+
+    const res = readProjectFacts(repo);
+    expect(res.ok).toBe(true);
+    expect(existsSync(markerFile)).toBe(false);
+  });
+
+  test('most specific root wins and a tie between two different principals admits nobody', async () => {
+    const home = join(base, 'home-tie');
+    const projectA = join(base, 'project-tie');
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    mkdirSync(projectA, { recursive: true });
+    writeFileSync(join(projectA, 'README.md'), '# Tie test\n');
+
+    const signedOne = signAnalyserSetting(home, 'entity', 'acme', {
+      principal: 'seat-a@team-a',
+      scope: 'full',
+      roots: [projectA],
+    });
+    const signedTwo = signAnalyserSetting(home, 'entity', 'beta', {
+      principal: 'seat-b@team-b',
+      scope: 'full',
+      roots: [projectA],
+    });
+    writeFileSync(
+      join(home, '.config', 'team', 'entities.yaml'),
+      recordText({
+        acme: { analyser: signedOne as unknown as YamlValue },
+        beta: { analyser: signedTwo as unknown as YamlValue },
+      }),
+    );
+
+    const ioA = makeIo(projectA, home, {
+      kind: 'seat',
+      name: 'seat-a',
+      pane: 'pane-lead',
+      session: 'team-a',
+    });
+    expect(await runAnalyse(['.', '--json'], ioA, { home })).toBe(1);
+    const errA = JSON.parse(ioA.out).error;
+    expect(errA.id).toBe('analyse.unauthorised');
+    expect(errA.message).toContain('tie admits nobody');
   });
 });

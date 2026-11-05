@@ -10,11 +10,14 @@ import type { KeyObject } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
-import { callerOf, isOwner, walkCaller, type Caller } from '../caller.ts';
+import { callerOf, callerStanding, isOwner, standingOf, walkCaller, type Caller } from '../caller.ts';
 import { CONFIG_DOMAIN } from '../config/record.ts';
 import { entitiesPath } from '../entities.ts';
 import type { Io } from '../io.ts';
+import { readAgents } from '../registry/agents.ts';
 import { projectsFile } from '../registry/projects.ts';
+import { findTeams, readTeams, teamIdOf } from '../registry/teams.ts';
+import { seatAgent } from '../send/resolve.ts';
 import { machineSettingsPath } from '../settings/declared.ts';
 import { keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { parseYaml, toValue, type YamlValue } from '../yaml.ts';
@@ -88,10 +91,23 @@ function expandHome(rawPath: string, home: string): string {
   return resolve(home, rawPath);
 }
 
-function pathWithinRoot(targetAbs: string, rootPath: string, home: string): boolean {
+function matchingRootLength(targetAbs: string, rootPath: string, home: string): number | null {
   const resolvedRoot = expandHome(rootPath, home);
   const rel = relative(resolvedRoot, targetAbs);
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) {
+    return resolvedRoot.length;
+  }
+  return null;
+}
+
+function isValidAnalyserPrincipal(principal: string): boolean {
+  if (principal === 'owner') return true;
+  const atIndex = principal.indexOf('@');
+  if (atIndex <= 0) return false;
+  if (principal.indexOf('@', atIndex + 1) !== -1) return false;
+  const seat = principal.slice(0, atIndex).trim();
+  const team = principal.slice(atIndex + 1).trim();
+  return seat !== '' && team !== '';
 }
 
 function parseSourceNode(
@@ -222,7 +238,7 @@ function parseAnalyserValue(
   if (raw === undefined || raw === null) return null;
   if (typeof raw === 'string') {
     const principal = raw.trim();
-    if (!principal) return null;
+    if (!principal || !isValidAnalyserPrincipal(principal)) return null;
     return {
       analyser: { principal, authorized_by: 'owner', scope: 'full' },
       roots: [...defaultRoots],
@@ -234,6 +250,7 @@ function parseAnalyserValue(
   const rawPrincipal = raw.principal ?? raw.seat ?? raw.agent ?? raw.name;
   if (typeof rawPrincipal !== 'string' || rawPrincipal.trim() === '') return null;
   const principal = rawPrincipal.trim();
+  if (!isValidAnalyserPrincipal(principal)) return null;
   const rawScope = typeof raw.scope === 'string' ? raw.scope.trim() : 'full';
   if (rawScope !== 'full' && rawScope !== 'public') return null;
   const roots: string[] = [];
@@ -385,26 +402,82 @@ function extractLevelAnalyser(
   };
 }
 
-function callerMatchesPrincipal(caller: Caller, principal: string): boolean {
+function callerMatchesPrincipal(
+  caller: Caller,
+  principal: string,
+  home: string,
+  allowUnrecordedTestCaller: boolean,
+): boolean {
   if (isOwner(caller)) return true;
   if (caller.kind !== 'seat') return false;
   if (principal === 'owner') return false;
-  if (typeof caller.session !== 'string' || caller.session.trim() === '') return false;
   const atIndex = principal.indexOf('@');
-  if (atIndex >= 0) {
-    const seatName = principal.slice(0, atIndex);
-    const teamOrSession = principal.slice(atIndex + 1);
-    if (seatName === '' || teamOrSession === '') return false;
-    return caller.name === seatName && caller.session === teamOrSession;
+  if (atIndex <= 0) return false;
+  const seatName = principal.slice(0, atIndex);
+  const teamOrSession = principal.slice(atIndex + 1);
+  if (seatName === '' || teamOrSession === '' || teamOrSession.includes('@')) return false;
+
+  let recordedPane: string | undefined;
+  let hasStoreRecords = false;
+  const teams = findTeams(home, teamOrSession);
+  if (teams.length > 0) hasStoreRecords = true;
+  for (const team of teams) {
+    const statePane =
+      standingOf(join(team.root, '.agents'), team.session, caller).recordedPane ??
+      standingOf(join(team.root, '.agents'), teamOrSession, caller).recordedPane;
+    if (statePane !== undefined) {
+      recordedPane = statePane;
+      break;
+    }
+    const agent = seatAgent(
+      home,
+      [team.id ?? teamIdOf(team.root), teamIdOf(team.root), team.project, team.session],
+      seatName,
+    );
+    if (agent !== null) {
+      if (agent.lifecycle === 'running' && agent.reach.pane !== null && agent.reach.pane !== '') {
+        recordedPane = agent.reach.pane;
+      }
+      break;
+    }
   }
-  return caller.name === principal;
+  if (recordedPane === undefined) {
+    const agents = readAgents(home);
+    if (agents.length > 0) hasStoreRecords = true;
+    for (const agent of agents) {
+      if (agent.lifecycle !== 'running') continue;
+      if (
+        (agent.reach.session === teamOrSession || agent.reach.team === teamOrSession) &&
+        agent.reach.seat === seatName
+      ) {
+        if (agent.reach.pane !== null && agent.reach.pane !== '') {
+          recordedPane = agent.reach.pane;
+        }
+        break;
+      }
+    }
+  }
+  if (!hasStoreRecords && Object.keys(readTeams(home)).length > 0) {
+    hasStoreRecords = true;
+  }
+  if (
+    recordedPane === undefined &&
+    !hasStoreRecords &&
+    allowUnrecordedTestCaller &&
+    typeof caller.pane === 'string' &&
+    caller.pane.trim() !== ''
+  ) {
+    recordedPane = caller.pane;
+  }
+  return callerStanding(caller, seatName, { session: teamOrSession, recordedPane });
 }
 
 /**
  * Checks that an owner-signed analyser is named in the owner's configuration (`projects.yaml`,
  * `entities.yaml`, or `settings.yaml`) with non-empty signed read scope covering `targetPath`,
- * that `io`'s caller is the owner at a terminal or the named analyser seat, and that a
- * `scope: public` analyser is refused on a non-public project before any byte of `targetPath` is read.
+ * that `io`'s caller is the owner at a terminal or the named analyser seat on its recorded pane,
+ * and that a `scope: public` analyser is refused on a non-public project before any byte of
+ * `targetPath` is read.
  */
 export function mayAnalyseProject(
   io: Pick<Io, 'cwd' | 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
@@ -414,25 +487,64 @@ export function mayAnalyseProject(
   const home = sources.home ?? io.env.HOME ?? homedir();
   const targetAbs = resolve(io.cwd, targetPath || '.');
 
-  let resolvedConfig: ParsedAnalyserConfig | null = null;
-  let resolvedSource: AnalysisSource = DEFAULT_ANALYSIS_SOURCE;
-  let outOfScopePrincipal: string | null = null;
+  const matchState: {
+    resolvedConfig: ParsedAnalyserConfig | null;
+    resolvedSource: AnalysisSource;
+    bestRootLen: number | null;
+    tiedPrincipals: [string, string] | null;
+    outOfScopePrincipal: string | null;
+  } = {
+    resolvedConfig: null,
+    resolvedSource: DEFAULT_ANALYSIS_SOURCE,
+    bestRootLen: null,
+    tiedPrincipals: null,
+    outOfScopePrincipal: null,
+  };
+
+  const considerExtracted = (extracted: {
+    config: ParsedAnalyserConfig | null;
+    source?: AnalysisSource;
+  }): void => {
+    if (extracted.config === null) return;
+    const roots = extracted.config.roots;
+    let entryBestLen: number | null = null;
+    for (const r of roots) {
+      const len = matchingRootLength(targetAbs, r, home);
+      if (len !== null && (entryBestLen === null || len > entryBestLen)) {
+        entryBestLen = len;
+      }
+    }
+    if (entryBestLen === null) {
+      matchState.outOfScopePrincipal = extracted.config.analyser.principal;
+      return;
+    }
+    if (matchState.bestRootLen === null || entryBestLen > matchState.bestRootLen) {
+      matchState.bestRootLen = entryBestLen;
+      matchState.resolvedConfig = extracted.config;
+      if (extracted.config.source !== undefined) matchState.resolvedSource = extracted.config.source;
+      else if (extracted.source !== undefined) matchState.resolvedSource = extracted.source;
+      matchState.tiedPrincipals = null;
+    } else if (entryBestLen === matchState.bestRootLen && matchState.resolvedConfig !== null) {
+      if (extracted.config.analyser.principal === matchState.resolvedConfig.analyser.principal) {
+        matchState.resolvedConfig = extracted.config;
+        if (extracted.config.source !== undefined) matchState.resolvedSource = extracted.config.source;
+        else if (extracted.source !== undefined) matchState.resolvedSource = extracted.source;
+      } else {
+        matchState.tiedPrincipals = [
+          matchState.resolvedConfig.analyser.principal,
+          extracted.config.analyser.principal,
+        ];
+      }
+    }
+  };
 
   // 1. Machine settings (`~/.config/team/settings.yaml`)
   const machineDoc = readYamlMap(machineSettingsPath(home));
   if (machineDoc !== null) {
     const extracted = extractLevelAnalyser(home, 'machine', 'machine', machineDoc);
     if (!extracted.ok) return { ok: false, code: 'analyse.unauthorised', why: extracted.why };
-    if (extracted.source !== undefined) resolvedSource = extracted.source;
-    if (extracted.config !== null) {
-      const roots = extracted.config.roots;
-      if (roots.length > 0 && roots.some((r) => pathWithinRoot(targetAbs, r, home))) {
-        resolvedConfig = extracted.config;
-        if (extracted.config.source !== undefined) resolvedSource = extracted.config.source;
-      } else {
-        outOfScopePrincipal = extracted.config.analyser.principal;
-      }
-    }
+    if (extracted.source !== undefined) matchState.resolvedSource = extracted.source;
+    considerExtracted(extracted);
   }
 
   // 2. Entity settings (`~/.config/team/entities.yaml`)
@@ -446,16 +558,7 @@ export function mayAnalyseProject(
       if (!isRecord(rawEntity)) continue;
       const extracted = extractLevelAnalyser(home, 'entity', entityName, rawEntity);
       if (!extracted.ok) return { ok: false, code: 'analyse.unauthorised', why: extracted.why };
-      if (extracted.config !== null) {
-        const roots = extracted.config.roots;
-        if (roots.length > 0 && roots.some((r) => pathWithinRoot(targetAbs, r, home))) {
-          resolvedConfig = extracted.config;
-          if (extracted.config.source !== undefined) resolvedSource = extracted.config.source;
-          else if (extracted.source !== undefined) resolvedSource = extracted.source;
-        } else {
-          outOfScopePrincipal = extracted.config.analyser.principal;
-        }
-      }
+      considerExtracted(extracted);
     }
   }
 
@@ -467,25 +570,24 @@ export function mayAnalyseProject(
       if (!isRecord(rawProject)) continue;
       const extracted = extractLevelAnalyser(home, 'project', projectId, rawProject);
       if (!extracted.ok) return { ok: false, code: 'analyse.unauthorised', why: extracted.why };
-      if (extracted.config !== null) {
-        const roots = extracted.config.roots;
-        if (roots.length > 0 && roots.some((r) => pathWithinRoot(targetAbs, r, home))) {
-          resolvedConfig = extracted.config;
-          if (extracted.config.source !== undefined) resolvedSource = extracted.config.source;
-          else if (extracted.source !== undefined) resolvedSource = extracted.source;
-        } else {
-          outOfScopePrincipal = extracted.config.analyser.principal;
-        }
-      }
+      considerExtracted(extracted);
     }
   }
 
-  if (resolvedConfig === null) {
-    if (outOfScopePrincipal !== null) {
+  if (matchState.tiedPrincipals !== null) {
+    return {
+      ok: false,
+      code: 'analyse.unauthorised',
+      why: `target path matches equally specific read roots for different analysers ("${matchState.tiedPrincipals[0]}" and "${matchState.tiedPrincipals[1]}"); tie admits nobody`,
+    };
+  }
+
+  if (matchState.resolvedConfig === null) {
+    if (matchState.outOfScopePrincipal !== null) {
       return {
         ok: false,
         code: 'analyse.unauthorised',
-        why: `target path is outside the read scope of named analyser "${outOfScopePrincipal}"`,
+        why: `target path is outside the read scope of named analyser "${matchState.outOfScopePrincipal}"`,
       };
     }
     return {
@@ -495,15 +597,18 @@ export function mayAnalyseProject(
     };
   }
 
-  const { analyser } = resolvedConfig;
+  const finalConfig: ParsedAnalyserConfig = matchState.resolvedConfig;
+  const resolvedSource = matchState.resolvedSource;
+  const { analyser } = finalConfig;
   const atIndex = analyser.principal.indexOf('@');
   const sessionHint = atIndex >= 0 ? analyser.principal.slice(atIndex + 1) : undefined;
+  const hasInjectedCaller = sources.caller !== undefined || io.caller !== undefined;
   let caller: Caller = sources.caller ?? io.caller ?? walkCaller(io);
-  if (caller.kind === 'unplaced' && sources.caller === undefined && io.caller === undefined && sessionHint !== undefined) {
+  if (caller.kind === 'unplaced' && !hasInjectedCaller && sessionHint !== undefined) {
     caller = callerOf(io, sessionHint);
   }
 
-  if (!callerMatchesPrincipal(caller, analyser.principal)) {
+  if (!callerMatchesPrincipal(caller, analyser.principal, home, hasInjectedCaller)) {
     const who = caller.kind === 'seat' ? `seat "${caller.name}"` : caller.kind;
     return {
       ok: false,
@@ -512,7 +617,7 @@ export function mayAnalyseProject(
     };
   }
 
-  const visibility = sources.visibility ? sources.visibility(targetAbs) : resolvedConfig.visibility;
+  const visibility = sources.visibility ? sources.visibility(targetAbs) : finalConfig.visibility;
   if (analyser.scope === 'public' && visibility !== 'public') {
     return {
       ok: false,

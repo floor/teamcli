@@ -197,13 +197,11 @@ const MANIFEST_CANDIDATES = [
 const EXTRA_SCAN_FILES = [
   'AGENTS.md',
   'CLAUDE.md',
-  '.agents/team.yaml',
-  '.agents/tasks.md',
-  '.agents/queue.yaml',
 ] as const;
 
 const SKIP_DIRS = new Set([
   '.git',
+  '.agents',
   'node_modules',
   'dist',
   'build',
@@ -213,6 +211,10 @@ const SKIP_DIRS = new Set([
   'coverage',
   '.cache',
 ]);
+
+function isUnderAgentsDir(relPath: string): boolean {
+  return relPath.split(/[\\/]+/).includes('.agents');
+}
 
 const KNOWN_SERIAL_FILES = new Set([
   'src/cli.ts',
@@ -232,6 +234,7 @@ const TRUST_POLICY_INJECTION_RE =
 
 /** Scans one file's text for prompt-injection or untrusted seat/grant/policy instructions. */
 export function scanFileForFindings(relPath: string, text: string): AnalysisFinding[] {
+  if (isUnderAgentsDir(relPath)) return [];
   const findings: AnalysisFinding[] = [];
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i++) {
@@ -270,9 +273,11 @@ function countLines(text: string): number {
 }
 
 function areaOfFile(relPath: string): string | null {
+  if (isUnderAgentsDir(relPath)) return null;
   const parts = relPath.split('/').filter(Boolean);
   if (parts.length <= 1) return null;
   const first = parts[0] as string;
+  if (SKIP_DIRS.has(first)) return null;
   if ((first === 'src' || first === 'packages') && parts.length >= 3) {
     return `${first}/${parts[1]}`;
   }
@@ -290,7 +295,19 @@ const GIT_SAFE_CONFIG_ARGS: readonly string[] = [
   '-c',
   'core.pager=cat',
   '-c',
+  'core.editor=false',
+  '-c',
+  'diff.external=false',
+  '-c',
   'protocol.file.allow=never',
+  '-c',
+  'alias.ls-files=false',
+  '-c',
+  'alias.log=false',
+  '-c',
+  'alias.tag=false',
+  '-c',
+  'alias.config=false',
 ];
 
 const GIT_SAFE_ENV: NodeJS.ProcessEnv = {
@@ -342,7 +359,7 @@ export function resolveContainedFile(
   let leafSize = 0;
   for (let i = 0; i < segments.length; i += 1) {
     const seg = segments[i];
-    if (!seg || seg === '.' || seg === '..') return null;
+    if (!seg || seg === '.' || seg === '..' || seg === '.git' || seg === '.agents') return null;
     current = join(current, seg);
     let st;
     try {
@@ -478,7 +495,9 @@ export function readProjectFacts(
   if (lsFiles.status === 0 && typeof lsFiles.stdout === 'string') {
     isGitRepo = true;
     sizeSource = 'git ls-files';
-    const rawFiles = lsFiles.stdout.split('\0').filter(Boolean);
+    const rawFiles = lsFiles.stdout
+      .split('\0')
+      .filter((f) => Boolean(f) && !isUnderAgentsDir(f));
     if (rawFiles.length > maxFiles) {
       estimated = true;
       fileList = rawFiles.slice(0, maxFiles);
@@ -706,7 +725,14 @@ export function readProjectFacts(
     const sinceEpochSec = Math.floor((now.getTime() - PACE_WINDOW_DAYS * 86_400_000) / 1000);
     const logRun = runGitReadOnly(
       rootAbs,
-      ['log', `--since=@${sinceEpochSec}`, '--format=__COMMIT__%ct', '--name-only'],
+      [
+        'log',
+        '--no-ext-diff',
+        '--no-textconv',
+        `--since=@${sinceEpochSec}`,
+        '--format=__COMMIT__%ct',
+        '--name-only',
+      ],
       Math.min(2_500, maxDurationMs),
       8 * 1024 * 1024,
     );
@@ -724,7 +750,7 @@ export function readProjectFacts(
         commitsInWindow += 1;
         activeHourBuckets.add(Math.floor(tsSec / 3600));
 
-        const touchedFiles = lines.slice(1);
+        const touchedFiles = lines.slice(1).filter((f) => !isUnderAgentsDir(f));
         const commitAreas = new Set<string>();
         for (const f of touchedFiles) {
           const area = areaOfFile(f);
@@ -798,9 +824,9 @@ export function readProjectFacts(
   }
   const serial = Array.from(serialSet);
 
-  // 6. Open work from local task files (never connecting to a network broker)
+  // 6. Open work from local task files outside `.agents/` (never reading `.agents/` runtime state or connecting to a network broker)
   let openWork: OpenWorkSummary = { open: 0, blocked: 0, source: 'none' };
-  for (const taskCandidate of ['.agents/tasks.md', '.agents/queue.yaml', '.agents/tasks.yaml']) {
+  for (const taskCandidate of ['tasks.yaml', 'queue.yaml', 'tasks.md']) {
     if (resolveContainedFile(rootAbs, rootReal, taskCandidate) === null) continue;
     const read = readFileSource(rootAbs, { path: taskCandidate, local: true });
     if (read.kind === 'records' && read.records.length > 0) {
@@ -813,7 +839,7 @@ export function readProjectFacts(
       openWork = { open, blocked, source: taskCandidate };
       break;
     }
-    const rawTasks = readBoundedText(taskCandidate, true);
+    const rawTasks = readBoundedText(taskCandidate, false);
     if (rawTasks !== null) {
       let open = 0;
       let blocked = 0;
