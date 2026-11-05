@@ -552,6 +552,54 @@ export function recordStartMatches(record: CodexEndpointRecord, started: number)
   return started <= recordedAt + START_SKEW_MS && started >= recordedAt - START_WINDOW_MS;
 }
 
+/** What the host's own readings say about the endpoint a seat's record names. `team check`
+ *  judges a seat's managed server by the same three places — the record for the seat's current
+ *  binding, the socket's liveness and the recorded pid's start — and a restore repair must ask
+ *  the same question the report answers. `live` needs every proof; `dead` is one of them
+ *  failing; `unknown` is a reading this build could not take, and nothing is repaired on an
+ *  unknown. The configuration the record carries is not judged here: a restore does not change
+ *  it, and this door only answers whether the recorded endpoint is running. */
+export type RecordedEndpointState =
+  | { kind: 'live' }
+  | { kind: 'dead'; why: string }
+  | { kind: 'unknown'; why: string };
+
+export function recordedEndpointState(input: {
+  dir: string;
+  session: string;
+  seat: string;
+  record: CodexEndpointRecord;
+  runtimeRoot?: string;
+  alive(pid: number): boolean;
+  startOf(pid: number): number | null;
+  isSocket(path: string): boolean;
+}): RecordedEndpointState {
+  const owned = ownedSocketPath(input.dir, input.session, input.seat, input.record, input.runtimeRoot);
+  if (owned === null) {
+    return { kind: 'dead', why: `its recorded endpoint ${input.record.url} is not this seat's owned socket` };
+  }
+  if (!input.isSocket(owned.path)) {
+    return { kind: 'dead', why: 'its recorded endpoint socket is not live' };
+  }
+  if (!input.alive(input.record.pid)) {
+    return { kind: 'dead', why: `its recorded app-server pid ${String(input.record.pid)} is not alive` };
+  }
+  const started = input.startOf(input.record.pid);
+  if (started === null || !Number.isFinite(Date.parse(input.record.started_at))) {
+    return {
+      kind: 'unknown',
+      why: `its recorded app-server pid ${String(input.record.pid)}'s start time cannot be read`,
+    };
+  }
+  if (!recordStartMatches(input.record, started)) {
+    return {
+      kind: 'dead',
+      why: `its recorded app-server pid ${String(input.record.pid)} started at another time than its endpoint record`,
+    };
+  }
+  return { kind: 'live' };
+}
+
 /** The one ownership proof both the stop and the reuse paths require: the live process at the
  *  recorded pid is the `codex` binary, its command line carries exactly this record's
  *  `app-server --listen <url>`, and its own start instant sits in the window in which the launch

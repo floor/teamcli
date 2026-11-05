@@ -792,7 +792,7 @@ export async function executePlan(
   // launched again; it is ready when it reaches its prompt, and the detail says why it was
   // launched. Any other end of that seat keeps its own record, and the close is what the plan
   // and the state already show.
-  const relaunched = new Map<string, 'gone' | 'replaced' | 'drift' | 'own-line'>();
+  const relaunched = new Map<string, 'gone' | 'replaced' | 'drift' | 'own-line' | 'endpoint'>();
   // The conversation id each launch is known to carry: the `--session-id` it minted, or the id its
   // line resumes. The seat state records it (and the registry's reach from it), so the next
   // relaunch can resume it when herdr's reading after the launch has none (herdr's reading, when present, wins).
@@ -821,6 +821,8 @@ export async function executePlan(
       final(seat, { kind: 'ready' }, '  its model drifted; closed without input and launched again\n');
     } else if (verdict === 'own-line') {
       final(seat, { kind: 'ready' }, '  its pane held the bare restored CLI, not its launch line; exited in place and launched again in the same pane\n');
+    } else if (verdict === 'endpoint') {
+      final(seat, { kind: 'ready' }, '  its recorded Codex endpoint was not live; exited in place and launched again in the same pane\n');
     } else final(seat, { kind: 'ready' });
   };
   // The identity read after the idle prompt, to carry into every later record of the seat.
@@ -2161,11 +2163,13 @@ export async function executePlan(
       }
       case 'relaunch': {
         reportProgress(op.seat, 'launching');
-        // The plan proved a restored conversation in a pane running the bare CLI, on a seat whose
-        // own launch line starts a wrapper: adopting the bare CLI would leave the wrapper's
-        // settings (an alternate endpoint) behind. The bare CLI is exited in that same pane — its
-        // recorded workspace is neither closed nor replaced — and the steps after this one launch
-        // the seat through its own line plus `--resume` there. The plan's reading may be minutes
+        // The plan found a restored pane that is not the seat's running form: the bare CLI on a
+        // seat whose own line starts a wrapper (adopting it would leave the wrapper's settings
+        // behind), or a Codex seat whose recorded managed endpoint died with the host (adopting
+        // it would leave the seat on Codex's own endpoint). The CLI is exited in that same pane —
+        // its recorded workspace is neither closed nor replaced — and the steps after this one
+        // launch the seat through its own line there, resuming the conversation where one is
+        // proven. The plan's reading may be minutes
         // old, so the host is read again with nothing between the readings and the exit, and the
         // same proof decides: a changed world is a refusal, never a partial exit. A working turn
         // or unsent text is left where it stands.
@@ -2180,7 +2184,11 @@ export async function executePlan(
           recordedSession: op.session,
           screen: host.paneText?.(session, op.pane) ?? null,
         });
-        if (proof.kind !== 'session') {
+        // A dead-endpoint relaunch (`op.endpoint`) exists to give the seat a fresh managed
+        // server, not to carry a conversation: the weak proof — the CLI alone at an idle
+        // prompt — is enough there. The wrapper relaunch still needs the conversation itself.
+        const proven = proof.kind === 'session' || (op.endpoint === true && proof.kind === 'cli');
+        if (!proven) {
           held = true;
           dropped.add(op.seat);
           final(op.seat, {
@@ -2280,7 +2288,7 @@ export async function executePlan(
         // there, never as one that ended with its pane still open. The identity the record holds
         // stays: a pane back at its shell alone gives no new process reading to record.
         recordSeat(op.seat, { stage: 'launched', pane: op.pane, workspace: op.workspace });
-        relaunched.set(op.seat, 'own-line');
+        relaunched.set(op.seat, op.endpoint === true ? 'endpoint' : 'own-line');
         break;
       }
       case 'repair': {

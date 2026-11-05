@@ -204,12 +204,12 @@ export type Op =
       after?: 'bus';
     }
   /**
-   * A restored pane runs the bare CLI where the seat's own launch line starts a wrapper (a
-   * launcher that selects an alternate endpoint). Re-read the host, re-run the same restore
-   * proof, then exit the bare CLI in that same pane — in its recorded workspace, which stays
-   * open — and let the steps after this one launch the seat through its own line plus
-   * `--resume <session>` there. A pane that is working or holds unsent text, or one whose exit
-   * does not come back to its shell in time, is left exactly as it is.
+   * A restored pane is not the seat's own running form: it runs the bare CLI where the seat's
+   * launch line starts a wrapper, or its managed Codex endpoint died with the host. Re-read the
+   * host, re-run the same restore proof, then exit the CLI in that same pane — in its recorded
+   * workspace, which stays open — and let the steps after this one launch the seat through its
+   * own line there. A pane that is working or holds unsent text, or one whose exit does not come
+   * back to its shell in time, is left exactly as it is.
    */
   | {
       do: 'relaunch';
@@ -219,8 +219,12 @@ export type Op =
       workspace: string;
       /** The launch record's identity: the proof's expected side, re-read before the exit. */
       launched: LaunchedIdentity;
-      /** The recorded conversation the relaunch resumes. */
-      session: string;
+      /** The recorded conversation the relaunch resumes; absent when none is proven. */
+      session?: string;
+      /** The seat's managed Codex endpoint is recorded but not live. The weak (`cli`) restore
+       *  proof is enough here: the pane is exited for the launch's fresh endpoint, not for a
+       *  conversation. */
+      endpoint?: true;
     }
   /**
    * The host restored the seat's pane and cleared its name. Re-read the host, re-run the same
@@ -420,10 +424,11 @@ export interface UpSeat {
     drift?: { way: string };
     /** Set by `team reload`: close only at an idle prompt, then launch the file's line. */
     reload?: { detail: string };
-    /** The restored pane runs the bare CLI where this seat's launch line starts a wrapper. The
-     *  step re-proves the recorded conversation, then exits the bare CLI in place; the seat is
-     *  launched through its own line plus `--resume <session>` in that same pane, never adopted. */
-    ownLine?: { session: string };
+    /** The restored pane is not the seat's running form: the bare CLI where this seat's launch
+     *  line starts a wrapper, or a Codex seat whose recorded managed endpoint died with the host.
+     *  The step re-proves the pane (strongly, or weakly for a dead endpoint), then exits the CLI
+     *  in place; the seat is launched through its own line in that same pane, never adopted. */
+    ownLine?: { session?: string; endpoint?: true };
     /**
      * The pane is back at its shell and still the seat's own: the launch runs in it, and nothing
      * is created or closed. The live run re-reads the pane and its workspace immediately before
@@ -538,6 +543,33 @@ export function launchWillRun(
   if (!waiting && seat.repair?.reuse === true) return true;
   const fresh = !waiting && (seat.stage === undefined || !seat.pane);
   return !waiting && (fresh || (seat.stage === 'launched' && !seat.agentLive));
+}
+
+/**
+ * Whether this launch is the seat's own Codex binary under the managed-endpoint policy: the one
+ * condition that makes a launch start an app-server and attach to it, and the same condition
+ * `team up` reads to decide a restored seat must be launched again for the endpoint it lost.
+ * A wrapper's own endpoint is not ours to bind, a `--remote` or `--no-daemon` the file already
+ * names is a collision, and a policy that is off or unreadable plans none. The collision is read
+ * from the CLI's own decoded words — a flag inside a trailing quoted script is one the CLI will
+ * read, a quoted flag name is the flag, and words before it are the shell's — with 0.5.10's
+ * whole-line question for a line this version cannot prove.
+ */
+export function managedCodexLaunch(input: {
+  cli: string;
+  binary: string;
+  codexDaemon: CodexDaemonValue | undefined;
+  stateDir: string | undefined;
+  launch: string;
+  command: string;
+}): boolean {
+  if (input.cli !== 'codex' || input.codexDaemon !== 'on' || input.stateDir === undefined) return false;
+  if (launchedCliBinary(input.launch) !== input.binary) return false;
+  const words = cliWordList(input.cli, input.command);
+  const names = words === null
+    ? (flag: string): boolean => new RegExp(`(^|\\s)${flag}(=|\\s|$)`).test(input.command)
+    : (flag: string): boolean => words.some((word) => word === flag || word.startsWith(`${flag}=`));
+  return !names('--remote') && !names('--no-daemon');
 }
 
 export interface UpInput {
@@ -1257,7 +1289,9 @@ export function upPlan(input: UpInput): Step[] {
             argv: profile.exit !== null
               ? herdr(session, 'pane', 'run', repair.pane, profile.exit)
               : herdr(session, 'pane', 'send-keys', repair.pane, ...profile.exitKeys),
-            note: 'its pane holds the bare restored CLI, not its launch line; exited in place and launched again here',
+            note: ownLine.endpoint === true
+              ? 'its recorded Codex endpoint is not live; exited in place and launched again here with its own endpoint'
+              : 'its pane holds the bare restored CLI, not its launch line; exited in place and launched again here',
             do: {
               do: 'relaunch',
               seat: seat.name,
@@ -1265,7 +1299,8 @@ export function upPlan(input: UpInput): Step[] {
               pane: repair.pane,
               workspace: repair.workspace,
               launched: repair.launched,
-              session: ownLine.session,
+              ...(ownLine.session === undefined ? {} : { session: ownLine.session }),
+              ...(ownLine.endpoint === true ? { endpoint: true as const } : {}),
             },
           });
         } else {
@@ -1320,24 +1355,17 @@ export function upPlan(input: UpInput): Step[] {
     // A managed Codex seat's endpoint, decided from the same signed policy that shaped the line:
     // the launch must be the Codex binary itself (a wrapper's own endpoint is not ours to bind),
     // and a `--remote` or `--no-daemon` the file already names is a collision, refused rather
-    // than probed past. Nothing is recorded when the policy is off or unreadable.
-    // The collision is read from the CLI's own decoded words: a flag inside a trailing quoted
-    // script is one the CLI will read, a quoted flag name is the flag, and the shell's words
-    // before it are not. A line this version cannot prove is asked 0.5.10's question of the
-    // whole line: a collision it plainly names still stops the managed endpoint, and one only a
-    // quoted flag name appears to name does not.
-    const managedWords = cliWordList(profile.cli, command);
-    const managedFlag = managedWords === null
-      ? (flag: string): boolean => new RegExp(`(^|\\s)${flag}(=|\\s|$)`).test(command)
-      : (flag: string): boolean => managedWords.some((word) => word === flag || word.startsWith(`${flag}=`));
-    const managedCodex = profile.cli === 'codex'
-      && codexDaemon === 'on'
-      && input.stateDir !== undefined
-      && launchedCliBinary(seat.launch) === profile.binary
-      && !managedFlag('--remote')
-      // A resume line attaches too: the attach sheds its permission overrides
-      // (`remoteCodexCommand`), which codex-cli 0.161.0 refuses on a remote resume.
-      && !managedFlag('--no-daemon');
+    // than probed past. Nothing is recorded when the policy is off or unreadable. A resume line
+    // attaches too: the attach sheds its permission overrides (`remoteCodexCommand`), which
+    // codex-cli 0.161.0 refuses on a remote resume.
+    const managedCodex = managedCodexLaunch({
+      cli: profile.cli,
+      binary: profile.binary,
+      codexDaemon,
+      stateDir: input.stateDir,
+      launch: seat.launch,
+      command,
+    });
     // The `waiting` guard is not this condition's alone: §5's seat is never launched again,
     // whatever its live-ness reads, so the wait above is the whole of its plan.
     if (wouldLaunch) {
