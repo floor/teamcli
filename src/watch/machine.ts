@@ -126,30 +126,6 @@ export function parsePsiMemory(text: string): MemoryPressure | null {
   return 'normal';
 }
 
-// "{ sec = 1762345678, usec = 123456 } Thu Nov  5 09:00:00 2026", as macOS's
-// `sysctl -n kern.boottime` prints it: the boot instant in whole seconds.
-export function parseBootTime(text: string): number | null {
-  const match = /\bsec = (\d+)/.exec(text);
-  return match ? Number(match[1]) * 1000 : null;
-}
-
-// "btime 1762345678", as Linux's /proc/stat holds the boot instant, in whole seconds.
-export function parseBtime(text: string): number | null {
-  const match = /^btime\s+(\d+)\s*$/m.exec(text);
-  return match ? Number(match[1]) * 1000 : null;
-}
-
-// The instant this machine booted, in epoch milliseconds, or null where it can't be read.
-// `platform` and `proc` are parameters for the tests; the command passes neither.
-export function readBootTime(platform: string = process.platform, proc = '/proc'): number | null {
-  if (platform === 'darwin') return parseBootTime(command('sysctl', ['-n', 'kern.boottime']) ?? '');
-  if (platform === 'linux') {
-    const stat = procFile(proc, 'stat');
-    return stat === null ? null : parseBtime(stat);
-  }
-  return null;
-}
-
 // This platform's figures: macOS's commands on darwin, Linux's /proc everywhere Linux runs.
 // `platform` and `proc` are parameters for the tests; the command passes neither.
 export function readMachine(root: string, platform: string = process.platform, proc = '/proc'): Machine {

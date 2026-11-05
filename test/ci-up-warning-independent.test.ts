@@ -200,7 +200,7 @@ describe('a refused up says only its refusal', () => {
     const io = atATerminal();
     const code = await runUp([], io, upSources({ launch }));
     expect(code).toBe(1);
-    expect(io.err).toContain(`team up: another session-mutating run is holding session acme-web (pid ${process.pid}); try again when it is done\n`);
+    expect(io.err).toContain(`team up: another session-mutating run is holding session acme-web (pid ${process.pid}, no start time recorded); try again when it is done\n`);
     expect(io.err).not.toContain('cannot be woken');
     expect(created()).toBe(0);
   });

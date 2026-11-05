@@ -13,9 +13,8 @@ function place(): { dir: string; path: string; claim: string } {
   return { dir, path, claim: `${path}.steal` };
 }
 
-// Synthetic process and boot facts for every scene: no scene reads the real process table or
-// this machine's own boot instant. `HOLDER` is a pid number the test owns; whether it is alive,
-// when it started and when this machine booted are the scene's to say.
+// Synthetic process facts for every scene: no scene reads the real process table. `HOLDER` is a
+// pid number the test owns; whether it is alive and when it started are the scene's to say.
 const HOLDER = 4242;
 const BOOT = Date.parse('2026-11-05T09:00:00Z');
 const START = Date.parse('2026-11-05T10:00:00Z');
@@ -25,8 +24,6 @@ function facts(overrides: Partial<LockSteps> = {}): Partial<LockSteps> {
     pid: () => HOLDER,
     alive: (pid) => pid !== DEAD,
     startOf: () => START,
-    bootTime: () => BOOT,
-    writtenAt: () => BOOT + 60_000,
     ...overrides,
   };
 }
@@ -241,22 +238,15 @@ describe('the seat lock', () => {
       // the boot instant, while the process that wrote it is still alive.
       const stepped = new Date(BOOT - 3_600_000);
       utimesSync(path, stepped, stepped);
-      const steppedAt = stepped.getTime();
-      expect(acquireSeatLock(dir, 'acme', 'lead', facts({ writtenAt: () => steppedAt }))).toEqual({ held: HOLDER, startedAt: null });
-      expect(token(path)).toBe(`${HOLDER} cafefeed`);
-    });
-
-    test('a start-less lock whose live pid is from this boot stays held', () => {
-      const { dir, path } = place();
-      writeFileSync(path, `${HOLDER} cafefeed\n`);
       expect(acquireSeatLock(dir, 'acme', 'lead', facts())).toEqual({ held: HOLDER, startedAt: null });
       expect(token(path)).toBe(`${HOLDER} cafefeed`);
     });
 
-    test('a start-less lock is held when this boot\'s time cannot be read', () => {
+    test('a start-less lock whose pid is alive stays held, whatever its file\'s time', () => {
       const { dir, path } = place();
       writeFileSync(path, `${HOLDER} cafefeed\n`);
-      expect(acquireSeatLock(dir, 'acme', 'lead', facts({ bootTime: () => null, writtenAt: () => 0 }))).toEqual({ held: HOLDER, startedAt: null });
+      expect(acquireSeatLock(dir, 'acme', 'lead', facts())).toEqual({ held: HOLDER, startedAt: null });
+      expect(token(path)).toBe(`${HOLDER} cafefeed`);
     });
 
     test('a start-less claim with a live pid refuses the takeover too', () => {
@@ -267,8 +257,7 @@ describe('the seat lock', () => {
       writeFileSync(claim, `${HOLDER} cafefeed\n`);
       const stepped = new Date(BOOT - 60_000);
       utimesSync(claim, stepped, stepped);
-      const steppedAt = stepped.getTime();
-      expect(acquireSeatLock(dir, 'acme', 'lead', facts({ writtenAt: () => steppedAt }))).toEqual({ held: -1, startedAt: null });
+      expect(acquireSeatLock(dir, 'acme', 'lead', facts())).toEqual({ held: -1, startedAt: null });
       expect(readFileSync(path, 'utf8')).toBe(`${DEAD} deadbeef\n`);
       expect(readFileSync(claim, 'utf8')).toBe(`${HOLDER} cafefeed\n`);
     });
@@ -297,11 +286,12 @@ describe('the seat lock', () => {
       expect(seatLockHolder(dir, 'acme', 'lead', facts({ startOf: () => START - 120_000 }))).toBeNull();
     });
 
-    test('a start-less lock is no holder when its file predates this boot, and held otherwise', () => {
+    test('a start-less lock with a live pid is a holder, whatever its file\'s time', () => {
       const { dir, path } = place();
       writeFileSync(path, `${HOLDER} cafefeed\n`);
-      expect(seatLockHolder(dir, 'acme', 'lead', facts({ writtenAt: () => BOOT - 1 }))).toBeNull();
-      expect(seatLockHolder(dir, 'acme', 'lead', facts({ writtenAt: () => BOOT }))).toEqual({ held: HOLDER, startedAt: null });
+      const stepped = new Date(BOOT - 3_600_000);
+      utimesSync(path, stepped, stepped);
+      expect(seatLockHolder(dir, 'acme', 'lead', facts())).toEqual({ held: HOLDER, startedAt: null });
     });
 
     test('a lock that cannot be read is reported as an unreadable holder, and never removed', () => {
@@ -317,8 +307,8 @@ describe('the seat lock', () => {
       expect(holderText({ held: HOLDER, startedAt: START })).toBe(`pid ${HOLDER}, started ${new Date(START).toISOString()}`);
     });
 
-    test('a token with no start names only the pid, as it always did', () => {
-      expect(holderText({ held: HOLDER, startedAt: null })).toBe(`pid ${HOLDER}`);
+    test('a token with no start names the pid and says the start is missing', () => {
+      expect(holderText({ held: HOLDER, startedAt: null })).toBe(`pid ${HOLDER}, no start time recorded`);
     });
 
     test('an unreadable lock names no pid', () => {

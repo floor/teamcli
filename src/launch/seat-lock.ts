@@ -1,7 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import { accessSync, linkSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { accessSync, linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { readBootTime } from '../watch/machine.ts';
 import { processStartOf } from '../watch/pane.ts';
 
 /**
@@ -23,10 +22,11 @@ import { processStartOf } from '../watch/pane.ts';
  * A live pid is not proof of ownership: after a reboot the OS hands the same numbers to
  * unrelated processes. A token that records its writer's start is held only while the
  * process at its pid started when the token says, and is stale when that process started
- * at any other time. A token with no start to compare is stale only when its file
- * predates this boot — written since, it belongs to a command this boot started, whatever
- * the history of its pid — and stays held when this boot's instant cannot be read. A live
- * pid whose start cannot be read is held too: it cannot be shown to be another process.
+ * at any other time. A token that records no start has nothing to compare, so a live pid
+ * at it keeps it held and only a dead pid shows it is not its writer's: such a token was
+ * written before locks recorded a start, and every lock written now records its start, so
+ * the boot after that build is judged by the start rule. A live pid whose start cannot be
+ * read is held too: it cannot be shown to be another process.
  *
  * A stale lock is taken over by the taker that wins a second, exclusive `link` on
  * `<path>.steal`. The claim serialises the takeover's read-check-unlink-publish sequence:
@@ -59,22 +59,16 @@ export type LockSteps = {
   exists(path: string): boolean;
   /** Best-effort removal. */
   drop(path: string): void;
-  /** The instant `path` was last written, in epoch milliseconds; null when it can't be read. */
-  writtenAt(path: string): number | null;
   /** Whether a pid names a live process; `EPERM` counts as live. */
   alive(pid: number): boolean;
   /** The instant the process at `pid` started, in epoch milliseconds; null when it can't be read. */
   startOf(pid: number): number | null;
-  /** The instant this machine booted, in epoch milliseconds; null when it can't be read. */
-  bootTime(): number | null;
   pid(): number;
   nonce(): string;
 };
 
 /** This process's own start, read once; undefined until the first lock asks for it. */
 let ownStart: number | null | undefined;
-/** This boot's instant, read once; undefined until the first start-less token asks for it. */
-let boot: number | null | undefined;
 
 export const lockSteps: LockSteps = {
   prepare: (folder) => {
@@ -110,13 +104,6 @@ export const lockSteps: LockSteps = {
       // Already gone, or never there.
     }
   },
-  writtenAt: (path) => {
-    try {
-      return statSync(path).mtimeMs;
-    } catch {
-      return null;
-    }
-  },
   alive: (pid) => {
     try {
       process.kill(pid, 0);
@@ -131,11 +118,6 @@ export const lockSteps: LockSteps = {
     // taken and released many times in one run, and the reading is a command away.
     if (ownStart === undefined) ownStart = processStartOf(pid);
     return ownStart;
-  },
-  bootTime: () => {
-    // This machine cannot boot again under this process, so one reading serves every lock.
-    if (boot === undefined) boot = readBootTime();
-    return boot;
   },
   pid: () => process.pid,
   nonce: () => randomBytes(6).toString('hex'),
@@ -160,19 +142,14 @@ function parseToken(text: string | null): Owner | null {
 /**
  * Whether a token still names the process that wrote it. `stillHeld` decides a lock's take-over
  * and a claim's, by the rule in the module comment: a dead pid is stale; a recorded start must
- * match the live process's; a start-less token holds unless its file predates this boot; and any
- * fact that cannot be read leaves the lock held, never taken for a stale one.
+ * match the live process's; a start-less token stays held while its pid is alive; and a fact that
+ * cannot be read leaves the lock held, never taken for a stale one.
  */
-function stillHeld(owner: Owner, path: string, steps: LockSteps): boolean {
+function stillHeld(owner: Owner, steps: LockSteps): boolean {
   if (!steps.alive(owner.pid)) return false;
-  if (owner.startedAt !== null) {
-    const live = steps.startOf(owner.pid);
-    return live === null || Math.abs(live - owner.startedAt) <= START_TOLERANCE_MS;
-  }
-  const boot = steps.bootTime();
-  if (boot === null) return true;
-  const written = steps.writtenAt(path);
-  return written === null || written >= boot;
+  if (owner.startedAt === null) return true;
+  const live = steps.startOf(owner.pid);
+  return live === null || Math.abs(live - owner.startedAt) <= START_TOLERANCE_MS;
 }
 
 /** The lock's live-holder arm: whose it is, and the start the token records. */
@@ -221,7 +198,7 @@ export function acquireSeatLock(dir: string, session: string, seat: string, over
     }
     const owner = parseToken(text);
     if (!owner) return held();
-    if (stillHeld(owner, path, steps)) return held(owner.pid, owner.startedAt);
+    if (stillHeld(owner, steps)) return held(owner.pid, owner.startedAt);
     if (!claim(claimPath, token, steps)) return held();
     try {
       const now = steps.read(path);
@@ -258,18 +235,19 @@ export function seatLockHolder(dir: string, session: string, seat: string, overr
   if (text === null) return steps.exists(path) ? { held: -1, startedAt: null } : null;
   const owner = parseToken(text);
   if (!owner) return { held: -1, startedAt: null };
-  return stillHeld(owner, path, steps) ? { held: owner.pid, startedAt: owner.startedAt } : null;
+  return stillHeld(owner, steps) ? { held: owner.pid, startedAt: owner.startedAt } : null;
 }
 
 /**
  * How a refusal names a lock's holder: the pid and, when the token records one, its start time —
- * the two facts that tell a live holder from a pid the OS has handed to another process. An
- * unreadable lock names neither.
+ * the two facts that tell a live holder from a pid the OS has handed to another process. A token
+ * written before starts were recorded names its pid and says the start is missing, so a reader
+ * can tell it apart from a live holder whose start is recorded. An unreadable lock names neither.
  */
 export function holderText(lock: LockHolder): string {
   if (lock.held === -1) return 'an unreadable lock';
   return lock.startedAt === null
-    ? `pid ${String(lock.held)}`
+    ? `pid ${String(lock.held)}, no start time recorded`
     : `pid ${String(lock.held)}, started ${new Date(lock.startedAt).toISOString()}`;
 }
 
@@ -278,7 +256,7 @@ function claim(claimPath: string, token: string, steps: LockSteps): boolean {
   const text = steps.read(claimPath);
   if (text !== null) {
     const owner = parseToken(text);
-    if (owner && stillHeld(owner, claimPath, steps)) return false;
+    if (owner && stillHeld(owner, steps)) return false;
     steps.drop(claimPath);
   } else if (steps.exists(claimPath)) {
     steps.drop(claimPath);

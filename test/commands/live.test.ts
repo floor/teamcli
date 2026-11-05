@@ -2117,7 +2117,7 @@ describe('team up, one run at a time', () => {
     const io = testIo(root, { kind: 'owner' });
     expect(await runUp(FILE, io, sources({}, made))).toBe(1);
     expect(io.err).toBe(
-      `team up: another session-mutating run is holding session acme-web (pid ${process.pid}); try again when it is done\n`,
+      `team up: another session-mutating run is holding session acme-web (pid ${process.pid}, no start time recorded); try again when it is done\n`,
     );
     expect(io.out).toBe('');
     expect(made.starts).toBe(0);
@@ -2146,7 +2146,7 @@ describe('team up, one run at a time', () => {
     const realIo = testIo(root, { kind: 'owner' });
     expect(await runUp(FILE, realIo, sources({}, real))).toBe(1);
     expect(realIo.err).toBe(
-      `team up: another session-mutating run is holding session acme-web (pid ${process.pid}); try again when it is done\n`,
+      `team up: another session-mutating run is holding session acme-web (pid ${process.pid}, no start time recorded); try again when it is done\n`,
     );
     expect(real.starts).toBe(0);
     const dryMade = world();
@@ -2226,7 +2226,7 @@ describe('team up, one run at a time', () => {
     const io = testIo(root, { kind: 'owner' });
     expect(await runUp(FILE, io, sources({ fs }, made))).toBe(1);
     expect(io.err).toBe(
-      `team up: another session-mutating run is holding session acme-web (pid ${process.pid}); try again when it is done\n`,
+      `team up: another session-mutating run is holding session acme-web (pid ${process.pid}, no start time recorded); try again when it is done\n`,
     );
     expect(io.err).not.toContain('failed to create');
     // The refused run made nothing: the lock's refusal came before the run's first write.
@@ -4865,7 +4865,7 @@ describe('team up, delegated', () => {
     const code = await runUp(FILE, io, sources({ ...passed, logDelegated }, made));
     expect(code).toBe(1);
     expect(io.err).toBe(
-      `team up: another session-mutating run is holding session acme-web (pid ${process.pid}); try again when it is done\n`,
+      `team up: another session-mutating run is holding session acme-web (pid ${process.pid}, no start time recorded); try again when it is done\n`,
     );
     // The delegation is not on the record either: the run lock comes before the audit line.
     expect(made.starts).toBe(0);
@@ -6242,7 +6242,7 @@ describe('team down, live', () => {
     const io = testIo(root, { kind: 'owner' });
     expect(await runDown(FILE, io, run.sourcesOf())).toBe(1);
     expect(io.err).toBe(
-      `team down: another session-mutating run is holding session acme-web (pid ${process.pid}); try again when it is done\n`,
+      `team down: another session-mutating run is holding session acme-web (pid ${process.pid}, no start time recorded); try again when it is done\n`,
     );
     expect(io.out).toBe('');
     expect(run.typed).toEqual([]);
