@@ -24,6 +24,8 @@ mock.module('../src/herdr.ts', () => ({
   workspaceList: () => [],
   paneRead: (pane: string) => (pane === 'w6:p1' ? PERMISSION : ''),
   paneProcesses: () => null,
+  // The one-ask reader the check uses answers from the same stand-in: no process identity.
+  paneProcessInfo: () => null,
 }));
 
 const { realCheckSources, runTeamCheck } = await import('../src/check/team.ts');

@@ -45,7 +45,7 @@ import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, labelPersona, LEAD_NAME, seatNickname, workspaceLabel } from '../file/sections/seats.ts';
 import { inboxRegistration } from '../mcp/register.ts';
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
-import { agentList, PANE_WINDOW, paneProcesses, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { agentList, foregroundArgv0, PANE_WINDOW, paneProcessesOf, paneProcessInfo, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
 import { GENERAL_BRIEF_SHA256, briefBindingOf, currentBriefClaim, generalBriefRecord } from '../launch/general-brief.ts';
 import { seatDeliveryClass, wakeableWhileIdle } from '../launch/delivery-class.ts';
@@ -176,24 +176,31 @@ export const realCheckSources: CheckSources = {
     }
     const screens: Record<string, string> = {};
     const processes: Record<string, PaneProcesses | null> = {};
+    const foreground: Record<string, string[] | null> = {};
     for (const agent of agents) {
       if (!recorded.has(agent.pane)) continue;
       const screen = paneRead(agent.pane, PANE_WINDOW, session);
       if (screen !== null) screens[agent.pane] = screen;
       // The pane's process identity, for the comparison with the one the state recorded: a pane
-      // that no longer holds what team launched is not the seat. Null when herdr can't tell.
-      processes[agent.pane] = paneProcesses(agent.pane, session);
+      // that no longer holds what team launched is not the seat. Null when herdr can't tell. The
+      // same reading carries the foreground names the restore proof ties a restored CLI with, so
+      // a pane is asked for once and both maps come from the one answer.
+      const info = paneProcessInfo(agent.pane, session);
+      processes[agent.pane] = paneProcessesOf(info);
+      foreground[agent.pane] = foregroundArgv0(info);
     }
     // A recorded seat herdr no longer lists an agent for still has its pane standing where it was
     // launched: read too, so one left holding its shell is told apart from one that is gone.
     for (const seat of team.seats) {
       const held = state.seats[seat.name];
       if (!held?.launched || !held.pane || held.pane in processes) continue;
-      processes[held.pane] = paneProcesses(held.pane, session);
+      const info = paneProcessInfo(held.pane, session);
+      processes[held.pane] = paneProcessesOf(info);
+      foreground[held.pane] = foregroundArgv0(info);
       const screen = paneRead(held.pane, PANE_WINDOW, session);
       if (screen !== null) screens[held.pane] = screen;
     }
-    return { running: true, agents, workspaces, screens, processes };
+    return { running: true, agents, workspaces, screens, processes, foreground };
   },
   branch: realSources.branch,
   standing: realSources.standing,

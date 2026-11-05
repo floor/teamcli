@@ -637,10 +637,12 @@ export function compare(
       // With the session up, `team restart <seat>` is the per-seat repair the map admits to the
       // owner and the team's leads alike; `team add` is the owner's alone, and a lead that reads
       // this line must be handed a command it can run. With nothing running the session itself is
-      // down, a lead cannot prove its pane, and the owner's `team up` is what starts it.
+      // down, a lead cannot prove its pane, and the owner's `team up` is what starts it. A session
+      // that came back without this seat is the exception: it is up, `team up` re-ties it, and a
+      // lead at a pane of it may run that — the mark follows the command, not the absence of a seat.
       repair: didNotComeBack || !anyRunning ? 'team up' : `team restart ${seat.name}`,
       needs: 'approve',
-      ...(anyRunning ? {} : { owner: true as const }),
+      ...(didNotComeBack || anyRunning ? {} : { owner: true as const }),
     });
   }
 
