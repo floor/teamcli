@@ -566,4 +566,35 @@ describe('admission against a close that cannot finish', () => {
     expect(existsSync(daemonSocketPath(world.home))).toBe(false);
     expect(readDaemonState(world.home).kind).toBe('missing');
   }, 15_000);
+
+  test('a close that ends the restore pass in flight leaves no unhandled rejection', async () => {
+    // The restore child is still starting in the first moments after the daemon serves; a close
+    // then ends its pass through the abort signal. The ended pass is a logged route failure,
+    // never a process-level rejection: a hosted run failed the close scenes above because this
+    // one surfaced as an unhandled rejection. The recorder sees only this window.
+    const rejections: unknown[] = [];
+    const record = (reason: unknown): void => { rejections.push(reason); };
+    process.on('unhandledRejection', record);
+    let closing: Promise<void> | null = null;
+    try {
+      const daemon = await start({
+        presenceHosting: true,
+        presenceEveryMs: 10,
+        presenceIngest: () => ({
+          step: async () => emptyIngest(),
+          close: async () => ({ quiesced: true }),
+          isClosed: () => false,
+        }),
+        presenceActivity: () => async () => activityResult(),
+      });
+      closing = daemon.close();
+      await closing;
+      // One turn for a rejection the close would have left behind to be reported.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', record);
+      if (closing !== null) await closing.catch(() => undefined);
+    }
+  }, 15_000);
 });
