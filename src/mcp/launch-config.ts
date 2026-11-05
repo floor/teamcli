@@ -1,7 +1,7 @@
 // A Claude channel's project config belongs to one seat and one claimed launch. No CLI home,
 // shared lobby config or trust store is read or written here.
 import { randomBytes } from 'node:crypto';
-import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync, type Stats } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { readTeamConfig } from '../file/team-config.ts';
 import { SEAT_NAME } from '../file/sections/seats.ts';
@@ -26,7 +26,7 @@ export function channelLobbyFolder(lobby: string, seat: { name: string; cli: str
 export type ChannelLaunchScope = { root: string; home?: string; epoch?: string };
 export type ChannelConfigLease = { check(): void; release(): void };
 type ObjectMap = Record<string, unknown>;
-type Seen = ReturnType<typeof lstatSync>;
+type Seen = Stats;
 class ConfigRefusal extends Error {}
 
 function object(value: unknown): value is ObjectMap {
