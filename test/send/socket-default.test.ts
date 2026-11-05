@@ -152,9 +152,11 @@ async function listen(sockets: string, pid: number): Promise<{ path: string; rec
 
 const owner = (root: string) => testIo(root, { kind: 'owner' });
 
-/** Files the delivery walk leaves beside a message record: the watch's retry record
- *  (`.pending`) and the fallback episode marker (`.fallback.json`). Neither is a message. */
-const derivative = (name: string): boolean => name.endsWith('.pending') || name.endsWith('.fallback.json');
+/** Files the delivery walk leaves beside a message record: the unread hint
+ *  (`.unread.json`), the watch's retry record (`.pending`) and the fallback episode
+ *  marker (`.fallback.json`). None of them is a message. */
+const derivative = (name: string): boolean =>
+  name === '.unread.json' || name.endsWith('.pending') || name.endsWith('.fallback.json');
 
 /** The one signed record in a drop folder, with the episode marker asserted by its id. */
 function dropRecord(drops: string): string {

@@ -53,7 +53,7 @@ const SRC_OWNER_WAY = '(team restart ${name} --abandon closes its workspace with
 const SRC_CALLER = 'only the owner or \\`leads\\` restarts a seat; this call is ';
 const SRC_DETACHED_WIRING = "const detached = detachedRefusal(walked, { who: 'the owner or a `leads` seat'";
 const SRC_FLAG_WIRING = 'const flagRefusal = fileOwnerRefusal(io, args.values.file)';
-const SRC_SELF_PANE = 'caller.name === name || (recordedSeat?.pane !== undefined && caller.pane === recordedSeat.pane)';
+const SRC_SELF_PANE = 'recordedSeat?.pane !== undefined && who.pane === recordedSeat.pane';
 
 function prose(path: string): string {
   return readFileSync(new URL(path, import.meta.url), 'utf8').replace(/\s+/g, ' ');
