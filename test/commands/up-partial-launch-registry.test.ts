@@ -9,9 +9,10 @@
 //     that stopped short never closes it, and the record keeps its route.
 //  3. A failed launch that closed nothing must leave a prior record exactly as it was — the
 //     route, its session and its measured conversation binding are not rewritten from the file.
-//  4. A working identity doubt and a stopped seat are left/ended exactly as today: nothing is
-//     closed, typed or re-signed behind a seat that is working, and a stopped seat's record is
-//     ended with its pane cleared.
+//  4. A working identity doubt and a stopped seat are left/ended as declared: nothing is closed,
+//     typed or re-signed behind a seat that is working; a stopped seat's record is ended with its
+//     pane cleared, and the workspace it vacated is closed only when the run's fresh readings
+//     prove every pane in it is back at its own shell, unnamed, with no other record naming it.
 //  5. A pending record already consistent with its pane is left pending and unchanged.
 //
 // Every reading is a fixture: no live terminal host, no registry outside the disposable home.
@@ -489,7 +490,7 @@ test('a working identity doubt is held without closing or touching the record', 
   expect(agent.lifecycle).toBe('running');
 });
 
-test('a stopped seat ends its record and clears the pane without touching the pane', async () => {
+test('a stopped seat ends its record, clears its pane, and closes the workspace it vacated', async () => {
   // A lead cannot be stopped, so the file carries a running lead beside the stopped seat. The
   // lead is ready and untouched: it is the run's only other seat.
   setup(true);
@@ -501,7 +502,10 @@ test('a stopped seat ends its record and clears the pane without touching the pa
   expect(await runUp([], io, made.sources)).toBe(0);
 
   expect(io.err).toContain('0 seats repaired, 0 skipped (working), 0 refused\n');
-  expect(made.trace.closed).toEqual([]);
+  // The workspace the stopped seat vacated holds only its own pane, and the fresh process
+  // reading is that pane's shell alone; no listed agent names it and no other record names the
+  // workspace, so the sweep closes it. Nothing is run, renamed or typed on the pane itself.
+  expect(made.trace.closed).toEqual([OLD_WORKSPACE]);
   // The run's watch starts beside the team, never on the stopped seat's pane, and the seat's
   // own line never runs.
   expect(made.trace.runs.filter((run) => run.pane === OLD_PANE)).toEqual([]);
