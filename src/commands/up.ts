@@ -68,7 +68,7 @@ import { bindCodexSeatThread } from '../launch/codex-thread-binding.ts';
 import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../daemon/presence/codex-source.ts';
 import { inspectRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
 import { currentBriefClaim, currentBriefEpochs, deliverBriefForAttribution, GENERAL_BRIEF_SHA256, walkBriefDeliveries } from '../launch/general-brief.ts';
-import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
+import { launchedIdentity, paneHoldsOnlyShell, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { restoreProof, relaunchWithOwnLine } from '../launch/restore-proof.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { launchRefusal, readEntityModelRule, type EntityModelRule } from '../launch/model-guard.ts';
@@ -581,6 +581,20 @@ function effectiveSeatOf(seat: Seat, planned: UpSeat | undefined): Seat {
   };
 }
 
+/** The workspace a host-moved seat left, when the host still lists it and the seat now reads
+ *  somewhere else: the sweep that closes it is planned after the seat is ready, and the execute
+ *  re-reads every fact before the close. */
+function vacatedWorkspace(
+  workspaces: { id: string; label: string }[] | null,
+  left: string,
+  now: string,
+  pane: string,
+): { workspace: string; pane: string; replaced: true } | undefined {
+  if (left === now) return undefined;
+  if (!workspaces?.some((item) => item.id === left)) return undefined;
+  return { workspace: left, pane, replaced: true };
+}
+
 function seatPlan(
   standing: Standing,
   team: TeamFile,
@@ -662,7 +676,17 @@ function seatPlan(
   };
   const known = agents ?? [];
   const asked = agents !== null;
-  if (!resume || !recorded || seat.stopped) return planned;
+  if (!resume || !recorded || seat.stopped) {
+    // A stopped seat's record still names the workspace it left, and nothing this run starts
+    // replaces it: the sweep closes that workspace from a fresh reading and leaves it otherwise.
+    // A human's declaration has no launch of ours to sweep, and a seat with no record names none.
+    return seat.stopped && !seat.human && recorded?.workspace !== undefined
+      ? {
+          ...planned,
+          sweep: { workspace: recorded.workspace, ...(recorded.pane === undefined ? {} : { pane: recorded.pane }) },
+        }
+      : planned;
+  }
   // §5: a seat recorded waiting takes precedence over everything below. Its recorded pane is
   // reused while the host still lists it and the process there is still the one this run
   // launched: the pause reads it fresh and verifies it before doing anything. A process that
@@ -791,6 +815,9 @@ function seatPlan(
       if (drift.kind === 'cycle') {
         const resumeHold = uncarryableResume(planned, continuitySession);
         if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+        // The seat relaunches where the host moved it; the workspace it left closes after the
+        // replacement is ready, never before, and only from a fresh reading.
+        const vacated = vacatedWorkspace(workspaces, movedWorkspace, movedRecord.workspace, movedPane);
         return {
           ...planned,
           repair: {
@@ -801,9 +828,11 @@ function seatPlan(
             drift: { way: drift.way },
           },
           resume: continuitySession,
+          ...(vacated === undefined ? {} : { sweep: vacated }),
         };
       }
       if (drift.kind === 'hold') return { ...planned, stage: 'ready', driftHold: drift.detail };
+      const vacated = vacatedWorkspace(workspaces, movedWorkspace, movedRecord.workspace, movedPane);
       return {
         ...planned,
         stage: 'ready',
@@ -814,6 +843,7 @@ function seatPlan(
           pane: candidate.pane,
           workspace: movedRecord.workspace,
         },
+        ...(vacated === undefined ? {} : { sweep: vacated }),
       };
     }
   }
@@ -1901,6 +1931,18 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       ...(budget.kind === 'clear' ? {} : { budget }),
     });
   }
+  // Records the file no longer declares: a removal that could not drop its state, or a file
+  // edited by hand. Their workspaces are vacated and nothing this run starts replaces them, so
+  // the plan sweeps them after its own steps — each close re-reads the host first.
+  const declaredNames = new Set(team.seats.map((seat) => seat.name));
+  const vacated = Object.entries(recorded?.seats ?? {})
+    .filter(([vacatedName, held]) => !declaredNames.has(vacatedName) && held.workspace !== undefined)
+    .map(([vacatedName, held]) => ({
+      seat: vacatedName,
+      workspace: held.workspace as string,
+      ...(held.pane === undefined ? {} : { pane: held.pane }),
+      ...(held.cli === undefined ? {} : { cli: held.cli }),
+    }));
   // The policy this run resolved per seat, cached before any writer runs: a later writer must
   // use what the launch actually ran, never re-read a record an earlier writer may have changed.
   const plannedByName = new Map(seats.map((planned) => [planned.name, planned]));
@@ -1946,6 +1988,52 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // and only when the bus does not already answer. A world that cannot probe it plans none.
   const startBus = team.bus?.autostart !== false && sources.busAlive !== undefined;
   const busAlive = startBus ? await sources.busAlive!(root) : false;
+  // One Bus per team. A workspace already carrying the Bus's label is reused rather than
+  // duplicated, and any extra labelled workspace is a stray that closes only after the live Bus
+  // is up. Every choice is made from this plan's reading; the execute re-reads the pane, its
+  // process and its name immediately before it types, and refuses one that is not bare.
+  const busWorkspaceLabel = busLabel(team.project);
+  const busLabelled = startBus && workspaces !== null ? workspaces.filter((item) => item.label === busWorkspaceLabel) : [];
+  let busReuse: { workspace: string; pane: string } | undefined;
+  let busHold: string | undefined;
+  let busStrays: { workspace: string }[] | undefined;
+  if (startBus && workspaces === null && !busAlive) {
+    busHold = "bus: the terminal host's workspaces could not be read; no Bus workspace is started and no second one is made";
+  } else if (startBus) {
+    if (busAlive) {
+      busStrays = busLabelled.filter((item) => item.id !== recorded?.bus?.workspace).map((item) => ({ workspace: item.id }));
+    } else {
+      const readPanes = (workspace: string) => sources.launch?.workspacePanes?.(session, workspace) ?? null;
+      const processIn = (pane: string) => sources.launch?.processInfo?.(session, pane) ?? null;
+      const listed = busLabelled.map((item) => ({ workspace: item.id, panes: readPanes(item.id) }));
+      const withPanes = listed.filter((item): item is { workspace: string; panes: string[] } => item.panes !== null && item.panes.length > 0);
+      const recordedBus = recorded?.bus;
+      // The workspace the Bus last recorded comes first: a pane there is the Bus's own, even if
+      // it is busy — the execute then refuses rather than start a second one elsewhere.
+      const picked = recordedBus?.workspace === undefined
+        ? withPanes[0]
+        : (withPanes.find((item) => item.workspace === recordedBus.workspace) ?? withPanes[0]);
+      if (picked === undefined) {
+        // Every labelled workspace whose panes could be read holds none. With an unreadable one
+        // beside them, the Bus could be sitting in it: nothing is started and nothing is made.
+        if (listed.some((item) => item.panes === null)) {
+          busHold = 'bus: its workspace could not be read; not started there and no second one is made';
+        } else {
+          busStrays = busLabelled.map((item) => ({ workspace: item.id }));
+        }
+      } else {
+        const recordedPane = recordedBus?.workspace === picked.workspace && recordedBus.pane !== undefined && picked.panes.includes(recordedBus.pane)
+          ? recordedBus.pane
+          : undefined;
+        const bare = picked.panes.find((pane) => paneHoldsOnlyShell(processIn(pane)));
+        const first = picked.panes[0];
+        if (first !== undefined) {
+          busReuse = { workspace: picked.workspace, pane: recordedPane ?? bare ?? first };
+          busStrays = listed.filter((item) => item.workspace !== picked.workspace).map((item) => ({ workspace: item.workspace }));
+        }
+      }
+    }
+  }
   const watch = recorded?.watch;
   // Which watch owns this route now. A hosted watch the daemon carries — anything but standing
   // by — is doing the job, and this run starts no second one beside it. Otherwise the pane
@@ -2010,7 +2098,18 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     ...(watchUnknown ? { watchUnknown: true } : {}),
     watchLine: (sources.watchCommand ?? watchCommand)(session),
     ...(watchFile ? { watchFile } : {}),
-    ...(startBus ? { startBus, busAlive, busLabel: busLabel(team.project), busLine: (sources.busCommand ?? busCommand)() } : {}),
+    ...(startBus
+      ? {
+          startBus,
+          busAlive,
+          busLabel: busWorkspaceLabel,
+          busLine: (sources.busCommand ?? busCommand)(),
+          ...(busReuse === undefined ? {} : { busReuse }),
+          ...(busHold === undefined ? {} : { busHold }),
+          ...(busStrays === undefined || busStrays.length === 0 ? {} : { busStrays }),
+        }
+      : {}),
+    ...(vacated.length === 0 ? {} : { vacated }),
     teamFile: launchTeamFile(loaded),
     cliHooks,
     ...(noLaunch ? {} : { briefEpochs: currentBriefEpochs(dir, session) }),

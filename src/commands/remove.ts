@@ -775,6 +775,25 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       }
     }
 
+    // A seat the host no longer lists has no CLI to stop, and the record that names its
+    // workspace is about to go: the sweep closes that workspace now, from a fresh reading of
+    // it, while the record still names the pane. A human's declaration leaves both alone, and
+    // a stopped seat's own close already closed what it made.
+    if (live && !agent && !human && recorded?.workspace !== undefined) {
+      await sweepVacated({
+        io: noteIo,
+        dir,
+        session,
+        seat: name,
+        workspace: recorded.workspace,
+        ...(recorded.pane === undefined ? {} : { pane: recorded.pane }),
+        cli: recorded.cli ?? cli,
+        sources,
+        logCommand: 'remove',
+        caller: whoText,
+      });
+    }
+
     let kept: string | null = null;
     let rewrote: string | null = null;
     if (!temporary && !swap) {
@@ -1048,4 +1067,70 @@ export async function stopRunning(input: {
   };
   await executePlan(steps, session, host);
   return stopped && !endpointRefused;
+}
+
+/**
+ * Closes the workspace a removed seat left, when the terminal host no longer lists its CLI. The
+ * record that names the workspace is about to go, so the close is made now — from a fresh
+ * reading of the workspace's panes, their processes and their names, never from the record. A
+ * reading that is not a pane bare at its own shell leaves the workspace exactly as it is and
+ * says why; the removal itself goes on.
+ */
+export async function sweepVacated(input: {
+  io: Io;
+  dir: string;
+  session: string;
+  seat: string;
+  workspace: string;
+  pane?: string;
+  cli: string;
+  sources: RemoveSources;
+  logCommand: string;
+  caller: string;
+}): Promise<void> {
+  const launch = input.sources.launch;
+  if (!launch) return;
+  const { sources, session } = input;
+  const host: Host = {
+    startServer: () => false,
+    sessionUp: () => true,
+    createWorkspace: () => null,
+    paneRun: () => false,
+    typeLine: async () => false,
+    renameAgent: () => false,
+    closeWorkspace: launch.closeWorkspace,
+    stopSession: () => false,
+    kill: () => false,
+    agentPanes: (name) => launch.agentPanes(name),
+    classify: (name, pane, cli) => sources.screen(name, pane, cli).kind,
+    sleep: sources.sleep ?? launch.sleep,
+    now: () => sources.now().getTime(),
+    allow: () => null,
+    record() {},
+    running() {},
+    drop() {},
+    say: (line) => input.io.stdout(line),
+    log: (who, what) => logLine(input.dir, input.logCommand, input.caller, `${who}: ${what}`, sources.now()),
+    agentList: (name) => sources.agents(name),
+    workspacePanes: sources.workspacePanes ? (name, workspace) => sources.workspacePanes!(name, workspace) : undefined,
+    processInfo: sources.processes ? (name, pane) => sources.processes!(name, pane) : undefined,
+    seatStates: (name) => readState(input.dir).sessions[name]?.seats ?? null,
+  };
+  await executePlan(
+    [
+      {
+        kind: 'run',
+        argv: ['herdr', 'workspace', 'close', input.workspace],
+        do: {
+          do: 'sweep',
+          seat: input.seat,
+          workspace: input.workspace,
+          ...(input.pane === undefined ? {} : { pane: input.pane }),
+          cli: input.cli,
+        },
+      },
+    ],
+    session,
+    host,
+  );
 }

@@ -181,6 +181,24 @@ export type Op =
    *  says why. */
   | { do: 'close-leftover'; seat: string; pane: string; workspace: string; cli?: string }
   /**
+   * A workspace a seat vacated — a stopped seat's record, a record the file no longer declares,
+   * or the workspace a host-moved seat left — is closed only from readings taken immediately
+   * before the close. It closes when its pane list, its panes' processes, the agent names, the
+   * seat records and the screens all say no CLI and no seat is there; anything else leaves it
+   * exactly as it is, with the reason said. `replaced` holds the close until the seat's record
+   * reads ready on a pane other than `pane` (the one it left). `after: 'bus'` holds a stray Bus
+   * workspace until the Bus this run started is up.
+   */
+  | {
+      do: 'sweep';
+      workspace: string;
+      seat?: string;
+      pane?: string;
+      cli?: string;
+      replaced?: true;
+      after?: 'bus';
+    }
+  /**
    * The host restored the seat's pane and cleared its name. Re-read the host, re-run the same
    * proof, and only then rename the pane back and record the identity it holds now. No typing,
    * no launch, no close, and no `team register` call.
@@ -202,8 +220,9 @@ export type Op =
       displayAgent?: string;
     }
   | { do: 'watch'; label: string; command: string; file?: string }
-  /** The event bus's pane: `team bus` in its own workspace, recorded like the watch's. */
-  | { do: 'bus'; label: string; command: string }
+  /** The event bus's pane: `team bus` in its own workspace, recorded like the watch's. A reused
+   *  workspace carries its pane and workspace here; the plan made no new workspace for it. */
+  | { do: 'bus'; label: string; command: string; pane?: string; workspace?: string }
   | {
       do: 'type';
       seat: string;
@@ -350,6 +369,13 @@ export interface UpSeat {
    * other reading leaves the workspace and says so.
    */
   closeLeftover?: { pane: string; workspace: string };
+  /**
+   * A workspace this seat vacated and this run's close should sweep: a stopped seat's recorded
+   * workspace (nothing replaces the seat), or the workspace a host-moved seat left for another
+   * one. The sweep reads the host afresh immediately before the close; `replaced` says the close
+   * waits until the seat's own record reads ready on a pane other than `pane`.
+   */
+  sweep?: { workspace: string; pane?: string; replaced?: true };
   /** The seat works in worktrees: it waits in the lobby until a brief names its worktree. */
   lobby?: boolean;
   /**
@@ -523,6 +549,19 @@ export interface UpInput {
   busLabel?: string;
   /** The command the bus's pane runs. Defaults to `team bus`. */
   busLine?: string;
+  /** A workspace already labelled for the Bus whose pane this run starts the Bus in, instead of
+   *  making a second one. Absent: no such workspace was found, and one is made. */
+  busReuse?: { workspace: string; pane: string };
+  /** Labelled Bus workspaces left over beside the one the Bus lives in. Each is swept after the
+   *  Bus is up (or at once when it already answers), never before, and only from a fresh
+   *  reading that finds no CLI in it. */
+  busStrays?: readonly { workspace: string; pane?: string }[];
+  /** The Bus cannot be placed: a sentence the plan says instead of creating a second workspace.
+   *  Set when a labelled Bus workspace exists whose pane cannot be chosen safely. */
+  busHold?: string;
+  /** Records the team file no longer declares: each seat's vacated workspace is swept after the
+   *  plan's own steps. A seat this run declares is swept through its own `sweep`. */
+  vacated?: readonly { seat: string; workspace: string; pane?: string; cli?: string }[];
   /**
    * The team file a flagless watch in `root` would not read. Recorded for the watch's pane
    * before its command runs. Absent when that flagless watch already reads the file.
@@ -1370,19 +1409,77 @@ export function upPlan(input: UpInput): Step[] {
     }
   }
 
-  if (input.startBus === true && input.busAlive !== true && input.busLabel !== undefined) {
+  // The workspaces seats vacated close last, after every step that makes a replacement ready —
+  // and after a stopped seat's own (there is no replacement to wait for). Each close re-reads
+  // the host immediately before it; this plan only says which workspace to read.
+  const swept = [
+    ...input.seats.flatMap((seat) => (seat.sweep === undefined ? [] : [{ seat: seat.name, cli: seat.cli, ...seat.sweep }])),
+    ...(input.vacated ?? []),
+  ];
+  for (const held of swept) {
+    steps.push({
+      kind: 'run',
+      argv: herdr(session, 'workspace', 'close', held.workspace),
+      note: 'closed only if a fresh reading shows every pane bare at its own shell, with no other seat there',
+      do: {
+        do: 'sweep',
+        seat: held.seat,
+        workspace: held.workspace,
+        ...(held.pane === undefined ? {} : { pane: held.pane }),
+        ...(held.cli === undefined ? {} : { cli: held.cli }),
+        ...('replaced' in held && held.replaced === true ? { replaced: true as const } : {}),
+      },
+    });
+  }
+
+  const busLabel = input.busLabel;
+  const busStarting = input.startBus === true && input.busAlive !== true && busLabel !== undefined;
+  if (busStarting && busLabel !== undefined) {
     const busLine = input.busLine ?? 'team bus';
-    steps.push({
-      kind: 'run',
-      argv: herdr(session, 'workspace', 'create', '--cwd', input.root, '--label', input.busLabel, '--no-focus'),
-      do: { do: 'create', label: input.busLabel, cwd: input.root, bus: true },
-    });
-    steps.push({
-      kind: 'run',
-      argv: herdr(session, 'pane', 'run', paneOf(input.busLabel), busLine),
-      note: 'seats follow it for message.arrived; without it they poll',
-      do: { do: 'bus', label: input.busLabel, command: busLine },
-    });
+    if (input.busHold !== undefined) {
+      // A Bus workspace with the team's label exists and its pane cannot be chosen from an
+      // unreadable host: a second workspace now could sit beside a Bus already running in it.
+      steps.push({ kind: 'skip', text: input.busHold });
+    } else if (input.busReuse !== undefined) {
+      steps.push({
+        kind: 'run',
+        argv: herdr(session, 'pane', 'run', input.busReuse.pane, busLine),
+        note: 'seats follow it for message.arrived; without it they poll',
+        do: { do: 'bus', label: busLabel, command: busLine, pane: input.busReuse.pane, workspace: input.busReuse.workspace },
+      });
+    } else {
+      steps.push({
+        kind: 'run',
+        argv: herdr(session, 'workspace', 'create', '--cwd', input.root, '--label', busLabel, '--no-focus'),
+        do: { do: 'create', label: busLabel, cwd: input.root, bus: true },
+      });
+      steps.push({
+        kind: 'run',
+        argv: herdr(session, 'pane', 'run', paneOf(busLabel), busLine),
+        note: 'seats follow it for message.arrived; without it they poll',
+        do: { do: 'bus', label: busLabel, command: busLine },
+      });
+    }
+  }
+  // A stray Bus workspace closes only once the Bus this team runs is up: after the step that
+  // starts it, or at once when it already answers. With no Bus planned at all (autostart off,
+  // or a hold), strays stay exactly where they are.
+  if (input.busStrays !== undefined && (busStarting || (input.startBus === true && input.busAlive === true))) {
+    if (!(busStarting && input.busHold !== undefined)) {
+      for (const stray of input.busStrays) {
+        steps.push({
+          kind: 'run',
+          argv: herdr(session, 'workspace', 'close', stray.workspace),
+          note: 'a second Bus workspace; closed only after the Bus is up and only from a fresh reading',
+          do: {
+            do: 'sweep',
+            workspace: stray.workspace,
+            ...(stray.pane === undefined ? {} : { pane: stray.pane }),
+            ...(busStarting ? { after: 'bus' as const } : {}),
+          },
+        });
+      }
+    }
   }
   if (input.watchAlive || input.startWatch === false) return steps;
   if (input.watchUnknown) {
