@@ -1,0 +1,529 @@
+// C7.5 item 9: `team up --all` runs the restore pass across every registered team whose session
+// is running in the terminal host with recorded seats, in parent-first then session order,
+// isolating per-team failures and refusing a false all-clear when no session is running.
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { approvalOf } from '../src/approve/approval.ts';
+import type { DoctorSources } from '../src/commands/doctor.ts';
+import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
+import { daemonLogPath } from '../src/daemon/paths.ts';
+import { startMachineDaemon } from '../src/daemon/host.ts';
+import { loadTeamFile } from '../src/file/load.ts';
+import type { HerdrAgent, SessionState } from '../src/herdr.ts';
+import { acquireRunLock } from '../src/launch/run-lock.ts';
+import { registerAgent } from '../src/registry/agents.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { emptySession, readState, updateState } from '../src/state.ts';
+import { storePath, writeApproval } from '../src/store/store.ts';
+import { gitEnv, testIo } from './helpers.ts';
+
+const NOW = new Date('2026-11-05T04:15:00Z');
+const IDLE = readFileSync(new URL('./fixtures/codex/0.161.0/idle.txt', import.meta.url), 'utf8')
+  .replace('gpt-5.6-terra', 'gpt-6.1-sol')
+  .replace('GPT-5.6-Terra', 'GPT-6.1-Sol');
+
+const LAUNCHED_PIDS = { shell: 100, cli: [200] };
+const RESTORED_PIDS = { shell: 301, foreground: [401] };
+
+type TeamFixture = {
+  project: string;
+  session: string;
+  root: string;
+  dir: string;
+  lobby: string;
+  lead: string;
+  operator: string;
+  worker: string;
+  pane: string;
+  workspace: string;
+  sessionId: string;
+};
+
+let base: string;
+let home: string;
+let neutralCwd: string;
+let mainTeam: TeamFixture;
+let alphaTeam: TeamFixture;
+let betaTeam: TeamFixture;
+
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: gitEnv(),
+  });
+}
+
+function teamYaml(fixture: TeamFixture): string {
+  return `format: 1
+project: ${fixture.project}
+entity: acme-org
+coordinator: ${fixture.lead}
+operator: ${fixture.operator}
+session: ${fixture.session}
+trust:
+  - ${fixture.lobby}
+  - ${fixture.root}
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: ${fixture.lead}
+    label: ${fixture.lead}
+    cli: codex
+    vendor: openai
+    model: GPT Sol
+    version: "6.1"
+    launch: codex -m gpt-6.1-sol
+    leads: true
+  - role: operator
+    name: ${fixture.operator}
+    label: ${fixture.operator}
+    cli: codex
+    vendor: openai
+    model: GPT Sol
+    version: "6.1"
+    launch: codex -m gpt-6.1-sol
+    human: true
+  - role: implementer
+    name: ${fixture.worker}
+    label: ${fixture.worker}
+    cli: codex
+    vendor: openai
+    model: GPT Sol
+    version: "6.1"
+    launch: codex -m gpt-6.1-sol
+    stopped: true
+`;
+}
+
+function createTeamFixture(spec: {
+  project: string;
+  session: string;
+  root: string;
+  pane: string;
+  workspace: string;
+  sessionId: string;
+}): TeamFixture {
+  const dir = join(spec.root, '.agents');
+  const lobby = join(home, '.config', 'team', 'lobbies', 'acme-org');
+  mkdirSync(dir, { recursive: true });
+  mkdirSync(lobby, { recursive: true, mode: 0o700 });
+  git(spec.root, 'init', '-q', '-b', 'main');
+  writeFileSync(join(spec.root, 'README.md'), `${spec.project}\n`);
+  git(spec.root, 'add', 'README.md');
+  git(spec.root, 'commit', '-q', '-m', 'init');
+
+  const fixture: TeamFixture = {
+    ...spec,
+    dir,
+    lobby,
+    lead: 'lead-1',
+    operator: 'op-1',
+    worker: 'worker-1',
+  };
+  const yaml = teamYaml(fixture);
+  const filePath = join(dir, 'team.yaml');
+  writeFileSync(filePath, yaml);
+  const loaded = loadTeamFile(spec.root, { file: filePath, home });
+  if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+  writeApproval(
+    storePath(loaded.team.project, loaded.root, home),
+    { approval: approvalOf(loaded.team, loaded.root, NOW), file: yaml },
+    loaded.team.seats,
+    home,
+  );
+  const teamId = teamIdOf(fixture.root);
+  updateState(dir, (state) => {
+    const s = (state.sessions[fixture.session] ??= emptySession());
+    s.seats[fixture.lead] = {
+      id: `seat_${teamId}`,
+      stage: 'ready',
+      pane: fixture.pane,
+      workspace: fixture.workspace,
+      launched: LAUNCHED_PIDS,
+      agent_session: fixture.sessionId,
+    };
+    s.seats[fixture.operator] = {
+      id: `seat_${teamId.slice(0, 11)}f`,
+      stage: 'ready',
+      pane: `${fixture.workspace}:p2`,
+      workspace: fixture.workspace,
+    };
+  });
+  registerAgent(home, {
+    name: fixture.lead,
+    signing: { model: 'GPT Sol', version: '6.1', role: 'coordinator' },
+    lab: 'openai',
+    cli: 'codex',
+    launcher: null,
+    launch: 'codex -m gpt-6.1-sol',
+    reach: {
+      team: teamId,
+      seat: fixture.lead,
+      session: fixture.session,
+      pane: fixture.pane,
+      address: null,
+      agent_session: fixture.sessionId,
+    },
+    seat_handle: `seat_${teamId}`,
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'team up',
+  });
+  upsertTeam(home, teamIdOf(fixture.root), {
+    project: fixture.project,
+    entity: 'acme-org',
+    session: fixture.session,
+    root: fixture.root,
+    lobby: fixture.lobby,
+    lobbies: { [fixture.session]: fixture.lobby },
+    roster: [
+      { agent: `ag_${fixture.session}_lead`, seat: fixture.lead, role: 'coordinator', leads: true },
+      { agent: `ag_${fixture.session}_op`, seat: fixture.operator, role: 'operator' },
+      { agent: `ag_${fixture.session}_worker`, seat: fixture.worker, role: 'implementer' },
+    ],
+    lifecycle: 'running',
+    by: 'team up',
+    at: NOW.toISOString(),
+  });
+  return fixture;
+}
+
+type MultiTrace = {
+  renamedBySession: { session: string; pane: string; name: string }[];
+  reportedBySession: { session: string; pane: string; text: string }[];
+};
+
+function buildMultiSources(options: {
+  sessionStates?: Record<string, SessionState | null>;
+  liveSessionIds?: Record<string, string>;
+  namedOnPane?: Record<string, string | null>;
+  hostDown?: boolean;
+} = {}): { sources: UpSources; trace: MultiTrace } {
+  const trace: MultiTrace = { renamedBySession: [], reportedBySession: [] };
+  const fixturesBySession = new Map<string, TeamFixture>([
+    [mainTeam.session, mainTeam],
+    [alphaTeam.session, alphaTeam],
+    [betaTeam.session, betaTeam],
+  ]);
+
+  const sessionState = (session: string): SessionState | null => {
+    if (options.hostDown) return null;
+    if (options.sessionStates && session in options.sessionStates) {
+      return options.sessionStates[session]!;
+    }
+    return fixturesBySession.has(session) ? 'running' : 'absent';
+  };
+
+  const agents = (session: string): HerdrAgent[] | null => {
+    if (options.hostDown) return null;
+    const fixture = fixturesBySession.get(session);
+    if (!fixture || sessionState(session) !== 'running') return [];
+    const name = options.namedOnPane && session in options.namedOnPane
+      ? options.namedOnPane[session]!
+      : null;
+    return [
+      {
+        name,
+        agent: 'codex',
+        pane: fixture.pane,
+        workspace: fixture.workspace,
+        status: 'idle',
+        cwd: fixture.root,
+        session: options.liveSessionIds?.[session] ?? fixture.sessionId,
+      },
+    ];
+  };
+
+  const launch: Launch = {
+    sessionState,
+    startServer: () => true,
+    sessionUp: (session) => {
+      const st = sessionState(session);
+      return st === null ? null : st === 'running';
+    },
+    createWorkspace: (_session, _cwd, label) => ({ pane: `new-${label}`, workspace: `ws-${label}` }),
+    paneRun: () => true,
+    typeText: () => true,
+    renameWorkspace: () => true,
+    reportDisplayAgent(session, pane, text) {
+      trace.reportedBySession.push({ session, pane, text });
+      return true;
+    },
+    renameAgent(session, pane, name) {
+      trace.renamedBySession.push({ session, pane, name });
+      return true;
+    },
+    closeWorkspace: () => true,
+    agentPanes: (session) => (agents(session) ?? []).map((a) => a.pane),
+    agents,
+    paneText: () => IDLE,
+    foreground: () => ['codex'],
+    processInfo: () => RESTORED_PIDS,
+    sleep: async () => {},
+    now: () => NOW,
+  };
+
+  const doctor: DoctorSources = {
+    version: () => '2.1.288',
+    onPath: () => true,
+    loggedIn: () => true,
+    herdrVersion: () => '0.7.1',
+    sessionRunning: () => !options.hostDown,
+    now: () => NOW,
+    home,
+  };
+
+  return {
+    sources: {
+      sessionRunning: (session) => {
+        const st = sessionState(session);
+        return st === null ? null : st === 'running';
+      },
+      sessionState,
+      agents,
+      workspaces: (session) => {
+        const f = fixturesBySession.get(session);
+        return f ? [{ id: f.workspace, label: f.lead }] : [];
+      },
+      home,
+      doctor,
+      launch,
+      now: () => NOW,
+    },
+    trace,
+  };
+}
+
+beforeEach(() => {
+  base = realpathSync(mkdtempSync(join(tmpdir(), 'up-all-restore-')));
+  home = join(base, 'home');
+  neutralCwd = join(base, 'neutral-lobby');
+  mkdirSync(home, { recursive: true });
+  mkdirSync(neutralCwd, { recursive: true });
+
+  const parentRoot = join(base, 'workspace');
+  const alphaRoot = join(parentRoot, 'alpha');
+  const betaRoot = join(parentRoot, 'beta');
+
+  // Register beta, then alpha, then main-team, plus a stale scratch entry whose root is gone.
+  betaTeam = createTeamFixture({
+    project: 'beta',
+    session: 'beta',
+    root: betaRoot,
+    pane: 'w-beta:p1',
+    workspace: 'w-beta',
+    sessionId: 'ses_beta',
+  });
+  alphaTeam = createTeamFixture({
+    project: 'alpha',
+    session: 'alpha',
+    root: alphaRoot,
+    pane: 'w-alpha:p1',
+    workspace: 'w-alpha',
+    sessionId: 'ses_alpha',
+  });
+  mainTeam = createTeamFixture({
+    project: 'main-team',
+    session: 'main-team',
+    root: parentRoot,
+    pane: 'w-main:p1',
+    workspace: 'w-main',
+    sessionId: 'ses_main',
+  });
+  upsertTeam(home, '000000000001', {
+    project: 'stale-scratch',
+    entity: null,
+    session: 'stale-scratch',
+    root: join(base, 'missing-tmp-scratch'),
+    lobby: join(home, '.config', 'team', 'lobby'),
+    roster: [{ agent: 'ag_stale', seat: 'lead-1', role: 'coordinator', leads: true }],
+    lifecycle: 'running',
+    by: 'team up',
+    at: NOW.toISOString(),
+  });
+});
+
+afterEach(() => {
+  rmSync(base, { recursive: true, force: true });
+});
+
+describe('team up --all single-command multi-team restore', () => {
+  test('sweeps running registered teams in parent-first then session order and skips inactive roots', async () => {
+    const { sources, trace } = buildMultiSources();
+    const io = testIo(neutralCwd, { kind: 'owner' });
+
+    const code = await runUp(['--all'], io, sources);
+    expect(code).toBe(0);
+
+    // Parent root (main-team) restores first, then alpha, then beta; stale-scratch is skipped.
+    expect(trace.renamedBySession).toEqual([
+      { session: 'main-team', pane: 'w-main:p1', name: 'lead-1' },
+      { session: 'alpha', pane: 'w-alpha:p1', name: 'lead-1' },
+      { session: 'beta', pane: 'w-beta:p1', name: 'lead-1' },
+    ]);
+
+    for (const fixture of [mainTeam, alphaTeam, betaTeam]) {
+      const seat = readState(fixture.dir).sessions[fixture.session]?.seats[fixture.lead];
+      expect(seat?.stage).toBe('ready');
+      expect(seat?.launched).toEqual({ shell: RESTORED_PIDS.shell, cli: RESTORED_PIDS.foreground });
+    }
+
+    expect(io.err).toContain('main-team (session main-team):');
+    expect(io.err).toContain('alpha (session alpha):');
+    expect(io.err).toContain('beta (session beta):');
+    expect(io.err).toContain('all teams: 3 teams swept');
+  });
+
+  test('refuses with a non-zero exit when no registered team has a running session (no false all-clear)', async () => {
+    const { sources, trace } = buildMultiSources({
+      sessionStates: {
+        'main-team': 'absent',
+        alpha: 'absent',
+        beta: 'absent',
+      },
+    });
+    const io = testIo(neutralCwd, { kind: 'owner' });
+    expect(await runUp(['--all'], io, sources)).toBe(1);
+    expect(io.err).toContain('nothing restored yet');
+    expect(trace.renamedBySession).toEqual([]);
+
+    const dryIo = testIo(neutralCwd, { kind: 'owner' });
+    expect(await runUp(['--all', '--dry-run'], dryIo, sources)).toBe(1);
+    expect(dryIo.err + dryIo.out).toContain('nothing restored yet');
+  });
+
+  test('admits a placed dev-mode lead from a lobby or checkout, and refuses seats, operators, and dev-mode-off leads', async () => {
+    // 1. Ordinary seat in dev mode is refused before touching any team.
+    const workerSources = buildMultiSources();
+    const workerIo = testIo(
+      neutralCwd,
+      { kind: 'seat', name: 'worker-1', pane: 'w-main:p9', session: 'main-team' },
+      { TEAMCLI_DEV_MODE: '1' },
+    );
+    expect(await runUp(['--all'], workerIo, workerSources.sources)).toBe(1);
+    expect(workerSources.trace.renamedBySession).toEqual([]);
+
+    // 2. Placed operator in dev mode is refused before touching any team.
+    const opSources = buildMultiSources();
+    const opIo = testIo(
+      neutralCwd,
+      { kind: 'seat', name: 'op-1', pane: 'w-main:p2', session: 'main-team' },
+      { TEAMCLI_DEV_MODE: '1' },
+    );
+    expect(await runUp(['--all'], opIo, opSources.sources)).toBe(1);
+    expect(opSources.trace.renamedBySession).toEqual([]);
+
+    // 3. Placed lead with dev mode off is refused.
+    const leadOffSources = buildMultiSources();
+    const leadOffIo = testIo(
+      neutralCwd,
+      { kind: 'seat', name: 'lead-1', pane: 'w-main:p1', session: 'main-team' },
+      {},
+    );
+    expect(await runUp(['--all'], leadOffIo, leadOffSources.sources)).toBe(1);
+    expect(leadOffSources.trace.renamedBySession).toEqual([]);
+
+    // 4. Placed lead with dev mode on, running from a lobby outside any checkout, is admitted.
+    const leadOnSources = buildMultiSources({
+      namedOnPane: { 'main-team': 'lead-1' },
+    });
+    const leadOnIo = testIo(
+      neutralCwd,
+      { kind: 'seat', name: 'lead-1', pane: 'w-main:p1', session: 'main-team' },
+      { TEAMCLI_DEV_MODE: '1' },
+    );
+    expect(await runUp(['--all'], leadOnIo, leadOnSources.sources)).toBe(0);
+    expect(leadOnIo.err).toContain('dev mode continues');
+    expect(leadOnSources.trace.renamedBySession).toEqual([
+      { session: 'alpha', pane: 'w-alpha:p1', name: 'lead-1' },
+      { session: 'beta', pane: 'w-beta:p1', name: 'lead-1' },
+    ]);
+  });
+
+  test('isolates per-team failures (failed proof or held run lock) without stopping the remaining teams', async () => {
+    // alpha has a mismatched conversation (refused); beta has its run lock held; main-team is healthy.
+    const heldLock = acquireRunLock(betaTeam.dir, betaTeam.session);
+    expect('release' in heldLock).toBe(true);
+    try {
+      const { sources, trace } = buildMultiSources({
+        liveSessionIds: { alpha: 'ses_foreign' },
+      });
+      const io = testIo(neutralCwd, { kind: 'owner' });
+      const code = await runUp(['--all'], io, sources);
+      expect(code).toBe(1);
+
+      // main-team still restored; alpha's seat was refused; beta was skipped due to lock-held.
+      expect(trace.renamedBySession).toEqual([
+        { session: 'main-team', pane: 'w-main:p1', name: 'lead-1' },
+      ]);
+      expect(io.err).toContain('main-team (session main-team):');
+      expect(io.err).toContain('alpha (session alpha):');
+      expect(io.err).toContain('beta (session beta):');
+    } finally {
+      if ('release' in heldLock) heldLock.release();
+    }
+  });
+
+  test('supports --dry-run and --json, and refuses incompatible single-team flags with exit 2', async () => {
+    const { sources, trace } = buildMultiSources();
+
+    const badFile = testIo(neutralCwd, { kind: 'owner' });
+    expect(await runUp(['--all', '--file', 'team.yaml'], badFile, sources)).toBe(2);
+
+    const badSession = testIo(neutralCwd, { kind: 'owner' });
+    expect(await runUp(['--all', '--session', 'alpha'], badSession, sources)).toBe(2);
+
+    const dryIo = testIo(neutralCwd, { kind: 'owner' });
+    expect(await runUp(['--all', '--dry-run'], dryIo, sources)).toBe(0);
+    expect(trace.renamedBySession).toEqual([]);
+    expect(dryIo.out).toContain('main-team');
+    expect(dryIo.out).toContain('alpha');
+    expect(dryIo.out).toContain('beta');
+
+    const jsonIo = testIo(neutralCwd, { kind: 'owner' });
+    expect(await runUp(['--all', '--json'], jsonIo, sources)).toBe(0);
+    const parsed = JSON.parse(jsonIo.out);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.command).toBe('team.up');
+    expect(parsed.all).toBe(true);
+    expect(parsed.teams.map((t: { session: string }) => t.session)).toEqual(['main-team', 'alpha', 'beta']);
+  });
+
+  test('daemon startup sweep retries not-running routes within a bound and logs nothing restored yet when none comes up', async () => {
+    let attempts = 0;
+    const started = await startMachineDaemon({
+      home,
+      roots: [alphaTeam.root],
+      startedBy: 'test',
+      version: '0.5.12-test',
+      heartbeatMs: 10_000,
+      restoreRetryDelayMs: 10,
+      restoreSweep: async () => {
+        attempts += 1;
+        return { kind: 'not-running', state: 'absent' };
+      },
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      const deadline = Date.now() + 2000;
+      while (Date.now() < deadline) {
+        const log = existsSync(daemonLogPath(home)) ? readFileSync(daemonLogPath(home), 'utf8') : '';
+        if (log.includes('nothing restored yet')) break;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(attempts).toBeGreaterThan(1);
+      const log = readFileSync(daemonLogPath(home), 'utf8');
+      expect(log).toContain('nothing restored yet');
+    } finally {
+      await started.daemon.close();
+    }
+  });
+});
