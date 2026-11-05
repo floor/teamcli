@@ -424,7 +424,9 @@ function expectHeld(
 ): void {
   expect(sent.code).toBe(0);
   expect(sent.err).toContain('queued, no event adapter');
-  expect(withoutSendId(sent.out)).toBe(dropLine('; queued; probe-seat reads it at its next turn, and nothing here gives it one (pull-only)'));
+  expect(withoutSendId(sent.out)).toBe(
+    dropLine('; queued; the typed wake did not run (the delivery order leaves the typed leg out); probe-seat reads it at its next turn, and nothing here gives it one (pull-only)'),
+  );
   expect(sent.calls).toEqual([]);
   for (const witness of witnesses) {
     expect(witness.connections).toBe(0);
