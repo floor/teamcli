@@ -6,13 +6,14 @@
 // A bundle without the op is refused as before, and a plain grant's record is still the client
 // inbox's to read, never this command's. Synthetic homes only.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BundleOp } from '../src/client/bundle-ops.ts';
 import { clientInboxFolder } from '../src/client/inbox.ts';
 import {
   appendClientRevocation,
+  clientGrantsFolder,
   clientKeyDir,
   newClientKeyPair,
   writeClientBundleGrant,
@@ -106,7 +107,7 @@ function world(grant: Grant) {
     : writeClientGrant(home, { clientId: 'grok-bot', entity: 'floor', publicKey: pair.publicKey, keyId: pair.keyId, keyDir, inbox: true }, { now: NOW, key: ownerKey });
   if (!written.ok) throw new Error(written.why);
   return {
-    base, root, home,
+    base, root, home, teamId,
     grantPath: written.path,
     grantId: written.grant.grantId,
     keyPath: join(keyDir, 'client.key'),
@@ -145,6 +146,57 @@ async function seatAck(w: World, seat: string, id: string, at: Date = new Date(N
   const io = testIo(w.root, { kind: 'seat', name: seat, pane, session: 'acme' });
   const code = await runAck([id, '--json'], io, { home: w.home, now: () => at });
   return { code, out: io.out, err: io.err, json: io.out.trim().startsWith('{') ? JSON.parse(io.out) : null };
+}
+
+/** Holds the grants lock as a running command would, so the reply must wait for it. */
+function holdGrantLock(w: World): string {
+  const folder = clientGrantsFolder(w.home);
+  mkdirSync(folder, { recursive: true, mode: 0o700 });
+  const path = join(folder, '.client.lock');
+  writeFileSync(path, `${JSON.stringify({ pid: 99_999, token: 'held-by-the-test', at: NOW.toISOString() })}\n`);
+  return path;
+}
+
+/**
+ * A second process that moves the seat to a new agent id between the reply's pre-lock binding
+ * read and its publication, then releases the lock the test holds. It waits for the client inbox
+ * the reply creates first: that folder exists only after the reply has read and bound the record.
+ * `withClientGrantLock` sleeps in-process, so the mutation cannot come from this test's own loop.
+ */
+function rosterMoveChild(w: World, lockPath: string): Promise<{ code: number | null }> {
+  const worktree = join(import.meta.dir, '..');
+  const script = join(w.base, 'roster-move.ts');
+  writeFileSync(script, `
+import { existsSync, unlinkSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+const [worktree, home, teamId, lockPath, inboxPath] = process.argv.slice(2);
+const deadline = Date.now() + 10_000;
+while (!inboxPath || !existsSync(inboxPath)) {
+  if (Date.now() > deadline) throw new Error('the reply never created its client inbox');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+const { registerAgent } = await import(pathToFileURL(worktree + '/src/registry/agents.ts').href);
+const { readTeams, upsertTeam } = await import(pathToFileURL(worktree + '/src/registry/teams.ts').href);
+const fresh = registerAgent(home, {
+  name: 'orchestrator',
+  signing: { model: 'Claude Opus', version: '5.5', role: 'orchestrator' },
+  lab: 'test', cli: 'claude-code', launcher: null, launch: 'true',
+  reach: { team: teamId, seat: 'orchestrator', session: 'acme', pane: 'fixture:lead', address: null },
+  mcp: [], skills: [], lifecycle: 'running', by: 'test',
+});
+const roster = readTeams(home)[teamId].roster.map((entry) => (entry.seat === 'orchestrator' ? { ...entry, agent: fresh.id } : entry));
+upsertTeam(home, teamId, { roster });
+unlinkSync(lockPath);
+`);
+  const child = spawn(
+    process.execPath,
+    [script, worktree, w.home, w.teamId, lockPath, clientInboxFolder(w.root, 'acme', 'grok-bot')],
+    { stdio: 'ignore' },
+  );
+  return new Promise((resolve, reject) => {
+    child.on('error', reject);
+    child.on('exit', (code) => resolve({ code }));
+  });
 }
 
 describe('a bundle-grant client opens a thread and its seat answers', () => {
@@ -215,6 +267,23 @@ describe('a bundle-grant client opens a thread and its seat answers', () => {
     expect(reply.json.error.message).toContain('nothing was written');
     expect(inboxNames(w, 'grok-bot')).toEqual([]);
     expect(inboxNames(w, 'acme-bot')).toEqual([]);
+  });
+});
+
+describe('the reply publication re-reads the recipient under the grant lock', () => {
+  test('a roster change that moves the recipient while the reply waits refuses, and nothing is written', async () => {
+    const w = world({ kind: 'bundle', ops: ['send', 'reply'] });
+    const sent = await clientSend(w, 'answer the seat that was');
+    expect(sent.code).toBe(0);
+    const lockPath = holdGrantLock(w);
+    const moved = rosterMoveChild(w, lockPath);
+    const reply = await seatReply(w, 'orchestrator', sent.id, 'answered across a roster change');
+    expect((await moved).code).toBe(0);
+    expect(reply.code).toBe(1);
+    expect(reply.json.error.message).toContain('recipient changed');
+    expect(reply.json.error.message).toContain('send the reply again');
+    expect(reply.out).not.toContain('answered across a roster change');
+    expect(inboxNames(w, 'grok-bot')).toEqual([]);
   });
 });
 

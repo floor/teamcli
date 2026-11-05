@@ -764,6 +764,15 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
               why: `the grant's recipient lives in another checkout or session than this record; a changed binding makes the thread unanswerable; nothing was written`,
             };
           }
+          // The record fixed its writer before the lock. A roster change that moved the seat to a
+          // new agent id rewrites the binding without disagreeing with itself, so it is caught by
+          // comparing against what the record already carries, not only the fresh pair.
+          if (freshBinding.recipientSeat !== binding.recipientSeat || freshBinding.recipientId !== binding.recipientId) {
+            return {
+              ok: false,
+              why: `the recipient changed while this call waited: "${binding.recipientSeat}" ${binding.recipientId} is now "${freshBinding.recipientSeat}" ${freshBinding.recipientId}; nothing was written; send the reply again`,
+            };
+          }
           const freshAgent = findAgent(host.home, { team: freshBinding.teamId, seat: me });
           if (freshAgent === null || freshAgent.id !== freshBinding.recipientId) {
             return {
