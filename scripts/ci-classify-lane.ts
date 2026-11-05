@@ -6,12 +6,20 @@
 //    files in the real git tree (`bun scripts/ci-classify-lane.ts --check`).
 //  - `schedule` and `workflow_dispatch` events, empty diffs, and diff failures are always `careful`.
 //  - Any file matching CAREFUL_RULES is `careful`.
+//  - Any source file that can reach an admission module (ADMISSION_MODULES) at runtime is
+//    `careful`, even when a routine rule matches its path: the routine list is a path list, and
+//    a module that can call the caller, signature, delegation, grant or credential code can
+//    change an admission answer from a path the list calls routine.
+//  - A rename is classified by both paths: the diff is taken with rename detection off, so a
+//    move from a careful path onto a routine path still lists the careful old path.
+//  - Revisions are named by the environment (CI_LANE_BASE_REF, CI_LANE_BEFORE_REF), never
+//    expanded by a shell into argv; a malformed revision is a diff failure, not a fallback.
 //  - Any unmatched path (not matched by ROUTINE_ALLOWLIST) defaults to `careful`, never `routine`.
 //  - Only a non-empty diff where EVERY changed file matches ROUTINE_ALLOWLIST and NONE matches
-//    CAREFUL_RULES classifies as `routine`.
-import { appendFileSync, readFileSync } from 'node:fs';
+//    CAREFUL_RULES or the admission graph classifies as `routine`.
+import { appendFileSync, readFileSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { dirname, join, normalize, resolve } from 'node:path';
 
 const ROOT = resolve(import.meta.dir, '..');
 
@@ -38,8 +46,8 @@ const dirPrefixes = (dirs: readonly string[]): readonly RegExp[] =>
 /**
  * Paths whose changes always require the `careful` lane: CI/workflows, build & toolchain,
  * contracts & schemas, native helpers & packages, core state/locks/signing/security, daemon,
- * broker, bus, launch/herdr, send/mcp, registry, permissions/policy/grants/approvals, watch,
- * workflow, worktree, and their corresponding command entrypoints.
+ * broker, bus, launch/herdr, send/mcp, registry, the reach roster, permissions/policy/grants/
+ * approvals, watch, workflow, worktree, and their corresponding command entrypoints.
  *
  * Every individual pattern here is verified against `git ls-files` by `verifyLaneRulesAgainstTree()`.
  */
@@ -122,6 +130,7 @@ export const CAREFUL_RULES: readonly LaneRule[] = [
       'src/permissions',
       'src/policy',
       'src/profiles',
+      'src/reach',
       'src/registry',
       'src/release',
       'src/security',
@@ -180,7 +189,10 @@ export const CAREFUL_RULES: readonly LaneRule[] = [
 /**
  * Paths eligible for the `routine` lane when no file in the diff triggers `CAREFUL_RULES`.
  * Any path that does not match one of these patterns is treated as unmatched and defaults
- * fail-closed to `careful`.
+ * fail-closed to `careful`. A file these patterns match is still `careful` when it can reach an
+ * admission module (see `admissionReachers`), so a directory entry covers only its modules
+ * outside the admission graph; `verifyLaneRulesAgainstTree()` refuses an entry whose every file
+ * is in that graph.
  *
  * Every individual pattern here is verified against `git ls-files` by `verifyLaneRulesAgainstTree()`.
  */
@@ -214,16 +226,12 @@ export const ROUTINE_ALLOWLIST: readonly LaneRule[] = [
     name: 'routine-leaf-src-files',
     patterns: exactFiles([
       'src/ansi.ts',
-      'src/args.ts',
       'src/clis.ts',
       'src/held.ts',
       'src/idle_work.ts',
       'src/io.ts',
-      'src/log.ts',
       'src/queues.ts',
       'src/run-memo.ts',
-      'src/seat-names.ts',
-      'src/session-names.ts',
       'src/version.ts',
       'src/wait.ts',
       'src/yaml.ts',
@@ -234,79 +242,212 @@ export const ROUTINE_ALLOWLIST: readonly LaneRule[] = [
     patterns: dirPrefixes([
       'src/budgets',
       'src/charter',
-      'src/checkpoint',
       'src/end',
       'src/handover',
       'src/information',
-      'src/labels',
-      'src/list',
       'src/output',
-      'src/pause',
-      'src/reach',
       'src/reminder',
       'src/seat-health',
-      'src/sessions',
-      'src/status',
-      'src/swap',
       'src/tasks',
     ]),
   },
-  {
-    name: 'routine-leaf-commands',
-    patterns: exactFiles([
-      'src/commands/add.ts',
-      'src/commands/answer.ts',
-      'src/commands/archive.ts',
-      'src/commands/ask-show.ts',
-      'src/commands/batch.ts',
-      'src/commands/brief.ts',
-      'src/commands/checkpoint.ts',
-      'src/commands/commits.ts',
-      'src/commands/doctor.ts',
-      'src/commands/drops.ts',
-      'src/commands/feed.ts',
-      'src/commands/forget.ts',
-      'src/commands/hold.ts',
-      'src/commands/import.ts',
-      'src/commands/issues.ts',
-      'src/commands/list.ts',
-      'src/commands/messages.ts',
-      'src/commands/next.ts',
-      'src/commands/order.ts',
-      'src/commands/pause.ts',
-      'src/commands/peek.ts',
-      'src/commands/plan.ts',
-      'src/commands/pr.ts',
-      'src/commands/proc.ts',
-      'src/commands/projects.ts',
-      'src/commands/queue.ts',
-      'src/commands/raise.ts',
-      'src/commands/remove.ts',
-      'src/commands/rename.ts',
-      'src/commands/seat.ts',
-      'src/commands/seats.ts',
-      'src/commands/sessions.ts',
-      'src/commands/show.ts',
-      'src/commands/status.ts',
-      'src/commands/swap.ts',
-      'src/commands/tempo.ts',
-      'src/commands/trace.ts',
-      'src/commands/usage.ts',
-      'src/commands/waits.ts',
-    ]),
-  },
 ];
+
+/**
+ * The modules that make an admission decision: who the caller is, whether a signature holds,
+ * whether a delegation or grant applies, and what credentials this machine can reach. A source
+ * file that imports one of these at runtime — directly or through other source modules — can
+ * change an admission answer, so it takes the careful lane whatever its path looks like.
+ *
+ * The graph is read from the checkout being classified (the files are the change under test),
+ * but the reading is done by this script, which CI takes from the base revision; a pull request
+ * cannot widen its own lane by editing a helper this script imports.
+ */
+export const ADMISSION_MODULES: readonly string[] = [
+  'src/caller.ts',
+  'src/check/signature.ts',
+  'src/file/signature.ts',
+  'src/signing/owner-request.ts',
+  'src/signing/owner-statement.ts',
+  'src/delegate.ts',
+  'src/grant.ts',
+  'src/permissions/grants.ts',
+  'src/profiles/credentials.ts',
+];
+
+/** A module specifier: static or dynamic import, `require`, and `export ... from`. */
+const IMPORT_SPEC = /(?:from\s*|import\s*\(\s*|require\s*\(\s*|import\s+)['"]([^'"]+)['"]/g;
+/**
+ * A string literal naming a repo source file. It catches a module spawned by path
+ * (`src/cli.ts`) and a file read by name, the same way the test selector's graph does.
+ */
+const PATH_LITERAL = /['"`]((?:\.{1,2}\/)*(?:src|test|scripts|packages)\/[\w./-]+\.(?:ts|mts|js|mjs))['"`]/g;
+
+const SOURCE_FILE = /\.(?:ts|mts|js|mjs)$/;
+
+/**
+ * Whether a line opens an import/export that exists only for the type checker. A type alias
+ * (`export type Name = ...`) is not a statement about another module and stays scanned.
+ */
+function opensTypeOnlyStatement(line: string): boolean {
+  return /^\s*import\s+type\b/.test(line) || /^\s*export\s+type\s*\{/.test(line);
+}
+
+/** Collects the module specifiers one line names into `specs`. */
+function scanSpecs(line: string, specs: string[]): void {
+  for (const re of [IMPORT_SPEC, PATH_LITERAL]) {
+    re.lastIndex = 0;
+    for (let m; (m = re.exec(line)); ) if (m[1]) specs.push(m[1]);
+  }
+}
+
+/** The text after the first quoted string: what a type-only statement shares its line with. */
+function afterFirstQuoted(line: string): string {
+  return line.replace(/^[^'"]*?['"][^'"]*['"]/, '');
+}
+
+/**
+ * The module specifiers one source file names, with type-only import/export statements left
+ * out: they are erased at build time and give the importer no way to run the module. A
+ * statement that selects types inline (`import { type A, b }`) is a runtime import and counts,
+ * and so does a runtime import sharing a line with a type-only statement.
+ *
+ * The scan is line by line; once a braced type-only statement is open, its continuation lines
+ * are skipped until the line carrying its specifier. Only an import/export line can open a
+ * statement, so a missing semicolon can never swallow a following import.
+ */
+function dependencySpecs(text: string): string[] {
+  const specs: string[] = [];
+  let inTypeOnly = false;
+  for (const line of text.split('\n')) {
+    if (inTypeOnly) {
+      // Only the statement's own specifier line closes it here; a continuation holds member
+      // names and braces, never an import.
+      if (/['"]/.test(line) || /;\s*(?:\/\/.*)?$/.test(line)) {
+        inTypeOnly = false;
+        scanSpecs(afterFirstQuoted(line), specs);
+      }
+      continue;
+    }
+    if (opensTypeOnlyStatement(line)) {
+      // `import type { A } from './a.ts'` on one line, semicolon or not.
+      if (!/['"]/.test(line)) inTypeOnly = true;
+      else scanSpecs(afterFirstQuoted(line), specs);
+      continue;
+    }
+    scanSpecs(line, specs);
+  }
+  return specs;
+}
+
+/** Resolves a specifier the way Bun does for this repository: relative, extensionless, index. */
+function resolveSpec(
+  from: string,
+  spec: string,
+  isFile: (path: string) => boolean,
+): string | undefined {
+  let candidate: string;
+  if (spec.startsWith('.')) candidate = normalize(join(dirname(from), spec));
+  else if (/^(?:src|test|scripts|packages)\//.test(spec)) candidate = spec;
+  else return undefined;
+  for (const c of [candidate, `${candidate}.ts`, candidate.replace(/\.js$/, '.ts'), join(candidate, 'index.ts')]) {
+    if (isFile(c)) return c;
+  }
+  // A root-relative literal written from inside test/ like '../src/x.ts'
+  const alt = spec.replace(/^(?:\.\.\/)+/, '');
+  if (alt !== spec && isFile(alt)) return alt;
+  return undefined;
+}
+
+export type AdmissionGraphIo = {
+  /** Reads one repository-relative source file. Defaults to the checkout at ROOT. */
+  readonly read?: (file: string) => string;
+  /** Whether a repository-relative path is a file. Defaults to the checkout at ROOT. */
+  readonly isFile?: (file: string) => boolean;
+};
+
+/**
+ * Every source file in `files` that can reach an admission module at runtime, the modules
+ * themselves included. `files` are repository-relative paths (a `git ls-files` reading); only
+ * `src/` modules are graphed, because only they ship.
+ */
+export function admissionReachers(
+  files: readonly string[],
+  io: AdmissionGraphIo = {},
+): ReadonlySet<string> {
+  const read = io.read ?? ((file: string) => readFileSync(join(ROOT, file), 'utf8'));
+  const isFile =
+    io.isFile ??
+    ((file: string) => {
+      try {
+        return statSync(join(ROOT, file)).isFile();
+      } catch {
+        return false;
+      }
+    });
+  const sources = new Set(files.filter((f) => f.startsWith('src/') && SOURCE_FILE.test(f)));
+  const importers = new Map<string, Set<string>>();
+  for (const file of sources) {
+    let text: string;
+    try {
+      text = read(file);
+    } catch {
+      continue;
+    }
+    const dependencies = new Set<string>();
+    for (const spec of dependencySpecs(text)) {
+      const dependency = resolveSpec(file, spec, isFile);
+      if (dependency !== undefined && dependency !== file && sources.has(dependency)) {
+        dependencies.add(dependency);
+      }
+    }
+    for (const dependency of dependencies) {
+      const up = importers.get(dependency) ?? new Set<string>();
+      up.add(file);
+      importers.set(dependency, up);
+    }
+  }
+
+  const reached = new Set(ADMISSION_MODULES.filter((module) => sources.has(module)));
+  const queue = [...reached];
+  while (queue.length > 0) {
+    const current = queue.pop()!;
+    for (const up of importers.get(current) ?? []) {
+      if (reached.has(up)) continue;
+      reached.add(up);
+      queue.push(up);
+    }
+  }
+  return reached;
+}
+
+let treeReachers: ReadonlySet<string> | undefined;
+
+/** The admission graph of the checkout at ROOT, read once per run. */
+function admissionReachersOfTree(): ReadonlySet<string> {
+  treeReachers ??= admissionReachers(trackedTreeFiles());
+  return treeReachers;
+}
 
 function matchesRuleList(rules: readonly LaneRule[], file: string): LaneRule | undefined {
   return rules.find((rule) => rule.patterns.some((re) => re.test(file)));
 }
 
+export type LaneClassifyOptions = {
+  /** The source files that reach an admission module. Defaults to this checkout's graph. */
+  readonly admissionReachers?: ReadonlySet<string>;
+};
+
 /**
  * Classifies a list of changed file paths into `routine` or `careful`.
- * Fail-closed: empty input, `<git diff failed>`, any careful rule match, or any unmatched path
- * returns `careful`.
+ * Fail-closed: empty input, `<git diff failed>`, any careful rule match, any file that can
+ * reach an admission module, or any unmatched path returns `careful`.
  */
-export function classifyLane(changedFiles: readonly string[], eventName?: string): LaneClassification {
+export function classifyLane(
+  changedFiles: readonly string[],
+  eventName?: string,
+  options: LaneClassifyOptions = {},
+): LaneClassification {
   if (eventName === 'schedule' || eventName === 'workflow_dispatch') {
     return {
       lane: 'careful',
@@ -335,9 +476,10 @@ export function classifyLane(changedFiles: readonly string[], eventName?: string
 
   const carefulFiles: string[] = [];
   const unmatchedFiles: string[] = [];
+  const admission = options.admissionReachers ?? admissionReachersOfTree();
 
   for (const file of cleaned) {
-    if (matchesRuleList(CAREFUL_RULES, file)) {
+    if (matchesRuleList(CAREFUL_RULES, file) || admission.has(file)) {
       carefulFiles.push(file);
       continue;
     }
@@ -374,10 +516,14 @@ export function classifyLane(changedFiles: readonly string[], eventName?: string
 
 /**
  * Verifies that every individual pattern in CAREFUL_RULES and ROUTINE_ALLOWLIST matches at least
- * one real tracked file in `trackedFiles`, and that no tracked file matches both CAREFUL_RULES
- * and ROUTINE_ALLOWLIST.
+ * one real tracked file in `trackedFiles`, that no tracked file matches both CAREFUL_RULES and
+ * ROUTINE_ALLOWLIST, that every routine rule still covers a file outside the admission graph,
+ * and that every admission module is a tracked file.
  */
-export function verifyLaneRulesAgainstTree(trackedFiles: readonly string[]): string[] {
+export function verifyLaneRulesAgainstTree(
+  trackedFiles: readonly string[],
+  reachers: ReadonlySet<string> = admissionReachers(trackedFiles),
+): string[] {
   const problems: string[] = [];
   for (const rule of CAREFUL_RULES) {
     for (const pattern of rule.patterns) {
@@ -392,12 +538,20 @@ export function verifyLaneRulesAgainstTree(trackedFiles: readonly string[]): str
         problems.push(`routine rule '${rule.name}' pattern ${pattern} matched 0 tracked files in git ls-files`);
       }
     }
+    if (!trackedFiles.some((f) => rule.patterns.some((p) => p.test(f)) && !reachers.has(f))) {
+      problems.push(`routine rule '${rule.name}' matches only files that reach an admission module and can never be routine`);
+    }
   }
   for (const file of trackedFiles) {
     const carefulMatch = matchesRuleList(CAREFUL_RULES, file);
     const routineMatch = matchesRuleList(ROUTINE_ALLOWLIST, file);
     if (carefulMatch && routineMatch) {
       problems.push(`${file}: matched both careful rule '${carefulMatch.name}' and routine rule '${routineMatch.name}'`);
+    }
+  }
+  for (const module of ADMISSION_MODULES) {
+    if (!trackedFiles.includes(module)) {
+      problems.push(`admission module '${module}' is not a tracked file in git ls-files`);
     }
   }
   return problems;
@@ -413,16 +567,29 @@ function diffFiles(base?: string, before?: string, stdin?: boolean): string[] {
   if (stdin) {
     return readFileSync(0, 'utf8').split('\n').map((s) => s.trim()).filter(Boolean);
   }
+  // `--no-renames` keeps both sides of a move in the list. With rename detection on, a move
+  // from a careful path onto a routine path appears only under the routine new path.
   if (before !== undefined) {
     if (!before || /^0+$/.test(before)) return ['<git diff failed>'];
-    const r = spawnSync('git', ['diff', '--name-only', `${before}..HEAD`], { cwd: ROOT, encoding: 'utf8' });
+    const r = spawnSync('git', ['diff', '--name-only', '--no-renames', `${before}..HEAD`], { cwd: ROOT, encoding: 'utf8' });
     if (r.status !== 0) return ['<git diff failed>'];
     return r.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
   }
   const range = `${base ?? 'origin/main'}...HEAD`;
-  const r = spawnSync('git', ['diff', '--name-only', range], { cwd: ROOT, encoding: 'utf8' });
+  const r = spawnSync('git', ['diff', '--name-only', '--no-renames', range], { cwd: ROOT, encoding: 'utf8' });
   if (r.status !== 0) return ['<git diff failed>'];
   return r.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+}
+
+/**
+ * A revision CI names. It must look like a ref or a commit id and never like a git option
+ * (a leading `-`) or a range (`..`), so an environment value cannot change what the diff
+ * command means. Returns `undefined` when nothing was named and `null` when the value is
+ * malformed; a malformed revision is a diff failure, never a fallback to another ref.
+ */
+function namedRef(value: string | undefined): string | undefined | null {
+  if (value === undefined || value === '') return undefined;
+  return /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value) && !value.includes('..') ? value : null;
 }
 
 if (import.meta.main) {
@@ -435,25 +602,39 @@ if (import.meta.main) {
 
   if (has('--check')) {
     const tracked = trackedTreeFiles();
-    const problems = verifyLaneRulesAgainstTree(tracked);
+    const reachers = admissionReachers(tracked);
+    const problems = verifyLaneRulesAgainstTree(tracked, reachers);
     if (problems.length > 0) {
       for (const p of problems) console.error(`ci:lane: ${p}`);
       process.exit(1);
     }
     const carefulCount = CAREFUL_RULES.reduce((n, r) => n + r.patterns.length, 0);
     const routineCount = ROUTINE_ALLOWLIST.reduce((n, r) => n + r.patterns.length, 0);
-    console.error(`ci:lane: ${carefulCount} careful patterns and ${routineCount} routine patterns verified against ${tracked.length} tracked files`);
+    const routineOverridden = tracked.filter(
+      (f) => ROUTINE_ALLOWLIST.some((r) => r.patterns.some((p) => p.test(f))) && reachers.has(f),
+    ).length;
+    console.error(
+      `ci:lane: ${carefulCount} careful patterns and ${routineCount} routine patterns verified against ${tracked.length} tracked files; ` +
+        `${reachers.size} source file(s) reach an admission module and take the careful lane (${routineOverridden} of them also match a routine path)`,
+    );
     process.exit(0);
   }
 
-  const base = get('--base');
-  const before = get('--before');
-  const event = get('--event') ?? process.env.GITHUB_EVENT_NAME;
+  // CI names the revisions in the environment. The shell never expands a ref into this argv,
+  // and a value that does not look like a revision is a diff failure rather than a fallback.
+  const base = namedRef(get('--base') ?? process.env.CI_LANE_BASE_REF);
+  const before = namedRef(get('--before') ?? process.env.CI_LANE_BEFORE_REF);
+  const event = get('--event') ?? process.env.CI_LANE_EVENT ?? process.env.GITHUB_EVENT_NAME;
   const out = get('--github-output');
   const stdin = has('--stdin');
   const positional = a.filter((x, i) => !x.startsWith('--') && !['--base', '--before', '--event', '--github-output'].includes(a[i - 1] ?? ''));
 
-  const changed = positional.length > 0 ? positional : diffFiles(base, before, stdin);
+  const changed =
+    positional.length > 0
+      ? positional
+      : base === null || before === null
+        ? ['<git diff failed>']
+        : diffFiles(base ?? undefined, before ?? undefined, stdin);
   const verdict = classifyLane(changed, event);
   console.error(`ci:lane: lane=${verdict.lane} (${verdict.reason})`);
   console.log(verdict.lane);

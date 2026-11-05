@@ -123,10 +123,23 @@ jobs:
       - name: Classify lane and select the tests this diff can reach
         id: select
         env:
-          EVENT: ${{ github.event_name }}
           BASE: ${{ github.base_ref }}
+          CI_LANE_BASE_REF: origin/${{ github.base_ref }}
+          CI_LANE_EVENT: ${{ github.event_name }}
         run: |
-          lane="$(bun scripts/ci-classify-lane.ts --base "origin/$BASE" --event "$EVENT" --github-output "$GITHUB_OUTPUT")"
+          # The classifier is read from the base revision, never from the pull request's copy,
+          # and the base ref reaches it through the environment rather than a shell expansion.
+          # It runs from a sibling copy so the pull request's own tests still exercise its own
+          # script. A base revision that has no classifier yet (the change that introduces it)
+          # stays careful, so it can never select the shallow lane for itself.
+          if git show "$CI_LANE_BASE_REF:scripts/ci-classify-lane.ts" > "$RUNNER_TEMP/ci-classify-lane.base.ts"; then
+            cp "$RUNNER_TEMP/ci-classify-lane.base.ts" scripts/ci-classify-lane.base.ts
+            lane="$(bun scripts/ci-classify-lane.base.ts --github-output "$GITHUB_OUTPUT")"
+          else
+            echo "ci:lane: no classifier at $CI_LANE_BASE_REF; this run stays careful"
+            lane=careful
+            echo "lane=careful" >> "$GITHUB_OUTPUT"
+          fi
           if [ "$lane" = routine ]; then
             SELECT_DEPTH=2 bun scripts/ci-select-tests.ts --base "origin/$BASE" --github-output "$GITHUB_OUTPUT" > /dev/null
           else
@@ -279,10 +292,22 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           BEFORE: ${{ github.event.before }}
+          CI_LANE_EVENT: ${{ github.event_name }}
+          CI_LANE_BEFORE_REF: ${{ github.event.before }}
           RUNNER_OS: ${{ matrix.os }}
           SHARD: ${{ matrix.shard }}
         run: |
-          lane="$(bun scripts/ci-classify-lane.ts --before "$BEFORE" --event "$EVENT")"
+          # The classifier comes from the commit before this push, not from the checked-out
+          # tree, and the revision reaches it through the environment. It runs from a sibling
+          # copy so the tree's own tests keep their own script. A first push or a revision
+          # without the script stays careful.
+          if [ -z "${BEFORE//0/}" ] || ! git show "$BEFORE:scripts/ci-classify-lane.ts" > "$RUNNER_TEMP/ci-classify-lane.base.ts"; then
+            echo "ci:lane: no classifier at $BEFORE; this run stays careful"
+            lane=careful
+          else
+            cp "$RUNNER_TEMP/ci-classify-lane.base.ts" scripts/ci-classify-lane.base.ts
+            lane="$(bun scripts/ci-classify-lane.base.ts)"
+          fi
           if [ "$RUNNER_OS" = macos-latest ] && [ "$lane" = routine ]; then
             if [ "$SHARD" = 0 ]; then
               echo "Routine lane on macOS: running CLI smoke test on shard 0."
