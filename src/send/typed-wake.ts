@@ -87,6 +87,10 @@ export type TypedWakeOptions = {
   enterSettleMs?: number;
   /** The poll interval while waiting for the working screen. */
   pollMs?: number;
+  /** The settle between an Enter and the first look at what it did. Never a read at zero delay:
+   *  a read before the key is drawn sees the line still in the box and presses a second Enter.
+   *  Defaults to `pollMs`, the interval the host reports a status change at. */
+  ackSettleMs?: number;
   /** How long one Enter is given to show the working screen. */
   verifyMs?: number;
 };
@@ -169,6 +173,7 @@ export async function deliverTypedWake(
   const settleMs = options.settleMs ?? SETTLE_MS;
   const enterSettleMs = options.enterSettleMs ?? WAKE_ENTER_SETTLE_MS;
   const pollMs = options.pollMs ?? POLL_MS;
+  const ackSettleMs = options.ackSettleMs ?? pollMs;
   const verifyMs = options.verifyMs ?? WAKE_VERIFY_MS;
   const opening = await host.read(pane);
   const first = seenOf(cli, opening);
@@ -271,12 +276,13 @@ export async function deliverTypedWake(
       return { delivered: true, typed: keyed(), tries, reason: `the working screen showed after ${String(tries)} Enter${tries === 1 ? '' : 's'}` };
     }
     const holds = boxHoldsText(cli, line, screen);
-    // The first Enter waits until two reads agree. After a fresh typing, the two reads are the
-    // same screen, so a row that is still rendering is not pressed. A line already in the box
-    // agrees when both reads hold exactly that line, and the rest of the screen may change.
-    const agreed = holds && (alreadyHeld ? previousHeld : previous === screen);
-    if (tries === 0 && !agreed) {
-      if (!holds && (alreadyHeld ? previousHeld : previous === screen)) {
+    // The first Enter waits for two looks at the drawn line. The pair agrees on the facts that
+    // matter — the composer holds exactly the line — not on whole frames: a ticking counter
+    // between the looks is not a reason to wait, and a line already drawn is looked at again at
+    // once. A look that does not hold the line keeps the echo settle; a box that settles on
+    // something else, or holds the line without settling, is never pressed.
+    if (tries === 0 && !(holds && previousHeld)) {
+      if (!holds && previous === screen) {
         return { delivered: false, typed: keyed(), tries, reason: heldReason(kind, false) };
       }
       if (settleLooks >= LINE_SETTLE_LOOKS) {
@@ -292,7 +298,7 @@ export async function deliverTypedWake(
       previous = screen;
       previousHeld = holds;
       settleLooks += 1;
-      await host.wait(enterSettleMs);
+      if (!holds) await host.wait(enterSettleMs);
       screen = await host.read(pane);
       continue;
     }
@@ -307,13 +313,23 @@ export async function deliverTypedWake(
       return { delivered: false, typed: keyed(), tries, reason: 'the pane did not take the Enter; no further Enter was pressed' };
     }
     tries += 1;
+    // One bounded ack settle before the first look at what the Enter did: a read taken at zero
+    // delay sees the row before the key has been drawn, which is what made the walk press a
+    // second Enter and then wait a poll. The look itself classifies the outcome.
+    await host.wait(ackSettleMs);
     const after = await host.read(pane);
-    // The line still sitting, with no working screen, means the submit did not take. Press
-    // again. Do not type the line a second time.
-    if (after !== null && boxHoldsText(cli, line, after) && readScreen(cli, after).kind !== 'working') {
-      screen = after;
-      previous = after;
-      continue;
+    if (after !== null) {
+      const working = readScreen(cli, after).kind === 'working';
+      const holds = boxHoldsText(cli, line, after);
+      if (working && !holds) {
+        return { delivered: true, typed: keyed(), tries, reason: `the working screen showed after ${String(tries)} Enter${tries === 1 ? '' : 's'}` };
+      }
+      // The line still sitting, with no working screen, means the submit did not take. Press
+      // again, still bounded by MAX_WAKE_ENTERS. Do not type the line a second time.
+      if (!working && holds) {
+        screen = after;
+        continue;
+      }
     }
     const ack = await pollSubmitted(host, pane, cli, line, pollMs, verifyMs);
     if (ack === 'submitted') {
@@ -323,6 +339,5 @@ export async function deliverTypedWake(
       return { delivered: false, typed: keyed(), tries, reason: stillHeldReason(tries) };
     }
     screen = await host.read(pane);
-    previous = screen;
   }
 }
