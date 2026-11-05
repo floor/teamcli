@@ -83,9 +83,11 @@ export type CostObservation = {
 /** A lab's or an account's state: plenty, close to the cap, out, or nothing fresh to say. */
 export type QuotaState = 'ok' | 'near cap' | 'walled' | 'unknown';
 
-/** The used percentage at or above which an account whose window offers no margin to read (its
- *  reset moment is unknown) reads `near cap`: the fallback figure. When a margin exists the pace
- *  decides, never the used figure alone — a window at 96% used and on pace is not near its cap. */
+/** The used percentage at or above which a window reads `near cap` whatever its pace: the figure
+ *  is nearly spent, so the credits and the advice must answer for it even when the clock says the
+ *  spend is on pace. Below it the pace decides alone. This is the same floor a window whose reset
+ *  moment is unknown has always fallen back to; item 13 made it apply in every case, with no new
+ *  number. */
 export const NEAR_CAP = 90;
 /** The margin at or above which an account counts as having headroom, in points. Its mirror is
  *  the band a window reads `near cap` from: at `-HEADROOM` or below the spend has run ahead of
@@ -277,12 +279,13 @@ function windowsOf(list: readonly QuotaObservation[], now: number): ReportQuotaW
 }
 
 /** The account's state from the newest fresh figures and any live wall: a wall (or a figure at
- *  100) is walled; near the cap is a fresh margin at `-HEADROOM` or below — the spend runs ahead
- *  of the window's own clock by more than the headroom the advice looks for, so at that pace the
- *  window is empty before it resets. The used percentage alone decides nothing when a margin
- *  exists (96% on pace is ok); a window whose clock gives no margin falls back to `NEAR_CAP`.
- *  Anything else is ok. Nothing fresh is unknown — a stale percentage describes a window that may
- *  have reset, and is never grounds for advice. */
+ *  100) is walled; near the cap is a fresh window at or above the used floor (`NEAR_CAP`) — the
+ *  figure is nearly spent whatever the clock says, so the credits and the advice answer for it —
+ *  or, below the floor, a fresh margin at `-HEADROOM` or below: the spend runs ahead of the
+ *  window's own clock by more than the headroom the advice looks for, so at that pace the window
+ *  is empty before it resets. A window whose clock gives no margin falls back to the same used
+ *  floor. Anything else is ok. Nothing fresh is unknown — a stale percentage describes a window
+ *  that may have reset, and is never grounds for advice. */
 function stateOf(windows: readonly ReportQuotaWindow[], walled: boolean): QuotaState {
   if (walled) return 'walled';
   const fresh = windows.filter((one) => !one.stale && one.used !== null);
@@ -293,18 +296,20 @@ function stateOf(windows: readonly ReportQuotaWindow[], walled: boolean): QuotaS
   return 'ok';
 }
 
-/** Whether one fresh window reads near its cap: the margin's pace decides when the window's
- *  clock gives one — at `-HEADROOM` or below the window is empty before it resets — and a window
- *  with no clock to read falls back to its used figure at `NEAR_CAP`. */
+/** Whether one fresh window reads near its cap: at or above the used floor (`NEAR_CAP`) it is
+ *  near cap whatever its pace — the figure is nearly spent — and below the floor the margin's
+ *  pace decides when the window's clock gives one: at `-HEADROOM` or below the window is empty
+ *  before it resets. A window with no clock to read falls back to the same used floor. */
 function nearCap(one: ReportQuotaWindow): boolean {
-  return one.margin === null ? (one.used as number) >= NEAR_CAP : one.margin <= -HEADROOM;
+  if (one.used !== null && one.used >= NEAR_CAP) return true;
+  return one.margin !== null && one.margin <= -HEADROOM;
 }
 
 /** One window's state, the account rule on that window alone: a wall is a wall, nothing fresh is
- *  unknown, a window empty of figure is walled, a margin at `-HEADROOM` or below is near cap, and
- *  a window with no margin falls back to its used figure at `NEAR_CAP`. The table's STATE cell
- *  reads this, so a row and the quota block's account can never disagree about a figure they
- *  show. */
+ *  unknown, a window empty of figure is walled, a window at or above the used floor is near cap
+ *  whatever its pace, and below the floor a margin at `-HEADROOM` or below is near cap. The
+ *  table's STATE cell reads this, so a row and the quota block's account can never disagree
+ *  about a figure they show. */
 export function windowState(one: ReportQuotaWindow): QuotaState {
   if (one.wall) return 'walled';
   if (one.stale || one.used === null) return 'unknown';

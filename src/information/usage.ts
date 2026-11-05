@@ -2378,7 +2378,14 @@ function accountCells(entry: ReportAccount, report: UsageReport): string[] {
   // nothing else, which is where it was read, not where it stands.
   const state = (window === null ? null : windowState(window)) ?? figureState(m);
   const stale = m.state === 'stale' ? '  stale' : '';
-  const cell = `${state}  ${pace}${stale}${watchOf(m, report)}`.trimEnd();
+  // A window near its cap with its clock still on pace says both facts (item 13): the used floor
+  // put it near the cap, the pace says the spend is not running out, and the room left before the
+  // reset is what the credits and the advice answer for. A run-out sentence already carries both
+  // hours, so this clause never stands beside it.
+  const room = state === 'near cap' && pace === 'on pace' && m.left !== null && m.resetsIn !== null
+    ? `, ${m.left}% left, resets in ${m.resetsIn}`
+    : '';
+  const cell = `${state}  ${pace}${room}${stale}${watchOf(m, report)}`.trimEnd();
   return [account, m.window ?? '-', `${m.left}%`, `${m.used}%`, reset, reserve, provenanceOf(m, report), source, cell];
 }
 

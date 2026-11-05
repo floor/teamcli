@@ -2316,12 +2316,12 @@ describe('team usage', () => {
     expect(io.out).not.toContain('\nquota\n');
   });
 
-  test('the state follows the pace: a small negative margin is ok, and a large one says when the window runs out', async () => {
-    // The owner's two readings (2026-11-05): anthropic weekly at 96% used with a -1.4% margin read
-    // `near cap` on the used figure alone, while google (gemini) at 47.1% used with a -36.4% margin
+  test('the state follows the pace below the used floor: a small negative margin is ok, and a large one says when the window runs out', async () => {
+    // The owner's two readings (2026-11-05): google (gemini) at 47.1% used with a -36.4% margin
     // read `ok`. The margin is the pace: a window a headroom band ahead of its clock runs out
     // before it resets, and one a point ahead of it does not. Both figures follow from the reset:
-    // 9h to reset leaves 159h of 168h gone, 94.6 - 96 = -1.4; 150h leaves 18h gone, 10.7 - 47.1.
+    // 24h to reset leaves 144h of 168h gone, 85.7 - 87 = -1.3; 150h leaves 18h gone, 10.7 - 47.1.
+    // At or above the used floor the floor decides, even on pace — item 13's own test holds that.
     const withWeekly = (used: number, left: number, resetsAt: string): void => {
       updateState(join(root, '.agents'), (state) => {
         state.budgets = {
@@ -2337,13 +2337,13 @@ describe('team usage', () => {
     });
     const row = (out: string): string => out.split('\n').find((text) => /^anthropic\s+weekly/.test(text)) ?? '';
 
-    // High, but on pace: STATE says ok, and the advice does not warn about it.
-    withWeekly(96, 4, '2026-10-04T18:00:00Z');
+    // Below the floor, on pace: STATE says ok, and the advice does not warn about it.
+    withWeekly(87, 13, '2026-10-05T09:00:00Z');
     const onPace = testIo(root, SEAT);
-    expect(await runUsage([], onPace, { home, now: () => NOW, observe: () => ({ observations: [read(96, 4, NOW.getTime() + 9 * 3_600_000)], costs: [], notes: [] }) })).toBe(0);
+    expect(await runUsage([], onPace, { home, now: () => NOW, observe: () => ({ observations: [read(87, 13, NOW.getTime() + 24 * 3_600_000)], costs: [], notes: [] }) })).toBe(0);
     expect(row(onPace.out)).toContain('ok  on pace');
     expect(row(onPace.out)).not.toContain('near cap');
-    expect(onPace.out).not.toContain('anthropic weekly 96% used');
+    expect(onPace.out).not.toContain('anthropic weekly 87% used');
 
     // Far ahead of its clock: near the cap, with the hours it runs out against the hours to reset.
     withWeekly(47.1, 52.9, '2026-10-10T15:00:00Z');
@@ -2429,10 +2429,12 @@ describe('team usage', () => {
     const doc = JSON.parse(json.out) as { credits?: Record<string, unknown> };
     expect(doc.credits).toEqual({ anthropic: { available: 260.5, currency: 'EUR', cap: 300, autoReload: false } });
 
-    // On pace, there is no overage to cover before the reset, and the line says so.
-    withWeekly(96, 4, '2026-10-04T18:00:00Z');
+    // Below the used floor and on pace, there is no overage to cover before the reset, and the
+    // line says so. (At or above the floor the account is near cap even on pace, so the credits
+    // answer coverage there — item 13's own test holds that.)
+    withWeekly(87, 13, '2026-10-05T09:00:00Z');
     const quiet = testIo(root, OWNER);
-    expect(await runUsage([], quiet, { home, now: () => NOW, observe: () => ({ observations: [read(96, 4, NOW.getTime() + 9 * 3_600_000)], costs: [], notes: [] }) })).toBe(0);
+    expect(await runUsage([], quiet, { home, now: () => NOW, observe: () => ({ observations: [read(87, 13, NOW.getTime() + 24 * 3_600_000)], costs: [], notes: [] }) })).toBe(0);
     expect(quiet.out).toContain('auto-reload off  no overage is expected before the reset');
 
     // With no credits entry the line is absent, and JSON carries no credits key at all.
@@ -2467,6 +2469,52 @@ describe('team usage', () => {
     });
     expect(code).toBe(0);
     expect(io.out).toContain('advice: anthropic weekly 47.1% used, runs out in about 20h12m, before the reset in 150h; credits €260.50 cover the overage until they are spent, €39.50 short of the monthly cap; or move lead off anthropic to openai (session used 10%, ahead of pace by 30%)\n');
+  });
+
+  test('a window at the used floor is near cap even when on pace, and the credits and the advice answer it', async () => {
+    // Item 13 (the orchestrator's decision on the review): at 96% used a pace inside
+    // the band read `ok  on pace`, which hid the credits question item 9 asks and kept the
+    // account out of the advice item 11 shapes. The floor the code already uses when no margin
+    // is known — `NEAR_CAP`, 90% used — now decides at or above it, and the words say both
+    // facts; below it the pace still decides everything. No new number.
+    withoutReadings();
+    // The owner's own reading of the window, from the watch: 96% used with nine hours to reset.
+    updateState(join(root, '.agents'), (state) => {
+      state.budgets = {
+        'anthropic/weekly/lead': { account: 'anthropic', window: 'weekly', left: 4, used: 96, changedAt: '2026-10-04T08:59:00Z', resetsAt: '2026-10-04T18:00:00Z', seat: 'lead', source: 'status_line', confirmed: true },
+      } as never;
+      state.sessions['acme-web'] = { ...emptySession() } as never;
+    });
+    writeFileSync(machineAccountsPath(home), 'accounts:\n  - anthropic\ncredits:\n  anthropic:\n    available: 260.50\n    currency: EUR\n    cap: 300\n    autoReload: false\n');
+    const io = testIo(root, OWNER);
+    const code = await runUsage([], io, {
+      home,
+      now: () => NOW,
+      observe: () => ({
+        observations: [
+          { account: 'anthropic', window: 'weekly', left: 4, used: 96, resetsAt: NOW.getTime() + 9 * 3_600_000, resetText: null, observedAt: NOW.getTime() - 60_000, source: 'status line', seat: 'lead', margin: null, wall: false },
+          { account: 'openai', window: 'session', left: 90, used: 10, resetsAt: NOW.getTime() + 9 * 3_600_000, resetText: null, observedAt: NOW.getTime() - 60_000, source: 'status line', seat: 'lead', margin: 30, wall: false },
+        ],
+        costs: [],
+        notes: [],
+      }),
+    });
+    expect(code).toBe(0);
+    // The row says both facts: the state the used figure puts it in, then the pace the clock reads
+    // and the room left before the reset.
+    const row = io.out.split('\n').find((line) => /^anthropic\s+weekly/.test(line)) ?? '';
+    expect(row).toContain('near cap  on pace, 4% left, resets in 9h');
+    // The credits line answers coverage now that the account is near its cap, and the advice names
+    // the figure, the credits and the move, as item 11 shapes it.
+    expect(io.out).toContain('  anthropic  credits  €260.50 available  €300.00 monthly cap  auto-reload off  overage is expected before the reset; the credits cover it until they are spent, €39.50 short of the cap');
+    expect(io.out).toContain('advice: anthropic weekly 96% used, resets in 9h; credits €260.50 cover the overage until they are spent, €39.50 short of the monthly cap; or move lead off anthropic to openai (session used 10%, ahead of pace by 30%)\n');
+    // The structured face carries the same state, and the pace rule still decides below the floor.
+    const json = testIo(root, OWNER);
+    expect(await runUsage(['--json'], json, { home, now: () => NOW, observe: () => ({ observations: [
+      { account: 'anthropic', window: 'weekly', left: 4, used: 96, resetsAt: NOW.getTime() + 9 * 3_600_000, resetText: null, observedAt: NOW.getTime() - 60_000, source: 'status line', seat: 'lead', margin: null, wall: false },
+    ], costs: [], notes: [] }) })).toBe(0);
+    const doc = JSON.parse(json.out) as { quota: { labs: { accounts: { account: string; state: string }[] }[] } };
+    expect(doc.quota.labs.flatMap((lab) => lab.accounts).find((one) => one.account === 'anthropic')?.state).toBe('near cap');
   });
 
   test('the SOURCE cell and the seat lines name where a figure was read in plain words, with its age', async () => {
