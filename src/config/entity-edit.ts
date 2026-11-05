@@ -20,13 +20,13 @@ import { resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { admitGeneral } from '../client/general-grant.ts';
-import { entitiesPath, NICKNAME_SCOPE_DEFAULT, NICKNAME_SCOPES, type NicknameScope } from '../entities.ts';
+import { entitiesPath, lockedEntities, NICKNAME_SCOPE_DEFAULT, NICKNAME_SCOPES, type NicknameScope } from '../entities.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { isEntityName } from '../file/sections/entity.ts';
 import { cleanedIo, type Io } from '../io.ts';
 import { composedRulesOf, formatComposedRules } from '../launch/rules.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
-import { ProjectsError, projectsFile, setProjectRules } from '../registry/projects.ts';
+import { projectIdOf, ProjectsError, projectsFile, setProjectRules } from '../registry/projects.ts';
 import { editedRecordText, getAt, parseValue, shownValue, withValue } from './team-record.ts';
 import { machineZone, readReminders } from '../reminder/config.ts';
 import { parseYaml, toValue, YamlError, type YamlNode, type YamlValue } from '../yaml.ts';
@@ -116,8 +116,8 @@ function unreadableReason(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function isMap(value: YamlValue): value is { [key: string]: YamlValue } {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
+function isMap(value: YamlValue | undefined): value is { [key: string]: YamlValue } {
+  return value !== null && value !== undefined && typeof value === 'object' && !Array.isArray(value);
 }
 
 /** The entities file written the atomic way the other stores are: a temporary file renamed over
@@ -282,8 +282,22 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     }
     if (!isMap(record)) return unreadable(io, json, `${file}: expected a map of ${isProjectRules ? 'projects' : 'entities'}`);
     if (key === REMINDERS_KEY || key === RULES_KEY) {
+      let resolvedTarget = targetName;
+      if (isProjectRules && isMap(record.projects) && !Object.hasOwn(record.projects, resolvedTarget)) {
+        const byDisplay = Object.entries(record.projects).find(
+          ([, raw]) => isMap(raw) && raw.name === targetName,
+        );
+        if (byDisplay) {
+          resolvedTarget = byDisplay[0];
+        } else {
+          try {
+            const derived = projectIdOf(targetName);
+            if (Object.hasOwn(record.projects, derived)) resolvedTarget = derived;
+          } catch {}
+        }
+      }
       const lookupPath = isProjectRules
-        ? ['projects', targetName, key]
+        ? ['projects', resolvedTarget, key]
         : hasEntitiesWrapper(record)
           ? ['entities', targetName, key]
           : [targetName, key];
@@ -341,7 +355,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     try {
       outcome = setProjectRules(home, targetName, list as string[], {
         dryRun,
-        allowDisplayName: false,
+        allowDisplayName: true,
       });
     } catch (error) {
       const msg = error instanceof ProjectsError || error instanceof Error ? error.message : String(error);
@@ -373,100 +387,131 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   }
 
   const entitiesFile = entitiesPath(home);
-  if (!existsSync(entitiesFile)) {
-    return pathRefused(
-      io,
-      json,
-      `${entitiesFile} does not exist: no entry for entity "${targetName}"; nothing was written`,
-    );
-  }
-  let text: string;
+  const runEntityWrite = ():
+    | { kind: 'path'; why: string }
+    | { kind: 'unreadable'; why: string }
+    | { kind: 'reminders-problem'; why: string }
+    | { kind: 'unchanged' }
+    | { kind: 'written'; text: string; kept: boolean } => {
+    if (!existsSync(entitiesFile)) {
+      return {
+        kind: 'path',
+        why: `${entitiesFile} does not exist: no entry for entity "${targetName}"; nothing was written`,
+      };
+    }
+    let text: string;
+    try {
+      text = readFileSync(entitiesFile, 'utf8');
+    } catch (error) {
+      return {
+        kind: 'unreadable',
+        why: `${entitiesFile}: ${(error as Error).message}`,
+      };
+    }
+    let root: YamlNode;
+    try {
+      root = parseYaml(text);
+    } catch (error) {
+      return {
+        kind: 'unreadable',
+        why: `${entitiesFile}: ${unreadableReason(error)}`,
+      };
+    }
+    const record = toValue(root);
+    if (!isMap(record)) {
+      return {
+        kind: 'unreadable',
+        why: `${entitiesFile}: expected a map of entities`,
+      };
+    }
+    const wrapped = hasEntitiesWrapper(record);
+    const entryLookup = wrapped ? ['entities', targetName] : [targetName];
+    const entry = getAt(record, entryLookup);
+    if (!entry.found) {
+      return {
+        kind: 'path',
+        why: `${entitiesFile}: no entry for entity "${targetName}"; nothing was written`,
+      };
+    }
+    if (!isMap(entry.value)) {
+      return {
+        kind: 'path',
+        why: `${entitiesFile}: entity "${targetName}" is not a map; nothing was written`,
+      };
+    }
+    // The record nests the word (`<entity>: names: unique:`), while a reminder or rules list sits
+    // directly under the entity.
+    const recordPath =
+      key === NAMES_KEY
+        ? [...entryLookup, 'names', 'unique']
+        : [...entryLookup, key as string];
+    const value: YamlValue | undefined = key === NAMES_KEY ? (word as string) : (list as YamlValue[]);
+    const changed = withValue(record, recordPath, value);
+    if (!changed.ok) {
+      return {
+        kind: 'path',
+        why: `entity "${targetName}" ${key as string}: ${changed.why}; nothing was written`,
+      };
+    }
+    if (!changed.changed) {
+      return { kind: 'unchanged' };
+    }
+    const edited = editedRecordText(text, recordPath, value, changed.root);
+    // A reminder list is held to the daemon's own parser on the text that would be written. A
+    // problem on this entity refuses the write with the parser's reason, whatever the file carried
+    // before the edit — the text stored must be one the daemon reads whole, and a list that already
+    // held a bad entry would otherwise keep it as if the edit had cured it. A problem on another
+    // entity refuses only when this edit introduced it: renaming a reminder can make a later
+    // entity's entry the duplicate, and the parser names that entity. A problem another entity
+    // already carried is not this call's subject and never blocks the write.
+    if (key === REMINDERS_KEY) {
+      let candidate: YamlNode;
+      try {
+        candidate = parseYaml(edited.text);
+      } catch (error) {
+        return {
+          kind: 'unreadable',
+          why: `${entitiesFile}: the edited text cannot be read: ${unreadableReason(error)}`,
+        };
+      }
+      const before = new Set(readReminders(root, { defaultZone: machineZone() }).problems.map(problemKey));
+      const refused = readReminders(candidate, { defaultZone: machineZone() }).problems.find(
+        (problem) => problem.entity === null || problem.entity === entityName || !before.has(problemKey(problem)),
+      );
+      if (refused !== undefined) return { kind: 'reminders-problem', why: refused.why };
+    }
+    if (!dryRun) {
+      writeOwnerFile(entitiesFile, edited.text);
+    }
+    return { kind: 'written', text: edited.text, kept: edited.kept };
+  };
+
+  let entityOutcome: ReturnType<typeof runEntityWrite>;
   try {
-    text = readFileSync(entitiesFile, 'utf8');
+    entityOutcome = dryRun ? runEntityWrite() : lockedEntities(home, runEntityWrite);
   } catch (error) {
-    return unreadable(io, json, `${entitiesFile}: ${(error as Error).message}`);
+    return unreadable(io, json, error instanceof Error ? error.message : String(error));
   }
-  let root: YamlNode;
-  try {
-    root = parseYaml(text);
-  } catch (error) {
-    return unreadable(io, json, `${entitiesFile}: ${unreadableReason(error)}`);
-  }
-  const record = toValue(root);
-  if (!isMap(record)) return unreadable(io, json, `${entitiesFile}: expected a map of entities`);
-  const wrapped = hasEntitiesWrapper(record);
-  const entryLookup = wrapped ? ['entities', targetName] : [targetName];
-  const entry = getAt(record, entryLookup);
-  if (!entry.found) {
-    return pathRefused(
-      io,
-      json,
-      `${entitiesFile}: no entry for entity "${targetName}"; nothing was written`,
-    );
-  }
-  if (!isMap(entry.value)) {
-    return pathRefused(
-      io,
-      json,
-      `${entitiesFile}: entity "${targetName}" is not a map; nothing was written`,
-    );
-  }
-  // The record nests the word (`<entity>: names: unique:`), while a reminder or rules list sits
-  // directly under the entity.
-  const recordPath =
-    key === NAMES_KEY
-      ? [...entryLookup, 'names', 'unique']
-      : [...entryLookup, key as string];
-  const value: YamlValue | undefined = key === NAMES_KEY ? (word as string) : (list as YamlValue[]);
-  const changed = withValue(record, recordPath, value);
-  if (!changed.ok) {
-    return pathRefused(
-      io,
-      json,
-      `entity "${targetName}" ${key as string}: ${changed.why}; nothing was written`,
-    );
-  }
-  if (!changed.changed) {
+  if (entityOutcome.kind === 'path') return pathRefused(io, json, entityOutcome.why);
+  if (entityOutcome.kind === 'unreadable') return unreadable(io, json, entityOutcome.why);
+  if (entityOutcome.kind === 'reminders-problem') return remindersProblem(io, json, entityOutcome.why);
+  if (entityOutcome.kind === 'unchanged') {
     if (json) writeJson(io, 'team.config-edit', { format: 1, verb, path: `${entityName}.${key as string}`, changed: false, ...(dryRun ? { dry_run: true } : {}), source: 'entity', comments_kept: true });
     else io.stdout(`nothing changed in ${entitiesFile}\n`);
     // exit: config.entity.unchanged
     return 0;
   }
-  const edited = editedRecordText(text, recordPath, value, changed.root);
-  // A reminder list is held to the daemon's own parser on the text that would be written. A
-  // problem on this entity refuses the write with the parser's reason, whatever the file carried
-  // before the edit — the text stored must be one the daemon reads whole, and a list that already
-  // held a bad entry would otherwise keep it as if the edit had cured it. A problem on another
-  // entity refuses only when this edit introduced it: renaming a reminder can make a later
-  // entity's entry the duplicate, and the parser names that entity. A problem another entity
-  // already carried is not this call's subject and never blocks the write.
-  if (key === REMINDERS_KEY) {
-    let candidate: YamlNode;
-    try {
-      candidate = parseYaml(edited.text);
-    } catch (error) {
-      return unreadable(io, json, `${entitiesFile}: the edited text cannot be read: ${unreadableReason(error)}`);
-    }
-    const before = new Set(readReminders(root, { defaultZone: machineZone() }).problems.map(problemKey));
-    const refused = readReminders(candidate, { defaultZone: machineZone() }).problems.find(
-      (problem) => problem.entity === null || problem.entity === entityName || !before.has(problemKey(problem)),
-    );
-    if (refused !== undefined) return remindersProblem(io, json, refused.why);
-  }
-  if (!dryRun) {
-    writeOwnerFile(entitiesFile, edited.text);
-  }
   if (json) {
-    writeJson(io, 'team.config-edit', { format: 1, verb, path: `${entityName}.${key as string}`, changed: true, ...(dryRun ? { dry_run: true } : {}), source: 'entity', comments_kept: edited.kept });
+    writeJson(io, 'team.config-edit', { format: 1, verb, path: `${entityName}.${key as string}`, changed: true, ...(dryRun ? { dry_run: true } : {}), source: 'entity', comments_kept: entityOutcome.kept });
   } else {
     const count = list?.length ?? 0;
     const itemLabel = key === RULES_KEY ? 'rule' : 'reminder';
     const shown = key === NAMES_KEY ? (word as string) : `${String(count)} ${itemLabel}${count === 1 ? '' : 's'}`;
     if (dryRun) {
-      io.stdout(`dry-run: would set ${entityName}.${key as string}: ${shown} in ${entitiesFile}\n${edited.text}`);
+      io.stdout(`dry-run: would set ${entityName}.${key as string}: ${shown} in ${entitiesFile}\n${entityOutcome.text}`);
     } else {
       io.stdout(`set ${entityName}.${key as string}: ${shown} in ${entitiesFile}\n`);
-      if (!edited.kept) io.stderr(`team config: the entities file was rewritten whole to change ${entityName}.${key as string}; its comments were not kept\n`);
+      if (!entityOutcome.kept) io.stderr(`team config: the entities file was rewritten whole to change ${entityName}.${key as string}; its comments were not kept\n`);
     }
   }
   // exit: config.entity.written

@@ -9,7 +9,7 @@ import type { KeyObject } from 'node:crypto';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { entitiesPath } from '../entities.ts';
+import { entitiesPath, lockedEntities } from '../entities.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { grantsDir } from '../grant.ts';
 import { logLine } from '../log.ts';
@@ -1004,72 +1004,120 @@ function emitPoliciesBlock(indent: string, policies: Record<string, YamlValue>):
   return lines;
 }
 
+function emitNestedYaml(indent: string, keyName: string, val: YamlValue): string[] {
+  if (Array.isArray(val)) {
+    if (val.length === 0) return [`${indent}${scalarYaml(keyName)}: []`];
+    const out = [`${indent}${scalarYaml(keyName)}:`];
+    for (const item of val) {
+      if (isMap(item)) {
+        const entries = Object.entries(item);
+        if (entries.length === 0) {
+          out.push(`${indent}  - {}`);
+        } else {
+          const [firstK, firstV] = entries[0]!;
+          out.push(`${indent}  - ${scalarYaml(firstK)}: ${emitYamlVal(firstV ?? null)}`);
+          for (const [k, v] of entries.slice(1)) {
+            out.push(`${indent}    ${scalarYaml(k)}: ${emitYamlVal(v ?? null)}`);
+          }
+        }
+      } else {
+        out.push(`${indent}  - ${emitYamlVal(item)}`);
+      }
+    }
+    return out;
+  }
+  if (isMap(val)) {
+    const entries = Object.entries(val);
+    if (entries.length === 0) return [`${indent}${scalarYaml(keyName)}: {}`];
+    const out = [`${indent}${scalarYaml(keyName)}:`];
+    for (const [k, v] of entries) {
+      out.push(...emitNestedYaml(`${indent}  `, k, v ?? null));
+    }
+    return out;
+  }
+  return [`${indent}${scalarYaml(keyName)}: ${emitYamlVal(val)}`];
+}
+
 function writeEntityPolicyEntry(
   home: string,
   entity: string,
   policyName: string,
   entry: Record<string, YamlValue> | null,
 ): void {
-  const path = entitiesPath(home);
-  let root: Record<string, YamlValue> = {};
-  let text: string | undefined;
-  try {
-    text = readFileSync(path, 'utf8');
-  } catch (error) {
-    // A file that is not there is a new one. A file that cannot be read is never replaced by this
-    // write: it would drop every other entity's policies this run could not see.
-    if (!isAbsent(error)) throw error;
-  }
-  if (text !== undefined && text.trim()) {
-    const parsed = toValue(parseYaml(text));
-    if (!isMap(parsed)) throw new Error(`${path}: expected a map of entities`);
-    root = { ...parsed };
-  }
-  const existingEntity = isMap(root[entity]) ? { ...(root[entity] as Record<string, YamlValue>) } : {};
-  const existingPolicies = isMap(existingEntity.policies) ? { ...(existingEntity.policies as Record<string, YamlValue>) } : {};
-  if (entry === null) {
-    delete existingPolicies[policyName];
-    for (const key of Object.keys(existingPolicies)) {
-      if (normalizePolicyName(key) === policyName) delete existingPolicies[key];
+  lockedEntities(home, () => {
+    const path = entitiesPath(home);
+    let container: Record<string, YamlValue> = {};
+    let hasWrapper = false;
+    let text: string | undefined;
+    try {
+      text = readFileSync(path, 'utf8');
+    } catch (error) {
+      // A file that is not there is a new one. A file that cannot be read is never replaced by this
+      // write: it would drop every other entity's policies this run could not see.
+      if (!isAbsent(error)) throw error;
     }
-  } else {
-    existingPolicies[policyName] = entry;
-  }
-  if (Object.keys(existingPolicies).length === 0) {
-    delete existingEntity.policies;
-  } else {
-    existingEntity.policies = existingPolicies;
-  }
-  root[entity] = existingEntity;
+    if (text !== undefined && text.trim()) {
+      const parsed = toValue(parseYaml(text));
+      if (!isMap(parsed)) throw new Error(`${path}: expected a map of entities`);
+      hasWrapper =
+        Object.keys(parsed).length === 1 &&
+        Object.hasOwn(parsed, 'entities') &&
+        isMap(parsed.entities as YamlValue);
+      container = hasWrapper
+        ? { ...(parsed.entities as Record<string, YamlValue>) }
+        : { ...parsed };
+    }
+    const existingEntity = isMap(container[entity]) ? { ...(container[entity] as Record<string, YamlValue>) } : {};
+    const existingPolicies = isMap(existingEntity.policies) ? { ...(existingEntity.policies as Record<string, YamlValue>) } : {};
+    if (entry === null) {
+      delete existingPolicies[policyName];
+      for (const key of Object.keys(existingPolicies)) {
+        if (normalizePolicyName(key) === policyName) delete existingPolicies[key];
+      }
+    } else {
+      existingPolicies[policyName] = entry;
+    }
+    if (Object.keys(existingPolicies).length === 0) {
+      delete existingEntity.policies;
+    } else {
+      existingEntity.policies = existingPolicies;
+    }
+    container[entity] = existingEntity;
 
-  const lines: string[] = [];
-  for (const entityKey of Object.keys(root).sort()) {
-    const entityVal = root[entityKey];
-    if (!isMap(entityVal) || Object.keys(entityVal).length === 0) {
-      lines.push(`${scalarYaml(entityKey)}: {}`);
-      continue;
+    const lines: string[] = [];
+    const entityIndent = hasWrapper ? '  ' : '';
+    const fieldIndent = `${entityIndent}  `;
+    if (hasWrapper) {
+      lines.push('entities:');
     }
-    lines.push(`${scalarYaml(entityKey)}:`);
-    if (Array.isArray(entityVal.roots)) {
-      lines.push('  roots:');
-      for (const r of entityVal.roots) {
-        lines.push(`    - ${typeof r === 'string' ? scalarYaml(r) : emitYamlVal(r)}`);
+    for (const entityKey of Object.keys(container).sort()) {
+      const entityVal = container[entityKey];
+      if (!isMap(entityVal) || Object.keys(entityVal).length === 0) {
+        lines.push(`${entityIndent}${scalarYaml(entityKey)}: {}`);
+        continue;
+      }
+      lines.push(`${entityIndent}${scalarYaml(entityKey)}:`);
+      if (Array.isArray(entityVal.roots)) {
+        lines.push(`${fieldIndent}roots:`);
+        for (const r of entityVal.roots) {
+          lines.push(`${fieldIndent}  - ${typeof r === 'string' ? scalarYaml(r) : emitYamlVal(r)}`);
+        }
+      }
+      if (isMap(entityVal.liveness)) {
+        const pairs = Object.entries(entityVal.liveness).map(([k, v]) => `${scalarYaml(k)}: ${emitYamlVal(v ?? null)}`);
+        if (pairs.length > 0) lines.push(`${fieldIndent}liveness: { ${pairs.join(', ')} }`);
+      }
+      if (isMap(entityVal.policies) && Object.keys(entityVal.policies).length > 0) {
+        lines.push(...emitPoliciesBlock(fieldIndent, entityVal.policies));
+      }
+      for (const [k, v] of Object.entries(entityVal)) {
+        if (k === 'roots' || k === 'liveness' || k === 'policies') continue;
+        lines.push(...emitNestedYaml(fieldIndent, k, v ?? null));
       }
     }
-    if (isMap(entityVal.liveness)) {
-      const pairs = Object.entries(entityVal.liveness).map(([k, v]) => `${scalarYaml(k)}: ${emitYamlVal(v ?? null)}`);
-      if (pairs.length > 0) lines.push(`  liveness: { ${pairs.join(', ')} }`);
-    }
-    if (isMap(entityVal.policies) && Object.keys(entityVal.policies).length > 0) {
-      lines.push(...emitPoliciesBlock('  ', entityVal.policies));
-    }
-    for (const [k, v] of Object.entries(entityVal)) {
-      if (k === 'roots' || k === 'liveness' || k === 'policies') continue;
-      lines.push(`  ${scalarYaml(k)}: ${emitYamlVal(v ?? null)}`);
-    }
-  }
-  mkdirSync(dirname(path), { recursive: true });
-  writeAtomic(path, `${lines.join('\n')}\n`);
+    mkdirSync(dirname(path), { recursive: true });
+    writeAtomic(path, `${lines.join('\n')}\n`);
+  });
 }
 
 function writeProjectPolicyEntry(

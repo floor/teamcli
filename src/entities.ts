@@ -3,7 +3,18 @@
 // nicknames. Read-only, like the rest of the configuration readers: this writes nothing, runs
 // nothing and opens no pane; the `names.unique` word has its own writer in
 // `src/config/entity-edit.ts`.
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import { editedRecordText, getAt, withValue } from './config/team-record.ts';
 import { parseYaml, toValue, type YamlEntry, type YamlNode, type YamlValue } from './yaml.ts';
@@ -14,6 +25,53 @@ import type { StateThresholds } from './settings/inherit.ts';
 /** The owner's entities file: `<home>/.config/team/entities.yaml`, one entry per entity. */
 export function entitiesPath(home: string): string {
   return join(home, '.config', 'team', 'entities.yaml');
+}
+
+/** The lock file serializing every read-modify-write of `<home>/.config/team/entities.yaml`. */
+export function entitiesLockPath(home: string): string {
+  return `${entitiesPath(home)}.lock`;
+}
+
+const LOCK_WAIT_MS = 5000;
+const LOCK_STALE_MS = 15000;
+
+/**
+ * Single lock for `<home>/.config/team/entities.yaml` (`entities.yaml.lock`).
+ * Every read-modify-write of `entities.yaml` (`writeEntityRulesSet`, `runEntityRecordEdit`,
+ * and `writeEntityPolicyEntry`) runs inside `lockedEntities` and re-reads `entities.yaml`
+ * under the lock. Fixed lock order with `projects.yaml`: `entities.yaml.lock` before
+ * `projects.yaml.lock`.
+ */
+export function lockedEntities<T>(home: string, work: () => T): T {
+  const path = entitiesLockPath(home);
+  mkdirSync(dirname(path), { recursive: true });
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      const fd = openSync(path, 'wx');
+      writeSync(fd, `${process.pid}\n`);
+      closeSync(fd);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      try {
+        if (Date.now() - statSync(path).mtimeMs > LOCK_STALE_MS) unlinkSync(path);
+      } catch {
+        // gone already, or taken by another waiter: look again
+      }
+      if (Date.now() > deadline) throw new Error(`${path} is held by another run`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+  try {
+    return work();
+  } finally {
+    try {
+      unlinkSync(path);
+    } catch {
+      // already removed as stale
+    }
+  }
 }
 
 /**
@@ -311,7 +369,8 @@ export function planEntityRulesSet(home: string, entity: string, rules: string[]
 
 /**
  * Write `<entity>.rules` in `<home>/.config/team/entities.yaml` (or return the plan without writing
- * when `opts.dryRun` is true).
+ * when `opts.dryRun` is true). Acquires `entities.yaml.lock` via `lockedEntities` and re-reads
+ * `entities.yaml` under the lock before writing.
  */
 export function writeEntityRulesSet(
   home: string,
@@ -319,18 +378,24 @@ export function writeEntityRulesSet(
   rules: string[],
   opts: { dryRun?: boolean } = {},
 ): RulesEditPlan & { written: boolean } {
-  const plan = planEntityRulesSet(home, entity, rules);
-  if (opts.dryRun || !plan.changed) {
+  if (opts.dryRun) {
+    const plan = planEntityRulesSet(home, entity, rules);
     return { ...plan, written: false };
   }
-  mkdirSync(dirname(plan.path), { recursive: true });
-  let mode = 0o600;
-  try {
-    mode = statSync(plan.path).mode & 0o777;
-  } catch {}
-  const tmp = `${plan.path}.${process.pid}.tmp`;
-  writeFileSync(tmp, plan.after, { mode });
-  renameSync(tmp, plan.path);
-  return { ...plan, written: true };
+  return lockedEntities(home, () => {
+    const plan = planEntityRulesSet(home, entity, rules);
+    if (!plan.changed) {
+      return { ...plan, written: false };
+    }
+    mkdirSync(dirname(plan.path), { recursive: true });
+    let mode = 0o600;
+    try {
+      mode = statSync(plan.path).mode & 0o777;
+    } catch {}
+    const tmp = `${plan.path}.${process.pid}.tmp`;
+    writeFileSync(tmp, plan.after, { mode });
+    renameSync(tmp, plan.path);
+    return { ...plan, written: true };
+  });
 }
 

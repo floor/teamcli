@@ -8,7 +8,11 @@ import {
   rulesFileProblem,
 } from '../src/commands/status.ts';
 import {
+  declaredRoots,
+  entitiesLockPath,
+  entitiesPath,
   entityRules,
+  namesUniqueFor,
   planEntityRulesSet,
   writeEntityRulesSet,
 } from '../src/entities.ts';
@@ -25,9 +29,11 @@ import {
   rulesFileHash,
   writeRulesFile,
 } from '../src/launch/rules-file.ts';
+import { readEntityPolicySource, writePolicySet } from '../src/policy/sources.ts';
 import {
   get as getProject,
   homeProjectIdOf,
+  list as listProjects,
   planProjectRulesSet,
   projectRules,
   projectsFile,
@@ -777,5 +783,192 @@ describe('inherited entity-wide and project-wide rules', () => {
       'Never drop sibling fields.',
     ]);
     expect(readFileSync(path, 'utf8')).toContain('Never drop sibling fields.');
+  });
+
+  test('8. setting project.<DisplayName>.rules and project.<id>.rules write the same record in projects.yaml', async () => {
+    upsertProject(home, 'teamcli', {
+      name: 'TeamCLI',
+      entity: 'acme-corp',
+      lead: null,
+      teams: [],
+      by: 'owner',
+      at: '2026-11-05T00:00:00Z',
+    });
+
+    // Write via CLI using display name `project.TeamCLI.rules`
+    const setByDisplayIo = testIo(teamRoot, { kind: 'owner' });
+    const setByDisplayCode = await runConfig(
+      ['set', 'project.TeamCLI.rules', '["Resolve display name to record id."]'],
+      setByDisplayIo,
+      { home },
+    );
+    expect(setByDisplayCode).toBe(0);
+    expect(listProjects(home)).toHaveLength(1);
+    expect(getProject(home, 'teamcli')?.rules).toEqual(['Resolve display name to record id.']);
+    expect(projectRules(home, 'teamcli')).toEqual(['Resolve display name to record id.']);
+    expect(projectRules(home, 'TeamCLI')).toEqual(['Resolve display name to record id.']);
+
+    // Read back via CLI by display name and by id
+    const getByDisplayIo = testIo(teamRoot, { kind: 'owner' });
+    expect(await runConfig(['get', 'project.TeamCLI.rules'], getByDisplayIo, { home })).toBe(0);
+    expect(getByDisplayIo.out).toContain('Resolve display name to record id.');
+
+    const getByIdIo = testIo(teamRoot, { kind: 'owner' });
+    expect(await runConfig(['get', 'project.teamcli.rules'], getByIdIo, { home })).toBe(0);
+    expect(getByIdIo.out).toContain('Resolve display name to record id.');
+
+    // Now write via CLI using record id `project.teamcli.rules` — updates the exact same record
+    const setByIdIo = testIo(teamRoot, { kind: 'owner' });
+    const setByIdCode = await runConfig(
+      [
+        'set',
+        'project.teamcli.rules',
+        '["Resolve display name to record id.", "One locked writer for project rules."]',
+      ],
+      setByIdIo,
+      { home },
+    );
+    expect(setByIdCode).toBe(0);
+    expect(listProjects(home)).toHaveLength(1);
+    expect(getProject(home, 'teamcli')?.rules).toEqual([
+      'Resolve display name to record id.',
+      'One locked writer for project rules.',
+    ]);
+
+    const getAfterIo = testIo(teamRoot, { kind: 'owner' });
+    expect(await runConfig(['get', 'project.TeamCLI.rules'], getAfterIo, { home })).toBe(0);
+    expect(getAfterIo.out).toContain('One locked writer for project rules.');
+  });
+
+  test('9. two interleaved writers to entities.yaml serialize on entities.yaml.lock and keep both updates', async () => {
+    writeEntitiesYaml(
+      [
+        'entities:',
+        '  acme-corp:',
+        '    name: Acme Corp',
+        '    roots:',
+        '      - /tmp/acme-root',
+        '',
+      ].join('\n'),
+    );
+
+    const path = entitiesPath(home);
+    const lockPath = entitiesLockPath(home);
+    writeFileSync(lockPath, `${process.pid}\n`, { flag: 'wx' });
+
+    const concurrentEntityText = [
+      'entities:',
+      '  acme-corp:',
+      '    name: Acme Corp',
+      '    roots:',
+      '      - /tmp/acme-root',
+      '    names:',
+      '      unique: project',
+      '',
+    ].join('\n');
+
+    const workerScript = `
+      import { writeFileSync, renameSync, unlinkSync } from 'node:fs';
+      setTimeout(() => {
+        const tmp = ${JSON.stringify(`${path}.worker.tmp`)};
+        writeFileSync(tmp, ${JSON.stringify(concurrentEntityText)}, { mode: 0o600 });
+        renameSync(tmp, ${JSON.stringify(path)});
+        unlinkSync(${JSON.stringify(lockPath)});
+        self.postMessage('released');
+      }, 45);
+    `;
+    const blobUrl = URL.createObjectURL(
+      new Blob([workerScript], { type: 'application/javascript' }),
+    );
+    const worker = new globalThis.Worker(blobUrl);
+    const workerDone = new Promise<void>((resolve) => {
+      worker.addEventListener('message', () => resolve());
+    });
+
+    try {
+      const cliIo = testIo(teamRoot, { kind: 'owner' });
+      const code = await runConfig(
+        ['set', 'acme-corp.rules', JSON.stringify([OWNER_NO_BLOCKING_RULE, 'Hold entities.yaml.lock on every write.'])],
+        cliIo,
+        { home },
+      );
+      expect(code).toBe(0);
+      await workerDone;
+    } finally {
+      worker.terminate();
+      URL.revokeObjectURL(blobUrl);
+      try {
+        unlinkSync(lockPath);
+      } catch {}
+    }
+
+    // Both the worker's `names.unique: project` update and the CLI's `rules` update landed:
+    expect(namesUniqueFor(home, 'acme-corp')).toBe('project');
+    expect(declaredRoots(home).get('acme-corp')).toEqual(['/tmp/acme-root']);
+    expect(entityRules(home, 'acme-corp')).toEqual([
+      OWNER_NO_BLOCKING_RULE,
+      'Hold entities.yaml.lock on every write.',
+    ]);
+
+    // Interleaved `writePolicySet` at entity level and `writeEntityRulesSet` also serialize on
+    // `entities.yaml.lock` and keep policies, rules, roots, and names.unique intact:
+    writeFileSync(lockPath, `${process.pid}\n`, { flag: 'wx' });
+    const afterRulesText = readFileSync(path, 'utf8');
+    const workerScript2 = `
+      import { writeFileSync, renameSync, unlinkSync } from 'node:fs';
+      setTimeout(() => {
+        const tmp = ${JSON.stringify(`${path}.worker2.tmp`)};
+        writeFileSync(tmp, ${JSON.stringify(afterRulesText)}, { mode: 0o600 });
+        renameSync(tmp, ${JSON.stringify(path)});
+        unlinkSync(${JSON.stringify(lockPath)});
+        self.postMessage('released');
+      }, 45);
+    `;
+    const blobUrl2 = URL.createObjectURL(
+      new Blob([workerScript2], { type: 'application/javascript' }),
+    );
+    const worker2 = new globalThis.Worker(blobUrl2);
+    const workerDone2 = new Promise<void>((resolve) => {
+      worker2.addEventListener('message', () => resolve());
+    });
+
+    try {
+      const policyPlan = writePolicySet(home, {
+        level: 'entity',
+        target: 'acme-corp',
+        name: 'dev-mode',
+        value: 'off',
+      });
+      expect(policyPlan.ok).toBe(true);
+      await workerDone2;
+    } finally {
+      worker2.terminate();
+      URL.revokeObjectURL(blobUrl2);
+      try {
+        unlinkSync(lockPath);
+      } catch {}
+    }
+
+    // Now write rules via `writeEntityRulesSet` after `writePolicySet` and verify both survive:
+    writeEntityRulesSet(home, 'acme-corp', [
+      OWNER_NO_BLOCKING_RULE,
+      'Hold entities.yaml.lock on every write.',
+      'Entity policy and rules coexist cleanly.',
+    ]);
+
+    expect(entityRules(home, 'acme-corp')).toEqual([
+      OWNER_NO_BLOCKING_RULE,
+      'Hold entities.yaml.lock on every write.',
+      'Entity policy and rules coexist cleanly.',
+    ]);
+    expect(namesUniqueFor(home, 'acme-corp')).toBe('project');
+    expect(declaredRoots(home).get('acme-corp')).toEqual(['/tmp/acme-root']);
+    const policyRead = readEntityPolicySource(home, 'acme-corp');
+    expect(policyRead.ok).toBe(true);
+    if (policyRead.ok) {
+      expect(policyRead.policies).toHaveLength(1);
+      expect(policyRead.policies[0]?.name).toBe('dev-mode');
+      expect(policyRead.policies[0]?.value).toBe('off');
+    }
   });
 });
