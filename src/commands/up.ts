@@ -1140,6 +1140,42 @@ function seatPlan(
         };
       }
       if (drift.kind === 'hold') return { ...planned, stage: 'ready', driftHold: drift.detail };
+      if (
+        verdict === 'same'
+        && recorded.pane
+        && recorded.workspace
+        && recorded.launched
+        && paneEntry !== undefined
+        && callerSeat !== seat.name
+        && endpointRelaunch(seat, recorded, planned.launch)
+      ) {
+        const held = replacedScreenRefusal(seat, recorded.pane, screenOf, paneEntry.status);
+        if (held) {
+          return {
+            ...planned,
+            stage: 'ready',
+            sessionDoubt: held.why,
+            ...(held.working ? { doubtWorking: true } : {}),
+          };
+        }
+        const resumedSession =
+          provenSession ?? (paneEntry.session === undefined && continuitySession !== null ? continuitySession : undefined);
+        const resumeHold = resumedSession === undefined ? undefined : uncarryableResume(planned, resumedSession);
+        if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+        return {
+          ...planned,
+          pane: recorded.pane,
+          workspace: recorded.workspace,
+          repair: {
+            pane: recorded.pane,
+            workspace: recorded.workspace,
+            launched: recorded.launched,
+            cli: seat.cli,
+            ownLine: { ...(provenSession === undefined ? {} : { session: provenSession }), endpoint: true },
+          },
+          ...(resumedSession === undefined ? {} : { resume: resumedSession }),
+        };
+      }
       const listed = named ?? known.find((agent) => agent.pane === recorded.pane);
       return {
         ...planned,

@@ -45,6 +45,9 @@ export type RestoreProofInput = {
   recordedSession: string | undefined;
   /** The recorded pane's screen text, where it could be read. */
   screen: string | null;
+  /** Whether the recorded process itself (`verdict === 'same'`) is also accepted for an in-place
+   *  dead-endpoint relaunch. */
+  allowSame?: boolean;
 };
 
 const NONE_LISTED = 'the terminal host does not list the pane any more; team cannot re-tie it';
@@ -67,7 +70,8 @@ export function restoreProof(input: RestoreProofInput): RestoreProof {
   if (entry.workspace !== '' && entry.workspace !== recorded.workspace) {
     return { kind: 'none', why: `its pane is in workspace ${entry.workspace}; the record puts it in ${recorded.workspace}`, specific: true };
   }
-  if (seatProcessVerdict(recorded.launched, input.process) !== 'replaced') {
+  const verdict = seatProcessVerdict(recorded.launched, input.process);
+  if (verdict !== 'replaced' && !(input.allowSame === true && verdict === 'same')) {
     return { kind: 'none', why: 'its pane holds no process this proof can re-tie to the launch' };
   }
   // 3. No other seat owns the pane. The seat's own name (or none) is the only one re-tied over.

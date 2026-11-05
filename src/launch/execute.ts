@@ -2329,6 +2329,7 @@ export async function executePlan(
           foreground: host.foreground?.(session, op.pane) ?? null,
           recordedSession: op.session,
           screen: host.paneText?.(session, op.pane) ?? null,
+          ...(op.endpoint === true ? { allowSame: true } : {}),
         });
         // A dead-endpoint relaunch (`op.endpoint`) exists to give the seat a fresh managed
         // server, not to carry a conversation: the weak proof — the CLI alone at an idle

@@ -976,6 +976,9 @@ export async function ensureCodexEndpoint(
       // The seat must still be the incarnation this endpoint was started for. A binding that
       // moved while the socket was coming up belongs to a successor launch, never this process.
       if (current === undefined || current.presence_binding !== binding) return false;
+      if (input.pane !== undefined && current.pane === undefined) {
+        current.pane = input.pane;
+      }
       current.codex_endpoint = {
         url: socketPath.url,
         binding,

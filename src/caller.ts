@@ -116,8 +116,14 @@ export function placeCaller(sources: CallerSources, session?: string): Caller {
 
 /** A caller whose nearest Codex ancestor is a seat's own managed app-server is that seat: the
  *  seat's tools run there once its TUI is attached by `--remote`. When a session is asked about,
- *  the endpoint must serve that session and herdr must still list the seat at its recorded pane. */
-function endpointSeat(ancestors: Process[], sources: Pick<CallerSources, 'managedEndpointSeat' | 'agents'>, session?: string): Caller | null {
+ *  the endpoint must serve that session and herdr must still hold its recorded pane (either
+ *  listed for the seat or not yet named during startup/restore, or with a live pane root before
+ *  herdr's agent scan catches up). */
+function endpointSeat(
+  ancestors: Process[],
+  sources: Pick<CallerSources, 'managedEndpointSeat' | 'agents' | 'paneRootPid'>,
+  session?: string,
+): Caller | null {
   if (sources.managedEndpointSeat === undefined) return null;
   const nearest = ancestors.find((process) => processNameMatches(process.name, CLI_PROCESSES));
   if (nearest === undefined || basename(nearest.name) !== 'codex') return null;
@@ -125,8 +131,14 @@ function endpointSeat(ancestors: Process[], sources: Pick<CallerSources, 'manage
   if (served === null || served.pane === undefined) return null;
   if (session !== undefined) {
     if (served.session !== session) return null;
-    const listed = sources.agents()?.find((agent) => agent.pane === served.pane);
-    if (listed?.name !== served.seat) return null;
+    const agents = sources.agents();
+    if (agents === null) return null;
+    const listed = agents.find((agent) => agent.pane === served.pane);
+    if (listed !== undefined) {
+      if (listed.name !== null && listed.name !== served.seat) return null;
+    } else if (sources.paneRootPid(served.pane) === null) {
+      return null;
+    }
     return { kind: 'seat', name: served.seat, pane: served.pane, session };
   }
   return { kind: 'seat', name: served.seat, pane: served.pane };
