@@ -986,7 +986,7 @@ function* prefixDigestAndMarkSteps(
   };
 }
 
-const PREFIX_HASH_CHUNK = 1 << 20;
+const PREFIX_HASH_CHUNK = 64 * 1024;
 
 /** Hashes the byte run a checkpoint's mark covers, reproducing the per-line digest exactly: each
  *  covered line's raw bytes and the newline the digest appends after it. Returns the un-finalized
@@ -1064,7 +1064,10 @@ function* incrementalReadSteps(
       if (seen % READ_EVENTS_SLICE_LINES === 0) yield;
     }
   }
+  let verifiedSeen = 0;
   for (const line of tail) {
+    verifiedSeen += 1;
+    if (verifiedSeen % READ_EVENTS_SLICE_LINES === 0) yield;
     if (line.parsed === null) {
       tailBroken += 1;
       continue;
@@ -1097,7 +1100,10 @@ function* incrementalReadSteps(
   let gap = false;
   let contiguous = true;
   let last: { file: number; end: number } | null = null;
+  let hashedSeen = 0;
   for (const line of tail) {
+    hashedSeen += 1;
+    if (hashedSeen % READ_EVENTS_SLICE_LINES === 0) yield;
     if (line.parsed === null || line.parsed.payload.seq > highest) {
       gap = true;
       continue;
@@ -1212,8 +1218,8 @@ function writeStoredCheckpoint(storeDir: string, fields: CheckpointFields, key: 
 /** The retained lines one slice of a read parses, verifies or hashes before yielding, and the
  *  budget a sliced read may hold the loop before it gives a turn back. A slice stays in the tens
  *  of milliseconds on a retained log at the size cap. */
-const READ_EVENTS_SLICE_LINES = 1_000;
-const READ_EVENTS_SLICE_MS = 8;
+const READ_EVENTS_SLICE_LINES = 64;
+const READ_EVENTS_SLICE_MS = 2;
 
 /** What this process last read from one retained store: the files it read, their stamps, and the
  *  verified result. A read whose files are all unchanged answers from memory. Anything else — a
@@ -1969,6 +1975,7 @@ function* openRecordsSteps(
   }
   const text = readNoFollow(path);
   if (text === null) return null;
+  yield;
   const slice = Math.max(1, Math.floor(sliceLines));
   const records: SignedEventRecord[] = [];
   let checked = 0;
@@ -2052,9 +2059,16 @@ export function* hydrateEventLogSteps(
   if (checked.segments.length === 0 || unsealed > 0) {
     const read = yield* readEventsSteps(project, root, home, { kept });
     if (!read.ok) return read;
+    const entries: EventBrief[] = [];
+    let mapped = 0;
+    for (const event of read.events) {
+      entries.push(briefOfRecord(event));
+      mapped += 1;
+      if (mapped % READ_EVENTS_SLICE_LINES === 0) yield;
+    }
     return {
       ok: true,
-      entries: read.events.map((event) => briefOfRecord(event)),
+      entries,
       checked: read.checked,
       full: read.full,
       path: read.path,
@@ -2074,9 +2088,14 @@ export function* hydrateEventLogSteps(
   } else {
     sealedEntries = [];
     sealedNewestSeq = null;
+    let seenSealed = 0;
     for (const segment of checked.segments) {
       if (segment.state !== 'sealed' || segment.entries === undefined) continue;
-      for (const entry of segment.entries) sealedEntries.push(briefOfEntry(entry));
+      for (const entry of segment.entries) {
+        sealedEntries.push(briefOfEntry(entry));
+        seenSealed += 1;
+        if (seenSealed % READ_EVENTS_SLICE_LINES === 0) yield;
+      }
       sealedNewestSeq = segment.seal?.lastSeq ?? sealedNewestSeq;
       yield;
     }
@@ -2084,7 +2103,13 @@ export function* hydrateEventLogSteps(
 
   const open = yield* openRecordsSteps(path, keyState, READ_EVENTS_SLICE_LINES);
   if (open === null) return { ok: false, reason: 'the event log could not be read' };
-  const entries = [...sealedEntries, ...open.records.map((record) => briefOfRecord(record))];
+  const entries = sealedEntries.slice();
+  let seenOpen = 0;
+  for (const record of open.records) {
+    entries.push(briefOfRecord(record));
+    seenOpen += 1;
+    if (seenOpen % READ_EVENTS_SLICE_LINES === 0) yield;
+  }
 
   const result: Extract<EventIndexReadResult, { ok: true }> = {
     ok: true,

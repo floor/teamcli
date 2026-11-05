@@ -493,6 +493,56 @@ export function readHistory(project: string, root: string, home: string): Histor
   return readStoreHistory(storePath(project, root, home), home);
 }
 
+/**
+ * Sliced form of `readHistory`: yields after reading each history file and every `sliceLines`
+ * lines parsed so a 3x1 MB retained history never holds the event loop during a reconcile pass.
+ */
+export function* readHistorySteps(
+  project: string,
+  root: string,
+  home: string,
+  sliceLines = 64,
+): Generator<void, HistoryRead, void> {
+  const storeDir = storePath(project, root, home);
+  const stateRoot = storesFolder(home);
+  const configDir = dirname(stateRoot);
+  for (const level of [configDir, stateRoot, storeDir]) {
+    const problem = ladderProblem(level);
+    if (problem !== null) return { ok: false, reason: problem };
+  }
+
+  const path = join(storeDir, HISTORY_FILE);
+  const files: string[] = [];
+  for (let n = HISTORY_KEPT - 1; n >= 1; n--) {
+    files.push(`${path}.${String(n)}`);
+  }
+  files.push(path);
+
+  const slice = Math.max(1, Math.floor(sliceLines));
+  const entries: HistoryEntry[] = [];
+  for (const candidate of files) {
+    const problem = fileProblem(candidate);
+    if (problem !== null) return { ok: false, reason: problem };
+    if (heldAt(candidate).kind === 'missing') continue;
+    const text = readNoFollow(candidate);
+    if (text === null) return { ok: false, reason: 'the history log could not be read' };
+    yield;
+    let seen = 0;
+    let position = 0;
+    while (position < text.length) {
+      const newline = text.indexOf('\n', position);
+      const end = newline < 0 ? text.length : newline;
+      const line = text.slice(position, end);
+      position = newline < 0 ? text.length : newline + 1;
+      const entry = parseHistoryLine(line);
+      if (entry !== null) entries.push(entry);
+      seen += 1;
+      if (seen % slice === 0) yield;
+    }
+  }
+  return { ok: true, entries, path };
+}
+
 export type StoreLinesRead =
   | { ok: true; lines: string[] }
   | { ok: false; reason: string };
