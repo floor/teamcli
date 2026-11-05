@@ -15,6 +15,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isSeatId, withLock } from '../state.ts';
+import { currentRunMemo } from '../run-memo.ts';
 import { parseYaml, toValue, type YamlValue } from '../yaml.ts';
 
 export const AGENT_ID_PATTERN = /^agt_[0-9a-f]{12}$/;
@@ -140,12 +141,38 @@ export function isAgentId(value: unknown): value is string {
   return typeof value === 'string' && AGENT_ID_PATTERN.test(value);
 }
 
+function cloneAgent(agent: Agent): Agent {
+  return {
+    ...agent,
+    signing: { ...agent.signing },
+    reach: { ...agent.reach },
+    mcp: [...agent.mcp],
+    skills: [...agent.skills],
+    provenance: {
+      ...agent.provenance,
+      ...(agent.provenance.delegated !== undefined ? { delegated: { ...agent.provenance.delegated } } : {}),
+    },
+    ...(agent.policies !== undefined ? { policies: { ...agent.policies } } : {}),
+    ...(agent.settings !== undefined ? { settings: { ...agent.settings } } : {}),
+  };
+}
+
+function cloneAgents(agents: readonly Agent[]): Agent[] {
+  return agents.map(cloneAgent);
+}
+
 /** Every valid agent record, by id. A file that does not parse or validate is skipped, never fatal. */
 export function readAgents(home: string): Agent[] {
+  const memo = currentRunMemo();
+  if (memo !== null) {
+    const cached = memo.agents.get(home);
+    if (cached !== undefined) return cloneAgents(cached);
+  }
   let names: string[];
   try {
     names = readdirSync(agentsDir(home));
   } catch {
+    memo?.agents.set(home, []);
     return [];
   }
   const agents: Agent[] = [];
@@ -156,11 +183,18 @@ export function readAgents(home: string): Agent[] {
     const agent = readAgentFile(join(agentsDir(home), name), id);
     if (agent) agents.push(agent);
   }
+  memo?.agents.set(home, cloneAgents(agents));
   return agents;
 }
 
 export function getAgent(home: string, id: string): Agent | null {
   if (!isAgentId(id)) return null;
+  const memo = currentRunMemo();
+  const cached = memo?.agents.get(home);
+  if (cached !== undefined) {
+    const found = cached.find((agent) => agent.id === id);
+    return found === undefined ? null : cloneAgent(found);
+  }
   return readAgentFile(agentFile(home, id), id);
 }
 
@@ -344,6 +378,7 @@ function writeAgentFile(path: string, agent: Agent): void {
   try {
     writeFileSync(temporary, emit(agent));
     renameSync(temporary, path);
+    currentRunMemo()?.agents.clear();
   } catch (error) {
     try {
       unlinkSync(temporary);

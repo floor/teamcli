@@ -13,6 +13,7 @@ import { resolveLobby } from '../lobby/gate.ts';
 import * as projects from './projects.ts';
 import { checkIssueTracker, type IssueTracker } from './issue-tracker.ts';
 import { writeAtomic } from '../state.ts';
+import { currentRunMemo } from '../run-memo.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
 
 export type { IssueTracker } from './issue-tracker.ts';
@@ -93,11 +94,37 @@ export function teamsFile(home: string): string {
  *  record with the field absent reads as it always did — a team with no roster lines. */
 export type ReadTeamsOptions = { strictRoster?: boolean };
 
+function cloneTeamRecord(record: TeamRecord): TeamRecord {
+  return {
+    ...record,
+    lobbies: { ...record.lobbies },
+    roster: record.roster.map((entry) => ({ ...entry })),
+    provenance: { ...record.provenance },
+    ...(record.settings !== undefined ? { settings: { ...record.settings } } : {}),
+    ...(record.issueTracker !== undefined ? { issueTracker: { ...record.issueTracker } } : {}),
+  };
+}
+
+function cloneTeams(records: Record<string, TeamRecord>): Record<string, TeamRecord> {
+  const out: Record<string, TeamRecord> = {};
+  for (const [id, record] of Object.entries(records)) {
+    out[id] = cloneTeamRecord(record);
+  }
+  return out;
+}
+
 /** Every registered team, by team ID. A missing file is no teams; a file that cannot be read —
  *  a corrupt one, or one under a folder this user cannot search — throws `TeamsError`, so no
  *  reader takes an unreadable registry as an empty one (the bridge would fall back to the team
  *  file's own declaration) and no writer replaces a file it could not read. */
 export function readTeams(home: string, options: ReadTeamsOptions = {}): Record<string, TeamRecord> {
+  const memo = currentRunMemo();
+  const strict = options.strictRoster === true;
+  if (memo !== null) {
+    const map = strict ? memo.teamsStrict : memo.teamsTolerant;
+    const cached = map.get(home);
+    if (cached !== undefined) return cloneTeams(cached);
+  }
   const path = teamsFile(home);
   let text: string;
   try {
@@ -105,10 +132,22 @@ export function readTeams(home: string, options: ReadTeamsOptions = {}): Record<
   } catch (error) {
     // Absence is ENOENT alone: an existence check would read a folder this user cannot search
     // as "no registry", and callers decide seats on that answer.
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (memo !== null) {
+        memo.teamsTolerant.set(home, {});
+        memo.teamsStrict.set(home, {});
+      }
+      return {};
+    }
     throw new TeamsError(`${path}: ${(error as Error).message}`);
   }
-  if (!text.trim()) return {};
+  if (!text.trim()) {
+    if (memo !== null) {
+      memo.teamsTolerant.set(home, {});
+      memo.teamsStrict.set(home, {});
+    }
+    return {};
+  }
   let value: YamlValue;
   try {
     value = toValue(parseYaml(text));
@@ -116,7 +155,12 @@ export function readTeams(home: string, options: ReadTeamsOptions = {}): Record<
     if (error instanceof YamlError) throw new TeamsError(`${path}: line ${error.line}: ${error.message}`);
     throw error;
   }
-  return teamsOf(value, path, options);
+  const parsed = teamsOf(value, path, options);
+  if (memo !== null) {
+    const map = strict ? memo.teamsStrict : memo.teamsTolerant;
+    map.set(home, cloneTeams(parsed));
+  }
+  return parsed;
 }
 
 export function getTeam(home: string, id: string): TeamRecord | null {
@@ -439,6 +483,11 @@ function write(home: string, teams: Record<string, TeamRecord>): void {
   const path = teamsFile(home);
   mkdirSync(dirname(path), { recursive: true });
   writeAtomic(path, emit(teams));
+  const memo = currentRunMemo();
+  if (memo !== null) {
+    memo.teamsStrict.clear();
+    memo.teamsTolerant.clear();
+  }
 }
 
 // --- reading the file's value into records ---------------------------------------------------

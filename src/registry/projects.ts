@@ -22,6 +22,7 @@ import {
   type SenderNameMode,
 } from '../settings/inherit.ts';
 import { writeAtomic } from '../state.ts';
+import { currentRunMemo } from '../run-memo.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
 
 export type ProjectProvenance = { registered_by: string; registered_at: string; updated_at: string };
@@ -97,11 +98,46 @@ export function projectsFile(home: string): string {
   return join(home, '.config', 'team', 'projects.yaml');
 }
 
+function cloneProjectRecord(record: ProjectRecord): ProjectRecord {
+  return {
+    ...record,
+    teams: [...record.teams],
+    ...(record.deliveryOrder !== undefined ? { deliveryOrder: [...record.deliveryOrder] } : {}),
+    ...(record.liveness !== undefined ? { liveness: { ...record.liveness } } : {}),
+    provenance: { ...record.provenance },
+    ...(record.policies !== undefined ? { policies: { ...record.policies } } : {}),
+    ...(record.settings !== undefined ? { settings: { ...record.settings } } : {}),
+  };
+}
+
+function cloneProjects(records: Record<string, ProjectRecord>): Record<string, ProjectRecord> {
+  const out: Record<string, ProjectRecord> = {};
+  for (const [id, record] of Object.entries(records)) {
+    out[id] = cloneProjectRecord(record);
+  }
+  return out;
+}
+
 /** Every registered project, by project ID. A missing file is no projects; a file that cannot
  *  be read — a corrupt one, or one under a folder this user cannot search — throws
  *  `ProjectsError`, so no reader takes an unreadable registry as an empty one (a team no
  *  project names reads as its own project) and no writer replaces a file it could not read. */
 export function readProjects(home: string): Record<string, ProjectRecord> {
+  const memo = currentRunMemo();
+  if (memo !== null) {
+    const cached = memo.projects.get(home);
+    if (cached !== undefined) return cloneProjects(cached);
+    if (memo.projectsRaw.has(home)) {
+      const raw = memo.projectsRaw.get(home);
+      if (raw === null || raw === undefined) {
+        memo.projects.set(home, {});
+        return {};
+      }
+      const parsed = projectsOf(raw, projectsFile(home));
+      memo.projects.set(home, cloneProjects(parsed));
+      return parsed;
+    }
+  }
   const path = projectsFile(home);
   let text: string;
   try {
@@ -109,10 +145,18 @@ export function readProjects(home: string): Record<string, ProjectRecord> {
   } catch (error) {
     // Absence is ENOENT alone: an existence check would read a folder this user cannot search
     // as "no project registry".
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      memo?.projects.set(home, {});
+      memo?.projectsRaw.set(home, null);
+      return {};
+    }
     throw new ProjectsError(`${path}: ${(error as Error).message}`);
   }
-  if (!text.trim()) return {};
+  if (!text.trim()) {
+    memo?.projects.set(home, {});
+    memo?.projectsRaw.set(home, null);
+    return {};
+  }
   let value: YamlValue;
   try {
     value = toValue(parseYaml(text));
@@ -120,7 +164,10 @@ export function readProjects(home: string): Record<string, ProjectRecord> {
     if (error instanceof YamlError) throw new ProjectsError(`${path}: line ${error.line}: ${error.message}`);
     throw error;
   }
-  return projectsOf(value, path);
+  memo?.projectsRaw.set(home, value);
+  const parsed = projectsOf(value, path);
+  memo?.projects.set(home, cloneProjects(parsed));
+  return parsed;
 }
 
 /** The projects of the registry, ID order, so a view reads the same twice. */
@@ -314,6 +361,11 @@ function write(home: string, projects: Record<string, ProjectRecord>): void {
   const path = projectsFile(home);
   mkdirSync(dirname(path), { recursive: true });
   writeAtomic(path, emit(projects));
+  const memo = currentRunMemo();
+  if (memo !== null) {
+    memo.projects.clear();
+    memo.projectsRaw.clear();
+  }
 }
 
 // --- writing the records as the YAML subset the reader takes ---------------------------------

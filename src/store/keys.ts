@@ -11,6 +11,7 @@ import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sig
 import { linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { currentRunMemo } from '../run-memo.ts';
 
 export const KEY_FORMAT = 1;
 
@@ -369,10 +370,18 @@ function readKeyFile(path: string, label: string): KeyState {
 
 /** The message key as a file, creating nothing. `missing` when `messages.json` is not there yet. */
 export function messageKeyState(home: string = homedir()): KeyState {
-  return readKeyFile(messageKeyPath(home), 'message key');
+  const memo = currentRunMemo();
+  if (memo !== null) {
+    const cached = memo.messageKeys.get(home);
+    if (cached !== undefined) return cached;
+  }
+  const state = readKeyFile(messageKeyPath(home), 'message key');
+  memo?.messageKeys.set(home, state);
+  return state;
 }
 
 function installMessageKey(home: string, stored: StoredKey): 'installed' | 'exists' {
+  currentRunMemo()?.messageKeys.delete(home);
   mkdirSync(keyFolder(home), { recursive: true, mode: 0o700 });
   const path = messageKeyPath(home);
   const temporary = `${path}.${process.pid}.tmp`;
@@ -405,7 +414,11 @@ export function messageKeyOf(home: string): KeyObject {
     algorithm: 'ed25519',
     private: pair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
   };
-  if (installMessageKey(home, stored) === 'installed') return createPrivateKey(stored.private);
+  if (installMessageKey(home, stored) === 'installed') {
+    const key = createPrivateKey(stored.private);
+    currentRunMemo()?.messageKeys.set(home, { kind: 'key', key });
+    return key;
+  }
   const winner = messageKeyState(home);
   if (winner.kind === 'key') return winner.key;
   throw new Error(`${messageKeyPath(home)}: ${winner.kind === 'unreadable' ? winner.why : 'the message key disappeared'} — a new key would orphan every message already signed`);

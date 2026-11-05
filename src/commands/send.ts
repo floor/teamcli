@@ -85,6 +85,7 @@ import { MESSAGE_LINE_MAX, messageSummaryOf, renderMessageDisplay } from '../set
 import { messageDisplayInForce } from '../settings/message-display-policy.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
 import { deliveryTimeoutInForce } from '../policy/delivery.ts';
+import { enterRunMemo, leaveRunMemo } from '../run-memo.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { buildIdentity, type BuildIdentity } from '../version.ts';
 import { modelDiffers, signedSeatModel } from '../status/statusline.ts';
@@ -1223,9 +1224,11 @@ export async function runSend(argv: string[], rawIo: Io, rawHost: SendHost): Pro
   const snapshotId = beginHerdrSnapshot();
   const io = snapshotSendIo(rawIo);
   const host = snapshotSendHost(rawHost);
+  enterRunMemo();
   try {
     return await runSendWithSnapshot(argv, io, host);
   } finally {
+    leaveRunMemo();
     endHerdrSnapshot(snapshotId);
   }
 }
@@ -2031,6 +2034,13 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   // The staged copy is assigned inside `stageOnce`'s closure, so the walk reads it through
   // this call: the declared type, not the narrowing control flow takes at the declaration.
   const stagedRecordOf = (): StagedForWalk | null => stagedWalk;
+  const stagedWrittenOf = (): RecordWritten | null => {
+    const staged = stagedRecordOf();
+    if (staged === null) return null;
+    if (!staged.ok) return staged;
+    if (staged.path === null) return { ok: false, reason: 'the record was not stored' };
+    return staged;
+  };
   // A direct-only send stages its record before its first attempt: no route the watch can take
   // asks anything of the receiver's pane, and the ending the caller reads names that record. An
   // order with no direct route left attempts nothing, so it stages nothing and reports no ending.
@@ -2074,7 +2084,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       // delivered on this leg, so the walk moves on to the next one.
       markLeg('channel', 'attempted');
       await ensureEpisode();
-      const staged = await stageChannelRecord(dir, to.session, to.seat, dropDir, record, from, host, report, to.sentAs, to.project);
+      const staged = await stageChannelRecord(dir, to.session, to.seat, dropDir, record, from, host, report, to.sentAs, to.project, stagedWrittenOf());
       const grace = host.channelGraceMs ?? CHANNEL_PUSH_GRACE_MS;
       const miss = staged ?? (await awaitChannelPush(dropDir, msgId, grace, host) ? null : `no push receipt within ${String(grace)} ms`);
       if (miss !== null) {
@@ -2318,7 +2328,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
         ? { mode: 'parallel' as const, settle: settleStaged }
         : store === 'none'
           ? { mode: 'none' as const }
-          : undefined;
+          : { mode: 'first' as const, staged: stagedRecordOf() };
       const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, identityHeader, human, true, socketStore);
       if (attempt.kind === 'delivered') {
         markLeg('socket', 'attempted');
@@ -2700,7 +2710,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       if (!human && !dry) {
         io.stderr(queuedLine(to.seat, noEventAdapter ? NO_PANE_MESSAGING : NO_EVENT_ADAPTER_TOOK_IT));
       }
-      return deliverDropped(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, human, wait, timeoutS, callerRoot, note);
+      return deliverDropped(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, human, wait, timeoutS, callerRoot, note, stagedWrittenOf());
     }
     // The typed leg. The trigger is built here, so an order that reaches this leg is refused a
     // trigger past the measured line before anything is written. The line is the seat's own
@@ -2821,7 +2831,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
         continue;
       }
       await ensureEpisode();
-      const wake = await deliverTypedWakeSeat(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, trigger, host, report, startedAt, failures, to.sentAs, note);
+      const wake = await deliverTypedWakeSeat(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, trigger, host, report, startedAt, failures, to.sentAs, note, true, stagedWrittenOf());
       if (wake.delivered) {
         markLeg('typed', 'attempted');
         return delivered(io, to.seat, report, 'typed wake', 'typed');
@@ -2838,7 +2848,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       const seatCwd = declared === undefined ? to.dir : resolve(to.root, declared.cwd);
       await ensureEpisode();
       markLeg('typed', 'attempted');
-      return deliverComposeSeat(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, seatCwd, host, report, startedAt, failures, to.sentAs, wait, timeoutS, callerRoot, note);
+      return deliverComposeSeat(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, seatCwd, host, report, startedAt, failures, to.sentAs, wait, timeoutS, callerRoot, note, stagedWrittenOf());
     }
     if (trigger === null) {
       const why = `${to.seat}: the trigger would exceed ${String(MESSAGE_LINE_MAX)} characters; nothing was sent`;
@@ -2850,7 +2860,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
     // trigger whose outcome is ambiguous still leaves the seat a record it can read.
     await ensureEpisode();
     markLeg('typed', 'attempted');
-    return deliverNative(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, trigger, host, report, startedAt, socketNote ?? undefined, failures, to.sentAs, wait, timeoutS, callerRoot, note);
+    return deliverNative(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, trigger, host, report, startedAt, socketNote ?? undefined, failures, to.sentAs, wait, timeoutS, callerRoot, note, stagedWrittenOf());
   }
 
   // No leg took the send: the walk ran out of legs — the signed record is already staged, and
@@ -4162,6 +4172,7 @@ async function storeDropRecord(
   heldReason: string,
   /** The receiving team's project: the store key its record's step events are filed under. */
   project: string,
+  staged?: RecordWritten | null,
 ): Promise<DropStore> {
   const lock = acquireSeatLock(dir, session, seatName);
   if (!('release' in lock)) return { ok: false, busy: lock.held, startedAt: lock.startedAt };
@@ -4173,23 +4184,26 @@ async function storeDropRecord(
       lock.release();
       return { ok: false, reason: 'the record could not be written' };
     }
-    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
+    const written = staged !== undefined
+      ? (staged ?? { ok: false as const, reason: 'the record was not staged' })
+      : await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
     if (!written.ok) {
       note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${written.reason})` }));
       lock.release();
       return { ok: false, reason: `the record could not be written (${written.reason})` };
     }
-    // The drop leg's one route attempt. The durable copy is the route: stored by the write above
-    // and confirmed by `deliver`, which returns `held` — a copy is never a delivery.
-    const attempt = await relayDeliver(
-      { route: 'durable-copy', copy: { dir: dropDir, name: payload.id } },
-      { id: payload.id, record: written.record },
-      { now: host.now },
-    );
-    if (attempt.outcome === 'refused') {
-      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: attempt.reason }));
-      lock.release();
-      return { ok: false, reason: `the record could not be written (${attempt.reason})` };
+    if (staged === undefined) {
+      // The drop leg's one route attempt when the caller did not already stage the durable copy.
+      const attempt = await relayDeliver(
+        { route: 'durable-copy', copy: { dir: dropDir, name: payload.id } },
+        { id: payload.id, record: written.record },
+        { now: host.now },
+      );
+      if (attempt.outcome === 'refused') {
+        note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: attempt.reason }));
+        lock.release();
+        return { ok: false, reason: `the record could not be written (${attempt.reason})` };
+      }
     }
     // A durable copy with no seat woken is the walk's last route's `held`: the episode counts it
     // so the delayed escalation can name a message nothing live ever took.
@@ -4250,11 +4264,12 @@ async function deliverDropped(
   timeoutS = 60,
   extraRoot?: { root: string; session: string },
   note: WalkNote = (_attempt) => { /* no episode */ },
+  staged?: RecordWritten | null,
 ): Promise<number> {
   const failed = failures.length > 0 ? { failed: [...failures] } : {};
   const msgId = payload.id;
   const body = payload.body;
-  const stored = await storeDropRecord(dir, who, session, seatName, dropDir, payload, from, host, report, sentAs, human, startedAt, note, 'the record is stored; no seat was woken', project);
+  const stored = await storeDropRecord(dir, who, session, seatName, dropDir, payload, from, host, report, sentAs, human, startedAt, note, 'the record is stored; no seat was woken', project, staged);
   if (stored.ok) {
     stored.release();
     if (wait) {
@@ -4297,21 +4312,25 @@ async function deliverDropped(
     note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
     return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was sent`, host, report);
   }
-  const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
+  const queuedWrite = staged !== undefined
+    ? (staged ?? { ok: false as const, reason: 'the record was not staged' })
+    : await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
   if (!queuedWrite.ok) {
     setLegState(report, 'drop', 'refused', `the record could not be written (${queuedWrite.reason})`);
     note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${queuedWrite.reason})` }));
     return refuse(io, dir, who, `${seatName}: the record could not be written (${queuedWrite.reason}); nothing was sent`, host, report);
   }
-  const queuedAttempt = await relayDeliver(
-    { route: 'durable-copy', copy: { dir: dropDir, name: msgId } },
-    { id: msgId, record: queuedWrite.record },
-    { now: host.now },
-  );
-  if (queuedAttempt.outcome === 'refused') {
-    setLegState(report, 'drop', 'refused', queuedAttempt.reason);
-    note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: queuedAttempt.reason }));
-    return refuse(io, dir, who, `${seatName}: the record could not be written (${queuedAttempt.reason}); nothing was sent`, host, report);
+  if (staged === undefined) {
+    const queuedAttempt = await relayDeliver(
+      { route: 'durable-copy', copy: { dir: dropDir, name: msgId } },
+      { id: msgId, record: queuedWrite.record },
+      { now: host.now },
+    );
+    if (queuedAttempt.outcome === 'refused') {
+      setLegState(report, 'drop', 'refused', queuedAttempt.reason);
+      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: queuedAttempt.reason }));
+      return refuse(io, dir, who, `${seatName}: the record could not be written (${queuedAttempt.reason}); nothing was sent`, host, report);
+    }
   }
   note(walkAttempt('drop', 'held', false, host.now(), startedAt, { reason: 'the record is stored; no seat was woken' }));
   if (!human) {
@@ -4382,6 +4401,7 @@ async function deliverNative(
   timeoutS = 60,
   extraRoot?: { root: string; session: string },
   walkNote: WalkNote = (_attempt) => { /* no episode */ },
+  staged?: RecordWritten | null,
 ): Promise<number> {
   const failed = failures.length > 0 ? { failed: [...failures] } : {};
   const msgId = payload.id;
@@ -4400,7 +4420,9 @@ async function deliverNative(
       walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was typed`, host, report);
     }
-    const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
+    const queuedWrite = staged !== undefined
+      ? (staged ?? { ok: false as const, reason: 'the record was not staged' })
+      : await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
     if (!queuedWrite.ok) {
       setLegState(report, 'typed', 'refused', `the record could not be written (${queuedWrite.reason})`);
       walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${queuedWrite.reason})` }));
@@ -4430,7 +4452,9 @@ async function deliverNative(
       walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was typed`, host, report);
     }
-    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
+    const written = staged !== undefined
+      ? (staged ?? { ok: false as const, reason: 'the record was not staged' })
+      : await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
     if (!written.ok) {
       walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${written.reason})` }));
       return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was typed`, host, report);
@@ -4567,6 +4591,7 @@ async function deliverTypedWakeSeat(
   /** False for a caller that writes the walk's one history line itself (the reply's own
    *  cascade): this leg then records nothing. A send leaves it true. */
   writeHistory = true,
+  staged?: RecordWritten | null,
 ): Promise<{ delivered: true } | { delivered: false; reason: string }> {
   const lock = acquireSeatLock(dir, session, seatName);
   if (!('release' in lock)) {
@@ -4578,7 +4603,9 @@ async function deliverTypedWakeSeat(
     } catch {
       return { delivered: false, reason: 'the record could not be written; nothing was typed' };
     }
-    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
+    const written = staged !== undefined
+      ? (staged ?? { ok: false as const, reason: 'the record was not staged' })
+      : await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
     if (!written.ok) {
       return { delivered: false, reason: `the record could not be written (${written.reason}); nothing was typed` };
     }
@@ -4634,13 +4661,16 @@ async function stageChannelRecord(
   report: Report,
   sentAs: SentAs | null,
   project: string,
+  staged?: RecordWritten | null,
 ): Promise<string | null> {
   try {
     sealDropTree(dir, session, seatName);
   } catch {
     return 'the record could not be written';
   }
-  const written = await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
+  const written = staged !== undefined
+    ? (staged ?? { ok: false as const, reason: 'the record was not staged' })
+    : await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
   if (!written.ok) return `the record could not be written (${written.reason})`;
   report.sent = payload.id;
   const entry = { ts: host.now().toISOString(), from, to: seatName, ...(sentAs === null ? {} : sentAs), body: payload.body, id: payload.id, thread: payload.thread };
@@ -4691,6 +4721,7 @@ async function deliverComposeSeat(
   timeoutS = 60,
   extraRoot?: { root: string; session: string },
   note: WalkNote = (_attempt) => { /* no episode */ },
+  staged?: RecordWritten | null,
 ): Promise<number> {
   const failed = failures.length > 0 ? { failed: [...failures] } : {};
   const msgId = payload.id;
@@ -4719,7 +4750,9 @@ async function deliverComposeSeat(
       note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was typed`, host, report);
     }
-    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
+    const written = staged !== undefined
+      ? (staged ?? { ok: false as const, reason: 'the record was not staged' })
+      : await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
     if (!written.ok) {
       note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${written.reason})` }));
       return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was typed`, host, report);
@@ -5382,7 +5415,8 @@ export async function walkReplyDelivery(input: {
       // The seat's own inbox server pushes the record into its CLI. The marker beside the record
       // is what the watch reads when no receipt follows; a marker that never appears inside the
       // short grace means nothing was delivered on this leg, so the walk moves on.
-      const staged = await stageChannelRecord(input.dir, input.session, seatName, dropDir, input.payload, from, input.host, report, null, input.project);
+      await ensureStaged();
+      const staged = await stageChannelRecord(input.dir, input.session, seatName, dropDir, input.payload, from, input.host, report, null, input.project, stagedRecordOf());
       const grace = input.host.channelGraceMs ?? CHANNEL_PUSH_GRACE_MS;
       const miss = staged ?? ((await awaitChannelPush(dropDir, msgId, grace, input.host)) ? null : `no push receipt within ${String(grace)} ms`);
       if (miss !== null) {
@@ -5456,7 +5490,7 @@ export async function walkReplyDelivery(input: {
       const identityHeader = frameIdentityHeader(input.payload, input.naming, input.sender.teamId, input.sender.project, input.sender.label);
       const attempt = await deliverSocketFrame(
         input.dir, input.who, from, aim, input.payload, failures, input.host, report, startedAt,
-        false, inbound, identityHeader, false, false,
+        false, inbound, identityHeader, false, false, { mode: 'first', staged: stagedRecordOf() },
       );
       if (attempt.kind === 'delivered') {
         return ended({ via: 'socket', walked: true, unconfirmed: false, summary: `${seatName}: delivered (socket)` });
@@ -5500,7 +5534,7 @@ export async function walkReplyDelivery(input: {
       await ensureStaged();
       const wake = await deliverTypedWakeSeat(
         quiet, input.dir, input.root, input.who, from, input.project, input.session, seatName, cli,
-        found.pane, dropDir, input.payload, trigger, input.host, report, startedAt, failures, null, () => {}, false,
+        found.pane, dropDir, input.payload, trigger, input.host, report, startedAt, failures, null, () => {}, false, stagedRecordOf(),
       );
       if (wake.delivered) {
         return ended({ via: 'typed', walked: true, unconfirmed: false, summary: `${seatName}: delivered (typed wake)` });
@@ -5938,12 +5972,15 @@ async function deliverSocketFrame(
   writeHistory = true,
   /** The store this walk keeps (`messaging.store`). `none`: the frame carries the signed record's
    *  bytes and nothing is written. `parallel`: the walk's own write runs beside this dial, and
-   *  `settle` answers whether it landed before the leg reports delivered. Left out, the leg
-   *  writes its own copy before the dial, as it always has. */
+   *  `settle` answers whether it landed before the leg reports delivered. `first`: the walk
+   *  already staged the record and hands it in here. Left out, the leg writes its own copy before
+   *  the dial, as it always has. */
   store?: {
-    mode: 'parallel' | 'none';
+    mode: 'parallel' | 'none' | 'first';
     /** `parallel` only: joins the walk's staging and answers whether the copy was written. */
     settle?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** `first` only: the record `stageOnce` already wrote. */
+    staged?: StagedForWalk | null;
   },
 ): Promise<SocketAttempt> {
   const msgId = payload.id;
@@ -5974,7 +6011,7 @@ async function deliverSocketFrame(
   // that cannot sign is the leg's own fallback, exactly as a copy that cannot be written is on
   // the `first` path, never an exception out of the walk.
   let carried: string | null = null;
-  if (store !== undefined) {
+  if (store !== undefined && (store.mode === 'parallel' || store.mode === 'none')) {
     try {
       carried = recordTextOf(signRecord(payload, host.home));
     } catch {
@@ -6015,6 +6052,10 @@ async function deliverSocketFrame(
   let recordText: string;
   if (carried !== null) {
     recordText = carried;
+  } else if (store?.mode === 'first' && store.staged !== undefined) {
+    if (store.staged === null) return { kind: 'fallback', reason: 'the record could not be written (the record was not staged)' };
+    if (!store.staged.ok) return { kind: 'fallback', reason: `the record could not be written (${store.staged.reason})` };
+    recordText = store.staged.record;
   } else {
     const written = await writeSendRecord(copy.dir, payload, host.home, host.now, report, to.project);
     if (!written.ok) return { kind: 'fallback', reason: `the record could not be written (${written.reason})` };

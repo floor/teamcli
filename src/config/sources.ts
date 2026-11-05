@@ -31,6 +31,7 @@ import { registerDeclaredSeat } from '../registry/sync.ts';
 import { readStoredTeamConfig } from '../registry/team-config-store.ts';
 import { getTeam, readTeams, teamIdOf, teamsFile, upsertTeam } from '../registry/teams.ts';
 import { bumpGeneration, keyOf, keyState } from '../store/keys.ts';
+import { currentRunMemo } from '../run-memo.ts';
 import { DELIVERY_LEGS, LEGACY_ORDER_WORDS, type DeliveryLeg } from '../settings/inherit.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
 import {
@@ -438,19 +439,33 @@ export function readEntityConfigSource(home: string = homedir(), entity: string 
  */
 export function readProjectConfigSource(home: string = homedir(), projectId: string | null = null): ConfigSourceRead {
   const path = projectsFile(home);
-  if (!existsSync(path)) return { ok: true, level: 'project', target: projectId, settings: [] };
-  let text: string;
-  try {
-    text = readFileSync(path, 'utf8');
-  } catch (error) {
-    return { ok: false, level: 'project', target: projectId, source: path, why: `${path}: ${(error as Error).message}`, settings: [] };
-  }
-  if (!text.trim()) return { ok: true, level: 'project', target: projectId, settings: [] };
+  const memo = currentRunMemo();
   let root: YamlValue;
-  try {
-    root = toValue(parseYaml(text));
-  } catch (error) {
-    return { ok: false, level: 'project', target: projectId, source: path, why: yamlReadProblem(path, error), settings: [] };
+  if (memo !== null && memo.projectsRaw.has(home)) {
+    const cached = memo.projectsRaw.get(home) ?? null;
+    if (cached === null) return { ok: true, level: 'project', target: projectId, settings: [] };
+    root = cached;
+  } else {
+    if (!existsSync(path)) {
+      memo?.projectsRaw.set(home, null);
+      return { ok: true, level: 'project', target: projectId, settings: [] };
+    }
+    let text: string;
+    try {
+      text = readFileSync(path, 'utf8');
+    } catch (error) {
+      return { ok: false, level: 'project', target: projectId, source: path, why: `${path}: ${(error as Error).message}`, settings: [] };
+    }
+    if (!text.trim()) {
+      memo?.projectsRaw.set(home, null);
+      return { ok: true, level: 'project', target: projectId, settings: [] };
+    }
+    try {
+      root = toValue(parseYaml(text));
+    } catch (error) {
+      return { ok: false, level: 'project', target: projectId, source: path, why: yamlReadProblem(path, error), settings: [] };
+    }
+    memo?.projectsRaw.set(home, root);
   }
   if (!isMap(root)) {
     return { ok: false, level: 'project', target: projectId, source: path, why: `${path}: expected a map`, settings: [] };
