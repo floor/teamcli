@@ -655,6 +655,22 @@ test('team remove leaves a human owner pane unswept', async () => {
   expect(said(io)).not.toContain('was closed');
 });
 
+test('an answering Bus with no record keeps its only labelled workspace', async () => {
+  setup('absent');
+  seedWatch();
+  const made = makeWorld({
+    panes: {},
+    busAlive: true,
+    bus: { [BUS_PANE_ONE]: { workspace: BUS_ONE, process: bare(60) } },
+  });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), said(io)).toBe(0);
+  expect(made.trace.closed).toEqual([]);
+  expect(made.trace.created).toEqual([]);
+  expect(made.trace.runs).toEqual([]);
+  expect(said(io)).not.toContain('was closed');
+});
+
 test('an answering Bus keeps the workspace it runs in and closes the one its record left', async () => {
   setup('absent');
   seedWatch();
