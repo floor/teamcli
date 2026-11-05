@@ -1195,7 +1195,7 @@ describe('team add', () => {
     // closed or made for it.
     expect(closes).toEqual([]);
     expect(made.creates).toEqual([]);
-    expect(io.err).toContain('worker: its recorded pane w9:p1 was at its shell; launched in the same pane\n');
+    expect(io.err).toContain(`worker: its recorded pane ${listed.pane} was at its shell; launched in the same pane\n`);
   });
 
   describe('a replaced seat with no stored session is left before any close', () => {

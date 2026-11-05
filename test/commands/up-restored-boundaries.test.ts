@@ -401,7 +401,7 @@ describe('team up, a restored session: boundaries', () => {
     expect(io.out).toContain('deepseek-acme: ready\n');
     // The record keeps its own pane and workspace; the surviving name and session did not save
     // the dead shell, and did not move the seat either.
-    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1', workspace: 'w93' });
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: RECORDED_PANE, workspace: SEATS['deepseek-acme'].workspace });
   });
 
   // Scene 5, under the restored verdict — the stored session matches, and the pane's screen
@@ -873,7 +873,7 @@ describe('team up, a restored session: boundaries', () => {
     // pane: no close is planned for it.
     expect(io.out).toContain('deepseek-acme: restored; left as it is');
     expect(io.out).toContain('deepseek-acme-2: its pane holds a process this record cannot tie to the launch');
-    expect(io.out).toContain('its recorded pane w91:p1 was at its shell; launched in the same pane');
+    expect(io.out).toContain(`its recorded pane ${SEATS['claude-coordinator-acme'].pane} was at its shell; launched in the same pane`);
     expect(io.out).not.toContain('workspace close w91');
     // Nothing was written: the restored seat's pids are still the stored ones, not re-recorded.
     expect(readFileSync(join(root, '.agents/team.state.json'), 'utf8')).toBe(before);
@@ -1037,7 +1037,7 @@ describe('team up, a restored session: boundaries', () => {
     const resumed = made.runs.filter((run) => run.command.includes('--resume kept'));
     expect(resumed).toHaveLength(1);
     expect(resumed[0]?.pane).toBe('w1:p1');
-    expect(io.err).toContain('deepseek-acme: its recorded pane w93:p1 was gone and was replaced; its recorded workspace w93 is closed once the seat is ready, if it still holds only the old pane\n');
+    expect(io.err).toContain(`deepseek-acme: its recorded pane ${RECORDED_PANE} was gone and was replaced; its recorded workspace ${SEATS['deepseek-acme'].workspace} is closed once the seat is ready, if it still holds only the old pane\n`);
     expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w1:p1' });
   });
 
