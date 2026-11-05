@@ -19,13 +19,17 @@ function settledPath(path: string): string {
 }
 
 /**
- * The daemon label derived for `home`. When the realpath of `home` equals the realpath of the
- * account home (`accountHome`), it keeps `DAEMON_LABEL`; for any other home it derives
- * `<DAEMON_LABEL>.<first 16 hex digits of sha256(realpath(home))>`.
+ * The daemon label derived for `home`. When `accountHome` cannot be read (`null` or empty),
+ * returns `null` so callers fail closed instead of deriving a label for the account home.
+ * When the realpath of `home` equals the realpath of `accountHome`, it keeps `DAEMON_LABEL`;
+ * for any other home it derives `<DAEMON_LABEL>.<first 16 hex digits of sha256(realpath(home))>`.
  */
-export function daemonLabel(home: string, accountHome: string | null): string {
+export function daemonLabel(home: string, accountHome: string | null): string | null {
+  if (accountHome === null || accountHome === '' || !accountHome.startsWith('/')) {
+    return null;
+  }
   const realHome = settledPath(home);
-  if (accountHome !== null && accountHome !== '' && realHome === settledPath(accountHome)) {
+  if (realHome === settledPath(accountHome)) {
     return DAEMON_LABEL;
   }
   const digest = createHash('sha256').update(realHome).digest('hex').slice(0, 16);

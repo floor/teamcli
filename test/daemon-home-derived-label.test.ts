@@ -489,4 +489,90 @@ describe('home-derived daemon label and --home install/uninstall', () => {
     expect(uninstallIo.err).toContain('dev mode continues');
     expect(existsSync(expectedUnit)).toBe(false);
   });
+
+  test('when the account home cannot be read, daemonLabel, install, uninstall, and serviceManaged fail closed with or without --home', async () => {
+    const accountHome = makeDir('unreadable-acct-');
+    const scratchHome = makeDir('unreadable-scratch-');
+    const { root, entry } = makeProject(accountHome);
+
+    expect(daemonLabel(accountHome, null)).toBeNull();
+    expect(daemonLabel(scratchHome, null)).toBeNull();
+    expect(daemonLabel(accountHome, '')).toBeNull();
+
+    const machineUnit = join(accountHome, 'Library', 'LaunchAgents', `${DAEMON_LABEL}.plist`);
+    const derivedAccountUnit = join(accountHome, 'Library', 'LaunchAgents', `${expectedDerivedLabel(accountHome)}.plist`);
+    const derivedScratchUnit = join(scratchHome, 'Library', 'LaunchAgents', `${expectedDerivedLabel(scratchHome)}.plist`);
+    mkdirSync(join(accountHome, 'Library', 'LaunchAgents'), { recursive: true });
+    writeFileSync(machineUnit, 'existing machine unit bytes\n', { mode: 0o600 });
+
+    let idWorks = false;
+    const calls: string[] = [];
+    const manager = darwinServiceManager({
+      uid: UID,
+      sleep: () => {},
+      runner: (command, args) => {
+        calls.push([command, ...args].join(' '));
+        if (command === '/usr/bin/id') {
+          return idWorks
+            ? { status: 0, stdout: idPasswdLine(UID, accountHome), stderr: '' }
+            : { status: 1, stdout: '', stderr: 'id: no such user' };
+        }
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+
+    const sources: DaemonCommandSources = {
+      home: accountHome,
+      service: manager,
+      program: { execPath: process.execPath, entry },
+      health: async () => ANSWERING,
+      sleep: async () => {},
+    };
+
+    // 1. Machine install (no --home) refuses before writing a derived unit or touching the existing machine unit.
+    const installPlainIo = testIo(root, { kind: 'owner' });
+    const installPlainCode = await runDaemon(['install', '--root', root, '--json'], installPlainIo, sources);
+    expect(installPlainCode).toBe(1);
+    expect(JSON.parse(installPlainIo.out || installPlainIo.err).error?.message).toContain('the account home could not be read');
+    expect(existsSync(derivedAccountUnit)).toBe(false);
+    expect(readFileSync(machineUnit, 'utf8')).toBe('existing machine unit bytes\n');
+    expect(calls.some((line) => line.startsWith('launchctl'))).toBe(false);
+
+    // 2. Machine uninstall (no --home) refuses before removing any unit or calling launchctl.
+    calls.splice(0);
+    const uninstallPlainIo = testIo(root, { kind: 'owner' });
+    const uninstallPlainCode = await runDaemon(['uninstall', '--json'], uninstallPlainIo, sources);
+    expect(uninstallPlainCode).toBe(1);
+    expect(JSON.parse(uninstallPlainIo.out || uninstallPlainIo.err).error?.message).toContain('the account home could not be read');
+    expect(existsSync(machineUnit)).toBe(true);
+    expect(readFileSync(machineUnit, 'utf8')).toBe('existing machine unit bytes\n');
+    expect(calls.some((line) => line.startsWith('launchctl'))).toBe(false);
+
+    // 3. Install and uninstall with --home also refuse before writing or removing any unit.
+    calls.splice(0);
+    const installFlagIo = testIo(root, { kind: 'owner' });
+    const installFlagCode = await runDaemon(['install', '--home', scratchHome, '--root', root, '--json'], installFlagIo, sources);
+    expect(installFlagCode).not.toBe(0);
+    expect(JSON.parse(installFlagIo.out || installFlagIo.err).error?.message).toContain('the account home could not be read');
+    expect(existsSync(derivedScratchUnit)).toBe(false);
+    expect(calls.some((line) => line.startsWith('launchctl'))).toBe(false);
+
+    calls.splice(0);
+    const uninstallFlagIo = testIo(root, { kind: 'owner' });
+    const uninstallFlagCode = await runDaemon(['uninstall', '--home', scratchHome, '--json'], uninstallFlagIo, sources);
+    expect(uninstallFlagCode).not.toBe(0);
+    expect(JSON.parse(uninstallFlagIo.out || uninstallFlagIo.err).error?.message).toContain('the account home could not be read');
+    expect(calls.some((line) => line.startsWith('launchctl'))).toBe(false);
+
+    // 4. serviceManaged stays refused when the account home cannot be read.
+    const runIo = testIo(root, { kind: 'owner-no-tty' });
+    const runCode = await runDaemon(['run', '--started-by', 'service-manager', '--root', root], runIo, sources);
+    expect(runCode).toBe(1);
+    expect(runIo.err).toContain('the unit file is not this daemon\'s own');
+
+    // 5. Failed reads are not cached as null: once /usr/bin/id succeeds, the manager resolves the account home.
+    idWorks = true;
+    expect(manager.accountHome?.()).toBe(accountHome);
+    expect(manager.unitPath(accountHome)).toBe(machineUnit);
+  });
 });

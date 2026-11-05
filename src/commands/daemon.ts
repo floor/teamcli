@@ -432,8 +432,13 @@ function serviceManaged(io: Io, home: string, sources: DaemonCommandSources, jso
   if (manager === null) {
     return refusal('daemon.service-managed.unit', 'no unit file of this daemon\'s own can be read on this platform');
   }
-  const account = sources.accountHome ?? (manager.accountHome !== undefined ? manager.accountHome() : home);
-  const expectedLabel = account === null ? null : daemonLabel(home, account);
+  const account =
+    sources.accountHome !== undefined
+      ? sources.accountHome
+      : manager.accountHome !== undefined
+        ? manager.accountHome()
+        : home;
+  const expectedLabel = daemonLabel(home, account);
   const unit = manager.unit(home);
   const uid = typeof process.getuid === 'function' ? process.getuid() : null;
   if (
@@ -1156,47 +1161,57 @@ function isAccountHome(targetHome: string, account: string | null): boolean {
   return settledHome(targetHome) === settledHome(account);
 }
 
-function homeProblem(
+function homeTargetProblem(
   raw: string,
   cwd: string,
-  account: string | null,
-  injectedAccount: boolean,
-): string | null {
-  if (raw === '') return '--home takes a folder';
-  if (raw.endsWith('/') || raw.endsWith(sep)) return '--home takes a folder without a trailing slash';
+): { ok: true; target: string; realTarget: string } | { ok: false; why: string } {
+  if (raw === '') return { ok: false, why: '--home takes a folder' };
+  if (raw.endsWith('/') || raw.endsWith(sep)) {
+    return { ok: false, why: '--home takes a folder without a trailing slash' };
+  }
   const target = resolve(cwd, raw);
   let stat: ReturnType<typeof lstatSync>;
   try {
     stat = lstatSync(target);
   } catch {
-    return `--home "${raw}" cannot be resolved`;
+    return { ok: false, why: `--home "${raw}" cannot be resolved` };
   }
   if (stat.isSymbolicLink() || hasUserSymlinkComponent(target)) {
-    return `--home "${raw}" is a symbolic link; name the folder itself`;
+    return { ok: false, why: `--home "${raw}" is a symbolic link; name the folder itself` };
   }
-  if (!stat.isDirectory()) return `--home "${raw}" is not a folder`;
-  let realTarget: string;
+  if (!stat.isDirectory()) return { ok: false, why: `--home "${raw}" is not a folder` };
   try {
-    realTarget = realpathSync(target);
+    return { ok: true, target, realTarget: realpathSync(target) };
   } catch {
-    return `--home "${raw}" cannot be resolved`;
+    return { ok: false, why: `--home "${raw}" cannot be resolved` };
   }
-  if (account === null || account === '') return 'the account home could not be read';
-  let realAccount: string;
+}
+
+function resolveAccount(
+  account: string | null,
+  injectedAccount: boolean,
+): { ok: true; realAccount: string } | { ok: false; why: string } {
+  if (account === null || account === '' || !account.startsWith('/')) {
+    return { ok: false, why: 'the account home could not be read' };
+  }
   try {
-    realAccount = realpathSync(account);
+    return { ok: true, realAccount: realpathSync(account) };
   } catch {
-    if (injectedAccount) realAccount = resolve(account);
-    else return 'the account home could not be resolved';
+    if (injectedAccount) return { ok: true, realAccount: resolve(account) };
+    return { ok: false, why: 'the account home could not be resolved' };
   }
-  if (realTarget === realAccount) return '--home may not name the account home';
-  return null;
 }
 
 function usageRefused(io: Io, parsed: Parsed, message: string): number {
   refuse(io, parsed.json, 'daemon', { id: 'daemon.usage', message, repair: null, usage: USAGE });
   // exit: daemon.usage
   return 2;
+}
+
+function uninstallFailed(io: Io, parsed: Parsed, message: string): number {
+  refuse(io, parsed.json, 'daemon', { id: 'daemon.uninstall-failed', message, repair: null });
+  // exit: daemon.uninstall-failed
+  return 1;
 }
 
 export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonCommandSources = {}): Promise<number> {
@@ -1380,23 +1395,39 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     return await restartInstalled(manager, io, parsed, home, sources);
   }
 
-  const account = sources.accountHome ?? (manager.accountHome !== undefined ? manager.accountHome() : home);
   let targetHome = home;
+  let realTargetHome: string | null = null;
   if (parsed.home !== undefined) {
-    const badHome = homeProblem(parsed.home, io.cwd, account, sources.accountHome !== undefined);
-    if (badHome !== null) {
-      return usageRefused(io, parsed, badHome);
+    const checkedHome = homeTargetProblem(parsed.home, io.cwd);
+    if (!checkedHome.ok) {
+      return usageRefused(io, parsed, checkedHome.why);
     }
-    targetHome = resolve(io.cwd, parsed.home);
+    targetHome = checkedHome.target;
+    realTargetHome = checkedHome.realTarget;
+  }
+
+  const account =
+    sources.accountHome !== undefined
+      ? sources.accountHome
+      : manager.accountHome !== undefined
+        ? manager.accountHome()
+        : home;
+  const checkedAccount = resolveAccount(account, sources.accountHome !== undefined);
+  if (!checkedAccount.ok) {
+    if (parsed.verb === 'uninstall') {
+      return uninstallFailed(io, parsed, checkedAccount.why);
+    }
+    return installFailed(io, parsed, { id: 'daemon.install-failed', message: checkedAccount.why, repair: null });
+  }
+  if (realTargetHome !== null && realTargetHome === checkedAccount.realAccount) {
+    return usageRefused(io, parsed, '--home may not name the account home');
   }
 
   if (parsed.verb === 'uninstall') {
     const removed = manager.uninstall(targetHome);
     if (!removed.ok) {
       appendDaemonLog(targetHome, `uninstall: ${removed.detail ?? removed.why}`, sources.now?.() ?? new Date());
-      refuse(io, parsed.json, 'daemon', { id: 'daemon.uninstall-failed', message: removed.why, repair: null });
-      // exit: daemon.uninstall-failed
-      return 1;
+      return uninstallFailed(io, parsed, removed.why);
     }
     if (parsed.json) {
       writeJson(io, 'team.daemon-install', {
