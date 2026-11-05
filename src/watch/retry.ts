@@ -51,6 +51,7 @@ import type { TypedWakeResult } from '../send/typed-wake.ts';
 import { markTaken } from '../send/taken.ts';
 import { verifiedPayloadOf, wakeTrigger } from '../send/wake.ts';
 import type { Live } from '../status/compare.ts';
+import type { MailPass } from './mail-pass.ts';
 import { readScreen } from './screen.ts';
 
 /** What a retry reads and types through: the watch's own sources, narrowed to the pane calls. */
@@ -92,6 +93,9 @@ export type RetryScene = {
   /** The channel's one redelivery over the socket: a push no receipt confirmed is written as a
    *  frame to the receiving session. Absent, the redelivery goes straight to the typed leg. */
   socketRedeliver?(dropDir: string, drop: PendingDrop): Promise<{ ok: true } | { ok: false; reason: string }>;
+  /** The pass's shared mail reading: the folds' unread and unacked lists, already taken once.
+   *  Absent, this pass takes its own — the same answer, read once more in the pass. */
+  mail?: MailPass;
 };
 
 /** The drop's words, minus the trigger line: one sentence for the watch's log. An inbox send

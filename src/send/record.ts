@@ -861,6 +861,19 @@ export function readRecord(path: string, expectedId?: string): RecordRead {
 
 export type StatusContext = { to: string; root: string; session: string };
 
+/** One record's verified payload by path and id, or null when the file is missing, is not a
+ *  record this version writes, or does not verify with the reading key. A caller that reads the
+ *  same folders more than once in one pass hands its own reader in, so a record is read once. */
+export type RecordReader = (path: string, id: string) => RecordPayload | null;
+
+/** The payload of a record this key signed, from one read: the file checks, the envelope, the
+ *  projection and the signature all happen here, and nothing is returned unless every one holds. */
+export function verifiedRecordAt(path: string, id: string, key: KeyObject): RecordPayload | null {
+  const looked = readRecord(path, id);
+  if (!looked.ok || looked.record === null || !verifyRecord(looked.record, key)) return null;
+  return looked.record.payload;
+}
+
 /** Whether two folder paths name one folder once links are resolved; a path that cannot be
  *  resolved is compared as written. A receipt and the message it belongs to are written by
  *  different commands, so their `root` strings need not be spelled the same way. The same rule
@@ -961,11 +974,13 @@ export function statusOf(dropDir: string, id: string, context: StatusContext, ke
  * Whether a message has been read: a signed `read` or `replied` receipt verifies for it. Statuses
  * move forward only, so a reply counts as the read that came before it. This is the one answer the
  * inbox, `team drops` and the watch give — a file at a receipt's name that the message key did not
- * sign, or one that names another message, seat, checkout or session, proves nothing.
+ * sign, or one that names another message, seat, checkout or session, proves nothing. Only the
+ * two names that answer are looked at: the other receipts cannot make a message read, and a
+ * reader that asks only this question does not stat them.
  */
 export function isRead(dropDir: string, id: string, context: StatusContext, key: KeyObject, brief?: BriefBinding): boolean {
-  const status = statusOf(dropDir, id, context, key, brief);
-  return status === 'read' || status === 'replied';
+  if (receiptHolds(receiptFile(dropDir, id, 'read'), id, 'read', context, key, brief)) return true;
+  return receiptHolds(receiptFile(dropDir, id, 'replied'), id, 'replied', context, key, brief);
 }
 
 /**

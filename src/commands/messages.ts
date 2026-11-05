@@ -61,7 +61,9 @@ import {
   recordFile,
   sealedRecordOf,
   signedRecordOf,
+  verifiedRecordAt,
   type RecordPayload,
+  type RecordReader,
   type SignedRecord,
 } from '../send/record.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
@@ -263,8 +265,9 @@ const WORK_PREFIX = 'work-';
 
 /** The signed records in `<root>/.agents/send-drops/<session>/<seat>/<id>`. A name that is not a
  *  record's id — a pending marker, a taken marker, an inbox receipt, the unread watch's wake or
- *  report marker, a receipt publisher's `.new` temp, a work nudge — is not a candidate. */
-function recordCandidates(root: string, session: string): Candidate[] {
+ *  report marker, a receipt publisher's `.new` temp, a work nudge — is not a candidate. The names
+ *  alone are returned here; whether a regular file at one is JSON is read by each caller. */
+function recordNames(root: string, session: string): Candidate[] {
   const dir = join(root, '.agents', 'send-drops', session);
   if (!isDir(dir)) return [];
   const out: Candidate[] = [];
@@ -276,14 +279,19 @@ function recordCandidates(root: string, session: string): Candidate[] {
       if (!NAME.test(name) || isMarkerName(name) || name.startsWith(WORK_PREFIX)) continue;
       const path = join(seatDir, name);
       if (!isFile(path)) continue;
-      // A body file written before the record spine is plain text. It stays in the folder for
-      // its seat to read, but it names no message: the inbox neither shows nor refuses it. A
-      // JSON file is held to the record's shape.
-      if (readJson(path) === undefined) continue;
       out.push({ store: 'record', seat, id: name, path, session });
     }
   }
   return out;
+}
+
+/** The record candidates `team messages` lists. A body file written before the record spine is
+ *  plain text: it stays in the folder for its seat to read, but it names no message, so the
+ *  inbox neither shows nor refuses it. A JSON file is held to the record's shape. The unacked
+ *  read does not need this look up front: it reads each record once, after the receipt, and a
+ *  file that is not JSON is no more a record there. */
+function recordCandidates(root: string, session: string): Candidate[] {
+  return recordNames(root, session).filter((candidate) => readJson(candidate.path) !== undefined);
 }
 
 function candidates(root: string, session: string): Candidate[] {
@@ -302,13 +310,21 @@ function recordReadHeld(candidate: Candidate, root: string, session: string, key
 /**
  * Records with no verifying read receipt, with the fields a wake line reads. A missing message
  * key yields nothing: a signature cannot be checked, and this read does not create the key. The
- * watch rings from this list.
+ * watch rings from this list. The receipt is checked before the record is read, and the record is
+ * read once: `records` lets a caller scanning several folders in one pass hand in the reader that
+ * keeps that read for the pass.
  */
-export function listUnackedMessages(root: string, session: string, home: string): UnackedMessage[] {
+export function listUnackedMessages(
+  root: string,
+  session: string,
+  home: string,
+  records?: RecordReader,
+): UnackedMessage[] {
   const state = messageKeyState(home);
   if (state.kind !== 'key') return [];
+  const readRecordAt: RecordReader = records ?? ((path, id) => verifiedRecordAt(path, id, state.key));
   const out: UnackedMessage[] = [];
-  for (const candidate of candidates(root, session)) {
+  for (const candidate of [...recordNames(root, session), ...legacyCandidates(root)]) {
     if (candidate.store === 'legacy') {
       if (legacyReceiptMatches(receiptFile(root, candidate.seat, candidate.id), candidate.seat, candidate.id, root, session, state.key)) continue;
       const parsed = readJson(candidate.path);
@@ -322,12 +338,9 @@ export function listUnackedMessages(root: string, session: string, home: string)
       continue;
     }
     if (recordReadHeld(candidate, root, session, state.key)) continue;
-    const sealed = sealedRecordOf(readJson(candidate.path));
-    if (sealed === null) continue;
+    const payload = readRecordAt(candidate.path, candidate.id);
+    if (payload === null) continue;
     // The complete raw payload authenticates before any field this list would report is read.
-    const auth = recordAuthOfSealed(sealed, state.key);
-    if (auth.kind !== 'ok') continue;
-    const payload = auth.value.payload;
     if (payload.id !== candidate.id || payload.to !== candidate.seat) continue;
     if (payload.session !== (candidate.session ?? session) || !samePath(payload.root, root)) continue;
     out.push({

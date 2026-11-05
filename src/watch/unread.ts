@@ -77,9 +77,10 @@ import { pendingDropPath } from '../send/pending.ts';
 import { readRecord, signRecord, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
 import { markTaken } from '../send/taken.ts';
 import { legClassOf, type WalkLeg } from '../send/walk-cascade.ts';
-import { wakeTrigger } from '../send/wake.ts';
+import { wakeTrigger, wakeWordsFor, type WakeWords } from '../send/wake.ts';
 import { DELIVERY_LEGS } from '../settings/inherit.ts';
 import { messageKeyState } from '../store/keys.ts';
+import { MailPass } from './mail-pass.ts';
 import type { RetryScene } from './retry.ts';
 import { readScreen } from './screen.ts';
 
@@ -492,6 +493,14 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
   if (options.noNudge === true) return;
   const key = messageKeyState(home);
   if (key.kind !== 'key') return;
+  // The pass's own mail reading: this reader and the report that follows share the pass's lists,
+  // so each drop folder is scanned once and each record read once. Callers that hold a pass (the
+  // watch) hand it in; a caller that does not gets the same reading, taken here.
+  const mail = scene.mail ?? new MailPass({ dir: scene.dir, root: scene.root, session: scene.session, home });
+  // The words every wake this pass types shares: read on the first message that reaches a wake,
+  // never per message.
+  let words: WakeWords | undefined;
+  const wordsNow = (): WakeWords => (words ??= wakeWordsFor(home, { root: scene.root, session: scene.session, team: scene.team }, scene.now));
   catchUpBlockedSeatEvents(scene, home);
   // The receiving team's `message-display` template is the same for every seat this pass wakes.
   const nowMs = scene.now.getTime();
@@ -516,7 +525,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     const retry = watchRetryOf(seat);
     const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
     const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session };
-    const unread = listUnread(dropDir, context, home);
+    const unread = mail.unread(seat.name);
     if (unread.length === 0) continue;
     // The seat's class is read only for a seat something waits at: the window is the one its
     // delivery class earns, and a seat with nothing unread costs no read.
@@ -606,7 +615,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       // The wake's header names the sender the signed record carries, resolved through this
       // home's registries. A sender that cannot be pinned is not typed nameless: the message
       // stays unread, its reservations are never taken, and the report pass says why.
-      const sender = wakeTrigger(audited.payload, home, { root: scene.root, session: scene.session, team: scene.team }, scene.now);
+      const sender = wakeTrigger(audited.payload, home, { root: scene.root, session: scene.session, team: scene.team }, scene.now, wordsNow());
       if (sender === null) continue;
       // A socket delivery's re-wake names the message the frame carried: answer it or ack it
       // (ADR `zeus-message-path`, D3). Any other message keeps the profile's read sentence.
@@ -1264,6 +1273,9 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void
   if (home === undefined) return;
   const key = messageKeyState(home);
   if (key.kind !== 'key') return;
+  // The pass's own mail reading, as the wake pass takes it: a caller that ran the wake with a
+  // pass hands it in, and each folder is listed once for the whole pass.
+  const mail = scene.mail ?? new MailPass({ dir: scene.dir, root: scene.root, session: scene.session, home });
   const nowMs = scene.now.getTime();
   const at = scene.now.toISOString();
   const leadName = scene.team.orchestrator !== '' ? scene.team.orchestrator : scene.team.operator;
@@ -1290,7 +1302,7 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void
     const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
     const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session };
     // The seat's class is read only for a seat something waits at, as the wake pass reads it.
-    const unread = listUnread(dropDir, context, home);
+    const unread = mail.unread(seat.name);
     if (unread.length === 0) continue;
     // Twice this seat's own window: the wake at N and the report at 2N read one value.
     const threshold = windowForSeat(window, seat) * 1000 * 2;
