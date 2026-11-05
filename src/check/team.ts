@@ -56,10 +56,11 @@ import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, labelPersona, LEAD_NAME, seatNickname, workspaceLabel } from '../file/sections/seats.ts';
 import { inboxRegistration } from '../mcp/register.ts';
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
-import { agentList, foregroundArgv0, PANE_WINDOW, paneProcessesOf, paneProcessInfo, paneRead, reportDisplayAgent, sessionList, sessionRunning, SIDEBAR_TTL_CAP_MS, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { agentList, hasCustomHerdrRun, foregroundArgv0, PANE_WINDOW, paneProcesses, paneProcessesOf, paneProcessInfo, paneRead, reportDisplayAgent, sessionList, sessionRunning, SIDEBAR_TTL_CAP_MS, workspaceList, workspacePanes, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import { sidebarPolicy } from '../settings/sidebar-policy.ts';
 import type { Io } from '../io.ts';
 import { GENERAL_BRIEF_SHA256, briefBindingOf, currentBriefClaim, generalBriefRecord } from '../launch/general-brief.ts';
+import { paneHoldsOnlyShell } from '../launch/identity.ts';
 import { seatDeliveryClass, wakeableWhileIdle } from '../launch/delivery-class.ts';
 import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
@@ -189,6 +190,12 @@ export type CheckSources = {
   codexEndpoint?: CodexEndpointCheckSources;
   /** The sidebar layout, per-session reload, and pane display reads/writes; adapter defaults when absent. */
   sidebar?: CheckSidebarSources;
+  /** The panes in a workspace (`pane list --workspace`). Wired in `realCheckSources`; a scene
+   *  stands in for it. */
+  workspacePanes?: (session: string, workspace: string) => readonly string[] | null;
+  /** A pane's process identity (`pane process-info --pane`). Wired in `realCheckSources`; a scene
+   *  stands in for it. */
+  processes?: (session: string, pane: string) => PaneProcesses | null;
   /** The process readings the orphan scan makes — the table, many working folders at once, and
    *  this run's own ancestry. Absent when no producer is wired: a run then reads no process table,
    *  as a scene that does not stand one in must not touch this machine. */
@@ -295,6 +302,10 @@ export const realCheckSources: CheckSources = {
     isSocket: isSocketFile,
   },
   sidebar: realSidebarCheckSources,
+  workspacePanes: (session, workspace) =>
+    workspacePanes(workspace, session === 'default' ? undefined : session),
+  processes: (session, pane) =>
+    paneProcesses(pane, session === 'default' ? undefined : session),
   // The process adapter's own readings: the table scoped to this user, one bulk folder query, and
   // this run's ancestry so the check never names or closes itself.
   orphans: {
@@ -701,6 +712,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...record.differences,
     ...rulesFileDifferences(standing, team, root, sources.home, rulesOriginOf(current.source)),
     ...staleDifferences(stale),
+    ...unrecordedWorkspaceDifferences(team, state, live, root, sources.home, session, sources),
     // A live agent CLI no pane holds: named with its pid, age and the record it answers to, with
     // the team's own close where a state record or the daemon's start proves it the team's.
     ...(orphans?.differences ?? []),
@@ -980,6 +992,145 @@ function staleDifferences(stale: Stale): Difference[] {
       what: `the state records the session "${name}", and no seat of the team is in it`,
       repair,
       owner: true,
+    });
+  }
+  return out;
+}
+
+function collectSessionRecords(
+  sessionState: SessionState | undefined,
+  workspaces: Set<string>,
+  panes: Set<string>,
+): void {
+  if (sessionState === undefined) return;
+  for (const held of Object.values(sessionState.seats)) {
+    if (typeof held.workspace === 'string' && held.workspace !== '') {
+      workspaces.add(held.workspace);
+    }
+    if (typeof held.pane === 'string' && held.pane !== '') {
+      panes.add(held.pane);
+    }
+  }
+  if (typeof sessionState.watch?.workspace === 'string' && sessionState.watch.workspace !== '') {
+    workspaces.add(sessionState.watch.workspace);
+  }
+  if (typeof sessionState.watch?.pane === 'string' && sessionState.watch.pane !== '') {
+    panes.add(sessionState.watch.pane);
+  }
+  if (typeof sessionState.bus?.workspace === 'string' && sessionState.bus.workspace !== '') {
+    workspaces.add(sessionState.bus.workspace);
+  }
+  if (typeof sessionState.bus?.pane === 'string' && sessionState.bus.pane !== '') {
+    panes.add(sessionState.bus.pane);
+  }
+  if (typeof sessionState.watchdog?.pane === 'string' && sessionState.watchdog.pane !== '') {
+    panes.add(sessionState.watchdog.pane);
+  }
+}
+
+function collectDelegatePanes(
+  delegates: TeamFile['delegates'],
+  session: string,
+  panes: Set<string>,
+): void {
+  for (const delegate of delegates ?? []) {
+    if (typeof delegate.pane !== 'string' || delegate.pane === '') continue;
+    const slash = delegate.pane.indexOf('/');
+    if (slash <= 0 || slash !== delegate.pane.lastIndexOf('/') || slash === delegate.pane.length - 1) continue;
+    if (/\s/.test(delegate.pane)) continue;
+    if (delegate.pane.slice(0, slash) === session) {
+      panes.add(delegate.pane.slice(slash + 1));
+    }
+  }
+}
+
+/**
+ * Workspaces in `session` that no team record names and whose panes are all bare shells, read
+ * fresh through the terminal host role (`pane list --workspace` and `pane process-info --pane`).
+ * Read-only: `team check` never closes an unrecorded workspace, because it may belong to the
+ * owner or another team. A workspace with an unreadable or empty pane list, or any pane whose
+ * process reading is unreadable or lists a foreground process other than its own shell, is left
+ * uncounted.
+ */
+function unrecordedWorkspaceDifferences(
+  team: TeamFile,
+  state: SessionState,
+  live: Live,
+  root: string,
+  home: string | undefined,
+  session: string,
+  sources: CheckSources,
+): Difference[] {
+  if (!live.running || live.workspaces.length === 0) return [];
+  if (
+    sources.workspacePanes === undefined &&
+    sources.processes === undefined &&
+    !hasCustomHerdrRun()
+  ) {
+    return [];
+  }
+
+  const recordedWorkspaces = new Set<string>();
+  const recordedPanes = new Set<string>();
+  collectSessionRecords(state, recordedWorkspaces, recordedPanes);
+  collectDelegatePanes(team.delegates, session, recordedPanes);
+  if (home !== undefined) {
+    try {
+      const teams = readTeams(home);
+      const ownRoot = resolve(root);
+      for (const record of Object.values(teams)) {
+        if (resolve(record.root) === ownRoot) continue;
+        try {
+          const otherState = readState(join(record.root, '.agents'));
+          collectSessionRecords(otherState.sessions[session], recordedWorkspaces, recordedPanes);
+        } catch {
+          // A sibling team whose state cannot be read does not fail this team's check.
+        }
+        try {
+          const otherConfig = readTeamConfig(record.root, { home, checkOnly: true });
+          if (otherConfig.ok) {
+            collectDelegatePanes(otherConfig.team.delegates, session, recordedPanes);
+          }
+        } catch {
+          // A sibling team whose config cannot be read does not fail this team's check.
+        }
+      }
+    } catch {
+      // An unreadable team registry is named once by `registryDifferences`.
+    }
+  }
+  for (const agent of live.agents) {
+    if (recordedPanes.has(agent.pane) && typeof agent.workspace === 'string' && agent.workspace !== '') {
+      recordedWorkspaces.add(agent.workspace);
+    }
+  }
+
+  const readPanes =
+    sources.workspacePanes ??
+    ((s: string, w: string) => workspacePanes(w, s === 'default' ? undefined : s));
+  const readProcesses =
+    sources.processes ??
+    ((s: string, p: string) => paneProcesses(p, s === 'default' ? undefined : s));
+
+  const out: Difference[] = [];
+  for (const workspace of live.workspaces) {
+    if (recordedWorkspaces.has(workspace.id)) continue;
+    recordedWorkspaces.add(workspace.id);
+    const panes = readPanes(session, workspace.id);
+    if (panes === null || panes.length === 0) continue;
+    if (panes.some((pane) => recordedPanes.has(pane))) continue;
+    let allBareShells = true;
+    for (const pane of panes) {
+      const process = readProcesses(session, pane);
+      if (!paneHoldsOnlyShell(process)) {
+        allBareShells = false;
+        break;
+      }
+    }
+    if (!allBareShells) continue;
+    out.push({
+      what: `unrecorded workspace ${workspace.id} (${workspace.label}) holds only shells`,
+      repair: 'look at the workspace; close it if it is yours',
     });
   }
   return out;
