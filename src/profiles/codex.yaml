@@ -309,8 +309,10 @@ screen:
       except: '…|L:|% (?:left|used)$|⚠ \d+ warnings?\s*·\s*f2 to view\s*$'
     # The pane's own row under the status line, and the whole of what may stand there: the
     # captures draw `← for agents · ? for shortcuts` (0.161.0/idle-hint.txt, working.txt), and
-    # the same hint carries the account's warning on it — `? for shortcuts … ⚠ N warning · f2 to
-    # view`, the `⚠ N warning · f2 to view` tail the 0.157.0 captures draw on the status row.
+    # the same hint carries the account's warning right-aligned on the same row — `? for
+    # shortcuts` on the left and `⚠ N warning · f2 to view` on the right, separated by the
+    # pane's column spaces (0.161.0/shortcuts-warning-row.txt) or an ellipsis, the `⚠ N warning ·
+    # f2 to view` tail the 0.157.0 captures draw on the status row.
     # The `← for agents · ` prefix is optional on both forms: it is the plain row's own, and a
     # warning or a width may draw the hint without it, or with it beside the warning. Anything
     # else below a status row is the seat's own text, and the row above it is not the composer's:
@@ -318,7 +320,7 @@ screen:
     # (test/quota.test.ts).
     chrome:
       - '^\s*(?:← for agents · )?\? for shortcuts\s*$'
-      - '^\s*(?:← for agents · )?\? for shortcuts\s*…\s*⚠ \d+ warnings?\s*·\s*f2 to view\s*$'
+      - '^\s*(?:← for agents · )?\? for shortcuts(?:\s*…\s*|\s+)⚠ \d+ warnings?\s*·\s*f2 to view\s*$'
       # With a line in the box the shortcuts row is hidden, and codex draws the account's
       # warning alone on the pane's last row, right-aligned under the status row
       # (0.161.0/warning-row.txt, reported from a live seat with a message line in the box;
