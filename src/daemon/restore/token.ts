@@ -1,22 +1,26 @@
-// The one-use door and token that prove a restore child was started by this machine daemon.
+// The one-use door and token that prove a restore child was started directly by the
+// service-managed machine daemon.
 //
-// Following the Seam B restart-door pattern (`src/seat-health/restart-door.ts`):
+// Following the Seam B restart-door pattern (`src/seat-health/restart-door.ts`) anchored to the
+// service manager's own job record (`src/daemon/service.ts`):
 // 1. The daemon writes `restore.inherit.<nonce>.json` under the machine folder (mode 0600,
 //    created exclusively) carrying the route claims (`version`, `home`, `root`, optional
-//    `teamFile`), a short expiry (`exp`), the daemon's own PID (`daemonPid`), and the SHA-256
-//    hash of a random 256-bit secret (`secretHash`) — never the raw secret itself.
+//    `teamFile`), a short expiry (`exp`), the daemon's own PID (`daemonPid`) as a cross-check,
+//    and the SHA-256 hash of a random 256-bit secret (`secretHash`) — never the raw secret.
 // 2. The daemon passes `{ nonce, secret }` only on inherited file descriptor 3 (a pipe closed
 //    after writing).
-// 3. The restore child (`./entry.ts`) reads descriptor 3, verifies that `daemonPid` is among its
-//    own ancestor processes (`readAncestors`) and that `sha256(secret) === secretHash` before
-//    claiming the token by atomic rename (`claimOneUseToken`), and checks `now < exp`. An
-//    unauthorized caller without the inherited descriptor, with a wrong secret, or without the
-//    daemon PID among its ancestors is refused and spends nothing it should not.
+// 3. The restore child (`./entry.ts`) reads descriptor 3, queries the system's service manager for
+//    the running job under the daemon label of the served `home`, verifies that its direct parent
+//    (`process.ppid`) equals the service manager's recorded daemon PID (`job.pid`) and matches the
+//    token file's `daemonPid` cross-check and `sha256(secret) === secretHash` before claiming the
+//    token by atomic rename (`claimOneUseToken`), and checks `now < exp`. Never trusting a PID
+//    from any file in the machine folder as the anchor ensures that a same-user seat forging its
+//    own token file and descriptor 3 is refused and spends nothing.
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, fstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { readAncestors } from '../../caller.ts';
 import { claimOneUseToken } from '../one-use-token.ts';
 import { machineConfigDir, restoreInheritPath } from '../paths.ts';
+import { systemServiceManager, type ServiceManager } from '../service.ts';
 
 export const RESTORE_DOOR_FD = 3;
 export const RESTORE_DOOR_MS = 2 * 60 * 1000;
@@ -101,11 +105,6 @@ export function writeRestoreDoor(input: RestoreDoorMint): { nonce: string; secre
   return { nonce, secret };
 }
 
-/** Writes the one-use token file and returns its nonce. */
-export function writeRestoreInherit(request: RestoreDoorMint): string {
-  return writeRestoreDoor(request).nonce;
-}
-
 /** The bytes the daemon writes to inherited descriptor 3 and closes so the child reads to EOF. */
 export function restoreDoorText(nonce: string, secret: string): string {
   return `${JSON.stringify({ nonce, secret })}\n`;
@@ -148,16 +147,19 @@ function cleanRequestOf(claims: RestoreChildRequest): RestoreChildRequest {
 }
 
 /**
- * Verifies the inherited descriptor (`{ nonce, secret }`), checks that `daemonPid` is among this
- * process's ancestors and that `sha256(secret)` matches `secretHash` before spending a valid
- * token file, atomically claims the file by rename (`claimOneUseToken`), and checks `now < exp`.
+ * Verifies the inherited descriptor (`{ nonce, secret }`), binds the child's direct parent
+ * (`process.ppid`) to the PID the system's service manager records for the daemon label of the
+ * served `home`, cross-checks `daemonPid` and `sha256(secret) === secretHash` before spending a
+ * valid token file, atomically claims the file by rename (`claimOneUseToken`), and checks
+ * `now < exp`.
  */
 export function acceptRestoreDoor(input: {
   home: string;
   nonce: string;
   text: string | null;
   now?: Date;
-  ancestors?: readonly { pid: number }[] | null;
+  parentPid?: number;
+  service?: Pick<ServiceManager, 'job'> | null;
 }): RestoreInheritRead {
   if (!/^[0-9a-f]{32}$/.test(input.nonce)) {
     return { kind: 'refused', why: 'the token name is not one this daemon writes' };
@@ -186,14 +188,20 @@ export function acceptRestoreDoor(input: {
     return { kind: 'refused', why: 'the restore door descriptor carries no secret' };
   }
 
-  const ancestors = input.ancestors === undefined ? readAncestors() : input.ancestors;
-  if (ancestors === null || ancestors.length === 0) {
-    return { kind: 'refused', why: 'the restore child ancestors could not be read' };
+  // Anchor parent identity to the system's service manager record for the daemon label, never to
+  // any file in the machine folder.
+  const parentPid = input.parentPid ?? process.ppid;
+  const manager = input.service !== undefined ? input.service : systemServiceManager();
+  const job = manager === null ? null : manager.job(input.home);
+  if (job === null || job.pid === null || !Number.isInteger(job.pid) || job.pid <= 1) {
+    return { kind: 'refused', why: "the system's service manager records no running machine daemon" };
+  }
+  if (!Number.isInteger(parentPid) || parentPid <= 1 || parentPid !== job.pid) {
+    return { kind: 'refused', why: 'the restore child was not started directly by the service-managed machine daemon' };
   }
 
-  // Pre-check `secretHash` and `daemonPid` before renaming so an unauthenticated process on the
-  // same UID (without the descriptor secret or without the daemon among its ancestors) cannot
-  // spend the real child's token.
+  // Pre-check `secretHash` and the `daemonPid` cross-check before renaming so a mismatched door or
+  // forged token file never spends a valid token.
   let preText: string;
   try {
     preText = readFileSync(path, 'utf8');
@@ -211,8 +219,8 @@ export function acceptRestoreDoor(input: {
     if (sha256(doorRaw.secret) !== preClaims.secretHash) {
       return { kind: 'refused', why: 'the restore door secret does not match the token' };
     }
-    if (!ancestors.some((proc) => proc.pid === preClaims.daemonPid)) {
-      return { kind: 'refused', why: 'the restore child is not a descendant of the daemon that minted the token' };
+    if (preClaims.daemonPid !== parentPid || preClaims.daemonPid !== job.pid) {
+      return { kind: 'refused', why: 'the restore token daemon pid does not match the service-managed machine daemon' };
     }
   }
 
@@ -230,8 +238,8 @@ export function acceptRestoreDoor(input: {
   if (sha256(doorRaw.secret) !== claims.secretHash) {
     return { kind: 'refused', why: 'the restore door secret does not match the token' };
   }
-  if (!ancestors.some((proc) => proc.pid === claims.daemonPid)) {
-    return { kind: 'refused', why: 'the restore child is not a descendant of the daemon that minted the token' };
+  if (claims.daemonPid !== parentPid || claims.daemonPid !== job.pid) {
+    return { kind: 'refused', why: 'the restore token daemon pid does not match the service-managed machine daemon' };
   }
   const exp = Date.parse(claims.exp);
   const now = input.now ?? new Date();
@@ -239,26 +247,4 @@ export function acceptRestoreDoor(input: {
     return { kind: 'refused', why: 'the restore token has expired' };
   }
   return { kind: 'ok', request: cleanRequestOf(claims) };
-}
-
-/**
- * Reads and consumes the token named on a child's command line (format and atomic rename claim).
- * The restore child entry (`./entry.ts`) uses `acceptRestoreDoor`, which additionally enforces
- * the inherited descriptor secret, expiry, and daemon ancestor check.
- */
-export function readRestoreInherit(home: string, nonce: string): RestoreInheritRead {
-  if (!/^[0-9a-f]{32}$/.test(nonce)) {
-    return { kind: 'refused', why: 'the token name is not one this daemon writes' };
-  }
-  const claimed = claimOneUseToken(restoreInheritPath(home, nonce));
-  if (claimed.kind === 'refused') return claimed;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(claimed.text);
-  } catch {
-    return { kind: 'refused', why: 'the token is not readable JSON' };
-  }
-  const problem = restoreRequestProblem(parsed);
-  if (problem !== null) return { kind: 'refused', why: problem };
-  return { kind: 'ok', request: cleanRequestOf(parsed as RestoreChildRequest) };
 }

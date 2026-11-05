@@ -2,7 +2,7 @@
 // is running in the terminal host with recorded seats, in parent-first then session order,
 // isolating per-team failures and refusing a false all-clear when no session is running.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,12 +11,10 @@ import { approvalOf } from '../src/approve/approval.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { readChildMessage, readHostMessage } from '../src/daemon/chores/protocol.ts';
-import { claimOneUseToken } from '../src/daemon/one-use-token.ts';
 import { daemonLogPath, machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
 import { answerDaemonRequest, parseDaemonRequest } from '../src/daemon/protocol.ts';
-import { runRestoreSweepInChild } from '../src/daemon/restore/spawn.ts';
-import { acceptRestoreDoor, discardRestoreInherit, restoreDoorText, writeRestoreDoor, writeRestoreInherit } from '../src/daemon/restore/token.ts';
+import { acceptRestoreDoor, discardRestoreInherit, restoreDoorText, writeRestoreDoor } from '../src/daemon/restore/token.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { HerdrAgent, SessionState } from '../src/herdr.ts';
 import { acquireRunLock } from '../src/launch/run-lock.ts';
@@ -638,8 +636,12 @@ describe('team up --all single-command multi-team restore', () => {
     const relOf = (full: string): string => full.slice(srcRoot.length + 1).replaceAll('\\', '/');
     const callersOfSweep: string[] = [];
     const callersOfWriteToken: string[] = [];
+    const callersOfAcceptDoor: string[] = [];
+    const callersOfRestoreInheritPath: string[] = [];
+    const callersOfClaimOneUseToken: string[] = [];
     const callersOfSpawnChild: string[] = [];
     const filesWithUpInternal: string[] = [];
+    const filesWithOldRestoreReader: string[] = [];
 
     for (const file of files) {
       const rel = relOf(file);
@@ -650,20 +652,40 @@ describe('team up --all single-command multi-team restore', () => {
       if (text.includes('writeRestoreDoor(') && rel !== 'daemon/restore/token.ts') {
         callersOfWriteToken.push(rel);
       }
+      if (text.includes('acceptRestoreDoor(') && rel !== 'daemon/restore/token.ts') {
+        callersOfAcceptDoor.push(rel);
+      }
+      if (text.includes('restoreInheritPath(') && rel !== 'daemon/paths.ts') {
+        callersOfRestoreInheritPath.push(rel);
+      }
+      if (text.includes('claimOneUseToken(') && rel !== 'daemon/one-use-token.ts') {
+        callersOfClaimOneUseToken.push(rel);
+      }
       if (text.includes('runRestoreSweepInChild(') && rel !== 'daemon/restore/spawn.ts') {
         callersOfSpawnChild.push(rel);
       }
       if (text.includes('UpInternal')) {
         filesWithUpInternal.push(rel);
       }
+      if (text.includes('readRestoreInherit') || text.includes('writeRestoreInherit')) {
+        filesWithOldRestoreReader.push(rel);
+      }
     }
 
     // 1. Single-caller chain: startMachineDaemon (daemon/host.ts) -> runRestoreSweepInChild (daemon/restore/spawn.ts)
-    //    -> writeRestoreDoor + entry.ts (daemon/restore/entry.ts) -> runRestoreSweepForRoute (launch/restore-sweep.ts).
+    //    -> writeRestoreDoor + entry.ts (daemon/restore/entry.ts) -> acceptRestoreDoor -> runRestoreSweepForRoute (launch/restore-sweep.ts).
+    //    No unauthenticated claim path (readRestoreInherit) exists anywhere in src/.
     expect(callersOfSweep).toEqual(['daemon/restore/entry.ts']);
     expect(callersOfWriteToken).toEqual(['daemon/restore/spawn.ts']);
+    expect(callersOfAcceptDoor).toEqual(['daemon/restore/entry.ts']);
+    expect(callersOfRestoreInheritPath).toEqual(['daemon/restore/token.ts']);
+    expect(callersOfClaimOneUseToken.sort()).toEqual(['daemon/chores/token.ts', 'daemon/restore/token.ts']);
     expect(callersOfSpawnChild).toEqual(['daemon/host.ts']);
     expect(filesWithUpInternal).toEqual(['commands/up.ts']);
+    expect(filesWithOldRestoreReader).toEqual([]);
+
+    const tokenText = readFileSync(join(srcRoot, 'daemon/restore/token.ts'), 'utf8');
+    expect((tokenText.match(/claimOneUseToken\(/g) ?? []).length).toBe(1);
 
     const entryText = readFileSync(join(srcRoot, 'daemon/restore/entry.ts'), 'utf8');
     expect(entryText).toContain('acceptRestoreDoor({ home, nonce, text: readRestoreDoor() })');
@@ -696,17 +718,42 @@ describe('team up --all single-command multi-team restore', () => {
     }
   });
 
-  test('restore child entry requires the inherited descriptor, secret hash, expiry, and daemon pid ancestor, spending nothing on unauthorized attempts while the real spawn path runs', async () => {
+  test('restore child door binds parentPid to the service manager job record, refuses forged non-daemon parent tokens without spending, and admits only the service-managed daemon parent', async () => {
     const entry = fileURLToPath(new URL('../src/daemon/restore/entry.ts', import.meta.url));
-    const nonce = writeRestoreInherit({ version: 1, home, root: alphaTeam.root });
-    const tokenPath = restoreInheritPath(home, nonce);
-    expect(existsSync(tokenPath)).toBe(true);
+    const NON_DAEMON_PID = process.ppid;
+    const DAEMON_PID = process.ppid + 10_000;
+    const activeService = {
+      job: (queriedHome: string) => {
+        expect(queriedHome).toBe(home);
+        return { pid: DAEMON_PID, program: process.execPath };
+      },
+    };
+    const emptyService = {
+      job: (queriedHome: string) => {
+        expect(queriedHome).toBe(home);
+        return null;
+      },
+    };
+    const stoppedService = {
+      job: (queriedHome: string) => {
+        expect(queriedHome).toBe(home);
+        return { pid: null, program: process.execPath };
+      },
+    };
 
     // 1. On-disk token holds secretHash, exp, and daemonPid — never a raw secret.
+    const { nonce, secret } = writeRestoreDoor({
+      version: 1,
+      home,
+      root: alphaTeam.root,
+      daemonPid: DAEMON_PID,
+    });
+    const tokenPath = restoreInheritPath(home, nonce);
+    expect(existsSync(tokenPath)).toBe(true);
     const onDisk = JSON.parse(readFileSync(tokenPath, 'utf8')) as Record<string, unknown>;
     expect(typeof onDisk.secretHash).toBe('string');
     expect(typeof onDisk.exp).toBe('string');
-    expect(typeof onDisk.daemonPid).toBe('number');
+    expect(onDisk.daemonPid).toBe(DAEMON_PID);
     expect(onDisk.secret).toBeUndefined();
 
     // 2. Starting the entry without the inherited descriptor is refused and spends nothing.
@@ -720,86 +767,144 @@ describe('team up --all single-command multi-team restore', () => {
     expect(noDoor.stdout).toBe('');
     expect(existsSync(tokenPath)).toBe(true);
 
-    // 3. A seat-like process that rename-claims the file first gets only the hash, not the secret,
-    //    and starting the entry (even after putting the file back and piping a forged secret on fd 3)
-    //    is refused and runs nothing.
-    const claimedBySeat = claimOneUseToken(tokenPath);
-    expect(claimedBySeat.kind).toBe('ok');
-    if (claimedBySeat.kind === 'ok') {
-      writeFileSync(tokenPath, claimedBySeat.text, { mode: 0o600 });
-    }
-    const forgedDoor = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
-      const child = spawn(process.execPath, [entry, '--inherited', nonce], {
-        cwd: alphaTeam.root,
-        env: { ...process.env, HOME: home },
-        stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
-      });
-      let stdout = '';
-      let stderr = '';
-      child.stdout?.setEncoding('utf8');
-      child.stderr?.setEncoding('utf8');
-      child.stdout?.on('data', (chunk: string) => {
-        stdout += chunk;
-      });
-      child.stderr?.on('data', (chunk: string) => {
-        stderr += chunk;
-      });
-      const fd3 = child.stdio[3];
-      if (fd3 && 'end' in fd3) {
-        fd3.on('error', () => {});
-        fd3.end(`${JSON.stringify({ nonce, secret: '0'.repeat(64) })}\n`);
-      }
-      child.on('close', (status) => resolve({ status, stdout, stderr }));
+    // 3. A wrong secret on descriptor 3 is refused and spends nothing, even if parentPid matches the service manager.
+    expect(
+      acceptRestoreDoor({
+        home,
+        nonce,
+        text: restoreDoorText(nonce, '0'.repeat(64)),
+        parentPid: DAEMON_PID,
+        service: activeService,
+      }),
+    ).toEqual({
+      kind: 'refused',
+      why: 'the restore door secret does not match the token',
     });
-    expect(forgedDoor.status).toBe(2);
-    expect(forgedDoor.stdout).toBe('');
     expect(existsSync(tokenPath)).toBe(true);
-    discardRestoreInherit(home, nonce);
 
-    // 4. Even with the real secret on descriptor 3, a process whose ancestors do not include
-    //    daemonPid is refused and spends nothing.
-    const { nonce: nonceNoAnc, secret: secretNoAnc } = writeRestoreDoor({
+    // 4. Forged file naming a non-daemon parent (NON_DAEMON_PID), with a matching secretHash and secret
+    //    and a direct parent matching that forged PID, is refused and spends nothing when the service
+    //    manager reports either the real daemon (DAEMON_PID) or no running job.
+    const forged = writeRestoreDoor({
       version: 1,
       home,
       root: alphaTeam.root,
-      daemonPid: 999_999,
+      daemonPid: NON_DAEMON_PID,
     });
-    const pathNoAnc = restoreInheritPath(home, nonceNoAnc);
-    const noAncRun = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
-      const child = spawn(process.execPath, [entry, '--inherited', nonceNoAnc], {
-        cwd: alphaTeam.root,
-        env: { ...process.env, HOME: home },
-        stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
-      });
-      let stdout = '';
-      let stderr = '';
-      child.stdout?.setEncoding('utf8');
-      child.stderr?.setEncoding('utf8');
-      child.stdout?.on('data', (chunk: string) => {
-        stdout += chunk;
-      });
-      child.stderr?.on('data', (chunk: string) => {
-        stderr += chunk;
-      });
-      const fd3 = child.stdio[3];
-      if (fd3 && 'end' in fd3) {
-        fd3.on('error', () => {});
-        fd3.end(restoreDoorText(nonceNoAnc, secretNoAnc));
-      }
-      child.on('close', (status) => resolve({ status, stdout, stderr }));
+    const forgedPath = restoreInheritPath(home, forged.nonce);
+    expect(
+      acceptRestoreDoor({
+        home,
+        nonce: forged.nonce,
+        text: restoreDoorText(forged.nonce, forged.secret),
+        parentPid: NON_DAEMON_PID,
+        service: activeService,
+      }),
+    ).toEqual({
+      kind: 'refused',
+      why: 'the restore child was not started directly by the service-managed machine daemon',
     });
-    expect(noAncRun.status).toBe(2);
-    expect(noAncRun.stdout).toBe('');
-    expect(noAncRun.stderr).toContain('not a descendant of the daemon');
-    expect(existsSync(pathNoAnc)).toBe(true);
-    discardRestoreInherit(home, nonceNoAnc);
+    expect(existsSync(forgedPath)).toBe(true);
 
-    // 5. An expired token is spent by rename on claim and refused.
+    for (const noJobService of [emptyService, stoppedService, null]) {
+      expect(
+        acceptRestoreDoor({
+          home,
+          nonce: forged.nonce,
+          text: restoreDoorText(forged.nonce, forged.secret),
+          parentPid: NON_DAEMON_PID,
+          service: noJobService,
+        }),
+      ).toEqual({
+        kind: 'refused',
+        why: "the system's service manager records no running machine daemon",
+      });
+      expect(existsSync(forgedPath)).toBe(true);
+    }
+
+    // Even if the direct parent is the real daemon (DAEMON_PID), a forged file whose daemonPid
+    // cross-check names NON_DAEMON_PID is refused and spends nothing.
+    expect(
+      acceptRestoreDoor({
+        home,
+        nonce: forged.nonce,
+        text: restoreDoorText(forged.nonce, forged.secret),
+        parentPid: DAEMON_PID,
+        service: activeService,
+      }),
+    ).toEqual({
+      kind: 'refused',
+      why: 'the restore token daemon pid does not match the service-managed machine daemon',
+    });
+    expect(existsSync(forgedPath)).toBe(true);
+    discardRestoreInherit(home, forged.nonce);
+
+    // 5. A non-daemon direct parent (e.g. a seat or shell grandchild, NON_DAEMON_PID) attempting to
+    //    claim the real daemon's token (even with the real secret) is refused and spends nothing.
+    expect(
+      acceptRestoreDoor({
+        home,
+        nonce,
+        text: restoreDoorText(nonce, secret),
+        parentPid: NON_DAEMON_PID,
+        service: activeService,
+      }),
+    ).toEqual({
+      kind: 'refused',
+      why: 'the restore child was not started directly by the service-managed machine daemon',
+    });
+    expect(existsSync(tokenPath)).toBe(true);
+
+    // 6. If the service manager has no running job for the daemon label, even the real token + secret
+    //    is refused and spends nothing.
+    expect(
+      acceptRestoreDoor({
+        home,
+        nonce,
+        text: restoreDoorText(nonce, secret),
+        parentPid: DAEMON_PID,
+        service: emptyService,
+      }),
+    ).toEqual({
+      kind: 'refused',
+      why: "the system's service manager records no running machine daemon",
+    });
+    expect(existsSync(tokenPath)).toBe(true);
+
+    // 7. The real daemon parent (parentPid === DAEMON_PID), as the service manager reports it,
+    //    is admitted and spends the token; replaying the spent token is refused.
+    expect(
+      acceptRestoreDoor({
+        home,
+        nonce,
+        text: restoreDoorText(nonce, secret),
+        parentPid: DAEMON_PID,
+        service: activeService,
+      }),
+    ).toEqual({
+      kind: 'ok',
+      request: { version: 1, home, root: alphaTeam.root },
+    });
+    expect(existsSync(tokenPath)).toBe(false);
+    expect(
+      acceptRestoreDoor({
+        home,
+        nonce,
+        text: restoreDoorText(nonce, secret),
+        parentPid: DAEMON_PID,
+        service: activeService,
+      }),
+    ).toEqual({
+      kind: 'refused',
+      why: 'no one-use token names this child',
+    });
+
+    // 8. An expired token from the real service-managed daemon parent is spent by rename and refused.
     const { nonce: nonceExp, secret: secretExp } = writeRestoreDoor({
       version: 1,
       home,
       root: alphaTeam.root,
-      daemonPid: process.pid,
+      daemonPid: DAEMON_PID,
       now: new Date(Date.now() - 5 * 60 * 1000),
     });
     const pathExp = restoreInheritPath(home, nonceExp);
@@ -808,18 +913,11 @@ describe('team up --all single-command multi-team restore', () => {
         home,
         nonce: nonceExp,
         text: restoreDoorText(nonceExp, secretExp),
-        ancestors: [{ pid: process.pid }],
+        parentPid: DAEMON_PID,
+        service: activeService,
       }),
     ).toEqual({ kind: 'refused', why: 'the restore token has expired' });
     expect(existsSync(pathExp)).toBe(false);
-
-    // 6. The real spawn path (runRestoreSweepInChild) passes the secret on descriptor 3, proves
-    //    its daemon pid ancestor, spends the token, and runs the sweep.
-    updateState(alphaTeam.dir, (file) => {
-      file.sessions[alphaTeam.session] = emptySession();
-    });
-    const realResult = await runRestoreSweepInChild({ home, root: alphaTeam.root, timeoutMs: 30_000 });
-    expect(realResult).toEqual({ kind: 'no-recorded-session' });
     expect(readdirSync(machineConfigDir(home)).filter((name) => name.startsWith('restore.inherit.'))).toEqual([]);
   });
 });
