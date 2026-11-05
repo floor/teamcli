@@ -25,6 +25,7 @@ import { machineReadingsPath, saveMachineReadings } from '../src/information/mac
 import {
   machineUsage,
   NOT_VERIFIED,
+  projectUsage,
   reportOf,
   reportText,
   tildify,
@@ -34,10 +35,12 @@ import {
   type UsageReport,
 } from '../src/information/usage.ts';
 import { emptySession, updateState } from '../src/state.ts';
+import { sha256, writeStoredTeamConfig } from '../src/registry/team-config-store.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
 import { generationsFolder } from '../src/store/keys.ts';
 import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import { gitEnv, testIo } from './helpers.ts';
-import { intoRegistry, underRegistry } from './helpers/registry-team.ts';
+import { intoRegistry, storedTeam, underRegistry } from './helpers/registry-team.ts';
 import { writeTextSignedApproval } from './helpers/text-signed-approval.ts';
 
 const NOW = new Date('2026-10-04T09:00:00Z');
@@ -1199,8 +1202,9 @@ describe('team usage', () => {
     expect(owner.out).toContain(`note: ${file} line 1: seats is required`);
     expect(owner.out).toContain(`note: ${file} line 1: the file has no seat that leads`);
     // The team the machine still records prints by name: its folder in the store is the record
-    // of which team this is (owner, 2026-10-17), never a path.
-    expect(owner.out).toContain(`note: the team "acme" (${root}): its file could not be read.`);
+    // of which team this is (owner, 2026-10-17), never a path — and the file the read tried, so
+    // the owner knows what to repair (item 10).
+    expect(owner.out).toContain(`note: the team "acme" (${root}): its file could not be read (${file}).`);
     expect(owner.out).not.toContain('anthropic');
 
     // A caller who is not the owner reads one fixed sentence per line instead — this project's
@@ -2516,10 +2520,11 @@ describe('team usage', () => {
     expect(rows).toEqual([]);
   });
 
-  test('a named team whose file cannot be read reads as one sentence in every view: its name and its ~ root', async () => {
-    // The sentence: `the team "team" (~/Code/floor/team): its file could
-    // not be read.` The store's folder is the record of the name; the root prints under the
-    // home it lives in, never as an absolute path. A `~/…` root prints in every view — the
+  test('a named team whose file cannot be read reads as one sentence in every view: its name, its ~ root and the file', async () => {
+    // The sentence: `the team "team" (~/Code/floor/team): its file could not be read
+    // (~/Code/floor/team/.agents/team.yaml).` The store's folder is the record of the name; the
+    // root prints under the home it lives in, never as an absolute path; and the file the read
+    // tried is named, so the owner knows what to repair. A `~/…` root prints in every view — the
     // owner's and the restricted view alike — so a seat sees the same sentence the owner does.
     const otherRoot = join(home, 'Code', 'floor', 'team');
     mkdirSync(join(otherRoot, '.agents'), { recursive: true });
@@ -2529,11 +2534,60 @@ describe('team usage', () => {
     writeFileSync(join(otherRoot, '.agents', 'team.yaml'), 'format: 1\nproject: team\ntrust: [\n');
     const out = await usageAt(root, OWNER);
     expect(out.code).toBe(0);
-    expect(out.out).toContain('note: the team "team" (~/Code/floor/team): its file could not be read.\n');
+    expect(out.out).toContain('note: the team "team" (~/Code/floor/team): its file could not be read (~/Code/floor/team/.agents/team.yaml).\n');
     // The restricted view reads the same sentence, root and all — the store's own folder is the
     // record the note is built from, and the team is named by the file that cannot be read.
     const seat = await usageAt(root, SEAT);
-    expect(seat.out).toContain('note: the team "team" (~/Code/floor/team): its file could not be read.\n');
+    expect(seat.out).toContain('note: the team "team" (~/Code/floor/team): its file could not be read (~/Code/floor/team/.agents/team.yaml).\n');
+  });
+
+  test('a definition that lives in the registry names the record, not the team file that is not there', async () => {
+    // Item 10: a registry-backed team's definition is the record under the home; the file the
+    // read used to try is gone (`team migrate` moved it). A record whose stored text no longer
+    // loads must name the record — naming `.agents/team.yaml` would point the owner at a file
+    // that is not the problem, and often is not there at all.
+    const otherRoot = join(home, 'Code', 'floor', 'team');
+    mkdirSync(join(otherRoot, '.agents'), { recursive: true });
+    const other = teamText().replace('project: acme', 'project: team').replace('session: acme-web', 'session: team-web').replace(root, otherRoot);
+    writeFileSync(join(otherRoot, '.agents', 'team.yaml'), other);
+    approve(other, { root: otherRoot });
+    intoRegistry(otherRoot, home);
+    const record = storedTeam(otherRoot, home);
+    if (record === null) throw new Error('the registry scene holds no record');
+    const broken = 'format: 1\nproject: team\n';
+    writeStoredTeamConfig(home, { ...record, text: broken, text_sha256: sha256(broken) });
+    const out = await underRegistry(() => usageAt(root, OWNER));
+    expect(out.code).toBe(0);
+    expect(out.out).toContain(`note: the team "team" (~/Code/floor/team): its file could not be read (~/.config/team/team-config/${teamIdOf(otherRoot)}.json).\n`);
+    // The team file is not there, so it is never what the sentence names.
+    expect(out.out).not.toContain('~/Code/floor/team/.agents/team.yaml)');
+  });
+
+  test('the block’s own no-figures line names the file it could not read', () => {
+    // The `no figures (the file could not be read)` line was the owner's example of a vague
+    // note: the reader of the block could not tell which file to repair. The block's own text
+    // now carries the file, from the read's own source: the registry record when the definition
+    // lives there.
+    const otherRoot = join(home, 'Code', 'floor', 'team');
+    mkdirSync(join(otherRoot, '.agents'), { recursive: true });
+    const other = teamText().replace('project: acme', 'project: team').replace('session: acme-web', 'session: team-web').replace(root, otherRoot);
+    writeFileSync(join(otherRoot, '.agents', 'team.yaml'), other);
+    approve(other, { root: otherRoot });
+    intoRegistry(otherRoot, home);
+    const record = storedTeam(otherRoot, home);
+    if (record === null) throw new Error('the registry scene holds no record');
+    const broken = 'format: 1\nproject: team\n';
+    writeStoredTeamConfig(home, { ...record, text: broken, text_sha256: sha256(broken) });
+    const read = process.env.TEAM_CONFIG_SOURCE;
+    process.env.TEAM_CONFIG_SOURCE = 'registry';
+    try {
+      const block = projectUsage(otherRoot, { home, now: NOW.getTime(), restricted: false });
+      expect(block.unreadableFile).toBe(join(home, '.config', 'team', 'team-config', `${teamIdOf(otherRoot)}.json`));
+      expect(block.problems[0]).toEqual({ kind: 'unreadable-file', text: `no figures (the file ~/.config/team/team-config/${teamIdOf(otherRoot)}.json could not be read)` });
+    } finally {
+      if (read === undefined) delete process.env.TEAM_CONFIG_SOURCE;
+      else process.env.TEAM_CONFIG_SOURCE = read;
+    }
   });
 
   test('a registry-backed team is read from the registry, not reported as a missing file', async () => {

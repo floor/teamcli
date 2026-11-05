@@ -18,8 +18,9 @@ export type QuotaLive = {
   /** The spend a seat's own screen printed this run, one observation per pane that printed one;
    *  a seat whose screen printed no money figure has no entry here, never a zero. */
   costs: CostObservation[];
-  /** Collapsed problems, one entry per distinct why with its count. */
-  notes: Array<{ why: string; count: number }>;
+  /** Collapsed problems, one entry per distinct why with its count. A pane note also names the
+   *  seats whose panes could not be read, sorted and distinct, so the line says which panes. */
+  notes: Array<{ why: string; count: number; seats?: string[] }>;
 };
 
 export type QuotaObserverSources = {
@@ -37,8 +38,11 @@ export type QuotaObserverSources = {
 /** The seat-shaped input a read needs: the seat's name, paying account and pool. */
 type SeatTarget = { seat: string; account: string; pool?: 'gemini' | 'claude-gpt'; cli: string };
 
-function addNote(notes: Map<string, number>, why: string): void {
-  notes.set(why, (notes.get(why) ?? 0) + 1);
+function addNote(notes: Map<string, { count: number; seats: Set<string> }>, why: string, seat?: string): void {
+  const entry = notes.get(why) ?? { count: 0, seats: new Set<string>() };
+  entry.count += 1;
+  if (seat !== undefined) entry.seats.add(seat);
+  notes.set(why, entry);
 }
 
 /**
@@ -56,7 +60,7 @@ export function observeQuota(machine: MachineUsage, view: UsageView, sources: Qu
   const teams = machine.teams.filter((team) => view.full || (mineKey !== null && realKey(team.root) === mineKey));
   const observations: QuotaObservation[] = [];
   const costs: CostObservation[] = [];
-  const notes = new Map<string, number>();
+  const notes = new Map<string, { count: number; seats: Set<string> }>();
   const screens = new Map<string, string | null>();
   let wantsUsage = false;
   for (const team of teams) {
@@ -73,7 +77,12 @@ export function observeQuota(machine: MachineUsage, view: UsageView, sources: Qu
       if (screen === undefined) {
         screen = pane(seat.pane, PANE_WINDOW, session);
         screens.set(key, screen);
-        if (screen === null) addNote(notes, PANE_UNREAD);
+      }
+      // Every seat whose pane did not read is named on the pane note: two seats sharing a pane
+      // are two seat panes the report could not read.
+      if (screen === null) {
+        addNote(notes, PANE_UNREAD, seat.seat);
+        continue;
       }
       const target: SeatTarget = { seat: seat.seat, account: seat.account, ...(seat.pool ? { pool: seat.pool } : {}), cli: seat.cli };
       // Stamped with the session the pane was read in: a report that attributes a figure back
@@ -88,7 +97,11 @@ export function observeQuota(machine: MachineUsage, view: UsageView, sources: Qu
     if (text === null) addNote(notes, USAGE_UNANSWERED);
     else observations.push(...parseUsageOutput(text, now));
   }
-  return { observations: ageByReset(observations, now), costs, notes: [...notes.entries()].map(([why, count]) => ({ why, count })) };
+  return {
+    observations: ageByReset(observations, now),
+    costs,
+    notes: [...notes.entries()].map(([why, entry]) => ({ why, count: entry.count, ...(entry.seats.size === 0 ? {} : { seats: [...entry.seats].sort() }) })),
+  };
 }
 
 /**

@@ -18,6 +18,8 @@ import type { BudgetAccount, Seat, TeamFile } from '../file/types.ts';
 import { defaultBudgets } from '../file/validate.ts';
 import type { Io } from '../io.ts';
 import { collapseNotes, renderTable } from '../output/index.ts';
+import { teamConfigRecordPath } from '../registry/team-config-store.ts';
+import { teamIdOf } from '../registry/teams.ts';
 import { labOfSeat, machineAccountsByEntityOf, machineAccountsOf, machineCreditsOf, machinePlansOf, ownerEntityOf, payingAccountOf, payingPoolOf, type MachineCredit } from './machine-accounts.ts';
 import { readMachineReadings, type MachineReading } from './machine-readings.ts';
 import { overridesInForceOf, quotaWith, type ProfileOverride } from '../profiles/overrides.ts';
@@ -178,6 +180,11 @@ export type ProjectUsage = {
    *  first, then the state): the filter turns them into the restricted words and the reader who
    *  stands here reads `text`. */
   problems: TeamProblem[];
+  /** The file the read tried when the live file cannot be read — the registry's record when the
+   *  definition lives there, the team file otherwise — so a note about it names what to repair.
+   *  Null when the read named none (a read that threw before a file was chosen) and when the
+   *  file was read. */
+  unreadableFile: string | null;
   /** What the block prints as its `note:` lines: for a caller who is not the owner, the fixed
    *  lines for stored readings the file does not bind (`UNBOUND_ACCOUNT`, `UNBOUND_SHAPE`). The
    *  state's own reason is a `problems` entry now, structured, so no raw message is left here. */
@@ -223,7 +230,8 @@ export type ProjectUsageOptions = {
 export function projectUsage(root: string, options: ProjectUsageOptions): ProjectUsage {
   const { home, now, restricted } = options;
   const standing = approvalStanding(root, home);
-  const team = teamOf(root, home);
+  const read = teamOf(root, home);
+  const team = read.team;
   // The machine's own accounts, read once for this block: every team draws on them, so they
   // count for this one whatever its own file declares.
   const machine = machineAccountsOf(home);
@@ -245,11 +253,11 @@ export function projectUsage(root: string, options: ProjectUsageOptions): Projec
     stateProblem = { kind: 'state', tail: stateTailOf(message), text: shownNote(message, root, restricted, home) };
   }
   if (team === null) {
-    // The live file cannot be read: no figures at all (`NO_FIGURES`),
-    // plus the state's own problem when there is one.
-    const problems: TeamProblem[] = [{ kind: 'unreadable-file', text: NO_FIGURES }];
+    // The live file cannot be read: no figures at all (`NO_FIGURES`, naming the file when the
+    // read named one), plus the state's own problem when there is one.
+    const problems: TeamProblem[] = [{ kind: 'unreadable-file', text: unreadableText(read.file, root, restricted, home) }];
     if (stateProblem !== null) problems.push(stateProblem);
-    return { project: null, rows: [], whyNotCounted: null, spend: [], watch: 'not-known', staleAfter: defaultBudgets().staleAfter, accounts: [], seatAccounts: [], session: null, borrows: [], quotaAccounts: [], vendors: [], whys: [], problems, notes };
+    return { project: null, rows: [], whyNotCounted: null, spend: [], watch: 'not-known', staleAfter: defaultBudgets().staleAfter, accounts: [], seatAccounts: [], session: null, borrows: [], quotaAccounts: [], vendors: [], whys: [], problems, unreadableFile: read.file, notes };
   }
   // The live file is the record for every caller: the budgets in force, the project name and
   // the seats all read from it, the owner and a caller who is not the owner alike. Before any
@@ -307,6 +315,7 @@ export function projectUsage(root: string, options: ProjectUsageOptions): Projec
       return why === null ? [] : [{ account, why }];
     }),
     problems,
+    unreadableFile: null,
     notes,
   };
 }
@@ -474,15 +483,21 @@ function whyNotCountedOf(standing: Standing, team: TeamFile, budgets: TeamFile['
 
 /** The team's definition, read through the one seam: a definition the registry holds reads the
  *  same as one still in its file, and a store root that is not a repository falls through to the
- *  file exactly as before. An unreadable or invalid definition has no fallback. */
-function teamOf(root: string, home: string): TeamFile | null {
+ *  file exactly as before. An unreadable or invalid definition has no fallback, and the result
+ *  names the file that read was about: the registry's record when the record was the definition,
+ *  the team file when the file was. */
+function teamOf(root: string, home: string): { team: TeamFile | null; file: string | null } {
   try {
     const loaded = readTeamConfig(root, { home });
-    return loaded.ok ? loaded.team : null;
+    if (loaded.ok) return { team: loaded.team, file: null };
+    const file = loaded.source === 'registry'
+      ? teamConfigRecordPath(home, teamIdOf(root))
+      : loaded.path ?? null;
+    return { team: null, file };
   } catch {
     // A record this reader cannot open is this team's unreadable definition, not the machine
     // report's failure: the other teams' blocks still print.
-    return null;
+    return { team: null, file: null };
   }
 }
 
@@ -494,6 +509,25 @@ function teamOf(root: string, home: string): TeamFile | null {
  *  the state's, quoted as it stands, for both callers. */
 function shownNote(message: string, root: string, restricted: boolean, home: string): string {
   return restricted ? message.replaceAll(join(root, '.agents'), '.agents') : tildify(message, home);
+}
+
+/** The line a block prints when its live file cannot be read, naming the file when the read
+ *  names one: the owner asked a vague `could not be read` note to say what to repair. A caller
+ *  who is not the owner reads the project's own file relative to its root (`.agents/team.yaml`),
+ *  a file under the home as `~/…`, and never a location this machine derived. With no printable
+ *  file the line is the plain `NO_FIGURES`. */
+function unreadableText(file: string | null, root: string, restricted: boolean, home: string): string {
+  if (file === null) return NO_FIGURES;
+  const shown = restricted ? restrictedFile(file, root, home) : tildify(file, home);
+  return shown === null ? NO_FIGURES : `no figures (the file ${shown} could not be read)`;
+}
+
+/** A file as a caller who is not the owner may read it named: this project's own file relative to
+ *  its root, or a `~/…` path. Anything else stays unnamed. */
+function restrictedFile(file: string, root: string, home: string): string | null {
+  if (file === join(root, TEAM_FILE)) return TEAM_FILE;
+  const shown = tildify(file, home);
+  return shown.startsWith('~/') ? shown : null;
 }
 
 /** The home folder in a message as `~/…`: the owner's rule that a report names no absolute path.
@@ -1048,7 +1082,14 @@ export type ReportLab = {
 };
 
 export type ReportWhy = { scope: string; account: string; why: string };
-export type ReportNote = { scope: string; why: string; count?: number };
+export type ReportNote = {
+  scope: string;
+  why: string;
+  count?: number;
+  /** The seats a live note is about, sorted and distinct — whose panes could not be read. Absent
+   *  for a note that is not about named seats. */
+  seats?: string[];
+};
 
 /** One quota figure a seat's own screen (or the watch's record of it) gave: the window, its two
  *  percentages, the reset and margin the report already reads, and whether this run measured the
@@ -1130,7 +1171,8 @@ export type QuotaFacts = {
   observations: QuotaObservation[];
   /** The money figures the same live read produced; absent from a caller with no cost source. */
   costs?: readonly CostObservation[];
-  notes: Array<{ why: string; count: number }>;
+  /** One entry per distinct why with its count; a pane note also names the seats it is about. */
+  notes: Array<{ why: string; count: number; seats?: string[] }>;
 };
 
 /** The one report both renderers print (design § 2.3, restricted shape). */
@@ -1721,8 +1763,8 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
   const notes: ReportNote[] = [];
   // The live source's own problems, already collapsed to one entry per distinct why: a pane that
   // would not read and a CLI usage command that did not answer each print one counted note, never
-  // one per seat.
-  if (live !== null) for (const note of live.notes) notes.push({ scope: 'usage', why: note.why, ...(note.count > 1 ? { count: note.count } : {}) });
+  // one per seat. A pane note carries the seats it is about, so the line says which panes.
+  if (live !== null) for (const note of live.notes) notes.push({ scope: 'usage', why: note.why, ...(note.count > 1 ? { count: note.count } : {}), ...(note.seats === undefined ? {} : { seats: note.seats }) });
   for (const text of mineNotes) notes.push({ scope: mineName ?? 'mine', why: text });
   const teamOrder = [...machine.teams].sort(byName);
   if (mineEntry !== null) {
@@ -1745,11 +1787,16 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
       // record of which team this is, and the owner asked a team whose file cannot be read to
       // print by that name and its `~/…` root (the report's own rule for a path) as one sentence.
       // A `~/…` root prints in every view, so a seat's line says what the owner's says; a root
-      // outside the home is a location this tool derived, and only the owner reads it.
+      // outside the home is a location this tool derived, and only the owner reads it. The file
+      // the read tried follows the same rule, in the sentence's parenthetical tail: the owner
+      // asked the note to name what to repair, and a caller who is not the owner reads only a
+      // `~/…` file, never a location this machine derived.
       if (problem.kind === 'unreadable-file' && team.recorded !== undefined && team.recorded !== '') {
         const shownRoot = tildify(team.root, machine.home);
+        const namedFile = team.usage.unreadableFile === null ? null : tildify(team.usage.unreadableFile, machine.home);
+        const shownFile = namedFile !== null && (view.full || namedFile.startsWith('~/')) ? namedFile : null;
         namedTeams.push(view.full || shownRoot.startsWith('~/')
-          ? { scope: 'named-team', why: `the team "${team.recorded}" (${shownRoot}): its file could not be read.` }
+          ? { scope: 'named-team', why: `the team "${team.recorded}" (${shownRoot}): its file could not be read${shownFile === null ? '' : ` (${shownFile})`}.` }
           : { scope: team.recorded, why: 'its file could not be read' });
         continue;
       }
@@ -2438,7 +2485,9 @@ function borrowedClause(from: string | undefined): string {
 }
 
 /** One `note:` line's words: an anonymized machine problem is its fixed sentence for the count,
- *  the caller's own notes are printed as they stand, and any other note is named. A note with a
+ *  the caller's own notes are printed as they stand, and any other note is named. A counted
+ *  sentence that is about named seats appends them after a colon (`2 seat panes could not be
+ *  read: coda, lead`), so the reader knows which panes to look at. A note with a
  *  team's own name in its scope is named, never replaced by the counted sentence: a team whose
  *  file cannot be read prints by name (the owner's rule), and the counted sentence speaks only
  *  for the anonymous scope. A store's own message is printed as it stands for the owner; the
@@ -2451,6 +2500,9 @@ function noteText(note: ReportNote): string {
   if (note.scope === 'store' && !ANON.some((one) => one.why === note.why)) return note.why;
   if (note.scope !== 'another' && note.scope !== 'usage' && note.scope !== 'store') return `${note.scope}: ${note.why}`;
   const anon = ANON.find((one) => one.why === note.why);
-  if (anon !== undefined) return anon.sentence(note.count ?? 1);
+  if (anon !== undefined) {
+    const sentence = anon.sentence(note.count ?? 1);
+    return note.seats === undefined || note.seats.length === 0 ? sentence : `${sentence}: ${note.seats.join(', ')}`;
+  }
   return `${note.scope}: ${note.why}`;
 }

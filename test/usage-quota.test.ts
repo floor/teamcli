@@ -455,7 +455,8 @@ describe('the live sources', () => {
     // The other team's pane is never read, and the two unread panes are one counted note.
     expect(reads).toEqual(['p1', 'p2']);
     expect(restricted.observations).toEqual([]);
-    expect(restricted.notes).toEqual([{ why: 'a seat pane could not be read', count: 2 }]);
+    // The note names the seats whose panes could not be read, sorted so the line is stable.
+    expect(restricted.notes).toEqual([{ why: 'a seat pane could not be read', count: 2, seats: ['coda', 'lead'] }]);
 
     reads.length = 0;
     const full = observeQuota(machine, { full: true, mine: null }, {
@@ -477,7 +478,7 @@ describe('the live sources', () => {
       source: 'status line',
     }]);
     expect(restricted.costs).toEqual([]);
-    expect(full.notes).toEqual([{ why: 'a seat pane could not be read', count: 2 }]);
+    expect(full.notes).toEqual([{ why: 'a seat pane could not be read', count: 2, seats: ['coda', 'scout'] }]);
   });
 
   test('a seat running a CLI with a usage command makes the observer ask it, once, and its silence is a note', () => {
@@ -601,6 +602,18 @@ seats:
       accountsFile: '~/.config/team/accounts.yaml',
       advice: 'no readings yet: no seat status line and no CLI usage command has answered',
     });
+  });
+
+  test('a pane note names the seats whose panes could not be read, in both faces', async () => {
+    const notes = [{ why: 'a seat pane could not be read', count: 2, seats: ['coda', 'lead'] }];
+    const observe = () => ({ observations: [], costs: [], notes });
+    const io = testIo(root, SEAT);
+    expect(await runUsage([], io, { home, now: () => new Date(NOW), observe })).toBe(0);
+    expect(io.out).toContain('note: 2 seat panes could not be read: coda, lead\n');
+    const json = testIo(root, SEAT);
+    expect(await runUsage(['--json'], json, { home, now: () => new Date(NOW), observe })).toBe(0);
+    const doc = JSON.parse(json.out) as { notes: unknown[] };
+    expect(doc.notes).toContainEqual({ scope: 'usage', why: 'a seat pane could not be read', count: 2, seats: ['coda', 'lead'] });
   });
 
   test('the lab is the model the seat RUNS, never the CLI it runs it with', async () => {
