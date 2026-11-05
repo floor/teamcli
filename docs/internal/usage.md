@@ -240,7 +240,9 @@ machine account counts once even with multiple windows or pools. The `quota` blo
 accounts, seats, states and windows (each with its source, age, staleness, wall flag and margin),
 and the one advice sentence. A team whose file cannot be read is one note naming the team and its
 `~` root in every view; a root outside the home is a derived location, so it stays the owner's
-sentence and other callers read the team's name only.
+sentence and other callers read the team's name only. A team the machine reports as not running
+is the counted line instead: `n teams on this machine are not running`, one note whatever the
+count, naming no team in either view.
 
 The full view belongs to the owner at a terminal. Every other caller receives the restricted
 view: its approved team names and rows, shared machine subscriptions, and anonymized counts or
@@ -250,7 +252,14 @@ boundary. `--all` does not elevate an agent's permissions.
 Seat records are filtered by what is running. A team whose recorded session herdr reports as not
 running contributes no seats and no accounts — not even a synthesized one — while a session whose
 state cannot be asked leaves the record as it stands; a stopped seat never prints, in either
-case. The closing summary counts a synthesized account exactly as a declared one, so a machine
+case. Another team with no live session is a record the report does not list: its problems and
+why-lines are history and are not printed, the watch clause never names it, and one counted note
+says how many such teams the machine holds; `--all` prints their blocks, each by the name its
+store recorded. The caller's own team keeps its own problems and why-lines and is not in that
+count, because its block always prints. A live file that cannot be read names no session, so
+liveness is asked under the session the store's approved text names — the machine's own copy of
+the team as approved — and a recorded text that names none leaves the team alone. The closing
+summary counts a synthesized account exactly as a declared one, so a machine
 with no `accounts.yaml` counts one account per lab its seats draw on.
 
 `usage` itself is read-only: it runs no check, writes no state, and opens no credential, key or

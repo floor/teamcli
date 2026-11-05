@@ -21,7 +21,7 @@ timeout; it opens no credential, key or CLI session file.
 
 | Flag | Value | Effect |
 | --- | --- | --- |
-| `--all` | — | include every team’s seat-to-account breakdown for the owner; other callers see only their own team |
+| `--all` | — | include every team’s seat-to-account breakdown for the owner, a team that is not running among them; other callers see only their own team |
 | `--json` | — | the same report as one document, format 1, for a script to read; every key is printed in both views |
 | `--tree` | — | add the quota view — one block per lab and per account, with each window’s margin — between the account lines and the team tables, its own `advice:` line inside it, and under each team table each seat’s own window and spend lines; without the flag the same advice line follows the account lines |
 
@@ -232,7 +232,13 @@ account's lab the same way, and only a reading this caller may make can name it:
 restricted view a machine-wide reading lands only on a lab the caller's own seats pay. An
 unreadable seat pane or an unanswered usage command is one counted note, however many seats hit
 it; a team whose own file cannot be read is one note too, naming the team and its `~` root in
-every view (`the team "team" (~/Code/floor/team): its file could not be read.`). In `--json` the
+every view (`the team "team" (~/Code/floor/team): its file could not be read.`). A team the
+machine reports as not running is a record, not a team: its problems are history, it is not named
+by a note, and one counted line says how many such teams there are (`note: 7 teams on this
+machine are not running`) — `--all` is the flag that prints their blocks, each by the name its
+store recorded. A file that cannot be read is asked about under the session its approved record
+names, so a broken file on a stopped team makes that same counted line, never a sentence of its
+own. In `--json` the
 block is the `quota` key:
 `format`, `accountsFile`, one entry per lab with its accounts, seats, states and windows, and
 `advice`; each window carries its `margin`, its `expired` mark and, when it names one, the
