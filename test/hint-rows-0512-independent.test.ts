@@ -237,7 +237,7 @@ describe('exact /tasks hint rows plus extra words and /tasks shows the queue sta
     }
   });
 
-  test('Muse keeps every hint-plus-extra-words row, /tasks shows the queue, and non-faint colored hint words as unsent and never types over them', async () => {
+  test('Muse keeps every hint-plus-extra-words row, /tasks shows the queue, and two-colour hint words as unsent while one-colour hint words read idle', async () => {
     for (const draft of nonPlaceholderRows) {
       const screen = museBox(draft);
       expect(readScreen('muse', screen)).toEqual({ kind: 'unsent' });
@@ -273,12 +273,18 @@ describe('exact /tasks hint rows plus extra words and /tasks shows the queue sta
       expect(secondReadPane.reads).toBe(2);
     }
 
-    // Exact hint words drawn in non-faint color in Muse are unsent text, never an idle placeholder.
+    // Exact hint words drawn in one non-bold colour in Muse read as an idle placeholder, while the
+    // same words split across two colours stay unsent text and are never typed over.
     for (const hint of [OPEN_HINT, WORKFLOWS_HINT]) {
-      const colored = museDimBox(hint).replace('\u001b[2m', '\u001b[38;5;245m');
-      expect(readScreen('muse', colored)).toEqual({ kind: 'unsent' });
-      expect(boxHoldsText('muse', hint, colored)).toBe(true);
-      const pane = scriptedWakeHost(() => colored);
+      const oneColour = museDimBox(hint).replace('\u001b[2m', '\u001b[38;5;245m');
+      expect(readScreen('muse', oneColour)).toEqual({ kind: 'idle' });
+      expect(boxHoldsText('muse', hint, oneColour)).toBe(false);
+
+      const splitHint = hint.replace('/tasks shows ', '/tasks shows\u001b[39m ');
+      const twoColour = museDimBox(splitHint).replace('\u001b[2m', '\u001b[38;5;245m');
+      expect(readScreen('muse', twoColour)).toEqual({ kind: 'unsent' });
+      expect(boxHoldsText('muse', hint, twoColour)).toBe(true);
+      const pane = scriptedWakeHost(() => twoColour);
       const out = await deliverTypedWake(pane.host, 'pane-muse', WAKE_LINE, 'muse', FAST);
       expect(out).toEqual({
         delivered: false,
