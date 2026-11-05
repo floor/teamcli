@@ -76,7 +76,7 @@ shares a process with another's; `shared` runs one child for every checkout whos
 backlog delays another's chores by a slice and never its socket or the daemon's beat; and
 `inline` keeps the work on the daemon's own loop, exactly as before the isolation — the
 rollback. Three limits bound a child:
-`daemon.chores-slice-ms` (2000) is how long one slice of a pass runs before it yields to its
+`daemon.chores-slice-ms` (20) is how long one slice of a pass runs before it yields to its
 heartbeat, `daemon.chores-missed-beats` (2) is how many heartbeats it may miss before the daemon
 ends and replaces it, and `daemon.chores-backoff-cap-ms` (30000) caps the doubling wait between
 replacements. A shared group runs the tightest limits of its checkouts. Each child reports its own

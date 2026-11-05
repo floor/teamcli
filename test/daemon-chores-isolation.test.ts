@@ -478,7 +478,7 @@ describe('the chores policy', () => {
     const made = world();
     expect(choresPolicyFor(teamFile(), made.root, made.home, new Date(NOW))).toEqual({
       mode: 'per-root',
-      sliceMs: 2000,
+      sliceMs: 20,
       missedBeats: 2,
       backoffCapMs: 30_000,
     });

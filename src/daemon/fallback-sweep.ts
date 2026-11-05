@@ -18,7 +18,7 @@ import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { DAEMON_BACKLOG_DEFAULTS, loadAndResolvePolicyChain } from '../policy/index.ts';
 import {
-  drainDeferredNotes,
+  drainDeferredNotesSteps,
   escalationSteps,
   reclaimSteps,
   retirementSteps,
@@ -240,7 +240,7 @@ function* sweepRootSteps(
     // Notes first: a fact a send deferred is recorded before this pass judges the episode, so an
     // exhaustion it carries schedules its escalation in the same tick rather than the next. The
     // drain is bounded and takes every lock with `waitMs: 0`, so it defers rather than waits.
-    const notes = drainDeferredNotes(ctx, { at, lockWaitMs: 0 });
+    const notes = yield* drainDeferredNotesSteps(ctx, { at, lockWaitMs: 0 });
     const report = yield* escalationSteps(ctx, { at, lockWaitMs: 0 });
     // Escalation first: a pending intent is flushed before retirement may archive its episode,
     // and an intent written during the pass keeps the marker out of the retired set.

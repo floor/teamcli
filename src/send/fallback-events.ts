@@ -71,7 +71,7 @@
 // episodes. Routing and delay are TeamCLI's, resolved from the signed chain; the transport
 // receives neither.
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { type Dir, existsSync, lstatSync, mkdirSync, opendirSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, sep } from 'node:path';
 import { logTag, type Caller } from '../caller.ts';
 import { appendEvent, verifySignedEvent, type EventAppendInput, type SignedEventRecord } from '../bus/log.ts';
@@ -719,6 +719,22 @@ export function drainDeferredNotes(
   ctx: EscalationContext,
   options: { at?: Date; limit?: number; lockWaitMs?: number } = {},
 ): DeferredNoteDrainReport {
+  const steps = drainDeferredNotesSteps(ctx, options);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  if (!step.done) throw new Error('the pass did not run to its end');
+  return step.value;
+}
+
+/**
+ * The deferred-note drain one work item at a time: directory entries and notes are walked in
+ * bounded chunks that yield, so a caller driving the pass a slice at a time checks its budget
+ * inside the walk rather than only after the whole store folder is read.
+ */
+export function* drainDeferredNotesSteps(
+  ctx: EscalationContext,
+  options: { at?: Date; limit?: number; lockWaitMs?: number } = {},
+): Generator<void, DeferredNoteDrainReport> {
   const at = options.at ?? ctx.now();
   const limit = options.limit ?? 64;
   const noteOptions = { dedupe: true, ...(options.lockWaitMs === undefined ? {} : { lockWaitMs: options.lockWaitMs }) };
@@ -730,8 +746,9 @@ export function drainDeferredNotes(
     unreadable: [],
     scanned: 0,
   };
-  for (const found of notesUnder(ctx.root)) {
+  for (const found of yield* notesUnderSteps(ctx.root)) {
     if (report.drained.length + report.refused.length + report.deferred.length + report.unreadable.length >= limit) break;
+    yield;
     report.scanned += 1;
     const note = found.text === null || found.text === '' ? null : deferredNoteOf(found.text);
     if (note === null) {
@@ -785,15 +802,15 @@ export function drainDeferredNotes(
 
 /** Every deferred note under a root's transport tree, sessions and seats sorted so a pass is
  *  ordered. `text` is null when the file cannot be read at all. */
-function notesUnder(root: string): { path: string; text: string | null }[] {
+function* notesUnderSteps(root: string): Generator<void, { path: string; text: string | null }[]> {
   const found: { path: string; text: string | null }[] = [];
   const base = join(root, '.agents', 'send-drops');
-  for (const session of folderNames(base)) {
+  for (const session of yield* folderNamesSteps(base)) {
     const sessionDir = join(base, session);
-    for (const seat of folderNames(sessionDir)) {
+    for (const seat of yield* folderNamesSteps(sessionDir)) {
       const seatDir = join(sessionDir, seat);
-      for (const name of fileNames(seatDir)) {
-        if (!DEFERRED_NOTE_NAME.test(name)) continue;
+      for (const name of yield* fileNamesSteps(seatDir, (entry) => DEFERRED_NOTE_NAME.test(entry))) {
+        yield;
         const path = join(seatDir, name);
         found.push({ path, text: readNoFollow(path) });
       }
@@ -927,7 +944,7 @@ export function* escalationSteps(
   const lockWaitMs = options.lockWaitMs ?? 10_000;
   const report: EscalationReport = { escalated: [], refused: [], deferred: [], unreadable: [], scanned: 0 };
 
-  for (const found of markersUnder(ctx.root)) {
+  for (const found of yield* markersUnderSteps(ctx.root)) {
     yield;
     if (found.kind === 'unreadable') {
       report.unreadable.push(found.path);
@@ -1099,11 +1116,30 @@ export type RetirementReport = {
  * there to judge, so a store of delivered and escalated episodes costs no policy read.
  */
 export function planRetirement(ctx: EscalationContext, options: { at?: Date } = {}): RetirementPlan {
+  const steps = planRetirementSteps(ctx, options);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  if (!step.done) throw new Error('the pass did not run to its end');
+  return step.value;
+}
+
+/**
+ * The retirement planning walk in bounded chunks that yield: directory reads, marker inspections
+ * and candidate sorting yield along the way so a sliced caller checks its slice budget inside
+ * the walk.
+ */
+export function* planRetirementSteps(
+  ctx: EscalationContext,
+  options: { at?: Date } = {},
+): Generator<void, RetirementPlan> {
   const at = options.at ?? ctx.now();
   const plan: RetirementPlan = { at: at.toISOString(), candidates: [], unreadable: [], scanned: 0, retention: null };
   const words = new Map<string, FallbackRetention>();
   const ordered: { order: string; candidate: RetirementCandidate }[] = [];
-  for (const found of markersUnder(ctx.root)) {
+  let count = 0;
+  for (const found of yield* markersUnderSteps(ctx.root)) {
+    count += 1;
+    if (count % DIR_SCAN_CHUNK === 0) yield;
     if (found.kind === 'unreadable') {
       plan.unreadable.push(found.path);
       continue;
@@ -1119,6 +1155,7 @@ export function planRetirement(ctx: EscalationContext, options: { at?: Date } = 
       const key = fallbackKeyOf(recipient, '');
       let word = words.get(key);
       if (word === undefined) {
+        yield;
         word = fallbackRetentionOf(ctx, recipient, at);
         words.set(key, word);
       }
@@ -1134,7 +1171,9 @@ export function planRetirement(ctx: EscalationContext, options: { at?: Date } = 
       candidate: { messageId, recipient, kind, ageSeconds, eligible, until },
     });
   }
+  if (ordered.length >= DIR_SCAN_CHUNK) yield;
   ordered.sort((a, b) => (a.order < b.order ? -1 : a.order > b.order ? 1 : 0));
+  if (ordered.length >= DIR_SCAN_CHUNK) yield;
   plan.candidates = ordered.map((entry) => entry.candidate);
   return plan;
 }
@@ -1189,7 +1228,7 @@ export function* retirementSteps(
   const at = options.at ?? ctx.now();
   const lockWaitMs = options.lockWaitMs ?? 10_000;
   const limit = options.limit ?? Number.POSITIVE_INFINITY;
-  const plan = planRetirement(ctx, { at });
+  const plan = yield* planRetirementSteps(ctx, { at });
   const backlog = plan.candidates.reduce((count, candidate) => count + (candidate.eligible ? 1 : 0), 0);
   const passLimit =
     options.backlogAbove !== undefined && options.backlogLimit !== undefined && backlog > options.backlogAbove
@@ -1371,7 +1410,7 @@ export function* reclaimSteps(
 ): Generator<void, { reclaimed: number; kept: number; scanned: number }> {
   const locksDir = join(dirname(historyPath(ctx.team.project, ctx.root, ctx.home)), 'locks');
   const limit = options.limit ?? 64;
-  const names = folderNames(locksDir).filter((name) => FALLBACK_LOCK_DIR.test(name));
+  const names = yield* folderNamesSteps(locksDir, (name) => FALLBACK_LOCK_DIR.test(name));
   let reclaimed = 0;
   let kept = 0;
   let scanned = 0;
@@ -1812,18 +1851,25 @@ function markerAtCached(path: string): MarkerRead {
   return read;
 }
 
+/** Entries read from a directory or marker list before yielding to the slice clock. */
+const DIR_SCAN_CHUNK = 64;
+
 /** All markers under a root's transport tree, sessions and seats sorted so a pass is ordered. A
  *  marker that cannot be trusted is returned as its path, never rewritten from a guess. */
-function markersUnder(root: string): ({ kind: 'ok'; path: string; marker: FallbackMarker } | { kind: 'unreadable'; path: string })[] {
+function* markersUnderSteps(
+  root: string,
+): Generator<void, ({ kind: 'ok'; path: string; marker: FallbackMarker } | { kind: 'unreadable'; path: string })[]> {
   const found: ({ kind: 'ok'; path: string; marker: FallbackMarker } | { kind: 'unreadable'; path: string })[] = [];
   const base = join(root, '.agents', 'send-drops');
   const seen = new Set<string>();
-  for (const session of folderNames(base)) {
+  let markerCount = 0;
+  for (const session of yield* folderNamesSteps(base)) {
     const sessionDir = join(base, session);
-    for (const seat of folderNames(sessionDir)) {
+    for (const seat of yield* folderNamesSteps(sessionDir)) {
       const seatDir = join(sessionDir, seat);
-      for (const name of fileNames(seatDir)) {
-        if (!name.endsWith('.fallback.json')) continue;
+      for (const name of yield* fileNamesSteps(seatDir, (entry) => entry.endsWith('.fallback.json'))) {
+        markerCount += 1;
+        if (markerCount % DIR_SCAN_CHUNK === 0) yield;
         const path = join(seatDir, name);
         seen.add(path);
         const read = markerAtCached(path);
@@ -1835,27 +1881,81 @@ function markersUnder(root: string): ({ kind: 'ok'; path: string; marker: Fallba
   // A marker that vanished from this root leaves the cache with it, so a long-lived daemon holds
   // stamps for the tree it just walked and nothing older.
   const prefix = `${base}${sep}`;
+  let cacheScanned = 0;
   for (const path of markerCache.keys()) {
+    cacheScanned += 1;
+    if (cacheScanned % DIR_SCAN_CHUNK === 0) yield;
     if (path.startsWith(prefix) && !seen.has(path)) markerCache.delete(path);
   }
   return found;
+}
+
+function* folderNamesSteps(dir: string, predicate?: (name: string) => boolean): Generator<void, string[]> {
+  const names: string[] = [];
+  let opened: Dir | null = null;
+  try {
+    opened = opendirSync(dir);
+  } catch {
+    return [];
+  }
+  try {
+    let scanned = 0;
+    for (;;) {
+      const entry = opened.readSync();
+      if (entry === null) break;
+      scanned += 1;
+      if (scanned % DIR_SCAN_CHUNK === 0) yield;
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      if (predicate !== undefined && !predicate(entry.name)) continue;
+      names.push(entry.name);
+    }
+  } catch {
+    return [];
+  } finally {
+    try {
+      opened.closeSync();
+    } catch {}
+  }
+  if (names.length >= DIR_SCAN_CHUNK) yield;
+  names.sort();
+  return names;
+}
+
+function* fileNamesSteps(dir: string, predicate?: (name: string) => boolean): Generator<void, string[]> {
+  const names: string[] = [];
+  let opened: Dir | null = null;
+  try {
+    opened = opendirSync(dir);
+  } catch {
+    return [];
+  }
+  try {
+    let scanned = 0;
+    for (;;) {
+      const entry = opened.readSync();
+      if (entry === null) break;
+      scanned += 1;
+      if (scanned % DIR_SCAN_CHUNK === 0) yield;
+      if (!entry.isFile()) continue;
+      if (predicate !== undefined && !predicate(entry.name)) continue;
+      names.push(entry.name);
+    }
+  } catch {
+    return [];
+  } finally {
+    try {
+      opened.closeSync();
+    } catch {}
+  }
+  if (names.length >= DIR_SCAN_CHUNK) yield;
+  names.sort();
+  return names;
 }
 
 function folderNames(dir: string): string[] {
   try {
     return readdirSync(dir, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
-      .map((entry) => entry.name)
-      .sort();
-  } catch {
-    return [];
-  }
-}
-
-function fileNames(dir: string): string[] {
-  try {
-    return readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
       .sort();
   } catch {
