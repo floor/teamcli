@@ -5,7 +5,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
-import { recordBody } from './helpers.ts';
+import { recordBody, withoutUnreadHint } from './helpers.ts';
 import { dropDir, filed, nativeHost, owner, world } from './send-native-fixtures.ts';
 import { withoutSendId } from './helpers/output.ts';
 
@@ -57,7 +57,7 @@ test('--json queued, not woken names the seat, exit 0, and the drop id', async (
   // The drop is the signed record the document names; the `<id>.fallback.json` beside it is
   // the delivery walk's episode marker (src/send/fallback-events.ts), a derivative file and
   // never a second message.
-  expect(names.filter((name) => !name.endsWith('.fallback.json') && !name.endsWith('.pending'))).toEqual([doc.ids.sent]);
+  expect(withoutUnreadHint(names).filter((name) => !name.endsWith('.fallback.json') && !name.endsWith('.pending'))).toEqual([doc.ids.sent]);
   expect(names).toContain(`${doc.ids.sent}.fallback.json`);
   expect(recordBody(join(drops, doc.ids.sent))).toBe(filed('hello'));
   expect(pane.typed.length).toBe(0);

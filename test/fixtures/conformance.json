@@ -2302,6 +2302,76 @@
       "classify": "unsent",
       "composer": "unsent",
       "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/esc-hint.txt",
+      "cli": "codex",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "constructed"
+    },
+    {
+      "file": "codex/0.161.0/scroll-back-marker.txt",
+      "cli": "codex",
+      "classify": "scroll back",
+      "composer": "unknown",
+      "provenance": "constructed"
+    },
+    {
+      "file": "codex/0.161.0/scroll-back.txt",
+      "cli": "codex",
+      "classify": "scroll back",
+      "composer": "unknown",
+      "provenance": "constructed"
+    },
+    {
+      "file": "codex/0.161.0/warning-row.txt",
+      "cli": "codex",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "constructed"
+    },
+    {
+      "file": "cursor/2026.10.22/drawing-settled.txt",
+      "cli": "cursor",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "constructed"
+    },
+    {
+      "file": "cursor/2026.10.22/drawing.txt",
+      "cli": "cursor",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.11/prose-hint-color.txt",
+      "cli": "muse",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.11/prose-hint-dim.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.11/prose-hint-plain.txt",
+      "cli": "muse",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.11/tasks-hint-dim.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "constructed"
     }
   ],
   "yaml": [

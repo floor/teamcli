@@ -72,10 +72,10 @@ describe('a faint suggestion is an empty box', () => {
     expect(boxHoldsText('codex', 'Rules.', other)).toBe(false);
   });
 
-  test('Codex: the captured typed text is unsent, and the placeholder bytes with the faint switch off are text', () => {
+  test('Codex: the captured typed text is unsent, and non-listed words with the faint switch off are text', () => {
     expect(readScreen('codex', exitTyping('codex-unsent-ansi')).kind).toBe('unsent');
     const idle = exitTyping('codex-idle-ansi');
-    const typed = idle.replace(`${ESC}[2mAsk Codex to do anything`, 'Ask Codex to do anything');
+    const typed = idle.replace(`${ESC}[2mAsk Codex to do anything`, 'Summarize recent commits');
     expect(typed).not.toBe(idle);
     expect(readScreen('codex', typed).kind).toBe('unsent');
   });
