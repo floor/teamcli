@@ -46,9 +46,38 @@ seats:
 
 const ID = '0f8fad5b-d9cb-469f-a165-70867728950e';
 
-// Known for 0.5.12.1: the detached --finish-late child scenes and 700 ms exit bounds fail on
-// Ubuntu runners.
-const offDarwin = process.platform !== 'darwin';
+// Measurement build (this branch never lands): every scene runs on every platform, and every
+// spawned child's stdout and stderr is echoed to the run's stderr under one prefix. A hosted run
+// whose child posts no request then shows whether the child started, what its entry said, and how
+// it exited — the evidence the 0.5.12.1 guard hid.
+function measureChild(
+  child: ReturnType<typeof spawn>,
+  label: string,
+): { out: string[]; err: string[]; report: (extra?: string) => void } {
+  const out: string[] = [];
+  const err: string[] = [];
+  const echo = (into: string[], stream: 'stdout' | 'stderr') => (chunk: string): void => {
+    into.push(chunk);
+    for (const line of chunk.split('\n')) {
+      if (line !== '') process.stderr.write(`[webhook-measure] ${label} ${stream}: ${line}\n`);
+    }
+  };
+  child.stdout?.setEncoding('utf8');
+  child.stderr?.setEncoding('utf8');
+  child.stdout?.on('data', echo(out, 'stdout'));
+  child.stderr?.on('data', echo(err, 'stderr'));
+  child.on('exit', (code, signal) => {
+    process.stderr.write(`[webhook-measure] ${label} exit code=${String(code)} signal=${String(signal)}\n`);
+  });
+  const report = (extra = ''): void => {
+    process.stderr.write(
+      `[webhook-measure] ${label} exit pid=${String(child.pid ?? '?')} ${extra}`
+      + ` out=${JSON.stringify(out.join('').replace(/\n$/, ''))}`
+      + ` err=${JSON.stringify(err.join('').replace(/\n$/, ''))}\n`,
+    );
+  };
+  return { out, err, report };
+}
 
 let base = '';
 let root = '';
@@ -284,7 +313,7 @@ describe("the send's own post under the deadline", () => {
     expect(existsSync(join(dir, `${ID}.posted`))).toBe(false);
   }, 10_000);
 
-  test.skipIf(offDarwin)('a real child returns the sender at the deadline, and the late 2xx settles after that process is gone', async () => {
+  test('a real child returns the sender at the deadline, and the late 2xx settles after that process is gone', async () => {
     signedAtTeam('webhook-sender-deadline-ms', 500);
     const dir = dropFolder();
     const message = signRecord(messagePayload(), home);
@@ -311,7 +340,8 @@ describe("the send's own post under the deadline", () => {
         body: messagePayload().body,
       }));
       const entry = fileURLToPath(import.meta.url);
-      const sender = spawn(process.execPath, [entry, '--measure-exit', spec], { stdio: ['ignore', 'pipe', 'ignore'] });
+      const sender = spawn(process.execPath, [entry, '--measure-exit', spec], { stdio: ['ignore', 'pipe', 'pipe'] });
+      const measured = measureChild(sender, 'scene-1 sender');
       let mark = 0;
       sender.stdout?.setEncoding('utf8');
       sender.stdout?.on('data', (chunk: string) => {
@@ -328,6 +358,7 @@ describe("the send's own post under the deadline", () => {
         });
       });
       const elapsed = mark === 0 ? 9999 : performance.now() - mark;
+      measured.report(`exit=${String(exitCode)} elapsedMs=${elapsed.toFixed(0)}`);
       // The sender's own process is gone at the bound. It does not stay up for the slow answer.
       expect(exitCode).toBe(0);
       expect(elapsed).toBeLessThan(700);
@@ -344,7 +375,7 @@ describe("the send's own post under the deadline", () => {
     }
   }, 15_000);
 
-  test.skipIf(offDarwin)('a child whose stdin closes before the answer still settles and exits', async () => {
+  test('a child whose stdin closes before the answer still settles and exits', async () => {
     const dir = dropFolder();
     const server = Bun.serve({
       hostname: '127.0.0.1',
@@ -352,8 +383,9 @@ describe("the send's own post under the deadline", () => {
       fetch: () => new Promise((resolve) => setTimeout(() => resolve(new Response('ok', { status: 200 })), 300)),
     });
     const child = spawn(process.execPath, [fileURLToPath(new URL('../src/bus/webhook.ts', import.meta.url)), '--finish-late'], {
-      stdio: ['pipe', 'ignore', 'ignore'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
+    const measured = measureChild(child, 'scene-2 worker');
     const job = {
       url: server.url.href,
       headers: [] as [string, string][],
@@ -381,11 +413,12 @@ describe("the send's own post under the deadline", () => {
       });
     });
     server.stop(true);
+    measured.report(`exit=${String(exitCode)} posted=${String(existsSync(join(dir, `${ID}.posted`)))}`);
     expect(exitCode).toBe(0);
     expect(existsSync(join(dir, `${ID}.posted`))).toBe(true);
   }, 10_000);
 
-  test.skipIf(offDarwin)('when the parent destroys child.stdin at the exact deadline while fetch is in flight and stdout stays open, the child does not hang on feed.taken and settles the claim', async () => {
+  test('when the parent destroys child.stdin at the exact deadline while fetch is in flight and stdout stays open, the child does not hang on feed.taken and settles the claim', async () => {
     const dir = dropFolder();
     writeFileSync(join(dir, `${ID}.posting`), `${JSON.stringify({ state: 'sent', at: '2026-11-03T00:00:00.000Z' })}\n`, { mode: 0o600 });
     let hitServer!: () => void;
@@ -403,11 +436,9 @@ describe("the send's own post under the deadline", () => {
     try {
       const workerEntry = fileURLToPath(new URL('../src/bus/webhook.ts', import.meta.url));
       const child = spawn(process.execPath, [workerEntry, '--finish-late'], {
-        stdio: ['pipe', 'pipe', 'ignore'],
+        stdio: ['pipe', 'pipe', 'pipe'],
       });
-      const stdoutChunks: string[] = [];
-      child.stdout?.setEncoding('utf8');
-      child.stdout?.on('data', (chunk: string) => stdoutChunks.push(chunk));
+      const measured = measureChild(child, 'scene-3 worker');
 
       const job = {
         url: server.url.href,
@@ -442,8 +473,9 @@ describe("the send's own post under the deadline", () => {
           resolve(code);
         });
       });
+      measured.report(`exit=${String(exitCode)}`);
       expect(exitCode).toBe(0);
-      expect(stdoutChunks.join('')).toContain('"status":200');
+      expect(measured.out.join('')).toContain('"status":200');
       expect(existsSync(join(dir, `${ID}.posting`))).toBe(false);
       expect(existsSync(join(dir, `${ID}.posted`))).toBe(true);
 
@@ -463,7 +495,7 @@ describe("the send's own post under the deadline", () => {
     }
   }, 10_000);
 
-  test.skipIf(offDarwin)('a real child that hits the 500 ms deadline writes unknown first, then the detached worker appends delivered (late) and settles the claim with one POST only', async () => {
+  test('a real child that hits the 500 ms deadline writes unknown first, then the detached worker appends delivered (late) and settles the claim with one POST only', async () => {
     signedAtTeam('webhook-sender-deadline-ms', 500);
     const dir = dropFolder();
     const message = signRecord(messagePayload(), home);
@@ -497,7 +529,8 @@ describe("the send's own post under the deadline", () => {
         body: messagePayload().body,
       }));
       const measureEntry = fileURLToPath(import.meta.url);
-      const sender = spawn(process.execPath, [measureEntry, '--measure-exit', spec], { stdio: ['ignore', 'pipe', 'ignore'] });
+      const sender = spawn(process.execPath, [measureEntry, '--measure-exit', spec], { stdio: ['ignore', 'pipe', 'pipe'] });
+      measureChild(sender, `sender ${spec.replace(/.*\//, '')}`);
       let mark = 0;
       sender.stdout?.setEncoding('utf8');
       sender.stdout?.on('data', (chunk: string) => {
@@ -617,7 +650,7 @@ describe("the send's own post under the deadline", () => {
     }
   }, 15_000);
 
-  test.skipIf(offDarwin)('a real child whose detached continuation receives a late 5xx files failed under the late step, appends no late delivery, and keeps the claim sent', async () => {
+  test('a real child whose detached continuation receives a late 5xx files failed under the late step, appends no late delivery, and keeps the claim sent', async () => {
     signedAtTeam('webhook-sender-deadline-ms', 500);
     const dir = dropFolder();
     const message = signRecord(messagePayload(), home);
@@ -651,7 +684,8 @@ describe("the send's own post under the deadline", () => {
         body: messagePayload().body,
       }));
       const measureEntry = fileURLToPath(import.meta.url);
-      const sender = spawn(process.execPath, [measureEntry, '--measure-exit', spec], { stdio: ['ignore', 'pipe', 'ignore'] });
+      const sender = spawn(process.execPath, [measureEntry, '--measure-exit', spec], { stdio: ['ignore', 'pipe', 'pipe'] });
+      measureChild(sender, `sender ${spec.replace(/.*\//, '')}`);
       let mark = 0;
       sender.stdout?.setEncoding('utf8');
       sender.stdout?.on('data', (chunk: string) => {
@@ -722,7 +756,7 @@ describe("the send's own post under the deadline", () => {
     }
   }, 15_000);
 
-  test.skipIf(offDarwin)('killing the detached continuation process while the slow endpoint waits leaves the claim in sent, writes no posted mark, and appends no late history', async () => {
+  test('killing the detached continuation process while the slow endpoint waits leaves the claim in sent, writes no posted mark, and appends no late history', async () => {
     signedAtTeam('webhook-sender-deadline-ms', 500);
     const dir = dropFolder();
     const message = signRecord(messagePayload(), home);
@@ -757,7 +791,8 @@ describe("the send's own post under the deadline", () => {
       }));
       const measureEntry = fileURLToPath(import.meta.url);
       const workerEntry = fileURLToPath(new URL('../src/bus/webhook.ts', import.meta.url));
-      const sender = spawn(process.execPath, [measureEntry, '--measure-exit', spec], { stdio: ['ignore', 'pipe', 'ignore'] });
+      const sender = spawn(process.execPath, [measureEntry, '--measure-exit', spec], { stdio: ['ignore', 'pipe', 'pipe'] });
+      measureChild(sender, `sender ${spec.replace(/.*\//, '')}`);
       let mark = 0;
       sender.stdout?.setEncoding('utf8');
       sender.stdout?.on('data', (chunk: string) => {
@@ -846,7 +881,7 @@ describe("the send's own post under the deadline", () => {
     }
   }, 15_000);
 
-  test.skipIf(offDarwin)('a real child that answers 2xx before the deadline settles in the sender and the detached worker does not double-settle', async () => {
+  test('a real child that answers 2xx before the deadline settles in the sender and the detached worker does not double-settle', async () => {
     signedAtTeam('webhook-sender-deadline-ms', 500);
     const dir = dropFolder();
     const message = signRecord(messagePayload(), home);
@@ -878,7 +913,8 @@ describe("the send's own post under the deadline", () => {
         body: messagePayload().body,
       }));
       const measureEntry = fileURLToPath(import.meta.url);
-      const sender = spawn(process.execPath, [measureEntry, '--measure-exit', spec], { stdio: ['ignore', 'pipe', 'ignore'] });
+      const sender = spawn(process.execPath, [measureEntry, '--measure-exit', spec], { stdio: ['ignore', 'pipe', 'pipe'] });
+      measureChild(sender, `sender ${spec.replace(/.*\//, '')}`);
       const exitCode = await new Promise<number | null>((resolve) => {
         const killer = setTimeout(() => {
           sender.kill('SIGKILL');

@@ -962,9 +962,14 @@ function spawnLateWorker(job: LateJob): { stop: () => void; took: () => void; do
   const entry = fileURLToPath(import.meta.url);
   const child = spawn(process.execPath, [entry, '--finish-late'], {
     detached: true,
-    stdio: ['pipe', 'pipe', 'ignore'],
+    // Measurement build only (this branch never lands): `inherit` puts the worker's stderr into the
+    // sender's own, so a hosted run can show whether the worker started, read its job and posted.
+    stdio: ['pipe', 'pipe', 'inherit'],
   });
   child.unref();
+  // Measurement build only: a spawn that never produces a process (missing interpreter, refused
+  // exec) is named here, in the sender's own stderr.
+  child.on('error', (error) => measureNote(`spawn error: ${String(error)}`));
   child.stdin?.write(`${JSON.stringify(job)}\n`);
   // The pipe objects are sockets at runtime. Leaving them referenced is what kept `team send` up
   // until the request finished.
@@ -1180,14 +1185,27 @@ function stdinFeed(): { job: Promise<string>; taken: Promise<boolean> } {
   return { job, taken };
 }
 
+/** Measurement build only (this branch never lands): one stderr line per step of the detached
+ *  worker, inherited by the sender, so the hosted run's log names where a silent worker stopped.
+ *  Never throws: the parent's pipe may already be gone, and this is diagnostics alone. */
+function measureNote(text: string): void {
+  try {
+    process.stderr.write(`[finish-late] ${text}\n`);
+  } catch {
+    // Diagnostics only.
+  }
+}
+
 async function finishLateWorker(): Promise<void> {
   const feed = stdinFeed();
   let job: LateJob;
   try {
     job = JSON.parse(await feed.job) as LateJob;
   } catch {
+    measureNote('job line unreadable or stdin closed');
     return;
   }
+  measureNote(`job taken capMs=${String(job.capMs)} project=${job.project}`);
   const started = Date.now();
   let line: LateLine;
   try {
@@ -1204,17 +1222,32 @@ async function finishLateWorker(): Promise<void> {
     line = unsent !== null ? { unsent } : { unknown: unknownReason(error, job.capMs) };
   }
   process.stdout.on('error', () => {});
+  measureNote(`answer=${JSON.stringify(line)}`);
   const told = tellParent(`${JSON.stringify(line)}\n`);
+  measureNote(`toldParent=${String(told)}`);
   const taken = told ? await feed.taken : false;
+  measureNote(`taken=${String(taken)}; settling=${String(!taken)}`);
   if (!taken) settleDetached(job, 'status' in line ? line : null, 'status' in line ? line.ms : 0);
 }
 
 const workerEntry = fileURLToPath(import.meta.url);
 const runAsWorker = (import.meta as { main?: boolean }).main === true
   || (process.argv[1] !== undefined && process.argv[1] === workerEntry);
+if (process.argv.includes('--finish-late')) {
+  // Measurement build only (this branch never lands): before the entry gate runs, record what the
+  // child process sees, so a hosted run distinguishes "never started" from "gate did not match".
+  measureNote(
+    `process pid=${String(process.pid)} ppid=${String(process.ppid)} argv=${JSON.stringify(process.argv)}`
+    + ` main=${String((import.meta as { main?: boolean }).main)} runAsWorker=${String(runAsWorker)} entry=${workerEntry}`,
+  );
+}
 if (runAsWorker && process.argv.includes('--finish-late')) {
   process.stdout.on('error', () => {});
-  void finishLateWorker().catch(() => {});
+  process.stderr.on('error', () => {});
+  void finishLateWorker().then(
+    () => measureNote('returned'),
+    (error: unknown) => measureNote(`threw ${String(error)}`),
+  );
 }
 
 export type WebhookFactoryInput = {
