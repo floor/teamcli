@@ -728,10 +728,11 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
 
   // A hosted pass yields to the daemon's beat between its blocking reads and synchronous sub-steps:
   // it fires the host's cross-route beat and yields a macrotask so an interval beat timer on this
-  // loop can run between steps. A CLI watch has no host and yields nothing.
+  // loop can run between steps. Without a host beat (a CLI watch, or a host that wired none), the
+  // pass yields nothing.
   const yieldBeat = async (): Promise<void> => {
-    if (hosted === undefined) return;
-    hosted.beat?.();
+    if (hosted?.beat === undefined) return;
+    hosted.beat();
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
   };
 

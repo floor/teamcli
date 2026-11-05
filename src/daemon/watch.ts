@@ -154,12 +154,16 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
       // through its own end instead of running another pass.
       settleWaiters(false);
     },
-    beat() {
-      // A stop owns the exit: nothing beats after it. Whether a beat is due, and which routes
-      // still need one, is the daemon's decision, not this host's.
-      if (stopped) return;
-      input.onBeat?.();
-    },
+    ...(input.onBeat === undefined
+      ? {}
+      : {
+          beat() {
+            // A stop owns the exit: nothing beats after it. Whether a beat is due, and which routes
+            // still need one, is the daemon's decision, not this host's.
+            if (stopped) return;
+            input.onBeat?.();
+          },
+        }),
   };
 
   /**
