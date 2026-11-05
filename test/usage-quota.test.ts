@@ -16,6 +16,7 @@ import { runUsage } from '../src/commands/usage.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { saveMachineReadings } from '../src/information/machine-readings.ts';
 import {
+  accountLabel,
   adviceOf,
   marginOf,
   marginWord,
@@ -102,6 +103,32 @@ describe('the quota model', () => {
     expect(marginWord(10)).toBe('ahead of pace by 10%');
     expect(marginWord(13.3)).toBe('ahead of pace by 13.3%');
     expect(marginWord(-10)).toBe('runs out before the reset');
+  });
+
+  test('an account is labelled with its plan and its bucket, never the tool’s own word for it', () => {
+    // Item 6 (the owner's run, 2026-11-05): `google (claude-gpt)` named a bucket in the tool's
+    // private word and the subscription's plan nowhere. The bucket is spelled the way the CLI's
+    // own usage print names it — a real `agy --print /usage` run prints `Gemini Models` and
+    // `Claude and GPT models` — and the plan is the owner's own setting, because no CLI prints
+    // it; the two read together, the plan first.
+    expect(accountLabel({ account: 'google-antigravity', pool: 'gemini' })).toBe('google-antigravity (Gemini models)');
+    expect(accountLabel({ account: 'google-antigravity', pool: 'claude-gpt' })).toBe('google-antigravity (Claude and GPT models)');
+    expect(accountLabel({ account: 'google-antigravity', pool: 'claude-gpt', plan: 'Google AI Ultra' })).toBe('Google AI Ultra, Claude and GPT models');
+    // A plan that does not split into buckets is the plan alone; no plan at all is the account.
+    expect(accountLabel({ account: 'anthropic', plan: 'Claude Max 20x' })).toBe('Claude Max 20x');
+    expect(accountLabel({ account: 'anthropic' })).toBe('anthropic');
+    // One label in the block and in the advice alike: an account named by its plan is never one
+    // thing in a row and another in the sentence that recommends moving a seat off it.
+    const quota = quotaOf({
+      labs: [{ lab: 'google', accounts: [{ account: 'google-antigravity', pool: 'gemini', plan: 'Google AI Ultra', seats: ['gem'] }] }],
+      observations: [observed({ account: 'google-antigravity', pool: 'gemini', window: 'weekly', used: 89, left: 11, resetsAt: NOW + 150 * HOUR })],
+      accountsFile: '~/.config/team/accounts.yaml',
+      now: NOW,
+    });
+    const text = quotaText(quota).join('\n');
+    expect(text).toContain('    Google AI Ultra, Gemini models  near cap  seats: gem');
+    expect(text).not.toContain('(gemini)');
+    expect(quota.advice).toContain('Google AI Ultra, Gemini models (weekly');
   });
 
   const labs: QuotaLabInput[] = [

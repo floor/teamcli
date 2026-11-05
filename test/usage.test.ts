@@ -21,7 +21,7 @@ import { runStatus } from '../src/commands/status.ts';
 import { NO_PROJECT, runUsage, USAGE } from '../src/commands/usage.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { machineAccountsPath } from '../src/information/machine-accounts.ts';
-import { machineReadingsPath } from '../src/information/machine-readings.ts';
+import { machineReadingsPath, saveMachineReadings } from '../src/information/machine-readings.ts';
 import {
   machineUsage,
   NOT_VERIFIED,
@@ -2350,6 +2350,42 @@ describe('team usage', () => {
     const doc = JSON.parse(json.out) as { quota: { labs: { accounts: { account: string; windows: { window: string; margin: number | null; runsOutIn: string | null }[] }[] }[] } };
     const window = doc.quota.labs.flatMap((lab) => lab.accounts).find((one) => one.account === 'anthropic')?.windows.find((one) => one.window === 'weekly');
     expect(window).toMatchObject({ margin: -36.4, runsOutIn: '20h12m' });
+  });
+
+  test('an account row is labelled with its plan and the bucket it measures, in the owner’s words', async () => {
+    // Item 6 (the owner's run, 2026-11-05): a row read `google (claude-gpt)` — a bucket in the
+    // tool's private word, and the subscription's plan nowhere. The plan is the owner's own
+    // setting in the machine's accounts file (no CLI prints it); each bucket is spelled the way
+    // the CLI's own usage print names it (`agy --print /usage` prints `Gemini Models` and
+    // `Claude and GPT models`), so one row says which subscription it is and which part of it
+    // the figure measures.
+    withoutReadings();
+    withState();
+    writeFileSync(machineAccountsPath(home), 'accounts:\n  - google-antigravity\nplans:\n  google-antigravity: Google AI Ultra\n');
+    saveMachineReadings(home, [
+      { account: 'google-antigravity', pool: 'gemini', window: 'weekly', left: 89, used: 11, resets: null },
+      { account: 'google-antigravity', pool: 'claude-gpt', window: 'weekly', left: 11, used: 89, resets: null },
+    ], NOW.getTime());
+    const io = testIo(root, OWNER);
+    expect(await runUsage([], io, { home, now: () => NOW })).toBe(0);
+    const rows = io.out.split('\n');
+    expect(rows.some((line) => line.startsWith('Google AI Ultra, Gemini models'))).toBe(true);
+    expect(rows.some((line) => line.startsWith('Google AI Ultra, Claude and GPT models'))).toBe(true);
+    expect(io.out).not.toContain('claude-gpt');
+    expect(io.out).not.toContain('(gemini)');
+    // The JSON keeps the account and the pool a script matches on, and carries the plan's words.
+    const json = testIo(root, OWNER);
+    expect(await runUsage(['--json'], json, { home, now: () => NOW })).toBe(0);
+    const doc = JSON.parse(json.out) as { labs: { accounts: { account: string; pool?: string; plan?: string }[] }[] };
+    const entries = doc.labs.flatMap((lab) => lab.accounts).filter((one) => one.account === 'google-antigravity');
+    expect(entries.map((one) => [one.pool, one.plan])).toEqual([['gemini', 'Google AI Ultra'], ['claude-gpt', 'Google AI Ultra']]);
+    // With no plan set the row still names its account, and the bucket in words rather than the
+    // word the model keeps for itself.
+    writeFileSync(machineAccountsPath(home), 'accounts:\n  - google-antigravity\n');
+    const plain = testIo(root, OWNER);
+    expect(await runUsage([], plain, { home, now: () => NOW })).toBe(0);
+    expect(plain.out).toContain('google-antigravity (Gemini models)');
+    expect(plain.out).not.toContain('(gemini)');
   });
 
   test('a spend a seat’s own row printed is measured for that seat and its run, and never for another run', async () => {

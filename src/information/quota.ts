@@ -119,6 +119,9 @@ export type ReportQuotaWindow = {
 export type ReportQuotaAccount = {
   account: string;
   pool?: 'gemini' | 'claude-gpt';
+  /** The plan the owner wrote for this account (`Google AI Ultra`): the row label leads with it,
+   *  because no CLI prints a subscription's plan and its own name is the tool's, not the owner's. */
+  plan?: string;
   state: QuotaState;
   windows: ReportQuotaWindow[];
   /** The seats this view may name on the account, in report order. */
@@ -144,6 +147,8 @@ export type ReportQuota = {
 export type QuotaAccountInput = {
   account: string;
   pool?: 'gemini' | 'claude-gpt';
+  /** The plan's words, from the owner's machine file (`machinePlansOf`). */
+  plan?: string;
   seats: string[];
   seatsOther?: number;
 };
@@ -163,9 +168,31 @@ function keyOf(one: { account: string; pool?: 'gemini' | 'claude-gpt' }): string
   return `${one.account}\0${one.pool ?? ''}`;
 }
 
-function named(one: { account: string; pool?: 'gemini' | 'claude-gpt' }, lab?: string): string {
-  const account = one.pool ? `${one.account} (${one.pool})` : one.account;
-  return lab === undefined || lab === one.account || lab === account ? account : `${lab}/${account}`;
+/** The words each pool's bucket carries: the CLI's own names for them. A real `agy --print
+ *  /usage` run prints `Gemini Models` and `Claude and GPT models` beside their remaining
+ *  percentages (`quota-observe.ts`), so a row says what the CLI says rather than the model's
+ *  own word for the pool (`claude-gpt`), which no reader at a terminal knows. */
+export const POOL_WORDS: Record<'gemini' | 'claude-gpt', string> = {
+  gemini: 'Gemini models',
+  'claude-gpt': 'Claude and GPT models',
+};
+
+/** How one account prints on a row and in the advice: its plan and bucket when the owner has
+ *  named the plan (`Google AI Ultra, Claude and GPT models`), the account and its bucket in the
+ *  CLI's words when no plan is set (`google-antigravity (Claude and GPT models)`), and the
+ *  account alone for a subscription that splits into no bucket. */
+export function accountLabel(one: { account: string; pool?: 'gemini' | 'claude-gpt'; plan?: string }): string {
+  const bucket = one.pool === undefined ? null : POOL_WORDS[one.pool];
+  if (one.plan !== undefined && one.plan !== '') return bucket === null ? one.plan : `${one.plan}, ${bucket}`;
+  return bucket === null ? one.account : `${one.account} (${bucket})`;
+}
+
+function named(one: { account: string; pool?: 'gemini' | 'claude-gpt'; plan?: string }, lab?: string): string {
+  const label = accountLabel(one);
+  // A plan's words already name the account for the owner, so the lab prefix — which only tells
+  // two same-named accounts apart — would add a vendor word the owner did not write.
+  if (lab === undefined || one.plan !== undefined) return label;
+  return lab === one.account || lab === label ? label : `${lab}/${label}`;
 }
 
 /** The margin the window's own clock allows: the share of the window already gone, minus the
@@ -315,6 +342,7 @@ export function quotaOf(options: QuotaOptions): ReportQuota {
       return {
         account: input.account,
         ...(input.pool ? { pool: input.pool } : {}),
+        ...(input.plan !== undefined && input.plan !== '' ? { plan: input.plan } : {}),
         state: stateOf(windows, wall !== null),
         windows,
         seats: [...input.seats],
@@ -339,7 +367,7 @@ export function quotaOf(options: QuotaOptions): ReportQuota {
 /** One expired window's label for the advice line: the block's own spelling of an account under
  *  its lab (`named`), with the window. Exported so the report names a budget row's expired window
  *  exactly as the block names its own, and one window never reads as two. */
-export function expiredLabel(one: { account: string; pool?: 'gemini' | 'claude-gpt' }, lab: string, window: string): string {
+export function expiredLabel(one: { account: string; pool?: 'gemini' | 'claude-gpt'; plan?: string }, lab: string, window: string): string {
   return `${named(one, lab)} (${window})`;
 }
 

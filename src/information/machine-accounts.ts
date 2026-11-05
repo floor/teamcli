@@ -83,6 +83,37 @@ export function machineAccountsOf(home: string): string[] {
   return [...new Set(machineAccountsByEntityOf(home).flatMap((one) => one.accounts))].sort();
 }
 
+/** The plan each account runs on, in the owner's own words: an optional `plans:` map in the same
+ *  machine file, keyed by account name (`plans: { google-antigravity: Google AI Ultra }`). No
+ *  CLI prints the plan a subscription is on, so this is the one place it comes from — an entry
+ *  the owner writes once — and an account with no entry keeps its own name as its label. The map
+ *  is empty when the file is absent, does not parse or carries no `plans:` key; an entry that is
+ *  no non-empty string is skipped, never guessed. */
+export function machinePlansOf(home: string): Map<string, string> {
+  const plans = new Map<string, string>();
+  let text: string;
+  try {
+    text = readFileSync(machineAccountsPath(home), 'utf8');
+  } catch {
+    return plans;
+  }
+  let root: YamlNode;
+  try {
+    root = parseYaml(text);
+  } catch {
+    return plans;
+  }
+  if (root.kind !== 'map') return plans;
+  const node = root.entries.find((entry) => entry.key === 'plans')?.value;
+  if (node === undefined || node.kind !== 'map') return plans;
+  for (const entry of node.entries) {
+    if (entry.key === '' || entry.value.kind !== 'scalar' || typeof entry.value.value !== 'string') continue;
+    const plan = entry.value.value.trim();
+    if (plan !== '') plans.set(entry.key, plan);
+  }
+  return plans;
+}
+
 /** Which entity owns each account, the file's own order deciding a name two entities claim: the
  *  first entry to list it owns it. An unnamed entry (`null`) owns nothing to name — its accounts
  *  are today's unnamed entity, counted and never borrowing. */

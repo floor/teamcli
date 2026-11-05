@@ -18,12 +18,12 @@ import type { BudgetAccount, Seat, TeamFile } from '../file/types.ts';
 import { defaultBudgets } from '../file/validate.ts';
 import type { Io } from '../io.ts';
 import { collapseNotes, renderTable } from '../output/index.ts';
-import { labOfSeat, machineAccountsByEntityOf, machineAccountsOf, ownerEntityOf, payingAccountOf, payingPoolOf } from './machine-accounts.ts';
+import { labOfSeat, machineAccountsByEntityOf, machineAccountsOf, machinePlansOf, ownerEntityOf, payingAccountOf, payingPoolOf } from './machine-accounts.ts';
 import { readMachineReadings, type MachineReading } from './machine-readings.ts';
 import { overridesInForceOf, quotaWith, type ProfileOverride } from '../profiles/overrides.ts';
 import { shippedQuotaAccounts } from '../profiles/profile.ts';
 import type { WindowName } from '../profiles/quota.ts';
-import { expiredLabel, marginOf, marginWord, NEAR_CAP, QUOTA_STALE_MS, quotaOf, quotaText, PANE_UNREAD, USAGE_ACCOUNTS, USAGE_UNANSWERED, windowState, type CostObservation, type QuotaLabInput, type QuotaObservation, type QuotaState, type ReportQuota, type ReportQuotaWindow } from './quota.ts';
+import { accountLabel, expiredLabel, marginOf, marginWord, NEAR_CAP, QUOTA_STALE_MS, quotaOf, quotaText, PANE_UNREAD, USAGE_ACCOUNTS, USAGE_UNANSWERED, windowState, type CostObservation, type QuotaLabInput, type QuotaObservation, type QuotaState, type ReportQuota, type ReportQuotaWindow } from './quota.ts';
 import { readState, type State } from '../state.ts';
 import { approvalStanding, readApproval, storesFolder, type ApprovalRecord, type Standing } from '../store/store.ts';
 
@@ -606,6 +606,9 @@ export type MachineUsage = {
   /** The home folder the walk read, so a path in a note prints as `~/…` (the report's rule). */
   home: string;
   machineAccounts: string[];
+  /** Each account's plan, in the owner's words, from the machine file's `plans:` map. An account
+   *  with no entry has none, and its labels stay its own name. */
+  plans: Map<string, string>;
   readings: MachineReading[];
   /** Every team the walk read, in walk order. */
   teams: TeamEntry[];
@@ -685,6 +688,7 @@ function approvedSessionOf(text: string, root: string, home: string): string | n
  */
 export function machineUsage(home: string, now: number, view: UsageView, sessions?: SessionLiveness, running?: RunningModels): MachineUsage {
   const machineAccounts = machineAccountsOf(home);
+  const plans = machinePlansOf(home);
   const readings = readMachineReadings(home);
   const folder = storesFolder(home);
   let names: string[];
@@ -822,7 +826,7 @@ export function machineUsage(home: string, now: number, view: UsageView, session
   }
   return {
     home,
-    machineAccounts, readings,
+    machineAccounts, plans, readings,
     teams,
     stores: entries.filter((entry): entry is StoreEntry => entry.kind === 'store').map((entry) => entry.text),
     counts: { teams: entries.length, labs: labs.size, accounts: accountNames.size },
@@ -984,6 +988,9 @@ export type ReportSpendMachine = {
  *  Each field here is copied in `reportRowOf`; a field absent here is absent from both faces. */
 export type ReportRow = {
   account: string;
+  /** The plan's words the owner wrote for the account, when there is one: the row prints its
+   *  account by that label, and a script reads the account itself from `account`. */
+  plan?: string;
   window: WindowName | null;
   left: number | null;
   used: number | null;
@@ -1022,7 +1029,7 @@ export type ReportSpendRow = {
 
 /** One machine line's entry. One entry per line, so the text and the array walk side by side. */
 export type ReportAccount =
-  | { account: string; kind: 'subscription'; machine: ReportMachine; teams: ReportTeamRow[]; readable: boolean; pool?: 'gemini' | 'claude-gpt' }
+  | { account: string; kind: 'subscription'; machine: ReportMachine; teams: ReportTeamRow[]; readable: boolean; pool?: 'gemini' | 'claude-gpt'; plan?: string }
   | { account: string; kind: 'spend'; machine: ReportSpendMachine; teams: ReportSpendRow[] };
 
 export type ReportLab = {
@@ -1048,6 +1055,9 @@ export type ReportSeatWindow = {
   window: WindowName;
   /** The account the figure measures — not always the account that pays for the seat. */
   account: string;
+  /** The plan the owner wrote for that account, when there is one: the line prints the account
+   *  by that label, and a script reads the account itself from `account`. */
+  plan?: string;
   left: number | null;
   used: number | null;
   resetsAt: string | null;
@@ -1096,6 +1106,8 @@ export type ReportSeatRow = {
   seat: string;
   cli: string;
   account: string;
+  /** The paying account's plan, in the owner's own words (`machinePlansOf`), when one is set. */
+  plan?: string;
   pool?: 'gemini' | 'claude-gpt';
   /** The team file's herdr session: the run the seat and its readings belong to. */
   run?: string;
@@ -1510,7 +1522,7 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
         accounts.push(entry);
       } else {
         for (const line of account.lines) {
-          const entry = subscriptionEntryOf(account.account, line, view, mineEntry, now, screenReadable.has(account.account), allTeams);
+          const entry = subscriptionEntryOf(account.account, line, view, mineEntry, now, screenReadable.has(account.account), allTeams, machine.plans.get(account.account));
           if (entry.machine.state !== 'unknown') withFigure.add(account.account);
           accounts.push(entry);
         }
@@ -1552,8 +1564,11 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
     // A stored figure older than its own window describes a window instance that passed: the row
     // keeps the age and the source, withholds the percentage and the reset, and says so.
     const expired = now - reading.observedAt >= WINDOW_MS[reading.window];
+    const planOfReading = machine.plans.get(reading.account);
     lab.accounts.push({ account: reading.account, kind: 'subscription', readable: true,
-      ...(reading.pool ? { pool: reading.pool } : {}), teams: previous?.kind === 'subscription' ? previous.teams : [],
+      ...(reading.pool ? { pool: reading.pool } : {}),
+      ...(planOfReading === undefined ? {} : { plan: planOfReading }),
+      teams: previous?.kind === 'subscription' ? previous.teams : [],
       machine: { window: reading.window,
         left: expired ? null : reading.left,
         used: expired ? null : reading.used,
@@ -1622,7 +1637,14 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
           else seatsOther += 1;
         }
       }
-      accounts.push({ account: entry.account, ...(entry.pool ? { pool: entry.pool } : {}), seats, ...(seatsOther > 0 ? { seatsOther } : {}) });
+      const plan = machine.plans.get(entry.account);
+      accounts.push({
+        account: entry.account,
+        ...(entry.pool ? { pool: entry.pool } : {}),
+        ...(plan === undefined ? {} : { plan }),
+        seats,
+        ...(seatsOther > 0 ? { seatsOther } : {}),
+      });
     }
     return { lab: lab.lab, accounts };
   });
@@ -1721,12 +1743,12 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
   // team's store.
   const breakdowns: ReportTeamBlock[] = [];
   if (mineEntry !== null && mineName !== null) {
-    breakdowns.push({ team: mineName ?? 'mine', seats: seatRowsOf(mineEntry, live, now) });
+    breakdowns.push({ team: mineName ?? 'mine', seats: seatRowsOf(mineEntry, live, now, machine.plans) });
   }
   if (allTeams && view.full) {
     for (const team of teamOrder) {
       if (team === mineEntry) continue;
-      breakdowns.push({ team: nameOf(team), root: team.root, seats: seatRowsOf(team, live, now) });
+      breakdowns.push({ team: nameOf(team), root: team.root, seats: seatRowsOf(team, live, now, machine.plans) });
     }
   }
   if (allTeams && !view.full) {
@@ -1767,7 +1789,7 @@ const SEAT_COST_UNREAD = 'no money cost was read from this seat\'s screen this r
  * the windows the live read did not answer, marked `estimated`. A seat with neither carries no
  * window at all — the tree prints `unknown`, never a zero.
  */
-function seatRowsOf(entry: TeamEntry, live: QuotaFacts | null, now: number): ReportSeatRow[] {
+function seatRowsOf(entry: TeamEntry, live: QuotaFacts | null, now: number, plans: Map<string, string>): ReportSeatRow[] {
   const run = entry.usage.session;
   let stored: Seen[] = [];
   try {
@@ -1790,13 +1812,15 @@ function seatRowsOf(entry: TeamEntry, live: QuotaFacts | null, now: number): Rep
     const paid = costs
       .filter((one) => one.seat === row.seat && mine(one))
       .sort((a, b) => b.observedAt - a.observedAt)[0] ?? null;
+    const plan = plans.get(row.account);
     return {
       seat: row.seat,
       cli: row.cli,
       account: row.account,
+      ...(plan === undefined ? {} : { plan }),
       ...(row.pool ? { pool: row.pool } : {}),
       ...(run === null ? {} : { run }),
-      windows: seatWindowsOf(row.seat, measured, bound, now),
+      windows: seatWindowsOf(row.seat, measured, bound, now, plans),
       cost: costOf(paid, now),
     };
   });
@@ -1820,8 +1844,14 @@ function costOf(paid: CostObservation | null, now: number): ReportSeatCost {
  *  for every account and window the live read left open. `measured` is this run's own read of
  *  the seat's screen; `estimated` is the watch's earlier record. The state is the project's own,
  *  so its readings need no session stamp: within one project a seat name is one seat. */
-function seatWindowsOf(seat: string, measured: readonly QuotaObservation[], stored: readonly Seen[], now: number): ReportSeatWindow[] {
+function seatWindowsOf(seat: string, measured: readonly QuotaObservation[], stored: readonly Seen[], now: number, plans: Map<string, string>): ReportSeatWindow[] {
   const windows = new Map<string, ReportSeatWindow>();
+  // The plan the owner wrote for a window's account, when there is one: the line the figure
+  // prints on leads with it (`Google AI Ultra, Gemini models`), as the machine table's rows do.
+  const planOf = (account: string): { plan?: string } => {
+    const plan = plans.get(account);
+    return plan === undefined ? {} : { plan };
+  };
   for (const one of measured) {
     if (one.window === null) continue;
     const window = one.window;
@@ -1832,6 +1862,7 @@ function seatWindowsOf(seat: string, measured: readonly QuotaObservation[], stor
     const candidate: ReportSeatWindow = {
       window,
       account: one.account,
+      ...planOf(one.account),
       left: expired ? null : one.left,
       used: expired ? null : one.used,
       resetsAt: expired || one.resetsAt === null ? null : new Date(one.resetsAt).toISOString(),
@@ -1858,6 +1889,7 @@ function seatWindowsOf(seat: string, measured: readonly QuotaObservation[], stor
     windows.set(key, {
       window: one.window,
       account: one.account,
+      ...planOf(one.account),
       left: expired ? null : one.left,
       used: expired ? null : one.used,
       resetsAt: expired || resetsAt === null ? null : new Date(resetsAt).toISOString(),
@@ -1903,6 +1935,7 @@ function subscriptionEntryOf(
   now: number,
   readable: boolean,
   allTeams: boolean,
+  plan?: string,
 ): ReportAccount {
   const newest = line.newest;
   const other = newest !== null && newest.team !== mineEntry;
@@ -1935,21 +1968,22 @@ function subscriptionEntryOf(
       return {
         team: view.full ? teamNameOf(one.team) : one.team.usage.project ?? '',
         ...(view.full ? { root: one.team.root } : {}),
-        row: reportRowOf(one.row, one.pace),
+        row: reportRowOf(one.row, one.pace, plan),
         ...(from === undefined ? {} : { borrowedFrom: from }),
       };
     })
     .sort((a, b) => (a.team < b.team ? -1 : 1));
-  return { account, kind: 'subscription', machine, teams, readable };
+  return { account, kind: 'subscription', machine, teams, readable, ...(plan === undefined || plan === '' ? {} : { plan }) };
 }
 
 /** The row's figure, copied field by field — `BudgetRow`'s own order, so the `--json` face stays
  *  byte-identical. The report is `JSON.stringify`'d, so a row carried by reference would print
  *  whatever field the internal type grows next; a field away from this list is away from both
  *  faces. The spend row's `reading` (`spendEntryOf`) is the same rule for the same reason. */
-function reportRowOf(row: BudgetRow, pace: number | null): ReportRow {
+function reportRowOf(row: BudgetRow, pace: number | null, plan?: string): ReportRow {
   return {
     account: row.account,
+    ...(plan === undefined || plan === '' ? {} : { plan }),
     window: row.window,
     // A figure older than its own window is not the current window's: both faces withhold it,
     // and `expired` says why the cells are empty.
@@ -2050,8 +2084,11 @@ export function reportText(report: UsageReport, tree = false): string {
       // machine row above it just said, machine-wide; every other why still prints, named by its
       // account now that the line no longer sits directly under it.
       const unreadable = first.kind === 'subscription' && !first.readable;
+      // The why names the account, never one of its buckets: the entry stands for the whole
+      // account, and a plan's words name it for the owner when they wrote one.
+      const whyName = first.kind === 'subscription' ? accountLabel({ account: first.account, plan: first.plan }) : first.account;
       for (const why of report.unknown.filter((one) => one.account === first.account && !(unreadable && one.why === WHY_WORDS['no-pattern']))) {
-        extras.push(`  ${first.account}  (${why.scope === 'another' ? 'another team' : why.scope}: ${why.why})`);
+        extras.push(`  ${whyName}  (${why.scope === 'another' ? 'another team' : why.scope}: ${why.why})`);
       }
       at = end;
     }
@@ -2090,7 +2127,7 @@ export function reportText(report: UsageReport, tree = false): string {
     lines.push('', block.team);
     lines.push(...renderTable({
       headers: ['SEAT', 'CLI', 'ACCOUNT'],
-      rows: block.seats.map((seat) => [seat.seat, seat.cli, `${seat.account}${seat.pool ? ` (${seat.pool})` : ''}`]),
+      rows: block.seats.map((seat) => [seat.seat, seat.cli, accountLabel(seat)]),
     }));
     // The seat figures are the tree's detail: the default table stays the table it was, and
     // `--tree` adds each seat's own windows, their marks and the one spend line under it.
@@ -2114,24 +2151,26 @@ function seatFiguresText(block: ReportTeamBlock): string[] {
   // team the caller already read, and a session name here would be one more line to keep true.
   const lines: string[] = [];
   for (const seat of block.seats) {
-    if (seat.windows.length === 0) lines.push(`  ${seat.seat}  ${seat.cli}  ${seat.account}  unknown  no reading for this seat`);
+    const label = accountLabel(seat);
+    if (seat.windows.length === 0) lines.push(`  ${seat.seat}  ${seat.cli}  ${label}  unknown  no reading for this seat`);
     for (const one of seat.windows) {
+      const account = accountLabel(one);
       if (one.expired) {
-        lines.push(`  ${seat.seat}  ${seat.cli}  ${one.account}  ${one.window}  no fresh reading  ${one.mark}  ${one.source}  read ${one.age} ago`);
+        lines.push(`  ${seat.seat}  ${seat.cli}  ${account}  ${one.window}  no fresh reading  ${one.mark}  ${one.source}  read ${one.age} ago`);
         continue;
       }
       const left = one.left === null ? 'left unknown' : `left ${one.left}%`;
       const used = one.used === null ? 'used unknown' : `used ${one.used}%`;
       const reset = one.resetsIn === null ? 'resets not printed' : `resets in ${one.resetsIn}`;
       const stale = one.stale ? '  stale' : '';
-      lines.push(`  ${seat.seat}  ${seat.cli}  ${one.account}  ${one.window}  ${left}  ${used}  ${reset}  ${marginWord(one.margin)}  ${one.mark}  ${one.source}  read ${one.age} ago${stale}`);
+      lines.push(`  ${seat.seat}  ${seat.cli}  ${account}  ${one.window}  ${left}  ${used}  ${reset}  ${marginWord(one.margin)}  ${one.mark}  ${one.source}  read ${one.age} ago${stale}`);
     }
     // The spend line belongs to its seat: the amount is the pane's own session, so two seats on
     // one account print their own figures, and one no screen answered for prints `unknown`.
     const cost = seat.cost.source === 'unknown' || seat.cost.amount === null
       ? `unknown  ${seat.cost.why ?? SEAT_COST_UNREAD}`
       : `$${seat.cost.amount}  ${seat.cost.source}  ${seat.cost.readFrom ?? 'status line'}${seat.cost.age === undefined ? '' : `  read ${seat.cost.age} ago`}`;
-    lines.push(`  ${seat.seat}  ${seat.cli}  ${seat.account}  cost  ${cost}`);
+    lines.push(`  ${seat.seat}  ${seat.cli}  ${label}  cost  ${cost}`);
   }
   return lines;
 }
@@ -2150,7 +2189,10 @@ function paceWord(pace: number | null): string {
  *  stands in its place, since `pace not known` would read as a failed computation where the
  *  figure is real and withheld. Every other row keeps its word, in either view. */
 function accountCells(entry: ReportAccount, report: UsageReport): string[] {
-  const account = entry.kind === 'subscription' && entry.pool ? `${entry.account} (${entry.pool})` : entry.account;
+  // A subscription row leads with the owner's own words for it when they wrote a plan down, and
+  // always names its bucket the way the CLI does (`Gemini models`, `Claude and GPT models`):
+  // `claude-gpt` is the tool's private word for a pool and means nothing at a terminal.
+  const account = entry.kind === 'subscription' ? accountLabel(entry) : entry.account;
   if (entry.kind === 'spend') {
     const m = entry.machine;
     if (m.state === 'unknown' || m.amount === null || m.currency === null || m.age === null) {
@@ -2277,7 +2319,9 @@ function watchOf(m: ReportMachine, report: UsageReport): string {
  *  longer sits under the account's own line, then the team, then the figure the team's reading
  *  holds. */
 function teamRowText(row: ReportTeamRow): string {
-  return `  ${row.row.account}  ${row.team}  ${budgetLine(row.row).slice(row.row.account.length + 2)}  ${paceWord(row.row.pace)}${borrowedClause(row.borrowedFrom)}`;
+  // The row leads with the account's label when the owner wrote its plan down; the rest of the
+  // line is the budget row's own words, which still begin with the account itself.
+  return `  ${accountLabel(row.row)}  ${row.team}  ${budgetLine(row.row).slice(row.row.account.length + 2)}  ${paceWord(row.row.pace)}${borrowedClause(row.borrowedFrom)}`;
 }
 
 function spendRowText(account: string, row: ReportSpendRow): string {

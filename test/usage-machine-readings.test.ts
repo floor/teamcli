@@ -180,8 +180,8 @@ test('machine updates merge accounts and pools, reject older updates, and refres
   expect(readings.find((one) => one.pool === 'claude-gpt')?.resetsAt).toBe(NOW + 3601000);
   const view = { full: true, mine: null };
   const text = reportText(reportOf(machineUsage(home, NOW + 60000, view), view, NOW + 60000, []));
-  expect(text).toMatch(/google-antigravity \(gemini\)\s+weekly\s+10%/);
-  expect(text).toMatch(/google-antigravity \(claude-gpt\)\s+weekly\s+80%/);
+  expect(text).toMatch(/google-antigravity \(Gemini models\)\s+weekly\s+10%/);
+  expect(text).toMatch(/google-antigravity \(Claude and GPT models\)\s+weekly\s+80%/);
   expect(payingPoolOf({ cli: 'agy', launch: 'agy', vendor: 'anthropic', model: 'Gemini 3.1' })).toBe('gemini');
   expect(payingPoolOf({ cli: 'antigravity', launch: 'agy', vendor: 'google', model: 'Claude Opus' })).toBe('claude-gpt');
 });
