@@ -3,8 +3,9 @@
 // The terminal host refuses a rename while the agent's startup is still pending, and only takes
 // one for a pane it currently lists as an agent. So the pane's foreground process can name the
 // CLI — the wait is over — before the host will take the name, and one refused call must not end
-// the seat. The retry keeps the same wait's budget, with a short backoff, and reports it only
-// when the wait itself runs out.
+// the seat. The retry keeps the same wait's budget, on a short backoff, and reports it only when
+// the wait itself runs out. A pane the host names for another seat is never renamed, and a host
+// that starts closing drops the naming without dropping the seat.
 //
 // Every pane, workspace, process reading and clock here is a synthetic fixture: no live terminal
 // host, CLI or pane is read.
@@ -53,11 +54,41 @@ const WAIT_SECONDS = namingSeconds();
 
 type Recorded = { seat: string; stage: string };
 
+/** One agent as the host lists it. */
+type ListedAgent = {
+  name: string | null;
+  agent: string;
+  pane: string;
+  workspace: string;
+  status: string;
+  cwd: string;
+  session: string;
+};
+
+type WorldOptions = {
+  /** What the host lists as its agents; the naming guard reads it before every rename. */
+  agents?: ListedAgent[];
+  /** Flip the host's closing flag once this many rename calls have been refused. */
+  closeOnRefusal?: number;
+};
+
 /** A host that refuses the first `refusals` rename calls and takes every one after. The create
  *  step makes the first call, so a refusal there is part of the same startup the retry covers. */
-function world(refusals: number): { host: Host; trace: { renames: () => number; records: Recorded[]; said: string[]; clock: () => number } } {
+function world(refusals: number, opts: WorldOptions = {}): {
+  host: Host;
+  trace: {
+    renames: () => number;
+    renamesAt: () => number[];
+    records: Recorded[];
+    said: string[];
+    clock: () => number;
+    isClosing: () => boolean;
+  };
+} {
   let clock = 0;
   let renames = 0;
+  let closing = false;
+  const renamesAt: number[] = [];
   const records: Recorded[] = [];
   const said: string[] = [];
   const host: Host = {
@@ -67,9 +98,13 @@ function world(refusals: number): { host: Host; trace: { renames: () => number; 
     paneRun: () => true,
     typeLine: async () => false,
     renameAgent: () => {
+      renamesAt.push(clock);
       renames += 1;
-      return renames > refusals;
+      const took = renames > refusals;
+      if (!took && opts.closeOnRefusal !== undefined && renames >= opts.closeOnRefusal) closing = true;
+      return took;
     },
+    ...(opts.agents === undefined ? {} : { agentList: () => opts.agents ?? null }),
     closeWorkspace: () => true,
     stopSession: () => true,
     kill: () => true,
@@ -92,7 +127,17 @@ function world(refusals: number): { host: Host; trace: { renames: () => number; 
     },
     log: () => {},
   };
-  return { host, trace: { renames: () => renames, records, said, clock: () => clock } };
+  return {
+    host,
+    trace: {
+      renames: () => renames,
+      renamesAt: () => [...renamesAt],
+      records,
+      said,
+      clock: () => clock,
+      isClosing: () => closing,
+    },
+  };
 }
 
 test('a rename refused while the agent starts is retried until the host takes it', async () => {
@@ -117,4 +162,43 @@ test('a host that never takes the name is retried until the wait ends, and says 
   expect(made.trace.renames()).toBeGreaterThan(2);
   expect(made.trace.said.join('')).toContain('was not named in time; left at launched');
   expect(made.trace.clock()).toBeLessThanOrEqual(WAIT_SECONDS * 1000);
+});
+
+test('the retry after a refusal waits for its backoff instead of calling again at once', async () => {
+  const made = world(3);
+  await executePlan(plan(), SESSION, made.host);
+
+  const at = made.trace.renamesAt();
+  // at[0] is the create call, at[1] the naming wait's first call; the retry that follows that
+  // refusal must come after a pause, never on the same tick.
+  const firstNaming = at[1];
+  const firstRetry = at[2];
+  if (firstNaming === undefined || firstRetry === undefined) throw new Error('the retry never called the host');
+  expect(firstRetry - firstNaming).toBeGreaterThan(0);
+});
+
+test('a pane the host names for another seat is never renamed', async () => {
+  const made = world(0, {
+    agents: [{ name: 'beta', agent: 'claude', pane: PANE, workspace: WORKSPACE, status: 'idle', cwd: '/work/acme', session: SESSION }],
+  });
+  await executePlan(plan(), SESSION, made.host);
+
+  // Not at create and not after the wait: the pane is another seat's, and a rename would take it.
+  expect(made.trace.renames()).toBe(0);
+  expect(made.trace.records.filter((record) => record.stage === 'ready')).toEqual([]);
+  expect(made.trace.said.join('')).toContain('its pane is named for another seat; left at launched');
+});
+
+test('a stop while the rename is retried aborts instead of reporting the seat unnamed', async () => {
+  const made = world(Number.POSITIVE_INFINITY, { closeOnRefusal: 2 });
+  await executePlan(plan(), SESSION, made.host, { isClosing: () => made.trace.isClosing() });
+
+  // The host started closing on the first refused naming call: the naming ends as a cancelled
+  // wait, exactly as a stop during the first wait does, and the seat keeps the stage it had
+  // (the create's). It is never reported as a seat that ran out of naming time.
+  expect(made.trace.said.join('')).not.toContain('was not named in time');
+  expect(made.trace.said.join('')).not.toContain('left at launched');
+  // The seat never leaves the stage the create recorded.
+  expect(made.trace.records.length).toBeGreaterThan(0);
+  expect(made.trace.records.every((record) => record.stage === 'launched')).toBe(true);
 });
