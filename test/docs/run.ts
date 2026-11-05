@@ -339,7 +339,7 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
     case 'brief':
       // The page's clock is pinned, so a delivery's `at` is the page's instant, and a state the
       // page seeds with fixed lifetimes prints the ids those lifetimes derive.
-      return runBrief(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
+      return runBrief(rest, io, { home: fixture.home, now: () => new Date(spec.now), gate: world.checkSources().gate });
     case 'broker':
       return runBroker(rest, io, { home: fixture.home });
     case 'approvals':
@@ -411,7 +411,7 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
     case 'policy':
       // The owner's signed declarations live under the fixture's own home; the clock is the
       // page's, so a declaration's `date` is the page's instant.
-      return runPolicy(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
+      return runPolicy(rest, io, { home: fixture.home, now: () => new Date(spec.now), gate: world.checkSources().gate });
     case 'init':
       // No login is probed in a doc run: the skeleton's seat is claude-code's, deterministically.
       return runInit(rest, io, fixture.home, undefined, { loggedIn: () => false });
@@ -457,7 +457,7 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
     case 'seat':
       return runSeat(rest, io, { ...world.statusSources(), wait: async () => false });
     case 'settings':
-      return runSettings(rest, io, { home: fixture.home, now: new Date(spec.now) });
+      return runSettings(rest, io, { home: fixture.home, now: new Date(spec.now), gate: world.checkSources().gate });
     case 'config':
       return runConfig(rest, io);
     case 'sessions':
@@ -468,7 +468,7 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       // The queue's clock is the page's: a queued swap's `queuedAt` and `deadline` are the
       // page's instant and the wait that follows it. A run reads the world's own herdr, as the
       // restart example does, never the machine's.
-      return runSwap(rest, io, { home: fixture.home, now: () => new Date(spec.now), sources: world.restartSources() });
+      return runSwap(rest, io, { home: fixture.home, now: () => new Date(spec.now), sources: world.restartSources(), gate: world.checkSources().gate });
     case 'list':
       return runList(rest, io, world.listSources());
     case 'up':
@@ -489,6 +489,7 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
         // running, and every other number is one that is gone, so no example depends on a pid
         // the machine running the suite happens to have.
         alive: (pid) => pid === PROC_PID,
+        gate: world.checkSources().gate,
       });
     case 'projects':
       // The page's registry is its own fence, `~/.config/team/projects.yaml` under the

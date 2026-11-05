@@ -4,6 +4,7 @@ import { ownerSeatHelperPath, readOwnerSeat, systemOwnerSeatKeyStore, type Owner
 import { ownerDeviceConsent } from '../security/profile.ts';
 import { readArgs } from '../args.ts';
 import { describeCaller, fileOwnerRefusal, isOwner, logTag, walkCaller } from '../caller.ts';
+import type { DelegateSources } from '../delegate.ts';
 import { devModeOwnerLiftAtCwd, type DevModeOwnerLift } from '../dev_mode.ts';
 import { currentTeam } from '../file/current.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -56,6 +57,8 @@ export type PolicyCommandOptions = {
   now?: Date | (() => Date);
   /** Test seam: the owner-seat credential store used for --owner-device consent. */
   ownerSeatStore?: OwnerSeatKeyStore;
+  /** The approved pane's read gate's own reads; the real ones when absent. */
+  gate?: DelegateSources;
 };
 
 function resolveNow(now: Date | (() => Date) | undefined): Date {
@@ -243,7 +246,7 @@ function executePolicyView(
 
   const current = currentTeam(rawIo.cwd, owner ? values.file : undefined, now, home, owner);
   if (!owner) {
-    const allowed = current.ok && mayReadTeam(current, rawIo, { home });
+    const allowed = current.ok && mayReadTeam(current, rawIo, options.gate !== undefined ? { home, gate: options.gate } : { home });
     if (!current.ok || !allowed) {
       const msg = 'this team is not yours to read';
       if (json) {

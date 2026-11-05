@@ -15,6 +15,7 @@ import {
   type CallerVerdict,
 } from '../caller.ts';
 import { charterGate } from '../charter/check.ts';
+import type { DelegateSources } from '../delegate.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { currentTeam } from '../file/current.ts';
 import { hasSeat, rewriteSeatModel, type SeatModelFields } from '../file/lines.ts';
@@ -75,6 +76,8 @@ export type SwapCommandOptions = {
   home?: string;
   now?: Date | (() => Date);
   sources?: RestartSources;
+  /** The approved pane's read gate's own reads; the real ones when absent. */
+  gate?: DelegateSources;
   /** The caller's fresh per-seat native channel health, when it has a provider. Unset leaves
    *  every native projection unproven, so the run holds such a seat. */
   presenceChannelHealthy?: (seat: string) => boolean;
@@ -310,7 +313,7 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
       refuse(rawIo, io, json, 'swap.caller', verdictRefusal(verdict, judged.caller), repairOf(verdict), notice, 'owner-or-leads');
       return 'caller';
     }
-  } else if (!owner && !mayReadTeam(current, rawIo, { home })) {
+  } else if (!owner && !mayReadTeam(current, rawIo, options.gate !== undefined ? { home, gate: options.gate } : { home })) {
     refuse(rawIo, io, json, 'swap.caller', 'this team is not yours to read', null, notice, 'team-read');
     return 'caller';
   }

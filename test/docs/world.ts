@@ -793,6 +793,12 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
         // The fixture's process table, not the machine's: the proc notes a page shows are the
         // records the same page's `team proc` examples made, never the host's own pids.
         alive: alivePid,
+        gate: {
+          standing: standingSource(home),
+          state: (dir) => readState(dir),
+          agents: () => (herdr === 'running' ? agents() : []),
+          sessionRunning: () => (herdr === 'none' ? null : herdr === 'running'),
+        },
       };
     },
     listSources(): ListSources {

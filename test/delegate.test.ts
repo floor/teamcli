@@ -666,15 +666,15 @@ describe('delegateReadGate and command gate sources', () => {
     const [delegateSession, delegatePaneId] = delegatePane.split('/');
     const delegateCaller: Io['caller'] = { kind: 'pane', pane: delegatePaneId ?? '', session: delegateSession ?? '' };
     const briefDelegate = makeIo(delegateCaller);
-    expect(await runBrief(['rollout'], briefDelegate.io, { home, now: () => new Date('2026-10-06T00:00:00Z'), gate: gateSources } as never)).toBe(0);
+    expect(await runBrief(['rollout'], briefDelegate.io, { home, now: () => new Date('2026-10-06T00:00:00Z'), gate: gateSources })).toBe(0);
     expect(briefDelegate.err()).toBe('');
 
     const policyDelegate = makeIo(delegateCaller);
-    expect(await runPolicy([], policyDelegate.io, { home, now: () => new Date('2026-10-06T00:00:00Z'), gate: gateSources } as never)).toBe(0);
+    expect(await runPolicy([], policyDelegate.io, { home, now: () => new Date('2026-10-06T00:00:00Z'), gate: gateSources })).toBe(0);
     expect(policyDelegate.err()).toBe('');
 
     const swapDelegate = makeIo(delegateCaller);
-    expect(await runSwap([], swapDelegate.io, { home, now: () => new Date('2026-10-06T00:00:00Z'), gate: gateSources } as never)).toBe(0);
+    expect(await runSwap([], swapDelegate.io, { home, now: () => new Date('2026-10-06T00:00:00Z'), gate: gateSources })).toBe(0);
     expect(swapDelegate.err()).toBe('');
   });
 });
