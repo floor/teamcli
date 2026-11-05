@@ -751,6 +751,12 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     ? comparison.rows
     : comparison.rows.filter((row) => row.state !== 'stopped');
 
+  // The seats whose own screen reads as holding text in the input box. The note below repeats
+  // that as a sentence and adds the one thing the reading can promise about it: nothing was
+  // typed there. A hint drawn in a colour the profile does not know reads the same way, so the
+  // line never tells a person to clear a box.
+  const holdsText = new Set(visibleRows.filter((row) => row.state.includes(' (unsent text)')).map((row) => row.name));
+
   // The compact table's wakeability reading, one read per row it shows. The expanded table gets
   // the same fact from `seatRegistryRows` (`wake: true` above), so the two can never disagree;
   // this path runs only where that table is not built.
@@ -795,7 +801,9 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       if (age === null || age < windowSeconds) continue;
       const waits = reading.words.replace(/^queued; /, '');
       const retry = reading.watchWake ? " the watch's typed retry has not delivered for it;" : '';
-      comparison.notes.push(`${name}: queued, not woken — its oldest unread drop has waited ${wakeAge(age)}, past the ${String(windowSeconds)}s unread window;${retry} ${waits}`);
+      const count = reading.wake.unread === null ? '' : `${String(reading.wake.unread)} unread; `;
+      const holding = holdsText.has(name) ? 'its input box reads as holding text; nothing is typed there; ' : '';
+      comparison.notes.push(`${name}: queued, not woken — ${count}${holding}its oldest unread drop has waited ${wakeAge(age)}, past the ${String(windowSeconds)}s unread window;${retry} ${waits}`);
     }
   }
 

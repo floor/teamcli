@@ -106,6 +106,7 @@ test('a seat with no endpoint and no listener is unwakeable, and its cell is fla
     conversation: false,
     endpoint: false,
     listener: false,
+    unread: 0,
     oldest_unread_seconds: null,
   });
   // The `!` is the flag: a scan finds the seat a message cannot wake before the drop stacks up.
@@ -141,7 +142,7 @@ test('a live listener and an unread drop are shown beside the class', () => {
     `${JSON.stringify({ id: DROP, from: 'lead', ts: new Date(NOW.getTime() - 5 * 60_000).toISOString() })}\n`,
   );
   const wake = read();
-  expect(wake).toMatchObject({ class: 'pull-on-turn', wakeable: false, listener: true, oldest_unread_seconds: 300 });
+  expect(wake).toMatchObject({ class: 'pull-on-turn', wakeable: false, listener: true, unread: 1, oldest_unread_seconds: 300 });
   expect(wakeCell(wake)).toBe('!pull-on-turn (inbox, unread 5m)');
 });
 
