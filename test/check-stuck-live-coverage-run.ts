@@ -32,6 +32,13 @@ mock.module('../src/herdr.ts', () => ({
     return screens[pane] ?? '';
   },
   paneProcesses: (pane: string) => processes[pane] ?? null,
+  // The same stand-in through the one-ask reader the check now uses, in the host's own answer
+  // shape: its process identity and its foreground names come from the one answer.
+  paneProcessInfo: (pane: string) => {
+    const proc = processes[pane];
+    if (proc === undefined || proc === null) return null;
+    return { process_info: { shell_pid: proc.shell, foreground_processes: proc.foreground.map((pid) => ({ pid })) } };
+  },
 }));
 
 const { realCheckSources, runTeamCheck } = await import('../src/check/team.ts');
