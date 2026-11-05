@@ -60,7 +60,8 @@ test('an ordinary ready seat keeps its existing repaint with no launch or typing
   const w=world(),f=sources(w,ORIGINAL_SPACE,false),result=await run(w,f.source);expect(result.code,result.io.out+result.io.err).toBe(0);expect(f.writes).toEqual([['title',SESSION,ORIGINAL_SPACE,'Planner'],['display',SESSION,PANE,'GPT Sol 6.1 default']]);expect(f.forbidden).toEqual([]);
 });
 test('a different conversation is left without repainting or input',async()=>{
-  const w=world(),f=sources(w,ORIGINAL_SPACE,true,'different-conversation'),result=await run(w,f.source);expect(result.code).not.toBe(2);expect(result.io.out+result.io.err).toContain('cannot tie to the launch');expect(f.writes).toEqual([]);expect(f.forbidden).toEqual([]);
+  const why=`its pane holds another conversation (different-conversation; the record's launch ran ${CONVERSATION})`;
+  const w=world(),f=sources(w,ORIGINAL_SPACE,true,'different-conversation'),result=await run(w,f.source);expect(result.code).toBe(1);expect(result.io.out).toContain(`${SEAT}: left out: ${why}\n`);expect(result.io.err).toContain(why);expect(f.writes).toEqual([]);expect(f.forbidden).toEqual([]);
 });
 function watchScene(w:World,registry:boolean,restored=true){
   const state=emptySession();state.seats[SEAT]={stage:'ready',pane:PANE,workspace:LIVE_SPACE,launched:ORIGINAL,...(registry?{}:{agent_session:CONVERSATION})};
