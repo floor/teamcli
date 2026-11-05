@@ -580,9 +580,17 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
           typedDue.push(message);
         }
       }
-      // The messages the webhook did not take are typed; a late message that is already this
-      // pass's to type is typed even when the webhook took every message the scan listed.
-      if (typedDue.length === 0 && arrived.length === 0) continue;
+      // The posts above took time, and a message that landed while they ran is in no list this
+      // pass took. With the webhook leaving nothing to type, the folder's names are read once
+      // more, after the posts, before the seat is left to a later pass; only an unseen id is
+      // opened, and one the cascade would take by webhook waits for that leg as before.
+      if (typedDue.length === 0) {
+        const after = listUnread(dropDir, context, home, mail.recordAt);
+        const late = after.filter((one) => !scanned.has(one.id)
+          && dueForWake(dropDir, one, nowMs, unreadAfter, retry === null ? null : retry.tries)
+          && !(seat.webhook !== undefined && webhookNext(seat, linesNow().get(one.id))));
+        if (late.length === 0) continue;
+      }
     }
     // A typed line that follows a webhook the walk tried names the leg that did not take the
     // send, so the history line reads as the walk it was (ADR zeus-message-path, D2).

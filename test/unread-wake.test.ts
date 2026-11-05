@@ -2005,6 +2005,38 @@ describe('the cascade re-wake below a channel leg', () => {
     expect(lines[1]?.ms).toBeGreaterThanOrEqual(0);
   });
 
+  test('a message that lands while the webhook posts is woken when the webhook leaves nothing to type', async () => {
+    // The scan listed one due message and the adapter takes it, so nothing the scan listed is
+    // left for the typed leg. A second message lands while that post is on the wire. The look
+    // that decides to leave the seat was taken before the post, so the late message would wait
+    // a sweep: with nothing left to type, the folder's names are read again after the posts,
+    // and the late message is woken by this pass.
+    let made: World | null = null;
+    const seen = hookReceiver(() => {
+      if (made !== null) seedMessage(made, 'acme', 'helper', UNREAD_B, 'from the owner\n\nlate', new Date(NOW.getTime() - 11 * MIN));
+      return new Response('ok');
+    });
+    const hooked = hookWorld(seen.url);
+    made = hooked.made;
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    seedSendLine(made, 'helper', UNREAD_A, { via: 'socket' });
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane');
+
+    await wakeUnreadDrops(sceneOf(made, hooked.team, one, [], { sources, live }), { unreadAfter: N });
+
+    // The adapter took the scanned message once; the message that landed during the post is the
+    // one line this pass types.
+    expect(seen.hits).toHaveLength(1);
+    expect(seen.hits[0]?.body).toContain(UNREAD_A);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.line).toContain('team drops --read');
+    expect(wakeMark(made, 'helper', UNREAD_A)).toMatchObject({ state: 'sent', evidence: 'webhook' });
+    expect(existsSync(wakePath(dropDir, UNREAD_B))).toBe(true);
+  });
+
   test('a webhook delivery the seat has not read is posted once more, and the typed leg does not run', async () => {
     const seen = hookReceiver();
     const { made, team } = hookWorld(seen.url);
