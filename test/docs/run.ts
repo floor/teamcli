@@ -190,6 +190,7 @@ function seedSessions(page: Page): void {
 }
 
 async function setup(page: Page): Promise<void> {
+  process.stderr.write(`[docs] setup start ${page.name}\n`);
   const { fixture } = page;
   const loaded = loadTeamFile(fixture.root, { home: fixture.home });
   if (loaded.ok) {
@@ -305,6 +306,7 @@ async function setup(page: Page): Promise<void> {
     if (code !== 0) throw new Error(`the fixture could not approve its team file: ${parts.join('')}`);
   }
   page.ready = true;
+  process.stderr.write(`[docs] setup done ${page.name}\n`);
 }
 
 async function command(page: Page, line: string, io: Io, answer?: string, waiting: Waiting = 'empty', reply?: string, sendId?: string): Promise<number> {
@@ -709,6 +711,7 @@ async function consoleBlock(page: Page, block: Block, failures: Failure[]): Prom
       const waiting: Waiting =
         block.attrs.waiting === '1' ? 'waiting' : block.attrs.waiting === 'unreadable' ? 'unreadable' : 'empty';
       try {
+        process.stderr.write(`[docs] ${page.name} line ${String(step.line)} $ ${step.command}\n`);
         code = await command(page, step.command, io, block.attrs.answer, waiting, block.attrs.reply, block.attrs['send-id']);
       } catch (error) {
         failures.push({ page: page.name, line: step.line, message: (error as Error).message });

@@ -10,9 +10,13 @@ import { runPage } from './docs/run.ts';
 
 const DIR = join(import.meta.dir, '..', 'docs', 'commands');
 
-const pages = readdirSync(DIR)
+const allPages = readdirSync(DIR)
   .filter((name) => name.endsWith('.md') && name !== 'README.md')
   .sort();
+
+// Throwaway diagnostic branch: only the page that hangs the hosted runner runs, so the log
+// reaches it in seconds.
+const pages = allPages.filter((name) => name === 'brief.md');
 
 function capture(): { io: Io; out(): string } {
   let out = '';
@@ -48,6 +52,6 @@ describe('the command reference', () => {
       .filter((line) => /^  \S+$/.test(line))
       .map((line) => line.trim());
     expect(listed.length).toBeGreaterThan(0);
-    expect(listed.sort()).toEqual(pages.map((name) => name.replace(/\.md$/, '')).sort());
+    expect(listed.sort()).toEqual(allPages.map((name) => name.replace(/\.md$/, '')).sort());
   });
 });
