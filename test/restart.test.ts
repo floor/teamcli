@@ -3712,10 +3712,10 @@ describe('a stored approval that does not verify', () => {
   test('the sentence names the record, the first lines, and the re-sign command', () => {
     const file = 'format: 1\nproject: acme\ncoordinator: lead\n';
     expect(unverifiedRecordSentence("acme's approval record", file)).toBe(
-      'acme\'s approval record does not verify: 3 unverified lines ("format: 1"; "project: acme"; "coordinator: lead"); re-sign with team config set format 1 --request, then team config set format 1 --approval <id>',
+      'acme\'s approval record does not verify: 3 unverified lines ("format: 1"; "project: acme"; "coordinator: lead"); re-sign with team approve, from this checkout, owner only',
     );
     expect(unverifiedRecordSentence('the approval record', 'rules: read this\n')).toBe(
-      'the approval record does not verify: 1 unverified line ("rules: read this"); re-sign with team config set rules \'read this\' --request, then team config set rules \'read this\' --approval <id>',
+      'the approval record does not verify: 1 unverified line ("rules: read this"); re-sign with team approve, from this checkout, owner only',
     );
   });
 
