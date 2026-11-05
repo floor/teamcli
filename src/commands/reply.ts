@@ -43,7 +43,7 @@ import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { ensureClientInbox, scanClientInbox, writeClientInboxFile } from '../client/inbox.ts';
 import { resolveBundleSendTarget } from '../client/bundles.ts';
 import { activeClientGrant, activeClientUpGrant, clientAdmission, readClientThreadGrant, resolveEntityCoordinator, withClientGrantLock } from '../client/records.ts';
-import { callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, logTag, standingOf, type Caller } from '../caller.ts';
+import { callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, logTag, standingOf, walkCaller, type Caller } from '../caller.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -450,12 +450,13 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   const text = args.rest.slice(1).join(' ');
   if (!close && text.trim() === '') return usage(io, json, 'a reply text is required');
 
-  const caller = callerOf(io);
-  const detached = detachedRefusal(caller, { who: 'the owner or a seat of this team', where: 'a terminal outside herdr or its own pane' });
+  // The walk decides the one detached refusal — the owner with no terminal. It places a caller
+  // under herdr as `unplaced` without reading a session, so it must never decide who may reply:
+  // the owner-or-seat admission is judged below, on the caller placed in the team's own session,
+  // exactly as `team send` places it (src/commands/send.ts).
+  const walked = walkCaller(io);
+  const detached = detachedRefusal(walked, { who: 'the owner or a seat of this team', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) return refused(io, json, detached);
-  if (caller.kind !== 'owner' && caller.kind !== 'seat') {
-    return refused(io, json, `only the owner or a seat of this team replies; this call is ${describeCaller(caller)}`);
-  }
 
   const loaded = readTeamConfig(io.cwd, { home: host.home });
   if (!loaded.ok) {
@@ -469,14 +470,17 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   const judged = judgeCallerIn(io, dir, team);
   const who = logTag(judged.caller);
   const standing = standingOf(dir, judged.session, judged.caller);
-  // The pane and pair checks below judge the caller placed in the session judged — the file's own,
-  // or the state session this caller stands in — never the sessionless reading the pre-file gate
-  // keeps. `placeCaller` records the session it was asked about, and `callerVerdict` and the
-  // admission's placement check both refuse a seat that carries none: the same reading `team send`
-  // judges, so a seat replying from its own pane is that seat and not "a caller of another
-  // session". A caller a test hands in is itself; its session is the one the scenes pin.
+  // Every check below judges the caller placed in the session judged — the file's own, or the
+  // state session this caller stands in. `placeCaller` records the session it was asked about,
+  // and `callerVerdict` and the admission's placement check both refuse a seat that carries
+  // none: the same reading `team send` judges, so a seat replying from its own pane is that seat
+  // and not "a caller of another session". A caller a test hands in is itself; its session is
+  // the one the scenes pin.
   const placed = judged.caller;
-  const me = placed.kind === 'seat' ? placed.name : caller.kind === 'seat' ? caller.name : 'owner';
+  if (placed.kind !== 'owner' && placed.kind !== 'seat') {
+    return refused(io, json, `only the owner or a seat of this team replies; this call is ${describeCaller(placed)}`);
+  }
+  const me = placed.kind === 'seat' ? placed.name : 'owner';
 
   // The id is looked up before the key is read: a name nothing holds needs no key to say so, and
   // a machine that never sent or read a record still gets the honest refusal rather than a
@@ -548,7 +552,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   if (close) {
     // Closing is the addressee's own act on its own thread: the standing check every write into
     // a seat's folder asks, and nothing else — no admission, since no message is written.
-    if (caller.kind === 'seat' && (placed.kind !== 'seat' || callerVerdict(placed, me, standing).kind !== 'ok')) {
+    if (placed.kind === 'seat' && callerVerdict(placed, me, standing).kind !== 'ok') {
       raiseSecurityRefusal(team, root, host.home, dir, placed, 'placement', null, host.now());
       return refused(io, json, `seat ${me} is not this call on its own pane and session; this call is ${describeCaller(placed)}`);
     }
@@ -611,8 +615,8 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   // else. A plain grant must carry send and messages (`--inbox`); a bundle must carry `reply`.
   // A seat cannot widen either into a conversation, and a client cannot either.
   if (answered.from_client !== undefined) {
-    if (caller.kind !== 'seat') {
-      return clientRefused(io, json, `a client thread is answered by its recipient seat, not by ${describeCaller(caller)}; nothing was written`);
+    if (placed.kind !== 'seat') {
+      return clientRefused(io, json, `a client thread is answered by its recipient seat, not by ${describeCaller(placed)}; nothing was written`);
     }
     if (placed.kind !== 'seat' || callerVerdict(placed, me, standing).kind !== 'ok') {
       raiseSecurityRefusal(team, root, host.home, dir, placed, 'placement', null, host.now());
