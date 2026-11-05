@@ -724,18 +724,18 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     }
     seatApproved = seat.kind === 'admitted';
   }
-  if (clientDown === null && !seatApproved && !isOwner(walkCaller(io))) {
-    seatApproved = ownerSeatRuleAdmits('team-down', io.cwd, dry, io, seatSources);
-  }
   // No create-grant admits a run with no terminal: the record matches the caller's own registry
   // record, and a caller outside herdr has none. This sentence is answered before any file is
   // read, as `init` asks it; the route names who may run it, so the sentence does not send every
   // reader to the owner. An owner-seat answer has already admitted this run.
   const detached = clientDown !== null || seatApproved ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) {
-    refuse(io, json, 'down', { id: 'down.detached', message: detached, repair: null });
-    // exit: down.detached
-    return 1;
+    seatApproved = ownerSeatRuleAdmits('team-down', io.cwd, dry, io, seatSources);
+    if (!seatApproved) {
+      refuse(io, json, 'down', { id: 'down.detached', message: detached, repair: null });
+      // exit: down.detached
+      return 1;
+    }
   }
   // Dev mode is resolved from the run's file below, once its chain is known.
   const refusals: DownRefusal[] = [];
@@ -945,7 +945,12 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // whole team, exactly as the owner's own `down` does: no seat of it is the caller.
   // A client's own down grant is the same kind of second door, and the verification above already
   // judged it whole: it admits whatever the caller is, for the grant's folder alone.
-  const createGranted = clientDown !== null || (!branching() && rule.kind !== 'ok'
+  // An owner-seat approval for this run, or a signed always rule asked only where the ordinary
+  // rule refused, admits it the way a create-grant does.
+  if (clientDown === null && !seatApproved && !branching() && rule.kind !== 'ok') {
+    seatApproved = ownerSeatRuleAdmits('team-down', root, dry, io, seatSources);
+  }
+  const createGranted = clientDown !== null || seatApproved || (!branching() && rule.kind !== 'ok'
     && readEntityCreateGrants(sources.home ?? homedir()).length > 0
     && entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: io.cwd }));
 

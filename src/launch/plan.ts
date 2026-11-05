@@ -7,6 +7,7 @@ import { cliWordList, launchCommandOrRefusal, pinnedRecordLine, resumeCarry, she
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
+import { shellScriptWordOf } from './cli-scope.ts';
 import { grokSandboxOf, type GrokSandbox } from './grok-sandbox.ts';
 import { launchedCliBinary } from './line.ts';
 import type { WaitingRecord } from '../state.ts';
@@ -36,7 +37,20 @@ export type Op =
    *  inbox server resolves the team from when the folder is a lobby. `watcher` is how the seat
    *  will learn a drop is waiting, as this run leaves it; recorded with the launch. Absent only
    *  on a hand-built op: every planned launch names them. */
-  | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string; cli?: string; cwd?: string; teamFile?: string; watcher?: CliWatcher;
+  | { do: 'launch'; seat: string; label: string; command: string; pane?: string;
+      /**
+       * The seat's own recorded pane is reused: the command runs there, nothing is created and
+       * nothing is closed. The value is the process identity the seat's record holds; the live
+       * run reads the pane, its workspace, its process and the agent list again immediately
+       * before the launch. Only a pane the workspace still lists, whose own shell is the only
+       * process in front and that the host does not name for another seat, is launched in — a
+       * pane back at the recorded CLI is the seat's again, and a pane holding anything else
+       * leaves the seat out with nothing launched.
+       */
+      reuse?: LaunchedIdentity;
+      /** The workspace the reused pane sits in; read again with the pane before the launch. */
+      workspace?: string;
+      notice?: string; cli?: string; cwd?: string; teamFile?: string; watcher?: CliWatcher;
       /**
        * The base recipe the seat's record keeps when this run records it: `seat.launch` with the
        * profile's pinned feature words appended, never the expanded command the pane runs (the
@@ -159,6 +173,13 @@ export type Op =
        */
       reload?: { detail: string };
     }
+  /** A seat relaunched in a fresh workspace had a recorded pane the host did not restore. Its
+   *  recorded workspace is closed only here, after the seat is ready on its replacement, and only
+   *  when a fresh reading still shows that workspace holding the one old pane, bare at its own
+   *  shell and not named for another seat. Every other reading — an unreadable pane, one with a
+   *  process beside its shell, a name the host gives another seat — leaves the workspace and
+   *  says why. */
+  | { do: 'close-leftover'; seat: string; pane: string; workspace: string; cli?: string }
   /**
    * The host restored the seat's pane and cleared its name. Re-read the host, re-run the same
    * proof, and only then rename the pane back and record the identity it holds now. No typing,
@@ -322,6 +343,13 @@ export interface UpSeat {
   replacedPane?: string;
   /** The recorded workspace, when the host still lists it. Named on that same line, and not closed. */
   leftWorkspace?: string;
+  /**
+   * A missing pane's recorded workspace, when the host still lists it: closed after the seat is
+   * ready on its replacement, never before. The plan's reading only says the host listed it; the
+   * close re-reads the workspace and its old pane immediately before it (`execute.ts`), and any
+   * other reading leaves the workspace and says so.
+   */
+  closeLeftover?: { pane: string; workspace: string };
   /** The seat works in worktrees: it waits in the lobby until a brief names its worktree. */
   lobby?: boolean;
   /**
@@ -342,6 +370,12 @@ export interface UpSeat {
     drift?: { way: string };
     /** Set by `team reload`: close only at an idle prompt, then launch the file's line. */
     reload?: { detail: string };
+    /**
+     * The pane is back at its shell and still the seat's own: the launch runs in it, and nothing
+     * is created or closed. The live run re-reads the pane and its workspace immediately before
+     * the launch, and a changed reading leaves the seat out with nothing launched.
+     */
+    reuse?: true;
   };
   /** A ready seat whose model drifted and that this `up` will not close: herdr reports it
    *  working, or its screen shows a running turn. The record stays ready. */
@@ -442,9 +476,12 @@ export interface UpSeat {
  * is left as it is.
  */
 export function launchWillRun(
-  seat: Pick<UpSeat, 'stage' | 'pane' | 'agentLive' | 'waiting'>,
+  seat: Pick<UpSeat, 'stage' | 'pane' | 'agentLive' | 'waiting' | 'repair'>,
 ): boolean {
   const waiting = seat.waiting;
+  // A seat whose own pane came back at its shell runs its line again in that pane: nothing is
+  // created beside it and nothing is closed.
+  if (!waiting && seat.repair?.reuse === true) return true;
   const fresh = !waiting && (seat.stage === undefined || !seat.pane);
   return !waiting && (fresh || (seat.stage === 'launched' && !seat.agentLive));
 }
@@ -557,6 +594,60 @@ function unquoteWord(word: string): string {
   return out;
 }
 
+function unwrapCodexCommand(command: string): string {
+  let current = command;
+  for (let depth = 0; depth < 4; depth += 1) {
+    const found = shellScriptWordOf(current);
+    if (found === null) break;
+    current = found.word.text;
+  }
+  return current;
+}
+
+export function codexCommandHasFlag(command: string, flag: string): boolean {
+  const words = cliWordList('codex', command);
+  if (words !== null) {
+    let positional = false;
+    for (const word of words) {
+      if (word === '--') {
+        positional = true;
+        continue;
+      }
+      if (positional) continue;
+      if (word === flag || word.startsWith(`${flag}=`)) return true;
+    }
+    return false;
+  }
+  const unwrapped = unwrapCodexCommand(command);
+  const rawWords: string[] = unwrapped.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
+  for (const raw of rawWords) {
+    const word = unquoteWord(raw);
+    if (word === '--') break;
+    if (word === flag || word.startsWith(`${flag}=`)) return true;
+  }
+  return new RegExp(`(^|\\s)${flag}(=|\\s|$)`).test(unwrapped);
+}
+
+export function codexCommandRemoteUrl(command: string): string | null {
+  const unwrapped = unwrapCodexCommand(command);
+  const words: string[] = unwrapped.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
+  let found: string | null = null;
+  for (let i = 0; i < words.length; i++) {
+    const word = unquoteWord(words[i]!);
+    if (word === '--') break;
+    if (word === '--remote') {
+      const next = words[i + 1];
+      if (next !== undefined) {
+        found = unquoteWord(next);
+        i++;
+      }
+    } else if (word.startsWith('--remote=')) {
+      found = unquoteWord(word.slice('--remote='.length));
+    }
+  }
+  return found;
+}
+
 /**
  * The configuration a managed Codex endpoint is started with, from the seat's own line.
  * Measured on codex-cli 0.161.0: a TUI attached with `--remote` runs its turns under the
@@ -570,7 +661,8 @@ function unquoteWord(word: string): string {
  * prompt word shaped like an option never becomes an endpoint permission.
  */
 export function codexEndpointConfig(command: string): string[] {
-  const words: string[] = command.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
+  const unwrapped = unwrapCodexCommand(command);
+  const words: string[] = unwrapped.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
   const config: string[] = [];
   const toml = (value: string): string => JSON.stringify(value);
   // A joined value is part of its flag's own word: `--flag=value`, and a short option's
@@ -631,6 +723,22 @@ export function codexEndpointConfig(command: string): string[] {
  * and provider.py. This measurement used an endpoint carrying the line's config words.
  */
 export function remoteCodexCommand(command: string): string {
+  const trimmed = command.trimEnd();
+  const script = shellScriptWordOf(trimmed);
+  if (script !== null && script.trailing.length === 0) {
+    const inner = remoteCodexCommand(script.word.text);
+    if (inner === script.word.text) return command;
+    const open = trimmed[script.word.start];
+    const close = trimmed[script.word.end - 1];
+    if (open === "'" && close === "'") {
+      const encoded = `'${inner.replaceAll("'", "'\\''")}'`;
+      return `${trimmed.slice(0, script.word.start)}${encoded}${trimmed.slice(script.word.end)}${command.slice(trimmed.length)}`;
+    }
+    if (open === '"' && close === '"') {
+      const encoded = `"${inner.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('$', '\\$').replaceAll('`', '\\`')}"`;
+      return `${trimmed.slice(0, script.word.start)}${encoded}${trimmed.slice(script.word.end)}${command.slice(trimmed.length)}`;
+    }
+  }
   // Raw shell words, quotes kept: a word is only ever matched whole and unquoted, so a quoted
   // argument (the rules line, a `-c` value) that happens to hold `resume` is never touched.
   const words: string[] = command.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
@@ -927,12 +1035,15 @@ export function upPlan(input: UpInput): Step[] {
       });
       continue;
     }
-    const pane = seat.pane ?? paneOf(seat.name);
     const cwd = isAbsolute(seat.cwd) ? seat.cwd : resolve(input.root, seat.cwd);
     // A seat recorded waiting is never launched again: its recorded pane is reused, and the
     // idle step below reads it fresh and asks its owner (§5).
     const waiting = seat.waiting;
-    const fresh = !waiting && (seat.stage === undefined || !seat.pane);
+    // The seat's own recorded pane came back at its shell: the line runs there, and neither a
+    // workspace is created nor one is closed.
+    const reuse = !waiting && seat.repair?.reuse === true ? seat.repair : undefined;
+    const fresh = !waiting && reuse === undefined && (seat.stage === undefined || !seat.pane);
+    const pane = reuse?.pane ?? seat.pane ?? paneOf(seat.name);
     // The same condition as the launch step below. A seat already running keeps
     // its idle wait, rename and rules, and hears the reading as a notice.
     const wouldLaunch = launchWillRun(seat);
@@ -1042,10 +1153,16 @@ export function upPlan(input: UpInput): Step[] {
     if (seat.budget?.kind === 'unknown') notice = seat.budget.text;
     else if (seat.budget?.kind === 'refuse') notice = seat.budget.why;
     if (seat.replacedPane) {
-      const gone = seat.leftWorkspace
-        ? `its recorded pane ${seat.replacedPane} was gone and was replaced; its workspace ${seat.leftWorkspace} was left`
-        : `its recorded pane ${seat.replacedPane} was gone and was replaced`;
+      const gone = seat.closeLeftover
+        ? `its recorded pane ${seat.replacedPane} was gone and was replaced; its recorded workspace ${seat.closeLeftover.workspace} is closed once the seat is ready, if it still holds only the old pane`
+        : seat.leftWorkspace
+          ? `its recorded pane ${seat.replacedPane} was gone and was replaced; its workspace ${seat.leftWorkspace} was left`
+          : `its recorded pane ${seat.replacedPane} was gone and was replaced`;
       notice = notice ? `${notice}; ${gone}` : gone;
+    }
+    if (reuse !== undefined) {
+      const same = `its recorded pane ${reuse.pane} was at its shell; launched in the same pane`;
+      notice = notice ? `${notice}; ${same}` : same;
     }
     const takeNotice = (): string | undefined => {
       const text = notice;
@@ -1140,7 +1257,7 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
         note: launchNote,
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, recordLine, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}), ...(plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }) },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: reuse?.pane ?? seat.pane, ...(reuse === undefined ? {} : { reuse: reuse.launched, workspace: reuse.workspace }), cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, recordLine, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}), ...(plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }) },
       });
     }
     const rules = profile.rulesMode;
@@ -1163,8 +1280,8 @@ export function upPlan(input: UpInput): Step[] {
           watcher,
           seconds: profile.idleTimeout,
           command,
-          pane: seat.pane,
-          workspace: seat.workspace,
+          pane: reuse?.pane ?? seat.pane,
+          workspace: reuse?.workspace ?? seat.workspace,
           repairLine: seat.repairLine,
           ...(seat.model !== undefined && seat.version !== undefined
             ? { model: seat.model, version: seat.version, ...(seat.effort ? { effort: seat.effort } : {}) }
@@ -1191,7 +1308,7 @@ export function upPlan(input: UpInput): Step[] {
           cli: seat.cli,
           seconds: profile.idleTimeout,
           rules,
-          pane: seat.pane,
+          pane: reuse?.pane ?? seat.pane,
           ...(seat.displayAgent ? { displayAgent: seat.displayAgent } : {}),
         },
       });
@@ -1227,7 +1344,7 @@ export function upPlan(input: UpInput): Step[] {
           line: file.line,
           seconds: profile.idleTimeout,
           launchCanCarryRules: profile.rulesPrompt !== null,
-          pane: seat.pane,
+          pane: reuse?.pane ?? seat.pane,
           ...(said ? { notice: said } : {}),
         },
       });
@@ -1238,6 +1355,17 @@ export function upPlan(input: UpInput): Step[] {
         text: `${seat.name}: named, and its rules went with the launch; marked ready`,
         ...(said ? { note: said } : {}),
         do: { do: 'ready', seat: seat.name, rules: 'option', ...(said ? { notice: said } : {}) },
+      });
+    }
+    // The old workspace closes last, after every step that makes the seat ready on its
+    // replacement: a seat this run does not launch never reaches it. The close re-reads the
+    // workspace and its old pane immediately before it, and says why when it leaves them.
+    if (seat.closeLeftover !== undefined && wouldLaunch) {
+      steps.push({
+        kind: 'run',
+        argv: herdr(session, 'workspace', 'close', seat.closeLeftover.workspace),
+        note: 'closed once the seat is ready on its replacement, if it still holds only the old pane, with no CLI in it',
+        do: { do: 'close-leftover', seat: seat.name, pane: seat.closeLeftover.pane, workspace: seat.closeLeftover.workspace, cli: seat.cli },
       });
     }
   }

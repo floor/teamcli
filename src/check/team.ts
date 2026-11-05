@@ -15,7 +15,15 @@ import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, isAbsolute, relative, resolve } from 'node:path';
 import { notInForce, sessionDefaultMoveNotes } from '../approve/approval.ts';
-import { unmanagedEndpointNotes } from '../launch/codex-endpoint.ts';
+import { readRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
+import {
+  isSocketFile,
+  ownedSocketPath,
+  processStartOf,
+  recordStartMatches,
+  unmanagedEndpointNotes,
+} from '../launch/codex-endpoint.ts';
+import { codexCommandHasFlag, codexCommandRemoteUrl, codexEndpointConfig } from '../launch/plan.ts';
 import { unfinishedWebhookNotes, webhookDeliveryNotes } from '../bus/webhook-notes.ts';
 import { rulesOriginOf } from '../launch/rules.ts';
 import { declaredUnreadAfter, UNREAD_AFTER_WAKEABLE_SECONDS, unreadWindowSeconds, watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
@@ -45,7 +53,7 @@ import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, labelPersona, LEAD_NAME, seatNickname, workspaceLabel } from '../file/sections/seats.ts';
 import { inboxRegistration } from '../mcp/register.ts';
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
-import { agentList, PANE_WINDOW, paneProcesses, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { agentList, foregroundArgv0, PANE_WINDOW, paneProcessesOf, paneProcessInfo, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
 import { GENERAL_BRIEF_SHA256, briefBindingOf, currentBriefClaim, generalBriefRecord } from '../launch/general-brief.ts';
 import { seatDeliveryClass, wakeableWhileIdle } from '../launch/delivery-class.ts';
@@ -146,6 +154,18 @@ export type CheckSources = {
   daemon?: DaemonHealth;
   /** The one probe the wrapper awaits; a scene hands `daemon` instead and reads no socket. */
   daemonHealth?(home: string): Promise<DaemonHealth>;
+  /** The process and socket readings that prove a running Codex seat's managed endpoint is its
+   *  own live app-server on its planned flags; absent in scenes that do not stand one in so no
+   *  test reads this machine's process table. */
+  codexEndpoint?: CodexEndpointCheckSources;
+};
+
+export type CodexEndpointCheckSources = {
+  alive?: (pid: number) => boolean;
+  commandOf?: (pid: number) => string | null;
+  startOf?: (pid: number) => number | null;
+  isSocket?: (path: string) => boolean;
+  runtimeRoot?: string;
 };
 
 /**
@@ -176,24 +196,31 @@ export const realCheckSources: CheckSources = {
     }
     const screens: Record<string, string> = {};
     const processes: Record<string, PaneProcesses | null> = {};
+    const foreground: Record<string, string[] | null> = {};
     for (const agent of agents) {
       if (!recorded.has(agent.pane)) continue;
       const screen = paneRead(agent.pane, PANE_WINDOW, session);
       if (screen !== null) screens[agent.pane] = screen;
       // The pane's process identity, for the comparison with the one the state recorded: a pane
-      // that no longer holds what team launched is not the seat. Null when herdr can't tell.
-      processes[agent.pane] = paneProcesses(agent.pane, session);
+      // that no longer holds what team launched is not the seat. Null when herdr can't tell. The
+      // same reading carries the foreground names the restore proof ties a restored CLI with, so
+      // a pane is asked for once and both maps come from the one answer.
+      const info = paneProcessInfo(agent.pane, session);
+      processes[agent.pane] = paneProcessesOf(info);
+      foreground[agent.pane] = foregroundArgv0(info);
     }
     // A recorded seat herdr no longer lists an agent for still has its pane standing where it was
     // launched: read too, so one left holding its shell is told apart from one that is gone.
     for (const seat of team.seats) {
       const held = state.seats[seat.name];
       if (!held?.launched || !held.pane || held.pane in processes) continue;
-      processes[held.pane] = paneProcesses(held.pane, session);
+      const info = paneProcessInfo(held.pane, session);
+      processes[held.pane] = paneProcessesOf(info);
+      foreground[held.pane] = foregroundArgv0(info);
       const screen = paneRead(held.pane, PANE_WINDOW, session);
       if (screen !== null) screens[held.pane] = screen;
     }
-    return { running: true, agents, workspaces, screens, processes };
+    return { running: true, agents, workspaces, screens, processes, foreground };
   },
   branch: realSources.branch,
   standing: realSources.standing,
@@ -204,6 +231,11 @@ export const realCheckSources: CheckSources = {
   pendingGreen: realSources.pendingGreen,
   // One probe, at the command wrapper: this report is synchronous and only reads the snapshot.
   daemonHealth: realSources.daemonHealth,
+  codexEndpoint: {
+    alive: pidAlive,
+    startOf: processStartOf,
+    isSocket: isSocketFile,
+  },
 };
 
 /**
@@ -449,6 +481,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...attention.differences,
     ...labelDifferences(team, state, live),
     ...featureDifferences(team, state),
+    ...unmanagedCodexServerDifferences(team, state, live, dir, session, continuityIds, sources),
     ...rosterDifferences(team, state, live, root, sources.home),
     ...registryDifferences(team, root, sources.home),
     // A team file left beside a registry team that says something else: never silent.
@@ -1448,6 +1481,164 @@ function featureDifferences(team: TeamFile, state: SessionState): Difference[] {
     const said = featureMismatch(held.launch_line, features, held.launch_line === undefined ? undefined : cliWordList(seat.cli, held.launch_line));
     if (said === null) continue;
     out.push({ what: `${seat.name}: ${said}`, repair: `team restart ${seat.name}` });
+  }
+  return out;
+}
+
+function endpointContainsConfig(recorded: readonly string[], needed: readonly string[]): boolean {
+  for (let i = 0; i + 1 < needed.length; i += 2) {
+    if (needed[i] !== '-c') continue;
+    const pair = needed[i + 1]!;
+    let found = false;
+    for (let j = 0; j + 1 < recorded.length; j += 2) {
+      if (recorded[j] === '-c' && recorded[j + 1] === pair) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) return false;
+  }
+  return true;
+}
+
+function unmanagedCodexServerDifferences(
+  team: TeamFile,
+  state: SessionState,
+  live: Live | null,
+  dir: string,
+  session: string,
+  continuityIds: ReadonlyMap<string, string | null> | undefined,
+  sources: CheckSources,
+): Difference[] {
+  const out: Difference[] = [];
+  if (live !== null && !live.running) return out;
+  const endpointSources = sources.codexEndpoint;
+  const aliveFn = endpointSources?.alive
+    ?? sources.alive;
+  const startOfFn = endpointSources?.startOf;
+
+  for (const seat of team.seats) {
+    if (seat.stopped || seat.human === true || seat.cli !== 'codex') continue;
+    const held = state.seats[seat.name];
+    if (held?.stage !== 'ready') continue;
+    if (live !== null) {
+      const listed = live.agents.find((c) => c.name === seat.name || (held.pane !== undefined && c.pane === held.pane));
+      if (listed === undefined || (held.pane !== undefined && listed.pane !== held.pane)) continue;
+      if (!paneShowsSeat(held, listed, live, continuitySessionOf(continuityIds, seat.name, held.agent_session))) continue;
+    }
+    const lineText = held.launch_line ?? seat.launch;
+    const hasEndpointEvidence = endpointSources !== undefined
+      || held.codex_endpoint !== undefined
+      || held.presence_binding !== undefined
+      || codexCommandRemoteUrl(lineText) !== null;
+    if (!hasEndpointEvidence) continue;
+
+    const repair = `team restart ${seat.name}`;
+    const recordedRemote = codexCommandRemoteUrl(lineText);
+    const noDaemon = codexCommandHasFlag(lineText, '--no-daemon');
+    if (noDaemon && recordedRemote === null && held.codex_endpoint === undefined) continue;
+
+    const record = readRecordedCodexEndpoint(held.codex_endpoint, held.presence_binding);
+    if (record === null) {
+      if (held.launch_line === undefined && held.codex_endpoint === undefined && recordedRemote === null) {
+        out.push({
+          what: `${seat.name}: cannot tell whether it is running against its managed Codex server (no launch line or managed endpoint is recorded for this seat)`,
+          repair,
+        });
+      } else {
+        out.push({
+          what: `${seat.name}: running against an unmanaged Codex server (no valid managed endpoint is recorded for this seat)`,
+          repair,
+        });
+      }
+      continue;
+    }
+    if (held.launch_line === undefined && recordedRemote === null) {
+      out.push({
+        what: `${seat.name}: cannot tell whether it is running against its managed Codex server (its recorded launch line is missing)`,
+        repair,
+      });
+      continue;
+    }
+    if (recordedRemote !== null && recordedRemote !== record.url) {
+      out.push({
+        what: `${seat.name}: running against an unmanaged Codex server (its recorded remote ${recordedRemote} does not match ${record.url})`,
+        repair,
+      });
+      continue;
+    }
+    const owned = ownedSocketPath(dir, session, seat.name, record, endpointSources?.runtimeRoot);
+    if (owned === null) {
+      out.push({
+        what: `${seat.name}: running against an unmanaged Codex server (its recorded endpoint ${record.url} is not this seat's owned socket)`,
+        repair,
+      });
+      continue;
+    }
+    if (endpointSources?.isSocket === undefined) {
+      out.push({
+        what: `${seat.name}: cannot tell whether its managed Codex server socket is live`,
+        repair,
+      });
+      continue;
+    }
+    if (!endpointSources.isSocket(owned.path)) {
+      out.push({
+        what: `${seat.name}: running against an unmanaged Codex server (its recorded endpoint socket is not live)`,
+        repair,
+      });
+      continue;
+    }
+    if (aliveFn === undefined) {
+      out.push({
+        what: `${seat.name}: cannot tell whether its recorded app-server pid ${record.pid} is alive`,
+        repair,
+      });
+      continue;
+    }
+    if (!aliveFn(record.pid)) {
+      out.push({
+        what: `${seat.name}: running against an unmanaged Codex server (its recorded app-server pid ${record.pid} is not alive)`,
+        repair,
+      });
+      continue;
+    }
+    if (startOfFn === undefined) {
+      out.push({
+        what: `${seat.name}: cannot tell whether its recorded app-server pid ${record.pid} is the one its launch started (its start time cannot be read)`,
+        repair,
+      });
+      continue;
+    }
+    const started = startOfFn(record.pid);
+    if (started === null || !Number.isFinite(Date.parse(record.started_at))) {
+      out.push({
+        what: `${seat.name}: cannot tell whether its recorded app-server pid ${record.pid} is the one its launch started (its start time cannot be read)`,
+        repair,
+      });
+      continue;
+    }
+    if (!recordStartMatches(record, started)) {
+      out.push({
+        what: `${seat.name}: running against an unmanaged Codex server (its recorded app-server pid ${record.pid} started at another time than its endpoint record)`,
+        repair,
+      });
+      continue;
+    }
+    if (record.config === undefined) {
+      out.push({
+        what: `${seat.name}: cannot tell whether its managed Codex server carries the seat's start flags (its endpoint record names no config)`,
+        repair,
+      });
+      continue;
+    }
+    const plannedFlags = codexEndpointConfig(lineText);
+    if (!endpointContainsConfig(record.config, plannedFlags)) {
+      out.push({
+        what: `${seat.name}: running against an unmanaged Codex server (its recorded endpoint config lacks the seat's start flags)`,
+        repair,
+      });
+    }
   }
   return out;
 }
