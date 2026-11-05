@@ -37,6 +37,7 @@ import { messageKeyOf } from '../src/store/keys.ts';
 import { takenDropPath } from '../src/send/taken.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
+import { MailPass } from '../src/watch/mail-pass.ts';
 import type { RetrySources } from '../src/watch/retry.ts';
 import { defaultWatch } from '../src/file/sections/watch.ts';
 import { declaredUnreadAfter, UNREAD_AFTER_PULL_SECONDS, UNREAD_AFTER_WAKEABLE_SECONDS, unreadWindowSeconds } from '../src/watch/rhythm.ts';
@@ -436,6 +437,34 @@ describe('wakeUnreadDrops', () => {
     expect(one.typed).toEqual([]);
     expect(one.enters).toBe(0);
     expect(said).toEqual([]);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+  });
+
+  test('a message that lands after the pass listed the folder is woken by the same pass', async () => {
+    // The pass lists the seat's folder once, before it takes the seat's lock. A message that
+    // lands after that listing is in neither list the pass took, and the under-lock re-read
+    // used to only narrow them: the late message waited for the next pass. The re-read finishes
+    // the listing too — a message new since the scan is due now, and it is woken in this pass.
+    const made = world();
+    const team = teamOf(typedTeamText(made.root, lobbyDir(made.home), 'muse'));
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nfirst', new Date(NOW.getTime() - 11 * MIN));
+    const mail = new MailPass({ dir: made.dir, root: made.root, session: 'acme', home: made.home });
+    // The pass's first scan, before anything else lands: the folder holds one message.
+    expect(mail.unread('helper').map((one) => one.id)).toEqual([UNREAD_A]);
+    // The seat reads that one, and a second message lands, both after the listing.
+    readInbox(made, UNREAD_A, 'helper', 'acme');
+    seedMessage(made, 'acme', 'helper', UNREAD_B, 'from the owner\n\nsecond', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane');
+
+    await wakeUnreadDrops({ ...sceneOf(made, team, one, [], { sources, live }), mail }, { unreadAfter: N });
+
+    // The late message earns this pass's one wake; the message read after the listing earns none.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.line).toContain('team drops --read');
+    expect(existsSync(wakePath(dropDir, UNREAD_B))).toBe(true);
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
   });
 
@@ -1063,6 +1092,29 @@ describe('reportUnreadDrops', () => {
     const again: string[] = [];
     reportUnreadDrops(sceneOf(made, team, one, again), { unreadAfter: N });
     expect(again).toEqual([]);
+  });
+
+  test('a message read after the pass listed the folder is not reported as queued, not woken', () => {
+    // The report reads the list the pass took before the seat's lock was ever asked for. A
+    // receipt that landed since is the read itself: reporting the message as still unread would
+    // be a loss the sender is told about but never suffered. The read is checked again for the
+    // few messages past the window, and a read one is left out.
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nnobody came', new Date(NOW.getTime() - 21 * MIN));
+    const mail = new MailPass({ dir: made.dir, root: made.root, session: 'acme', home: made.home });
+    expect(mail.unread('lead').map((one) => one.id)).toEqual([UNREAD_A]);
+    // The seat reads its mail after the listing; the pass's list still holds the message.
+    readInbox(made, UNREAD_A, 'lead', 'acme');
+    const said: string[] = [];
+
+    reportUnreadDrops({ ...sceneOf(made, team, pane(claudeBox('')), said), mail }, { unreadAfter: N });
+
+    expect(said).toEqual([]);
+    expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(false);
+    expect(existsSync(join(made.root, '.agents', 'messages', 'owner', `unread-${UNREAD_A}.json`))).toBe(false);
+    const leadDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    expect(readdirSync(leadDir).filter((name) => MESSAGE_ID.test(name))).toEqual([UNREAD_A]);
   });
 
   test('an unread report drop is served to the lead but never reported on again', () => {

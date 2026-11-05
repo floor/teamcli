@@ -9,9 +9,9 @@
 // is read once, through one cached verified read.
 //
 // Only the pass's own reading is kept. A record is write-once, so its verified payload stands for
-// the pass. Receipts are checked when a folder is listed — once per pass, as the shared set the
-// brief asks for — so a receipt that lands later is seen by the next pass, and the wake's typing
-// leg keeps its own under-lock re-look before anything is typed. Nothing here delays that look.
+// the pass. The wake's typing leg still reads names and receipts afresh under the seat's lock,
+// before anything is typed; what it reuses is this pass's record reads, so only a record that
+// landed after the scan is opened there. Nothing here delays or narrows that look.
 import { join } from 'node:path';
 import type { KeyObject } from 'node:crypto';
 import { listUnackedMessages, type UnackedMessage } from '../commands/messages.ts';

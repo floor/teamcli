@@ -26,7 +26,7 @@ import { isNoRepository, withoutFileOffer } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
 import { isGeneralBriefRecord } from '../launch/general-brief.ts';
-import { type Held } from '../launch/rules-file.ts';
+import { heldAt, type Held } from '../launch/rules-file.ts';
 import {
   contextLine,
   formatRelativeTime,
@@ -308,11 +308,32 @@ function recordReadHeld(candidate: Candidate, root: string, session: string, key
 }
 
 /**
+ * The payload of a record another user owns, read the way this list read every record before the
+ * pass's shared reader existed: the file as JSON, then its envelope and the signature over its
+ * own payload. The strict reader refuses such a file before it opens it, and with that refusal
+ * standing alone the record would leave the unacked list even though the slow read listed it.
+ * Only that refusal falls back: the file must be a regular file this user does not own, so a
+ * record this user owns is never read twice and a link, a folder or a FIFO is refused as the
+ * reader refuses it.
+ */
+function foreignRecordPayload(path: string, key: KeyObject): RecordPayload | null {
+  const held = heldAt(path);
+  if (held.kind !== 'file') return null;
+  if (process.getuid === undefined || held.uid === process.getuid()) return null;
+  const sealed = sealedRecordOf(readJson(path));
+  if (sealed === null) return null;
+  const auth = recordAuthOfSealed(sealed, key);
+  return auth.kind === 'ok' ? auth.value.payload : null;
+}
+
+/**
  * Records with no verifying read receipt, with the fields a wake line reads. A missing message
  * key yields nothing: a signature cannot be checked, and this read does not create the key. The
  * watch rings from this list. The receipt is checked before the record is read, and the record is
  * read once: `records` lets a caller scanning several folders in one pass hand in the reader that
- * keeps that read for the pass.
+ * keeps that read for the pass. The one record that reader refuses by ownership — a regular file
+ * that belongs to another user — is read the slow way here, so it stays waiting mail exactly as
+ * it did before the shared reader took that read.
  */
 export function listUnackedMessages(
   root: string,
@@ -338,7 +359,7 @@ export function listUnackedMessages(
       continue;
     }
     if (recordReadHeld(candidate, root, session, state.key)) continue;
-    const payload = readRecordAt(candidate.path, candidate.id);
+    const payload = readRecordAt(candidate.path, candidate.id) ?? foreignRecordPayload(candidate.path, state.key);
     if (payload === null) continue;
     // The complete raw payload authenticates before any field this list would report is read.
     if (payload.id !== candidate.id || payload.to !== candidate.seat) continue;

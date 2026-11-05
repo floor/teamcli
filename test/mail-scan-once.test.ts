@@ -16,7 +16,7 @@
 // process-wide, and every test file of a run shares one process.
 import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WatchSources } from '../src/commands/watch.ts';
@@ -190,6 +190,43 @@ describe('the record is read after the receipt, once', () => {
     expect(readsOf(waiting)).toBe(0);
     expect(opensOf(read)).toBe(0);
     expect(readsOf(read)).toBe(0);
+  });
+
+  test('a record another user owns stays waiting on both lists, as the slow read had it', () => {
+    const w = world();
+    const waiting = seed(w, 'helper', UNREAD, new Date(AT));
+    // The file time stands in for the record's own signed `at`, which this reader cannot read
+    // when the file is not its own: a record it refuses is dated by the file, never dropped.
+    utimesSync(waiting, new Date(), new Date(AT));
+
+    // Read with this user's files: both lists show the message, dated by its record.
+    expect(listUnread(dropOf(w, 'helper'), { to: 'helper', root: w.root, session: SESSION }, w.home)
+      .map((one) => one.id)).toEqual([UNREAD]);
+    expect(listUnackedMessages(w.root, SESSION, w.home).map((one) => one.id)).toEqual([UNREAD]);
+
+    // The same files, read as another user: the strict reader refuses the record before it is
+    // opened, and both lists must still answer what they answered before the shared reader
+    // existed — the record is waiting mail on the unread list and on the unacked list.
+    const getuid = process.getuid!;
+    try {
+      process.getuid = () => getuid() + 1;
+      watchingNow(dropOf(w, 'helper'));
+
+      const unread = listUnread(dropOf(w, 'helper'), { to: 'helper', root: w.root, session: SESSION }, w.home);
+      const unacked = listUnackedMessages(w.root, SESSION, w.home);
+
+      expect(unread.map((one) => one.id)).toEqual([UNREAD]);
+      // No signed time was read: the file's own time dates it, as the slow read dated it.
+      expect(unread[0]?.ts).toBe(AT);
+      expect(unacked.map((one) => one.id)).toEqual([UNREAD]);
+      expect(unacked[0]?.from).toBe('owner');
+      // The refusal opens nothing; the list that must still see the record reads it once, the
+      // slow way, and only because the file is another user's.
+      expect(opensOf(waiting)).toBe(0);
+      expect(readsOf(waiting)).toBe(1);
+    } finally {
+      process.getuid = getuid;
+    }
   });
 });
 
