@@ -545,6 +545,13 @@ function spawnAppServer(input: { url: string; cwd?: string; config?: string[]; e
   return child.pid === undefined ? null : { pid: child.pid };
 }
 
+/** Whether a live process's start instant sits in the window in which the launch wrote `record`. */
+export function recordStartMatches(record: CodexEndpointRecord, started: number): boolean {
+  const recordedAt = Date.parse(record.started_at);
+  if (!Number.isFinite(recordedAt)) return false;
+  return started <= recordedAt + START_SKEW_MS && started >= recordedAt - START_WINDOW_MS;
+}
+
 /** The one ownership proof both the stop and the reuse paths require: the live process at the
  *  recorded pid is the `codex` binary, its command line carries exactly this record's
  *  `app-server --listen <url>`, and its own start instant sits in the window in which the launch
@@ -563,10 +570,7 @@ export function provenOwner(
   const command = proof.commandOf(record.pid);
   if (command === null || !command.includes(`app-server --listen ${record.url}`)) return false;
   const started = proof.startOf(record.pid);
-  if (started === null) return false;
-  const recordedAt = Date.parse(record.started_at);
-  if (!Number.isFinite(recordedAt)) return false;
-  return started <= recordedAt + START_SKEW_MS && started >= recordedAt - START_WINDOW_MS;
+  return started !== null && recordStartMatches(record, started);
 }
 
 /** Whether the configuration recorded beside an endpoint is the one this launch needs. A record

@@ -373,11 +373,14 @@ seats:
     return { base, root, home, dir, standing, socket, live };
   }
 
-  test('names a running codex seat attached to an unmanaged server and gives team restart <seat> as the repair', () => {
+  test('judges from recorded launch facts without reading any process command line (commandOf throws if called)', () => {
     const w = setupCheckWorld();
+    const forbidCommandOf = (): string | null => {
+      throw new Error('team check must not read any process command line');
+    };
     try {
-      // Scene A: seat has a presence_binding and is running bare codex (neither --remote nor --no-daemon),
-      // with no managed codex_endpoint recorded.
+      // Scene A: seat has a presence_binding and a recorded launch_line without --no-daemon,
+      // with no valid managed codex_endpoint recorded.
       updateState(w.dir, (state) => {
         const session = (state.sessions[SESSION] ??= emptySession());
         session.watch = { pid: 1, heartbeat: NOW.toISOString() };
@@ -409,7 +412,7 @@ seats:
         home: w.home,
         codexEndpoint: {
           alive: () => true,
-          commandOf: (pid) => (pid === 201 ? 'codex -m gpt-5.4 -a never -s danger-full-access' : null),
+          commandOf: forbidCommandOf,
           startOf: () => T0_MS,
           isSocket: () => false,
         },
@@ -419,13 +422,77 @@ seats:
       expect(ioA.out).toContain('unmanaged');
       expect(ioA.out).toContain(`repair: team restart ${SEAT}`);
 
-      // Scene B: seat records codex_endpoint, but the recorded app-server pid exited (handed off to a
-      // pre-existing unmanaged shared server) or runs with different start flags.
       const expectedConfig = [
         '-c', 'approval_policy="never"',
         '-c', 'sandbox_mode="danger-full-access"',
         '-c', 'features.mcp_oauth_refresh_coordination=false',
       ];
+
+      // Scene B1: seat recorded remote does not match its own endpoint record.
+      updateState(w.dir, (state) => {
+        const seat = state.sessions[SESSION]!.seats[SEAT]!;
+        seat.launch_line =
+          "zsh -lc 'codex -m gpt-5.4 -a never -s danger-full-access -c features.mcp_oauth_refresh_coordination=false --remote unix:///tmp/foreign.sock'";
+        seat.codex_endpoint = {
+          url: w.socket.url,
+          binding: BINDING,
+          pid: 700,
+          started_at: T0,
+          config: expectedConfig,
+        };
+      });
+      const ioB1 = testIo(w.root, { kind: 'owner' });
+      const codeB1 = runTeamCheck({ file: '.agents/team.yaml' }, ioB1, {
+        live: () => w.live,
+        branch: () => 'main',
+        standing: () => w.standing,
+        now: () => NOW,
+        home: w.home,
+        codexEndpoint: {
+          alive: (pid) => pid === 700,
+          commandOf: forbidCommandOf,
+          startOf: () => T0_MS,
+          isSocket: (path) => path === w.socket.path,
+        },
+      });
+      expect(codeB1).toBe(1);
+      expect(ioB1.out).toContain(`difference: ${SEAT}:`);
+      expect(ioB1.out).toContain('unmanaged');
+      expect(ioB1.out).toContain(`repair: team restart ${SEAT}`);
+
+      // Scene B2: endpoint record config lacks the seat's planned start flags, or pid start time mismatches.
+      updateState(w.dir, (state) => {
+        const seat = state.sessions[SESSION]!.seats[SEAT]!;
+        seat.launch_line =
+          `zsh -lc 'codex -m gpt-5.4 -a never -s danger-full-access -c features.mcp_oauth_refresh_coordination=false --remote ${w.socket.url}'`;
+        seat.codex_endpoint = {
+          url: w.socket.url,
+          binding: BINDING,
+          pid: 700,
+          started_at: T0,
+          config: ['-c', 'features.mcp_oauth_refresh_coordination=false'],
+        };
+      });
+      const ioB2 = testIo(w.root, { kind: 'owner' });
+      const codeB2 = runTeamCheck({ file: '.agents/team.yaml' }, ioB2, {
+        live: () => w.live,
+        branch: () => 'main',
+        standing: () => w.standing,
+        now: () => NOW,
+        home: w.home,
+        codexEndpoint: {
+          alive: (pid) => pid === 700,
+          commandOf: forbidCommandOf,
+          startOf: () => T0_MS,
+          isSocket: (path) => path === w.socket.path,
+        },
+      });
+      expect(codeB2).toBe(1);
+      expect(ioB2.out).toContain(`difference: ${SEAT}:`);
+      expect(ioB2.out).toContain('unmanaged');
+      expect(ioB2.out).toContain(`repair: team restart ${SEAT}`);
+
+      // Scene B3: socket not live, or recorded app-server pid exited, or pid start time mismatches.
       updateState(w.dir, (state) => {
         const seat = state.sessions[SESSION]!.seats[SEAT]!;
         seat.codex_endpoint = {
@@ -436,9 +503,33 @@ seats:
           config: expectedConfig,
         };
       });
+      for (const badEndpoint of [
+        { alive: () => true, startOf: () => T0_MS, isSocket: () => false },
+        { alive: () => false, startOf: () => T0_MS, isSocket: (path: string) => path === w.socket.path },
+        { alive: () => true, startOf: () => T0_MS + 60_000, isSocket: (path: string) => path === w.socket.path },
+      ]) {
+        const ioBad = testIo(w.root, { kind: 'owner' });
+        const codeBad = runTeamCheck({ file: '.agents/team.yaml' }, ioBad, {
+          live: () => w.live,
+          branch: () => 'main',
+          standing: () => w.standing,
+          now: () => NOW,
+          home: w.home,
+          codexEndpoint: {
+            ...badEndpoint,
+            commandOf: forbidCommandOf,
+          },
+        });
+        expect(codeBad).toBe(1);
+        expect(ioBad.out).toContain(`difference: ${SEAT}:`);
+        expect(ioBad.out).toContain('unmanaged');
+        expect(ioBad.out).toContain(`repair: team restart ${SEAT}`);
+      }
 
-      const ioB = testIo(w.root, { kind: 'owner' });
-      const codeB = runTeamCheck({ file: '.agents/team.yaml' }, ioB, {
+      // Scene C: when a fact cannot be had from recorded facts / start time (e.g. startOf returns null
+      // or endpoint record has no config), check says "cannot tell" for that seat and repair stays team restart.
+      const ioC1 = testIo(w.root, { kind: 'owner' });
+      const codeC1 = runTeamCheck({ file: '.agents/team.yaml' }, ioC1, {
         live: () => w.live,
         branch: () => 'main',
         standing: () => w.standing,
@@ -446,25 +537,27 @@ seats:
         home: w.home,
         codexEndpoint: {
           alive: (pid) => pid === 700,
-          // Live server lacks the approval/sandbox flags:
-          commandOf: (pid) => {
-            if (pid === 201) return `codex -m gpt-5.4 --remote ${w.socket.url}`;
-            if (pid === 700) return `codex app-server --listen ${w.socket.url}`;
-            return null;
-          },
-          startOf: () => T0_MS,
+          commandOf: forbidCommandOf,
+          startOf: () => null,
           isSocket: (path) => path === w.socket.path,
         },
       });
-      expect(codeB).toBe(1);
-      expect(ioB.out).toContain(`difference: ${SEAT}:`);
-      expect(ioB.out).toContain('unmanaged');
-      expect(ioB.out).toContain(`repair: team restart ${SEAT}`);
+      expect(codeC1).toBe(1);
+      expect(ioC1.out).toContain(`difference: ${SEAT}:`);
+      expect(ioC1.out).toContain('cannot tell');
+      expect(ioC1.out).toContain(`repair: team restart ${SEAT}`);
 
-      // Scene C: when the managed app-server is alive, proven, and started with the seat's flags,
-      // team check reports 0 differences for the endpoint.
-      const ioC = testIo(w.root, { kind: 'owner' });
-      runTeamCheck({ file: '.agents/team.yaml' }, ioC, {
+      updateState(w.dir, (state) => {
+        const seat = state.sessions[SESSION]!.seats[SEAT]!;
+        seat.codex_endpoint = {
+          url: w.socket.url,
+          binding: BINDING,
+          pid: 700,
+          started_at: T0,
+        };
+      });
+      const ioC2 = testIo(w.root, { kind: 'owner' });
+      const codeC2 = runTeamCheck({ file: '.agents/team.yaml' }, ioC2, {
         live: () => w.live,
         branch: () => 'main',
         standing: () => w.standing,
@@ -472,17 +565,45 @@ seats:
         home: w.home,
         codexEndpoint: {
           alive: (pid) => pid === 700,
-          commandOf: (pid) => {
-            if (pid === 201) return `codex -m gpt-5.4 --remote ${w.socket.url}`;
-            if (pid === 700) return `codex app-server --listen ${w.socket.url} ${expectedConfig.join(' ')}`;
-            return null;
-          },
+          commandOf: forbidCommandOf,
           startOf: () => T0_MS,
           isSocket: (path) => path === w.socket.path,
         },
       });
-      expect(ioC.out).not.toContain('unmanaged');
-      expect(ioC.out).not.toContain(`repair: team restart ${SEAT}`);
+      expect(codeC2).toBe(1);
+      expect(ioC2.out).toContain(`difference: ${SEAT}:`);
+      expect(ioC2.out).toContain('cannot tell');
+      expect(ioC2.out).toContain(`repair: team restart ${SEAT}`);
+
+      // Scene D: when the endpoint record, its config, socket liveness, pid start time, and recorded
+      // remote all match, team check reports 0 endpoint differences and never calls commandOf.
+      updateState(w.dir, (state) => {
+        const seat = state.sessions[SESSION]!.seats[SEAT]!;
+        seat.codex_endpoint = {
+          url: w.socket.url,
+          binding: BINDING,
+          pid: 700,
+          started_at: T0,
+          config: expectedConfig,
+        };
+      });
+      const ioD = testIo(w.root, { kind: 'owner' });
+      runTeamCheck({ file: '.agents/team.yaml' }, ioD, {
+        live: () => w.live,
+        branch: () => 'main',
+        standing: () => w.standing,
+        now: () => NOW,
+        home: w.home,
+        codexEndpoint: {
+          alive: (pid) => pid === 700,
+          commandOf: forbidCommandOf,
+          startOf: () => T0_MS,
+          isSocket: (path) => path === w.socket.path,
+        },
+      });
+      expect(ioD.out).not.toContain('unmanaged');
+      expect(ioD.out).not.toContain('cannot tell');
+      expect(ioD.out).not.toContain(`repair: team restart ${SEAT}`);
     } finally {
       rmSync(w.base, { recursive: true, force: true });
     }

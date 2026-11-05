@@ -17,11 +17,9 @@ import { join, isAbsolute, relative, resolve } from 'node:path';
 import { notInForce, sessionDefaultMoveNotes } from '../approve/approval.ts';
 import { readRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
 import {
-  codexCommandOf,
   isSocketFile,
   ownedSocketPath,
-  provenOwner,
-  sameLiveEndpointFlags,
+  recordStartMatches,
   unmanagedEndpointNotes,
 } from '../launch/codex-endpoint.ts';
 import { codexCommandHasFlag, codexCommandRemoteUrl, codexEndpointConfig } from '../launch/plan.ts';
@@ -227,7 +225,6 @@ export const realCheckSources: CheckSources = {
   daemonHealth: realSources.daemonHealth,
   codexEndpoint: {
     alive: pidAlive,
-    commandOf: codexCommandOf,
     startOf: processStartOf,
     isSocket: isSocketFile,
   },
@@ -1496,27 +1493,6 @@ function endpointContainsConfig(recorded: readonly string[], needed: readonly st
   return true;
 }
 
-function liveCodexCliCommand(
-  held: SeatState,
-  pane: string | undefined,
-  live: Live | null,
-  commandOf: (pid: number) => string | null,
-): string | null {
-  const candidates: number[] = [];
-  if (pane !== undefined) {
-    const fg = live?.processes?.[pane]?.foreground ?? [];
-    for (const pid of fg) candidates.push(pid);
-  }
-  for (const pid of held.launched?.cli ?? []) {
-    if (!candidates.includes(pid)) candidates.push(pid);
-  }
-  for (const pid of candidates) {
-    const cmd = commandOf(pid);
-    if (cmd !== null && !cmd.includes('app-server --listen ')) return cmd;
-  }
-  return null;
-}
-
 function unmanagedCodexServerDifferences(
   team: TeamFile,
   state: SessionState,
@@ -1529,11 +1505,15 @@ function unmanagedCodexServerDifferences(
   const out: Difference[] = [];
   if (live !== null && !live.running) return out;
   const endpointSources = sources.codexEndpoint;
-  const alive = endpointSources?.alive
+  const aliveFn = endpointSources?.alive
     ?? sources.closeOrphans?.alive
-    ?? sources.alive
-    ?? (() => true);
-  const commandOf = endpointSources?.commandOf ?? (() => null);
+    ?? sources.alive;
+  const startOfFn = endpointSources?.startOf
+    ?? sources.closeOrphans?.startOf
+    ?? (sources.orphans !== undefined
+      ? (pid: number): number | null =>
+          sources.orphans?.table()?.find((row) => row.pid === pid)?.startedAtMs ?? null
+      : undefined);
 
   for (const seat of team.seats) {
     if (seat.stopped || seat.human === true || seat.cli !== 'codex') continue;
@@ -1551,58 +1531,109 @@ function unmanagedCodexServerDifferences(
       || codexCommandRemoteUrl(lineText) !== null;
     if (!hasEndpointEvidence) continue;
 
-    const liveCmd = liveCodexCliCommand(held, held.pane, live, commandOf);
-    const effectiveLine = liveCmd ?? lineText;
-    const noDaemon = codexCommandHasFlag(effectiveLine, '--no-daemon');
-    const remoteUrl = codexCommandRemoteUrl(effectiveLine);
-    if (noDaemon && remoteUrl === null) continue;
-
     const repair = `team restart ${seat.name}`;
+    const recordedRemote = codexCommandRemoteUrl(lineText);
+    const noDaemon = codexCommandHasFlag(lineText, '--no-daemon');
+    if (noDaemon && recordedRemote === null && held.codex_endpoint === undefined) continue;
+
     const record = readRecordedCodexEndpoint(held.codex_endpoint, held.presence_binding);
     if (record === null) {
+      if (held.launch_line === undefined && held.codex_endpoint === undefined && recordedRemote === null) {
+        out.push({
+          what: `${seat.name}: cannot tell whether it is running against its managed Codex server (no launch line or managed endpoint is recorded for this seat)`,
+          repair,
+        });
+      } else {
+        out.push({
+          what: `${seat.name}: running against an unmanaged Codex server (no valid managed endpoint is recorded for this seat)`,
+          repair,
+        });
+      }
+      continue;
+    }
+    if (held.launch_line === undefined && recordedRemote === null) {
       out.push({
-        what: `${seat.name}: running against an unmanaged Codex server (no valid managed endpoint is recorded for this seat)`,
+        what: `${seat.name}: cannot tell whether it is running against its managed Codex server (its recorded launch line is missing)`,
         repair,
       });
       continue;
     }
-    const isSocket = endpointSources?.isSocket ?? (() => true);
+    if (recordedRemote !== null && recordedRemote !== record.url) {
+      out.push({
+        what: `${seat.name}: running against an unmanaged Codex server (its recorded remote ${recordedRemote} does not match ${record.url})`,
+        repair,
+      });
+      continue;
+    }
     const owned = ownedSocketPath(dir, session, seat.name, record, endpointSources?.runtimeRoot);
-    if (owned === null || !isSocket(owned.path)) {
+    if (owned === null) {
+      out.push({
+        what: `${seat.name}: running against an unmanaged Codex server (its recorded endpoint ${record.url} is not this seat's owned socket)`,
+        repair,
+      });
+      continue;
+    }
+    if (endpointSources?.isSocket === undefined) {
+      out.push({
+        what: `${seat.name}: cannot tell whether its managed Codex server socket is live`,
+        repair,
+      });
+      continue;
+    }
+    if (!endpointSources.isSocket(owned.path)) {
       out.push({
         what: `${seat.name}: running against an unmanaged Codex server (its recorded endpoint socket is not live)`,
         repair,
       });
       continue;
     }
-    if (liveCmd !== null && remoteUrl !== record.url) {
+    if (aliveFn === undefined) {
       out.push({
-        what: `${seat.name}: running against an unmanaged Codex server (its process is not attached to ${record.url})`,
+        what: `${seat.name}: cannot tell whether its recorded app-server pid ${record.pid} is alive`,
         repair,
       });
       continue;
     }
-    const startOf = endpointSources?.startOf
-      ?? sources.closeOrphans?.startOf
-      ?? ((pid: number): number | null =>
-        sources.orphans?.table()?.find((row) => row.pid === pid)?.startedAtMs
-        ?? (endpointSources !== undefined ? Date.parse(record.started_at) : null));
-    if (!provenOwner(record, { alive, commandOf, startOf })) {
+    if (!aliveFn(record.pid)) {
       out.push({
-        what: `${seat.name}: running against an unmanaged Codex server (its recorded app-server pid ${record.pid} is not the live owner of ${record.url})`,
+        what: `${seat.name}: running against an unmanaged Codex server (its recorded app-server pid ${record.pid} is not alive)`,
+        repair,
+      });
+      continue;
+    }
+    if (startOfFn === undefined) {
+      out.push({
+        what: `${seat.name}: cannot tell whether its recorded app-server pid ${record.pid} is the one its launch started (its start time cannot be read)`,
+        repair,
+      });
+      continue;
+    }
+    const started = startOfFn(record.pid);
+    if (started === null || !Number.isFinite(Date.parse(record.started_at))) {
+      out.push({
+        what: `${seat.name}: cannot tell whether its recorded app-server pid ${record.pid} is the one its launch started (its start time cannot be read)`,
+        repair,
+      });
+      continue;
+    }
+    if (!recordStartMatches(record, started)) {
+      out.push({
+        what: `${seat.name}: running against an unmanaged Codex server (its recorded app-server pid ${record.pid} started at another time than its endpoint record)`,
+        repair,
+      });
+      continue;
+    }
+    if (record.config === undefined) {
+      out.push({
+        what: `${seat.name}: cannot tell whether its managed Codex server carries the seat's start flags (its endpoint record names no config)`,
         repair,
       });
       continue;
     }
     const plannedFlags = codexEndpointConfig(lineText);
-    const liveServerCmd = commandOf(record.pid);
-    if (
-      record.config === undefined
-      || !sameLiveEndpointFlags(liveServerCmd, record.url, record.config)
-      || !endpointContainsConfig(record.config, plannedFlags)
-    ) {
+    if (!endpointContainsConfig(record.config, plannedFlags)) {
       out.push({
-        what: `${seat.name}: running against an unmanaged Codex server (its app-server start flags differ from the seat's launch configuration)`,
+        what: `${seat.name}: running against an unmanaged Codex server (its recorded endpoint config lacks the seat's start flags)`,
         repair,
       });
     }
