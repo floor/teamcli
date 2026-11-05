@@ -216,6 +216,33 @@ export function nativeHeldSeats(input: {
   return held;
 }
 
+/** The seats whose proven native projection says a turn is running, with the instant the word
+ *  began. Nothing is named for an unproven reading, a person wait, a session end or an absent
+ *  channel: only a state the proof itself calls `working` can age into the stuck report, and the
+ *  age is the projection's own `since` rather than a guess at what the pane is doing. */
+export function presenceWorkingSince(input: {
+  team: IdleWorkInput['team'];
+  state: IdleWorkInput['state'];
+  presence: ReadonlyMap<string, PresenceRead>;
+  channelHealthy?: (seat: string) => boolean;
+  now: Date;
+}): ReadonlyMap<string, string> {
+  const working = new Map<string, string>();
+  for (const seat of input.team.seats) {
+    if (seat.human === true) continue;
+    const read = input.presence.get(seat.name);
+    if (read === undefined || read.kind !== 'native') continue;
+    const verdict = presenceVerdict(
+      read,
+      presenceSeatOf(input.state, seat.name, input.channelHealthy),
+      { now: input.now, thresholdSeconds: 0 },
+    );
+    if (verdict.idle || verdict.reason !== 'working') continue;
+    working.set(seat.name, read.reading.since);
+  }
+  return working;
+}
+
 /** The persisted idle clock, or null when the state records no stamp the reader can parse: a
  *  seat with no provable clock is not counted idle by this snapshot. */
 function sinceOf(stamp: string | undefined): string | null {

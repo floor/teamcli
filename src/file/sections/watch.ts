@@ -47,6 +47,10 @@ export const watch: Section = {
         ...measureSchema(DURATION),
         description: 'how long a message may go without the seat\'s read receipt before the watch retries it once; the report to the sender and the lead follows at twice this window',
       },
+      stuck_after: {
+        ...measureSchema(DURATION),
+        description: 'how long a seat whose presence still says a turn is running may sit with unread mail before the lead is told it is stuck; 15m when omitted, never scaled by the tempo',
+      },
       nudge: {
         type: 'string',
         minLength: 1,
@@ -87,6 +91,7 @@ export function defaultWatch(): TeamFile['watch'] {
     nudgeWait: 600,
     unsentAfter: 60,
     unreadAfter: 600,
+    stuckAfter: 900,
     quotaMarks: [50, 75, 90],
     checks: [],
   };
@@ -94,7 +99,7 @@ export function defaultWatch(): TeamFile['watch'] {
 
 function readWatch(entry: YamlEntry | undefined, check: Check): Watched {
   const fields = check.fields(entry?.value, 'watch', [
-    'interval', 'idle_first', 'idle_owner', 'blind_after', 'idle_repeat', 'team_idle', 'nudge_wait', 'unsent_after', 'unread_after', 'nudge', 'queue_dir', 'quota_marks', 'checks',
+    'interval', 'idle_first', 'idle_owner', 'blind_after', 'idle_repeat', 'team_idle', 'nudge_wait', 'unsent_after', 'unread_after', 'stuck_after', 'nudge', 'queue_dir', 'quota_marks', 'checks',
   ]);
   const time = (name: string, fallback: number) =>
     check.measure(fields.get(name), `watch.${name}`, DURATION, '120s or 10m') ?? fallback;
@@ -126,6 +131,7 @@ function readWatch(entry: YamlEntry | undefined, check: Check): Watched {
       nudgeWait: time('nudge_wait', base.nudgeWait),
       unsentAfter: time('unsent_after', base.unsentAfter),
       unreadAfter: time('unread_after', base.unreadAfter),
+      stuckAfter: time('stuck_after', base.stuckAfter),
       quotaMarks,
       checks: readChecks(fields.get('checks'), check),
       ...(nudge !== undefined ? { nudge } : {}),

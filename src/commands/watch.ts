@@ -41,11 +41,11 @@ import { modelRuleOfPass } from '../watch/rule-pass.ts';
 import { promoteInboxDrops, retryHeldDrops } from '../watch/retry.ts';
 import { expirePendingNative } from '../watch/native.ts';
 import { confirmTakenDrops } from '../watch/taken.ts';
-import { reportUnreadDrops, wakeUnreadDrops } from '../watch/unread.ts';
+import { reportStuckSeats, reportUnreadDrops, wakeUnreadDrops } from '../watch/unread.ts';
 import { readScreen } from '../watch/screen.ts';
 import { dispatchIdleWork, type IdleDispatchResult, type WorkPush } from '../watch/dispatch.ts';
 import type { BrokerWorkSnapshot, BrokerWorkSource } from '../idle_work.ts';
-import { nativeHeldSeats } from '../watch/idle-work.ts';
+import { nativeHeldSeats, presenceWorkingSince } from '../watch/idle-work.ts';
 import { prefetchPresence } from '../watch/presence.ts';
 import { actingWatchHandover, readWatchHandover } from '../watch/handover.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
@@ -768,6 +768,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   /** The current pass's native hold, replaced before the status engine, the pass and every
    *  automatic typed path read it. Empty until the first pass has read the store. */
   let nativeHeldNow: ReadonlySet<string> = new Set();
+  /** The seats whose proven presence says a turn is running, and since when. Replaced with the
+   *  hold before every pass that could report a stuck seat. */
+  let workingSinceNow: ReadonlyMap<string, string> = new Map();
   let statusWaiters: { stop(): void; done: Promise<void> } | undefined;
   let statusWaitersKey = '';
   try {
@@ -962,6 +965,16 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           seatNames: team.seats.map((seat) => seat.name),
         });
         nativeHeldNow = nativeHeldSeats({
+          team,
+          state,
+          presence,
+          ...(sources.presenceChannelHealthy === undefined ? {} : { channelHealthy: sources.presenceChannelHealthy }),
+          now: sources.now(),
+        });
+        // The seats a proven presence says are mid-turn, with the instant the word began: the
+        // stuck report ages that word against `watch.stuck_after` rather than guessing at what
+        // the pane is doing.
+        workingSinceNow = presenceWorkingSince({
           team,
           state,
           presence,
@@ -1440,6 +1453,14 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             unreadWindows.set(seat.name, seconds);
             return seconds;
           };
+          // The stuck report runs before the wake: it names a seat the wake cannot reach — held by
+          // its native presence, or carrying a sender's pending marker — and its episode marker
+          // is what keeps the wake path's own blocked notice from saying the same thing twice.
+          reportStuckSeats(
+            { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say, ...(mail === undefined ? {} : { mail }) },
+            { unreadAfter: inForce.unreadAfter, seatWindow: unreadWindowOf },
+            { workingSince: workingSinceNow, stuckAfterSeconds: inForce.stuckAfter },
+          );
           await wakeUnreadDrops(
             { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow, ...(mail === undefined ? {} : { mail }) },
             { unreadAfter: inForce.unreadAfter, seatWindow: unreadWindowOf, rung, ...(quiet || !paceVerified ? { noNudge: true } : {}) },
