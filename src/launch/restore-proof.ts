@@ -16,7 +16,7 @@ import type { HerdrAgent, PaneProcesses } from '../herdr.ts';
 import type { SeatState } from '../state.ts';
 import { profileFor } from '../profiles/index.ts';
 import { readScreen } from '../watch/screen.ts';
-import { reportedLiveAgent } from './agent.ts';
+import { reportedAgentIsCli, reportedLiveAgent } from './agent.ts';
 import { seatProcessVerdict } from './identity.ts';
 import { usesLauncher } from './line.ts';
 
@@ -75,7 +75,9 @@ export function restoreProof(input: RestoreProofInput): RestoreProof {
     return { kind: 'none', why: `its pane is named ${entry.name}; team never adopts a pane another seat owns`, specific: true };
   }
   // 4. The declared CLI is in the pane, for both proofs. The foreground argv0s are the reading
-  //    the launch itself uses; the entry's own attribution, when it names one, must agree.
+  //    the launch itself uses; the entry's own attribution, when it names one, must name the
+  //    same CLI — its process names, or the profile's own cli where herdr's kind differs
+  //    (Cursor: kind `cursor`, process `cursor-agent`).
   const processNames = profileFor(seat.cli)?.processNames ?? [];
   if (processNames.length === 0) {
     return { kind: 'none', why: 'its launch profile names no process to look for; team cannot tie the pane' };
@@ -86,7 +88,7 @@ export function restoreProof(input: RestoreProofInput): RestoreProof {
   if (!reportedLiveAgent(input.foreground, processNames)) {
     return { kind: 'none', why: `its pane runs ${input.foreground[0] ?? 'no CLI'}; the seat's launch line runs ${seat.cli}`, specific: true };
   }
-  if (entry.agent !== null && !reportedLiveAgent([entry.agent], processNames)) {
+  if (entry.agent !== null && !reportedAgentIsCli(entry.agent, seat.cli, processNames)) {
     return { kind: 'none', why: `its pane's agent says ${entry.agent}; the seat's launch line runs ${seat.cli}`, specific: true };
   }
   // 5. The conversation decides strong versus weak. One-sided ids are refused: a recorded

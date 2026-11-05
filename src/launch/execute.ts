@@ -11,7 +11,7 @@ function saveTextFile(path: string, text: string): boolean {
     return false;
   }
 }
-import { reportedLiveAgent } from './agent.ts';
+import { reportedAgentIsCli, reportedLiveAgent } from './agent.ts';
 import { refusalReport, type Refusal } from './deliver.ts';
 import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeTarget, withoutResume, conversationMissingOnScreen } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
@@ -891,8 +891,10 @@ export async function executePlan(
   const liveSession = (seat: string, pane: string, cli: string): string | undefined => {
     const listed = host.agentList?.(session)?.find((agent) => agent.pane === pane
       && (agent.name === null || agent.name === undefined || agent.name === seat));
-    // A reading explicitly attributed to another CLI is never a resume id for this one.
-    if (listed?.agent && !reportedLiveAgent([listed.agent], profileFor(cli)?.processNames ?? [])) return undefined;
+    // A reading explicitly attributed to another CLI is never a resume id for this one. Herdr
+    // names the agent by kind, which is not always the process name (`cursor` for
+    // `cursor-agent`), so the kind is read as either the profile's cli or its process names.
+    if (listed?.agent && !reportedAgentIsCli(listed.agent, cli, profileFor(cli)?.processNames ?? [])) return undefined;
     return listed?.session || undefined;
   };
   const laterLaunchSession = (seat: string, pane: string, cli: string): { agent_session?: string } => {
