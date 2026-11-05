@@ -397,8 +397,8 @@ describe('named project channel approval', () => {
       const target = unsafe === 'foreign-file' ? w.approval() : join(w.lobby, 'alpha/.claude');
       const original = fs.lstatSync;
       const metadata = spyOn(fs, 'lstatSync').mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => {
-        const actual = Reflect.apply(original, fs, args);
-        if (args[0] !== target) return actual;
+        if (args[0] !== target) return Reflect.apply(original, fs, args);
+        const actual = original(target);
         return Object.assign(Object.create(actual), unsafe.startsWith('foreign-')
           ? { uid: (process.getuid?.() ?? 0) + 1 }
           : { mode: actual.mode | (unsafe === 'writable-folder' ? 0o022 : 0o2000) });
