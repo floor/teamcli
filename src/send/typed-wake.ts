@@ -12,10 +12,10 @@
 // The screens are the CLI's own captured frames (`test/fixtures/muse/` and
 // `test/fixtures/cursor/2026.10.22/`): `idle` is the empty box, `unsent` is the box holding the
 // line, and the profile's `working` rule is the acknowledgement.
-import { paneRead, pressEnter, typeText } from '../herdr.ts';
+import { paneRead, pressEnter, sendKey, typeText } from '../herdr.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { MESSAGE_LINE_MAX } from '../settings/message-display.ts';
-import { readScreen } from '../watch/screen.ts';
+import { readScreen, screenData } from '../watch/screen.ts';
 import { POLL_MS, SETTLE_MS } from './native.ts';
 
 /** How long after the line is typed the box is read before the first Enter, and between the two
@@ -46,6 +46,10 @@ export type TypedWakeHost = {
   type(pane: string, text: string): boolean;
   /** One Enter. False when the key was not taken. */
   enter(pane: string): boolean;
+  /** One named key — the profile's return-to-prompt key when the pane is scrolled back. Absent:
+   *  a screen read as scrolled back is refused rather than woken. False when the key was not
+   *  taken. */
+  key?(pane: string, key: string): boolean;
   wait(ms: number): Promise<void>;
 };
 
@@ -56,6 +60,7 @@ export function herdrTypedWakeHost(session: string): TypedWakeHost {
     read: (pane) => paneRead(pane, WAKE_LINES, session),
     type: (pane, text) => typeText(pane, text, session),
     enter: (pane) => pressEnter(pane, session),
+    key: (pane, key) => sendKey(pane, key, session),
     wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   };
 }
@@ -65,10 +70,10 @@ export function herdrTypedWakeHost(session: string): TypedWakeHost {
 export type TypedWakeResult = {
   /** True only when the profile's working screen showed after an Enter this wake pressed. */
   delivered: boolean;
-  /** True when this wake put at least one key into the pane (the line, or an Enter). A caller
-   *  that keeps a one-attempt reservation — a socket delivery's single re-wake — holds it when
-   *  this is true; a caller that retries releases it either way and records this so a later
-   *  report can say a wake was typed and none was confirmed. */
+  /** True when this wake put at least one key into the pane (the return key, the line, or an
+   *  Enter). A caller that keeps a one-attempt reservation — a socket delivery's single re-wake
+   *  — holds it when this is true; a caller that retries releases it either way and records
+   *  this so a later report can say a wake was typed and none was confirmed. */
   typed: boolean;
   /** How many Enters were pressed. */
   tries: number;
@@ -134,9 +139,13 @@ async function pollSubmitted(
  * Types one trigger line into the profile's idle composer and presses Enter, then waits for the
  * profile's working screen. Both idle reads happen before any key goes out, spaced by a settle:
  * a pane that is working, holds unsent text, shows a dialog or cannot be read is refused with
- * nothing typed. A box that already holds exactly the line is not typed again: Enter is pressed
- * into it. After the line is typed, Enter is pressed only into a box that reads back as
- * exactly that line; a box that is empty, holds other text or cannot be read gets no Enter.
+ * nothing typed. A pane scrolled back over its transcript — the profile's footer on its last
+ * row, the composer hidden — is returned to the prompt first, with the one key its footer names,
+ * and the two idle reads are taken after that key: the return is the only key this module sends
+ * into a screen it read as scrolled back, and it is sent once. A box that already holds exactly
+ * the line is not typed again: Enter is pressed into it. After the line is typed, Enter is
+ * pressed only into a box that reads back as exactly that line; a box that is empty, holds other
+ * text or cannot be read gets no Enter.
  * The host's Enter is the submit key, not a Return on the text, and the first one waits
  * until two reads show that same drawn line. A line longer than the composer cap, or a line
  * with a newline, is not typed. After an Enter, a box that still holds exactly the line
@@ -165,20 +174,46 @@ export async function deliverTypedWake(
   // The line is already the whole box. Press Enter into it; do not type it a second time.
   const alreadyHeld = opening !== null && first === 'unsent' && boxHoldsText(cli, line, opening);
   let typedLine = false;
+  let keyedReturn = false;
   let screen: string | null;
   if (alreadyHeld) {
     screen = opening;
   } else {
-    if (first !== 'idle') {
+    if (first === 'scroll back') {
+      // The pane sits scrolled back over its transcript: the composer is hidden and the CLI's
+      // own footer stands where it was. One press of the key that footer names returns to the
+      // prompt; the box is read twice after it, exactly as it is on any other wake, so a draft
+      // the scroll was hiding refuses and nothing working is typed into.
+      const returnKey = screenData(cli)?.scrollBack?.returnKey;
+      if (returnKey === undefined || host.key === undefined) {
+        return { delivered: false, typed: false, tries: 0, reason: 'the screen is scrolled back and no return key is bound; nothing was typed' };
+      }
+      if (!host.key(pane, returnKey)) {
+        return { delivered: false, typed: false, tries: 0, reason: 'the pane did not take the return key; nothing was typed' };
+      }
+      keyedReturn = true;
+      await host.wait(enterSettleMs);
+      const returned = seenOf(cli, host.read(pane));
+      if (returned !== 'idle') {
+        return { delivered: false, typed: keyedReturn, tries: 0, reason: `the screen read ${returned} after the return key, not an empty idle prompt; no wake line was typed` };
+      }
+    } else if (first !== 'idle') {
       return { delivered: false, typed: false, tries: 0, reason: `the first read showed ${first}, not an empty idle prompt; nothing was typed` };
     }
     await host.wait(settleMs);
     const second = seenOf(cli, host.read(pane));
     if (second !== 'idle') {
-      return { delivered: false, typed: false, tries: 0, reason: `the second read showed ${second}, not an empty idle prompt; nothing was typed` };
+      return {
+        delivered: false,
+        typed: keyedReturn,
+        tries: 0,
+        reason: keyedReturn
+          ? `the screen read ${second} on the second idle read, not an empty idle prompt; nothing was typed`
+          : `the second read showed ${second}, not an empty idle prompt; nothing was typed`,
+      };
     }
     if (!host.type(pane, line)) {
-      return { delivered: false, typed: false, tries: 0, reason: 'the pane did not take the line; nothing was typed' };
+      return { delivered: false, typed: keyedReturn, tries: 0, reason: 'the pane did not take the line; nothing was typed' };
     }
     typedLine = true;
     await host.wait(enterSettleMs);
@@ -188,7 +223,7 @@ export async function deliverTypedWake(
   let previous: string | null = null;
   let previousHeld = false;
   let settleLooks = 0;
-  const keyed = (): boolean => typedLine || tries > 0;
+  const keyed = (): boolean => keyedReturn || typedLine || tries > 0;
   const heldReason = (kind: string, pressed: boolean): string => {
     const why = kind === 'unsent' ? 'the box held text other than the line' : `the screen read ${kind}`;
     if (pressed) return `${why} and no working screen showed`;

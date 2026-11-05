@@ -48,7 +48,7 @@ import {
 } from '../dev_mode.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import type { Host } from '../launch/execute.ts';
-import { executePlan } from '../launch/execute.ts';
+import { executePlan, launchKind } from '../launch/execute.ts';
 import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, refreshCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
@@ -606,8 +606,11 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       }
       // herdr's own status is the last word on a screen the profile cannot read: one it reports
       // idle or done is closed without typing into it, and the advice says so. A working seat
-      // was refused above; anything else unread stays the refusal it was.
-      if (!(unreadIdle(listed.status) && (kind === 'idle' || kind === 'unknown'))) {
+      // was refused above; anything else unread stays the refusal it is. A pane scrolled back
+      // over its transcript is at its prompt behind the scroll, and this close types nothing —
+      // the pane is killed — so herdr's quiet word frees it as the unread screen it reads to a
+      // close decision, with no unread advice: the profile reads the screen, it is only scrolled.
+      if (!(unreadIdle(listed.status) && (kind === 'idle' || kind === 'unknown' || kind === 'scroll back'))) {
         refuse(io, json, 'reload', { id: 'reload.not-idle', message: `${seat.name} is not at an idle prompt; nothing closed`, repair: null });
         // exit: reload.not-idle
         return 1;
@@ -724,7 +727,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       processInfo: (current, pane) => launch.processInfo?.(current, pane) ?? null,
       paneText: (current, pane) => launch.paneText(current, pane),
       classify(current, pane, cli) {
-        return readScreen(cli, launch.paneText(current, pane) ?? undefined).kind;
+        return launchKind(readScreen(cli, launch.paneText(current, pane) ?? undefined).kind);
       },
       foreground: (current, pane) => launch.foreground(current, pane),
       shellBack: (current, pane) => launch.shellBack?.(current, pane) ?? null,

@@ -61,7 +61,7 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import { endpointCleanupHost } from '../launch/endpoint-cleanup.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
-import { executePlan, restoreSummaryOf, type Report, type RestoreSweepSummary } from '../launch/execute.ts';
+import { executePlan, launchKind, restoreSummaryOf, type Report, type RestoreSweepSummary } from '../launch/execute.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
 import { isSocketFile, launchCodexEndpoint, processStartOf, recordedEndpointState, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { bindCodexSeatThread } from '../launch/codex-thread-binding.ts';
@@ -3330,7 +3330,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         return Object.fromEntries(Object.entries(seats).filter(([name, seat]) => seatOfFile(name, seat, declared)));
       },
       workspacePanes: launch.workspacePanes ? (session, workspace) => launch.workspacePanes!(session, workspace) : undefined,
-      classify: (name, pane, cli) => readScreen(cli, launch.paneText(name, pane) ?? undefined).kind,
+      classify: (name, pane, cli) => launchKind(readScreen(cli, launch.paneText(name, pane) ?? undefined).kind),
       paneText: (session, pane) => launch.paneText(session, pane),
       foreground: (session, pane) => launch.foreground(session, pane),
       shellBack: (session, pane) => launch.shellBack?.(session, pane) ?? null,

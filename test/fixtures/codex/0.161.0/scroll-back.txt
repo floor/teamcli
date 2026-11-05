@@ -1,0 +1,12 @@
+  >_ OpenAI Codex (v0.161.0)
+     <workspace>
+  permissions: YOLO mode
+
+› read the release notes and summarise the changes
+
+• The release notes name three changes: the composer's chrome row, the plan
+  approval dialog and the question footer.
+
+› check the changelog for 0.161.0
+
+New activity · ↓ Back to bottom · esc

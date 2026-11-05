@@ -222,6 +222,12 @@ export type ScreenData = {
    *  `provider_error`: the box under it is not a free prompt. */
   rate_limit?: Stage;
   working?: Stage;
+  /** A pane scrolled back over its transcript, where the composer is hidden and the CLI draws
+   *  its own footer in the composer's place: the row on the pane's last non-blank line, and the
+   *  key that returns to the prompt the footer names. Read only where the composer cannot be
+   *  read, after every caution stage, so a screen that is working, unsent or a dialog never
+   *  reads as this one. Absent: a footer-shaped row is no reading at all. */
+  scrollBack?: { footer: RegExp; returnKey: string };
   /** Where the question text of a dialog sits, for the three kinds that carry one. Absent: the
    *  reader returns null and the report names the dialog without quoting it. */
   questionText?: QuestionText;

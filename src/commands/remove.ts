@@ -23,7 +23,7 @@ import { approvalStanding, type Standing } from '../store/store.ts';
 import { agentRename, paneForeground, paneForegroundCwd } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
-import { executePlan } from '../launch/execute.ts';
+import { executePlan, launchKind } from '../launch/execute.ts';
 import type { Host } from '../launch/execute.ts';
 import { downPlan, type DownSeat } from '../launch/plan.ts';
 import { logLine } from '../log.ts';
@@ -1110,7 +1110,7 @@ export async function sweepVacated(input: {
     stopSession: () => false,
     kill: () => false,
     agentPanes: (name) => launch.agentPanes(name),
-    classify: (name, pane, cli) => sources.screen(name, pane, cli).kind,
+    classify: (name, pane, cli) => launchKind(sources.screen(name, pane, cli).kind),
     sleep: sources.sleep ?? launch.sleep,
     now: () => sources.now().getTime(),
     allow: () => null,

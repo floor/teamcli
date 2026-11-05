@@ -38,7 +38,7 @@ import type { LobbyRefusal } from '../lobby/gate.ts';
 import type { InboxRegistration } from '../mcp/register.ts';
 import type { SeatState, WaitingRecord } from '../state.ts';
 import { continuitySessionOf } from '../registry/resume.ts';
-import { vendorNoticeRange } from '../watch/screen.ts';
+import { vendorNoticeRange, type Screen } from '../watch/screen.ts';
 import type { SessionEndReason } from '../sessions/registry.ts';
 import { endpointCleanupHost } from './endpoint-cleanup.ts';
 
@@ -57,6 +57,15 @@ export type ScreenKind =
   | 'rate limit'
   | 'unsent'
   | 'unknown';
+
+/** A screen reading as the launch host's kind: the closed list above has no scrolled-back
+ *  prompt, because a launch types its rules into the composer and a back-scrolled pane hides
+ *  that composer. A pane scrolled back over its transcript — idle behind the scroll, returned to
+ *  a typed prompt only by the wake's own guarded key — is the `unknown` a launch saw before the
+ *  kind existed, so every launch decision keeps its conservative reading of it. */
+export function launchKind(kind: Screen['kind']): ScreenKind {
+  return kind === 'scroll back' ? 'unknown' : kind;
+}
 
 /** What a live `up` or `down` can do, apart from deciding it. Tests stand in for all of it. */
 /** What one live exit typing ended in. `true`: the box read back as the typed text and the
