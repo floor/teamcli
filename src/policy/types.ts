@@ -1130,7 +1130,7 @@ export const DAEMON_CHORES_MODES = ['inline', 'shared', 'per-root'] as const;
 export type DaemonChoresMode = (typeof DAEMON_CHORES_MODES)[number];
 export const DAEMON_CHORES_DEFAULTS = {
   mode: 'per-root' as DaemonChoresMode,
-  sliceMs: 2000,
+  sliceMs: 20,
   missedBeats: 2,
   backoffCapMs: 30_000,
 } as const;
@@ -1148,6 +1148,17 @@ function parseChoreMode(raw: unknown): DaemonChoresMode | null {
 function choreModeProblem(name: string, raw: unknown): string | null {
   if (parseChoreMode(raw) !== null) return null;
   return `policy "${name}" needs one of inline, shared or per-root`;
+}
+
+/** Whole milliseconds from 10 to 30000: how long one slice of a chores child's pass may run before yielding. */
+function parseChoreSliceMs(raw: unknown): number | null {
+  const n = typeof raw === 'string' && /^[1-9][0-9]*$/.test(raw.trim()) ? Number.parseInt(raw.trim(), 10) : raw;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 10 && n <= 30_000 ? n : null;
+}
+
+function choreSliceMsProblem(name: string, raw: unknown): string | null {
+  if (parseChoreSliceMs(raw) !== null) return null;
+  return `policy "${name}" needs a whole number of milliseconds from 10 to 30000, such as 20`;
 }
 
 /** Whole beats from 1 to 60: how many missed child heartbeats end the child and restart it. */
@@ -1891,7 +1902,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     isWithin: (lower: DaemonChoresMode, higher: DaemonChoresMode) => CHORE_MODE_RANK[lower] <= CHORE_MODE_RANK[higher],
   },
   // How long one slice of a chores child's pass may run before it yields: whole milliseconds,
-  // 2000 when nothing declares it, and a shorter slice is the tighter one (the child answers its
+  // 20 when nothing declares it, and a shorter slice is the tighter one (the child answers its
   // heartbeat sooner). The child reads this together with the per-root sweep cadence.
   'daemon.chores-slice-ms': {
     name: 'daemon.chores-slice-ms',
@@ -1899,8 +1910,8 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     levels: ['entity', 'project', 'team'],
     defaultValue: DAEMON_CHORES_DEFAULTS.sliceMs,
     gateLifting: false,
-    parseValue: parseReadMillis,
-    valueProblem: (raw: unknown) => readMillisProblem('daemon.chores-slice-ms', raw),
+    parseValue: parseChoreSliceMs,
+    valueProblem: (raw: unknown) => choreSliceMsProblem('daemon.chores-slice-ms', raw),
     // A shorter or equal slice is tighter.
     isWithin: (lower: number, higher: number) => lower <= higher,
   },

@@ -36,6 +36,7 @@ import {
   fchmodSync,
   fstatSync,
   lstatSync,
+  opendirSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -1162,6 +1163,31 @@ function writeArchiveManifestInHeldDir(
   };
 }
 
+/** Directory entries read or non-candidate files skipped before yielding to the slice clock. */
+const DIR_SCAN_CHUNK = 64;
+
+function* sortedDirEntriesSteps(dirPath: string): Generator<void, string[]> {
+  const names: string[] = [];
+  const opened = opendirSync(dirPath);
+  try {
+    let scanned = 0;
+    for (;;) {
+      const entry = opened.readSync();
+      if (entry === null) break;
+      names.push(entry.name);
+      scanned += 1;
+      if (scanned % DIR_SCAN_CHUNK === 0) yield;
+    }
+  } finally {
+    try {
+      opened.closeSync();
+    } catch {}
+  }
+  if (names.length >= DIR_SCAN_CHUNK) yield;
+  names.sort();
+  return names;
+}
+
 /**
  * Generator driving one root's drop-archive pass a step at a time. Yields between directory and
  * candidate inspections so the chores child's slice clock can yield to the event loop and answer
@@ -1348,7 +1374,7 @@ export function* dropRetirementSteps(
     // refuses the whole pass before a single file is moved.
     let sessionEntries: string[];
     try {
-      sessionEntries = readdirSync(sendDropsDir).sort();
+      sessionEntries = yield* sortedDirEntriesSteps(sendDropsDir);
     } catch (error) {
       return fail(`${sendDropsDir}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -1374,7 +1400,7 @@ export function* dropRetirementSteps(
 
       let seatEntries: string[];
       try {
-        seatEntries = readdirSync(sessionDir).sort();
+        seatEntries = yield* sortedDirEntriesSteps(sessionDir);
       } catch (error) {
         return fail(`${sessionDir}: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -1401,7 +1427,7 @@ export function* dropRetirementSteps(
 
         let fileNames: string[];
         try {
-          fileNames = readdirSync(seatDir).sort();
+          fileNames = yield* sortedDirEntriesSteps(seatDir);
         } catch (error) {
           return fail(`${seatDir}: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -1436,7 +1462,10 @@ export function* dropRetirementSteps(
 
         const activeClaim = currentClaimIn(root, session, seat);
 
+        let candidateCheckCount = 0;
         for (const name of fileNames) {
+          candidateCheckCount += 1;
+          if (candidateCheckCount % DIR_SCAN_CHUNK === 0) yield;
           if (name.includes('.') || name.startsWith(WORK_PREFIX) || !RECORD_NAME.test(name)) continue;
           yield;
           scanned += 1;
@@ -1695,7 +1724,7 @@ export function* dropRetirementSteps(
 
     let dateEntries: string[];
     try {
-      dateEntries = readdirSync(archiveBaseHeld.path).sort();
+      dateEntries = yield* sortedDirEntriesSteps(archiveBaseHeld.path);
     } catch (error) {
       return fail(`${archiveBaseHeld.path}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -1728,14 +1757,17 @@ export function* dropRetirementSteps(
 
       let dateChildren: string[];
       try {
-        dateChildren = readdirSync(dateHeld.path).sort();
+        dateChildren = yield* sortedDirEntriesSteps(dateHeld.path);
       } catch (error) {
         return fail(`${dateHeld.path}: ${error instanceof Error ? error.message : String(error)}`);
       }
 
       const manifestNames: string[] = [];
       const archiveSessionNames: string[] = [];
+      let dateChildCount = 0;
       for (const child of dateChildren) {
+        dateChildCount += 1;
+        if (dateChildCount % DIR_SCAN_CHUNK === 0) yield;
         const childPath = join(dateHeld.path, child);
         if (!insideSendDrops(sendDropsDir, childPath)) {
           return fail(`${childPath}: path escapes send-drops`);
@@ -1835,7 +1867,7 @@ export function* dropRetirementSteps(
 
         let seatNames: string[];
         try {
-          seatNames = readdirSync(sessionHeld.path).sort();
+          seatNames = yield* sortedDirEntriesSteps(sessionHeld.path);
         } catch (error) {
           return fail(`${sessionHeld.path}: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -1870,7 +1902,7 @@ export function* dropRetirementSteps(
 
           let archivedFiles: string[];
           try {
-            archivedFiles = readdirSync(seatHeld.path).sort();
+            archivedFiles = yield* sortedDirEntriesSteps(seatHeld.path);
           } catch (error) {
             return fail(`${seatHeld.path}: ${error instanceof Error ? error.message : String(error)}`);
           }
