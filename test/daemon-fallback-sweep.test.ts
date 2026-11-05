@@ -20,8 +20,12 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { readEvents } from '../src/bus/log.ts';
-import { messageFile } from '../src/commands/messages.ts';
+import { messageFile, recordDir } from '../src/commands/messages.ts';
+import { serveChoresChild } from '../src/daemon/chores/child.ts';
+import { createFallbackPass } from '../src/daemon/chores/fallback.ts';
+import type { ChoresChildMessage } from '../src/daemon/chores/protocol.ts';
 import { sweepFallbackEscalations, sweepFallbackEscalationsSliced } from '../src/daemon/fallback-sweep.ts';
 import { probeDaemonHealth } from '../src/daemon/health.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
@@ -41,6 +45,7 @@ import {
   type TransportFact,
 } from '../src/send/fallback-events.ts';
 import { historyPath } from '../src/send/history.ts';
+import { RECORD_KIND, signRecord, writeRecord } from '../src/send/record.ts';
 import { LOCK_FILE } from '../src/state.ts';
 
 const TEAM_YAML = `format: 1
@@ -656,5 +661,250 @@ describe('the daemon fallback sweep', () => {
     expect(yields).toBe(1);
     expect(sliced.roots).toEqual([]);
     expect(sliced.at).toBe(AT);
+  });
+
+  test('a synthetic send-drops store whose drainDeferredNotes step outlasts sliceMs still emits a heartbeat within one beat', async () => {
+    const world = makeWorld();
+    const dropDir = recordDir(world.root, world.recipient.session, world.recipient.seat);
+    mkdirSync(dropDir, { recursive: true });
+    const stageNote = (index: number): string => {
+      const id = `m-note-${String(index).padStart(4, '0')}`;
+      const record = signRecord(
+        {
+          kind: RECORD_KIND,
+          id,
+          to: world.recipient.seat,
+          to_id: world.recipient.toId,
+          root: world.root,
+          session: world.recipient.session,
+          at: AT,
+          body: `from: worker-1\n\nhello ${id}\n`,
+          from: 'worker-1',
+          from_id: null,
+          rule: 'a teammate in the same session',
+          thread: id,
+        },
+        world.home,
+      );
+      const written = writeRecord(dropDir, record);
+      if (!written.ok) throw new Error(written.reason);
+      const recordDigest = createHash('sha256').update(readFileSync(written.path)).digest('hex');
+      const notePath = join(dropDir, `.fallback-note-${index.toString(16).padStart(16, '0')}.json`);
+      writeFileSync(
+        notePath,
+        `${JSON.stringify({
+          format: 1,
+          sender: 'seat:worker-1',
+          fact: fact(world, { messageId: id, recordDigest }),
+        })}\n`,
+      );
+      return notePath;
+    };
+
+    // Seed 64 signed deferred notes plus a wider send-drops directory so one drainDeferredNotes
+    // step outlasts both sliceMs and beatMs on a single synchronous turn.
+    const notePaths: string[] = [];
+    for (let i = 0; i < 64; i += 1) notePaths.push(stageNote(i));
+    for (let i = 64; i < 320; i += 1) {
+      writeFileSync(join(dropDir, `extra-drop-${String(i).padStart(4, '0')}`), 'noop\n');
+    }
+
+    // 1. Chores child heartbeat check: while drainDeferredNotes drains the 64 notes under a 5 ms
+    // slice budget and a 10 ms beat, the child yields inside drainDeferredNotes and emits a
+    // heartbeat within one beat while deferred notes are still being drained.
+    const beatMs = 10;
+    const sliceMs = 5;
+    const lines: { atMs: number; notesRemaining: number; message: ChoresChildMessage }[] = [];
+    const stdout = {
+      write(chunk: string) {
+        for (const raw of chunk.split('\n')) {
+          if (raw.trim() === '') continue;
+          const message = JSON.parse(raw) as ChoresChildMessage;
+          const notesRemaining =
+            message.type === 'heartbeat' && message.busy === 'chores'
+              ? notePaths.filter((path) => existsSync(path)).length
+              : 0;
+          lines.push({ atMs: performance.now(), notesRemaining, message });
+        }
+        return true;
+      },
+    } as unknown as NodeJS.WritableStream;
+    const stdin = new PassThrough();
+    const config = {
+      version: 1 as const,
+      home: world.home,
+      beatMs,
+      sliceMs,
+      since: AT,
+      routes: [{ root: world.root, team: 'acme', session: 'acme-dev', teamFile: world.team }],
+    };
+    const served = serveChoresChild({
+      config,
+      stdin,
+      stdout,
+      pass: createFallbackPass(config),
+    });
+    try {
+      const tickAtMs = performance.now();
+      stdin.write(`${JSON.stringify({ type: 'tick', id: '1', at: AT })}\n`);
+      await waitFor(() => lines.some((entry) => entry.message.type === 'pass'), 5_000);
+      const passAtMs = lines.find((entry) => entry.message.type === 'pass')!.atMs;
+      const busyBeats = lines.filter(
+        (entry) =>
+          entry.atMs >= tickAtMs &&
+          entry.atMs <= passAtMs &&
+          entry.message.type === 'heartbeat' &&
+          entry.message.busy === 'chores',
+      );
+      expect(busyBeats.length).toBeGreaterThanOrEqual(1);
+      expect(busyBeats[0]!.notesRemaining).toBeGreaterThan(0);
+      expect(notePaths.filter((path) => existsSync(path))).toHaveLength(0);
+    } finally {
+      stdin.write(`${JSON.stringify({ type: 'stop', why: 'the test is done' })}\n`);
+    }
+    expect(await served).toBe(0);
+
+    // 2. Deterministic clock-driven check: stopping at an intra-step boundary inside
+    // drainDeferredNotes leaves the remaining deferred notes for the next pass.
+    const partialWorld = makeWorld();
+    const partialDropDir = recordDir(partialWorld.root, partialWorld.recipient.session, partialWorld.recipient.seat);
+    mkdirSync(partialDropDir, { recursive: true });
+    const partialPaths: string[] = [];
+    for (let i = 0; i < 8; i += 1) {
+      const id = `m-part-${String(i).padStart(4, '0')}`;
+      const record = signRecord(
+        {
+          kind: RECORD_KIND,
+          id,
+          to: partialWorld.recipient.seat,
+          to_id: partialWorld.recipient.toId,
+          root: partialWorld.root,
+          session: partialWorld.recipient.session,
+          at: AT,
+          body: `from: worker-1\n\nhello ${id}\n`,
+          from: 'worker-1',
+          from_id: null,
+          rule: 'a teammate in the same session',
+          thread: id,
+        },
+        partialWorld.home,
+      );
+      const written = writeRecord(partialDropDir, record);
+      if (!written.ok) throw new Error(written.reason);
+      const recordDigest = createHash('sha256').update(readFileSync(written.path)).digest('hex');
+      const notePath = join(partialDropDir, `.fallback-note-${i.toString(16).padStart(16, '0')}.json`);
+      writeFileSync(
+        notePath,
+        `${JSON.stringify({
+          format: 1,
+          sender: 'seat:worker-1',
+          fact: fact(partialWorld, { messageId: id, recordDigest }),
+        })}\n`,
+      );
+      partialPaths.push(notePath);
+    }
+    const clock = { at: 0 };
+    let partialYields = 0;
+    let partialStopping = false;
+    await sweepFallbackEscalationsSliced({
+      home: partialWorld.home,
+      roots: [{ root: partialWorld.root, team: partialWorld.team }],
+      now: () => new Date(AT),
+      sliceClock: () => {
+        const value = clock.at;
+        clock.at += 10;
+        return value;
+      },
+      slices: {
+        sliceMs: 10,
+        stopping: () => partialStopping,
+        yield: async () => {
+          partialYields += 1;
+          if (partialYields >= 4) {
+            partialStopping = true;
+            return false;
+          }
+          return true;
+        },
+      },
+    });
+    const remainingPartialNotes = partialPaths.filter((path) => existsSync(path)).length;
+    expect(remainingPartialNotes).toBeGreaterThan(0);
+    expect(remainingPartialNotes).toBeLessThan(partialPaths.length);
+  });
+
+  test('notesUnder, markersUnder and retirement check the slice budget inside a step', async () => {
+    const world = makeWorld();
+    for (let i = 0; i < 140; i += 1) {
+      const id = `m-ret-${String(i).padStart(4, '0')}`;
+      const noted = noteTransport(world.ctx, fact(world, { messageId: id, outcome: 'delivered', route: 'native' }));
+      if (!noted.ok) throw new Error(noted.reason);
+    }
+
+    // With 140 settled markers (> 64 entries per chunk), markersUnder and planRetirement yield
+    // inside their own loops. Stopping on the second boundary aborts inside the scan before any
+    // marker is escalated or retired.
+    const scanClock = { at: 0 };
+    let scanYields = 0;
+    let scanStopping = false;
+    const abortedScan = await sweepFallbackEscalationsSliced({
+      home: world.home,
+      roots: [{ root: world.root, team: world.team }],
+      now: () => new Date(AT),
+      retire: { limit: 64, lockWaitMs: 0 },
+      sliceClock: () => {
+        const value = scanClock.at;
+        scanClock.at += 10;
+        return value;
+      },
+      slices: {
+        sliceMs: 10,
+        stopping: () => scanStopping,
+        yield: async () => {
+          scanYields += 1;
+          if (scanYields >= 2) {
+            scanStopping = true;
+            return false;
+          }
+          return true;
+        },
+      },
+    });
+    expect(scanYields).toBe(2);
+    expect(abortedScan.roots).toEqual([]);
+    expect(existsSync(markerPathOf(world.recipient, 'm-ret-0000'))).toBe(true);
+
+    // Running past escalationSteps into retirementSteps: planRetirement itself yields every 64
+    // markers before retiring a single episode, so stopping inside planRetirement retires nothing.
+    const retireClock = { at: 0 };
+    let retireYields = 0;
+    let retireStopping = false;
+    // Allow sweepRootSteps start (1) + notesUnder chunks + markersUnder chunks + 140 escalation
+    // marker steps + the first intra-step yield inside planRetirement, then stop before any
+    // marker is retired.
+    await sweepFallbackEscalationsSliced({
+      home: world.home,
+      roots: [{ root: world.root, team: world.team }],
+      now: () => new Date(AT),
+      retire: { limit: 64, lockWaitMs: 0 },
+      sliceClock: () => {
+        const value = retireClock.at;
+        retireClock.at += 10;
+        return value;
+      },
+      slices: {
+        sliceMs: 10,
+        stopping: () => retireStopping,
+        yield: async () => {
+          retireYields += 1;
+          if (retireYields === 148) {
+            retireStopping = true;
+            return false;
+          }
+          return true;
+        },
+      },
+    });
+    expect(existsSync(markerPathOf(world.recipient, 'm-ret-0000'))).toBe(true);
   });
 });
