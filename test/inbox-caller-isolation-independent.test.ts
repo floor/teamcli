@@ -1,7 +1,7 @@
 // Synthetic homes, messages and process ancestry only; never herdr, an owner's CLI or signals.
 import { afterAll, afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
-import type { ChildProcess } from 'node:child_process';
+import { execFileSync, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
