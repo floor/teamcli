@@ -12,7 +12,7 @@
 // The screens are the CLI's own captured frames (`test/fixtures/muse/` and
 // `test/fixtures/cursor/2026.10.22/`): `idle` is the empty box, `unsent` is the box holding the
 // line, and the profile's `working` rule is the acknowledgement.
-import { paneRead, pressEnter, sendKey, typeText } from '../herdr.ts';
+import { paneReadAsync, pressEnterAsync, sendKeyAsync, typeTextAsync } from '../herdr.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { MESSAGE_LINE_MAX } from '../settings/message-display.ts';
 import { readScreen, screenData } from '../watch/screen.ts';
@@ -41,15 +41,15 @@ const WAKE_LINES = 40;
  *  hands in its own. */
 export type TypedWakeHost = {
   /** The pane's visible text, or null when it cannot be read. */
-  read(pane: string): string | null;
+  read(pane: string): string | null | Promise<string | null>;
   /** Types `text` once. False when the pane did not take it. */
-  type(pane: string, text: string): boolean;
+  type(pane: string, text: string): boolean | Promise<boolean>;
   /** One Enter. False when the key was not taken. */
-  enter(pane: string): boolean;
+  enter(pane: string): boolean | Promise<boolean>;
   /** One named key — the profile's return-to-prompt key when the pane is scrolled back. Absent:
    *  a screen read as scrolled back is refused rather than woken. False when the key was not
    *  taken. */
-  key?(pane: string, key: string): boolean;
+  key?(pane: string, key: string): boolean | Promise<boolean>;
   wait(ms: number): Promise<void>;
 };
 
@@ -57,10 +57,10 @@ export type TypedWakeHost = {
  *  type and Enter are not `refuseTyping`: the typed wake is the single grant of that rule. */
 export function herdrTypedWakeHost(session: string): TypedWakeHost {
   return {
-    read: (pane) => paneRead(pane, WAKE_LINES, session),
-    type: (pane, text) => typeText(pane, text, session),
-    enter: (pane) => pressEnter(pane, session),
-    key: (pane, key) => sendKey(pane, key, session),
+    read: (pane) => paneReadAsync(pane, WAKE_LINES, session, { timeoutMs: 10_000 }),
+    type: (pane, text) => typeTextAsync(pane, text, session, { timeoutMs: 10_000 }),
+    enter: (pane) => pressEnterAsync(pane, session, { timeoutMs: 10_000 }),
+    key: (pane, key) => sendKeyAsync(pane, key, session, { timeoutMs: 10_000 }),
     wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   };
 }
@@ -124,7 +124,7 @@ async function pollSubmitted(
   let lastHolds = false;
   for (let i = 0; i < polls; i += 1) {
     await host.wait(pollMs);
-    const screen = host.read(pane);
+    const screen = await host.read(pane);
     if (screen === null) continue;
     const holds = boxHoldsText(cli, line, screen);
     lastHolds = holds;
@@ -170,7 +170,7 @@ export async function deliverTypedWake(
   const enterSettleMs = options.enterSettleMs ?? WAKE_ENTER_SETTLE_MS;
   const pollMs = options.pollMs ?? POLL_MS;
   const verifyMs = options.verifyMs ?? WAKE_VERIFY_MS;
-  const opening = host.read(pane);
+  const opening = await host.read(pane);
   const first = seenOf(cli, opening);
   // The line is already the whole box. Press Enter into it; do not type it a second time.
   const alreadyHeld = opening !== null && first === 'unsent' && boxHoldsText(cli, line, opening);
@@ -189,12 +189,12 @@ export async function deliverTypedWake(
       if (returnKey === undefined || host.key === undefined) {
         return { delivered: false, typed: false, tries: 0, reason: 'the screen is scrolled back and no return key is bound; nothing was typed' };
       }
-      if (!host.key(pane, returnKey)) {
+      if (!(await host.key(pane, returnKey))) {
         return { delivered: false, typed: false, tries: 0, reason: 'the pane did not take the return key; nothing was typed' };
       }
       keyedReturn = true;
       await host.wait(enterSettleMs);
-      const returned = seenOf(cli, host.read(pane));
+      const returned = seenOf(cli, await host.read(pane));
       if (returned !== 'idle') {
         return { delivered: false, typed: keyedReturn, tries: 0, reason: `the screen read ${returned} after the return key, not an empty idle prompt; no wake line was typed` };
       }
@@ -202,7 +202,7 @@ export async function deliverTypedWake(
       return { delivered: false, typed: false, tries: 0, reason: `the first read showed ${first}, not an empty idle prompt; nothing was typed` };
     }
     await host.wait(settleMs);
-    const second = seenOf(cli, host.read(pane));
+    const second = seenOf(cli, await host.read(pane));
     if (second !== 'idle') {
       return {
         delivered: false,
@@ -213,12 +213,12 @@ export async function deliverTypedWake(
           : `the second read showed ${second}, not an empty idle prompt; nothing was typed`,
       };
     }
-    if (!host.type(pane, line)) {
+    if (!(await host.type(pane, line))) {
       return { delivered: false, typed: keyedReturn, tries: 0, reason: 'the pane did not take the line; nothing was typed' };
     }
     typedLine = true;
     await host.wait(enterSettleMs);
-    screen = host.read(pane);
+    screen = await host.read(pane);
   }
   let tries = 0;
   let previous: string | null = null;
@@ -276,7 +276,7 @@ export async function deliverTypedWake(
       previousHeld = holds;
       settleLooks += 1;
       await host.wait(enterSettleMs);
-      screen = host.read(pane);
+      screen = await host.read(pane);
       continue;
     }
     if (!holds) {
@@ -286,11 +286,11 @@ export async function deliverTypedWake(
       return { delivered: false, typed: keyed(), tries, reason: `the line stayed in the box through ${String(tries)} Enters and no working screen showed` };
     }
     // Muse and Antigravity submit with Enter. The host's enter is that key, not Return.
-    if (!host.enter(pane)) {
+    if (!(await host.enter(pane))) {
       return { delivered: false, typed: keyed(), tries, reason: 'the pane did not take the Enter; no further Enter was pressed' };
     }
     tries += 1;
-    const after = host.read(pane);
+    const after = await host.read(pane);
     // The line still sitting, with no working screen, means the submit did not take. Press
     // again. Do not type the line a second time.
     if (after !== null && boxHoldsText(cli, line, after) && readScreen(cli, after).kind !== 'working') {
@@ -305,7 +305,7 @@ export async function deliverTypedWake(
     if (ack === 'held') {
       return { delivered: false, typed: keyed(), tries, reason: stillHeldReason(tries) };
     }
-    screen = host.read(pane);
+    screen = await host.read(pane);
     previous = screen;
   }
 }

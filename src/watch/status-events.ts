@@ -26,6 +26,7 @@ import {
   isHerdrAgentStatus,
   PANE_WINDOW,
   paneRead,
+  paneReadAsync,
   parseWaitAgentStatusOutput,
   waitAgentStatus,
   HERDR_AGENT_STATUSES,
@@ -107,12 +108,15 @@ export type StatusSource = {
   /** The same read, with the dialog's own question text when the profile places one. One call is
    *  one pane read; a source that offers both must not read twice. */
   promptReading?(seat: StatusWaitSeat): PromptReading;
+  promptReadingAsync?(seat: StatusWaitSeat): Promise<PromptReading>;
   /** Reads the pane's screen for `herdr_status: unreliable` profiles (`jules`) or screen-verified statuses. */
   readUnreliableScreen?(seat: StatusWaitSeat): Screen;
+  readUnreliableScreenAsync?(seat: StatusWaitSeat): Promise<Screen>;
   /** Reads the pane's visible screen as plain text, the last `lines` lines at most, for a
    *  read-only view of a seat's screen. Null when the pane cannot be read. It types nothing and
    *  sends no key, like every other member of this contract. */
   screenText?(seat: StatusWaitSeat, lines: number): string | null;
+  screenTextAsync?(seat: StatusWaitSeat, lines: number): Promise<string | null>;
   /** Desktop notification when a prompt climbs to the owner. */
   notify?(title: string, body: string, sound?: string): void;
 };
@@ -232,6 +236,7 @@ export type HerdrStatusSourceOptions = {
   session?: string;
   now?: () => number;
   readPane?: (pane: string, lines: number, session?: string) => string | null;
+  readPaneAsync?: (pane: string, lines: number, session?: string) => Promise<string | null>;
   waitFn?: typeof waitAgentStatus;
   notifyFn?: (text: string) => void;
   screenOptions?: ScreenOptions;
@@ -253,6 +258,10 @@ const WAIT_CANDIDATE_ORDER: Record<HerdrAgentStatus, readonly HerdrAgentStatus[]
 export function herdrStatusSource(options: HerdrStatusSourceOptions = {}): StatusSource {
   const now = options.now ?? (() => Date.now());
   const readPane = options.readPane ?? paneRead;
+  const readPaneAsync = options.readPaneAsync
+    ?? (options.readPane !== undefined
+      ? async (pane: string, lines: number, session?: string) => options.readPane!(pane, lines, session)
+      : (pane: string, lines: number, session?: string) => paneReadAsync(pane, lines, session, { timeoutMs: 10_000 }));
   const waitFn = options.waitFn ?? waitAgentStatus;
   const notifyFn = options.notifyFn ?? defaultNotify;
 
@@ -261,6 +270,14 @@ export function herdrStatusSource(options: HerdrStatusSourceOptions = {}): Statu
   const readReading = (seat: StatusWaitSeat): PromptReading => {
     if (seat.human === true) return { kind: 'unknown', text: null };
     const raw = readPane(seat.pane, PANE_WINDOW, seat.session ?? options.session);
+    const kind = classifyPromptKind(seat.cli, raw, options.screenOptions);
+    const text = kind === 'unknown' || raw === null ? null : questionText(seat.cli, raw);
+    return { kind, text };
+  };
+
+  const readReadingAsync = async (seat: StatusWaitSeat): Promise<PromptReading> => {
+    if (seat.human === true) return { kind: 'unknown', text: null };
+    const raw = await readPaneAsync(seat.pane, PANE_WINDOW, seat.session ?? options.session);
     const kind = classifyPromptKind(seat.cli, raw, options.screenOptions);
     const text = kind === 'unknown' || raw === null ? null : questionText(seat.cli, raw);
     return { kind, text };
@@ -320,9 +337,19 @@ export function herdrStatusSource(options: HerdrStatusSourceOptions = {}): Statu
       return readReading(seat);
     },
 
+    promptReadingAsync(seat): Promise<PromptReading> {
+      return readReadingAsync(seat);
+    },
+
     readUnreliableScreen(seat): Screen {
       if (seat.human === true) return { kind: 'unknown' };
       const raw = readPane(seat.pane, PANE_WINDOW, seat.session ?? options.session);
+      return readScreen(seat.cli, raw ?? undefined, options.screenOptions);
+    },
+
+    async readUnreliableScreenAsync(seat): Promise<Screen> {
+      if (seat.human === true) return { kind: 'unknown' };
+      const raw = await readPaneAsync(seat.pane, PANE_WINDOW, seat.session ?? options.session);
       return readScreen(seat.cli, raw ?? undefined, options.screenOptions);
     },
 
@@ -331,6 +358,11 @@ export function herdrStatusSource(options: HerdrStatusSourceOptions = {}): Statu
       // readUnreliableScreen, and no pane read at all.
       if (seat.human === true) return null;
       return readPane(seat.pane, lines, seat.session ?? options.session);
+    },
+
+    screenTextAsync(seat, lines): Promise<string | null> {
+      if (seat.human === true) return Promise.resolve(null);
+      return readPaneAsync(seat.pane, lines, seat.session ?? options.session);
     },
 
     notify(title, body): void {
@@ -780,6 +812,7 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
     pane = `${seatName}:p1`,
     allowUnreliable = false,
     rawScreen?: string,
+    preRead?: { screen?: Screen; prompt?: PromptReading },
   ): SeatStatusStep {
     const seat = team.seats.find((item) => item.name === seatName);
     if (!seat) {
@@ -805,10 +838,10 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
       && isScreenVerifiedStatusCli(seat.cli)
       && status !== 'blocked'
       && shouldReadScreenForStatus(seat, status, true)
-      && source.readUnreliableScreen !== undefined
+      && (preRead?.screen !== undefined || source.readUnreliableScreen !== undefined)
     ) {
       const target = seatTargetOf(seatName, pane)!;
-      const screen = source.readUnreliableScreen(target);
+      const screen = preRead?.screen ?? source.readUnreliableScreen!(target);
       if (
         screen.kind === 'permission'
         || screen.kind === 'trust'
@@ -913,11 +946,13 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
       const fromScreen = rawScreen ? classifyPromptKind(seat.cli, rawScreen) : 'unknown';
       const reading: PromptReading = fromScreen !== 'unknown'
         ? { kind: fromScreen, text: rawScreen === undefined ? null : questionText(seat.cli, rawScreen) }
-        : source.promptReading
-          ? source.promptReading(target)
-          : source.promptKind
-            ? { kind: source.promptKind(target), text: null }
-            : { kind: 'unknown', text: null };
+        : preRead?.prompt !== undefined
+          ? preRead.prompt
+          : source.promptReading
+            ? source.promptReading(target)
+            : source.promptKind
+              ? { kind: source.promptKind(target), text: null }
+              : { kind: 'unknown', text: null };
       const prompt = reading.kind;
       state.status = 'blocked';
       state.promptSpell = {
@@ -1161,6 +1196,29 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
     return emitted;
   }
 
+  function needsFreshPromptReading(
+    seat: { cli: string },
+    seatName: string,
+    effectiveStatus: HerdrAgentStatus,
+    at: number,
+    rawScreen?: string,
+  ): boolean {
+    if (effectiveStatus !== 'blocked') return false;
+    const state = states.get(seatName);
+    if (state?.status === 'blocked' && state.promptSpell && state.promptSpell.clearedAt === undefined) {
+      return false;
+    }
+    if (
+      state?.promptSpell !== undefined
+      && state.promptSpell.clearedAt !== undefined
+      && at - state.promptSpell.clearedAt <= graceMs
+    ) {
+      return false;
+    }
+    const fromScreen = rawScreen ? classifyPromptKind(seat.cli, rawScreen) : 'unknown';
+    return fromScreen === 'unknown';
+  }
+
   async function publishEmitted(events: readonly EmittedStatusEvent[]): Promise<void> {
     if (input.publish === undefined || input.root === undefined) return;
     for (const ev of events) {
@@ -1174,7 +1232,44 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
     },
 
     async observe(seatName, status, atMs = now(), pane, rawScreen) {
-      const step = applyStatusTransition(seatName, status, atMs, pane, false, rawScreen);
+      const seat = team.seats.find((item) => item.name === seatName);
+      const target = seatTargetOf(seatName, pane);
+      let screen: Screen | undefined;
+      let prompt: PromptReading | undefined;
+      if (seat && target && seat.human !== true && seat.stopped !== true && !herdrUnreliable(seat.cli)) {
+        let effective: HerdrAgentStatus = isScreenVerifiedStatusCli(seat.cli)
+          ? reconcileStatusWithScreen(seat.cli, status, rawScreen)
+          : status;
+        if (
+          rawScreen === undefined
+          && isScreenVerifiedStatusCli(seat.cli)
+          && effective !== 'blocked'
+          && shouldReadScreenForStatus(seat, effective, true)
+        ) {
+          screen = source.readUnreliableScreenAsync
+            ? await source.readUnreliableScreenAsync(target)
+            : source.readUnreliableScreen?.(target);
+          if (
+            screen !== undefined
+            && (
+              screen.kind === 'permission'
+              || screen.kind === 'trust'
+              || screen.kind === 'question'
+              || screen.kind === 'exit question'
+              || screen.kind === 'plan approval'
+              || screen.kind === 'confirmation'
+              || screen.kind === 'vendor notice'
+              || screen.kind === 'rate limit'
+            )
+          ) {
+            effective = 'blocked';
+          }
+        }
+        if (needsFreshPromptReading(seat, seatName, effective, atMs, rawScreen) && source.promptReadingAsync) {
+          prompt = await source.promptReadingAsync(target);
+        }
+      }
+      const step = applyStatusTransition(seatName, status, atMs, pane, false, rawScreen, { screen, prompt });
       await publishEmitted(step.events);
       return step;
     },
@@ -1200,11 +1295,18 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
       }
       const screen = rawScreen !== undefined
         ? readScreen(target.cli, rawScreen)
-        : source.readUnreliableScreen
-          ? source.readUnreliableScreen(target)
-          : { kind: 'unknown' as const };
+        : source.readUnreliableScreenAsync
+          ? await source.readUnreliableScreenAsync(target)
+          : source.readUnreliableScreen
+            ? source.readUnreliableScreen(target)
+            : { kind: 'unknown' as const };
       const word = screenWord(screen);
-      const step = applyStatusTransition(seatName, word, atMs, target.pane, true, rawScreen);
+      const seat = team.seats.find((item) => item.name === seatName);
+      const prompt =
+        seat && needsFreshPromptReading(seat, seatName, word, atMs, rawScreen) && source.promptReadingAsync
+          ? await source.promptReadingAsync(target)
+          : undefined;
+      const step = applyStatusTransition(seatName, word, atMs, target.pane, true, rawScreen, { screen, prompt });
       await publishEmitted(step.events);
       return step;
     },

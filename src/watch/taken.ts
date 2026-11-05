@@ -23,14 +23,21 @@ import {
   TAKEN_MAX_AGE_MS,
   type TakenDrop,
 } from '../send/taken.ts';
-import type { RetryScene } from './retry.ts';
+import { passPaneScreen, passPaneScreenAsync, passPaneStatus, type RetryScene } from './retry.ts';
 
 /** The two statuses a free seat reads: past the grace, a taken line it never showed is gone. */
 const FREE = new Set(['idle', 'done']);
 
 /** One taken drop, looked at on this pass. Confirmed on the first sign; reported once the window
  *  passes with none. Nothing here ever types: a taken line is never submitted again. */
-function confirmOne(scene: RetryScene, pane: string | undefined, dropDir: string, drop: TakenDrop): void {
+function confirmOne(
+  scene: RetryScene,
+  pane: string | undefined,
+  screen: string | null,
+  agentStatus: string | undefined,
+  dropDir: string,
+  drop: TakenDrop,
+): void {
   const age = scene.now.getTime() - Date.parse(drop.ts);
   // The read itself: the trigger the send typed is the seat's own drop read, so a signed receipt
   // that verifies for this message, seat, checkout and session is the sign the send's window
@@ -50,8 +57,7 @@ function confirmOne(scene: RetryScene, pane: string | undefined, dropDir: string
     return;
   }
   if (pane !== undefined) {
-    const screen = scene.sources.screen(pane, scene.session);
-    const status = scene.sources.status(pane, scene.session);
+    const status = passPaneStatus(scene, pane, agentStatus);
     const line = triggerLine(join(dropDir, drop.id));
     // The transcript's sign, for a trigger that names the drop's path: a row that names the
     // drop's id and is not the trigger's own echo. The trigger line may be unreadable (a path too
@@ -66,6 +72,9 @@ function confirmOne(scene: RetryScene, pane: string | undefined, dropDir: string
       clearTaken(dropDir, drop.id);
       return;
     }
+    // Without a readable screen, the pass cannot tell whether the transcript already shows the
+    // drop; leave the marker for a later pass until the age bound runs out.
+    if (screen === null && age <= TAKEN_MAX_AGE_MS) return;
     if (!(FREE.has(status ?? '') && age >= TAKEN_IDLE_GRACE_MS) && age <= TAKEN_MAX_AGE_MS) return;
   } else if (age <= TAKEN_MAX_AGE_MS) {
     // No pane at the seat this pass: there is no sign to read yet, and the record keeps for a
@@ -98,14 +107,42 @@ function confirmOne(scene: RetryScene, pane: string | undefined, dropDir: string
  * the record is reported and goes, as a retry's does — a seat that went away must not keep a
  * marker in the store forever.
  */
-export function confirmTakenDrops(scene: RetryScene): void {
+export function confirmTakenDrops(scene: RetryScene): void | Promise<void> {
+  const pendingSeats: {
+    drops: TakenDrop[];
+    pane: string | undefined;
+    status: string | undefined;
+    dropDir: string;
+  }[] = [];
+  let needsAsyncScreen = false;
   for (const seat of scene.team.seats) {
     const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
     const drops = readTaken(dropDir);
     if (drops.length === 0) continue;
     const agents = scene.live.agents.filter((agent) => agent.name === seat.name);
-    const found = agents.length === 1 ? agents[0]?.pane : undefined;
+    const agent = agents.length === 1 ? agents[0] : undefined;
+    const found = agent?.pane;
     const pane = found === scene.ownPane ? undefined : found;
-    for (const drop of drops) confirmOne(scene, pane, dropDir, drop);
+    if (pane !== undefined && !(pane in scene.live.screens) && scene.sources.screenAsync !== undefined) {
+      needsAsyncScreen = true;
+    }
+    pendingSeats.push({ drops, pane, status: agent?.status, dropDir });
   }
+  if (!needsAsyncScreen) {
+    for (const item of pendingSeats) {
+      const screen = item.pane !== undefined ? passPaneScreen(scene, item.pane) : null;
+      for (const drop of item.drops) {
+        confirmOne(scene, item.pane, screen, item.status, item.dropDir, drop);
+      }
+    }
+    return;
+  }
+  return (async () => {
+    for (const item of pendingSeats) {
+      const screen = item.pane !== undefined ? await passPaneScreenAsync(scene, item.pane) : null;
+      for (const drop of item.drops) {
+        confirmOne(scene, item.pane, screen, item.status, item.dropDir, drop);
+      }
+    }
+  })();
 }

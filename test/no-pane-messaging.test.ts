@@ -19,7 +19,14 @@ function files(dir: string): string[] {
 // An import of a pane writer from herdr, under whatever local name: `sendKey as keys` is the
 // same writer as `sendKey`, and the scan reads the alias too, so a renamed import cannot carry
 // a pane writer past it.
-const PANE_WRITERS: ReadonlySet<string> = new Set(['typeText', 'pressEnter', 'sendKey']);
+const PANE_WRITERS: ReadonlySet<string> = new Set([
+  'typeText',
+  'pressEnter',
+  'sendKey',
+  'typeTextAsync',
+  'pressEnterAsync',
+  'sendKeyAsync',
+]);
 function importsPaneWriter(text: string): boolean {
   for (const match of text.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]\.\.\/herdr\.ts['"]/g)) {
     for (const specifier of (match[1] ?? '').split(',')) {

@@ -20,8 +20,10 @@
 // drop no watcher read is given up on with the file's path, never typed and never called lost.
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import type { ChildOptions } from '../child.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import type { PaneProcesses } from '../herdr.ts';
+import { READ_LIMITS_DEFAULT_MS } from './read-limits.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { isBareShellPane } from '../send/daemon.ts';
 import { claimBindingIn, currentClaimIn, INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, inboxLive, receiptHeld } from '../mcp/inbox.ts';
@@ -57,6 +59,7 @@ import { readScreen } from './screen.ts';
 /** What a retry reads and types through: the watch's own sources, narrowed to the pane calls. */
 export type RetrySources = {
   screen(pane: string, session: string): string | null;
+  screenAsync?(pane: string, session: string, options: ChildOptions): Promise<string | null>;
   status(pane: string, session: string): string | null;
   typeText(pane: string, text: string, session: string): boolean;
   pressEnter(pane: string, session: string): boolean;
@@ -82,6 +85,11 @@ export type RetryScene = {
   home?: string;
   team: TeamFile;
   live: Live;
+  /** The pass's per-pane process snapshot when the caller already read it. */
+  processes?: Readonly<Record<string, PaneProcesses | null>>;
+  /** How one fallback async screen read is bounded in this pass (or the options directly).
+   *  Absent in direct test scenes, the read uses the documented per-read timeout. */
+  readOptions?: ChildOptions | (() => ChildOptions | null);
   /** The watch's own pane: never typed into. */
   ownPane: string | null;
   sources: RetrySources;
@@ -97,6 +105,61 @@ export type RetryScene = {
    *  Absent, this pass takes its own — the same answer, read once more in the pass. */
   mail?: MailPass;
 };
+
+/** The pane's status from the pass's live snapshot when the snapshot carries whole-session
+ *  pane readings, falling back to `sources.status` only for minimal test scenes that omit them. */
+export function passPaneStatus(scene: RetryScene, pane: string, agentStatus?: string): string | null {
+  if (pane in scene.live.screens || scene.live.processes !== undefined) {
+    if (agentStatus !== undefined && agentStatus !== '') return agentStatus;
+    const found = scene.live.agents.find((agent) => agent.pane === pane);
+    return found?.status ?? null;
+  }
+  return scene.sources.status(pane, scene.session);
+}
+
+const fallbackScreens = new WeakMap<Live, Map<string, string | null>>();
+
+/** The pane's visible screen from the pass's live snapshot when present, falling back to
+ *  `sources.screen` only for minimal test scenes whose `live` snapshot omits pane readings. */
+export function passPaneScreen(scene: RetryScene, pane: string): string | null {
+  if (pane in scene.live.screens) return scene.live.screens[pane] ?? null;
+  const cached = fallbackScreens.get(scene.live);
+  if (cached !== undefined && cached.has(pane)) return cached.get(pane) ?? null;
+  if (scene.live.processes !== undefined || scene.sources.screenAsync !== undefined) return null;
+  return scene.sources.screen(pane, scene.session);
+}
+
+/** The pane's visible screen from the pass's live snapshot when present, falling back to one
+ *  awaited `sources.screenAsync` read per pass when the snapshot screen map omits the pane. */
+export async function passPaneScreenAsync(scene: RetryScene, pane: string): Promise<string | null> {
+  if (pane in scene.live.screens) return scene.live.screens[pane] ?? null;
+  let cached = fallbackScreens.get(scene.live);
+  if (cached !== undefined && cached.has(pane)) return cached.get(pane) ?? null;
+  if (scene.sources.screenAsync !== undefined) {
+    const options = typeof scene.readOptions === 'function'
+      ? scene.readOptions()
+      : (scene.readOptions ?? { timeoutMs: READ_LIMITS_DEFAULT_MS.timeout });
+    if (options === null) return null;
+    const read = await scene.sources.screenAsync(pane, scene.session, options);
+    if (cached === undefined) {
+      cached = new Map();
+      fallbackScreens.set(scene.live, cached);
+    }
+    cached.set(pane, read);
+    if (read !== null) scene.live.screens[pane] = read;
+    return read;
+  }
+  return passPaneScreen(scene, pane);
+}
+
+/** The pane's process identity from the pass's snapshot when present, falling back to
+ *  `sources.processes` only for direct scenes that supply no process map. */
+export function passPaneProcesses(scene: RetryScene, pane: string): PaneProcesses | null {
+  if (scene.processes !== undefined && pane in scene.processes) return scene.processes[pane] ?? null;
+  if (scene.live.processes !== undefined && pane in scene.live.processes) return scene.live.processes[pane] ?? null;
+  if (scene.processes !== undefined || scene.live.processes !== undefined) return null;
+  return scene.sources.processes?.(pane, scene.session) ?? null;
+}
 
 /** The drop's words, minus the trigger line: one sentence for the watch's log. An inbox send
  *  was `sent (unconfirmed)` rather than held — the seat's own client never read it — and the

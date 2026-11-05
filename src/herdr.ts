@@ -1461,14 +1461,58 @@ export function typeText(pane: string, text: string, session?: string): boolean 
  *  the line is still drawing. */
 export const SUBMIT_ENTER = 'enter';
 
+export async function typeTextAsync(
+  pane: string,
+  text: string,
+  session?: string,
+  options: HerdrReadOptions = {},
+): Promise<boolean> {
+  try {
+    await execText(
+      'herdr',
+      [...(session ? ['--session', session] : []), 'pane', 'send-text', pane, text],
+      { timeoutMs: 10_000, ...options },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function pressEnter(pane: string, session?: string): boolean {
   return sendKey(pane, SUBMIT_ENTER, session);
+}
+
+export async function pressEnterAsync(
+  pane: string,
+  session?: string,
+  options: HerdrReadOptions = {},
+): Promise<boolean> {
+  return sendKeyAsync(pane, 'enter', session, options);
 }
 
 /** One key, by the name `herdr pane send-keys` takes. The same call `pressEnter` uses. */
 export function sendKey(pane: string, key: string, session?: string): boolean {
   try {
     execFileSync('herdr', [...(session ? ['--session', session] : []), 'pane', 'send-keys', pane, key], { stdio: 'ignore', timeout: 10_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function sendKeyAsync(
+  pane: string,
+  key: string,
+  session?: string,
+  options: HerdrReadOptions = {},
+): Promise<boolean> {
+  try {
+    await execText(
+      'herdr',
+      [...(session ? ['--session', session] : []), 'pane', 'send-keys', pane, key],
+      { timeoutMs: 10_000, ...options },
+    );
     return true;
   } catch {
     return false;
