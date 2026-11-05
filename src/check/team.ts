@@ -1028,6 +1028,22 @@ function collectSessionRecords(
   }
 }
 
+function collectDelegatePanes(
+  delegates: TeamFile['delegates'],
+  session: string,
+  panes: Set<string>,
+): void {
+  for (const delegate of delegates ?? []) {
+    if (typeof delegate.pane !== 'string' || delegate.pane === '') continue;
+    const slash = delegate.pane.indexOf('/');
+    if (slash <= 0 || slash !== delegate.pane.lastIndexOf('/') || slash === delegate.pane.length - 1) continue;
+    if (/\s/.test(delegate.pane)) continue;
+    if (delegate.pane.slice(0, slash) === session) {
+      panes.add(delegate.pane.slice(slash + 1));
+    }
+  }
+}
+
 /**
  * Workspaces in `session` that no team record names and whose panes are all bare shells, read
  * fresh through the terminal host role (`pane list --workspace` and `pane process-info --pane`).
@@ -1057,11 +1073,7 @@ function unrecordedWorkspaceDifferences(
   const recordedWorkspaces = new Set<string>();
   const recordedPanes = new Set<string>();
   collectSessionRecords(state, recordedWorkspaces, recordedPanes);
-  for (const delegate of team.delegates ?? []) {
-    if (typeof delegate.pane === 'string' && delegate.pane !== '') {
-      recordedPanes.add(delegate.pane);
-    }
-  }
+  collectDelegatePanes(team.delegates, session, recordedPanes);
   if (home !== undefined) {
     try {
       const teams = readTeams(home);
@@ -1073,6 +1085,14 @@ function unrecordedWorkspaceDifferences(
           collectSessionRecords(otherState.sessions[session], recordedWorkspaces, recordedPanes);
         } catch {
           // A sibling team whose state cannot be read does not fail this team's check.
+        }
+        try {
+          const otherConfig = readTeamConfig(record.root, { home, checkOnly: true });
+          if (otherConfig.ok) {
+            collectDelegatePanes(otherConfig.team.delegates, session, recordedPanes);
+          }
+        } catch {
+          // A sibling team whose config cannot be read does not fail this team's check.
         }
       }
     } catch {

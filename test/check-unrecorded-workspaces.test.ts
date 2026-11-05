@@ -670,4 +670,148 @@ describe('team check unrecorded bare-shell workspaces', () => {
     expect(repaired.stdout).not.toContain('ws-watch-pane-only');
     expect(trace.closedWorkspaces).toEqual([]);
   });
+
+  test('does not report a workspace holding a delegate pane of this team or a sibling team in the matching session', () => {
+    const world = makeWorld();
+    writeFileSync(
+      join(world.dir, 'team.yaml'),
+      `${TEAM_YAML}delegates:
+  - pane: ${ALT_SESSION}/alt-delegate:p1
+    commands:
+      - up
+`,
+    );
+    updateState(world.dir, (state) => {
+      const alt = (state.sessions[ALT_SESSION] ??= emptySession());
+      alt.seats.lead = {
+        stage: 'ready',
+        pane: 'alt-lead:p1',
+        workspace: 'alt-lead',
+        launched: { shell: 300, cli: [400] },
+      };
+      alt.watch = { pid: 42, heartbeat: NOW.toISOString(), pane: 'alt-watch:p1', workspace: 'alt-watch' };
+    });
+    deliverBriefs({
+      dir: world.dir,
+      root: world.root,
+      session: ALT_SESSION,
+      seats: ['lead'],
+      home: world.home,
+      at: NOW.toISOString(),
+    });
+
+    // Sibling team in ALT_SESSION whose delegates section names a bare-shell pane in SESSION.
+    const siblingRoot = join(world.base, 'sibling-delegating');
+    const siblingDir = join(siblingRoot, '.agents');
+    mkdirSync(siblingDir, { recursive: true });
+    execFileSync('git', ['init', '-q'], { cwd: siblingRoot, stdio: 'ignore' });
+    writeFileSync(
+      join(siblingDir, 'team.yaml'),
+      `format: 1
+project: sibling
+session: ${ALT_SESSION}
+operator: lead
+workspace:
+  mode: shared
+seats:
+  - role: orchestrator
+    name: lead
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+    leads: true
+delegates:
+  - pane: ${SESSION}/ws-sib-delegate:p1
+    commands:
+      - up
+`,
+    );
+    upsertTeam(world.home, teamIdOf(siblingRoot), {
+      project: 'sibling',
+      session: ALT_SESSION,
+      root: siblingRoot,
+      at: NOW.toISOString(),
+    });
+
+    installSyntheticHost({
+      [SESSION]: {
+        running: true,
+        workspaces: [
+          { id: 'ws-lead', label: LEAD_TITLE },
+          { id: 'ws-sib-delegate', label: 'sibling-delegate' },
+          // Same bare pane id `alt-delegate:p1`, but in SESSION rather than ALT_SESSION -> unrecorded here
+          { id: 'ws-wrong-session-del', label: 'wrong-session-del' },
+        ],
+        panes: [
+          {
+            pane: 'ws-lead:p1',
+            workspace: 'ws-lead',
+            shell: 100,
+            foreground: [200],
+            screen: CLAUDE_IDLE,
+            displayAgent: LEAD_DISPLAY,
+          },
+          { pane: 'ws-sib-delegate:p1', workspace: 'ws-sib-delegate', shell: 710, foreground: [710] },
+          { pane: 'alt-delegate:p1', workspace: 'ws-wrong-session-del', shell: 720, foreground: [720] },
+        ],
+        agents: [
+          {
+            name: 'lead',
+            agent: 'claude',
+            pane: 'ws-lead:p1',
+            workspace: 'ws-lead',
+            status: 'idle',
+            cwd: world.root,
+            displayAgent: LEAD_DISPLAY,
+          },
+        ],
+      },
+      [ALT_SESSION]: {
+        running: true,
+        workspaces: [
+          { id: 'alt-lead', label: LEAD_TITLE },
+          { id: 'alt-delegate', label: 'own-delegate' },
+          { id: 'alt-stray', label: 'alt-leftover' },
+        ],
+        panes: [
+          {
+            pane: 'alt-lead:p1',
+            workspace: 'alt-lead',
+            shell: 300,
+            foreground: [400],
+            screen: CLAUDE_IDLE,
+            displayAgent: LEAD_DISPLAY,
+          },
+          { pane: 'alt-delegate:p1', workspace: 'alt-delegate', shell: 810, foreground: [810] },
+          { pane: 'alt-stray:p1', workspace: 'alt-stray', shell: 820, foreground: [820] },
+        ],
+        agents: [
+          {
+            name: 'lead',
+            agent: 'claude',
+            pane: 'alt-lead:p1',
+            workspace: 'alt-lead',
+            status: 'idle',
+            cwd: world.root,
+            displayAgent: LEAD_DISPLAY,
+          },
+        ],
+      },
+    });
+
+    // In SESSION: sibling team's delegate `ws-sib-delegate:p1` is recorded, while `alt-delegate:p1`
+    // (declared for ALT_SESSION, not SESSION) is unrecorded in SESSION.
+    const primary = runCheckWithHost(world);
+    expect(primary.code).toBe(1);
+    expect(primary.stdout).not.toContain('ws-sib-delegate');
+    expect(primary.stdout).toContain('difference: unrecorded workspace ws-wrong-session-del (wrong-session-del) holds only shells');
+
+    // In ALT_SESSION: this team's own delegate `alt-delegate:p1` is recorded, while `alt-stray` is reported.
+    const alt = runCheckWithHost(world, { session: ALT_SESSION });
+    expect(alt.code).toBe(1);
+    expect(alt.stdout).not.toContain('alt-delegate');
+    expect(alt.stdout).toContain('difference: unrecorded workspace alt-stray (alt-leftover) holds only shells');
+  });
 });
