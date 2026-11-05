@@ -9,10 +9,10 @@ import { projectIdOfTeam } from '../dev_mode.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE } from '../launch/general-brief.ts';
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { KeyObject } from 'node:crypto';
-import { findAgent, getAgent, isAgentId } from '../registry/agents.ts';
+import { getAgent, isAgentId, type Agent } from '../registry/agents.ts';
 import { readProjects } from '../registry/projects.ts';
 import { getTeam, teamIdOf } from '../registry/teams.ts';
 import { admitSend, sendGrantFor, type AdmitContext, type AdmitTeam, type AdmitTeams, type ReplyContext, type SendSide } from '../send/admit.ts';
@@ -38,7 +38,7 @@ export function admitChannelDelivery(input: {
     return { ok: false, why: `${input.seat}: it is not a declared seat of the team file now in force` };
   }
   const receivingId = teamIdOf(input.root);
-  const receiving = admitTeamOf(input.team, agentIdsOf(input.home, receivingId));
+  const receiving = admitTeamOf(input.team, agentIdsOf(input.home, receivingId, input.session));
   const records: AdmitTeams = { [receivingId]: receiving };
   const target = receivingSide(input, receivingId);
   if ('ok' in target) return target;
@@ -92,11 +92,14 @@ export function admitChannelDelivery(input: {
     if (!input.team.seats.some((seat) => seat.name === input.payload.from)) {
       return { ok: false, why: `agent ${input.payload.from_id} is not a seat of this checkout's team file now in force` };
     }
-    const holder = findAgent(input.home, { team: receivingId, seat: input.payload.from });
-    if (holder === null || holder.id !== agent.id) {
+    const holder = currentHolderOf(input.home, receivingId, input.payload.from);
+    if (holder.kind === 'unreadable') {
+      return { ok: false, why: 'the sender registry cannot be read' };
+    }
+    if (holder.kind !== 'holder' || holder.agent.id !== agent.id) {
       return { ok: false, why: `agent ${input.payload.from_id} is not the live holder of ${JSON.stringify(input.payload.from)}` };
     }
-    if (agentIdsOf(input.home, receivingId).get(input.payload.from) !== agent.id) {
+    if (agentIdsOf(input.home, receivingId, input.session).get(input.payload.from) !== agent.id) {
       return { ok: false, why: `agent ${input.payload.from_id} is not the one current roster binding for ${JSON.stringify(input.payload.from)}` };
     }
     return judge(agent, target, records, context, input.home);
@@ -139,12 +142,7 @@ function receivingSide(
   input: { home: string; root: string; session: string; seat: string; team: TeamFile; payload: { from: string; from_id: string | null; rule: string; to_id?: string | null } },
   receivingId: string,
 ): SendSide | ChannelAdmission {
-  let live;
-  try {
-    live = findAgent(input.home, { team: receivingId, seat: input.seat });
-  } catch {
-    return { ok: false, why: 'the recipient registry cannot be read' };
-  }
+  const holder = currentHolderOf(input.home, receivingId, input.seat);
   const named = input.payload.to_id;
   const reserved = (input.payload.from === OWNER_MAILBOX && input.payload.from_id === null)
     || (input.payload.from === GENERAL_BRIEF_FROM && input.payload.from_id === null && input.payload.rule === GENERAL_BRIEF_RULE);
@@ -152,6 +150,10 @@ function receivingSide(
     return { ok: false, why: 'an ordinary channel record must name its recipient agent id' };
   }
   if (typeof named === 'string' && named !== '') {
+    if (holder.kind === 'unreadable') {
+      return { ok: false, why: 'the recipient registry cannot be read' };
+    }
+    const live = holder.kind === 'holder' ? holder.agent : null;
     if (!isAgentId(named) || live === null || live.id !== named || live.reach.seat !== input.seat || live.reach.session !== input.session) {
       return { ok: false, why: `the signed record names recipient ${JSON.stringify(named)}, which is not the live agent for ${input.seat}` };
     }
@@ -172,7 +174,9 @@ function receivingSide(
     }
     return live;
   }
-  if (live !== null && live.reach.seat === input.seat && live.reach.session === input.session) return live;
+  if (holder.kind === 'holder' && holder.agent.reach.seat === input.seat && holder.agent.reach.session === input.session) {
+    return holder.agent;
+  }
   return { seat: input.seat, team: receivingId, role: roleOf(input.team, input.seat) };
 }
 
@@ -332,29 +336,105 @@ function roleOf(team: TeamFile, seat: string): string | undefined {
   return team.seats.find((entry) => entry.name === seat)?.role;
 }
 
-function agentIdsOf(home: string, teamId: string): Map<string, string> {
-  const out = new Map<string, string>();
+type HolderLookup =
+  | { kind: 'holder'; agent: Agent }
+  | { kind: 'none' }
+  | { kind: 'ambiguous' }
+  | { kind: 'unreadable' };
+
+/** Resolves the current non-retired holder of `(team, seat)`. Non-record directory artifacts and
+ *  corrupt records belonging to other teams or seats are ignored. A corrupt or unreadable record
+ *  that could belong to `(team, seat)` returns `unreadable`; tied maximum `updated_at` timestamps
+ *  return `ambiguous` without consulting filesystem modification times. */
+function currentHolderOf(home: string, team: string, seat: string): HolderLookup {
+  const dir = join(home, '.config', 'team', 'agents');
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'none' };
+    return { kind: 'unreadable' };
+  }
+  const claimants: { agent: Agent; updatedAt: number }[] = [];
+  for (const name of names.sort()) {
+    if (!name.endsWith('.yaml')) continue;
+    const id = name.slice(0, -'.yaml'.length);
+    if (!isAgentId(id)) continue;
+    let agent: Agent | null;
+    try {
+      agent = getAgent(home, id);
+    } catch {
+      return { kind: 'unreadable' };
+    }
+    if (agent === null) {
+      let text: string;
+      try {
+        text = readFileSync(join(dir, name), 'utf8');
+      } catch {
+        return { kind: 'unreadable' };
+      }
+      const hasTeam = /^\s*team:\s*\S+/m.test(text);
+      const hasSeat = /^\s*seat:\s*\S+/m.test(text);
+      const couldMatchTeam = !hasTeam || text.includes(team);
+      const couldMatchSeat = !hasSeat || text.includes(seat);
+      if (couldMatchTeam && couldMatchSeat) {
+        return { kind: 'unreadable' };
+      }
+      continue;
+    }
+    if (agent.lifecycle === 'retired') continue;
+    if (agent.reach.team !== team || agent.reach.seat !== seat) continue;
+    const updatedAt = Date.parse(agent.provenance.updated_at);
+    if (!Number.isFinite(updatedAt)) return { kind: 'ambiguous' };
+    claimants.push({ agent, updatedAt });
+  }
+  if (claimants.length === 0) return { kind: 'none' };
+  let best = claimants[0]!;
+  let tied = false;
+  for (let i = 1; i < claimants.length; i += 1) {
+    const candidate = claimants[i]!;
+    if (candidate.updatedAt > best.updatedAt) {
+      best = candidate;
+      tied = false;
+    } else if (candidate.updatedAt === best.updatedAt) {
+      tied = true;
+    }
+  }
+  if (tied) return { kind: 'ambiguous' };
+  return { kind: 'holder', agent: best.agent };
+}
+
+function agentIdsOf(home: string, teamId: string, session: string): Map<string, string> {
   try {
     const record = getTeam(home, teamId);
-    if (record === null) return out;
-    const counts = new Map<string, number>();
-    for (const entry of record.roster) counts.set(entry.seat, (counts.get(entry.seat) ?? 0) + 1);
-    for (const entry of record.roster) {
-      if (entry.agent !== '' && counts.get(entry.seat) === 1) out.set(entry.seat, entry.agent);
-    }
+    if (record === null || record.root === '' || teamIdOf(record.root) !== teamId) return new Map();
+    return idsFrom(home, teamId, session, record.roster);
   } catch {
     // A registry that cannot be read leaves the roster without ids. The seat rules still run;
     // a project or grant that needs an id does not match an empty one.
+    return new Map();
   }
-  return out;
 }
 
-function idsFrom(roster: readonly { agent: string; seat: string }[]): Map<string, string> {
-  const counts = new Map<string, number>();
-  for (const entry of roster) counts.set(entry.seat, (counts.get(entry.seat) ?? 0) + 1);
+function idsFrom(
+  home: string,
+  teamId: string,
+  session: string,
+  roster: readonly { agent: string; seat: string }[],
+): Map<string, string> {
+  const seats = new Map<string, number>();
+  const agents = new Map<string, number>();
+  for (const entry of roster) {
+    seats.set(entry.seat, (seats.get(entry.seat) ?? 0) + 1);
+    if (entry.agent !== '') agents.set(entry.agent, (agents.get(entry.agent) ?? 0) + 1);
+  }
   const out = new Map<string, string>();
   for (const entry of roster) {
-    if (entry.agent !== '' && counts.get(entry.seat) === 1) out.set(entry.seat, entry.agent);
+    if (entry.agent === '' || !isAgentId(entry.agent)) continue;
+    if (seats.get(entry.seat) !== 1 || agents.get(entry.agent) !== 1) continue;
+    const holder = currentHolderOf(home, teamId, entry.seat);
+    if (holder.kind !== 'holder' || holder.agent.id !== entry.agent || holder.agent.reach.session !== session) continue;
+    out.set(entry.seat, entry.agent);
   }
   return out;
 }
@@ -406,13 +486,11 @@ function foreignTeam(
   if (pair.length !== 1 || seats.length !== 1 || agents.length !== 1) {
     return { ok: false, why: `agent ${agentId} is not one seat of team ${JSON.stringify(teamId)}` };
   }
-  let holder;
-  try {
-    holder = findAgent(home, { team: teamId, seat });
-  } catch {
+  const holder = currentHolderOf(home, teamId, seat);
+  if (holder.kind === 'unreadable') {
     return { ok: false, why: 'the foreign sender registry cannot be read' };
   }
-  if (holder === null || holder.id !== agentId || holder.reach.session !== session) {
+  if (holder.kind !== 'holder' || holder.agent.id !== agentId || holder.agent.reach.session !== session) {
     return { ok: false, why: `agent ${agentId} is not the current holder of foreign seat ${JSON.stringify(seat)}` };
   }
   const loaded = readTeamConfig(record.root, { home });
@@ -422,5 +500,5 @@ function foreignTeam(
   if (!loaded.team.seats.some((entry) => entry.name === seat)) {
     return { ok: false, why: `${seat}: it is not a declared seat of its own team file now in force` };
   }
-  return { ok: true, team: admitTeamOf(loaded.team, idsFrom(record.roster)) };
+  return { ok: true, team: admitTeamOf(loaded.team, idsFrom(home, teamId, session, record.roster)) };
 }
