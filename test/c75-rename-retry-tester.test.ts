@@ -9,6 +9,7 @@ const SESSION = 'acme';
 const SEAT = 'worker';
 const PANE = 'fixture-pane-one';
 const SPACE = 'fixture-space';
+const OTHER_SEAT = 'fixture-other-seat';
 
 function seat(): UpSeat {
   return {
@@ -44,14 +45,25 @@ const BUDGET_MS = namingMs();
 
 type Recorded = { seat: string; stage: string };
 
-function world(input: { takeAfter: number; stopOnFirstSleep?: boolean }): {
+function world(input: {
+  takeAfter: number;
+  stopOnFirstSleep?: boolean;
+  agents?: { name: string; pane: string }[];
+}): {
   host: Host;
   closing: () => boolean;
-  trace: { renames: () => number; records: Recorded[]; said: string[]; clock: () => number };
+  trace: {
+    renames: () => number;
+    renamesAt: () => number[];
+    records: Recorded[];
+    said: string[];
+    clock: () => number;
+  };
 } {
   let clock = 0;
   let renames = 0;
   let closing = false;
+  const renamesAt: number[] = [];
   const records: Recorded[] = [];
   const said: string[] = [];
   const host: Host = {
@@ -61,9 +73,22 @@ function world(input: { takeAfter: number; stopOnFirstSleep?: boolean }): {
     paneRun: () => true,
     typeLine: async () => false,
     renameAgent: () => {
+      renamesAt.push(clock);
       renames += 1;
       return renames > input.takeAfter;
     },
+    ...(input.agents === undefined
+      ? {}
+      : {
+          agentList: () => input.agents!.map((agent) => ({
+            name: agent.name,
+            agent: 'claude',
+            pane: agent.pane,
+            workspace: SPACE,
+            status: 'idle',
+            cwd: '/work/acme',
+          })),
+        }),
     closeWorkspace: () => true,
     stopSession: () => true,
     kill: () => true,
@@ -89,7 +114,7 @@ function world(input: { takeAfter: number; stopOnFirstSleep?: boolean }): {
   return {
     host,
     closing: () => closing,
-    trace: { renames: () => renames, records, said, clock: () => clock },
+    trace: { renames: () => renames, renamesAt: () => [...renamesAt], records, said, clock: () => clock },
   };
 }
 
@@ -117,13 +142,40 @@ test('a host that never takes the name is retried until the wait ends', async ()
   expect(made.trace.clock()).toBe(BUDGET_MS);
 });
 
-test('a stop during the rename retry aborts before the wait runs out', async () => {
+test('the retry waits before it asks again, so the next call is not on the same tick', async () => {
+  const made = world({ takeAfter: 3 });
+  await executePlan(plan(), SESSION, made.host, { isClosing: made.closing });
+
+  const at = made.trace.renamesAt();
+  const refused = at[1];
+  const retried = at[2];
+  if (refused === undefined || retried === undefined) throw new Error('the retry never called the host');
+  expect(retried - refused).toBeGreaterThan(0);
+  expect(made.trace.clock()).toBeLessThanOrEqual(BUDGET_MS);
+});
+
+test('a pane named for another seat is never renamed', async () => {
+  const made = world({
+    takeAfter: 0,
+    agents: [{ name: OTHER_SEAT, pane: PANE }],
+  });
+  await executePlan(plan(), SESSION, made.host, { isClosing: made.closing });
+
+  expect(made.trace.renames()).toBe(0);
+  expect(ready(made.trace.records)).toEqual([]);
+  expect(made.trace.said.join('')).toContain('its pane is named for another seat; left at launched');
+  expect(made.trace.clock()).toBeLessThanOrEqual(BUDGET_MS);
+});
+
+test('a stop during the rename retry keeps the stage the create recorded', async () => {
   const made = world({ takeAfter: Number.POSITIVE_INFINITY, stopOnFirstSleep: true });
   await executePlan(plan(), SESSION, made.host, { isClosing: made.closing });
 
   expect(made.closing()).toBe(true);
-  expect(ready(made.trace.records)).toEqual([]);
-  expect(made.trace.renames()).toBe(3);
+  expect(made.trace.records.length).toBeGreaterThan(0);
+  expect(made.trace.records.every((record) => record.stage === 'launched')).toBe(true);
+  expect(made.trace.said.join('')).not.toContain('was not named in time');
+  expect(made.trace.renames()).toBe(2);
   expect(made.trace.clock()).toBe(250);
   expect(made.trace.clock()).toBeLessThan(BUDGET_MS);
 });
