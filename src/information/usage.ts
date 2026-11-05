@@ -13,6 +13,7 @@ import { budgetTable, budgetLine, reserveOf, sourcesOf, span, whenWord, WINDOWS,
 import { money } from '../budgets/gate.ts';
 import { walkCaller } from '../caller.ts';
 import { readTeamConfig } from '../file/team-config.ts';
+import { loadTeamText, TEAM_FILE } from '../file/load.ts';
 import type { BudgetAccount, Seat, TeamFile } from '../file/types.ts';
 import { defaultBudgets } from '../file/validate.ts';
 import type { Io } from '../io.ts';
@@ -564,6 +565,10 @@ export type TeamEntry = {
    *  the machine counted the team under before its file broke, so a team whose file cannot be
    *  read still prints by name — never by path. */
   recorded?: string;
+  /** Set false when the machine's own answer says the team's session is gone or stopped: a
+   *  record, not a team. Absent when the answer was running, or was not asked, or could not be
+   *  given — only a known-dead session is ever called dead. */
+  live?: boolean;
 };
 /** A store whose own record cannot be read: `text` is the read's message, the owner's to see. */
 export type StoreEntry = { kind: 'store'; text: string };
@@ -645,6 +650,24 @@ export function realKey(path: string): string {
 export type SessionLiveness = (session: string) => boolean | null;
 
 /**
+ * The session a team's approved record names, for a team whose live file names none: the store
+ * keeps the text that was approved (`ApprovalRecord.file`), so a team whose file cannot be read
+ * still answers whether its session runs — the record is the machine's own copy of the team as
+ * approved, and asking under it is evidence, not a guess. Null when the recorded text names no
+ * session or no longer loads: no evidence, and the team is left alone.
+ */
+function approvedSessionOf(text: string, root: string, home: string): string | null {
+  try {
+    const loaded = loadTeamText(text, root, join(root, TEAM_FILE), { home, checkOnly: true });
+    if (!loaded.ok) return null;
+    const session: unknown = loaded.team.session;
+    return typeof session === 'string' && session !== '' ? session : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Every store this machine holds, read the one way the design note rules (§ 2.1): the stores
  * folder listed, each name ending `-<12 hex>`, each record read whole for its root, each root
  * read by `projectUsage` under this caller's view. One bad store, one moved project, one
@@ -675,6 +698,11 @@ export function machineUsage(home: string, now: number, view: UsageView, session
   const mineKey = view.mine === null ? null : realKey(view.mine);
   const entries: MachineTeam[] = [];
   const seen = new Set<string>();
+  // The session each entry's liveness is asked under. The live file's own session is the first
+  // answer; a file that cannot be read names none, and the store's approved record still does —
+  // the record is the machine's own copy of the team as approved, so asking under it is
+  // evidence, not a guess.
+  const asked = new Map<TeamEntry, string | null>();
   for (const name of names.filter(isStoreName).sort()) {
     const store = join(folder, name);
     let record: ApprovalRecord | null;
@@ -702,10 +730,15 @@ export function machineUsage(home: string, now: number, view: UsageView, session
     }
     // The store's folder names the team (`<project>-<12 hex>`, `store.ts:59-64`): the recorded
     // name rides the entry so a file that cannot be read still prints as a team, by name.
-    entries.push({ kind: 'team', root, recorded: name.replace(/-[0-9a-f]{12}$/, ''), usage });
+    const entry: TeamEntry = { kind: 'team', root, recorded: name.replace(/-[0-9a-f]{12}$/, ''), usage };
+    entries.push(entry);
+    asked.set(entry, usage.session ?? approvedSessionOf(record.file, root, home));
   }
   if (view.mine !== null && !seen.has(realKey(view.mine))) {
-    entries.push({ kind: 'team', root: view.mine, usage: projectUsage(view.mine, { home, now, restricted, ...(running === undefined ? {} : { running }) }) });
+    const usage = projectUsage(view.mine, { home, now, restricted, ...(running === undefined ? {} : { running }) });
+    const entry: TeamEntry = { kind: 'team', root: view.mine, usage };
+    entries.push(entry);
+    asked.set(entry, usage.session);
   }
   const teams = entries.filter((entry): entry is TeamEntry => entry.kind === 'team');
   // A team whose herdr session no longer runs is a record: the file still declares what it
@@ -714,7 +747,9 @@ export function machineUsage(home: string, now: number, view: UsageView, session
   // session herdr cannot be asked about (null) is left alone: no evidence, no removal.
   if (sessions !== undefined) {
     for (const team of teams) {
-      if (team.usage.session === null || sessions(team.usage.session) !== false) continue;
+      const session = asked.get(team) ?? null;
+      if (session === null || sessions(session) !== false) continue;
+      team.live = false;
       team.usage.seatAccounts = [];
       team.usage.vendors = [];
     }
@@ -796,7 +831,7 @@ export function machineUsage(home: string, now: number, view: UsageView, session
 }
 
 function byName(a: TeamEntry, b: TeamEntry): number {
-  const name = (team: TeamEntry) => team.usage.project ?? team.root;
+  const name = teamNameOf;
   return name(a) < name(b) ? -1 : name(a) > name(b) ? 1 : 0;
 }
 
@@ -1115,6 +1150,7 @@ const WHY_WORDS: Record<UnknownWhy, string> = {
  * fragment is the tool's own, never a read's message, so nothing another team's read produced
  * can cross.
  */
+const NOT_RUNNING = 'a team on this machine is not running';
 const ANON: Array<{ why: string; sentence: (count: number) => string }> = [
   {
     why: 'its file could not be read',
@@ -1151,6 +1187,10 @@ const ANON: Array<{ why: string; sentence: (count: number) => string }> = [
   {
     why: 'its project folder is not there anymore',
     sentence: (n) => (n === 1 ? "1 team's project folder is not there anymore" : `${n} teams' project folders are not there anymore`),
+  },
+  {
+    why: NOT_RUNNING,
+    sentence: (n) => (n === 1 ? '1 team on this machine is not running' : `${n} teams on this machine are not running`),
   },
   {
     why: 'a store on this machine cannot be read',
@@ -1396,6 +1436,15 @@ function synthesizeAccounts(
 }
 
 /**
+ * The name a team prints under: its live project name, the name its store recorded when the
+ * live file cannot be read, and the root only when neither is known — the same rule the
+ * unreadable-file note follows, so no face names a team by a path where its name is on record.
+ */
+function teamNameOf(team: TeamEntry): string {
+  return team.usage.project ?? (team.recorded !== undefined && team.recorded !== '' ? team.recorded : team.root);
+}
+
+/**
  * The one filter: the machine's facts in, exactly the report's fields out. A team the caller does
  * not own contributes counts, fixed sentences and figures of accounts the caller's own file
  * names — never a name, a root, a seat, a path or a message a read produced. When the caller
@@ -1407,7 +1456,7 @@ function synthesizeAccounts(
 export function reportOf(machine: MachineUsage, view: UsageView, now: number, mineNotes: readonly string[], allTeams = false, live: QuotaFacts | null = null): UsageReport {
   const mineEntry = view.mine === null ? null : machine.teams.find((team) => realKey(team.root) === realKey(view.mine as string)) ?? null;
   const mineName = mineEntry?.usage.project ?? null;
-  const nameOf = (team: TeamEntry) => team.usage.project ?? team.root;
+  const nameOf = teamNameOf;
   /** The name a member's own material prints under: its name, or `mine` when it has none. */
   const scopeOf = (team: TeamEntry) => (team === mineEntry ? mineName ?? 'mine' : view.full ? nameOf(team) : 'another');
   // The accounts the caller's own file names: the only accounts the restricted view may name.
@@ -1587,10 +1636,12 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
   const quota = quotaOf({ labs: quotaLabs, observations: synthesized.observations, accountsFile: ACCOUNTS_FILE, now, ...(expired.length > 0 ? { expired } : {}) });
 
   // Every why-line, the caller's own first, then by the words and the account: the order holds
-  // in both views, so hiding a name cannot reshuffle the lines around it.
+  // in both views, so hiding a name cannot reshuffle the lines around it. A team that is not
+  // running explains nothing about this machine: its why-lines are the same history its notes
+  // are, and the one summary line below says how many such teams there are.
   const mineWhys = (mineEntry?.usage.whys ?? []).map((one) => ({ team: mineEntry as TeamEntry, ...one }));
   const otherWhys = machine.teams
-    .filter((team) => team !== mineEntry)
+    .filter((team) => team !== mineEntry && team.live !== false)
     .flatMap((team) => team.usage.whys.map((one) => ({ team, ...one })))
     .filter((one) => visible(one.account));
   const byWord = (a: { account: string; why: UnknownWhy }, b: { account: string; why: UnknownWhy }): number =>
@@ -1619,11 +1670,12 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
   // the owner's rule is one summary line for the teams with no data, never one note per team —
   // and the sentence names no team, so a name the view holds back never rides one. The caller's
   // own team's problems keep their own words above (`mineEntry`), and a store's message is the
-  // machine's, not a team's, and keeps its own rule below.
+  // machine's, not a team's, and keeps its own rule below. A team the machine reports as not
+  // running contributes neither a grouped sentence nor a named one: its problems are history.
   const groups = new Map<string, number>();
   const namedTeams: ReportNote[] = [];
   for (const team of teamOrder) {
-    if (team === mineEntry) continue;
+    if (team === mineEntry || team.live === false) continue;
     for (const problem of team.usage.problems) {
       if (!shownProblem(problem)) continue;
       // A team the machine still records by name keeps its name: the store's own folder is the
@@ -1646,6 +1698,12 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
     notes.push({ scope: 'another', why, ...(count > 1 ? { count } : {}) });
   }
   for (const note of namedTeams) notes.push(note);
+  // The other teams whose sessions the machine reports as gone are one counted line, never one
+  // note each: such a team is a record, and the report says how many records it is not showing.
+  // The caller's own team is not in the count — its block always prints. The sentence names no
+  // team in either view — the names are history, and `--all` is the flag that prints their blocks.
+  const notRunning = teamOrder.filter((team) => team !== mineEntry && team.live === false);
+  if (notRunning.length > 0) notes.push({ scope: 'usage', why: NOT_RUNNING, ...(notRunning.length > 1 ? { count: notRunning.length } : {}) });
   // A store problem's message is the read's own and carries the store's path: the owner reads it
   // as it stands; every other caller reads the fixed sentence with the count (§ 2.3's note rule).
   if (view.full) for (const message of machine.stores) notes.push({ scope: 'store', why: message });
@@ -1864,8 +1922,10 @@ function subscriptionEntryOf(
     expired,
     pace: other && !view.full ? null : newest?.pace ?? null,
     other,
-    ...(newest !== null && newest.team.usage.watch !== 'recording' ? { watch: newest.team.usage.watch } : {}),
-    ...(view.full && newest !== null ? { team: newest.team.usage.project ?? newest.team.root } : {}),
+    // A watch cannot record for a team that is not running: the clause that says so is about a
+    // live gap, and a stale team's name here would read as a problem of its own.
+    ...(newest !== null && newest.team.live !== false && newest.team.usage.watch !== 'recording' ? { watch: newest.team.usage.watch } : {}),
+    ...(view.full && newest !== null ? { team: teamNameOf(newest.team) } : {}),
     ...(newest !== null && (view.full || !other) ? { seat: newest.row.seat } : {}),
   };
   const rows = view.full && allTeams ? line.rows : line.rows.filter((one) => one.team === mineEntry);
@@ -1873,7 +1933,7 @@ function subscriptionEntryOf(
     .map((one) => {
       const from = borrowedOf(one.team, account);
       return {
-        team: view.full ? one.team.usage.project ?? one.team.root : one.team.usage.project ?? '',
+        team: view.full ? teamNameOf(one.team) : one.team.usage.project ?? '',
         ...(view.full ? { root: one.team.root } : {}),
         row: reportRowOf(one.row, one.pace),
         ...(from === undefined ? {} : { borrowedFrom: from }),
@@ -1920,14 +1980,14 @@ function spendEntryOf(account: MachineAccount & { kind: 'spend' }, view: UsageVi
     source: newest === null ? null : 'check',
     state: newest === null ? 'unknown' : now - newest.reading.at < staleAfterMs * 1000 ? 'fresh' : 'stale',
     other,
-    ...(view.full && newest !== null ? { team: newest.team.usage.project ?? newest.team.root } : {}),
+    ...(view.full && newest !== null ? { team: teamNameOf(newest.team) } : {}),
   };
   const rows = view.full && allTeams ? account.spend.rows : account.spend.rows.filter((one) => one.team === mineEntry);
   const teams: ReportSpendRow[] = rows
     .map((one) => {
       const from = borrowedOf(one.team, account.account);
       return {
-        team: view.full ? one.team.usage.project ?? one.team.root : one.team.usage.project ?? '',
+        team: view.full ? teamNameOf(one.team) : one.team.usage.project ?? '',
         ...(view.full ? { root: one.team.root } : {}),
         reading: {
           amount: one.reading.amount,

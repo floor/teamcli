@@ -2466,6 +2466,49 @@ describe('team usage', () => {
     expect(out.out).toContain('usage on this machine, 1 team, 2 labs, 2 accounts');
   });
 
+  test('a team that is not running is one summary line, never a per-team note or a problem of its own', async () => {
+    // Item 2: the owner's report named teams that had had no live seats on this machine for
+    // weeks, and each printed as a team whose file could not be read. A team whose session the
+    // machine reports as gone is a record, not a team: its file's problem and its state's are
+    // history, never the report's notes, and the report says the count in one line. Its live
+    // file cannot name the session any more, so the session the store's own approved record
+    // names answers for it.
+    const retired = join(home, 'Code', 'floor', 'boathouse');
+    mkdirSync(join(retired, '.agents'), { recursive: true });
+    const other = teamText().replace('project: acme', 'project: boathouse').replace('session: acme-web', 'session: boathouse-web').replace(root, retired);
+    writeFileSync(join(retired, '.agents', 'team.yaml'), other);
+    approve(other, { root: retired });
+    // The live file breaks after the approval, and its state with it: both are that record's
+    // problems, and neither is this machine's while the session is gone.
+    writeFileSync(join(retired, '.agents', 'team.yaml'), 'format: 1\nproject: boathouse\ntrust: [\n');
+    writeFileSync(join(retired, '.agents', 'team.state.json'), 'not json');
+    withoutReadings();
+    const sessions = (name: string) => name !== 'boathouse-web';
+    const out = testIo(root, OWNER);
+    expect(await runUsage([], out, { home, now: () => NOW, sessions })).toBe(0);
+    expect(out.out).toContain('note: 1 team on this machine is not running\n');
+    expect(out.out).toContain('usage on this machine, 2 teams, 2 labs, 2 accounts\n');
+    expect(out.out).not.toContain('its file could not be read');
+    expect(out.out).not.toContain('state cannot be read');
+    // The same fact in the structured face: one usage-scoped note with the machine's own words,
+    // and no named-team note for a team the machine says is not running.
+    const json = testIo(root, OWNER);
+    expect(await runUsage(['--json'], json, { home, now: () => NOW, sessions })).toBe(0);
+    const doc = JSON.parse(json.out) as { notes: { scope: string; why: string }[] };
+    expect(doc.notes).toEqual([{ scope: 'usage', why: 'a team on this machine is not running' }]);
+    // `--all` is the flag that asks for the block; the team prints by the name its store
+    // recorded, never by its root.
+    const all = testIo(root, OWNER);
+    expect(await runUsage(['--all'], all, { home, now: () => NOW, sessions })).toBe(0);
+    expect(all.out).toContain('\nboathouse\n');
+    expect(all.out).not.toContain(retired);
+    // A caller who is not the owner reads the same count and never the name.
+    const seat = testIo(root, SEAT);
+    expect(await runUsage([], seat, { home, now: () => NOW, sessions })).toBe(0);
+    expect(seat.out).toContain('note: 1 team on this machine is not running\n');
+    expect(seat.out).not.toContain('boathouse');
+  });
+
   test('a reading older than its own window shows no figure: the age and source print, and the advice says how to read a fresh one', async () => {
     // Item 3: the owner's own row carried `100%` left and `in 0m`, read a day and more ago — a
     // window instance that passed long before the report ran, printed as if it were the current
