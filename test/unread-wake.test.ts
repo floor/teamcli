@@ -1163,7 +1163,8 @@ describe('reportUnreadDrops', () => {
     const toOwner = mailboxBody(made.root, 'owner', `unread-${UNREAD_A}`);
     expect(toOwner.body).toContain('helper: a message from owner is queued, not woken - unread for 21 min');
     const leadDir = join(made.dir, 'send-drops', 'acme', 'lead');
-    expect(readdirSync(leadDir).filter((name) => MESSAGE_ID.test(name))).toEqual([]);
+    const leadNames = existsSync(leadDir) ? readdirSync(leadDir).filter((name) => MESSAGE_ID.test(name)) : [];
+    expect(leadNames).toEqual([]);
     expect(said).toEqual(['helper: a message from owner was still unread after 21 min; reported to owner']);
   });
 
@@ -1897,7 +1898,7 @@ describe('team watch wakes an unread seat', () => {
     // this seat is the stuck notice the same pass wrote, never a second generic report.
     const owner = mailboxBody(directory, 'owner', `unread-${UNREAD_B}`);
     expect(owner.body).toContain('no wake line was typed');
-    expect(leadReportBody(join(directory, '.agents'), UNREAD_B, 'claude-coordinator-acme', 'acme-web')).toContain('screen not recognised');
+    expect(leadReportBody(join(directory, '.agents'), UNREAD_B, 'claude-coordinator-acme', 'acme-web')).toContain('screen idle, no wake reached it');
     expect(io.out).toContain('deepseek-acme: a message from owner was still unread after 21 min; reported to owner');
     expect(io.out).not.toContain('reported to owner and claude-coordinator-acme');
   });
