@@ -64,7 +64,18 @@ and launcher:
 | Cursor | `cursor` |
 
 Antigravity seats also carry a model pool: `gemini` or `claude-gpt`. The store keeps pool readings
-separate; unknown models have no inferred pool.
+separate; unknown models have no inferred pool. The pool is the tool's own word and never prints:
+a label names the bucket as the CLI's usage print does (`Gemini models`, `Claude and GPT models`,
+from `quota-observe.ts`), and leads with the account's plan when the owner wrote one down
+(`machinePlansOf`, below).
+
+The machine file `~/.config/team/accounts.yaml` may also carry a top-level `plans:` map from
+account name to the plan's words (`plans: { google-antigravity: Google AI Ultra }`). No CLI prints
+the plan a subscription runs on, so this owner-written entry is the only source, read once per run
+by `machinePlansOf` and carried as `MachineUsage.plans` into every label (`accountLabel`): the plan
+and the bucket (`Google AI Ultra, Claude and GPT models`), the account and the bucket when no plan
+is set (`google-antigravity (Claude and GPT models)`), the account alone for a subscription that
+splits into no bucket. JSON keeps `account` and `pool` and adds `plan` where one is set.
 
 The paying account is not the lab. A seat's lab is the model its pane says it runs: herdr's
 `display_agent` line for the agent of that name, which the watch keeps from the pane itself. A
@@ -239,7 +250,8 @@ counts, account rows grouped by lab, the `quota` block, unknown reasons, notes, 
 each seat's run, its windows (mark, source, reading time, age and staleness) and its cost (the
 registry's `source` word, `readFrom`, reading time and age; `why` when unknown). A lab no screen reads and no reading reached also carries its seat count (`seats`),
 which the text face prints as one line in place of its rows. Subscription rows carry the window,
-left/used percentages, reset countdown and reading age; Antigravity pool rows add `pool`. A
+left/used percentages, reset countdown and reading age; Antigravity pool rows add `pool`, and a
+row whose account the machine file gives a plan also carries `plan` (the text leads with it). A
 machine account counts once even with multiple windows or pools. The `quota` block carries
 `format: 1`, the accounts file the declaration line points at, one lab per entry with its
 accounts, seats, states and windows (each with its source, age, staleness, wall flag and margin),

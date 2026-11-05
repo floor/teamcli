@@ -79,7 +79,7 @@ The watch writes the machine configuration’s `usage/readings.json` (relative t
 | left / used | number | yes | none | present at 0.5.0 | Left in [0,100], used exactly 100-left. |
 | observedAt | safe nonnegative integer | yes | none | present at 0.5.0 | Observation time in milliseconds. |
 | resetsAt | safe nonnegative integer or null | yes | null | present at 0.5.0 | Reset time in milliseconds. |
-| pool | gemini or claude-gpt | no | absent | present at 0.5.0 | Provider pool qualifier. |
+| pool | gemini or claude-gpt | no | absent | present at 0.5.0 | Provider pool qualifier; the text prints the bucket as the CLI names it, never this word. |
 
 No team name, seat, filesystem path or screen text is retained. Shared subscription declarations are resolved from the machine accounts configuration; an explicit seat account wins, otherwise CLI and launcher select the paying account. No credential or CLI session file is read by this reporting path.
 
@@ -111,7 +111,7 @@ The report is built once for text and JSON rendering. The following is the quota
 |---|---|---|---|
 | `ReportQuota` | `format: 1`, `accountsFile: string`, `labs: ReportQuotaLab[]`, `advice: string` | no invented figure | Usage report builder; configuration reference, lab groups and one advice line. |
 | `ReportQuotaLab` | `lab: string`, `state: QuotaState`, `accounts: ReportQuotaAccount[]` | empty accounts allowed | Lab of the running model, rather than its launcher CLI. |
-| `ReportQuotaAccount` | `account: string`, `pool?: gemini or claude-gpt`, `state: QuotaState`, `windows: ReportQuotaWindow[]`, `seats: string[]`, `seatsOther?: number`, `wallResets: string or null` | optional pool/other-seat count absent; unknown wall reset null | Account group under the caller’s permitted view; other-team seats may only be counted. |
+| `ReportQuotaAccount` | `account: string`, `pool?: gemini or claude-gpt`, `plan?: string`, `state: QuotaState`, `windows: ReportQuotaWindow[]`, `seats: string[]`, `seatsOther?: number`, `wallResets: string or null` | optional pool/plan/other-seat count absent; unknown wall reset null | Account group under the caller’s permitted view; other-team seats may only be counted. `plan` is the owner’s own words from the machine file’s `plans:` map, the only source no CLI prints, and the text label leads with it. |
 | `ReportQuotaWindow` | `window: session or weekly`, `used: number or null`, `left: number or null`, `resetsAt: ISO string or null`, `resetsIn: string or null`, `margin: number or null`, `runsOutIn: string or null`, `source: QuotaSource`, `seat: string or null`, `age: string`, `stale: boolean`, `expired: boolean`, `wall: boolean` | unavailable figures, margin and run-out null; an expired reading’s figures null | Observed quota window; wall reports do not manufacture a percentage, and a reading older than its own window is not shown as a figure. |
 | `QuotaSource` | status line; cli usage; machine reading; quota screen | explicit source | Source spelling as printed by the reporting model. |
 | `QuotaState` | ok; near cap; walled; unknown | unknown without fresh evidence | Classification thresholds are in §3.5. |

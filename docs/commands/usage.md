@@ -43,10 +43,29 @@ accounts:
 A flat list is one unnamed entity and reads exactly as before. A keyed account a team's seat spends
 that belongs to another entity is borrowed: the team's row for that account names the entity —
 `  openai  beacon  weekly  left 70%  …  pace 1.2%/h  (borrowed from globex)` — in the same
-parenthesised tail the `(pool)` suffix and the watch clause sit in. The account still counts once,
+parenthesised tail the watch clause sits in. The account still counts once,
 under the team that spends it, so the closing summary count does not change. A team file's
 `entity:` names the team's own
 entity; a file that names none borrows every keyed account its seats spend.
+
+The same file can name the plan each account runs on, in the owner's own words:
+
+```text
+accounts:
+  - google-antigravity
+  - anthropic
+
+plans:
+  google-antigravity: Google AI Ultra
+  anthropic: Claude Max 20x
+```
+
+No CLI prints the plan a subscription is on, so this is the one place it comes from — an entry the
+owner writes once. A row then leads with it, followed by the bucket the CLI itself names when the
+account splits into buckets: `Google AI Ultra, Gemini models` and `Google AI Ultra, Claude and
+GPT models` are Antigravity's two buckets on one plan, and `Claude Max 20x` is a subscription that
+splits into none. An account with no entry keeps its own name, with its bucket in the CLI's words —
+`google-antigravity (Claude and GPT models)` — and never the tool's own word for the pool.
 
 These accounts appear even outside a project, with no teams or budgets configured. The file is
 optional: a lab no entry here declares is one account named after the lab, read from the status
@@ -245,7 +264,9 @@ block is the `quota` key:
 `format`, `accountsFile`, one entry per lab with its accounts, seats, states and windows, and
 `advice`; each window carries its `margin` — the same pace as points, positive ahead of its
 clock — its `expired` mark and, when it names one, the `runsOutIn` figure. The text prints the
-pace in words; the JSON key keeps its model name for scripts.
+pace in words; the JSON key keeps its model name for scripts. An account whose plan the machine
+file names also carries `plan` — the owner’s words, never a guess — beside its `account` and
+`pool`, so a script reads the account itself and its label’s plan apart.
 
 ## Each seat’s own figures
 
@@ -273,7 +294,8 @@ figures and spend are attributed to the run (herdr session) its pane was read in
 same-named seats never borrow each other’s figures. In `--json` the same facts are `teams[].seats`:
 the seat, its CLI and paying account, its `run`, its `windows` (each with `mark`, `source`,
 `readAt`, `age` and `stale`), and its `cost` (`amount`, `currency`, `source`, `readFrom`,
-`readAt`, `age`; `why` when unknown). The cost’s `source` carries the session registry’s own word
+`readAt`, `age`; `why` when unknown), with `plan` on the seat and on each window whose account
+the machine file gives a plan. The cost’s `source` carries the session registry’s own word
 for how the amount was obtained — `measured`, `estimated`, or `unknown` for a seat whose screen
 printed no amount — so `team sessions` and `team usage` print the same mark for the same figure;
 `readFrom` names the screen it was read from (`status line`).
