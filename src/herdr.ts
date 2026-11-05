@@ -60,15 +60,19 @@ export function activeHerdrSnapshotId(): number | null {
 }
 
 /**
- * Runs one command scope while reusing a single in-memory snapshot of the terminal host's
- * agent list and pane process tables. Lives only for `fn` inside this process.
+ * Opens one command scope that reuses a single in-memory snapshot of the terminal host's
+ * agent list and pane process tables. Returns the snapshot id when this call opened it,
+ * or `null` when an outer scope is already open.
  */
-export async function withHerdrSnapshot<T>(fn: () => Promise<T>): Promise<T> {
-  if (activeSnapshot !== null) return fn();
-  activeSnapshot = { id: nextSnapshotId++, agents: new Map(), processInfo: new Map() };
-  try {
-    return await fn();
-  } finally {
+export function beginHerdrSnapshot(): number | null {
+  if (activeSnapshot !== null) return null;
+  const id = nextSnapshotId++;
+  activeSnapshot = { id, agents: new Map(), processInfo: new Map() };
+  return id;
+}
+
+export function endHerdrSnapshot(id: number | null): void {
+  if (id !== null && activeSnapshot?.id === id) {
     activeSnapshot = null;
   }
 }

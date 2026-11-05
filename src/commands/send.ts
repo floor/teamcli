@@ -18,7 +18,7 @@ import { NOT_A_REPO } from '../file/load.ts';
 import { labelPersona } from '../file/sections/seats.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
-import { agentList, agentStatus, evictHerdrPaneProcessInfo, paneForegroundCwd, paneProcesses, paneRead, withHerdrSnapshot, type PaneProcesses } from '../herdr.ts';
+import { agentList, agentStatus, beginHerdrSnapshot, endHerdrSnapshot, evictHerdrPaneProcessInfo, paneForegroundCwd, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, wakeableWhileIdle, WEBHOOK_QUEUED_WORDS, type DeliveryClass, type WakeOutcome } from '../launch/delivery-class.ts';
 import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
@@ -1220,11 +1220,14 @@ function snapshotSendIo(io: Io): Io {
 }
 
 export async function runSend(argv: string[], rawIo: Io, rawHost: SendHost): Promise<number> {
-  return withHerdrSnapshot(async () => {
-    const io = snapshotSendIo(rawIo);
-    const host = snapshotSendHost(rawHost);
-    return runSendWithSnapshot(argv, io, host);
-  });
+  const snapshotId = beginHerdrSnapshot();
+  const io = snapshotSendIo(rawIo);
+  const host = snapshotSendHost(rawHost);
+  try {
+    return await runSendWithSnapshot(argv, io, host);
+  } finally {
+    endHerdrSnapshot(snapshotId);
+  }
 }
 
 async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Promise<number> {
