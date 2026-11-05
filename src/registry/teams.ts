@@ -33,6 +33,8 @@ export type RosterEntry = { agent: string; seat: string; role: string; nickname?
 
 export type TeamProvenance = { registered_by: string; registered_at: string; updated_at: string };
 
+export type PreviousTeamName = { name: string; until: string };
+
 export type TeamRecord = {
   /** The team ID this record is stored under. Filled in when a record is read; never written. */
   id?: string;
@@ -41,6 +43,10 @@ export type TeamRecord = {
   /** The project this team sits in, by project ID (src/registry/projects.ts), or null: a team no
    *  project names is its own project. Written from the team file's `in_project` through sync. */
   projectId: string | null;
+  /** All project IDs this team belongs to (home `projectId` included), when present. */
+  projects?: string[];
+  /** Previous team names carried across a rename with their grace-window expiry (`until`, ISO UTC). */
+  previousNames?: PreviousTeamName[];
   entity: string | null;
   session: string;
   root: string;
@@ -100,6 +106,8 @@ function cloneTeamRecord(record: TeamRecord): TeamRecord {
     lobbies: { ...record.lobbies },
     roster: record.roster.map((entry) => ({ ...entry })),
     provenance: { ...record.provenance },
+    ...(record.projects !== undefined ? { projects: [...record.projects] } : {}),
+    ...(record.previousNames !== undefined ? { previousNames: record.previousNames.map((entry) => ({ ...entry })) } : {}),
     ...(record.settings !== undefined ? { settings: { ...record.settings } } : {}),
     ...(record.issueTracker !== undefined ? { issueTracker: { ...record.issueTracker } } : {}),
   };
@@ -231,6 +239,8 @@ export function upsertTeam(home: string, id: string, patch: TeamPatch): TeamReco
       record = {
         project: fields.project as string,
         projectId: fields.projectId ?? null,
+        ...(fields.projects !== undefined ? { projects: [...fields.projects] } : fields.projectId ? { projects: [fields.projectId] } : {}),
+        ...(fields.previousNames !== undefined ? { previousNames: fields.previousNames.map((entry) => ({ ...entry })) } : {}),
         entity: fields.entity ?? null,
         session: fields.session as string,
         root: fields.root as string,
@@ -241,6 +251,9 @@ export function upsertTeam(home: string, id: string, patch: TeamPatch): TeamReco
         ...(fields.settings !== undefined ? { settings: fields.settings } : {}),
         provenance: { registered_by: by ?? 'team', registered_at: at, updated_at: at },
       };
+    }
+    if (record.projectId !== null && (record.projects === undefined || !record.projects.includes(record.projectId))) {
+      record.projects = [record.projectId, ...(record.projects ?? [])];
     }
     if (!TEAM_LIFECYCLES.includes(record.lifecycle)) throw new TeamsError(`"${record.lifecycle}" is not a team lifecycle`);
     if (record.projectId !== null && typeof record.projectId !== 'string') throw new TeamsError('"project_id" must be a project ID or null');
@@ -303,6 +316,88 @@ export function findTeams(home: string, key: string): TeamRecord[] {
 export function findTeam(home: string, key: string): TeamRecord | null {
   const found = findTeams(home, key);
   return found.length === 1 ? (found[0] as TeamRecord) : null;
+}
+
+/**
+ * Teams whose `previousNames` carry `key`, paired with whether the grace window (`until`) has
+ * expired at `now`. Used only when no current team id, project or session matches `key`.
+ */
+export function findTeamsByPreviousName(
+  home: string,
+  key: string,
+  now: Date = new Date(),
+): Array<{ team: TeamRecord; expired: boolean }> {
+  const all = Object.values(readTeams(home));
+  const out: Array<{ team: TeamRecord; expired: boolean }> = [];
+  const nowMs = now.getTime();
+  for (const team of all) {
+    const match = team.previousNames?.find((entry) => entry.name === key);
+    if (!match) continue;
+    const untilMs = Date.parse(match.until);
+    const expired = Number.isFinite(untilMs) && untilMs <= nowMs;
+    out.push({ team, expired });
+  }
+  return out;
+}
+
+/**
+ * Single seam for changing a team's project membership (`project_id` home, `projects: [...]` list,
+ * and `projects.yaml` membership). Isolates item 0's project membership shape in one function.
+ */
+export function setTeamProjectMembership(
+  home: string,
+  teamId: string,
+  inProject: string | null,
+  opts: { entity?: string | null; by?: string; at?: string } = {},
+): { projectId: string | null; projects: string[] } {
+  const current = getTeam(home, teamId);
+  const entity = opts.entity !== undefined ? opts.entity : (current?.entity ?? null);
+  const by = opts.by ?? 'rename';
+  const at = opts.at ?? new Date().toISOString();
+  if (inProject === null) {
+    const served = (current?.projects ?? []).filter((id) => id !== current?.projectId);
+    upsertTeam(home, teamId, { projectId: null, projects: served, by, at });
+    projectLeave(home, teamId, null);
+    return { projectId: null, projects: served };
+  }
+  const projectId = projects.projectIdOf(inProject);
+  const otherProjects = (current?.projects ?? []).filter((id) => id !== current?.projectId && id !== projectId);
+  const nextProjects = [projectId, ...otherProjects];
+  upsertTeam(home, teamId, { projectId, projects: nextProjects, by, at });
+  projectJoin(home, teamId, inProject, entity, by);
+  return { projectId, projects: nextProjects };
+}
+
+/**
+ * Explicitly re-keys a team record from `oldId` to `newId` when the owner moves a repository root
+ * with `--rekey`, updating `teams.yaml` and `projects.yaml` `teams[]` references.
+ */
+export function rekeyTeamRecord(home: string, oldId: string, newId: string, patch: TeamPatch): TeamRecord {
+  const record = locked(home, () => {
+    const teams = readTeams(home);
+    const prior = teams[oldId];
+    if (!prior) throw new TeamsError(`no team ${oldId} in the registry to re-key`);
+    delete teams[oldId];
+    const at = patch.at ?? new Date().toISOString();
+    const { by: _by, at: _at, settingsDelta: _sd, issueTracker: _it, ...fields } = patch;
+    const next: TeamRecord = {
+      ...prior,
+      ...definedOnly(fields),
+      provenance: { ...prior.provenance, updated_at: at },
+    };
+    next.lobbies = { ...(next.lobbies ?? {}) };
+    if (next.lobby) next.lobbies[next.session] = next.lobby;
+    delete next.id;
+    teams[newId] = next;
+    write(home, teams);
+    return { ...next, id: newId };
+  });
+  for (const [projectId, proj] of Object.entries(projects.readProjects(home))) {
+    if (!proj.teams.includes(oldId)) continue;
+    const nextTeams = proj.teams.map((t) => (t === oldId ? newId : t));
+    projects.upsertProject(home, projectId, { teams: Array.from(new Set(nextTeams)) });
+  }
+  return record;
 }
 
 /**
@@ -516,6 +611,25 @@ function recordOf(id: string, raw: YamlValue, path: string, options: ReadTeamsOp
   if (entity !== null && typeof entity !== 'string') bad('"entity" must be text or null');
   const projectId = raw.project_id ?? null;
   if (projectId !== null && typeof projectId !== 'string') bad('"project_id" must be a project ID or null');
+  let projectsList: string[] | undefined;
+  if (raw.projects !== undefined) {
+    if (!Array.isArray(raw.projects) || !raw.projects.every((item) => typeof item === 'string')) {
+      bad('"projects" must be a list of project IDs');
+    }
+    projectsList = raw.projects as string[];
+  } else if (typeof projectId === 'string') {
+    projectsList = [projectId];
+  }
+  let previousNames: PreviousTeamName[] | undefined;
+  if (raw.previous_names !== undefined) {
+    if (!Array.isArray(raw.previous_names)) bad('"previous_names" must be a list');
+    previousNames = (raw.previous_names as YamlValue[]).map((item, i): PreviousTeamName => {
+      if (!isMap(item) || typeof item.name !== 'string' || typeof item.until !== 'string') {
+        return bad(`previous_names line ${i + 1} must carry "name" and "until"`);
+      }
+      return { name: item.name, until: item.until };
+    });
+  }
   // A lenient reader takes a null roster as no roster lines; a strict one refuses it, because a
   // command must not read "I cannot see this roster" as "this roster names nobody".
   if (options.strictRoster === true && raw.roster === null) bad('"roster" must be a list');
@@ -580,6 +694,8 @@ function recordOf(id: string, raw: YamlValue, path: string, options: ReadTeamsOp
     id,
     project: text('project'),
     projectId: projectId as string | null,
+    ...(projectsList !== undefined ? { projects: projectsList } : {}),
+    ...(previousNames !== undefined && previousNames.length > 0 ? { previousNames } : {}),
     entity: entity as string | null,
     session,
     root: text('root'),
@@ -680,6 +796,12 @@ function emit(teams: Record<string, TeamRecord>): string {
       lines.push('    roster: []');
     }
     lines.push(`    lifecycle: ${team.lifecycle}`);
+    if (team.previousNames && team.previousNames.length > 0) {
+      lines.push('    previous_names:');
+      for (const prev of team.previousNames) {
+        lines.push(`      - { name: ${scalar(prev.name)}, until: ${scalar(prev.until)} }`);
+      }
+    }
     // Only a team that names a tracker says so: absent and "none" are the same record.
     if (team.issueTracker) lines.push(`    issue_tracker: ${emitIssueTracker(team.issueTracker)}`);
     if (team.settings && Object.keys(team.settings).length > 0) {

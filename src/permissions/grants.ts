@@ -611,6 +611,48 @@ export function covers(grant: GrantRecord, grantee: { agentId?: string | null; t
   return grant.kind === 'seat' ? grant.grantee === (grantee.agentId ?? null) : grant.grantee === (grantee.teamId ?? null);
 }
 
+/**
+ * Re-issues standing team grants naming `oldTeamId` (and rewrites `oldRoot` to `newRoot` in grant
+ * scopes) when the owner runs `team rename --team ... --rekey` after a root move.
+ */
+export function reissueTeamGrants(
+  home: string,
+  oldTeamId: string,
+  newTeamId: string,
+  oldRoot: string,
+  newRoot: string,
+  options: { now?: Date } = {},
+): string[] {
+  const now = options.now ?? new Date();
+  const { grants } = readGrants(home);
+  const reissued: string[] = [];
+  for (const grant of grants) {
+    const granteeChanged = grant.kind === 'team' && grant.grantee === oldTeamId && newTeamId !== oldTeamId;
+    const nextScope = grant.scope.map((path) => {
+      if (path === oldRoot) return newRoot;
+      if (path.startsWith(`${oldRoot}/`)) return `${newRoot}${path.slice(oldRoot.length)}`;
+      return path;
+    });
+    const scopeChanged = nextScope.some((path, idx) => path !== grant.scope[idx]);
+    if (!granteeChanged && !scopeChanged) continue;
+    const res = writeGrant(
+      home,
+      {
+        name: grant.name,
+        kind: grant.kind,
+        grantee: granteeChanged ? newTeamId : grant.grantee,
+        capabilities: [...grant.capabilities],
+        roots: nextScope,
+        scope: nextScope,
+        ...(grant.expires !== null ? { expires: grant.expires } : {}),
+      },
+      { now },
+    );
+    if (res.ok) reissued.push(grant.name);
+  }
+  return reissued;
+}
+
 // ---- writing helpers ----------------------------------------------------------------------
 
 function recordPath(home: string, name: string): string {

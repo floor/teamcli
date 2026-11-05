@@ -11,7 +11,7 @@
 // never sees half a record.
 
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { writeAtomic } from '../state.ts';
 
@@ -117,4 +117,27 @@ export function writeStoredTeamConfig(home: string, record: StoredTeamConfig): s
   mkdirSync(dirname(path), { recursive: true });
   writeAtomic(path, `${JSON.stringify(record, null, 2)}\n`);
   return path;
+}
+
+/** Moves a stored team configuration record from `oldId` to `newId` under `--rekey`. */
+export function rekeyStoredTeamConfig(
+  home: string,
+  oldId: string,
+  newId: string,
+  newRoot: string,
+): StoredTeamConfig | null {
+  const prior = readStoredTeamConfig(home, oldId);
+  if (prior === null) return null;
+  const next: StoredTeamConfig = {
+    ...prior,
+    id: newId,
+    root: newRoot,
+  };
+  writeStoredTeamConfig(home, next);
+  if (oldId !== newId) {
+    try {
+      unlinkSync(teamConfigRecordPath(home, oldId));
+    } catch {}
+  }
+  return next;
 }

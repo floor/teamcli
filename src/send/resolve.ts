@@ -9,12 +9,12 @@ import { readTeamConfig } from '../file/team-config.ts';
 import { agentList } from '../herdr.ts';
 import type { Io } from '../io.ts';
 import { AGENT_ID_PATTERN, findAgent, getAgent, type Agent } from '../registry/agents.ts';
-import { findTeams, readTeams, teamIdOf, type RosterEntry, type TeamRecord } from '../registry/teams.ts';
+import { findTeams, findTeamsByPreviousName, readTeams, teamIdOf, type RosterEntry, type TeamRecord } from '../registry/teams.ts';
 import { resolveSeatSettings } from '../config/apply.ts';
 import { agentIdOf } from '../config/read.ts';
 
 /** What a spec resolves to: the owning team record, the agent, and the pane to type into. */
-export type Target = { team: TeamRecord; agent: Agent; pane: string };
+export type Target = { team: TeamRecord; agent: Agent; pane: string; notice?: string };
 
 /**
  * A spec the resolver refuses. `kind` labels the refusals a caller must act on before any
@@ -122,7 +122,7 @@ function recordOfFolder(
 export function resolveTarget(
   home: string,
   spec: string,
-  io: Pick<Io, 'cwd'>,
+  io: Pick<Io, 'cwd'> & Partial<Pick<Io, 'stderr' | 'env'>>,
   live: LiveRead = liveFromHerdr,
 ): Target | ResolveProblem {
   const parsed = parseSpec(spec);
@@ -130,7 +130,27 @@ export function resolveTarget(
   if (parsed.kind === 'id') return fromId(home, parsed.id, live);
   if (parsed.kind === 'at') {
     const found = findTeams(home, parsed.scope);
-    if (found.length === 0) return { error: `${spec}: no team registry record matches "${parsed.scope}" (by id, name or session)` };
+    if (found.length === 0) {
+      const byPrevious = findTeamsByPreviousName(home, parsed.scope);
+      if (byPrevious.length === 0) {
+        return { error: `${spec}: no team registry record matches "${parsed.scope}" (by id, name or session)` };
+      }
+      if (byPrevious.length > 1) {
+        return ambiguousKey(spec, parsed.scope, byPrevious.map((item) => item.team));
+      }
+      const match = byPrevious[0]!;
+      const graceOff = io.env?.TEAM_RENAME_GRACE === 'off' || process.env.TEAM_RENAME_GRACE === 'off' || match.expired;
+      if (graceOff) {
+        return {
+          error: `${spec}: team "${parsed.scope}" was renamed to "${match.team.project}"; address it as "${parsed.target}@${match.team.project}"`,
+        };
+      }
+      const hit = lookupInTeam(home, spec, match.team, parsed.target, live, true);
+      if ('error' in hit) return hit;
+      const notice = `deprecated: "${parsed.target}@${parsed.scope}" — use "${parsed.target}@${match.team.project}"`;
+      io.stderr?.(`${notice}\n`);
+      return { ...hit, notice };
+    }
     if (found.length > 1) return ambiguousKey(spec, parsed.scope, found);
     return lookupInTeam(home, spec, found[0] as TeamRecord, parsed.target, live, true);
   }
