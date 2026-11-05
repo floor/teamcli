@@ -186,10 +186,17 @@ describe('the state record is written once per beat, off the loop, on change onl
     try {
       await waitServing(home);
       await sleep(150);
+      // Flip first, then wait for the writer to go idle: a write that entered the writer
+      // before the flip may still land, and `before` must be read after it has.
+      crashing = true;
+      const idleDeadline = Date.now() + 3000;
+      while (inFlight > 0) {
+        if (Date.now() > idleDeadline) throw new Error('the writer never went idle after the flip');
+        await sleep(5);
+      }
       const before = readDaemonState(home);
       expect(before.kind).toBe('ok');
       if (before.kind !== 'ok') return;
-      crashing = true;
       await sleep(220);
       // Every write in the crash window died mid-temp; the record on disk is still the old
       // one, whole and readable, never the partial temp text.
