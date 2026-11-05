@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { notInForce } from '../approve/approval.ts';
+import { unverifiedRecordSentence } from '../approve/unverified-record.ts';
+import { devModeState } from '../dev_mode.ts';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
 import { insideTrust } from '../file/paths.ts';
@@ -17,7 +19,7 @@ import { contextLine, displayPath, formatTable, hasJsonFlag, pluralCount, refuse
 import { profileFor } from '../profiles/index.ts';
 import { pullSession } from '../send/session-cli.ts';
 import { emptySession, readState, withLock, writeAtomic, STATE_FILE, type State } from '../state.ts';
-import { approvalStanding, type Standing } from '../store/store.ts';
+import { approvalStanding, findStore, readApproval, type Standing } from '../store/store.ts';
 import { fillPattern, publicNameHit, realLanding, taskProblem } from '../worktree/place.ts';
 
 // What the command reads from outside the process, so a test can point the approval store elsewhere.
@@ -231,9 +233,18 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
   // removed has, and it runs (as up, remove and down do). A stored record that is legacy or
   // cannot be verified still refuses.
   if (standing.kind !== 'verified' && standing.kind !== 'none') {
-    refuse(io, json, 'worktree', { id: 'worktree.never-approved', message: notInForce(standing), repair: null });
-    // exit: worktree.never-approved
-    return 1;
+    // Outside dev mode the refusal stays. In dev mode the fold names the record and continues.
+    // Nothing here signs.
+    const dev = devModeState(io, { home: sources.home, team, root, now: sources.now() });
+    if (!dev.on) {
+      refuse(io, json, 'worktree', { id: 'worktree.never-approved', message: notInForce(standing), repair: null });
+      // exit: worktree.never-approved
+      return 1;
+    }
+    const store = findStore(root, sources.home);
+    const file = store === null ? '' : (readApproval(store)?.file ?? '');
+    const sentence = unverifiedRecordSentence(`${team.project}'s approval record`, file);
+    io.stderr(`team worktree: ${sentence}\n`);
   }
   const who = describeCaller(caller);
   if (sub === 'list') return listWorktrees(io, json, reading, root, dir, session, sources.home);

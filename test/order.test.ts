@@ -8,7 +8,10 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { approvalOf } from '../src/approve/approval.ts';
 import { runOrder, type OrderSources } from '../src/commands/order.ts';
+import { readTeamConfig } from '../src/file/team-config.ts';
+import { LEGACY_LINE, storePath } from '../src/store/store.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { gitEnv, testIo } from './helpers.ts';
@@ -406,5 +409,48 @@ describe('team order', () => {
     // The seats' relative order is the roster's; the watch keeps its place between them.
     expect(world.workspaces).toEqual(['w1', 'w2', 'w5', 'w6']);
     expect(io.out).toContain('team order: sidebar: lead, ops, worker\n');
+  });
+});
+
+const RENEW = 'standing cannot be renewed in this build, and the owner is to be told';
+
+function plantLegacy(fixture: Fixture): void {
+  const loaded = readTeamConfig(fixture.root, { home: fixture.home });
+  if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+  const store = storePath(loaded.team.project, loaded.root, fixture.home);
+  mkdirSync(store, { recursive: true });
+  const record = { ...approvalOf(loaded.team, loaded.root, NOW), format: 1 as const, file: TEAM_YAML };
+  writeFileSync(join(store, 'approval.json'), `${JSON.stringify(record, null, 2)}\n`);
+}
+
+function ordered(fixture: Fixture): { io: ReturnType<typeof testIo>; sources: OrderSources } {
+  place(fixture, { lead: { pane: 'pane1', workspace: 'w1' }, ops: { pane: 'pane2', workspace: 'w2' }, worker: { pane: 'pane3', workspace: 'w3' } });
+  const world: World = {
+    workspaces: ['w1', 'w2', 'w3'],
+    agents: agentsOver([{ name: 'lead', workspace: 'w1' }, { name: 'ops', workspace: 'w2' }, { name: 'worker', workspace: 'w3' }]),
+    restarts: [], move: true, fail: new Set(), next: 4,
+  };
+  return { io: testIo(fixture.root, { kind: 'owner' }), sources: makeSources(fixture, world) };
+}
+
+describe('order and a legacy approval', () => {
+  test('dev mode names the record and still orders', async () => {
+    const fixture = makeFixture();
+    plantLegacy(fixture);
+    const { io, sources } = ordered(fixture);
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runOrder([], io, sources), io.err).toBe(0);
+    expect(io.err).toContain(RENEW);
+    expect(io.err).toContain('unverified lines');
+    expect(io.out).toContain('nothing was closed');
+  });
+
+  test('outside dev mode a legacy record still refuses', async () => {
+    const fixture = makeFixture();
+    plantLegacy(fixture);
+    const { io, sources } = ordered(fixture);
+    expect(await runOrder([], io, sources)).toBe(1);
+    expect(io.err).toContain(LEGACY_LINE);
+    expect(io.err).not.toContain(RENEW);
   });
 });
