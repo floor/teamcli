@@ -20,7 +20,7 @@ jobs:
   # Pull requests: typecheck, one build (via pack), every fast check and the signature check
   # in one job; the tests the diff can reach in parallel shards. See scripts/ci-select-tests.ts.
   # Pushes to main (merge time), the nightly schedule and workflow_dispatch run the static
-  # stages once per system in `static` and the whole suite in parallel as four shards per
+  # stages once per system in `static` and the whole suite in parallel as six shards per
   # system in `full-tests`, so anything the selection misses is caught there.
   checks:
     if: github.event_name == 'pull_request'
@@ -106,7 +106,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: [0, 1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -125,7 +125,7 @@ jobs:
           BASE: ${{ github.base_ref }}
         run: bun scripts/ci-select-tests.ts --base "origin/$BASE" --github-output "$GITHUB_OUTPUT" > /dev/null
       # The live-herdr tests skip themselves: TEAM_LIVE_UP is not set here.
-      - name: Run the selected tests (shard ${{ matrix.shard }} of 4)
+      - name: Run the selected tests (shard ${{ matrix.shard }} of 6)
         env:
           BASE: ${{ github.base_ref }}
           MODE: ${{ steps.select.outputs.mode }}
@@ -137,8 +137,8 @@ jobs:
           if git diff --name-only "origin/$BASE...HEAD" | grep -qE '^(src/broker/|src/commands/broker\.ts$|test/broker(-run|\.test)\.ts$)'; then
             export TEAM_NIGHTLY_STRESS=1
           fi
-          bun scripts/ci-shard-tests.ts --plan --shards 4 > /dev/null
-          mine="$(bun scripts/ci-shard-tests.ts --shard "$SHARD" --shards 4)"
+          bun scripts/ci-shard-tests.ts --plan --shards 6 > /dev/null
+          mine="$(bun scripts/ci-shard-tests.ts --shard "$SHARD" --shards 6)"
           if [ -z "$mine" ]; then echo "No tests in this shard."; exit 0; fi
           echo "Shard $SHARD runs: $mine"
           files=""
@@ -243,7 +243,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        shard: [0, 1, 2, 3]
+        shard: [0, 1, 2, 3, 4, 5]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
@@ -265,7 +265,7 @@ jobs:
       # Each run's JUnit report becomes `##[unit]<unit> <ms>` lines in this job's log, which is
       # what `ci-shard-tests.ts --record` reads back into scripts/ci-test-timings.json.
       # The live-herdr tests skip themselves: TEAM_LIVE_UP is not set here.
-      - name: Run the full suite (shard ${{ matrix.shard }} of 4)
+      - name: Run the full suite (shard ${{ matrix.shard }} of 6)
         env:
           EVENT: ${{ github.event_name }}
           BEFORE: ${{ github.event.before }}
@@ -283,7 +283,7 @@ jobs:
             esac
           fi
           bun scripts/ci-shard-tests.ts --assigned --plan
-          mine="$(bun scripts/ci-shard-tests.ts --assigned --shard "$SHARD" --shards 4)"
+          mine="$(bun scripts/ci-shard-tests.ts --assigned --shard "$SHARD" --shards 6)"
           if [ -z "$mine" ]; then echo "No tests in this shard."; exit 0; fi
           echo "Shard $SHARD runs: $mine"
           files=""
