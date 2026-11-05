@@ -3888,6 +3888,10 @@ describe('team up, the pause', () => {
       pane === 'w3:p1' ? { shell: 510, foreground: [510, 511] } : null;
     const read = made.launch.paneText.bind(made.launch);
     made.launch.paneText = (session, pane) => (pane === 'w1:p1' ? (flipped ? IDLE : trust) : read(session, pane));
+    // The coordinator as this fixture lists it, so the expected trace below can name its pane
+    // and seat through these fields rather than repeating a pane literal of its own.
+    const recorded = listed()[0];
+    if (recorded === undefined) throw new Error('the fixture lists no coordinator seat');
     const nap = made.launch.sleep.bind(made.launch);
     made.launch.sleep = async (ms) => { flipped = true; return nap(ms); };
     const { calls, typed } = trace(made);
@@ -3912,7 +3916,7 @@ describe('team up, the pause', () => {
       'agents', 'process:w1:p1', 'read:w1:p1', 'key:o',
       'agents', 'process:w1:p1', 'process:w1:p1', 'focus:w1:p1',
       'sleep:2000', 'agents', 'process:w1:p1', 'read:w1:p1',
-      'read:w1:p1', 'process:w1:p1', 'agents', 'agent-panes', 'agents', 'rename:w1:p1:claude-coordinator-acme',
+      `read:${recorded.pane}`, `process:${recorded.pane}`, 'agents', 'agent-panes', 'agents', `rename:${recorded.pane}:${recorded.name}`,
     ]);
     expect(made.creates).toEqual([]);
     expect(made.runs).toEqual([]);
