@@ -21,7 +21,7 @@ import { channelPushPath } from '../src/mcp/channel.ts';
 import { listenerPath, receiptPath } from '../src/mcp/inbox.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
 import { registerAgent, type Agent } from '../src/registry/agents.ts';
-import { registerProject } from '../src/registry/projects.ts';
+import { upsertProject } from '../src/registry/projects.ts';
 import { teamIdOf, teamsFile, upsertTeam } from '../src/registry/teams.ts';
 import { signRecord, type RecordPayload } from '../src/send/record.ts';
 import { testIo } from './helpers.ts';
@@ -545,14 +545,14 @@ describe('same-team sender and projected-roster uniqueness', () => {
     const projectLeadTeam = createTeam(base, home, 'proj-main', null);
     const subTeam = createTeam(base, home, 'proj-sub', null);
 
-    registerProject(home, {
-      id: 'proj-main',
-      name: 'Project Main',
-      root: projectLeadTeam.root,
-      lead: projectLeadTeam.lead.id,
+    upsertProject(home, 'proj-main', {
+      name: 'proj-main',
+      entity: null,
+      lead: projectLeadTeam.worker.id,
+      teams: [projectLeadTeam.teamId, subTeam.teamId],
       by: 'owner',
     });
-    // Both teams belong to the same project `proj-main` so `projectLeadTeam.lead` has project-lead reach to `subTeam.lead`.
+    // Both teams belong to the same project `proj-main` so `projectLeadTeam.worker` (as project lead) reaches `subTeam.lead`.
     writeFileSync(
       subTeam.file,
       readFileSync(subTeam.file, 'utf8').replace('project: proj-sub', 'project: proj-main'),
@@ -563,11 +563,11 @@ describe('same-team sender and projected-roster uniqueness', () => {
     expect(
       admitChannelDelivery({
         payload: {
-          from: 'lead',
-          from_id: projectLeadTeam.lead.id,
+          from: 'worker',
+          from_id: projectLeadTeam.worker.id,
           to: 'lead',
           to_id: subTeam.lead.id,
-          rule: "the project's lead to an orchestrator of a team on that project",
+          rule: 'the project lead and the leads of its teams',
         },
         home,
         root: subTeam.root,
@@ -577,21 +577,21 @@ describe('same-team sender and projected-roster uniqueness', () => {
       }).ok,
     ).toBe(true);
 
-    // Register a tied competitor for `projectLeadTeam.lead` so its currentness is ambiguous.
+    // Register a tied competitor for `projectLeadTeam.worker` so its currentness is ambiguous.
     registerCompetitor(
       home,
-      projectLeadTeam.lead,
+      projectLeadTeam.worker,
       '2020-01-01T00:00:00.000Z',
       '2020-01-01T00:00:00.000Z',
     );
     expect(
       admitChannelDelivery({
         payload: {
-          from: 'lead',
-          from_id: projectLeadTeam.lead.id,
+          from: 'worker',
+          from_id: projectLeadTeam.worker.id,
           to: 'lead',
           to_id: subTeam.lead.id,
-          rule: "the project's lead to an orchestrator of a team on that project",
+          rule: 'the project lead and the leads of its teams',
         },
         home,
         root: subTeam.root,
