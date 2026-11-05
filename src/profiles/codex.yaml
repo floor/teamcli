@@ -319,6 +319,14 @@ screen:
     chrome:
       - '^\s*(?:← for agents · )?\? for shortcuts\s*$'
       - '^\s*(?:← for agents · )?\? for shortcuts\s*…\s*⚠ \d+ warnings?\s*·\s*f2 to view\s*$'
+      # After the scroll-back return key codex draws `esc again to edit previous message` where
+      # the shortcuts row stands, and the hint stays until the next keypress. The box over the
+      # status row is the empty prompt, so the screen is idle: a wake may type its line there
+      # (that keypress is what clears the hint), and it must never answer the hint with a second
+      # esc, which would open edit-previous-message. The row is read only as the one trailing
+      # row under the status row, exactly as drawn — a transcript line quoting it is never that
+      # row, and a box holding text still reads unsent on its own input row.
+      - '^\s*esc again to edit previous message\s*$'
     # The input row carries the prompt at the pane's first column — unsent.txt draws `› Rules.`
     # there, content on the rows below at the second, and exit-typed.txt keeps the old
     # transcript and menu rows above it — and a prompt glyph on a content row is never the
