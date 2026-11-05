@@ -53,7 +53,11 @@ export function rulesFilePath(project: string, root: string, home: string, seat:
  *  name then. */
 export function approvedProjectOf(standing: Standing, options: { home?: string; root?: string } = {}): string | null {
   if (standing.kind !== 'verified') return null;
-  const copy = validateTeamFile(standing.record.file, options);
+  const pin = standing.record.approval.lead;
+  const copy = validateTeamFile(standing.record.file, {
+    ...options,
+    ...(pin !== undefined ? { lead: pin } : {}),
+  });
   return copy.ok ? copy.team.project : null;
 }
 

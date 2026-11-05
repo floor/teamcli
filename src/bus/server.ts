@@ -885,7 +885,15 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
       // outside that chain — even with its unkeyed digests recomputed — is a miss: the running
       // rows stay, and the line is said once.
       const standing = approvalStanding(input.root, home);
-      const approved = standing.kind === 'verified' ? approvedRecordOf(standing.record.file, { home, root: input.root }) : null;
+      const pin = standing.kind === 'verified' ? standing.record.approval.lead : undefined;
+      const approved =
+        standing.kind === 'verified'
+          ? approvedRecordOf(standing.record.file, {
+              home,
+              root: input.root,
+              ...(pin !== undefined ? { lead: pin } : {}),
+            })
+          : null;
       if (approved === null || approved !== canonicalTeam(parsed.team)) {
         reloadProblem = reportReloadProblem(input.stderr, reloadProblem, 'the registry\'s record of this team is not the copy the owner approved');
         return;

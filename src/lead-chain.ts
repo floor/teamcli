@@ -17,7 +17,7 @@
 import { declaredEntityLead, entitiesPath } from './entities.ts';
 import { leadWordProblem, resolveLead, type LeadChain, type ResolvedLead } from './lead.ts';
 import { machineLead } from './settings/declared.ts';
-import { ofTeam, projectsFile, type ProjectRecord } from './registry/projects.ts';
+import { byName, get, ofTeam, projectIdOf, projectsFile, type ProjectRecord } from './registry/projects.ts';
 import { teamIdOf } from './registry/teams.ts';
 
 export type LeadChainInput = {
@@ -27,6 +27,8 @@ export type LeadChainInput = {
   root: string;
   /** The team file's `lead:` word, when its section found one. */
   team?: string | null;
+  /** The project the file names (`in_project:`), used when the team is not yet in `projects.yaml`. */
+  inProject?: string | null;
   /** The entity the file names; the home project's entity when the file names none. */
   entity?: string | null;
 };
@@ -42,7 +44,12 @@ export function readLeadChain(input: LeadChainInput): LeadChainRead {
 
   let project: ProjectRecord | null;
   try {
-    project = ofTeam(input.home, teamIdOf(input.root));
+    project =
+      input.inProject !== undefined && input.inProject !== null
+        ? (byName(input.home, input.inProject) ??
+          get(input.home, projectIdOf(input.inProject)) ??
+          ofTeam(input.home, teamIdOf(input.root)))
+        : ofTeam(input.home, teamIdOf(input.root));
   } catch (error) {
     return { ok: false, why: `this team's home project cannot be read: ${(error as Error).message}` };
   }

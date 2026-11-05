@@ -11,7 +11,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalDifferences, approvalOf, approvedFingerprints, recordSeatRenameOf } from '../src/approve/approval.ts';
 import { compare, describe, fingerprints } from '../src/approve/fingerprint.ts';
+import { renameSeat } from '../src/file/lines.ts';
 import { loadTeamFile } from '../src/file/load.ts';
+import { rulesFilePathOf } from '../src/launch/rules-file.ts';
 import { projectsFile } from '../src/registry/projects.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { approvalStanding, readApproval, storePath, writeApproval } from '../src/store/store.ts';
@@ -41,11 +43,11 @@ ${extra}`;
 }
 
 /** The team file: no seat marked unless asked, so the lead comes from the chain. */
-function teamText(root: string, options: { mark?: boolean } = {}): string {
+function teamText(root: string, options: { mark?: boolean; topLead?: string } = {}): string {
   return `format: 1
 project: acme
 session: acme
-operator: worker
+${options.topLead !== undefined ? `lead: ${options.topLead}\n` : ''}operator: worker
 trust:
   - ~/.config/team/lobby
   - ${root}
@@ -56,7 +58,7 @@ ${seat('lead', options.mark === true ? '    leads: true\n' : '')}${seat('worker'
 }
 
 /** A machine: a home, and a checkout that is a project root with its team file. */
-function world(options: { mark?: boolean } = {}): World {
+function world(options: { mark?: boolean; topLead?: string } = {}): World {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'lead-approval-')));
   dirs.push(base);
   const home = join(base, 'home');
@@ -171,4 +173,34 @@ test('renaming the lead seat carries the approved lead and keeps the record veri
   expect(approvalStanding(at.root, at.home).kind).toBe('verified');
   expect(readApproval(store)?.approval.lead).toBe('lead2');
   expect(approvalDifferences(live.team, live.root, at.home)).toEqual([]);
+});
+
+test('renameSeat rewrites a literal top-level lead: field and recordSeatRenameOf keeps the approval verifying', () => {
+  const at = world({ topLead: 'lead' });
+  const store = approve(at);
+  const path = join(at.root, '.agents', 'team.yaml');
+  const renamedText = renameSeat(readFileSync(path, 'utf8'), 'lead', 'lead2');
+  expect(renamedText).toContain('lead: lead2\n');
+  writeFileSync(path, renamedText);
+
+  const live = load(at);
+  expect(live.team.orchestrator).toBe('lead2');
+
+  const standing = approvalStanding(at.root, at.home);
+  if (standing.kind !== 'verified') throw new Error('the approval must verify before the rename');
+  recordSeatRenameOf(standing, live.team, live.root, [{ from: 'lead', to: 'lead2' }], at.home);
+
+  expect(approvalStanding(at.root, at.home).kind).toBe('verified');
+  expect(readApproval(store)?.approval.lead).toBe('lead2');
+  expect(approvalDifferences(live.team, live.root, at.home)).toEqual([]);
+});
+
+test('approvedProjectOf uses the pinned lead when the external chain has been removed', () => {
+  const at = world();
+  projectLead(at, 'lead');
+  approve(at);
+  rmSync(projectsFile(at.home));
+  const standing = approvalStanding(at.root, at.home);
+  expect(standing.kind).toBe('verified');
+  expect(rulesFilePathOf(standing, 'worker', at.root, at.home)).not.toBeNull();
 });

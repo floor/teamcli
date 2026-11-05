@@ -101,6 +101,7 @@ export function resolveLeadField(entry: YamlEntry | undefined, ctx: Ctx): string
   const read = defaultLeadOf({
     home: ctx.leadHome,
     root: ctx.rootDir,
+    inProject: valueOf<string | null>(ctx, 'in_project'),
     entity: valueOf<string | null>(ctx, 'entity'),
   });
   if (!read.ok) {
