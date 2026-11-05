@@ -11,10 +11,11 @@ import { approvalOf } from '../src/approve/approval.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { readChildMessage, readHostMessage } from '../src/daemon/chores/protocol.ts';
-import { daemonLogPath, machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
+import { DAEMON_LABEL, daemonLogPath, machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
 import { answerDaemonRequest, parseDaemonRequest } from '../src/daemon/protocol.ts';
 import { acceptRestoreDoor, discardRestoreInherit, restoreDoorText, writeRestoreDoor } from '../src/daemon/restore/token.ts';
+import { systemServiceManager } from '../src/daemon/service.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { HerdrAgent, SessionState } from '../src/herdr.ts';
 import { acquireRunLock } from '../src/launch/run-lock.ts';
@@ -719,7 +720,6 @@ describe('team up --all single-command multi-team restore', () => {
   });
 
   test('restore child door binds parentPid to the service manager job record, refuses forged non-daemon parent tokens without spending, and admits only the service-managed daemon parent', async () => {
-    const entry = fileURLToPath(new URL('../src/daemon/restore/entry.ts', import.meta.url));
     const NON_DAEMON_PID = process.ppid;
     const DAEMON_PID = process.ppid + 10_000;
     const activeService = {
@@ -756,15 +756,19 @@ describe('team up --all single-command multi-team restore', () => {
     expect(onDisk.daemonPid).toBe(DAEMON_PID);
     expect(onDisk.secret).toBeUndefined();
 
-    // 2. Starting the entry without the inherited descriptor is refused and spends nothing.
-    const noDoor = spawnSync(process.execPath, [entry, '--inherited', nonce], {
-      cwd: alphaTeam.root,
-      env: { ...process.env, HOME: home },
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
+    // 2. Starting without the inherited descriptor is refused and spends nothing.
+    expect(
+      acceptRestoreDoor({
+        home,
+        nonce,
+        text: null,
+        parentPid: DAEMON_PID,
+        service: activeService,
+      }),
+    ).toEqual({
+      kind: 'refused',
+      why: 'the restore child was started without an inherited door descriptor',
     });
-    expect(noDoor.status).toBe(2);
-    expect(noDoor.stdout).toBe('');
     expect(existsSync(tokenPath)).toBe(true);
 
     // 3. A wrong secret on descriptor 3 is refused and spends nothing, even if parentPid matches the service manager.
@@ -919,5 +923,87 @@ describe('team up --all single-command multi-team restore', () => {
     ).toEqual({ kind: 'refused', why: 'the restore token has expired' });
     expect(existsSync(pathExp)).toBe(false);
     expect(readdirSync(machineConfigDir(home)).filter((name) => name.startsWith('restore.inherit.'))).toEqual([]);
+
+    // 9. Adapter job(home) binding: a token whose claims name a home with no installed unit (or a
+    //    unit with a different label), even under the machine daemon as direct parent, is refused
+    //    and spends nothing; once that home's own unit is installed with DAEMON_LABEL, it is admitted.
+    const darwinService = systemServiceManager({
+      platform: 'darwin',
+      runner: () => ({
+        status: 0,
+        stdout: `\tpid = ${String(DAEMON_PID)}\n\tprogram = ${process.execPath}\n`,
+        stderr: '',
+      }),
+    });
+    expect(darwinService).not.toBeNull();
+    if (darwinService === null) return;
+
+    const scratchHomeNoUnit = join(base, 'scratch-home-no-unit');
+    mkdirSync(scratchHomeNoUnit, { recursive: true });
+    const noUnitMint = writeRestoreDoor({
+      version: 1,
+      home: scratchHomeNoUnit,
+      root: alphaTeam.root,
+      daemonPid: DAEMON_PID,
+    });
+    const noUnitTokenPath = restoreInheritPath(scratchHomeNoUnit, noUnitMint.nonce);
+    expect(darwinService.job(scratchHomeNoUnit)).toBeNull();
+    expect(
+      acceptRestoreDoor({
+        home: scratchHomeNoUnit,
+        nonce: noUnitMint.nonce,
+        text: restoreDoorText(noUnitMint.nonce, noUnitMint.secret),
+        parentPid: DAEMON_PID,
+        service: darwinService,
+      }),
+    ).toEqual({
+      kind: 'refused',
+      why: "the system's service manager records no running machine daemon",
+    });
+    expect(existsSync(noUnitTokenPath)).toBe(true);
+
+    // A unit at that home's path naming a different label is also refused without spending.
+    const unitFile = darwinService.unitPath(scratchHomeNoUnit);
+    mkdirSync(join(scratchHomeNoUnit, 'Library', 'LaunchAgents'), { recursive: true });
+    writeFileSync(
+      unitFile,
+      `<plist version="1.0"><dict><key>Label</key><string>other.label</string></dict></plist>\n`,
+      { mode: 0o600 },
+    );
+    expect(darwinService.job(scratchHomeNoUnit)).toBeNull();
+    expect(
+      acceptRestoreDoor({
+        home: scratchHomeNoUnit,
+        nonce: noUnitMint.nonce,
+        text: restoreDoorText(noUnitMint.nonce, noUnitMint.secret),
+        parentPid: DAEMON_PID,
+        service: darwinService,
+      }),
+    ).toEqual({
+      kind: 'refused',
+      why: "the system's service manager records no running machine daemon",
+    });
+    expect(existsSync(noUnitTokenPath)).toBe(true);
+
+    // Installing that home's own unit naming DAEMON_LABEL allows job(home) to return the job and admits the token.
+    writeFileSync(
+      unitFile,
+      `<plist version="1.0"><dict><key>Label</key><string>${DAEMON_LABEL}</string></dict></plist>\n`,
+      { mode: 0o600 },
+    );
+    expect(darwinService.job(scratchHomeNoUnit)).toEqual({ pid: DAEMON_PID, program: process.execPath });
+    expect(
+      acceptRestoreDoor({
+        home: scratchHomeNoUnit,
+        nonce: noUnitMint.nonce,
+        text: restoreDoorText(noUnitMint.nonce, noUnitMint.secret),
+        parentPid: DAEMON_PID,
+        service: darwinService,
+      }),
+    ).toEqual({
+      kind: 'ok',
+      request: { version: 1, home: scratchHomeNoUnit, root: alphaTeam.root },
+    });
+    expect(existsSync(noUnitTokenPath)).toBe(false);
   });
 });

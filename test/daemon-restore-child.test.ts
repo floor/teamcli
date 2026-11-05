@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startMachineDaemon } from '../src/daemon/host.ts';
-import { machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
+import { DAEMON_LABEL, machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
 import { restoreEntryOf, runRestoreSweepInChild } from '../src/daemon/restore/spawn.ts';
 import { acceptRestoreDoor, discardRestoreInherit, restoreDoorText, writeRestoreDoor } from '../src/daemon/restore/token.ts';
 import { readDaemonState } from '../src/daemon/state.ts';
@@ -41,17 +41,37 @@ seats:
 const ENTRY = fileURLToPath(new URL('../src/daemon/restore/entry.ts', import.meta.url));
 
 const bases: string[] = [];
+const ORIGINAL_PATH = process.env.PATH;
 
-function scratch(): { base: string; root: string; home: string } {
+function scratch(): { base: string; root: string; home: string; bin: string } {
   const base = realpathSync(mkdtempSync(join(BASE, 'team-restore-child-')));
   bases.push(base);
   const root = join(base, 'repo');
   const home = join(base, 'home');
+  const bin = join(base, 'bin');
   mkdirSync(join(root, '.agents'), { recursive: true });
   mkdirSync(home);
+  mkdirSync(bin, { recursive: true });
+  // Place a synthetic service-manager unit and shim first on PATH so subprocess scenes never
+  // reach the live system service manager and always report this test runner process as the
+  // daemon job for `home`.
+  mkdirSync(join(home, 'Library', 'LaunchAgents'), { recursive: true });
+  writeFileSync(
+    join(home, 'Library', 'LaunchAgents', `${DAEMON_LABEL}.plist`),
+    `<plist version="1.0"><dict><key>Label</key><string>${DAEMON_LABEL}</string></dict></plist>\n`,
+    { mode: 0o600 },
+  );
+  const launchctl = join(bin, 'launchctl');
+  writeFileSync(
+    launchctl,
+    `#!/bin/sh\nprintf 'pid = %s\\nprogram = %s\\n' "${String(process.pid)}" "${process.execPath}"\n`,
+    { mode: 0o755 },
+  );
+  chmodSync(launchctl, 0o755);
+  process.env.PATH = `${bin}:${ORIGINAL_PATH ?? '/usr/bin:/bin'}`;
   spawnSync('git', ['init', '-q'], { cwd: root });
   writeFileSync(join(root, '.agents', 'team.yaml'), TEAM);
-  return { base, root, home };
+  return { base, root, home, bin };
 }
 
 /** The route's record: one seat recorded ready, so a pass proceeds past the recorded-session
@@ -143,6 +163,8 @@ const tokenFiles = (home: string): string[] => {
 };
 
 afterEach(() => {
+  if (ORIGINAL_PATH === undefined) delete process.env.PATH;
+  else process.env.PATH = ORIGINAL_PATH;
   for (const base of bases.splice(0)) rmSync(base, { recursive: true, force: true });
 });
 
@@ -342,7 +364,7 @@ describe("the daemon's beat while a restore pass runs", () => {
     recordSeat(root);
     const bin = join(base, 'bin');
     const herdrLog = join(base, 'herdr.log');
-    mkdirSync(bin);
+    mkdirSync(bin, { recursive: true });
     const shim = join(bin, 'herdr');
     writeFileSync(
       shim,
@@ -475,11 +497,11 @@ describe('independent adversarial checks: restore spawn abort, deadline, spawn e
     ).rejects.toThrow(/did not answer within 0 s and was ended/);
     expect(tokenFiles(home)).toEqual([]);
 
-    // 2. Spawn error (`cwd` does not exist -> asynchronous `'error'` event on child): discards token and rejects.
+    // 2. Spawn error (`cwd` does not exist -> asynchronous `'error'` event or missing stdio on child): discards token and rejects.
     const missingCwd = join(base, 'no-such-cwd');
     await expect(
       runRestoreSweepInChild({ home, root: missingCwd, entry: hangEntry, timeoutMs: 5_000 }),
-    ).rejects.toThrow(/the restore child (?:failed|could not be started)/);
+    ).rejects.toThrow(/the restore child (?:failed|could not be started|could not open its inherited door descriptor)/);
     expect(tokenFiles(home)).toEqual([]);
 
     // 3. Early exit without claiming token (exits 1 with stderr diagnostic): discards token and includes last stderr line.
@@ -552,7 +574,7 @@ describe('independent adversarial checks: restore spawn abort, deadline, spawn e
 
     const bin = join(base, 'bin');
     const herdrLog = join(base, 'herdr.log');
-    mkdirSync(bin);
+    mkdirSync(bin, { recursive: true });
     const shim = join(bin, 'herdr');
     writeFileSync(
       shim,

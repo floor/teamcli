@@ -128,26 +128,6 @@ export async function runRestoreSweepInChild(input: SpawnRestoreInput): Promise<
     discardRestoreInherit(input.home, nonce);
     throw new Error(`the restore child could not be started: ${reasonOf(error)}`);
   }
-  const door = child.stdio[3];
-  if (door === null || door === undefined || !('end' in door)) {
-    try {
-      child.kill('SIGTERM');
-    } catch {}
-    discardRestoreInherit(input.home, nonce);
-    throw new Error('the restore child could not open its inherited door descriptor');
-  }
-  door.on('error', () => {
-    // A child that exits before reading its door raises EPIPE here; its exit handler settles the run.
-  });
-  try {
-    door.end(restoreDoorText(nonce, secret));
-  } catch (error) {
-    try {
-      child.kill('SIGTERM');
-    } catch {}
-    discardRestoreInherit(input.home, nonce);
-    throw new Error(`the restore door could not be written: ${reasonOf(error)}`);
-  }
 
   let settled = false;
   let lastError = '';
@@ -299,6 +279,20 @@ export async function runRestoreSweepInChild(input: SpawnRestoreInput): Promise<
   };
   child.on('exit', gone);
   child.on('close', gone);
+
+  const door = child.stdio[3];
+  if (door !== null && door !== undefined && 'end' in door) {
+    door.on('error', () => {
+      // A child that exits before reading its door raises EPIPE here; its exit handler settles the run.
+    });
+    try {
+      door.end(restoreDoorText(nonce, secret));
+    } catch (error) {
+      endRunning();
+      discardRestoreInherit(input.home, nonce);
+      settleFailure(`the restore door could not be written: ${reasonOf(error)}`);
+    }
+  }
 
   return done;
 }

@@ -758,7 +758,11 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
         program: programOf({ ...program, entry: join(runtimeRoot(home), sha, set.entry) }),
       };
     },
-    job: () => jobRecord(),
+    job: (home) => {
+      const unit = unitRecord(home);
+      if (unit === null || unit.label !== DAEMON_LABEL) return null;
+      return jobRecord();
+    },
     unit: (home) => unitRecord(home),
 
     install(home, program): ServiceInstallResult {
