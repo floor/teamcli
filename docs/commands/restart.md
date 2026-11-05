@@ -29,6 +29,29 @@ refused, never replaced or followed — [`team brief rollout --apply`](brief.md)
 delivery at the claim's next attempt. A delivery that cannot be written is said and logged, and
 the restart goes on; [`team check`](check.md) names the seat.
 
+## After a restore
+
+The team a restart reads is proven by one of three authorities, in order: the team this session
+was launched from, when the record names one; the team this folder holds; and the team the
+registry records for this session. Only when none of them declares the seat is it refused as
+undeclared. A fallback says so once, naming the place it read:
+
+    note: <seat> is not in the team this session was launched from; reading the team this folder holds (<path>)
+    note: <seat> is not in the team this session was launched from; reading the team registered for session <session> (<root>)
+
+The note is on stderr in a real run, `! ` on stdout in a dry run, and `notes` in `--json`. A
+`--file` names one file and never falls back; a team that fails to load keeps the configuration
+refusal it always gave. For the registry authority, a `--session` must be carried by exactly one
+record: two records carrying it prove nothing and the seat is refused as before, while a lone
+record that cannot be read keeps the load refusal. With no session to name, the caller's own
+placement narrows the candidates, and the record alone never picks a team.
+
+A seat the terminal host restored is re-tied by [`team up`](up.md#a-seat-the-terminal-host-restored),
+not restarted; [`team check`](check.md#seats-the-terminal-host-restored) names that repair for
+the panes it finds. A pane whose name the host cleared is not restart's to take: restart treats a
+restored process as the same seat only while the host still names the seat on its recorded pane,
+and `--abandon` replaces what is in that pane only under the same name.
+
 ## Synopsis
 
     team restart <seat> [--abandon] [--fresh] [--dry-run] [--session <name>] [--file <path>] [--json]
