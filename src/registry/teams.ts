@@ -7,10 +7,11 @@
 // lose each other's update.
 
 import { createHash } from 'node:crypto';
-import { closeSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { resolveLobby } from '../lobby/gate.ts';
 import * as projects from './projects.ts';
+import { withRegistryLock, withTeamProjectsLocks } from './locks.ts';
 import { checkIssueTracker, type IssueTracker } from './issue-tracker.ts';
 import { writeAtomic } from '../state.ts';
 import { currentRunMemo } from '../run-memo.ts';
@@ -41,6 +42,8 @@ export type TeamRecord = {
   /** The project this team sits in, by project ID (src/registry/projects.ts), or null: a team no
    *  project names is its own project. Written from the team file's `in_project` through sync. */
   projectId: string | null;
+  /** All project memberships, including the home. Older records default to the home alone. */
+  projects?: string[];
   entity: string | null;
   session: string;
   root: string;
@@ -97,6 +100,7 @@ export type ReadTeamsOptions = { strictRoster?: boolean };
 function cloneTeamRecord(record: TeamRecord): TeamRecord {
   return {
     ...record,
+    projects: [...membershipsOf(record)],
     lobbies: { ...record.lobbies },
     roster: record.roster.map((entry) => ({ ...entry })),
     provenance: { ...record.provenance },
@@ -167,6 +171,11 @@ export function getTeam(home: string, id: string): TeamRecord | null {
   return readTeams(home)[id] ?? null;
 }
 
+/** All memberships; the home alone is the fallback for records from older builds. */
+export function membershipsOf(team: Pick<TeamRecord, 'projectId' | 'projects'>): string[] {
+  return [...(team.projects ?? (team.projectId === null ? [] : [team.projectId]))];
+}
+
 /** What `registeredRootOf` found: the team a seat is on by the registry's roster, or why none
  *  could be named. Every failure is structured, so each caller words its own sentence. */
 export type RegisteredRoot =
@@ -221,6 +230,7 @@ export function upsertTeam(home: string, id: string, patch: TeamPatch): TeamReco
     const at = patch.at ?? new Date().toISOString();
     const prior = teams[id];
     const { by, at: _at, settingsDelta, issueTracker, ...fields } = patch;
+    if (fields.projects !== undefined && !Array.isArray(fields.projects)) throw new TeamsError('"projects" must be a list of project IDs');
     let record: TeamRecord;
     if (prior) {
       record = { ...prior, ...definedOnly(fields), provenance: { ...prior.provenance, updated_at: at } };
@@ -231,6 +241,7 @@ export function upsertTeam(home: string, id: string, patch: TeamPatch): TeamReco
       record = {
         project: fields.project as string,
         projectId: fields.projectId ?? null,
+        projects: fields.projects ?? (fields.projectId ? [fields.projectId] : []),
         entity: fields.entity ?? null,
         session: fields.session as string,
         root: fields.root as string,
@@ -244,6 +255,16 @@ export function upsertTeam(home: string, id: string, patch: TeamPatch): TeamReco
     }
     if (!TEAM_LIFECYCLES.includes(record.lifecycle)) throw new TeamsError(`"${record.lifecycle}" is not a team lifecycle`);
     if (record.projectId !== null && typeof record.projectId !== 'string') throw new TeamsError('"project_id" must be a project ID or null');
+    if (fields.projects === undefined && fields.projectId !== undefined) {
+      record.projects = membershipsOf(prior ?? { projectId: null }).filter(id => id !== prior?.projectId);
+      if (record.projectId !== null && !record.projects.includes(record.projectId)) record.projects.unshift(record.projectId);
+    }
+    if (record.projects !== undefined && !Array.isArray(record.projects)) throw new TeamsError('"projects" must be a list of project IDs');
+    const memberships = membershipsOf(record);
+    if (memberships.some(id => typeof id !== 'string' || !id)) {
+      throw new TeamsError('"projects" must be a list of project IDs');
+    }
+    record.projects = [...new Set(memberships)];
     // An update that names no tracker keeps the one on record (the spread above carried it).
     if (issueTracker === null) delete record.issueTracker;
     else if (issueTracker !== undefined) {
@@ -311,22 +332,15 @@ export function findTeam(home: string, key: string): TeamRecord | null {
  * when the registry has no team with that id.
  */
 export function forgetTeam(home: string, id: string): TeamRecord | null {
-  const removed = locked(home, () => {
+  return withTeamProjectsLocks(home, () => {
     const teams = readTeams(home);
     const prior = teams[id];
     if (!prior) return null;
+    projectLeave(home, prior, null);
     delete teams[id];
     write(home, teams);
     return { ...prior, id };
   });
-  if (removed === null) return null;
-  for (const [projectId, record] of Object.entries(projects.readProjects(home))) {
-    if (!record.teams.includes(id)) continue;
-    const patch: projects.ProjectPatch = { teams: record.teams.filter((team) => team !== id) };
-    if (record.lead !== null && removed.roster.some((line) => line.agent === record.lead)) patch.lead = null;
-    projects.upsertProject(home, projectId, patch);
-  }
-  return removed;
 }
 
 /** What of a team file the registry keeps. */
@@ -363,70 +377,55 @@ export function noteTeam(home: string, root: string, seed: TeamSeed, lifecycle: 
     return `the project registry was not updated: ${(error as Error).message}`;
   }
   try {
-    // The lobby is recorded once per session: a session the registry holds a lobby for keeps it,
-    // so editing the file's `entity` never moves a running team's seats. An explicit `lobby:` is
-    // the owner's own declaration, not a derivation, and is re-recorded; a session with no entry
-    // derives from the entity (`src/lobby/recorded.ts` reads the record back at every use). The
-    // map is what lets another session — `up --session alt`, or another team file in the same
-    // checkout, since the registry is keyed by the root — record its own lobby without taking
-    // this one's entry away. The file's own session is recorded alongside when the note runs
-    // under another name, unless it already holds an entry of its own.
-    const earlier = getTeam(home, teamId);
-    const prior = earlier?.lobbies[seed.session] ?? '';
-    const current = seed.lobby ? resolveLobby(home, { lobby: seed.lobby }) : prior || resolveLobby(home, { entity: seed.entity });
-    const lobbies: Record<string, string> = { ...(earlier?.lobbies ?? {}), [seed.session]: current };
-    if (seed.aliasSession && !lobbies[seed.aliasSession]) lobbies[seed.aliasSession] = current;
-    upsertTeam(home, teamId, {
-      project: seed.project,
-      projectId,
-      entity: seed.entity,
-      session: seed.session,
-      root: real,
-      lobby: current,
-      lobbies,
-      lifecycle,
-      by,
+    return withTeamProjectsLocks(home, () => {
+      // The lobby is recorded once per session: a session the registry holds a lobby for keeps it,
+      // so editing the file's `entity` never moves a running team's seats. An explicit `lobby:` is
+      // the owner's own declaration, not a derivation, and is re-recorded; a session with no entry
+      // derives from the entity (`src/lobby/recorded.ts` reads the record back at every use). The
+      // map is what lets another session — `up --session alt`, or another team file in the same
+      // checkout, since the registry is keyed by the root — record its own lobby without taking
+      // this one's entry away. The file's own session is recorded alongside when the note runs
+      // under another name, unless it already holds an entry of its own.
+      const earlier = getTeam(home, teamId);
+      if (inProject !== undefined) {
+        if (inProject !== null) projectJoin(home, inProject, seed.entity, by);
+        if (earlier && earlier.projectId !== projectId) projectLeave(home, earlier, projectId ?? null);
+      }
+      const prior = earlier?.lobbies[seed.session] ?? '';
+      const current = seed.lobby ? resolveLobby(home, { lobby: seed.lobby }) : prior || resolveLobby(home, { entity: seed.entity });
+      const lobbies: Record<string, string> = { ...(earlier?.lobbies ?? {}), [seed.session]: current };
+      if (seed.aliasSession && !lobbies[seed.aliasSession]) lobbies[seed.aliasSession] = current;
+      upsertTeam(home, teamId, {
+        project: seed.project,
+        projectId,
+        entity: seed.entity,
+        session: seed.session,
+        root: real,
+        lobby: current,
+        lobbies,
+        lifecycle,
+        by,
+      });
+      return null;
     });
   } catch (error) {
-    return `the team registry was not updated: ${(error as Error).message}`;
-  }
-  if (inProject === undefined) return null;
-  try {
-    if (inProject === null) projectLeave(home, teamId, null);
-    else projectJoin(home, teamId, inProject, seed.entity, by);
-    return null;
-  } catch (error) {
-    return `the project registry was not updated: ${(error as Error).message}`;
+    const registry = error instanceof projects.ProjectsError ? 'project' : 'team';
+    return `the ${registry} registry was not updated: ${(error as Error).message}`;
   }
 }
 
-/** The team joins the project the file names: the record is made if the registry has none — with
- *  the name the file wrote and the team's entity — and lists the team. Keys by `projectIdOf`, so
- *  the spelling the file chose is the display name and the ID is the same one every reader
- *  derives. Then the team leaves every other project that named it. */
-function projectJoin(home: string, teamId: string, name: string, entity: string | null, by: string): void {
+/** Project metadata exists before the membership write. Membership itself has one writer. */
+function projectJoin(home: string, name: string, entity: string | null, by: string): void {
   const id = projects.projectIdOf(name);
-  const held = projects.get(home, id);
-  if (!held) {
-    projects.upsertProject(home, id, { name, entity, teams: [teamId], by });
-  } else if (!held.teams.includes(teamId)) {
-    projects.upsertProject(home, id, { teams: [...held.teams, teamId] });
-  }
-  projectLeave(home, teamId, id);
+  if (!projects.get(home, id)) projects.upsertProject(home, id, { name, entity, by });
 }
 
-/** The team leaves every project that names it except `keep` (null: every one). The project it
- *  leaves also loses its lead when the lead on record is one of this team's agents: that id came
- *  from this team's lead seat, so it goes with the team's place in the project rather than
- *  staying admitted as a lead after its team left. Another team's lead is left alone. */
-function projectLeave(home: string, teamId: string, keep: string | null): void {
-  const roster = getTeam(home, teamId)?.roster ?? [];
-  for (const held of projects.list(home)) {
-    const id = held.id as string;
-    if (id === keep || !held.teams.includes(teamId)) continue;
-    const patch: projects.ProjectPatch = { teams: held.teams.filter((team) => team !== teamId) };
-    if (held.lead !== null && roster.some((line) => line.agent === held.lead)) patch.lead = null;
-    projects.upsertProject(home, id, patch);
+/** Clear this team's old home lead before changing its membership. No project-side link write. */
+function projectLeave(home: string, team: TeamRecord, keep: string | null): void {
+  if (team.projectId === null || team.projectId === keep) return;
+  const held = projects.get(home, team.projectId);
+  if (held?.lead && team.roster.some(line => line.agent === held.lead)) {
+    projects.upsertProject(home, team.projectId, { lead: null });
   }
 }
 
@@ -436,47 +435,13 @@ function definedOnly<T extends object>(fields: T): Partial<T> {
 
 // --- the lock and the write ------------------------------------------------------------------
 
-const LOCK_WAIT_MS = 5000;
-const LOCK_STALE_MS = 15000;
-
-/** Holds the registry's write lock — the one every roster and team-record write takes — while
- *  `work` runs. A command that decides from one reading and then writes from that decision must
- *  hold it across both, so no write lands between them. */
+/** Holds the team registry lock across a read and a write. */
 export function withTeamsLock<T>(home: string, work: () => T): T {
   return locked(home, work);
 }
 
 function locked<T>(home: string, work: () => T): T {
-  const path = `${teamsFile(home)}.lock`;
-  mkdirSync(dirname(path), { recursive: true });
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  for (;;) {
-    try {
-      const fd = openSync(path, 'wx');
-      writeSync(fd, `${process.pid}\n`);
-      closeSync(fd);
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      // A holder that died leaves its file behind: one older than any write takes is not held.
-      try {
-        if (Date.now() - statSync(path).mtimeMs > LOCK_STALE_MS) unlinkSync(path);
-      } catch {
-        // gone already, or taken by another waiter: look again
-      }
-      if (Date.now() > deadline) throw new TeamsError(`${path} is held by another run`);
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
-    }
-  }
-  try {
-    return work();
-  } finally {
-    try {
-      unlinkSync(path);
-    } catch {
-      // already removed as stale
-    }
-  }
+  return withRegistryLock(home, 'teams', work, message => new TeamsError(message));
 }
 
 function write(home: string, teams: Record<string, TeamRecord>): void {
@@ -516,6 +481,8 @@ function recordOf(id: string, raw: YamlValue, path: string, options: ReadTeamsOp
   if (entity !== null && typeof entity !== 'string') bad('"entity" must be text or null');
   const projectId = raw.project_id ?? null;
   if (projectId !== null && typeof projectId !== 'string') bad('"project_id" must be a project ID or null');
+  const memberships = raw.projects === undefined ? (projectId === null ? [] : [projectId]) : raw.projects;
+  if (!Array.isArray(memberships) || memberships.some(id => typeof id !== 'string' || !id)) bad('"projects" must be a list of project IDs');
   // A lenient reader takes a null roster as no roster lines; a strict one refuses it, because a
   // command must not read "I cannot see this roster" as "this roster names nobody".
   if (options.strictRoster === true && raw.roster === null) bad('"roster" must be a list');
@@ -580,6 +547,7 @@ function recordOf(id: string, raw: YamlValue, path: string, options: ReadTeamsOp
     id,
     project: text('project'),
     projectId: projectId as string | null,
+    projects: memberships as string[],
     entity: entity as string | null,
     session,
     root: text('root'),
@@ -653,6 +621,7 @@ function emit(teams: Record<string, TeamRecord>): string {
     lines.push(`  ${scalar(id)}:`);
     lines.push(`    project: ${scalar(team.project)}`);
     lines.push(`    project_id: ${nullable(team.projectId)}`);
+    lines.push(`    projects: [${membershipsOf(team).map(scalar).join(', ')}]`);
     lines.push(`    entity: ${nullable(team.entity)}`);
     lines.push(`    session: ${scalar(team.session)}`);
     lines.push(`    root: ${scalar(team.root)}`);

@@ -207,7 +207,6 @@ test("team status --project reads the registry the home holds when no projects s
     expect(io.err).toBe('');
     expect(io.out).toBe(
       'project TeamCLI  4f2a1b7c9d0e  entity floor  lead agt_2b9f\n'
-      + `  ${TEAM_A}  not registered  home\n`
       + '0 active agents\n',
     );
 

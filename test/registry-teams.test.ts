@@ -96,6 +96,7 @@ describe('the registry file', () => {
         '  abcdef012345:',
         '    project: acme',
         '    project_id: null',
+        '    projects: []',
         '    entity: acme',
         '    session: acme',
         '    root: /work/acme',
@@ -119,6 +120,7 @@ describe('the registry file', () => {
         id: 'abcdef012345',
         project: 'acme',
         projectId: null,
+        projects: [],
         entity: null,
         session: 'acme',
         root: '/work/acme',
@@ -493,7 +495,7 @@ describe('noteTeam and the project level', () => {
     noteTeam(home, cli(), seedOf('TeamCLI'), 'defined', 'owner');
     noteTeam(home, site(), seedOf('TeamCLI'), 'defined', 'owner');
     expect(listProjects(home)).toHaveLength(1);
-    expect(getProject(home, 'teamcli')?.teams).toEqual([teamIdOf(cli()), teamIdOf(site())]);
+    expect(getProject(home, 'teamcli')?.teams).toEqual([teamIdOf(cli()), teamIdOf(site())].sort());
   });
 
   test('a team moved to another project leaves the one that named it', () => {
@@ -518,12 +520,12 @@ describe('noteTeam and the project level', () => {
     expect(getProject(home, 'teamcli')?.teams).toEqual([teamIdOf(cli())]);
   });
 
-  test('a project registry that cannot be written is its own line, and the team record is still written', () => {
+  test('an unreadable project registry is reported before changing membership', () => {
     mkdirSync(join(home, '.config', 'team'), { recursive: true });
     writeFileSync(projectsFile(home), 'projects: [1]\n');
     const said = noteTeam(home, cli(), seedOf('TeamCLI'), 'defined', 'owner');
     expect(said).toMatch(/^the project registry was not updated: .*"projects" must be a map/);
-    expect(getTeam(home, teamIdOf(cli()))?.projectId).toBe('teamcli');
+    expect(getTeam(home, teamIdOf(cli()))).toBeNull();
   });
 
   test('a project name with nothing to keep is a line, and nothing is written at all', () => {
