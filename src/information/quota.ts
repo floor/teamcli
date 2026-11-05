@@ -398,7 +398,7 @@ export function adviceOf(labs: readonly ReportQuotaLab[], expired: readonly stri
     const figure = one.account.windows.find((w) => w.window === 'weekly' && !w.stale && w.margin !== null)
       ?? one.account.windows.find((w) => !w.stale && w.margin !== null);
     const parts = [`used ${figure?.used ?? '?'}%`];
-    if (one.margin !== null) parts.push(`margin ${signed(one.margin)}%`);
+    if (one.margin !== null) parts.push(marginWord(one.margin));
     return `${named(one.account, one.lab)} (${figure?.window ?? 'weekly'} ${parts.join(', ')})`;
   };
   const withNote = (line: string): string => (notes.length === 0 ? line : `${line}; ${notes.join('; ')}`);
@@ -423,7 +423,7 @@ export function adviceOf(labs: readonly ReportQuotaLab[], expired: readonly stri
     return withNote(`headroom on ${targets.slice(0, 2).map((one) => describe(one)).join('; ')}`);
   }
   if (notes.length > 0) return notes.join('; ');
-  if (withFigures.length > 0) return `no account has headroom yet (no fresh margin at or above ${signed(HEADROOM)}%)`;
+  if (withFigures.length > 0) return `no account has headroom yet (no fresh reading is ahead of pace by ${HEADROOM}% or more)`;
   return 'no readings yet: no seat status line and no CLI usage command has answered';
 }
 
@@ -433,10 +433,15 @@ export function signed(value: number): string {
   return `${value > 0 ? '+' : ''}${value}`;
 }
 
-/** The margin as a line prints it: `margin +13.3%`, `margin -10%`, `margin 0%`, or the tool's own
- *  words when the window's clock gives none. */
+/** The pace as a line prints it, in the owner's words: `on pace` within the headroom band of the
+ *  window's own clock either way, `ahead of pace by 13.3%` a band or more ahead of it, and
+ *  `runs out before the reset` a band or more behind — the window and state lines print that same
+ *  fact in hours when the clock is known. `pace not known` when the source gave no clock. */
 export function marginWord(margin: number | null): string {
-  return margin === null ? 'margin not known' : `margin ${signed(margin)}%`;
+  if (margin === null) return 'pace not known';
+  if (margin <= -HEADROOM) return 'runs out before the reset';
+  if (margin >= HEADROOM) return `ahead of pace by ${round1(margin)}%`;
+  return 'on pace';
 }
 
 /** One window's line, under the account's own line: the two percentages, the reset, the margin,

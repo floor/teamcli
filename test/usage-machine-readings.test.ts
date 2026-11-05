@@ -91,7 +91,7 @@ test('a watch persists a Grok zero without team budgets; usage counts machine su
   // seat drawing on the walled account rather than inventing a destination.
   expect(usage.out).toContain('  xai  walled\n');
   expect(usage.out).toContain('    xai  walled  seats: lead\n');
-  expect(usage.out).toContain('      weekly  used 100%  left 0%  resets not printed  margin not known  (machine reading, read 2m ago)');
+  expect(usage.out).toContain('      weekly  used 100%  left 0%  resets not printed  pace not known  (machine reading, read 2m ago)');
   expect(usage.out).toContain('advice: swap lead off xai (walled): no other account has headroom');
 });
 

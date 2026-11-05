@@ -118,8 +118,8 @@ const ADVICE = 'advice: no readings yet: no seat status line and no CLI usage co
 // the lead's openai daily and weekly readings (the state `withState()` writes), both estimated,
 // one stale; no live source answered, and the spend is unknown with its reason.
 const SEAT_FIGURES = [
-  '  lead  claude-code  openai  daily  left 70%  used 30%  resets not printed  margin not known  estimated  state record  read 40m ago  stale',
-  '  lead  claude-code  openai  weekly  left 5%  used 95%  resets in 44m  margin +4.6%  estimated  state record  read 2m ago',
+  '  lead  claude-code  openai  daily  left 70%  used 30%  resets not printed  pace not known  estimated  state record  read 40m ago  stale',
+  '  lead  claude-code  openai  weekly  left 5%  used 95%  resets in 44m  on pace  estimated  state record  read 2m ago',
   "  lead  claude-code  anthropic  cost  unknown  no money cost was read from this seat's screen this run",
 ].join('\n');
 const REPORT = TABLE.replace(`${ADVICE}\n`, '')
@@ -1546,7 +1546,7 @@ describe('team usage', () => {
       '  ghost  claude-code  anthropic',
       '  lead  claude-code  anthropic  unknown  no reading for this seat',
       "  lead  claude-code  anthropic  cost  unknown  no money cost was read from this seat's screen this run",
-      '  ghost  claude-code  openai  weekly  left 5%  used 95%  resets in 44m  margin +4.6%  estimated  state record  read 2m ago',
+      '  ghost  claude-code  openai  weekly  left 5%  used 95%  resets in 44m  on pace  estimated  state record  read 2m ago',
       "  ghost  claude-code  anthropic  cost  unknown  no money cost was read from this seat's screen this run",
       '',
       'usage on this machine, 1 team, 2 labs, 2 accounts',
@@ -1908,7 +1908,7 @@ describe('team usage', () => {
       '  lead  claude-code  anthropic',
       // The caller's own state holds this seat's weekly record; it is old enough to be stale, so
       // the margin is not read from it, and the spend is unknown with its reason.
-      '  lead  claude-code  openai  weekly  left 5%  used 95%  resets in 44m  margin not known  estimated  state record  read 10m ago  stale',
+      '  lead  claude-code  openai  weekly  left 5%  used 95%  resets in 44m  pace not known  estimated  state record  read 10m ago  stale',
       "  lead  claude-code  anthropic  cost  unknown  no money cost was read from this seat's screen this run",
       "note: acme-7QK: a stored reading names an account this team's file does not: not shown",
       "note: 2 teams' states cannot be read (not valid JSON; move it aside and run the command again)",
@@ -2304,9 +2304,9 @@ describe('team usage', () => {
     });
     expect(code).toBe(0);
     const line = io.out.split('\n').find((text) => /^openai\s+session/.test(text)) ?? '';
-    expect(line).toContain('near cap  margin -68.6%');
+    expect(line).toContain('near cap  runs out before the reset');
     expect(line).not.toContain('fresh');
-    expect(io.out).toContain('advice: near cap on openai (session used 60%, margin -68.6%)');
+    expect(io.out).toContain('advice: near cap on openai (session used 60%, runs out before the reset)');
     expect(io.out).not.toContain('\nquota\n');
   });
 
@@ -2335,7 +2335,7 @@ describe('team usage', () => {
     withWeekly(96, 4, '2026-10-04T18:00:00Z');
     const onPace = testIo(root, SEAT);
     expect(await runUsage([], onPace, { home, now: () => NOW, observe: () => ({ observations: [read(96, 4, NOW.getTime() + 9 * 3_600_000)], costs: [], notes: [] }) })).toBe(0);
-    expect(row(onPace.out)).toContain('ok  margin -1.4%');
+    expect(row(onPace.out)).toContain('ok  on pace');
     expect(row(onPace.out)).not.toContain('near cap');
     expect(onPace.out).not.toContain('near cap on anthropic');
 

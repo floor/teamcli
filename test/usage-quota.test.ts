@@ -18,6 +18,7 @@ import { saveMachineReadings } from '../src/information/machine-readings.ts';
 import {
   adviceOf,
   marginOf,
+  marginWord,
   quotaOf,
   quotaText,
   signed,
@@ -89,6 +90,20 @@ describe('the quota model', () => {
     expect(signed(0)).toBe('0');
   });
 
+  test('the pace reads in plain words, never the jargon', () => {
+    // Item 5: "margin" is the tool's word, not the owner's. A window within the headroom band of
+    // its own clock either way is `on pace`; one a band or more ahead of its clock prints how
+    // far; one a band or more behind is the run-out, which the window and state lines normally
+    // carry in hours instead. No source printed gives the tool's own words.
+    expect(marginWord(null)).toBe('pace not known');
+    expect(marginWord(0)).toBe('on pace');
+    expect(marginWord(9.9)).toBe('on pace');
+    expect(marginWord(-9.9)).toBe('on pace');
+    expect(marginWord(10)).toBe('ahead of pace by 10%');
+    expect(marginWord(13.3)).toBe('ahead of pace by 13.3%');
+    expect(marginWord(-10)).toBe('runs out before the reset');
+  });
+
   const labs: QuotaLabInput[] = [
     {
       lab: 'anthropic',
@@ -142,18 +157,18 @@ describe('the quota model', () => {
           ],
         },
       ],
-      advice: 'swap scout off anthropic/openai (walled) to anthropic (weekly used 12%, margin +13.3%)',
+      advice: 'swap scout off anthropic/openai (walled) to anthropic (weekly used 12%, ahead of pace by 13.3%)',
     });
 
     expect(quotaText(quota)).toEqual([
       'quota',
       '  anthropic  walled',
       '    anthropic  ok  seats: lead',
-      '      session  used 40%  left 60%  resets in 3h  margin 0%  (status line, read 1m ago)',
-      '      weekly  used 12%  left 88%  resets in 125h26m  margin +13.3%  (status line, read 1m ago)',
+      '      session  used 40%  left 60%  resets in 3h  on pace  (status line, read 1m ago)',
+      '      weekly  used 12%  left 88%  resets in 125h26m  ahead of pace by 13.3%  (status line, read 1m ago)',
       '    openai  walled  resets 2h  seats: scout, +2 on another team',
-      '      weekly  used 95%  left 5%  resets not printed  margin not known  (machine reading, read 2m ago)',
-      'advice: swap scout off anthropic/openai (walled) to anthropic (weekly used 12%, margin +13.3%)',
+      '      weekly  used 95%  left 5%  resets not printed  pace not known  (machine reading, read 2m ago)',
+      'advice: swap scout off anthropic/openai (walled) to anthropic (weekly used 12%, ahead of pace by 13.3%)',
     ]);
   });
 
@@ -167,9 +182,9 @@ describe('the quota model', () => {
     expect(quota.labs[0]?.accounts[0]?.state).toBe('unknown');
     expect(quota.labs[0]?.accounts[0]?.windows[0]).toMatchObject({ stale: true, margin: null, age: '6m' });
     expect(quotaText(quota)).toContain(
-      '      weekly  used 40%  left 60%  resets in 24h  margin not known  (status line, read 6m ago)  stale',
+      '      weekly  used 40%  left 60%  resets in 24h  pace not known  (status line, read 6m ago)  stale',
     );
-    expect(quota.advice).toBe(`no account has headroom yet (no fresh margin at or above ${signed(10)}%)`);
+    expect(quota.advice).toBe('no account has headroom yet (no fresh reading is ahead of pace by 10% or more)');
   });
 
   test('a wall whose reset has already passed is a window that rolled over', () => {
@@ -206,7 +221,7 @@ describe('the quota model', () => {
       now: NOW,
     });
     expect(quota.labs[0]?.accounts[0]?.state).toBe('near cap');
-    expect(quota.advice).toBe('near cap on google (weekly used 89%, margin -71.6%)');
+    expect(quota.advice).toBe('near cap on google (weekly used 89%, runs out before the reset)');
     // The threshold is the headroom band's mirror: a window a headroom band ahead of its clock
     // is near the cap, one a tenth short of it is ok — the used figure alone decides nothing
     // when the window's clock gives a margin.
@@ -237,15 +252,15 @@ describe('the quota model', () => {
     expect(two(
       [{ account: 'anthropic', seats: [] }, { account: 'openai', seats: [] }],
       [fresh('anthropic', 20, 12), fresh('openai', 10, 30)],
-    )).toBe('headroom on anthropic/openai (weekly used 10%, margin +30%); anthropic (weekly used 20%, margin +12%)');
+    )).toBe('headroom on anthropic/openai (weekly used 10%, ahead of pace by 30%); anthropic (weekly used 20%, ahead of pace by 12%)');
     // Fresh figures, and none of them at the +10% headroom mark.
     expect(two([{ account: 'anthropic', seats: [] }], [fresh('anthropic', 60, 3)]))
-      .toBe('no account has headroom yet (no fresh margin at or above +10%)');
+      .toBe('no account has headroom yet (no fresh reading is ahead of pace by 10% or more)');
     // Walled seats move to the account with headroom; no headroom says so instead.
     expect(two(
       [{ account: 'anthropic', seats: ['lead', 'coda'] }, { account: 'openai', seats: [] }],
       [fresh('anthropic', 100, null), fresh('openai', 10, 30)],
-    )).toBe('swap lead, coda off anthropic (walled) to anthropic/openai (weekly used 10%, margin +30%)');
+    )).toBe('swap lead, coda off anthropic (walled) to anthropic/openai (weekly used 10%, ahead of pace by 30%)');
     expect(two(
       [{ account: 'anthropic', seats: ['lead'] }, { account: 'openai', seats: [] }],
       [fresh('anthropic', 100, null), fresh('openai', 70, 5)],
@@ -521,11 +536,11 @@ seats:
       'quota',
       '  anthropic  ok',
       '    anthropic  ok  seats: lead',
-      '      weekly  used 12%  left 88%  resets in 125h26m  margin +13.3%  (status line, read 1m ago)',
+      '      weekly  used 12%  left 88%  resets in 125h26m  ahead of pace by 13.3%  (status line, read 1m ago)',
       '  openai  unknown',
       '    openai  unknown',
       '      not known: no reading yet',
-      'advice: headroom on anthropic (weekly used 12%, margin +13.3%)',
+      'advice: headroom on anthropic (weekly used 12%, ahead of pace by 13.3%)',
     ].join('\n'));
     expect(io.out).toContain('note: 1 seat pane could not be read\n');
 
@@ -729,9 +744,9 @@ seats:
     expect(seat.out).toContain([
       '  zai  ok',
       '    zai  ok',
-      '      weekly  used 12%  left 88%  resets in 125h26m  margin +13.3%  (status line, read 1m ago)',
+      '      weekly  used 12%  left 88%  resets in 125h26m  ahead of pace by 13.3%  (status line, read 1m ago)',
     ].join('\n'));
-    expect(seat.out).toContain('advice: headroom on zai (weekly used 12%, margin +13.3%)\n');
+    expect(seat.out).toContain('advice: headroom on zai (weekly used 12%, ahead of pace by 13.3%)\n');
     expect(seat.out).toContain('usage on this machine, 1 team, 3 labs, 3 accounts\n');
     const json = testIo(root, SEAT);
     expect(await runUsage(['--json'], json, { home, now: () => new Date(NOW), observe: () => ({ observations: [read], costs: [], notes: [] }) })).toBe(0);
