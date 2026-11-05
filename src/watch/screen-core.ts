@@ -452,6 +452,7 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
     }
 
     // Composer stage: comes from hatch OR from data (refused if both at load).
+    if (feedbackSurvey(data, plain, tick)) return { kind: 'feedback survey' };
     const composerFn = getProfileFn(data.profile, 'composer');
     if (composerFn !== undefined) {
       const composed = callComposer(composerFn, plain);
@@ -1658,6 +1659,40 @@ function scrolledBack(data: ScreenData, plain: string[], tick: () => boolean): b
     return spec.marker.test(line);
   }
   return false;
+}
+
+/** The pane sits at the CLI's post-turn feedback survey: the two declared rows (`prompt`
+ *  immediately above `choices`, on adjacent rows) stand at the bottom of the pane, either as the
+ *  pane's last two non-blank rows or with only the CLI's own `statusFooter` row beneath them.
+ *  Read after every caution stage (`working`, `permission`, `question`, `trust`, `confirmation`,
+ *  `rate_limit`, etc.) so a running turn or any other dialog keeps its own reading, and never
+ *  matched from a transcript row higher up that quotes the survey above a composer or above any
+ *  other row. */
+function feedbackSurvey(data: ScreenData, plain: string[], tick: () => boolean): boolean {
+  const spec = data.feedbackSurvey;
+  if (spec === undefined) return false;
+  let last = -1;
+  for (let i = plain.length - 1; i >= 0; i--) {
+    if (tick()) return false;
+    if ((plain[i] ?? '').trim() === '') continue;
+    last = i;
+    break;
+  }
+  if (last < 1) return false;
+  let choicesAt = last;
+  if (!spec.choices.test(plain[last] ?? '')) {
+    if (spec.statusFooter === undefined || !spec.statusFooter.test(plain[last] ?? '')) return false;
+    choicesAt = -1;
+    for (let i = last - 1; i >= 0; i--) {
+      if (tick()) return false;
+      if ((plain[i] ?? '').trim() === '') continue;
+      choicesAt = i;
+      break;
+    }
+    if (choicesAt < 1 || !spec.choices.test(plain[choicesAt] ?? '')) return false;
+  }
+  if (tick()) return false;
+  return spec.prompt.test(plain[choicesAt - 1] ?? '');
 }
 
 function choiceLine(line: string): boolean {

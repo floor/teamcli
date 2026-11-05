@@ -305,6 +305,19 @@ screen:
         - '\bRunning command\.\.\.'
         # Active tool execution
         - '^\s*●\s+Running\b'
+  # The periodic post-turn feedback survey replaces the two-rule composer box at the bottom of
+  # the pane (test/fixtures/antigravity/1.4.12/feedback-survey.txt): the question row and its
+  # four numbered choices sit as two contiguous rows at the bottom of the pane (with at most the
+  # pane's own `? for shortcuts … Gemini <ver> …` status footer below them, and no composer rule
+  # or prompt below them). The only answer TeamCLI ever sends to this dialog is `0` (Skip), once,
+  # from the typed wake (`src/send/typed-wake.ts`), which then re-reads the pane and continues
+  # the wake only if an empty idle prompt shows. A transcript line quoting the survey above a
+  # composer or above any other row never matches, and every other dialog stays refused.
+  feedback_survey:
+    prompt: '^\s*How''s the CLI experience so far\? Help us improve:\s*$'
+    choices: '^\s*\[1\] Good  \[2\] Fine  \[3\] Bad  \[0\] Skip\s*$'
+    status_footer: '^\s*(?:\? for shortcuts(?:\s+Gemini\s+[0-9].*)?|Gemini\s+[0-9].*)\s*$'
+    skip_key: '0'
   # Where each dialog's question sits, so a report can quote it. The question tool words its
   # question after the counter's colon (`antigravity/1.2.16/question-54.txt`); the unsent
   # confirmation asks on its own sentence row (`antigravity/1.2.16/question-unsent-54.txt`).

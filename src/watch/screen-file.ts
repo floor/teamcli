@@ -116,7 +116,7 @@ function loadScreenModule(specifier: string, baseDir: string | undefined, line: 
 
 function screenOf(node: YamlNode, topScreenModule?: YamlEntry, baseDir?: string, profileFile?: string): ScreenData {
   const entries = mapping(node, 'screen');
-  only(entries, ['chrome', 'turn_end', 'composer', 'screen_module', 'question_text', 'scroll_back', ...STAGES]);
+  only(entries, ['chrome', 'turn_end', 'composer', 'screen_module', 'question_text', 'scroll_back', 'feedback_survey', ...STAGES]);
   const chrome = optional(entries, 'chrome');
   const screenScreenModule = optional(entries, 'screen_module');
   const moduleEntry = screenScreenModule ?? topScreenModule;
@@ -162,7 +162,49 @@ function screenOf(node: YamlNode, topScreenModule?: YamlEntry, baseDir?: string,
   if (questionText) data.questionText = questionTextOf(questionText);
   const scrollBack = optional(entries, 'scroll_back');
   if (scrollBack) data.scrollBack = scrollBackOf(scrollBack);
+  const feedbackSurvey = optional(entries, 'feedback_survey');
+  if (feedbackSurvey) data.feedbackSurvey = feedbackSurveyOf(feedbackSurvey);
   return data;
+}
+
+/** The only answer the product ever sends to a feedback survey: `'0'` (`Skip`), once. */
+const FEEDBACK_SURVEY_KEYS = ['0'] as const;
+
+/** A post-turn feedback survey drawn at the bottom of the pane in the composer's place: two
+ *  contiguous whole rows (`prompt` immediately above `choices`), with at most the profile's
+ *  optional `status_footer` row on the last non-blank row beneath them. */
+function feedbackSurveyOf(entry: YamlEntry): { prompt: RegExp; choices: RegExp; statusFooter?: RegExp; skipKey: string } {
+  const entries = mapping(entry.value, 'feedback_survey');
+  only(entries, ['prompt', 'choices', 'status_footer', 'skip_key']);
+  const key = required(entries, 'skip_key', entry.line);
+  const keyText = stringOf(key.value);
+  if (keyText === null) fail(key.line, '"feedback_survey.skip_key" must be a string');
+  if (!(FEEDBACK_SURVEY_KEYS as readonly string[]).includes(keyText)) {
+    fail(key.line, `"feedback_survey.skip_key" must be one of ${FEEDBACK_SURVEY_KEYS.join(', ')}: only Skip ('0') may be sent to a feedback survey`);
+  }
+  const requiredRow = (name: 'prompt' | 'choices'): RegExp => {
+    const found = required(entries, name, entry.line);
+    const text = stringOf(found.value);
+    if (text === null) fail(found.line, `"feedback_survey.${name}" must be a string`);
+    if (!anchored(text)) fail(found.line, `a feedback_survey ${name} must match the whole line: "^…$"`);
+    return patternOf(text, false, found.line);
+  };
+  const prompt = requiredRow('prompt');
+  const choices = requiredRow('choices');
+  let statusFooter: RegExp | undefined;
+  const footerEntry = optional(entries, 'status_footer');
+  if (footerEntry !== undefined) {
+    const text = stringOf(footerEntry.value);
+    if (text === null) fail(footerEntry.line, '"feedback_survey.status_footer" must be a string');
+    if (!anchored(text)) fail(footerEntry.line, 'a feedback_survey status footer must match the whole line: "^…$"');
+    statusFooter = patternOf(text, false, footerEntry.line);
+  }
+  return {
+    prompt,
+    choices,
+    ...(statusFooter === undefined ? {} : { statusFooter }),
+    skipKey: keyText,
+  };
 }
 
 /** The keys a `scroll_back` return may name: only a key a run established at that screen — an

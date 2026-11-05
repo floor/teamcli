@@ -64,7 +64,8 @@ export type ScreenKind =
  *  a typed prompt only by the wake's own guarded key — is the `unknown` a launch saw before the
  *  kind existed, so every launch decision keeps its conservative reading of it. */
 export function launchKind(kind: Screen['kind']): ScreenKind {
-  return kind === 'scroll back' ? 'unknown' : kind;
+  if (kind === 'scroll back' || kind === 'feedback survey') return 'unknown';
+  return kind;
 }
 
 /** What a live `up` or `down` can do, apart from deciding it. Tests stand in for all of it. */

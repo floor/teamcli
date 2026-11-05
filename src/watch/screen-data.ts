@@ -236,6 +236,11 @@ export type ScreenData = {
    *
    *  A profile declares one layout or both; the loader refuses half of the marker one. */
   scrollBack?: { footer?: RegExp; marker?: RegExp; statusFooter?: RegExp; returnKey: string };
+  /** A post-turn feedback survey drawn at the bottom of the pane in the composer's place: two
+   *  contiguous whole rows (`prompt` immediately above `choices`), with at most the CLI's own
+   *  `statusFooter` row beneath them, and the single Skip key (`'0'`) the typed wake sends at
+   *  most once before re-reading for an empty idle prompt. */
+  feedbackSurvey?: { prompt: RegExp; choices: RegExp; statusFooter?: RegExp; skipKey: string };
   /** Where the question text of a dialog sits, for the three kinds that carry one. Absent: the
    *  reader returns null and the report names the dialog without quoting it. */
   questionText?: QuestionText;
