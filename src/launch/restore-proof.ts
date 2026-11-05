@@ -25,8 +25,11 @@ export type RestoreProof =
   | { kind: 'session'; pane: string; sentence: string }
   /** No session id on either side: the declared CLI, alone in its workspace, at an idle prompt. */
   | { kind: 'cli'; pane: string; sentence: string }
-  /** A reported reason, never an adoption. */
-  | { kind: 'none'; why: string };
+  /** A reported reason, never an adoption. `specific` marks a reason that names something a
+   *  reader can act on (another conversation, another CLI, another pane, a working pane); a
+   *  reason that only restates "the pane cannot be tied" leaves it off, so `team check` keeps
+   *  its generic line for those. */
+  | { kind: 'none'; why: string; specific?: true };
 
 export type RestoreProofInput = {
   seat: Pick<Seat, 'name' | 'cli'>;
@@ -62,14 +65,14 @@ export function restoreProof(input: RestoreProofInput): RestoreProof {
   const entry = input.agents.find((agent) => agent.pane === recorded.pane);
   if (!entry) return { kind: 'none', why: NONE_LISTED };
   if (entry.workspace !== '' && entry.workspace !== recorded.workspace) {
-    return { kind: 'none', why: `its pane is in workspace ${entry.workspace}; the record puts it in ${recorded.workspace}` };
+    return { kind: 'none', why: `its pane is in workspace ${entry.workspace}; the record puts it in ${recorded.workspace}`, specific: true };
   }
   if (seatProcessVerdict(recorded.launched, input.process) !== 'replaced') {
     return { kind: 'none', why: 'its pane holds no process this proof can re-tie to the launch' };
   }
   // 3. No other seat owns the pane. The seat's own name (or none) is the only one re-tied over.
   if (entry.name !== null && entry.name !== seat.name) {
-    return { kind: 'none', why: `its pane is named ${entry.name}; team never adopts a pane another seat owns` };
+    return { kind: 'none', why: `its pane is named ${entry.name}; team never adopts a pane another seat owns`, specific: true };
   }
   // 4. The declared CLI is in the pane, for both proofs. The foreground argv0s are the reading
   //    the launch itself uses; the entry's own attribution, when it names one, must agree.
@@ -81,10 +84,10 @@ export function restoreProof(input: RestoreProofInput): RestoreProof {
     return { kind: 'none', why: `its pane's foreground cannot be read; team cannot tell it is ${seat.cli}` };
   }
   if (!reportedLiveAgent(input.foreground, processNames)) {
-    return { kind: 'none', why: `its pane runs ${input.foreground[0] ?? 'no CLI'}; the seat's launch line runs ${seat.cli}` };
+    return { kind: 'none', why: `its pane runs ${input.foreground[0] ?? 'no CLI'}; the seat's launch line runs ${seat.cli}`, specific: true };
   }
   if (entry.agent !== null && !reportedLiveAgent([entry.agent], processNames)) {
-    return { kind: 'none', why: `its pane's agent says ${entry.agent}; the seat's launch line runs ${seat.cli}` };
+    return { kind: 'none', why: `its pane's agent says ${entry.agent}; the seat's launch line runs ${seat.cli}`, specific: true };
   }
   // 5. The conversation decides strong versus weak. One-sided ids are refused: a recorded
   //    conversation the pane does not show, or one the record never named, is not a weak proof.
@@ -94,29 +97,30 @@ export function restoreProof(input: RestoreProofInput): RestoreProof {
       return {
         kind: 'none',
         why: `its pane holds another conversation (${liveSession}; the record's launch ran ${input.recordedSession})`,
+        specific: true,
       };
     }
     return { kind: 'session', pane: recorded.pane, sentence: 'its conversation is the one the record names' };
   }
   if (input.recordedSession !== undefined) {
-    return { kind: 'none', why: `its pane reports no conversation; the record's launch ran ${input.recordedSession}` };
+    return { kind: 'none', why: `its pane reports no conversation; the record's launch ran ${input.recordedSession}`, specific: true };
   }
   if (liveSession !== undefined) {
-    return { kind: 'none', why: `its pane holds a conversation (${liveSession}) the record's launch never named` };
+    return { kind: 'none', why: `its pane holds a conversation (${liveSession}) the record's launch never named`, specific: true };
   }
   // Weak: the declared CLI must be alone in its workspace, at an idle prompt, with nothing
   // unsent in its box. Another pane in the workspace leaves no way to tell which one is the seat.
   if (input.agents.some((agent) => agent.pane !== recorded.pane && agent.workspace === recorded.workspace)) {
-    return { kind: 'none', why: 'its workspace holds another pane; team cannot tell which one is the seat' };
+    return { kind: 'none', why: 'its workspace holds another pane; team cannot tell which one is the seat', specific: true };
   }
-  if (entry.status === 'working') return { kind: 'none', why: workingWhy(seat.name) };
+  if (entry.status === 'working') return { kind: 'none', why: workingWhy(seat.name), specific: true };
   if (entry.status !== 'idle' && entry.status !== 'done') {
-    return { kind: 'none', why: `its pane reads ${entry.status || 'no state'}; team cannot tell it is at an idle prompt` };
+    return { kind: 'none', why: `its pane reads ${entry.status || 'no state'}; team cannot tell it is at an idle prompt`, specific: true };
   }
   if (input.screen !== null && input.screen !== '') {
     const kind = readScreen(seat.cli, input.screen).kind;
-    if (kind === 'working') return { kind: 'none', why: workingWhy(seat.name) };
-    if (kind === 'unsent') return { kind: 'none', why: `the process in its pane holds unsent text; nothing closed (send or clear it there, or run team remove ${seat.name})` };
+    if (kind === 'working') return { kind: 'none', why: workingWhy(seat.name), specific: true };
+    if (kind === 'unsent') return { kind: 'none', why: `the process in its pane holds unsent text; nothing closed (send or clear it there, or run team remove ${seat.name})`, specific: true };
   }
   return {
     kind: 'cli',

@@ -601,11 +601,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     return 1;
   }
   // The pane is the seat only while the process team launched is still in it. A recorded seat
-  // whose pane runs no CLI, or a process team did not launch, is not "already running": its
-  // workspace is closed without input and the seat is launched fresh, exactly as `up` does.
-  // A seat with no record, or a herdr that can't tell, keeps today's reading. The close itself
-  // reads herdr again, immediately before it (`execute.ts`), so this reading only decides that
-  // the seat needs repair, never that its recorded workspace is still its own.
+  // whose pane runs no CLI is not "already running": its own pane is launched in again, and
+  // nothing is created or closed, exactly as `up` does. A pane holding a process team did not
+  // launch is left, and the add is refused. A seat with no record, or a herdr that can't tell,
+  // keeps today's reading. The launch itself reads the pane and its workspace again, immediately
+  // before it (`execute.ts`), so this reading only decides that the seat needs repair, never
+  // that its recorded pane is still its own.
   const held = recorded.seats[built.name];
   const proc = held?.launched && held.pane && sources.launch.processInfo ? sources.launch.processInfo(session, held.pane) : null;
   const verdict = seatProcessVerdict(held?.launched, proc);
@@ -640,9 +641,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.session-doubt
     return 1;
   }
-  // The shell is in front. The seat is not already running: close and launch fresh.
+  // The shell is in front. The seat is not already running, and its pane is still its own: the
+  // launch line runs there again, with nothing created and nothing closed (`up` does the same
+  // through the same plan). The run re-reads the pane and its workspace immediately before the
+  // launch, and a changed reading leaves the seat out with nothing launched.
   const repair = verdict === 'gone' && held?.workspace && held.pane && held.launched
-    ? { pane: held.pane, workspace: held.workspace, launched: held.launched, cli: built.seat.cli }
+    ? { pane: held.pane, workspace: held.workspace, launched: held.launched, cli: built.seat.cli, reuse: true as const }
     : undefined;
   const runningNow = !repair ? agents.find((agent) => agent.name === built.name) : undefined;
   if (runningNow) {

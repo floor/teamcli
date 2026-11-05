@@ -29,9 +29,10 @@ export function paneHoldsShell(pane: PaneProcesses | null | undefined): boolean 
   return pane.foreground.includes(pane.shell);
 }
 
-/** The pane holds its own shell and nothing else: no CLI, no helper, nothing in front. Read
- *  after an exit is typed, to know the CLI is back at the shell the seat will launch from.
- *  An empty foreground, or no reading at all, is not a shell — herdr could not say. */
+/** The pane's own shell is the only process in front. This is the reading a pane gives before
+ *  a program is started in it and after the program is gone: no CLI, and no helper beside it.
+ *  It is stricter than `paneHoldsShell`, which a foreground of `[shell, cli]` also satisfies —
+ *  a pane that lists its shell *and* a process beside it is not one to launch into or close. */
 export function paneHoldsOnlyShell(pane: PaneProcesses | null | undefined): boolean {
   if (!pane || pane.foreground.length === 0) return false;
   return pane.foreground.every((pid) => pid === pane.shell);

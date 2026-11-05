@@ -1650,8 +1650,10 @@ describe('a pane that no longer holds the process team launched', () => {
     const { code, out } = await status();
     expect(code).toBe(1);
     expect(out).toMatch(/codex-acme\s+restored, not launched by team\s+-\s+w2:p1/);
+    // The proof names why it cannot adopt the pane: another agent owns it, and the repair is to
+    // look — never a rename into the seat and never `team up`.
     expect(out).toContain(
-      'difference: codex-acme: its pane holds a process this record cannot tie to the launch\n' +
+      'difference: codex-acme: its pane is named stranger; team never adopts a pane another seat owns\n' +
         '  repair: look at the pane\n',
     );
     expect(out).not.toContain('repair: team up\n');
