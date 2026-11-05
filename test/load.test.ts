@@ -8,6 +8,7 @@ import { readWithPs } from '../src/caller.ts';
 import { selectCommits } from '../src/check/git.ts';
 import { privateDiffCorpus } from '../src/check/private-names.ts';
 import { scanPublicNames } from '../src/check/public-names.ts';
+import { syncChildTimeout } from '../src/child.ts';
 import { headOf } from '../src/client/owner-action-step.ts';
 import { branchPresent } from '../src/end/condition.ts';
 import { branchProblem } from '../src/end/until.ts';
@@ -371,6 +372,36 @@ describe('synchronous child calls bound their wait and close stdin', () => {
       if (originalTimeout === undefined) delete process.env.TEAM_SYNC_CHILD_TIMEOUT_MS;
       else process.env.TEAM_SYNC_CHILD_TIMEOUT_MS = originalTimeout;
       rmSync(stubDir, { recursive: true, force: true });
+    }
+  });
+
+  test('syncChildTimeout floors the test override at 50 ms and never widens a call past its default', () => {
+    const originalTimeout = process.env.TEAM_SYNC_CHILD_TIMEOUT_MS;
+    try {
+      delete process.env.TEAM_SYNC_CHILD_TIMEOUT_MS;
+      expect(syncChildTimeout(2_000)).toBe(2_000);
+
+      process.env.TEAM_SYNC_CHILD_TIMEOUT_MS = '';
+      expect(syncChildTimeout(2_000)).toBe(2_000);
+
+      process.env.TEAM_SYNC_CHILD_TIMEOUT_MS = '0';
+      expect(syncChildTimeout(2_000)).toBe(2_000);
+
+      process.env.TEAM_SYNC_CHILD_TIMEOUT_MS = '-100';
+      expect(syncChildTimeout(2_000)).toBe(2_000);
+
+      process.env.TEAM_SYNC_CHILD_TIMEOUT_MS = '10';
+      expect(syncChildTimeout(2_000)).toBe(50);
+
+      process.env.TEAM_SYNC_CHILD_TIMEOUT_MS = '60';
+      expect(syncChildTimeout(2_000)).toBe(60);
+
+      process.env.TEAM_SYNC_CHILD_TIMEOUT_MS = '60000';
+      expect(syncChildTimeout(2_000)).toBe(2_000);
+      expect(syncChildTimeout(5_000)).toBe(5_000);
+    } finally {
+      if (originalTimeout === undefined) delete process.env.TEAM_SYNC_CHILD_TIMEOUT_MS;
+      else process.env.TEAM_SYNC_CHILD_TIMEOUT_MS = originalTimeout;
     }
   });
 });

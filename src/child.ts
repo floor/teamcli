@@ -39,13 +39,13 @@ export function wasAborted(error: unknown): boolean {
   return (error as { code?: unknown } | null)?.code === 'ABORT_ERR';
 }
 
-/** The timeout a synchronous child gets: `defaultMs`, or `TEAM_SYNC_CHILD_TIMEOUT_MS` when a
- *  sleeping-stub test narrows the ceiling so the scene finishes in milliseconds. */
+/** The timeout a synchronous child gets: `defaultMs`, or a narrower `TEAM_SYNC_CHILD_TIMEOUT_MS`
+ *  (floored at 50 ms and never above `defaultMs`) when a sleeping-stub test narrows the ceiling. */
 export function syncChildTimeout(defaultMs: number): number {
   const raw = process.env.TEAM_SYNC_CHILD_TIMEOUT_MS;
   if (raw !== undefined && raw !== '') {
     const parsed = Number(raw);
-    if (Number.isInteger(parsed) && parsed > 0) return parsed;
+    if (Number.isInteger(parsed) && parsed > 0) return Math.min(defaultMs, Math.max(50, parsed));
   }
   return defaultMs;
 }
