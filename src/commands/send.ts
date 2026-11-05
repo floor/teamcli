@@ -5894,8 +5894,11 @@ function staleSocketReason(to: Aim, path: string, home: string | undefined): str
   // this send returns. The typed-wake exception
   // applies here too: this sentence is read while the typed leg is still ahead of the walk, so a
   // profile that declares a typed wake says the seat reads the message at its next turn rather
-  // than claiming it has no way to be woken.
-  return `the socket recorded for ${to.seat} (${path}) is gone; ${classWords(classWithoutSocket(to, home), to.seat)}`;
+  // than claiming it has no way to be woken. The event-adapter sentence is the class, not a leg
+  // that ran, so a stale socket does not wear it.
+  const words = classWords(classWithoutSocket(to, home), to.seat);
+  const proved = words === 'woken through its event adapter' ? '' : `; ${words}`;
+  return `the socket recorded for ${to.seat} (${path}) is gone${proved}`;
 }
 
 /** Raises the owner's `security.refused` for a denied identity or admission: the rule, the
