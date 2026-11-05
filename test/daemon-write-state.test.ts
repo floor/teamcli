@@ -8,7 +8,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { daemonHealth } from '../src/daemon/health.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
-import { writeDaemonStateText } from '../src/daemon/state.ts';
+import { daemonStatePath } from '../src/daemon/paths.ts';
+import { readDaemonState, writeDaemonStateText } from '../src/daemon/state.ts';
 
 const TEAM = `format: 1
 project: acme
@@ -149,6 +150,67 @@ describe('the state record is written once per beat, off the loop, on change onl
     } finally {
       gated = false;
       gate.release?.();
+      await started.daemon.close();
+    }
+  });
+
+  test('a crash after a partial temp write leaves the old record whole, and the next beats recover', async () => {
+    const { root, home } = scratch();
+    let crashing = false;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const started = await startMachineDaemon({
+      home,
+      roots: [root],
+      startedBy: 'manual',
+      version: 'test',
+      heartbeatMs: 50,
+      stateWriter: async (writerHome, text) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        try {
+          if (crashing) {
+            // The simulated crash: half the new record reaches the temp file in the same
+            // folder, then the writer dies before the rename. No real signal is sent.
+            writeFileSync(`${daemonStatePath(writerHome)}.${String(process.pid)}.tmp`, text.slice(0, 40));
+            throw new Error('simulated crash before the rename');
+          }
+          await writeDaemonStateText(writerHome, text);
+        } finally {
+          inFlight -= 1;
+        }
+      },
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      await waitServing(home);
+      await sleep(150);
+      const before = readDaemonState(home);
+      expect(before.kind).toBe('ok');
+      if (before.kind !== 'ok') return;
+      crashing = true;
+      await sleep(220);
+      // Every write in the crash window died mid-temp; the record on disk is still the old
+      // one, whole and readable, never the partial temp text.
+      const during = readDaemonState(home);
+      expect(during.kind).toBe('ok');
+      if (during.kind !== 'ok') return;
+      expect(during.state.heartbeatAt).toBe(before.state.heartbeatAt);
+      expect(maxInFlight).toBe(1);
+      // The daemon itself never noticed: the probe answers from memory throughout.
+      const health = await daemonHealth(home);
+      expect(health.state).toBe('running');
+      crashing = false;
+      const deadline = Date.now() + 3000;
+      for (;;) {
+        const after = readDaemonState(home);
+        if (after.kind === 'ok' && after.state.heartbeatAt > before.state.heartbeatAt) break;
+        if (Date.now() > deadline) throw new Error('the record never advanced after the crash window');
+        await sleep(10);
+      }
+    } finally {
+      crashing = false;
       await started.daemon.close();
     }
   });
