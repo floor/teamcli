@@ -904,7 +904,7 @@ export function readRecord(path: string, expectedId?: string): RecordRead {
   return { ok: true, record };
 }
 
-export type StatusContext = { to: string; root: string; session: string };
+export type StatusContext = { to: string; root: string; session: string; lead?: string };
 
 /** One record's verified payload by path and id, or null when the file is missing, is not a
  *  record this version writes, or does not verify with the reading key. A caller that reads the
@@ -1152,6 +1152,15 @@ export function readVerifiedReceipt(
  * the message's own receipt name, verifying for this message and inbox, whose `read_by` names
  * `lead-ack:<actor>`. This is not the seat's read — `isRead` and `statusOf` never count it — but
  * it settles the message: the unread listings skip it and the watch stops retrying it.
+ *
+ * The signature proves the receipt came from this checkout, never which seat wrote it: the
+ * message key is per home, shared by every seat that serves the checkout. A clearance therefore
+ * settles only when its actor is the owner, or the seat this call site resolved as the team's
+ * lead (`context.lead`, the team file's `coordinator`). A context with no lead — a reader that
+ * did not load the team — settles no seat-named clearance at all, so a receipt any seat can sign
+ * cannot clear mail in the lead's name alone. The residual is the owner's name itself: a forged
+ * `lead-ack:owner` is indistinguishable under the shared key, and closing that needs per-seat
+ * keys or daemon-issued receipts.
  */
 export function leadAckReceiptAt(
   dropDir: string,
@@ -1163,6 +1172,7 @@ export function leadAckReceiptAt(
   if (verified === null) return null;
   const by = leadAckActorOf(verified.payload.read_by);
   if (by === null) return null;
+  if (by !== 'owner' && (context.lead === undefined || by !== context.lead)) return null;
   return { by, at: verified.payload.at, payload: verified.payload };
 }
 

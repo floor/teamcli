@@ -122,6 +122,9 @@ export function observeSwap(
   /** Whether this run's own native presence read holds the seat. The run reads the store itself
    *  at decision time, so a watch caller and a `team swap` caller reach the same answer. */
   nativeHeld = false,
+  /** The team's lead seat, for the assigned-work check's clearance read; absent, only the
+   *  owner's clearances settle. */
+  lead?: string,
 ): SwapObservation | null {
   const agents = sources.agents(session);
   if (agents === null) return null;
@@ -162,6 +165,7 @@ export function observeSwap(
   const assigned = seatHasAssignedWorkOnDisk(root, session, seat.name, now.getTime(), {
     project,
     home: sources.home,
+    ...(lead === undefined ? {} : { lead }),
   });
   const boundary = quiet && !working && !prompt
     && !nativeHeld
@@ -245,7 +249,7 @@ export async function runOneSwap(input: SwapRunOptions, name: string, swap: Queu
   );
   const nativeHeld = !nativeAllowsTyping(native);
 
-  const observed = observeSwap(sources, session, declared, root, now(), team.project, nativeHeld);
+  const observed = observeSwap(sources, session, declared, root, now(), team.project, nativeHeld, team.orchestrator);
   if (observed === null) {
     return { kind: 'retry', seat: name, why: 'herdr cannot be read; the queue stands' };
   }

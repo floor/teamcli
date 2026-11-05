@@ -306,8 +306,13 @@ function candidates(root: string, session: string): Candidate[] {
  *  verifies for this message and inbox. A reply counts as the read that came before it, the same
  *  answer `readMessage`, `team drops` and the watch share, so no reader shows a body again and the
  *  watch does not ring for a message that was already answered. */
-function recordReadHeld(candidate: Candidate, root: string, session: string, key: KeyObject): boolean {
-  const context = { to: candidate.seat, root, session: candidate.session ?? session };
+function recordReadHeld(candidate: Candidate, root: string, session: string, key: KeyObject, lead?: string): boolean {
+  const context = {
+    to: candidate.seat,
+    root,
+    session: candidate.session ?? session,
+    ...(lead === undefined ? {} : { lead }),
+  };
   return isReadOrCleared(recordDir(root, context.session, candidate.seat), candidate.id, context, key);
 }
 
@@ -347,6 +352,7 @@ export function listUnackedMessages(
   session: string,
   home: string,
   records?: RecordReader,
+  lead?: string,
 ): UnackedMessage[] {
   const state = messageKeyState(home);
   if (state.kind !== 'key') return [];
@@ -394,10 +400,12 @@ export function listUnackedMessages(
       if (entry !== null) out.push(entry);
       continue;
     }
-    if (recordReadHeld(candidate, root, session, state.key)) continue;
+    if (recordReadHeld(candidate, root, session, state.key, lead)) continue;
     const targetSession = candidate.session ?? session;
     const stamp = fileStatStamp(candidate.path);
-    const scope = `record\0${keyPrint}\0${candidate.id}\0${candidate.seat}\0${targetSession}\0${realRoot}`;
+    // The clearance depends on the team's lead, so the lead is part of the cached scope: a
+    // caller that knows the team and one that does not never share an answer.
+    const scope = `record\0${keyPrint}\0${candidate.id}\0${candidate.seat}\0${targetSession}\0${realRoot}\0${lead ?? ''}`;
     if (stamp !== null && keyPrint !== '') {
       const cached = unackedStampCache.get(candidate.path);
       if (cached !== undefined && cached.stamp === stamp && cached.scope === scope) {
@@ -423,8 +431,8 @@ export function listUnackedMessages(
 }
 
 /** The ids of the records with no verifying read receipt: the ring's recheck. */
-export function listUnacked(root: string, session: string, home: string): Unacked[] {
-  return listUnackedMessages(root, session, home).map((record) => ({ id: record.id, to: record.to, at: record.at }));
+export function listUnacked(root: string, session: string, home: string, lead?: string): Unacked[] {
+  return listUnackedMessages(root, session, home, undefined, lead).map((record) => ({ id: record.id, to: record.to, at: record.at }));
 }
 
 /**
@@ -589,6 +597,7 @@ function openRecord(
   home: string,
   key: KeyObject,
   at: string,
+  lead?: string,
 ): ReadGate {
   const recordSession = candidate.session ?? session;
   const outcome = publishRecordRead({
@@ -600,6 +609,7 @@ function openRecord(
     home,
     key,
     at,
+    ...(lead === undefined ? {} : { lead }),
   });
   if (outcome.kind === 'published') return { kind: 'shown' };
   if (outcome.kind === 'served') return { kind: 'served' };
@@ -890,7 +900,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
     if (state.kind === 'key') {
       const readHeld =
         candidate.store === 'record'
-          ? recordReadHeld(candidate, root, session, state.key)
+          ? recordReadHeld(candidate, root, session, state.key, loaded.team.orchestrator)
           : legacyReceiptMatches(receiptFile(root, candidate.seat, candidate.id), candidate.seat, candidate.id, root, session, state.key);
       if (readHeld) return false;
     }
@@ -1005,7 +1015,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
     if (candidate.store === 'record') {
       // The receipt is published and flushed before the body: one reader wins the id, and the
       // proof of exposure survives a crash that follows it.
-      const gate = openRecord(candidate, root, session, sources.home, key, sources.now().toISOString());
+      const gate = openRecord(candidate, root, session, sources.home, key, sources.now().toISOString(), loaded.team.orchestrator);
       if (gate.kind === 'served') continue; // another reader already spent this id: no row, no body
       if (gate.kind === 'refused') {
         rows.push({

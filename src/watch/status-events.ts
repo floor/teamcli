@@ -42,7 +42,7 @@ import type { BusPublishOutcome } from '../bus/server.ts';
 import { EVENT_THRESHOLDS } from '../policy/events.ts';
 import { herdrUnreliable } from '../profiles/index.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { isReadOrCleared, readRecord, RECEIPT_STATUSES, sameFolder, verifyRecord } from '../send/record.ts';
+import { isReadOrCleared, readRecord, RECEIPT_STATUSES, sameFolder, verifyRecord, type StatusContext } from '../send/record.ts';
 import { readState } from '../state.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { minutes } from './check.ts';
@@ -504,7 +504,7 @@ export function seatHasAssignedWorkOnDisk(
   session: string,
   seatName: string,
   atMs: number,
-  options?: { project?: string; home?: string },
+  options?: { project?: string; home?: string; lead?: string },
 ): boolean {
   const agentsDir = existsSync(join(root, '.agents')) ? join(root, '.agents') : root;
 
@@ -553,7 +553,7 @@ export function seatHasAssignedWorkOnDisk(
   // home with no usable key proves nothing, so every name left below is still work.
   const keyState = messageKeyState(options?.home);
   const key = keyState.kind === 'key' ? keyState.key : undefined;
-  const context = { to: seatName, root, session };
+  const context: StatusContext = { to: seatName, root, session, ...(options?.lead === undefined ? {} : { lead: options.lead }) };
   const dropDir = join(agentsDir, 'send-drops', session, seatName);
   if (existsSync(dropDir)) {
     try {
@@ -678,6 +678,7 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
       && seatHasAssignedWorkOnDisk(input.root, session, seatName, atMs, {
         project: team.project,
         home: input.home,
+        lead: team.orchestrator,
       })
     ) {
       return true;

@@ -592,7 +592,15 @@ export type InboxRead =
 export type BriefRead = { claim: () => CurrentBriefClaim | null; epoch?: string };
 
 /** The inbox a read serves: the launch's own folder, root, seat and session. */
-export type InboxTarget = { dropDir: string; root: string; seat: string; session: string };
+export type InboxTarget = {
+  dropDir: string;
+  root: string;
+  seat: string;
+  session: string;
+  /** The team's resolved lead, when the reader loaded the team: the one seat name a clearance
+   *  receipt may carry and still settle the inbox read. */
+  lead?: string;
+};
 
 /**
  * Reads one message, verifies it, and only then writes its receipt **before** returning the body:
@@ -717,7 +725,12 @@ export function readMessage(
   // entry at the read or replied receipt name is uncertainty about an earlier exposure, so it is
   // preserved and no body is returned. Otherwise this reader races every other reader to publish
   // the signed receipt with `link`; exactly one wins, and only the winner returns the body.
-  const context: StatusContext = { to: target.seat, root: target.root, session: target.session };
+  const context: StatusContext = {
+    to: target.seat,
+    root: target.root,
+    session: target.session,
+    ...(target.lead === undefined ? {} : { lead: target.lead }),
+  };
   const receiptHeldNow = (): boolean => isRead(target.dropDir, id, context, key.key, binding);
   // A lead's clearance holds the one read name without being the seat's read: the id is served
   // and no body follows. A brief's own delivery never takes this path — only a seat reads it.

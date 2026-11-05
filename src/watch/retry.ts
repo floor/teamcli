@@ -175,7 +175,7 @@ function heldWords(drop: PendingDrop): string {
 /** The lead's clearance of a message, when this home's message key proves one: a stopped seat's
  *  swept mail is settled, and no retry may type it or report the seat as its reader. */
 export function clearedAt(
-  scene: Pick<RetryScene, 'home' | 'root' | 'session'>,
+  scene: Pick<RetryScene, 'home' | 'root' | 'session' | 'team'>,
   dropDir: string,
   id: string,
   to: string,
@@ -183,7 +183,12 @@ export function clearedAt(
   if (scene.home === undefined) return null;
   const key = messageKeyState(scene.home);
   if (key.kind !== 'key') return null;
-  return leadAckReceiptAt(dropDir, id, { to, root: scene.root, session: scene.session }, key.key);
+  return leadAckReceiptAt(
+    dropDir,
+    id,
+    { to, root: scene.root, session: scene.session, lead: scene.team.orchestrator },
+    key.key,
+  );
 }
 
 /** Why this marker's delivery ended on another leg, as the history line's failed note. The

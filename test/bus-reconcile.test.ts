@@ -47,6 +47,9 @@ function makeScratch(): { root: string; home: string } {
   const root = join(base, 'repo');
   const home = join(base, 'home');
   mkdirSync(join(root, '.agents'), { recursive: true });
+  // The pass reads the team's configuration once to know which seat may write a clearance: a
+  // receipt naming any other seat raises nothing.
+  writeFileSync(join(root, '.agents', 'team.yaml'), SAMPLE_TEAM_YAML);
   return { root, home };
 }
 
@@ -241,6 +244,40 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     expect(byId('drop-10:read')).toBeDefined();
     expect(byId('drop-10:read')?.payload.outcome).toBeUndefined();
     expect(byId('drop-10:read')?.payload.reason).toBeUndefined();
+  });
+
+  test('a clearance naming a seat that is not the lead raises no read step at all', () => {
+    // The message key is the checkout's, shared by every seat: a signed `read_by` naming any name
+    // proves only that a seat wrote it. The pass admits the owner or the team's own lead, so a
+    // receipt naming another seat is not a clearance and the reader is never reported as one.
+    const { root, home } = makeScratch();
+    const seatDir = join(root, '.agents', 'send-drops', 'acme', 'worker-1');
+    mkdirSync(seatDir, { recursive: true });
+    dropRecord({ root, home }, 'worker-1', 'drop-11');
+    const forged = signReceiptPayload({
+      kind: 'receipt',
+      status: 'read',
+      id: 'drop-11',
+      to: 'worker-1',
+      root,
+      session: 'acme',
+      at: '2026-10-18T12:05:00.000Z',
+      read_by: 'lead-ack:op-1',
+    }, home);
+    writeFileSync(join(seatDir, 'drop-11.read.json'), `${JSON.stringify(forged, null, 2)}\n`);
+
+    const pass = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      now: new Date('2026-10-18T12:10:00.000Z'),
+    });
+    expect(pass.ok).toBe(true);
+    if (!pass.ok) return;
+    // `op-1` is a listed seat, not the coordinator: nothing settled, so nothing is raised for it.
+    const reads = pass.raised.filter((record) => record.payload.kind === 'message.read');
+    expect(reads.map((record) => record.payload.record_id)).not.toContain('drop-11:read');
   });
 
   test('a pass verifies the whole log once, then only the events appended since its last read', () => {

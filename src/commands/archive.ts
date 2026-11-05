@@ -411,7 +411,7 @@ async function runScopedArchive(
 
   const now = sources.now();
   const date = now.toISOString().slice(0, 10);
-  const transport = scanArchiveSeat({ root, session, seat, key: keyState.key, olderThanMs, now });
+  const transport = scanArchiveSeat({ root, session, seat, key: keyState.key, olderThanMs, now, lead: team.orchestrator });
   const legacy = scanLegacySeat({ root, session, seat, key: keyState.key, olderThanMs, now });
   const planned = [...transport.move, ...legacy.move];
   const stays = [...transport.stays, ...legacy.stays];

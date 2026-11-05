@@ -284,6 +284,7 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
     home: host.home,
     key,
     at,
+    lead: team.orchestrator,
   });
   let outcome: ReturnType<typeof publishRecordRead>;
   if (clientOrigin === null) {
@@ -422,7 +423,7 @@ async function runScopedAck(argv: string[], io: Io, host: AckHost, json: boolean
       : judged.caller.kind;
   const readBy = `${LEAD_ACK_PREFIX}${actor}`;
   const now = host.now();
-  const scan = scanAckSeat({ root, session, seat, key: keyState.key, olderThanMs, now });
+  const scan = scanAckSeat({ root, session, seat, key: keyState.key, olderThanMs, now, lead: team.orchestrator });
   const notDue = scan.stays.length;
   const failures: string[] = [];
   let read = 0;
@@ -439,6 +440,7 @@ async function runScopedAck(argv: string[], io: Io, host: AckHost, json: boolean
         key: keyState.key,
         at,
         readBy,
+        lead: team.orchestrator,
       });
       if (outcome.kind === 'published') {
         read += 1;

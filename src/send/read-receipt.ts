@@ -31,6 +31,9 @@ export type RecordReadInput = {
   readBy?: string;
   /** The runtime epoch this reader was started under, when it has one. */
   epoch?: string;
+  /** The team's resolved lead, when the caller loaded the team: the one seat name a clearance
+   *  receipt may carry and still settle here. */
+  lead?: string;
 };
 
 /** What the act found or did. `held` names the entry at a receipt name this run will not touch;
@@ -52,8 +55,8 @@ export function publishRecordRead(input: RecordReadInput): RecordReadOutcome {
 }
 
 function publish(input: RecordReadInput): RecordReadOutcome {
-  const { dropDir, id, to, root, session, home, key, at, readBy, epoch } = input;
-  const context = { to, root, session };
+  const { dropDir, id, to, root, session, home, key, at, readBy, epoch, lead } = input;
+  const context = { to, root, session, ...(lead === undefined ? {} : { lead }) };
   const servedNow = (): boolean => isRead(dropDir, id, context, key);
   // The caller's own filter may already have asked `isRead`; this re-check is the race with every
   // other reader.

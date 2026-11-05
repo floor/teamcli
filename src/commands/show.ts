@@ -206,6 +206,7 @@ export async function runShow(argv: string[], io: Io, host: ShowHost): Promise<n
     home: host.home,
     key,
     at,
+    lead: loaded.team.orchestrator,
   });
   if (outcome.kind === 'held') {
     const where = receiptPath(session, found.seat, resolvedId, outcome.status);

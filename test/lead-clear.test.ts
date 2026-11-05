@@ -109,8 +109,10 @@ function sent(seat: string, id: string, body = 'a body for the seat\n\nthe secon
   return plantRecord(home, root, 'acme', seat, id, body, { at: NOW_ISO, from: 'lead' });
 }
 
-function contextOf(seat: string): { to: string; root: string; session: string } {
-  return { to: seat, root, session: 'acme' };
+function contextOf(seat: string): { to: string; root: string; session: string; lead: string } {
+  // The team's resolved lead, as every settle site in the commands supplies it: the checkout's
+  // message key is shared by every seat, so a seat-named clearance needs the settle side's word.
+  return { to: seat, root, session: 'acme', lead: 'lead' };
 }
 
 /** The payload the receipt file at `path` was signed over. */
@@ -232,11 +234,11 @@ describe('a lead-ack receipt is how a stopped seat\'s stale mail is cleared', ()
     const listed = listDrops(dir, key, context);
     expect(listed.kind).toBe('ok');
     if (listed.kind === 'ok') expect(listed.rows.map((row) => row.id)).not.toContain(STALE_ID);
-    expect(listUnackedMessages(root, 'acme', home).map((message) => message.id)).not.toContain(STALE_ID);
+    expect(listUnackedMessages(root, 'acme', home, undefined, 'lead').map((message) => message.id)).not.toContain(STALE_ID);
 
     // A returning seat that asks for the id by name is told it was already served, and gets no
     // body: a clearance is an at-most-once serving like any other.
-    const read = readMessage({ dropDir: dir, root, seat: 'worker', session: 'acme' }, STALE_ID, home);
+    const read = readMessage({ dropDir: dir, root, seat: 'worker', session: 'acme', lead: 'lead' }, STALE_ID, home);
     expect(read.ok).toBe(false);
     if (!read.ok) {
       expect(read.served).toBe('already-served');
@@ -392,5 +394,50 @@ describe('only a seat that is not running may be cleared', () => {
     expect(refused.code).toBe(1);
     expect(refused.err).toContain('only the owner or a seat this team marks `leads`');
     expect(refused.err).not.toContain('is running');
+  });
+});
+
+describe('a signed clearance must name the actor the team admits', () => {
+  test('a receipt naming a seat that is not the lead settles nothing', () => {
+    // Every seat signs with the checkout's one message key, so a receipt file alone proves only
+    // that a seat of this checkout wrote it. A clearance therefore settles only when its actor is
+    // the owner or the lead this settle site resolved, never any seat that can sign the payload.
+    teamFile(STOPPED_TEAM);
+    sent('worker', STALE_ID);
+    const dir = recordDir(root, 'acme', 'worker');
+    const receipt = signReceiptPayload({
+      kind: 'receipt', status: 'read', id: STALE_ID, to: 'worker', root, session: 'acme',
+      at: NOW_ISO, read_by: 'lead-ack:worker',
+    }, home);
+    expect(writeReceipt(dir, receipt, home).ok).toBe(true);
+
+    const key = messageKeyOf(home);
+    const context = contextOf('worker');
+    expect(leadAckReceiptAt(dir, STALE_ID, context, key)).toBeNull();
+    expect(isReadOrCleared(dir, STALE_ID, context, key)).toBe(false);
+    // The forged clearance is not even the seat's own read: `isRead` never counted a lead-ack.
+    expect(isRead(dir, STALE_ID, context, key)).toBe(false);
+    expect(listUnread(dir, context, home).map((message) => message.id)).toContain(STALE_ID);
+    expect(listUnackedMessages(root, 'acme', home, undefined, 'lead').map((message) => message.id)).toContain(STALE_ID);
+  });
+
+  test('a receipt naming the lead settles only where the settle side knows the lead', () => {
+    teamFile(STOPPED_TEAM);
+    sent('worker', STALE_ID);
+    const dir = recordDir(root, 'acme', 'worker');
+    const receipt = signReceiptPayload({
+      kind: 'receipt', status: 'read', id: STALE_ID, to: 'worker', root, session: 'acme',
+      at: NOW_ISO, read_by: 'lead-ack:lead',
+    }, home);
+    expect(writeReceipt(dir, receipt, home).ok).toBe(true);
+
+    const key = messageKeyOf(home);
+    expect(leadAckReceiptAt(dir, STALE_ID, contextOf('worker'), key)?.by).toBe('lead');
+    // A caller that did not load the team has no word to check the name against: only the
+    // owner's clearance settles blind, exactly as a reader with no team configured reads it.
+    const blind = { to: 'worker', root, session: 'acme' };
+    expect(leadAckReceiptAt(dir, STALE_ID, blind, key)).toBeNull();
+    expect(isReadOrCleared(dir, STALE_ID, blind, key)).toBe(false);
+    expect(listUnread(dir, blind, home).map((message) => message.id)).toContain(STALE_ID);
   });
 });

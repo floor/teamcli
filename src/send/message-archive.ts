@@ -221,8 +221,11 @@ export function scanAckSeat(options: {
   key: KeyObject;
   olderThanMs: number;
   now: Date;
+  /** The team's resolved lead: the only seat name a clearance receipt may carry and settle. */
+  lead?: string;
 }): AckScan {
   const { root, session, seat, key } = options;
+  const context = { to: seat, root, session, ...(options.lead === undefined ? {} : { lead: options.lead }) };
   const cutoff = options.now.getTime() - options.olderThanMs;
   const dir = join(root, '.agents', 'send-drops', session, seat);
   const scan: AckScan = { due: [], already: 0, stays: [], scanned: 0 };
@@ -271,7 +274,7 @@ export function scanAckSeat(options: {
     }
     // A message the seat read, or one a lead already cleared, is not due again: the receipt name
     // is held by the first serving and is never rewritten.
-    if (isReadOrCleared(dir, name, { to: seat, root, session }, key)) {
+    if (isReadOrCleared(dir, name, context, key)) {
       scan.already += 1;
       continue;
     }
@@ -292,8 +295,11 @@ export function scanArchiveSeat(options: {
   key: KeyObject;
   olderThanMs: number;
   now: Date;
+  /** The team's resolved lead: the only seat name a clearance receipt may carry and settle. */
+  lead?: string;
 }): ArchiveScan {
   const { root, session, seat, key } = options;
+  const context = { to: seat, root, session, ...(options.lead === undefined ? {} : { lead: options.lead }) };
   const cutoff = options.now.getTime() - options.olderThanMs;
   const dir = join(root, '.agents', 'send-drops', session, seat);
   const scan: ArchiveScan = { move: [], stays: [], scanned: 0 };
@@ -351,7 +357,6 @@ export function scanArchiveSeat(options: {
       stay(scan, name, 'too-recent');
       continue;
     }
-    const context = { to: seat, root, session };
     // A lead's clearance settles the family exactly as the seat's own read does: it is eligible
     // to move, and its clearance receipt travels with it.
     if (!isReadOrCleared(dir, name, context, key)) {

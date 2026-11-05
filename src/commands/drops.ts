@@ -487,7 +487,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       return refuse(io, json, 'the drop folder is not a real folder: a link or a file stands in its path');
     }
     const dropDir = join(dir, 'send-drops', readSession, seatName);
-    const context: StatusContext = { to: seatName, root: loaded.root, session: readSession };
+    const context: StatusContext = { to: seatName, root: loaded.root, session: readSession, lead: loaded.team.orchestrator };
     // The launch's own brief is served under the claim the seat's state holds now. A reader the
     // launch started under an epoch serves only a brief delivered under that same runtime; a
     // manual read has none and binds the claim it serves.
@@ -516,7 +516,12 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     // an earlier build wrote is counted and skipped, and the signed records around it are read.
     for (const message of [...waiting].reverse()) {
       if (bodies.length >= DROP_READ_BATCH) break;
-      const got = readMessage({ dropDir, root: loaded.root, seat: seatName, session: readSession }, message.id, sources.home, brief);
+      const got = readMessage(
+        { dropDir, root: loaded.root, seat: seatName, session: readSession, lead: loaded.team.orchestrator },
+        message.id,
+        sources.home,
+        brief,
+      );
       if (got.ok) {
         bodies.push(got.body);
       } else if (got.served !== undefined) {
@@ -588,7 +593,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
   const dropDir = join(dir, 'send-drops', session, seat);
   const keyState = messageKeyState(sources.home);
   const key = keyState.kind === 'key' ? keyState.key : undefined;
-  const context: StatusContext = { to: seat, root: loaded.root, session };
+  const context: StatusContext = { to: seat, root: loaded.root, session, lead: loaded.team.orchestrator };
   // The FROM column and `--follow`'s line carry the project's readable sender name; `--json`
   // keeps each row's own `from`.
   const naming = namingFor({ home: sources.home, root: loaded.root, viewerTeam: teamIdOf(loaded.root), seat, file: loaded.team });

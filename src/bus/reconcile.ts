@@ -35,7 +35,7 @@ import {
 } from '../config/sources.ts';
 import { entitiesPath } from '../entities.ts';
 import { TEAM_FILE } from '../file/load.ts';
-import { TEAM_CONFIG_SOURCE_ENV } from '../file/team-config.ts';
+import { readTeamConfig, TEAM_CONFIG_SOURCE_ENV } from '../file/team-config.ts';
 import { grantsDir } from '../grant.ts';
 import { agentsDir } from '../registry/agents.ts';
 import { projectsFile } from '../registry/projects.ts';
@@ -609,6 +609,23 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   const nowIso = nowDate.toISOString();
   const nowMs = nowDate.getTime();
   const heldThresholdMs = (options.heldThresholdSeconds ?? DEFAULT_HELD_THRESHOLD_SECONDS) * 1000;
+  // The lead this pass's clearances must name, read from the same team file the ack gate reads.
+  // The read is lazy: an ordinary pass meets no clearance and pays nothing for it, and the pass's
+  // slice discipline keeps its first turn as early as before. A folder whose team cannot be read
+  // proves no lead, and only the owner's clearances settle — the reader's own fail-closed rule.
+  let lead: string | null = null;
+  const leadForClearance = (): string => {
+    if (lead !== null) return lead;
+    // A team file that cannot be read (or throws while being read) proves no lead: the empty
+    // answer settles the owner's clearances only, never a seat-named one on trust.
+    try {
+      const teamRead = readTeamConfig(root, { home });
+      lead = teamRead.ok ? teamRead.team.orchestrator : '';
+    } catch {
+      lead = '';
+    }
+    return lead;
+  };
 
   // The retained log is read as a whole only when one of its files changed. Until then the
   // dedupe sets it produced are still exactly the log's answer, and the log read — which parses
@@ -933,6 +950,14 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
           storeEntry(state, seatDir, file, fresh.stamp, entry);
         } else {
           stats.filesReused += 1;
+        }
+        // A lead-ack receipt settles only when it names the owner or this team's lead. The
+        // receipt is signed with the shared message key every seat holds, so its `read_by` name
+        // is the only actor proof there is; a name the team does not admit raises no step at
+        // all, so a forged clearance can never leave a `message.read` a seat did not earn.
+        if (entry.clearedBy !== undefined && entry.clearedBy !== 'owner' && entry.clearedBy !== leadForClearance()) {
+          yield;
+          continue;
         }
         const from = sendersById.get(entry.id) ?? previousSenders?.get(entry.id) ?? arrivedFrom.get(`${seat}\0${entry.id}`);
         raise({

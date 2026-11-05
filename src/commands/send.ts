@@ -1986,6 +1986,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
           project: team.project,
           home: host.home,
           at: record.at,
+          lead: team.orchestrator,
         });
         if (answered.kind === 'unavailable') {
           logLine(dir, 'send', who, `${caller.name}: the answered message could not be marked read (${answered.reason})`, host.now());
