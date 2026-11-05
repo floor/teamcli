@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { issueOwnerGeneralGrant } from '../src/client/general-grant.ts';
+import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
 import { runConfig } from '../src/commands/config.ts';
 import {
   rulesFileDifferences,
@@ -43,7 +45,7 @@ import {
 } from '../src/registry/projects.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import type { Standing } from '../src/store/store.ts';
-import { testIo } from './helpers.ts';
+import { fixtureBase, testIo } from './helpers.ts';
 
 const OWNER_NO_BLOCKING_RULE =
   'No seat ever waits on a blocking prompt to a human … questions go to the orchestrator with team send.';
@@ -981,6 +983,103 @@ describe('inherited entity-wide and project-wide rules', () => {
       expect(policyRead.policies).toHaveLength(1);
       expect(policyRead.policies[0]?.name).toBe('dev-mode');
       expect(policyRead.policies[0]?.value).toBe('off');
+    }
+  });
+
+  test('10. the composed view answers at the reserved @composed.rules, and an entity named composed keeps composed.rules', async () => {
+    const ENTITY_RULE = 'An entity named composed keeps its own stored rules at composed.rules.';
+    // A team file in the checkout the view loads from: the view composes this team's rules.
+    mkdirSync(join(teamRoot, '.agents'), { recursive: true });
+    const { rawYaml } = makeTeam({ entity: 'composed' });
+    writeFileSync(join(teamRoot, '.agents', 'team.yaml'), rawYaml);
+    writeEntitiesYaml(
+      [
+        'entities:',
+        '  composed:',
+        '    name: Composed',
+        '    rules:',
+        `      - ${JSON.stringify(ENTITY_RULE)}`,
+        '',
+      ].join('\n'),
+    );
+
+    // The view answers at the reserved path and carries the entity's rules.
+    const viewIo = testIo(teamRoot, { kind: 'owner' });
+    expect(await runConfig(['get', '@composed.rules', '--json'], viewIo, { home })).toBe(0);
+    const view = JSON.parse(viewIo.out) as {
+      path: string;
+      source: string;
+      value: Array<{ origin: string; rule: string }>;
+    };
+    expect(view.path).toBe('@composed.rules');
+    expect(view.source).toBe('composed');
+    expect(view.value.some((entry) => entry.origin === 'entity' && entry.rule === ENTITY_RULE)).toBe(true);
+
+    // The entity really named `composed` keeps the plain path for its own stored rules.
+    const storedIo = testIo(teamRoot, { kind: 'owner' });
+    expect(await runConfig(['get', 'composed.rules', '--json'], storedIo, { home })).toBe(0);
+    const stored = JSON.parse(storedIo.out) as { path: string; source: string; value: unknown };
+    expect(stored.path).toBe('composed.rules');
+    expect(stored.source).toBe('entity');
+    expect(stored.value).toEqual([ENTITY_RULE]);
+
+    // The view is a read: set and unset are refused before the file is read, and nothing is written.
+    const setIo = testIo(teamRoot, { kind: 'owner' });
+    expect(await runConfig(['set', '@composed.rules', '[ "x" ]'], setIo, { home })).toBe(2);
+    expect(setIo.err).toContain('is a view');
+    const unsetIo = testIo(teamRoot, { kind: 'owner' });
+    expect(await runConfig(['unset', '@composed.rules'], unsetIo, { home })).toBe(2);
+    expect(unsetIo.err).toContain('is a view');
+  });
+
+  test('11. rules paths refuse --request and --approval, and a wildcard general grant still writes them', async () => {
+    writeEntitiesYaml(['entities:', '  acme-corp:', '    name: Acme Corp', ''].join('\n'));
+
+    const entityRequest = testIo(teamRoot, { kind: 'owner' });
+    expect(await runConfig(['set', 'acme-corp.rules', '[ "one" ]', '--request'], entityRequest, { home })).toBe(2);
+    expect(entityRequest.err).toContain('take no --request or --approval');
+
+    const entityApproval = testIo(teamRoot, { kind: 'owner' });
+    expect(await runConfig(['set', 'acme-corp.rules', '[ "one" ]', '--approval', 'oa_missing'], entityApproval, { home })).toBe(2);
+    expect(entityApproval.err).toContain('take no --request or --approval');
+
+    const projectRequest = testIo(teamRoot, { kind: 'owner' });
+    expect(await runConfig(['set', 'project.beacon.rules', '[ "one" ]', '--request'], projectRequest, { home })).toBe(2);
+    expect(projectRequest.err).toContain("a project's rules take no --request or --approval");
+
+    // The door the refusal names: a wildcard general grant admitting config writes the same path.
+    const base = fixtureBase('.inherited-rules-grant-');
+    try {
+      const grantHome = join(base, 'home');
+      mkdirSync(join(grantHome, '.config', 'team'), { recursive: true });
+      writeFileSync(
+        join(grantHome, '.config', 'team', 'entities.yaml'),
+        ['entities:', '  acme-corp:', '    name: Acme Corp', ''].join('\n'),
+      );
+      const pair = newClientKeyPair();
+      const keys = writeClientKeyFiles(join(grantHome, '.config', 'team-client', 'client-a'), pair);
+      if (!keys.ok) throw new Error(keys.why);
+      const now = new Date('2026-11-05T00:00:00Z');
+      const grant = issueOwnerGeneralGrant(grantHome, {
+        clientId: 'client-a',
+        publicKey: pair.publicKey,
+        entities: ['*'],
+        ops: ['config'],
+        mayIssue: true,
+        expires: new Date('2026-11-06T00:00:00Z'),
+      }, now);
+      if (!grant.ok) throw new Error(grant.why);
+      const io = testIo(teamRoot, { kind: 'seat', name: 'builder-9', pane: 'pane1' });
+      const code = await runConfig(
+        ['set', 'acme-corp.rules', JSON.stringify(['Admitted by the wildcard grant.']), '--general', grant.path, '--key', keys.keyPath],
+        io,
+        { home: grantHome, now: () => now },
+      );
+      expect(code, io.err).toBe(0);
+      expect(io.err).toContain('admitted by general grant');
+      expect(entityRules(grantHome, 'acme-corp')).toEqual(['Admitted by the wildcard grant.']);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
     }
   });
 });

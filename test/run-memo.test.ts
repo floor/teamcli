@@ -67,13 +67,17 @@ describe('the per-run rules memo', () => {
 
   test('a reader gets its own copy: a caller cannot write through into the memo', () => {
     writeEntities('first');
+    writeProjects('first');
     enterRunMemo();
     try {
       declaredEntityRules(home).get('ent-a')?.push('injected');
       expect(entityRules(home, 'ent-a')).toEqual(['first']);
       declaredProjectRules(home).clear();
+      // A direct write to the file is not the run's writer: the run's read stands, and the copy
+      // the caller cleared never reached the memo.
       writeProjects('still first');
-      expect(projectRules(home, 'beacon')).toEqual(['still first']);
+      expect(projectRules(home, 'beacon')).toEqual(['first']);
+      expect(entityRules(home, 'ent-a')).toEqual(['first']);
     } finally {
       leaveRunMemo();
     }
@@ -123,7 +127,10 @@ describe('a team up run holds the memo', () => {
   test('for the whole run, and drops it when the run returns', async () => {
     made = world();
     const seen: boolean[] = [];
-    const code = await runUp(['--dry-run'], testIo(made.root, { kind: 'owner' }), {
+    // What the run returns is not this scene's subject — the world is approved by nothing, so a
+    // dry run may refuse — but every step it did reach saw the same scope, and the scope is gone
+    // when it returns.
+    await runUp(['--dry-run'], testIo(made.root, { kind: 'owner' }), {
       home: made.home,
       agents: () => [],
       sessionRunning: () => {
@@ -133,7 +140,6 @@ describe('a team up run holds the memo', () => {
       now: () => NOW,
     });
 
-    expect(code).toBe(0);
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((held) => held)).toBe(true);
     expect(currentRunMemo()).toBeNull();

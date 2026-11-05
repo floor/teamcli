@@ -1593,7 +1593,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   // public-only seat is never given them: its rules are the team's own text, and a service
   // outside this machine reads the whole body it is handed.
   if (declared !== undefined && receiving.ok && !publicOnly && profileFor(declared.cli)?.rulesMode === 'prepend') {
-    body = `${rulesOf(receiving.team, declared, to.root, undefined, rulesOriginOf(receiving.source))}\n\n${body}`;
+    body = `${rulesOf(receiving.team, declared, to.root, undefined, rulesOriginOf(receiving.source), host.home)}\n\n${body}`;
   }
 
   const dry = args.flags.has('dry-run');

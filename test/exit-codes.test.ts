@@ -2841,7 +2841,7 @@ scene('seats.not-yours', async (place) => {
   }
   scene('config.entity.composed-value', async (place) => {
     write(place, TEAM);
-    return show(await entityRun(place, ['get', 'composed.rules']), 'No entity, project, or team rules declared');
+    return show(await entityRun(place, ['get', '@composed.rules']), 'No entity, project, or team rules declared');
   });
   scene('config.project.rules-written', async (place) => {
     projects(place);

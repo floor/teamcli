@@ -35,6 +35,11 @@ import type { ConfigSources } from '../commands/config.ts';
 const NAMES_KEY = 'names.unique';
 const REMINDERS_KEY = 'reminders';
 const RULES_KEY = 'rules';
+/** The reserved path the composed view answers to. A leading `@` is a shape no entity name can
+ *  take (`isEntityName` starts with a letter or a digit), so the view cannot shadow an entity
+ *  called `composed`, and `composed.rules` stays that entity's own stored rules. */
+const COMPOSED_PATH = '@composed.rules';
+const COMPOSED_NAME = '@composed';
 type EntityKey = typeof NAMES_KEY | typeof REMINDERS_KEY | typeof RULES_KEY;
 const FORM: Record<EntityKey, string> = {
   [NAMES_KEY]: `team config set <entity>.${NAMES_KEY} <word>`,
@@ -167,6 +172,9 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   const targetName = isProjectRules ? entityName.replace(/^projects?\./, '') : entityName;
   let why: string | null = args.error ?? null;
   if (why === null && key === null) why = `a path names an entity's ${NAMES_KEY}, ${REMINDERS_KEY}, or ${RULES_KEY}`;
+  if (why === null && verb !== 'get' && key === RULES_KEY && targetName === COMPOSED_NAME) {
+    why = `${COMPOSED_PATH} is a view of the rules in force, not a stored value: it takes no set or unset; \`team config get ${COMPOSED_PATH}\` reads it`;
+  }
   if (why === null && verb === 'unset') {
     why =
       key === NAMES_KEY
@@ -192,7 +200,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   }
   if (why === null && (args.values.general !== undefined) !== (args.values.key !== undefined)) why = '--general and --key go together';
   if (why === null && args.values.general !== undefined && verb === 'get') why = '--general takes set';
-  if (why === null && !isEntityName(targetName)) {
+  if (why === null && !(key === RULES_KEY && targetName === COMPOSED_NAME) && !isEntityName(targetName)) {
     why = `"${targetName}" is not an entity name: letters, digits, ".", "_" and "-", starting with a letter or a digit, 128 at most`;
   }
   if (why !== null) return usageRefused(io, json, why, usage);
@@ -241,7 +249,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   const home = sources.home ?? homedir();
   const file = isProjectRules ? projectsFile(home) : entitiesPath(home);
 
-  if (verb === 'get' && path === 'composed.rules') {
+  if (verb === 'get' && path === COMPOSED_PATH) {
     const loaded = loadTeamFile(io.cwd, { home });
     if (!loaded.ok) return noValue(io, json, loaded.errors.map((e) => e.message).join('; '));
     const seat = loaded.team.seats[0];
@@ -249,7 +257,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     if (json) {
       writeJson(io, 'team.config-value', {
         format: 1,
-        path: 'composed.rules',
+        path: COMPOSED_PATH,
         value: composedRulesOf(loaded.team, seat, loaded.root, undefined, 'file', home),
         source: 'composed',
       });

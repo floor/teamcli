@@ -34,7 +34,7 @@ import {
 } from '../settings/inherit.ts';
 import { writeAtomic } from '../state.ts';
 import { leadWordProblem } from '../lead.ts';
-import { currentRunMemo } from '../run-memo.ts';
+import { cloneRulesMap, currentRunMemo } from '../run-memo.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
 
 export type ProjectProvenance = { registered_by: string; registered_at: string; updated_at: string };
@@ -382,6 +382,7 @@ function locked<T>(home: string, work: () => T): T {
       if (memo !== null) {
         memo.projects.delete(home);
         memo.projectsRaw.delete(home);
+        memo.projectRules.delete(home);
       }
       return work();
     },
@@ -397,6 +398,7 @@ function write(home: string, projects: Record<string, ProjectRecord>): void {
   if (memo !== null) {
     memo.projects.clear();
     memo.projectsRaw.clear();
+    memo.projectRules.clear();
   }
 }
 
@@ -603,8 +605,20 @@ function isMap(value: YamlValue | undefined): value is { [key: string]: YamlValu
 /**
  * Each project's declared standing rules (`projects.<id>.rules`), read directly from
  * `<home>/.config/team/projects.yaml` (including minimal test fixtures without provenance).
+ * Read once per run: the per-run memo holds the file's words for the life of the run, and a
+ * writer under this home drops them.
  */
 export function declaredProjectRules(home: string): Map<string, string[]> {
+  const memo = currentRunMemo();
+  const held = memo?.projectRules.get(home);
+  if (held !== undefined) return cloneRulesMap(held);
+  const out = readDeclaredProjectRules(home);
+  memo?.projectRules.set(home, cloneRulesMap(out));
+  return out;
+}
+
+/** The file read itself: one parse, every project's list. */
+function readDeclaredProjectRules(home: string): Map<string, string[]> {
   const out = new Map<string, string[]>();
   const path = projectsFile(home);
   if (!existsSync(path)) return out;
@@ -870,6 +884,7 @@ export function setProjectRules(
     if (memo !== null) {
       memo.projects.clear();
       memo.projectsRaw.clear();
+      memo.projectRules.clear();
     }
     return { ...plan, written: true };
   });

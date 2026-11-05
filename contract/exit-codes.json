@@ -1567,7 +1567,7 @@
       "command": "config",
       "id": "config.entity.composed-value",
       "meaning": "the team file's composed rules are printed",
-      "trigger": "team config get composed.rules"
+      "trigger": "team config get @composed.rules"
     },
     {
       "code": 0,
