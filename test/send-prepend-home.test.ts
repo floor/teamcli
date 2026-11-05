@@ -49,7 +49,7 @@ function registerSeat(seat: string, cli: string): void {
       `  team: "${id}"`,
       `  seat: "${seat}"`,
       '  session: "acme"',
-      '  pane: "w3:p1"',
+      '  pane: "pane1"',
       '  address: null',
       'mcp: []',
       'skills: []',
