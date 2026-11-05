@@ -232,8 +232,9 @@ function writeSocket(w: World, seat: Ready, at: Date = new Date()): string {
 }
 
 /** The registry record a plain-name send resolves, carrying the recorded socket address the
- *  delivery class and the send's own leg both read. */
-function register(w: World, seat: Ready, address: string): void {
+ *  delivery class and the send's own leg both read (null for one launched before an address
+ *  was recorded). */
+function register(w: World, seat: Ready, address: string | null): void {
   registerAgent(w.home, {
     name: seat.name,
     signing: { model: 'Claude Opus', version: '5.5', role: 'orchestrator' },
@@ -445,6 +446,9 @@ describe('team check names a live seat whose socket a send would skip', () => {
     ready(w, [seat]);
     const { code, out } = check(w, liveOn([seat]));
     expect(out).toContain(`difference: older: ${NOT_SOCKET}: the socket predates the settings that declare it accepts`);
+    // The repair is the load's to refuse: the line names the limit as the machine's own refusal
+    // does, so a refused restart is understood before it is attempted.
+    expect(out).toContain('a restart is refused while the load is above 3 per core (machine.load_start)');
     expect(out).toContain('  repair: team restart older');
     expect(code).toBe(1);
   });
@@ -523,6 +527,45 @@ describe('team check names a live seat whose socket a send would skip', () => {
     expect(out).toContain('difference: ended: its pane runs no CLI (the CLI ended or the session was restored)');
     expect(out).not.toContain(NOT_SOCKET);
     expect(out).not.toContain(NO_SOCKET);
+    expect(code).toBe(1);
+  });
+
+  test('a seat whose socket only its pane proves: the record’s missing address is a difference, and team up records it', () => {
+    const w = world([{ name: 'paneonly', role: 'orchestrator', launch: 'claude', inbound: 'accept', leads: true }]);
+    const seat = { name: 'paneonly', pane: PANE_ONE, launch: 'claude --model claude-opus-5-5', pid: SESSION_PID };
+    declare(w, 'paneonly');
+    // The pane carries the socket and the record names the seat but no address: this check can
+    // read the socket through the pane, while every reader that holds no pane — the send's class
+    // line, `team plan`, the seat's `team next` — reads the seat pull-only.
+    register(w, seat, null);
+    writeSocket(w, seat);
+    ready(w, [seat]);
+    updateState(w.dir, (state) => {
+      state.sessions.acme!.seats.paneonly!.launched = { shell: SHELL_PID, cli: [SESSION_PID] };
+    });
+    const { code, out } = check(w, liveOn([seat]));
+    expect(out).toContain(
+      "difference: paneonly: a reader without its pane sees pull-on-turn, not push: only the socket its pane's processes carry proves it, and its agent record holds no address this session can dial",
+    );
+    // The pane is read and the record's identity is the record's own: recording the address is
+    // `team up`'s write, and nothing relaunches.
+    expect(out).toContain('  repair: team up');
+    expect(out).not.toContain(NOT_SOCKET);
+    expect(code).toBe(1);
+  });
+
+  test('the same seat whose record names no process: team register is the repair', () => {
+    const w = world([{ name: 'paneold', role: 'orchestrator', launch: 'claude', inbound: 'accept', leads: true }]);
+    const seat = { name: 'paneold', pane: PANE_ONE, launch: 'claude --model claude-opus-5-5', pid: SESSION_PID };
+    declare(w, 'paneold');
+    // The record predates process identities: `team up` would refuse to name the pane's process,
+    // and `team register` is the read that records both the identity and the address.
+    register(w, seat, null);
+    writeSocket(w, seat);
+    ready(w, [seat]);
+    const { code, out } = check(w, liveOn([seat]));
+    expect(out).toContain('difference: paneold: a reader without its pane sees pull-on-turn, not push');
+    expect(out).toContain('  repair: team register paneold');
     expect(code).toBe(1);
   });
 
