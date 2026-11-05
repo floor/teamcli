@@ -259,7 +259,7 @@ describe('the main orchestrator across teams', () => {
     expect(run.err).not.toContain("team check: --repair is the owner's");
     expect(run.err).toContain("warning: --repair is the owner's; dev mode continues");
     expect(dropped(at)).toBe(true);
-    expect(logOf(at)).toContain("check [atlas] warning: --repair is the owner's; dev mode continues; admitted as orchestrator");
+    expect(logOf(at)).toContain("check [atlas] warning: --repair is the owner's; dev mode continues; admitted as lead");
   });
 
   test('the JSON form continues too, and writes no check.repair-owner error', () => {

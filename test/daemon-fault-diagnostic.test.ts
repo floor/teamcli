@@ -355,7 +355,7 @@ describe('the administration admission', () => {
     expect(io.err).toContain('dev mode continues');
     const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
     expect(log).toContain('daemon [atlas] warning: only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon');
-    expect(log).toContain('admitted as orchestrator');
+    expect(log).toContain('admitted as lead');
   });
 
   test('the target team’s operator is no orchestrator: dev mode does not blanket-admit every seat', async () => {

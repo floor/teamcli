@@ -127,7 +127,7 @@ test('the variable admits a placed orchestrator to grant: the dry run plans, war
   expect(io.out).toBe('grant: would change\n');
   expect(io.err).toBe(`warning: ${OWNER_GRANT}; this call is lead; dev mode continues\n`);
   expect(readFileSync(file, 'utf8')).toBe(before);
-  expect(logOf(root)).toContain(`grant [lead] warning: ${OWNER_GRANT}; this call is lead; dev mode continues; admitted as orchestrator\n`);
+  expect(logOf(root)).toContain(`grant [lead] warning: ${OWNER_GRANT}; this call is lead; dev mode continues; admitted as lead\n`);
 });
 
 test('the variable admits the real grant write', async () => {
@@ -140,7 +140,7 @@ test('the variable admits the real grant write', async () => {
   expect(after).toContain('grant:\n');
   expect(after).toContain('seat: "lead"');
   expect(logOf(root)).toContain('grant [lead]');
-  expect(logOf(root)).toContain('admitted as orchestrator');
+  expect(logOf(root)).toContain('admitted as lead');
 });
 
 test('delegate is admitted by the same lift and logs its own command', async () => {
@@ -162,7 +162,7 @@ test('revoke is admitted by the same lift and removes the record it names', asyn
   expect(io.out).toBe('revoke: updated\n');
   expect(readFileSync(file, 'utf8')).not.toContain('grant:');
   expect(logOf(root)).toContain('revoke [lead]');
-  expect(logOf(root)).toContain('admitted as orchestrator');
+  expect(logOf(root)).toContain('admitted as lead');
 });
 
 test('revoke of a delegate record is admitted by the same lift', async () => {
@@ -182,7 +182,7 @@ test('the placement comes from the pane walk, not from a name: the herdr route i
   io.callerSources = () => herdrSources('lead', 'w1:p1');
   expect(await runGrant(['lead', '--scope', 'up,down', '--dry-run'], io, { home })).toBe(0);
   expect(io.err).toContain('dev mode continues');
-  expect(logOf(root)).toContain('admitted as orchestrator');
+  expect(logOf(root)).toContain('admitted as lead');
 });
 
 test('an ordinary seat is refused with dev mode on, and nothing is written or logged', async () => {
@@ -220,7 +220,7 @@ test('a governing dev-mode on admits the authority commands with its level note,
   const io = testIo(root, LEAD);
   expect(await runGrant(['lead', '--scope', 'up,down', '--dry-run'], io, { home })).toBe(0);
   expect(io.err).toBe(`warning: ${OWNER_GRANT}; this call is lead; dev mode continues (dev-mode on at team level)\n`);
-  expect(logOf(root)).toContain('dev mode continues (dev-mode on at team level); admitted as orchestrator');
+  expect(logOf(root)).toContain('dev mode continues (dev-mode on at team level); admitted as lead');
 });
 
 test('the herdr route reads a governing dev-mode on without the variable', async () => {
@@ -233,7 +233,7 @@ test('the herdr route reads a governing dev-mode on without the variable', async
   expect(await runGrant(['lead', '--scope', 'up,down', '--dry-run'], io, { home })).toBe(0);
   expect(io.err).toBe(`warning: ${OWNER_GRANT}; this call is unplaced (it runs under herdr); dev mode continues (dev-mode on at team level)\n`);
   expect(logOf(root)).toContain('grant [lead]');
-  expect(logOf(root)).toContain('admitted as orchestrator');
+  expect(logOf(root)).toContain('admitted as lead');
 });
 
 test('the herdr route reads the machine local-fast record without the variable', async () => {
@@ -244,7 +244,7 @@ test('the herdr route reads the machine local-fast record without the variable',
   io.callerSources = () => herdrSources('lead', 'w1:p1');
   expect(await runGrant(['lead', '--scope', 'up,down', '--dry-run'], io, { home })).toBe(0);
   expect(io.err).toBe(`warning: ${OWNER_GRANT}; this call is unplaced (it runs under herdr); dev mode continues (dev-mode on at machine level)\n`);
-  expect(logOf(root)).toContain('dev mode continues (dev-mode on at machine level); admitted as orchestrator');
+  expect(logOf(root)).toContain('dev mode continues (dev-mode on at machine level); admitted as lead');
 });
 
 test('the herdr route keeps the refusal under the machine off record, even with the variable set', async () => {

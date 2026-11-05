@@ -606,7 +606,7 @@ describe('the owner-only edits: the widening admits one placed orchestrator, and
     expect(io.out).toBe('grant: updated\n');
     // The audit line names the command, the caller and the role the widening proved.
     expect(readFileSync(join(root, '.agents', 'team.log'), 'utf8'))
-      .toContain(` grant [lead] warning: ${line}; dev mode continues; admitted as orchestrator\n`);
+      .toContain(` grant [lead] warning: ${line}; dev mode continues; admitted as lead\n`);
   });
 
   test('grant refuses an unplaced caller with the mode unset and with it set', async () => {
@@ -1023,7 +1023,7 @@ test('every owner lift admits the placed orchestrator, and logs the role it prov
     expect(lift).not.toBeNull();
     if (lift === null || lift.warning === null) throw new Error(`${row.command}: the lift spoke no warning`);
     expect(lift.lifted).toBe(true);
-    expect(lift.role).toBe('orchestrator');
+    expect(lift.role).toBe('lead');
     expect(lift.warning).toBe(`warning: ${row.refusal}; dev mode continues`);
     warned.push({ command: row.command, warning: lift.warning });
   }
@@ -1041,14 +1041,14 @@ test('every owner lift admits the placed orchestrator, and logs the role it prov
     });
     if (lift.warning === null) throw new Error(`${row.command}: the lift spoke no warning`);
     expect(lift.lifted).toBe(true);
-    expect(lift.role).toBe('orchestrator');
+    expect(lift.role).toBe('lead');
     expect(lift.warning).toBe(`warning: ${row.refusal}; dev mode continues`);
     warned.push({ command: row.command, warning: lift.warning });
   }
   expect(warned).toHaveLength(OWNER_AT_CWD.length + OWNER_AFTER_LOAD.length);
   const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
   for (const row of warned) {
-    expect(log).toContain(`${NOW.toISOString()} ${row.command} [lead] ${row.warning}; admitted as orchestrator\n`);
+    expect(log).toContain(`${NOW.toISOString()} ${row.command} [lead] ${row.warning}; admitted as lead\n`);
   }
 });
 
