@@ -2,9 +2,10 @@
 // never closed, and that liveness is proven by the stored agent session over a pid mismatch —
 // never by the surviving name alone, and never on the wrong pane. These scenes try to break it
 // from both sides: a matching session that must NOT be adopted (wrong pane, or absent from this
-// session's agent list), a surviving name on a dead shell that must STILL be closed, a restored
-// seat whose screen reads working that must still not be closed or typed, and a dry run that
-// closes nothing and prints the leave-it line for restored and doubt. No live herdr: every
+// session's agent list), a surviving name on a dead shell that must still be relaunched — in
+// that same pane, never a fresh one — a restored seat whose screen reads working that must still
+// not be closed or typed, and a dry run that closes nothing and prints the leave-it line for
+// restored and doubt. No live herdr: every
 // reading is a fixture. The happy paths live in live.test.ts; these are only the edges.
 //
 // Every scene starts from four seats recorded ready, each reading `same`, so the only seat that
@@ -370,17 +371,19 @@ describe('team up, a restored session: boundaries', () => {
   });
 
   // Scene 3 — the shell is in front (the program is gone). The seat's name survives on the
-  // recorded pane and the stored session equals the live one: none of that is liveness. The
-  // bare-shell close and the fresh launch still happen.
-  test('a surviving name and a matching session on a bare shell is still closed and relaunched', async () => {
+  // recorded pane and the stored session equals the live one: none of that is liveness, and the
+  // seat is relaunched. Its pane is still its own — the host lists it in the recorded
+  // workspace with the shell in front — so the launch line runs there: nothing is created and
+  // nothing is closed.
+  test('a surviving name and a matching session on a bare shell is relaunched in the same pane', async () => {
     await approve();
     writeState('kept');
     const { sameProcess, list, workspaces } = baseline();
     const made = world();
     // The shell is in front on the recorded pane: gone, whatever the agent list and session say.
     made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [900] } : sameProcess(pane));
-    // The name is still listed on the recorded pane, carrying the stored session. The execute
-    // close re-reads herdr through `launch.agents`, so planning and the close see the same list.
+    // The name is still listed on the recorded pane, carrying the stored session. Nothing in
+    // that reading makes the bare shell live.
     const live = () => list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'kept' } : a));
     made.launch.agents = live;
     const io = testIo(root, { kind: 'owner' });
@@ -390,13 +393,15 @@ describe('team up, a restored session: boundaries', () => {
       sources({ sessionState: () => 'running', workspaces, agents: live, doctor: doctor() }, made),
     );
     expect(code).toBe(0);
-    // Closed before its fresh launch — the matching name and session did not save a dead shell.
-    expect(made.closes).toEqual(['w93']);
-    expect(made.creates).toContain('deepseek-acme · implementer');
-    expect(io.err).toContain('  its pane held no CLI; closed without input and launched again\n');
+    // Relaunched in the pane the seat already has: no workspace made for it, none closed.
+    expect(made.creates.filter((label) => !label.startsWith('Watch · '))).toEqual([]);
+    expect(made.closes).toEqual([]);
+    expect(made.runs.filter((run) => run.pane === RECORDED_PANE)).toHaveLength(1);
+    expect(io.err).toContain(`deepseek-acme: its recorded pane ${RECORDED_PANE} was at its shell; launched in the same pane\n`);
     expect(io.out).toContain('deepseek-acme: ready\n');
-    // The fresh pane's identity replaces the record; it is not the old one.
-    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', launched: { shell: 700, cli: [701] } });
+    // The record keeps its own pane and workspace; the surviving name and session did not save
+    // the dead shell, and did not move the seat either.
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1', workspace: 'w93' });
   });
 
   // Scene 5, under the restored verdict — the stored session matches, and the pane's screen
@@ -828,8 +833,9 @@ describe('team up, a restored session: boundaries', () => {
   });
 
   // Scene 6 — a dry run touches nothing. deepseek-acme restored, deepseek-acme-2 doubt, and the
-  // coordinator gone: the plan prints the leave-it line for the first two and the close line only
-  // for the gone one, and the state file is byte for byte what it was.
+  // coordinator gone: the plan prints the leave-it line for the first two and the relaunch line
+  // for the gone one — in its own pane, with no close — and the state file is byte for byte what
+  // it was.
   test('a dry run closes nothing and prints the leave-it line for restored and doubt', async () => {
     await approve();
     // deepseek-acme carries the stored session; a second record for deepseek-acme-2 does not.
@@ -863,10 +869,12 @@ describe('team up, a restored session: boundaries', () => {
     expect(made.closes).toEqual([]);
     expect(made.creates).toEqual([]);
     expect(made.runs).toEqual([]);
-    // The plan names the two leave-it lines, and the close only for the gone seat.
+    // The plan names the two leave-it lines, and the seat at its shell is relaunched in its own
+    // pane: no close is planned for it.
     expect(io.out).toContain('deepseek-acme: restored; left as it is');
     expect(io.out).toContain('deepseek-acme-2: its pane holds a process this record cannot tie to the launch');
-    expect(io.out).toContain('closed without input: its pane no longer holds the process team launched');
+    expect(io.out).toContain('its recorded pane w91:p1 was at its shell; launched in the same pane');
+    expect(io.out).not.toContain('workspace close w91');
     // Nothing was written: the restored seat's pids are still the stored ones, not re-recorded.
     expect(readFileSync(join(root, '.agents/team.state.json'), 'utf8')).toBe(before);
     expect(seatsOf()['deepseek-acme']).toMatchObject({ launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
@@ -999,7 +1007,8 @@ describe('team up, a restored session: boundaries', () => {
   });
 
   // Gap 4A — the pane is gone and no name survived: the recorded conversation is resumed on a
-  // fresh pane, and the recorded workspace, still listed by the host, is named and left.
+  // fresh pane, and the recorded workspace, still listed by the host, is closed only once the
+  // seat is ready on its replacement — never before it.
   test('a missing pane resumes the recorded conversation on a fresh pane', async () => {
     await approve();
     writeState('kept', true);
@@ -1023,11 +1032,12 @@ describe('team up, a restored session: boundaries', () => {
       ),
     );
     expect(code).toBe(0);
-    expect(made.closes).toEqual([]);
+    // The old workspace is closed after the replacement is ready; it holds only the old pane.
+    expect(made.closes).toEqual(['w93']);
     const resumed = made.runs.filter((run) => run.command.includes('--resume kept'));
     expect(resumed).toHaveLength(1);
     expect(resumed[0]?.pane).toBe('w1:p1');
-    expect(io.err).toContain('deepseek-acme: its recorded pane w93:p1 was gone and was replaced; its workspace w93 was left\n');
+    expect(io.err).toContain('deepseek-acme: its recorded pane w93:p1 was gone and was replaced; its recorded workspace w93 is closed once the seat is ready, if it still holds only the old pane\n');
     expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w1:p1' });
   });
 

@@ -36,7 +36,19 @@ export type Op =
    *  inbox server resolves the team from when the folder is a lobby. `watcher` is how the seat
    *  will learn a drop is waiting, as this run leaves it; recorded with the launch. Absent only
    *  on a hand-built op: every planned launch names them. */
-  | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string; cli?: string; cwd?: string; teamFile?: string; watcher?: CliWatcher;
+  | { do: 'launch'; seat: string; label: string; command: string; pane?: string;
+      /**
+       * The seat's own recorded pane is reused: the command runs there, nothing is created and
+       * nothing is closed. The value is the process identity the seat's record holds; the live
+       * run reads the pane, its workspace and its process again immediately before the launch.
+       * Only a pane the workspace still lists and that reads `gone` against that identity is
+       * launched in — a pane back at the recorded CLI is the seat's again, and a pane holding
+       * anything else leaves the seat out with nothing launched.
+       */
+      reuse?: LaunchedIdentity;
+      /** The workspace the reused pane sits in; read again with the pane before the launch. */
+      workspace?: string;
+      notice?: string; cli?: string; cwd?: string; teamFile?: string; watcher?: CliWatcher;
       /**
        * The base recipe the seat's record keeps when this run records it: `seat.launch` with the
        * profile's pinned feature words appended, never the expanded command the pane runs (the
@@ -159,6 +171,11 @@ export type Op =
        */
       reload?: { detail: string };
     }
+  /** A seat relaunched in a fresh workspace had a recorded pane the host did not restore. Its
+   *  recorded workspace is closed only here, after the seat is ready on its replacement, and only
+   *  when a fresh reading still shows that workspace holding the one old pane with no CLI in it.
+   *  Every other reading leaves the workspace and says why. */
+  | { do: 'close-leftover'; seat: string; pane: string; workspace: string; cli?: string }
   | { do: 'watch'; label: string; command: string; file?: string }
   /** The event bus's pane: `team bus` in its own workspace, recorded like the watch's. */
   | { do: 'bus'; label: string; command: string }
@@ -301,6 +318,13 @@ export interface UpSeat {
   replacedPane?: string;
   /** The recorded workspace, when the host still lists it. Named on that same line, and not closed. */
   leftWorkspace?: string;
+  /**
+   * A missing pane's recorded workspace, when the host still lists it: closed after the seat is
+   * ready on its replacement, never before. The plan's reading only says the host listed it; the
+   * close re-reads the workspace and its old pane immediately before it (`execute.ts`), and any
+   * other reading leaves the workspace and says so.
+   */
+  closeLeftover?: { pane: string; workspace: string };
   /** The seat works in worktrees: it waits in the lobby until a brief names its worktree. */
   lobby?: boolean;
   /**
@@ -321,6 +345,12 @@ export interface UpSeat {
     drift?: { way: string };
     /** Set by `team reload`: close only at an idle prompt, then launch the file's line. */
     reload?: { detail: string };
+    /**
+     * The pane is back at its shell and still the seat's own: the launch runs in it, and nothing
+     * is created or closed. The live run re-reads the pane and its workspace immediately before
+     * the launch, and a changed reading leaves the seat out with nothing launched.
+     */
+    reuse?: true;
   };
   /** A ready seat whose model drifted and that this `up` will not close: herdr reports it
    *  working, or its screen shows a running turn. The record stays ready. */
@@ -405,9 +435,12 @@ export interface UpSeat {
  * is left as it is.
  */
 export function launchWillRun(
-  seat: Pick<UpSeat, 'stage' | 'pane' | 'agentLive' | 'waiting'>,
+  seat: Pick<UpSeat, 'stage' | 'pane' | 'agentLive' | 'waiting' | 'repair'>,
 ): boolean {
   const waiting = seat.waiting;
+  // A seat whose own pane came back at its shell runs its line again in that pane: nothing is
+  // created beside it and nothing is closed.
+  if (!waiting && seat.repair?.reuse === true) return true;
   const fresh = !waiting && (seat.stage === undefined || !seat.pane);
   return !waiting && (fresh || (seat.stage === 'launched' && !seat.agentLive));
 }
@@ -864,12 +897,15 @@ export function upPlan(input: UpInput): Step[] {
       });
       continue;
     }
-    const pane = seat.pane ?? paneOf(seat.name);
     const cwd = isAbsolute(seat.cwd) ? seat.cwd : resolve(input.root, seat.cwd);
     // A seat recorded waiting is never launched again: its recorded pane is reused, and the
     // idle step below reads it fresh and asks its owner (§5).
     const waiting = seat.waiting;
-    const fresh = !waiting && (seat.stage === undefined || !seat.pane);
+    // The seat's own recorded pane came back at its shell: the line runs there, and neither a
+    // workspace is created nor one is closed.
+    const reuse = !waiting && seat.repair?.reuse === true ? seat.repair : undefined;
+    const fresh = !waiting && reuse === undefined && (seat.stage === undefined || !seat.pane);
+    const pane = reuse?.pane ?? seat.pane ?? paneOf(seat.name);
     // The same condition as the launch step below. A seat already running keeps
     // its idle wait, rename and rules, and hears the reading as a notice.
     const wouldLaunch = launchWillRun(seat);
@@ -979,10 +1015,16 @@ export function upPlan(input: UpInput): Step[] {
     if (seat.budget?.kind === 'unknown') notice = seat.budget.text;
     else if (seat.budget?.kind === 'refuse') notice = seat.budget.why;
     if (seat.replacedPane) {
-      const gone = seat.leftWorkspace
-        ? `its recorded pane ${seat.replacedPane} was gone and was replaced; its workspace ${seat.leftWorkspace} was left`
-        : `its recorded pane ${seat.replacedPane} was gone and was replaced`;
+      const gone = seat.closeLeftover
+        ? `its recorded pane ${seat.replacedPane} was gone and was replaced; its recorded workspace ${seat.closeLeftover.workspace} is closed once the seat is ready, if it still holds only the old pane`
+        : seat.leftWorkspace
+          ? `its recorded pane ${seat.replacedPane} was gone and was replaced; its workspace ${seat.leftWorkspace} was left`
+          : `its recorded pane ${seat.replacedPane} was gone and was replaced`;
       notice = notice ? `${notice}; ${gone}` : gone;
+    }
+    if (reuse !== undefined) {
+      const same = `its recorded pane ${reuse.pane} was at its shell; launched in the same pane`;
+      notice = notice ? `${notice}; ${same}` : same;
     }
     const takeNotice = (): string | undefined => {
       const text = notice;
@@ -1077,7 +1119,7 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
         note: launchNote,
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, recordLine, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}), ...(plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }) },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: reuse?.pane ?? seat.pane, ...(reuse === undefined ? {} : { reuse: reuse.launched, workspace: reuse.workspace }), cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, recordLine, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}), ...(plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }) },
       });
     }
     const rules = profile.rulesMode;
@@ -1100,8 +1142,8 @@ export function upPlan(input: UpInput): Step[] {
           watcher,
           seconds: profile.idleTimeout,
           command,
-          pane: seat.pane,
-          workspace: seat.workspace,
+          pane: reuse?.pane ?? seat.pane,
+          workspace: reuse?.workspace ?? seat.workspace,
           repairLine: seat.repairLine,
           ...(seat.model !== undefined && seat.version !== undefined
             ? { model: seat.model, version: seat.version, ...(seat.effort ? { effort: seat.effort } : {}) }
@@ -1128,7 +1170,7 @@ export function upPlan(input: UpInput): Step[] {
           cli: seat.cli,
           seconds: profile.idleTimeout,
           rules,
-          pane: seat.pane,
+          pane: reuse?.pane ?? seat.pane,
           ...(seat.displayAgent ? { displayAgent: seat.displayAgent } : {}),
         },
       });
@@ -1164,7 +1206,7 @@ export function upPlan(input: UpInput): Step[] {
           line: file.line,
           seconds: profile.idleTimeout,
           launchCanCarryRules: profile.rulesPrompt !== null,
-          pane: seat.pane,
+          pane: reuse?.pane ?? seat.pane,
           ...(said ? { notice: said } : {}),
         },
       });
@@ -1175,6 +1217,17 @@ export function upPlan(input: UpInput): Step[] {
         text: `${seat.name}: named, and its rules went with the launch; marked ready`,
         ...(said ? { note: said } : {}),
         do: { do: 'ready', seat: seat.name, rules: 'option', ...(said ? { notice: said } : {}) },
+      });
+    }
+    // The old workspace closes last, after every step that makes the seat ready on its
+    // replacement: a seat this run does not launch never reaches it. The close re-reads the
+    // workspace and its old pane immediately before it, and says why when it leaves them.
+    if (seat.closeLeftover !== undefined && wouldLaunch) {
+      steps.push({
+        kind: 'run',
+        argv: herdr(session, 'workspace', 'close', seat.closeLeftover.workspace),
+        note: 'closed once the seat is ready on its replacement, if it still holds only the old pane, with no CLI in it',
+        do: { do: 'close-leftover', seat: seat.name, pane: seat.closeLeftover.pane, workspace: seat.closeLeftover.workspace, cli: seat.cli },
       });
     }
   }

@@ -2299,11 +2299,11 @@ describe('team up, one run at a time', () => {
 });
 
 // A restored session: herdr lists the names, and the processes behind them are not the ones team
-// launched. A pane back at its shell is closed with no key and no text and the seat launched
-// fresh, even when herdr still lists the seat's name. A pane held by another program is left,
-// unless its agent session is the one stored at launch, in which case the seat is kept and the
-// stored pids become the ones the pane holds now. A seat still holding its recorded process is
-// skipped as ready.
+// launched. A pane back at its shell is launched again in that same pane, with no key and no text
+// and no workspace made or closed, even when herdr still lists the seat's name. A pane held by
+// another program is left, unless its agent session is the one stored at launch, in which case
+// the seat is kept and the stored pids become the ones the pane holds now. A seat still holding
+// its recorded process is skipped as ready.
 describe('team up, a session that was restored', () => {
   test('four seats: one same, one gone, one replaced, one whose pane is missing', async () => {
     writeFileSync(join(root, '.agents/team.yaml'), makeExample(base, root, EXAMPLE.replace('stopped: true\n', 'parked: true\n')));
@@ -2330,6 +2330,9 @@ describe('team up, a session that was restored', () => {
     );
     const made = world();
     made.session = 'running';
+    // The coordinator's pane is launched in again, and the pane it is launched in reads the
+    // idle prompt its own line prints: `pane run` in a pane the run did not create.
+    made.seed('w91:p1', IDLE, true);
     // The readings as herdr gives them: pids only. w92 is the recorded process; w91's shell is in
     // front with no CLI; w93's shell is the recorded one and a stranger's CLI is in front; w94
     // can't be read at all.
@@ -2392,22 +2395,24 @@ describe('team up, a session that was restored', () => {
     );
 
     expect(code).toBe(1);
-    // The shell is closed before its fresh launch. The pane that holds another program, with no
-    // stored session, is not closed and is never typed or run into. The coordinator's name is
-    // still in the agent list; that does not keep a shell.
-    expect(made.closes).toEqual(['w91']);
+    // The shell's own pane is launched in again — nothing is created or closed for it. The pane
+    // that holds another program, with no stored session, is not closed and is never typed or
+    // run into. The coordinator's name is still in the agent list; that does not keep a shell,
+    // and the pane is its own either way.
+    expect(made.closes).toEqual([]);
     const before = (at: string, n: number) => calls.slice(0, calls.indexOf(at)).slice(-n);
-    expect(before('close w91', 2)).toEqual(['agents', 'process w91:p1']);
-    expect(calls.indexOf('close w91')).toBeLessThan(calls.indexOf('run w1:p1'));
+    // The pane's process is read immediately before the launch line runs in it.
+    expect(before('run w91:p1', 1)).toEqual(['process w91:p1']);
+    expect(calls).not.toContain('close w91');
     expect(calls).not.toContain('close w93');
     expect(keys).toEqual([]);
-    expect(made.runs.filter(({ pane }) => ['w91:p1', 'w92:p1', 'w93:p1', 'w94:p1'].includes(pane))).toEqual([]);
-    expect(made.runs.find(({ pane }) => pane === 'w1:p1')?.command).toContain('--append-system-prompt');
-    expect(made.runs.find(({ pane }) => pane === 'w1:p1')?.command).toContain('Agent: Claude Opus 5.5 · project coordinator');
+    expect(made.runs.filter(({ pane }) => ['w92:p1', 'w93:p1', 'w94:p1'].includes(pane))).toEqual([]);
+    expect(made.runs.find(({ pane }) => pane === 'w91:p1')?.command).toContain('--append-system-prompt');
+    expect(made.runs.find(({ pane }) => pane === 'w91:p1')?.command).toContain('Agent: Claude Opus 5.5 · project coordinator');
     expect(io.out).toContain('codex-acme: ready\n');
     expect(io.err).toContain('  already ready; left as it is\n');
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
-    expect(io.err).toContain('  its pane held no CLI; closed without input and launched again\n');
+    expect(io.err).toContain('claude-coordinator-acme: its recorded pane w91:p1 was at its shell; launched in the same pane\n');
     expect(io.out).toContain('deepseek-acme: left out: its pane holds a process this record cannot tie to the launch\n');
     expect(io.err).toContain('  its pane holds a process this record cannot tie to the launch\n');
     expect(io.err).toContain('1 seat repaired, 0 skipped (working), 1 refused (deepseek-acme: its pane holds a process this record cannot tie to the launch)\n');
@@ -2415,9 +2420,11 @@ describe('team up, a session that was restored', () => {
     expect(io.out).toContain('deepseek-acme-2: ready\n');
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
     expect(seats['codex-acme']).toMatchObject({ stage: 'ready', pane: 'w92:p1', launched: { shell: 410, cli: [411] } });
-    expect(seats['claude-coordinator-acme']).toMatchObject({ stage: 'ready', pane: 'w1:p1', launched: { shell: 700, cli: [701] } });
+    // Relaunched in its own pane: the record keeps that pane and workspace, and its pids are
+    // unchanged, because a pane reading of the shell alone gives no new identity to record.
+    expect(seats['claude-coordinator-acme']).toMatchObject({ stage: 'ready', pane: 'w91:p1', workspace: 'w91', launched: { shell: 420, cli: [421] } });
     expect(seats['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1', launched: { shell: 430, cli: [431] } });
-    expect(seats['deepseek-acme-2']).toMatchObject({ stage: 'ready', pane: 'w2:p1', launched: { shell: 700, cli: [701] } });
+    expect(seats['deepseek-acme-2']).toMatchObject({ stage: 'ready', pane: 'w1:p1', launched: { shell: 700, cli: [701] } });
   });
 
   test('a matching agent session on its own model is not closed, and one on another model is repaired', async () => {
@@ -2579,7 +2586,7 @@ describe('team up, a session that was restored', () => {
     expect(seats['deepseek-acme']).toMatchObject({ pane: 'w93:p1', launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
   });
 
-  test('a workspace that does not close leaves the seat out with a line', async () => {
+  test('a recorded workspace that does not close is left by the replacement, and said so', async () => {
     writeFileSync(join(root, '.agents/team.yaml'), makeExample(base, root, EXAMPLE.replace('stopped: true\n', 'parked: true\n')));
     await approve();
     writeFileSync(
@@ -2589,7 +2596,7 @@ describe('team up, a session that was restored', () => {
         sessions: {
           'acme-web': {
             seats: {
-              'claude-coordinator-acme': { stage: 'ready', pane: 'w91:p1', workspace: 'w91', launched: { shell: 420, cli: [421] } },
+              'claude-coordinator-acme': { stage: 'ready', pane: 'w91:p1', workspace: 'w91', launched: { shell: 420, cli: [421] }, agent_session: 'held' },
             },
             worktrees: {},
           },
@@ -2598,11 +2605,12 @@ describe('team up, a session that was restored', () => {
     );
     const made = world();
     made.session = 'running';
-    made.launch.processInfo = () => ({ shell: 420, foreground: [420] });
-    made.launch.agents = () => [agent('claude-coordinator-acme', 'w91:p1', 'idle')];
+    // The recorded pane did not come back: the replacement is created and launched first, and
+    // the recorded workspace is closed only once the seat is ready on the replacement. This
+    // close fails, and the workspace is left — the seat keeps its replacement.
+    made.launch.processInfo = (_session, pane) => (pane === 'w91:p1' ? null : { shell: 700, foreground: [700, 701] });
+    made.launch.agents = () => [];
     made.launch.closeWorkspace = () => false;
-    // The parked codex seat launched here never idles on its screen and its wait times out.
-    // §2, no terminal: the timeout keeps today's record — this run never prompts.
     const io = quietIo();
     const code = await runUp(
       FILE,
@@ -2611,18 +2619,22 @@ describe('team up, a session that was restored', () => {
         {
           sessionState: () => 'running',
           workspaces: () => [{ id: 'w91', label: 'claude-coordinator-acme · project coordinator' }],
-          agents: () => [agent('claude-coordinator-acme', 'w91:p1', 'idle')],
+          agents: () => [],
           doctor: doctor(),
         },
         made,
       ),
     );
     expect(code).toBe(1);
-    expect(io.out).toContain('claude-coordinator-acme: left out: its workspace did not close; left as it is\n');
-    expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
-    // Nothing was cleared: the seat's record still names the pane whose process is not the seat's.
+    // The replacement was made and the seat launched in it before the close was tried at all.
+    expect(made.creates).toContain('claude-coordinator-acme · project coordinator');
+    expect(made.runs.find(({ pane }) => pane === 'w1:p1')?.command).toContain('--resume held');
+    // The close failed: the workspace is left exactly as it was, and the failure is said.
+    expect(made.closes).toEqual([]);
+    expect(io.err).toContain('claude-coordinator-acme: its recorded workspace w91 did not close; left as it is\n');
+    // The record is the replacement's: the seat is ready on the pane it was launched in.
     expect((readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {})['claude-coordinator-acme'])
-      .toMatchObject({ stage: 'ready', pane: 'w91:p1', launched: { shell: 420, cli: [421] } });
+      .toMatchObject({ stage: 'ready', pane: 'w1:p1', workspace: 'w1', launched: { shell: 700, cli: [701] } });
   });
 
   // The four recorded seats the close-path tests start from: each with its pane, workspace and
@@ -2698,62 +2710,73 @@ describe('team up, a session that was restored', () => {
       .toMatchObject({ stage: 'ready', pane: 'w91:p1', launched: { shell: 420, cli: [421] } });
   });
 
-  test('herdr no longer names the seat on its recorded pane: nothing is closed', async () => {
+  test('herdr names the seat on another pane: its own pane at its shell is launched in anyway', async () => {
     restoredFile();
     await approve();
     const made = restored();
     const read = made.launch.processInfo!;
     made.launch.processInfo = (session, pane) => (pane === 'w91:p1' ? { shell: 420, foreground: [420] } : read(session, pane));
-    // The name is listed, on a pane team did not record: a reused id, or another agent renamed.
-    made.launch.agents = () => [{ ...agent('claude-coordinator-acme', 'w95:p1', 'idle') }, ...restoredList().slice(1)];
+    // The name is listed on a pane team did not record — a reused id, or another agent renamed.
+    // A shell is read by its place, not by a name: the pane the record holds is its own, and the
+    // launch line runs there.
+    const named = () => [{ ...agent('claude-coordinator-acme', 'w95:p1', 'idle') }, ...restoredList().slice(1)];
+    made.launch.agents = named;
     const io = testIo(root, { kind: 'owner' });
-    const code = await runUp(FILE, io, sources(restoredSources(), made));
-    expect(code).toBe(1);
-    expect(io.out).toContain('claude-coordinator-acme: left out: herdr no longer shows this seat on its recorded pane; nothing closed; run team status\n');
+    const code = await runUp(FILE, io, sources({ ...restoredSources(), agents: named }, made));
+    expect(code).toBe(0);
+    expect(io.err).toContain('claude-coordinator-acme: its recorded pane w91:p1 was at its shell; launched in the same pane\n');
+    expect(made.runs.find(({ pane }) => pane === 'w91:p1')?.command).toContain('--model claude-opus-5-5');
+    expect(made.runs.map(({ pane }) => pane)).not.toContain('w95:p1');
     expect(made.closes).toEqual([]);
     expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(seatState('claude-coordinator-acme'))
-      .toMatchObject({ stage: 'ready', pane: 'w91:p1', launched: { shell: 420, cli: [421] } });
+      .toMatchObject({ stage: 'ready', pane: 'w91:p1', workspace: 'w91', launched: { shell: 420, cli: [421] } });
   });
 
-  test('the recorded workspace now belongs to another pane: nothing is closed', async () => {
+  test('the agent list puts the seat name in another workspace: its own pane at its shell is launched in anyway', async () => {
     restoredFile();
     await approve();
     const made = restored();
     const read = made.launch.processInfo!;
     made.launch.processInfo = (session, pane) => (pane === 'w91:p1' ? { shell: 420, foreground: [420] } : read(session, pane));
-    // herdr knows the seat on its pane, but the pane's workspace is no longer the recorded one:
-    // the id was reused for something else, and closing it would close a stranger.
-    made.launch.agents = () => [{ ...agent('claude-coordinator-acme', 'w91:p1', 'idle'), workspace: 'w99' }, ...restoredList().slice(1)];
+    // The host names the seat on its recorded pane but under another workspace id. The pane is
+    // still listed in the recorded workspace, and a shell is the place the record holds: the
+    // launch line runs there, and no workspace is closed.
+    const named = () => [{ ...agent('claude-coordinator-acme', 'w91:p1', 'idle'), workspace: 'w99' }, ...restoredList().slice(1)];
+    made.launch.agents = named;
     const io = testIo(root, { kind: 'owner' });
-    const code = await runUp(FILE, io, sources(restoredSources(), made));
-    expect(code).toBe(1);
-    expect(io.out).toContain('claude-coordinator-acme: left out: herdr no longer shows this seat on its recorded pane; nothing closed; run team status\n');
+    const code = await runUp(FILE, io, sources({ ...restoredSources(), agents: named }, made));
+    expect(code).toBe(0);
+    expect(io.err).toContain('claude-coordinator-acme: its recorded pane w91:p1 was at its shell; launched in the same pane\n');
+    expect(made.runs.find(({ pane }) => pane === 'w91:p1')?.command).toContain('--model claude-opus-5-5');
     expect(made.closes).toEqual([]);
     expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(seatState('claude-coordinator-acme'))
-      .toMatchObject({ stage: 'ready', pane: 'w91:p1', launched: { shell: 420, cli: [421] } });
+      .toMatchObject({ stage: 'ready', pane: 'w91:p1', workspace: 'w91', launched: { shell: 420, cli: [421] } });
   });
 
-  test('the recorded workspace also holds another pane: nothing is closed', async () => {
+  test('the recorded workspace also holds another pane: the shell is launched in, and nothing is closed', async () => {
     restoredFile();
     await approve();
     const made = restored();
     const read = made.launch.processInfo!;
     made.launch.processInfo = (session, pane) => (pane === 'w91:p1' ? { shell: 420, foreground: [420] } : read(session, pane));
-    // The recorded workspace holds another pane beside the seat's pane.
+    // The recorded workspace holds another pane beside the seat's. A reuse closes nothing, so
+    // that pane is never the owner's to lose: the launch line runs in the seat's own pane.
     made.seed('w91:p2', '', false);
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources(restoredSources(), made));
-    expect(code).toBe(1);
-    expect(io.out).toContain('claude-coordinator-acme: left out: its workspace holds other panes; nothing closed (close its pane there, then run team up)\n');
+    expect(code).toBe(0);
+    expect(io.err).toContain('claude-coordinator-acme: its recorded pane w91:p1 was at its shell; launched in the same pane\n');
+    expect(made.runs.find(({ pane }) => pane === 'w91:p1')?.command).toContain('--model claude-opus-5-5');
+    expect(made.runs.map(({ pane }) => pane)).not.toContain('w91:p2');
     expect(made.closes).toEqual([]);
     expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(seatState('claude-coordinator-acme'))
-      .toMatchObject({ stage: 'ready', pane: 'w91:p1', launched: { shell: 420, cli: [421] } });
+      .toMatchObject({ stage: 'ready', pane: 'w91:p1', workspace: 'w91', launched: { shell: 420, cli: [421] } });
   });
 
-  test('workspacePanes with the right pane id under another workspace id: nothing is closed', async () => {
+  test('workspacePanes with the right pane id under another workspace id: nothing is launched', async () => {
     restoredFile();
     await approve();
     const made = restored();
@@ -2764,14 +2787,16 @@ describe('team up, a session that was restored', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources(restoredSources(), made));
     expect(code).toBe(1);
-    expect(io.out).toContain('claude-coordinator-acme: left out: its pane could not be read; nothing closed\n');
+    // The workspace the record names cannot be read: a pane is launched in only when the host
+    // lists it there, so nothing is launched and nothing is closed.
+    expect(io.out).toContain('claude-coordinator-acme: left out: its recorded workspace could not be read; nothing launched, nothing closed\n');
     expect(made.closes).toEqual([]);
     expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(seatState('claude-coordinator-acme'))
       .toMatchObject({ stage: 'ready', pane: 'w91:p1', launched: { shell: 420, cli: [421] } });
   });
 
-  test('workspacePanes under no workspace id: nothing is closed', async () => {
+  test('workspacePanes under no workspace id: nothing is launched', async () => {
     restoredFile();
     await approve();
     const made = restored();
@@ -2782,14 +2807,14 @@ describe('team up, a session that was restored', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources(restoredSources(), made));
     expect(code).toBe(1);
-    expect(io.out).toContain('claude-coordinator-acme: left out: its pane could not be read; nothing closed\n');
+    expect(io.out).toContain('claude-coordinator-acme: left out: its recorded workspace could not be read; nothing launched, nothing closed\n');
     expect(made.closes).toEqual([]);
     expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(seatState('claude-coordinator-acme'))
       .toMatchObject({ stage: 'ready', pane: 'w91:p1', launched: { shell: 420, cli: [421] } });
   });
 
-  test('workspacePanes with a non-object entry: nothing is closed', async () => {
+  test('workspacePanes with a non-object entry: nothing is launched', async () => {
     restoredFile();
     await approve();
     const made = restored();
@@ -2800,14 +2825,14 @@ describe('team up, a session that was restored', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources(restoredSources(), made));
     expect(code).toBe(1);
-    expect(io.out).toContain('claude-coordinator-acme: left out: its pane could not be read; nothing closed\n');
+    expect(io.out).toContain('claude-coordinator-acme: left out: its recorded workspace could not be read; nothing launched, nothing closed\n');
     expect(made.closes).toEqual([]);
     expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(seatState('claude-coordinator-acme'))
       .toMatchObject({ stage: 'ready', pane: 'w91:p1', launched: { shell: 420, cli: [421] } });
   });
 
-  test('workspacePanes with a pane id that is not a string: nothing is closed', async () => {
+  test('workspacePanes with a pane id that is not a string: nothing is launched', async () => {
     restoredFile();
     await approve();
     const made = restored();
@@ -2818,14 +2843,14 @@ describe('team up, a session that was restored', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources(restoredSources(), made));
     expect(code).toBe(1);
-    expect(io.out).toContain('claude-coordinator-acme: left out: its pane could not be read; nothing closed\n');
+    expect(io.out).toContain('claude-coordinator-acme: left out: its recorded workspace could not be read; nothing launched, nothing closed\n');
     expect(made.closes).toEqual([]);
     expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(seatState('claude-coordinator-acme'))
       .toMatchObject({ stage: 'ready', pane: 'w91:p1', launched: { shell: 420, cli: [421] } });
   });
 
-  test('workspacePanes with the right entry plus one malformed entry: nothing is closed', async () => {
+  test('workspacePanes with the right entry plus one malformed entry: nothing is launched', async () => {
     restoredFile();
     await approve();
     const made = restored();
@@ -2841,14 +2866,14 @@ describe('team up, a session that was restored', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources(restoredSources(), made));
     expect(code).toBe(1);
-    expect(io.out).toContain('claude-coordinator-acme: left out: its pane could not be read; nothing closed\n');
+    expect(io.out).toContain('claude-coordinator-acme: left out: its recorded workspace could not be read; nothing launched, nothing closed\n');
     expect(made.closes).toEqual([]);
     expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(seatState('claude-coordinator-acme'))
       .toMatchObject({ stage: 'ready', pane: 'w91:p1', launched: { shell: 420, cli: [421] } });
   });
 
-  test('workspacePanes with an empty listing: nothing is closed and line is unreadable', async () => {
+  test('workspacePanes with an empty listing: nothing is launched and nothing is closed', async () => {
     restoredFile();
     await approve();
     const made = restored();
@@ -2858,7 +2883,9 @@ describe('team up, a session that was restored', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources(restoredSources(), made));
     expect(code).toBe(1);
-    expect(io.out).toContain('claude-coordinator-acme: left out: its pane could not be read; nothing closed\n');
+    // The workspace is readable and does not list the seat's pane: the pane is not its own
+    // place any more, so the launch line does not run and nothing is closed.
+    expect(io.out).toContain('claude-coordinator-acme: left out: its recorded pane is no longer listed in its recorded workspace; nothing launched, nothing closed\n');
     expect(made.closes).toEqual([]);
     expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(seatState('claude-coordinator-acme'))
@@ -2908,11 +2935,11 @@ describe('team up, a session that was restored', () => {
     expect(seatState('deepseek-acme')).toMatchObject({ stage: 'ready', pane: 'w93:p1', launched: { shell: 430, cli: [431] } });
   });
 
-  test('the process reading fails at the close: nothing is closed', async () => {
+  test('the process reading fails before the launch: nothing is launched', async () => {
     restoredFile();
     await approve();
     const made = restored();
-    // gone at the plan, unreadable at the close: a failed read is not a free pane.
+    // gone at the plan, unreadable at the launch: a failed read is not a free pane.
     const read = made.launch.processInfo!;
     let seen = 0;
     made.launch.processInfo = (session, pane) => {
@@ -2923,7 +2950,8 @@ describe('team up, a session that was restored', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources(restoredSources(), made));
     expect(code).toBe(1);
-    expect(io.out).toContain('claude-coordinator-acme: left out: its pane could not be read; nothing closed\n');
+    expect(io.out).toContain('claude-coordinator-acme: left out: its pane could not be read; nothing launched, nothing closed\n');
+    expect(made.runs.map(({ pane }) => pane)).not.toContain('w91:p1');
     expect(made.closes).toEqual([]);
     expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
     expect(seatState('claude-coordinator-acme'))

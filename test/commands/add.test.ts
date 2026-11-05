@@ -1164,7 +1164,7 @@ describe('team add', () => {
     expect(seats.worker).toMatchObject({ pane: 'w9:p1', launched: { shell: 900, cli: [901] }, agent_session: 'kept' });
   });
 
-  test('a shell in front is still closed without input and launched fresh', async () => {
+  test('a shell in front is launched again in its own pane', async () => {
     updateState(join(project, '.agents'), (state) => {
       const session = state.sessions.acme ?? emptySession();
       session.seats.worker = { stage: 'launched', workspace: 'w9', pane: 'w9:p1', launched: { shell: 400, cli: [401] }, agent_session: 'kept' };
@@ -1191,8 +1191,11 @@ describe('team add', () => {
     }));
     expect(code).toBe(0);
     expect(keys).toEqual([]);
-    expect(closes).toEqual(['w9']);
-    expect(io.err).toContain('  its pane held no CLI; closed without input and launched again\n');
+    // Its pane is still its own, at its shell: the line runs there again, and nothing is
+    // closed or made for it.
+    expect(closes).toEqual([]);
+    expect(made.creates).toEqual([]);
+    expect(io.err).toContain('worker: its recorded pane w9:p1 was at its shell; launched in the same pane\n');
   });
 
   describe('a replaced seat with no stored session is left before any close', () => {

@@ -5,9 +5,8 @@
 //     `named` — must move the same agent id to that pane, with the conversation the launch
 //     measured, and must not keep a closed previous pane current. Readiness is not claimed:
 //     the record follows the live session, not the plan's outcome.
-//  2. A failed launch after a proven close leaves no live successor: the dead route is cleared
-//     (pane null, lifecycle no longer running), while the stable agent id, signing and
-//     conversation history stay.
+//  2. The recorded workspace closes only after the seat is ready on its replacement: a launch
+//     that stopped short never closes it, and the record keeps its route.
 //  3. A failed launch that closed nothing must leave a prior record exactly as it was — the
 //     route, its session and its measured conversation binding are not rewritten from the file.
 //  4. A working identity doubt and a stopped seat are left/ended exactly as today: nothing is
@@ -209,6 +208,9 @@ function sources(opts: {
   pending?: { pane: string; workspace: string; live: string };
   /** The old pane holds a live process the record does not name (a `replaced` verdict). */
   foreign?: boolean;
+  /** The old pane did not come back at all: the host lists it nowhere and reads no process in
+   *  it, so the run replaces it (a fresh workspace first, the recorded one closed once ready). */
+  missing?: boolean;
   /** The team's running lead, at its own ready pane: present only in the stopped-seat file. */
   lead?: boolean;
 } = {}): { sources: UpSources; trace: Trace } {
@@ -225,11 +227,12 @@ function sources(opts: {
     if (createdNow()) {
       return [{ name: null, agent: 'codex', pane: NEW_PANE, workspace: NEW_WORKSPACE, status: 'idle', cwd: root, session: NEW_SESSION }];
     }
-    if (opts.absent === true) return [];
+    if (opts.absent === true || opts.missing === true) return [];
     return [{ name: SEAT, agent: 'codex', pane: OLD_PANE, workspace: OLD_WORKSPACE, status: opts.status ?? 'idle', cwd: root, session: opts.live ?? OLD_SESSION }];
   };
   const processes = (pane: string): PaneProcesses | null => {
     if (pane === OLD_PANE) {
+      if (opts.missing === true) return null;
       return opts.foreign === true
         ? { shell: OLD_LAUNCHED.shell, foreground: [FOREIGN_PID] }
         : { shell: OLD_LAUNCHED.shell, foreground: [OLD_LAUNCHED.shell] };
@@ -338,17 +341,20 @@ afterEach(() => {
 test('a replacement that stops at launched moves the agent to the pane that is running', async () => {
   const id = registry();
   state({ stage: 'ready', pane: OLD_PANE, workspace: OLD_WORKSPACE, launched: OLD_LAUNCHED, agent_session: OLD_SESSION });
-  // The old pane is only its shell: the plan repairs, closes the workspace, makes a fresh one,
-  // runs the line, and the rename never lands — the seat stops at `launched`.
-  const made = sources({ named: false });
+  // The old pane did not come back: the plan creates the fresh workspace first, runs the line
+  // there, and the rename never lands — the seat stops at `launched`. The recorded workspace is
+  // left to close only once the seat is ready on its replacement, so nothing is closed.
+  const made = sources({ named: false, missing: true });
   const io = testIo(root, { kind: 'owner' });
   expect(await runUp([], io, made.sources)).toBe(1);
 
   expect(io.out).toContain(`${SEAT}: left out: was not named in time; left at launched\n`);
   expect(io.err).toContain(`0 seats repaired, 0 skipped (working), 1 refused (${SEAT}: was not named in time; left at launched)\n`);
-  // The close was the proven one, and the launch ran on the pane the state now names; nothing
-  // this run started ran on the closed old pane.
-  expect(made.trace.closed).toEqual([OLD_WORKSPACE]);
+  // The close re-reads the seat before it reads anything else: a seat that never reached ready
+  // on its replacement leaves the recorded workspace as it is, and says so.
+  expect(made.trace.closed).toEqual([]);
+  expect(io.err).toContain(`${SEAT}: its recorded workspace ${OLD_WORKSPACE} was left as it is; the seat is not ready on a replacement\n`);
+  // The launch ran on the pane the state now names; nothing this run started ran on the old pane.
   expect(made.trace.runs.some((run) => run.pane === NEW_PANE)).toBe(true);
   expect(made.trace.runs.filter((run) => run.pane === OLD_PANE)).toEqual([]);
   expect(seatState()).toMatchObject({
@@ -359,8 +365,8 @@ test('a replacement that stops at launched moves the agent to the pane that is r
     agent_session: NEW_SESSION,
   });
 
-  // The record follows the live session; it never claims ready, and the closed old pane is not
-  // left current.
+  // The record follows the live session; it never claims ready, and the old pane is not left
+  // current.
   const agent = agentNow();
   expect(agent.id).toBe(id);
   expect(agent.reach.pane).toBe(NEW_PANE);
@@ -375,13 +381,15 @@ test('a replacement that stops at launched moves the agent to the pane that is r
 test('a replacement whose name lands moves the agent to the pane that is running', async () => {
   const id = registry();
   state({ stage: 'ready', pane: OLD_PANE, workspace: OLD_WORKSPACE, launched: OLD_LAUNCHED, agent_session: OLD_SESSION });
-  // The name lands and the rules rode the launch line, so nothing is left to type: the seat
-  // reaches `ready` on the live pane, and no stop at `named` for want of typed rules arises.
-  const made = sources();
+  // The recorded pane is gone, so a fresh workspace is created and the line runs there; the name
+  // lands and the rules rode the launch line, so nothing is left to type: the seat reaches
+  // `ready` on the live pane, and only then is the recorded workspace closed.
+  const made = sources({ missing: true });
   const io = testIo(root, { kind: 'owner' });
   expect(await runUp([], io, made.sources)).toBe(0);
 
   expect(io.out).not.toContain('rules not typed');
+  expect(made.trace.closed).toEqual([OLD_WORKSPACE]);
   expect(seatState()).toMatchObject({
     stage: 'ready',
     pane: NEW_PANE,
@@ -399,24 +407,27 @@ test('a replacement whose name lands moves the agent to the pane that is running
   expect(agent.seat_handle).toBe(HANDLE);
 });
 
-test('a failed launch after a proven close clears the dead route and keeps the agent', async () => {
+test('a failed launch before the close leaves the recorded workspace open and the prior record as it was', async () => {
   const id = registry();
   state({ stage: 'ready', pane: OLD_PANE, workspace: OLD_WORKSPACE, launched: OLD_LAUNCHED, agent_session: OLD_SESSION });
-  // The old workspace closes, the fresh pane exists, and the line never runs: no successor.
-  const made = sources({ run: false });
+  // The replacement exists, but the line never runs: no successor, and the recorded workspace
+  // was never closed — the close comes only after a ready replacement — so nothing this run did
+  // can be blamed for the dead route. The prior record stays exactly as it was.
+  const made = sources({ run: false, missing: true });
   const io = testIo(root, { kind: 'owner' });
   expect(await runUp([], io, made.sources)).toBe(1);
 
   expect(io.out).toContain(`${SEAT}: left out: its launch command did not run; left at launched\n`);
-  expect(made.trace.closed).toEqual([OLD_WORKSPACE]);
+  expect(made.trace.closed).toEqual([]);
+  expect(io.err).toContain(`${SEAT}: its recorded workspace ${OLD_WORKSPACE} was left as it is; the seat is not ready on a replacement\n`);
   expect(seatState()).toMatchObject({ stage: 'launched', pane: NEW_PANE, workspace: NEW_WORKSPACE });
 
-  // The pane the record named is gone for good: it must not stay current, and the agent must
-  // not keep claiming a session it no longer has. Its id, signing and conversation stay.
+  // Nothing was closed and nothing started: the route, its session and its conversation binding
+  // are not rewritten from the declaration. Its id, signing and handle stay.
   const agent = agentNow();
   expect(agent.id).toBe(id);
-  expect(agent.reach.pane).toBeNull();
-  expect(agent.lifecycle).toBe('stopped');
+  expect(agent.reach.pane).toBe(OLD_PANE);
+  expect(agent.lifecycle).toBe('running');
   expect(agent.reach.agent_session).toBe(OLD_SESSION);
   expect(agent.signing).toEqual(SIGNING);
   expect(agent.seat_handle).toBe(HANDLE);
