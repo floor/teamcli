@@ -219,22 +219,29 @@ function report(
   );
 }
 
-/** The notices the lead's own folder holds: every signed runtime report, as its body. */
+/** The notices the lead's own folder holds, oldest first: every signed runtime report, as its
+ *  body. `readdirSync` order is the file system's, not the clock's, so the listing is sorted by
+ *  each record's own signed instant. */
 function leadNotices(made: World): string[] {
   const dropDir = join(made.dir, 'send-drops', 'acme', 'lead');
   if (!existsSync(dropDir)) return [];
-  const bodies: string[] = [];
+  const found: { at: string; body: string }[] = [];
   for (const name of readdirSync(dropDir)) {
-    let parsed: { payload?: { from?: unknown; to?: unknown; body?: unknown } };
+    let parsed: { payload?: { at?: unknown; from?: unknown; to?: unknown; body?: unknown } };
     try {
       parsed = JSON.parse(readFileSync(join(dropDir, name), 'utf8')) as typeof parsed;
     } catch {
       continue;
     }
     if (parsed.payload?.from !== 'runtime' || parsed.payload.to !== 'lead') continue;
-    if (typeof parsed.payload.body === 'string') bodies.push(parsed.payload.body);
+    if (typeof parsed.payload.body !== 'string') continue;
+    found.push({
+      at: typeof parsed.payload.at === 'string' ? parsed.payload.at : '',
+      body: parsed.payload.body,
+    });
   }
-  return bodies;
+  found.sort((one, other) => Date.parse(one.at) - Date.parse(other.at));
+  return found.map((one) => one.body);
 }
 
 test('an unrecognised screen is named once, with every held message and the oldest age', () => {
@@ -390,5 +397,6 @@ test('a read receipt closes the episode; the messages still waiting are named ag
   const notices = leadNotices(made);
   expect(notices).toHaveLength(2);
   expect(notices[1]).toContain('3 messages wait');
-  expect(notices[1]).toContain('oldest 100 min');
+  // The age is the message's own, read at this pass: 100 minutes when it landed, 102 by now.
+  expect(notices[1]).toContain('oldest 102 min');
 });
