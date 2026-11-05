@@ -69,6 +69,7 @@ import { runRaise } from '../src/commands/raise.ts';
 import { runGrant } from '../src/commands/grant.ts';
 import { runDelegate } from '../src/commands/delegate.ts';
 import { runAck } from '../src/commands/ack.ts';
+import { runShow } from '../src/commands/show.ts';
 import { runDevelopmentMode } from '../src/commands/development-mode.ts';
 import { runOwnerSeat } from '../src/commands/owner-seat.ts';
 import { runRevoke } from '../src/commands/revoke.ts';
@@ -7842,6 +7843,30 @@ for (const [name, command, args, invalidArgs] of [
       'only the owner or a seat this team marks `leads` acknowledges another seat\'s messages',
     );
   });
+}
+
+{
+  const SENT = '3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
+  const FILE = TWO.replace('workspace:', 'session: acme\nworkspace:');
+  async function shown(place: Place, argv: readonly string[], caller: Caller = owner): Promise<Ran> {
+    const io = testIo(place.root, caller);
+    return { code: await runShow([...argv], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+  }
+  scene('show.shown', async (place) => {
+    write(place, FILE);
+    plantRecord(place.home, place.root, 'acme', 'owner', SENT, "from the file's seat worker (no registry record yet) — admitted by: a seat to its own team's orchestrator\n\nquestion", { from: 'worker', at: NOW.toISOString() });
+    return show(await shown(place, ['3a3b3c4d']), 'question');
+  });
+  scene('show.refused', async (place) => {
+    write(place, FILE);
+    messageKeyOf(place.home);
+    return show(await shown(place, ['3a3b3c4d']), 'no record named');
+  });
+  scene('show.configuration', async (place) => {
+    write(place, 'format: [\n');
+    return show(await shown(place, ['3a3b3c4d']), 'team show:');
+  });
+  scene('show.usage', async (place) => show(await shown(place, []), '<id> is required'));
 }
 
 {

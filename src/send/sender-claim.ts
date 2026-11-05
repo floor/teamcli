@@ -37,8 +37,12 @@ export type SenderRenderContext = {
   cli?: string | null;
   /** Explicit sender display name override (e.g. nickname/label resolved for a socket frame). */
   displayName?: string | null;
+  /** Explicit preformatted sender label override (e.g. `"Gemini seat Argon"`). */
+  senderLabel?: string | null;
   /** Explicit rule override when `body` carries no `from … — admitted by: …` line. */
   rule?: string | null;
+  /** When true, only the first non-empty content line of the body is rendered (compact socket frame). */
+  compact?: boolean;
 };
 
 /**
@@ -196,6 +200,17 @@ function resolveSenderCli(context: SenderRenderContext, claimed: string): string
 }
 
 /**
+ * Extracts the first non-empty line of a message body (excluding the `from … — admitted by: …`
+ * header) for compact socket delivery.
+ */
+export function firstContentLine(text: string): string {
+  for (const line of text.split('\n')) {
+    if (line.trim() !== '') return line;
+  }
+  return '';
+}
+
+/**
  * Formats the single-line compact sender header for a rendered message:
  * - Client:      `"Client <Name> (<short rule>):"` (or `"Client <Name>:"` when no rule is given)
  * - Non-Claude:  `"<Kind> seat <Name> (<short rule>):"` (or `"<Kind> seat <Name>:"` when no rule is given)
@@ -204,10 +219,13 @@ function resolveSenderCli(context: SenderRenderContext, claimed: string): string
 export function compactSenderHeader(
   name: string,
   rule = '',
-  options: { client?: boolean; cli?: string | null } = {},
+  options: { client?: boolean; cli?: string | null; preformatted?: boolean } = {},
 ): string {
   const shortRule = compactRule(rule);
   const ruleSuffix = shortRule === '' ? '' : ` (${shortRule})`;
+  if (options.preformatted === true) {
+    return `${name}${ruleSuffix}:`;
+  }
   if (options.client === true) {
     return `Client ${name}${ruleSuffix}:`;
   }
@@ -227,14 +245,19 @@ export function compactSenderHeader(
  * - A client record (`from_client` or `client:<id>`) renders `Client <Name> (<short rule>):`.
  * - A headerless plain body folds into the compact header using the record's sender and rule
  *   (or `from <claimed>:` when no rule is present).
+ * - When `context.compact` is true, only the first non-empty content line of the body is rendered.
  */
 export function attributedBody(body: string, claimed: string, context: SenderRenderContext = {}): string {
   const header = SENDER_HEADER.exec(body);
   const isClient = context.record?.from_client !== undefined || claimed.startsWith('client:');
+  const renderRest = (text: string): string => (context.compact === true ? firstContentLine(text) : text);
   if (header !== null) {
     const headerName = header[1] ?? claimed;
     const headerRule = header[2] ?? context.record?.rule ?? context.rule ?? '';
-    const rest = body.slice(header[0].length);
+    const rest = renderRest(body.slice(header[0].length));
+    if (context.senderLabel && context.senderLabel !== '') {
+      return `${compactSenderHeader(context.senderLabel, headerRule, { preformatted: true })}\n\n${rest}`;
+    }
     if (isClient) {
       const display =
         context.displayName && context.displayName !== ''
@@ -249,19 +272,22 @@ export function attributedBody(body: string, claimed: string, context: SenderRen
     const cli = isSystemOrOwner(claimed, display) ? null : resolveSenderCli(context, claimed);
     return `${compactSenderHeader(display, headerRule, { cli })}\n\n${rest}`;
   }
+  const rest = renderRest(body);
+  const rule = context.record?.rule ?? context.rule ?? (isClient ? 'a client grant, to the entity orchestrator' : '');
+  if (context.senderLabel && context.senderLabel !== '') {
+    return `${compactSenderHeader(context.senderLabel, rule, { preformatted: true })}\n\n${rest}`;
+  }
   if (isClient) {
     const display =
       context.displayName && context.displayName !== ''
         ? context.displayName
         : clientDisplayName(claimed, context.record?.from_client?.client_id);
-    const rule = context.record?.rule ?? context.rule ?? 'a client grant, to the entity orchestrator';
-    return `${compactSenderHeader(display, rule, { client: true })}\n\n${body}`;
+    return `${compactSenderHeader(display, rule, { client: true })}\n\n${rest}`;
   }
   const display =
     context.displayName && context.displayName !== ''
       ? context.displayName
       : claimed;
-  const rule = context.record?.rule ?? context.rule ?? '';
   const cli = isSystemOrOwner(claimed, display) ? null : resolveSenderCli(context, claimed);
-  return `${compactSenderHeader(display, rule, { cli })}\n\n${body}`;
+  return `${compactSenderHeader(display, rule, { cli })}\n\n${rest}`;
 }

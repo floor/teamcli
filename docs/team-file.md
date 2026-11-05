@@ -487,6 +487,14 @@ declares it for every seat of that CLI in its profile (`public_only: true` there
 can only add the guard, never remove it, and `public_only: false` reads as absent. The key is
 part of the seat's digest, and a record that marks no seat keeps every digest it had.
 
+`compact_delivery` is optional on a seat: `compact_delivery: true` narrows a cross-session socket
+frame delivered to that seat to the compact sender header, the body's first non-empty content line,
+and the one-line reader footer `↩ team show <prefix> · team reply <prefix> · team ack <prefix>`. The
+stored record in `.agents/send-drops/<session>/<seat>/<id>` keeps the full body, and the seat reads
+the whole message on demand with [`team show <id>`](commands/show.md). `compact_delivery: false`
+reads as absent. The key is part of the seat's digest, and a record that marks no seat keeps every
+digest it had.
+
 `inbound` is optional on a seat: its own word on cross-session socket frames. `accept`
 authorizes a send's `socket` leg for any launch; `hold` and `refuse` never let it dial — the
 explicit opt-out — and an omitted key leaves the choice to the launch. A send always needs the

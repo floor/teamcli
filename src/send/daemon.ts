@@ -55,7 +55,7 @@ import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native
 import { openReplyListener, readReply } from './reply.ts';
 import { attributedBody } from './sender-claim.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from './uds.ts';
-import { existingRecordIdsIn, frameFor, readerLine } from './frame.ts';
+import { compactReaderLine, existingRecordIdsIn, frameFor, readerLine } from './frame.ts';
 import {
   declaredInboundOf, heldSocketPath, inboundStaleReason, readHeldSocket, socketEligible, socketHeldReason,
   socketSkipReason,
@@ -1617,12 +1617,20 @@ async function executeSocketSend(
   // for and marks it attributed, so the receiving seat never reads the displayed name as proof.
   // The mark is its own line; the display header and the body follow in their usual order.
   const dropDir = join(dir, 'send-drops', team.session, seatName);
+  const existingIds = existingRecordIdsIn(dropDir);
+  const compact = receiver?.compactDelivery === true;
   const content = attributedBody(body, from, {
     home: host.home,
     root,
     displayName: senderName === '' ? null : senderName === 'owner' ? 'the owner' : senderName,
+    compact,
   });
-  const frame = frameFor(content, msgId, personPane ? null : readerLine(msgId, existingRecordIdsIn(dropDir)));
+  const reply = personPane
+    ? null
+    : compact
+      ? compactReaderLine(msgId, existingIds)
+      : readerLine(msgId, existingIds);
+  const frame = frameFor(content, msgId, reply);
   if (frame.length > FRAME_LIMIT) {
     return {
       v: 1,

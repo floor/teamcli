@@ -8,6 +8,7 @@ import { createConnection } from 'node:net';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runAck } from '../../src/commands/ack.ts';
+import { runShow } from '../../src/commands/show.ts';
 import { runAdd } from '../../src/commands/add.ts';
 import { runAgents } from '../../src/commands/agents.ts';
 import { runFallback } from '../../src/commands/fallback.ts';
@@ -401,6 +402,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
     case 'reply':
       // The page's clock is pinned, so thread-ttl is read against it, not against today.
       return runReply(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
+    case 'show':
+      return runShow(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'issues':
       return runIssues(rest, io, { home: fixture.home });
     case 'next':

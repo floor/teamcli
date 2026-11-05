@@ -662,6 +662,10 @@
             "type": "boolean",
             "$comment": "the seat's briefs go to a service outside this machine: the team's rules are never prepended, and a send reads the body against the machine's private lists and falls through on a match; a hosted CLI's profile is public-only on its own, and a seat can only add the guard"
           },
+          "compact_delivery": {
+            "type": "boolean",
+            "$comment": "the seat's socket frame carries only the sender header, the first content line, and the show/reply/ack footer; the full body stays on disk for team show <id>; omitted or false keeps full socket delivery"
+          },
           "inbound": {
             "enum": [
               "accept",

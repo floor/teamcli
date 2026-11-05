@@ -2220,6 +2220,30 @@ export const ACK_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team show` (`schema/show.schema.json`): the verified
+ *  message record from the caller's own mailbox, its shortest unique prefix, whether this run
+ *  newly wrote the read receipt (`written`), and the rendered full message text (`content`). */
+export const SHOW_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.show',
+  fileName: 'show.schema.json',
+  title: 'team show --json output',
+  required: ['format', 'id', 'prefix', 'project', 'session', 'seat', 'from', 'from_id', 'rule', 'at', 'written', 'content'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    id: { type: 'string', minLength: 1 },
+    prefix: { type: 'string', minLength: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    seat: { type: 'string', minLength: 1 },
+    from: { type: 'string', minLength: 1 },
+    from_id: { type: ['string', 'null'] },
+    rule: { type: 'string', minLength: 1 },
+    at: { type: 'string', minLength: 1 },
+    written: { type: 'boolean' },
+    content: { type: 'string', minLength: 1 },
+  },
+};
+
 /** Published `--json` output schema for `team route` (`schema/route.schema.json`): the action
  *  surface, then the answered address. `session` is the caller's team session; the recipient's
  *  session travels as `recipient_session`. */
@@ -3286,6 +3310,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   SEND_OUTPUT_SCHEMA,
   REPLY_OUTPUT_SCHEMA,
   ACK_OUTPUT_SCHEMA,
+  SHOW_OUTPUT_SCHEMA,
   ANSWER_OUTPUT_SCHEMA,
   MCP_OUTPUT_SCHEMA,
   TEMPO_OUTPUT_SCHEMA,

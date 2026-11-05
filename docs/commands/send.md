@@ -701,6 +701,10 @@ seat name), then a blank line, the message body, and the one-line reader footer 
 `↩ team reply <prefix> "…" · team ack <prefix>`
 `<prefix>` is the shortest unique prefix of the record's id in that mailbox (at least 8 characters);
 `team reply <prefix>` answers and marks it read, `team ack <prefix>` marks it read with no answer.
+When the receiving seat's record sets `compact_delivery: true` ([the team file](../team-file.md#seats)),
+the socket frame carries only the first non-empty content line of the body after the header and closes
+with `↩ team show <prefix> · team reply <prefix> · team ack <prefix>`; the signed drop record keeps
+the full body, and [`team show <prefix>`](show.md) prints the whole message and writes its read receipt.
 The line is the same for every sender, the owner included, and carries no address — no entity or
 owner-reply target is resolved for it. An ordinary send never frames a human's seat: a
 `human: true` seat walks the drop leg alone, so no frame is dialed for it.

@@ -16,6 +16,7 @@
 
 import { readdirSync } from 'node:fs';
 import { recordNameOk } from './record.ts';
+import { attributedBody } from './sender-claim.ts';
 
 export const MIN_ID_PREFIX_LEN = 8;
 
@@ -69,6 +70,60 @@ export function existingRecordIdsIn(dropDir: string): string[] {
 export function readerLine(msgId: string, existingIds: Iterable<string> = []): string {
   const prefix = shortIdPrefix(msgId, existingIds);
   return `↩ team reply ${prefix} "…" · team ack ${prefix}`;
+}
+
+/**
+ * The line a compact socket frame (`compact_delivery: true`) ends with. It adds `team show
+ * <prefix>` in front of `team reply` and `team ack`, using the same shortest unique id prefix:
+ * `↩ team show <prefix> · team reply <prefix> · team ack <prefix>`
+ */
+export function compactReaderLine(msgId: string, existingIds: Iterable<string> = []): string {
+  const prefix = shortIdPrefix(msgId, existingIds);
+  return `↩ team show ${prefix} · team reply ${prefix} · team ack ${prefix}`;
+}
+
+export type SocketMessageFrameOptions = {
+  from?: string;
+  from_id?: string | null;
+  rule?: string | null;
+  cli?: string | null;
+  displayName?: string | null;
+  senderLabel?: string | null;
+  compact?: boolean;
+  existingIds?: Iterable<string>;
+  human?: boolean;
+  carried?: string;
+  home?: string;
+  root?: string;
+};
+
+/**
+ * Builds a rendered socket message frame with the compact sender header, the body (or first
+ * content line when `compact: true`), and the appropriate reader footer (`compactReaderLine` when
+ * `compact: true`, `readerLine` otherwise, or `null` for a human pane).
+ */
+export function socketMessageFrame(
+  _session: string,
+  _seat: string,
+  body: string,
+  msgId: string,
+  options: SocketMessageFrameOptions = {},
+): string {
+  const rendered = attributedBody(body, options.from ?? '', {
+    cli: options.cli,
+    displayName: options.displayName,
+    senderLabel: options.senderLabel,
+    rule: options.rule,
+    compact: options.compact,
+    home: options.home,
+    root: options.root,
+  });
+  const reply = options.human
+    ? null
+    : options.compact
+      ? compactReaderLine(msgId, options.existingIds)
+      : readerLine(msgId, options.existingIds);
+  return frameFor(rendered, msgId, reply, options.carried);
 }
 
 /** The one frame this channel carries: `type:"user"`, the whole body, the reader line as its own

@@ -47,6 +47,7 @@ const allCommandNames = Array.from(
  */
 export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
   ack: "writes one signed read receipt into the addressee's folder",
+  show: "prints one message record from the addressee's folder and writes a signed read receipt",
   approvals: 'lists or revokes owner-seat always rules under the owner home',
   forget: 'removes a team registry record from the owner home',
   fallback: "lists the project's finished fallback episodes and, with --apply, retires them and reclaims stale lock folders; its --json output has no registered schema",
