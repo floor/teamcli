@@ -1,6 +1,7 @@
 // Real bus and real loopback receivers; all roots, registry keys and secrets are synthetic.
 import { afterEach, expect, spyOn, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { approvalOf } from '../src/approve/approval.ts';
@@ -23,7 +24,7 @@ afterEach(async()=>{
 test('bus and receivers run under an isolated HOME from startup',assertIndependentHome);
 type Hit={path:string;method:string;auth:string|null;custom:string|null;body:string};
 function receiver(hold=false){const hits:Hit[]=[];let release!:()=>void;const gate=hold?new Promise<void>(r=>{release=r;releases.push(r);}):Promise.resolve();const server=Bun.serve({hostname:'127.0.0.1',port:0,async fetch(r){hits.push({path:new URL(r.url).pathname,method:r.method,auth:r.headers.get('authorization'),custom:r.headers.get('x-fixture-key'),body:await r.text()});await gate;return new Response(null,{status:204});}});servers.push(server);return{hits,url:`http://127.0.0.1:${server.port}/routine`,release};}
-function base(){const path=realpathSync(mkdtempSync('/private/tmp/hkr-'));owned.push(path);return path;}
+function base(){const path=realpathSync(mkdtempSync(join(tmpdir(),'hkr-')));owned.push(path);return path;}
 type Hook={urlFile:string;secretFile:string;header?:string;body?:'event'|'inbox'};
 function hook(dir:string,name:string,url:string,custom=false):Hook{const h:Hook={urlFile:join(dir,name+'.url'),secretFile:join(dir,name+'.secret'),...(custom?{header:'X-Fixture-Key',body:'inbox' as const}:{})};writeFileSync(h.urlFile,url+'\n',{mode:0o600});writeFileSync(h.secretFile,SECRET+'\n',{mode:0o600});return h;}
 function text(root:string,home:string,h:Hook|null){return`format: 1\nproject: reload-fixture\nsession: reload-scene\noperator: captain\nworkspace:\n  mode: shared\ntrust:\n  - ${root}\n  - ${join(home,'.config/team/lobby')}\n  - ${join(process.env.HOME!,'.config/team/lobby')}\nseats:\n  - name: captain\n    role: orchestrator\n    leads: true\n    cli: codex\n    vendor: test\n    model: Test\n    version: "1"\n    launch: fixture\n  - name: routine\n    role: worker\n    cli: codex\n    vendor: test\n    model: Test\n    version: "1"\n    launch: fixture\n${h?'    webhook: '+JSON.stringify({url_file:h.urlFile,secret_file:h.secretFile,...(h.header?{header:h.header}:{}),...(h.body?{body:h.body}:{})})+'\n':''}`;}

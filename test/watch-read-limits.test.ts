@@ -9,6 +9,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { entitiesPath } from '../src/entities.ts';
 import type { TeamFile } from '../src/file/types.ts';
@@ -42,7 +43,7 @@ let root = '';
 let home = '';
 
 beforeEach(() => {
-  base = realpathSync(mkdtempSync(join('/private/tmp', 'team-watch-read-limits-')));
+  base = realpathSync(mkdtempSync(join(tmpdir(), 'team-watch-read-limits-')));
   root = join(base, 'repo');
   home = join(base, 'home');
   mkdirSync(join(root, '.agents'), { recursive: true });

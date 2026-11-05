@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { deliverWebhook, postArrivalWebhook, type LateWebhook, type WebhookFacts } from '../src/bus/webhook.ts';
@@ -56,7 +57,7 @@ if (process.argv.includes('--measure-exit')) {
   void postArrivalWebhook({ ...spec, now: () => new Date() });
 } else {
 beforeEach(() => {
-  base = realpathSync(mkdtempSync(join('/private/tmp', 'team-webhook-deadline-')));
+  base = realpathSync(mkdtempSync(join(tmpdir(), 'team-webhook-deadline-')));
   root = join(base, 'acme');
   home = join(base, 'home');
   mkdirSync(join(root, '.agents'), { recursive: true });

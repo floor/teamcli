@@ -20,6 +20,7 @@ import {
   appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync,
   utimesSync, writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appendEvent, EVENT_DOMAIN, eventLogPath, readEvents, type EventReadResult } from '../src/bus/log.ts';
@@ -81,7 +82,8 @@ afterEach(async () => {
 });
 
 function makeWorld(lineCounts: number[], name: string): World {
-  const base = realpathSync(mkdtempSync(`/private/tmp/talos-${name}-`));
+  const short = existsSync('/private/tmp') ? '/private/tmp' : tmpdir();
+  const base = realpathSync(mkdtempSync(join(short, `talos-${name}-`)));
   bases.push(base);
   const home = join(base, 'home');
   mkdirSync(join(home, '.config', 'team'), { recursive: true });

@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WatchSources } from '../src/commands/watch.ts';
 import type { AsyncLiveRead, AsyncLiveOptions } from '../src/commands/status.ts';
@@ -85,7 +86,7 @@ function makeWorld(name: string): World {
 
 beforeEach(() => {
   forgetIdleEpisodes();
-  base = realpathSync(mkdtempSync(join('/private/tmp', 'team-watch-async-budget-')));
+  base = realpathSync(mkdtempSync(join(tmpdir(), 'team-watch-async-budget-')));
 });
 
 afterEach(() => {
