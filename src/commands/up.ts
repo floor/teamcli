@@ -100,7 +100,7 @@ import { continuityIdOf, continuityIdsOf, recordedSeatContinuity, recordedSeatSe
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { nativePushBindingFor } from '../send/push.ts';
-import { refreshAgentAddress } from '../send/address.ts';
+import { defaultSocketsDirs, refreshAgentAddressFrom } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { emptySession, liveHold, mintSeatId, pidAlive, readState, seatOfFile, updateState, type RetainedSeat, type SeatState, type WaitingRecord } from '../state.ts';
@@ -166,6 +166,9 @@ export type UpSources = {
   logGranted?: typeof logGranted;
   // Present on the shipped command. A dry run never calls it.
   launch?: Launch;
+  // The folders a session's socket is discovered in, where the run records an address. Absent:
+  // the real ones. A test passes its own, so no scene reads a socket of the machine's.
+  sockets?: string | readonly string[];
   // The loaded threads a managed Codex endpoint holds, for binding a ready seat whose records
   // name no conversation to the one thread its endpoint proves. Absent in a world that binds
   // nothing: the launch's summary then names no pull-only reason.
@@ -3771,15 +3774,26 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         };
       }),
     )) logLine(dir, 'up', callerLabel(caller), note, now());
-    // The address: a claude-code seat this run left ready records the socket its session answers
-    // at, so a later send reaches it without re-reading herdr. A pane herdr cannot read leaves
-    // whatever the record holds; the note, if any, is a log line like the registry's own.
+    // The address: every declared claude-code seat this run leaves live records the socket its
+    // session answers at, so a later send reaches it without re-reading herdr — a seat it left
+    // ready and one it could not take as well, because a run that gave up on a seat does not
+    // stop the pane being the one the seat's record names. Each pane is read once, through the
+    // same seam the run's own steps used, and the record's identity is the gate: `same` is the
+    // very process the record names, whose socket is the seat's; `gone` is that seat's shell
+    // back in front, and clears an address the dead CLI left. A pane holding a process the
+    // record does not name, or a record that names none, is never given an address — a send
+    // that dialed one would wake a process this record cannot name (`team register` is that
+    // seat's repair). `unknown` covers a pane herdr cannot read, which writes nothing. The
+    // note, if any, is a log line like the registry's own.
     for (const seat of team.seats) {
       const held = afterwards[seat.name];
-      if (seat.cli !== 'claude-code' || held?.stage !== 'ready' || !held.pane) continue;
+      if (seat.cli !== 'claude-code' || !held?.pane) continue;
       const agent = findAgent(sources.home, { team: teamIdOf(root), seat: seat.name });
       if (!agent) continue;
-      const refreshed = refreshAgentAddress(sources.home, agent.id, held.pane, session);
+      const processes = launch.processInfo?.(session, held.pane) ?? null;
+      const verdict = seatProcessVerdict(held.launched, processes);
+      if (verdict !== 'same' && verdict !== 'gone') continue;
+      const refreshed = refreshAgentAddressFrom(sources.home, agent.id, processes, sources.sockets ?? defaultSocketsDirs());
       if (refreshed.note) logLine(dir, 'up', callerLabel(caller), refreshed.note, now());
     }
     const pending = team.seats.filter((seat) => {
