@@ -8,13 +8,15 @@
 // push, no ack. Fixtures only: synthetic folders, a synthetic home, and a launch line this test
 // writes; no live session is touched.
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listenerPath, receiptPath } from '../src/mcp/inbox.ts';
 import { CHANNEL_CONFIRM_MS, CHANNEL_UNCONFIRMED, channelPushPath } from '../src/mcp/channel.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
 import { loadTeamFile } from '../src/file/load.ts';
+import { runReply } from '../src/commands/reply.ts';
+import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { markPending, readPending } from '../src/send/pending.ts';
 import { signRecord, verifyReceipt, type RecordPayload, type SignedReceipt } from '../src/send/record.ts';
@@ -58,6 +60,8 @@ type Place = {
   root: string;
   home: string;
   dropDir: string;
+  leadId: string;
+  workerId: string;
   cleanup(): void;
 };
 
@@ -69,22 +73,33 @@ function place(launch = `claude ${FLAG}`): Place {
   // The state `team up` leaves: the server proves its caller stands on lead's recorded pane.
   writeFileSync(
     join(root, '.agents', 'team.state.json'),
-    `${JSON.stringify({ format: 1, sessions: { [SESSION]: { seats: { lead: { stage: 'ready', pane: 'pane-lead' } }, worktrees: {} } } })}\n`,
+    `${JSON.stringify({ format: 1, sessions: { [SESSION]: { seats: { lead: { stage: 'ready', pane: 'pane-lead' }, worker: { stage: 'ready', pane: 'pane-worker' } }, worktrees: {} } } })}\n`,
   );
+  const home = join(root, 'home');
+  const teamId = teamIdOf(root);
+  // Roster membership alone cannot resolve a signed from_id: the sender lookup also requires
+  // a live agent file with matching team, seat and session. Register both synthetic agents.
+  const agents = (['lead', 'worker'] as const).map((seat) => registerAgent(home, {
+    name: seat,
+    signing: { model: 'Test', version: '1', role: seat === 'lead' ? 'coordinator' : 'worker' },
+    lab: 'test', cli: 'claude-code', launcher: null,
+    launch: seat === 'lead' ? launch : 'claude',
+    reach: { team: teamId, seat, session: SESSION, pane: `pane-${seat}`, address: null },
+    mcp: [], skills: [], lifecycle: 'running', by: 'owner',
+  }));
   // A server started with no --file resolves its team from the registry record holding the seat.
-  upsertTeam(join(root, 'home'), teamIdOf(root), {
+  upsertTeam(home, teamId, {
     project: 'acme',
     session: SESSION,
     root,
-    roster: [
-      { agent: 'agt_000000000001', seat: 'lead', role: 'coordinator' },
-      { agent: 'agt_000000000002', seat: 'worker', role: 'worker' },
-    ],
+    roster: agents.map((agent) => ({ agent: agent.id, seat: agent.reach.seat, role: agent.signing.role })),
   });
   return {
     root,
-    home: join(root, 'home'),
+    home,
     dropDir: join(root, '.agents', 'send-drops', SESSION, 'lead'),
+    leadId: agents[0]!.id,
+    workerId: agents[1]!.id,
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }
@@ -95,13 +110,13 @@ function signed(at: Place, id: string, body: string, extra: Partial<RecordPayloa
     kind: 'message',
     id,
     to: 'lead',
-    to_id: null,
+    to_id: at.leadId,
     root: realpathSync(at.root),
     session: SESSION,
     at: '2026-10-22T09:00:00.000Z',
     body,
     from: 'worker',
-    from_id: 'agt_000000000002',
+    from_id: at.workerId,
     rule: 'the owner',
     thread: id,
     ...extra,
@@ -363,7 +378,7 @@ describe('the push', () => {
       expect(existsSync(receiptPath(at.dropDir, PUSHED_ID))).toBe(false);
       const read = await tool(feed, 'read', 'inbox_read', { id: PUSHED_ID });
       expect(read.isError).toBeUndefined();
-      expect(read.content[0].text).toBe('read the pushed body');
+      expect(read.content[0].text).toBe('from worker (owner):\n\nread the pushed body');
       const before = readFileSync(receiptPath(at.dropDir, PUSHED_ID), 'utf8');
       const receipt = JSON.parse(before) as SignedReceipt;
       expect(receipt.payload.read_by).not.toBe('channel-push');
@@ -373,6 +388,76 @@ describe('the push', () => {
       const acked = await tool(feed, 'ack-after-read', 'ack', { id: PUSHED_ID });
       expect(JSON.parse(acked.content[0].text)).toEqual({ acknowledged: PUSHED_ID, written: false });
       expect(readFileSync(receiptPath(at.dropDir, PUSHED_ID), 'utf8')).toBe(before);
+    } finally {
+      feed.end();
+      await running;
+      at.cleanup();
+    }
+  });
+
+  test('an explicit reply settles an unacknowledged push and later ack preserves its read receipt', async () => {
+    const at = place();
+    const feed = queue();
+    const running = runMcpServe({ seat: 'lead', session: SESSION }, testIo(at.root, seatCaller()), feed, { home: at.home });
+    try {
+      await until(() => existsSync(listenerPath(at.dropDir)));
+      signed(at, PUSHED_ID, 'answer this push');
+      await until(() => notice(feed.replies).length === 1);
+      expect(notice(feed.replies)).toHaveLength(1);
+      expect(existsSync(receiptPath(at.dropDir, PUSHED_ID))).toBe(false);
+      const replyIo = testIo(at.root, seatCaller());
+      const replied = await runReply([PUSHED_ID, 'the explicit answer'], replyIo, {
+        home: at.home,
+        now: () => new Date('2026-10-22T09:00:01.000Z'),
+        newId: () => ACKED_ID,
+      });
+      expect(replied, replyIo.err).toBe(0);
+      const before = readFileSync(receiptPath(at.dropDir, PUSHED_ID), 'utf8');
+      const receipt = JSON.parse(before) as SignedReceipt;
+      expect(receipt.payload.read_by).toBe('reply');
+      const key = messageKeyState(at.home);
+      if (key.kind !== 'key') throw new Error('fixture key missing');
+      expect(verifyReceipt(receipt, key.key)).toBe(true);
+      expect(existsSync(join(at.dropDir, `${PUSHED_ID}.replied.json`))).toBe(true);
+      const answer = JSON.parse(readFileSync(join(at.root, '.agents', 'send-drops', SESSION, 'worker', ACKED_ID), 'utf8'));
+      expect(answer.payload).toMatchObject({ to: 'worker', from: 'lead', thread: PUSHED_ID });
+      const acked = await tool(feed, 'ack-after-reply', 'ack', { id: PUSHED_ID });
+      expect(JSON.parse(acked.content[0].text)).toEqual({ acknowledged: PUSHED_ID, written: false });
+      expect(readFileSync(receiptPath(at.dropDir, PUSHED_ID), 'utf8')).toBe(before);
+      expect(JSON.parse((await tool(feed, 'unread-after-reply', 'inbox_check')).content[0].text)).toEqual({ unread: [] });
+    } finally {
+      feed.end();
+      await running;
+      at.cleanup();
+    }
+  });
+
+  test('a blocked ack receipt write leaves the push unread and an explicit retry can settle it', async () => {
+    const at = place();
+    const feed = queue();
+    const running = runMcpServe({ seat: 'lead', session: SESSION }, testIo(at.root, seatCaller()), feed, { home: at.home });
+    try {
+      await until(() => existsSync(listenerPath(at.dropDir)));
+      signed(at, PUSHED_ID, 'retry acknowledgment after the receipt path is free');
+      await until(() => notice(feed.replies).length === 1);
+      expect(notice(feed.replies)).toHaveLength(1);
+      const path = receiptPath(at.dropDir, PUSHED_ID);
+      mkdirSync(path);
+      const failed = await tool(feed, 'blocked-ack', 'ack', { id: PUSHED_ID });
+      expect(failed.isError).toBe(true);
+      expect(failed.content[0].text).toContain('receipt name is held');
+      expect(statSync(path).isDirectory()).toBe(true);
+      const checked = await tool(feed, 'still-unread', 'inbox_check');
+      expect(JSON.parse(checked.content[0].text).unread.map((one: { id: string }) => one.id)).toEqual([PUSHED_ID]);
+      // Move the synthetic obstruction aside without changing the message or its reservation.
+      renameSync(path, join(at.root, 'held-read-name'));
+      const retried = await tool(feed, 'retry-ack', 'ack', { id: PUSHED_ID });
+      expect(retried.isError).toBeUndefined();
+      expect(JSON.parse(retried.content[0].text)).toEqual({ acknowledged: PUSHED_ID, written: true });
+      const key = messageKeyState(at.home);
+      if (key.kind !== 'key') throw new Error('fixture key missing');
+      expect(verifyReceipt(JSON.parse(readFileSync(path, 'utf8')) as SignedReceipt, key.key)).toBe(true);
+      expect(notice(feed.replies)).toHaveLength(1);
     } finally {
       feed.end();
       await running;

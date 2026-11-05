@@ -25,6 +25,7 @@ import { lobbyDir } from '../src/lobby/gate.ts';
 import { channelPushPath } from '../src/mcp/channel.ts';
 import { listUnread, listenerPath, receiptPath } from '../src/mcp/inbox.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
+import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { markAnsweredBySend } from '../src/send/answered-by-send.ts';
 import { appendHistory } from '../src/send/history.ts';
@@ -565,7 +566,7 @@ describe('independent adversarial read-receipt intake and D7 trace checks', () =
     expect(readdirSync(recordDir(w.root, 'acme', 'lead')).filter((n) => !n.startsWith('.'))).toEqual(leadDropsAt2N);
   });
 
-  test('the channel push writes its read receipt only after the notification is handed over to the stream, and never if alive() halts before the write', async () => {
+  test('the channel reserves before notification, writes no consumer receipt until explicit ack, and stops before exposing a stale launch', async () => {
     const w = makeWorld();
     const teamPath = join(w.root, '.agents', 'team.yaml');
     writeFileSync(
@@ -575,11 +576,20 @@ describe('independent adversarial read-receipt intake and D7 trace checks', () =
         'launch: claude --dangerously-load-development-channels server:team-inbox',
       ),
     );
-    upsertTeam(w.home, teamIdOf(w.root), {
+    const teamId = teamIdOf(w.root);
+    const agents = (['lead', 'worker', 'helper'] as const).map((seat) => registerAgent(w.home, {
+      name: seat,
+      signing: { model: 'Test', version: '1', role: seat === 'lead' ? 'coordinator' : 'implementer' },
+      lab: 'test', cli: 'claude-code', launcher: null,
+      launch: seat === 'lead' ? 'claude --dangerously-load-development-channels server:team-inbox' : 'claude',
+      reach: { team: teamId, seat, session: 'acme', pane: `pane-${seat}`, address: null },
+      mcp: [], skills: [], lifecycle: 'running', by: 'owner',
+    }));
+    upsertTeam(w.home, teamId, {
       project: 'acme',
       session: 'acme',
       root: w.root,
-      roster: [{ agent: 'agt_000000000001', seat: 'lead', role: 'coordinator' }],
+      roster: agents.map((agent) => ({ agent: agent.id, seat: agent.reach.seat, role: agent.signing.role })),
     });
 
     const leadDropDir = recordDir(w.root, 'acme', 'lead');
@@ -592,10 +602,12 @@ describe('independent adversarial read-receipt intake and D7 trace checks', () =
     const observed: {
       pushMarkerDuringWrite: boolean | null;
       readReceiptDuringWrite: boolean | null;
+      readReceiptDuringAckReply: boolean | null;
       wake: (() => void) | null;
     } = {
       pushMarkerDuringWrite: null,
       readReceiptDuringWrite: null,
+      readReceiptDuringAckReply: null,
       wake: null,
     };
 
@@ -613,12 +625,16 @@ describe('independent adversarial read-receipt intake and D7 trace checks', () =
         }
       })(),
       write: (lineText: string) => {
-        const parsed = JSON.parse(lineText) as { method?: string };
+        const parsed = JSON.parse(lineText) as { method?: string; id?: string };
         if (parsed.method === 'notifications/claude/channel') {
           // At the exact moment the notification is handed to `write`, `.channel-push.json` exists
-          // and `.read.json` has NOT been written yet (`publishRecordRead` runs after `write`).
+          // and `.read.json` is absent: transport handoff cannot acknowledge a consumer read.
           observed.pushMarkerDuringWrite = existsSync(channelPushPath(leadDropDir, PUSH_1));
           observed.readReceiptDuringWrite = existsSync(receiptPath(leadDropDir, PUSH_1));
+        }
+        if (parsed.id === 'ack-push') {
+          // The consumer's explicit ack publishes its receipt before reporting success.
+          observed.readReceiptDuringAckReply = existsSync(receiptPath(leadDropDir, PUSH_1));
         }
         replies.push(lineText);
       },
@@ -637,13 +653,13 @@ describe('independent adversarial read-receipt intake and D7 trace checks', () =
             kind: 'message',
             id,
             to: 'lead',
-            to_id: null,
+            to_id: agents[0]!.id,
             root: realpathSync(w.root),
             session: 'acme',
             at: NOW_ISO,
             body,
             from: 'worker',
-            from_id: null,
+            from_id: agents[1]!.id,
             rule: 'the owner',
             thread: id,
           },
@@ -654,17 +670,32 @@ describe('independent adversarial read-receipt intake and D7 trace checks', () =
       };
 
       writeSigned(PUSH_1, 'from worker\n\nfirst channel push');
-      for (let i = 0; i < 400 && !existsSync(receiptPath(leadDropDir, PUSH_1)); i += 1) {
+      for (let i = 0; i < 400 && observed.pushMarkerDuringWrite === null; i += 1) {
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
       expect(observed.pushMarkerDuringWrite).toBe(true);
       expect(observed.readReceiptDuringWrite).toBe(false);
-      expect(existsSync(receiptPath(leadDropDir, PUSH_1))).toBe(true);
-      expect(readReceiptOf(w, 'lead', PUSH_1)?.payload.read_by).toBe('channel-push');
+      expect(existsSync(receiptPath(leadDropDir, PUSH_1))).toBe(false);
+      expect(listUnread(leadDropDir, { to: 'lead', root: w.root, session: 'acme' }, w.home).map((one) => one.id)).toEqual([PUSH_1]);
       const pushLine = replies.find((one) => (JSON.parse(one) as Record<string, unknown>).method === 'notifications/claude/channel');
       expect(pushLine).toBeDefined();
       expect(pushLine!).not.toContain('"key"');
       expect(Object.keys((JSON.parse(pushLine!) as { params: Record<string, unknown> }).params)).toEqual(['content', 'meta']);
+
+      pending.push(JSON.stringify({ jsonrpc: '2.0', id: 'ack-push', method: 'tools/call', params: { name: 'ack', arguments: { id: PUSH_1 } } }));
+      observed.wake?.();
+      for (let i = 0; i < 400 && observed.readReceiptDuringAckReply === null; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(observed.readReceiptDuringAckReply).toBe(true);
+      const acknowledged = replies.map((one) => JSON.parse(one)).find((one) => one.id === 'ack-push');
+      expect(acknowledged.result.isError).toBeUndefined();
+      expect(JSON.parse(acknowledged.result.content[0].text)).toEqual({ acknowledged: PUSH_1, written: true });
+      const read = readReceiptOf(w, 'lead', PUSH_1);
+      expect(read?.payload.read_by).toBe('channel');
+      const key = messageKeyState(w.home);
+      if (key.kind !== 'key' || read === null) throw new Error('no verifiable receipt after ack');
+      expect(verifyReceipt(read, key.key)).toBe(true);
 
       // Now move `lead` off its pane in `team.state.json` so `serving.alive()` refuses before `write`:
       // no notification is handed over and no read receipt is written for `PUSH_2`.
@@ -675,6 +706,8 @@ describe('independent adversarial read-receipt intake and D7 trace checks', () =
       writeSigned(PUSH_2, 'from worker\n\nsecond channel push');
       await new Promise((resolve) => setTimeout(resolve, 250));
       expect(existsSync(receiptPath(leadDropDir, PUSH_2))).toBe(false);
+      expect(existsSync(channelPushPath(leadDropDir, PUSH_2))).toBe(false);
+      expect(replies.filter((one) => JSON.parse(one).method === 'notifications/claude/channel')).toHaveLength(1);
     } finally {
       ended = true;
       observed.wake?.();
