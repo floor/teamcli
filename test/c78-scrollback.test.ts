@@ -17,6 +17,7 @@ import { readHistory } from '../src/send/history.ts';
 import { dropMessage } from '../src/send/native.ts';
 import { readRecord, signRecord } from '../src/send/record.ts';
 import { deliverTypedWake, type TypedWakeHost, type TypedWakeResult } from '../src/send/typed-wake.ts';
+import { boxHoldsText } from '../src/launch/deliver.ts';
 import type { Live } from '../src/status/compare.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { RetrySources } from '../src/watch/retry.ts';
@@ -40,6 +41,12 @@ const MARKER = '↓ Back to bottom · esc';
 // placeholder, and the hint codex draws until the next keypress is the last non-blank row.
 const ESC_HINT_SCREEN = readFileSync(join(FIXTURES, 'esc-hint.txt'), 'utf8');
 const ESC_HINT = 'esc again to edit previous message';
+// The fourth screen: with a line in the box codex hides the shortcuts row and draws the
+// account's warning on its own last row, under the status row. The bottom region is the
+// reported one; the transcript above it is the fixture's own.
+const WARNING_SCREEN = readFileSync(join(FIXTURES, 'warning-row.txt'), 'utf8');
+const WARNING_LINE = 'Message from the lead. Read it with: team drops --read.';
+const WARNING_ROW = '⚠ 1 warning · f2 to view';
 
 const NOW = new Date('2026-11-04T15:00:00.000Z');
 const N = 600;
@@ -70,6 +77,18 @@ function markerReplaced(row: string): string {
 /** The esc-hint frame with `text` drawn in place of the grey suggestion. */
 function hintHolding(text: string): string {
   return ESC_HINT_SCREEN.replace('› Ask Codex to do anything', `› ${text}`);
+}
+
+/** The warning-row frame with its line removed from the box: the empty prompt, same bottom. */
+function warningIdle(): string {
+  return WARNING_SCREEN.replace(`› ${WARNING_LINE}`, '› Ask Codex to do anything');
+}
+
+/** The warning-row frame with `row` drawn in place of the warning row. */
+function warningReplaced(row: string): string {
+  return WARNING_SCREEN.split('\n')
+    .map((line) => (line.trim() === WARNING_ROW ? row : line))
+    .join('\n');
 }
 
 /** A pane scripted by how many reads and Enters it has seen, and by the lines typed into it.
@@ -349,6 +368,62 @@ describe('the esc hint under an empty composer reads idle', () => {
       `• the pane printed “${ESC_HINT}”\n\n› Ask Codex to do anything`,
     );
     expect(readScreen('codex', idleWithQuote).kind).toBe('idle');
+  });
+});
+
+describe('the account warning on its own row under the status line reads the composer', () => {
+  test('the reported line above the warning row reads unsent', () => {
+    expect(readScreen('codex', WARNING_SCREEN).kind).toBe('unsent');
+    expect(classifyComposer('codex', WARNING_SCREEN.split('\n')).kind).toBe('unsent');
+    // The box holds exactly the line the wake typed: the trailing warning is chrome, not text.
+    expect(boxHoldsText('codex', WARNING_LINE, WARNING_SCREEN)).toBe(true);
+  });
+
+  test('the empty prompt above the warning row reads idle', () => {
+    const frame = warningIdle();
+    expect(readScreen('codex', frame).kind).toBe('idle');
+    expect(classifyComposer('codex', frame.split('\n')).kind).toBe('idle');
+  });
+
+  test('only the exact warning row, as the last non-blank row under the status row, is chrome', () => {
+    // A near miss is no chrome row, and the layout is not the composer's.
+    expect(readScreen('codex', warningReplaced('⚠ 1 warning · f2 to close view')).kind).toBe('unknown');
+    expect(readScreen('codex', warningReplaced('notice: ⚠ 1 warning · f2 to view')).kind).toBe('unknown');
+    // A row under the warning row means it is not the one trailing chrome row.
+    expect(readScreen('codex', `${WARNING_SCREEN}• a row the seat printed\n`).kind).toBe('unknown');
+    // Trailing blank rows are dropped; the warning row stays the last non-blank row.
+    expect(readScreen('codex', `${WARNING_SCREEN}\n\n\n`).kind).toBe('unsent');
+    // The warning row with no status row above it is no composer at all.
+    expect(readScreen('codex', `• a row the seat printed\n  ${WARNING_ROW}\n`).kind).toBe('unknown');
+  });
+
+  test('a transcript row quoting the warning is never the chrome row', () => {
+    // The exact row higher up the transcript does not stand in for the trailing row: with the
+    // trailing row the seat's own, the screen is not the composer's layout.
+    const quotedHigher = warningReplaced('• a row the seat printed').replace(
+      '• The changelog matches the notes; no other change is listed.',
+      `• The changelog matches the notes; no other change is listed.\n\n                                ${WARNING_ROW}`,
+    );
+    expect(readScreen('codex', quotedHigher).kind).toBe('unknown');
+    // A sentence quoting the row leaves the reading as it was: the phrase is transcript, and the
+    // warning row under the status row is still the one chrome row.
+    const idleWithQuote = warningIdle().replace(
+      '› Ask Codex to do anything',
+      `• the pane printed “${WARNING_ROW}”\n\n› Ask Codex to do anything`,
+    );
+    expect(readScreen('codex', idleWithQuote).kind).toBe('idle');
+  });
+
+  test('the typed wake presses Enter into the line under the warning row, and no other key', async () => {
+    // The opening reads are the same bottom region over the empty prompt; after the typing the
+    // box holds the line and codex draws the warning under the status row.
+    const screens = [warningIdle(), warningIdle(), WARNING_SCREEN, WARNING_SCREEN, WORKING];
+    const wake = wakeFake((read) => screens[Math.min(read, screens.length - 1)] ?? null);
+    const out = await deliverTypedWake(wake.host, 'pane-1', WARNING_LINE, 'codex', FAST);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(wake.keys).toEqual([]);
+    expect(wake.typed).toEqual([WARNING_LINE]);
+    expect(wake.enters).toBe(1);
   });
 });
 

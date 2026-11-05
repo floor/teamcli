@@ -319,6 +319,15 @@ screen:
     chrome:
       - '^\s*(?:← for agents · )?\? for shortcuts\s*$'
       - '^\s*(?:← for agents · )?\? for shortcuts\s*…\s*⚠ \d+ warnings?\s*·\s*f2 to view\s*$'
+      # With a line in the box the shortcuts row is hidden, and codex draws the account's
+      # warning alone on the pane's last row, right-aligned under the status row
+      # (0.161.0/warning-row.txt, reported from a live seat with a message line in the box;
+      # the same bottom region over the empty prompt reads idle). The row is the pane's own and
+      # the one chrome row the mode allows under the status row: a draft above it still reads
+      # unsent on its own input row, so the wake's guarded Enter goes into its line, and a
+      # transcript row quoting the warning is never this row. It is drawn, not a dialog — no
+      # key is pressed into it; f2 opens the warning view and would take the pane off its prompt.
+      - '^\s*⚠ \d+ warnings?\s*·\s*f2 to view\s*$'
       # After the scroll-back return key codex draws `esc again to edit previous message` where
       # the shortcuts row stands, and the hint stays until the next keypress. The box over the
       # status row is the empty prompt, so the screen is idle: a wake may type its line there
