@@ -5,9 +5,9 @@
 // counts, models/labs, grants, trust, or policies, which are recorded in `report.findings` with
 // `file:line` provenance and never followed. No discovered check or script is ever executed.
 
-import { spawnSync } from 'node:child_process';
-import { lstatSync, readdirSync, readFileSync } from 'node:fs';
-import { extname, join, relative, resolve } from 'node:path';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
+import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { issueState } from '../commands/issues.ts';
 import { plainLine } from '../launch/plain.ts';
 import { readFileSource } from '../tasks/queue.ts';
@@ -279,6 +279,98 @@ function areaOfFile(relPath: string): string | null {
   return first;
 }
 
+const GIT_SAFE_CONFIG_ARGS: readonly string[] = [
+  '--no-pager',
+  '-c',
+  'core.fsmonitor=false',
+  '-c',
+  'core.hooksPath=/dev/null',
+  '-c',
+  'core.sshCommand=false',
+  '-c',
+  'core.pager=cat',
+  '-c',
+  'protocol.file.allow=never',
+];
+
+const GIT_SAFE_ENV: NodeJS.ProcessEnv = {
+  PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin',
+  HOME: '/var/empty',
+  XDG_CONFIG_HOME: '/var/empty',
+  GIT_CONFIG_NOSYSTEM: '1',
+  GIT_ATTR_NOSYSTEM: '1',
+  GIT_TERMINAL_PROMPT: '0',
+};
+
+function runGitReadOnly(
+  rootAbs: string,
+  args: readonly string[],
+  timeoutMs: number,
+  maxBuffer?: number,
+): SpawnSyncReturns<string> {
+  return spawnSync('git', [...GIT_SAFE_CONFIG_ARGS, '-C', rootAbs, ...args], {
+    encoding: 'utf8',
+    timeout: timeoutMs,
+    ...(maxBuffer !== undefined ? { maxBuffer } : {}),
+    env: GIT_SAFE_ENV,
+  });
+}
+
+/**
+ * Resolves `relPath` inside `rootAbs` and verifies that:
+ * 1. `relPath` is a non-empty relative path (not absolute, no NUL bytes).
+ * 2. `resolve(rootAbs, relPath)` stays strictly inside `rootAbs` (no `..` escape).
+ * 3. Every path segment from `rootAbs` to the target is non-symlink (`lstatSync`), with intermediate
+ *    segments being directories and the leaf being a regular file.
+ * 4. `realpathSync(full)` resolves strictly inside `rootReal` (`realpathSync(rootAbs)`).
+ */
+export function resolveContainedFile(
+  rootAbs: string,
+  rootReal: string,
+  relPath: string,
+): { full: string; size: number } | null {
+  if (typeof relPath !== 'string' || relPath === '' || relPath.includes('\0') || isAbsolute(relPath)) {
+    return null;
+  }
+  const full = resolve(rootAbs, relPath);
+  const rel = relative(rootAbs, full);
+  if (rel === '' || rel === '.' || rel.startsWith('..') || isAbsolute(rel)) {
+    return null;
+  }
+  const segments = rel.split(/[\\/]+/);
+  let current = rootAbs;
+  let leafSize = 0;
+  for (let i = 0; i < segments.length; i += 1) {
+    const seg = segments[i];
+    if (!seg || seg === '.' || seg === '..') return null;
+    current = join(current, seg);
+    let st;
+    try {
+      st = lstatSync(current);
+    } catch {
+      return null;
+    }
+    if (st.isSymbolicLink()) return null;
+    if (i < segments.length - 1) {
+      if (!st.isDirectory()) return null;
+    } else {
+      if (!st.isFile()) return null;
+      leafSize = st.size;
+    }
+  }
+  let fullReal: string;
+  try {
+    fullReal = realpathSync(full);
+  } catch {
+    return null;
+  }
+  const relReal = relative(rootReal, fullReal);
+  if (relReal === '' || relReal === '.' || relReal.startsWith('..') || isAbsolute(relReal)) {
+    return null;
+  }
+  return { full, size: leafSize };
+}
+
 export function readProjectFacts(
   targetPath: string,
   options: ReadProjectOptions = {},
@@ -314,6 +406,16 @@ export function readProjectFacts(
       why: `${targetPath}: not a directory`,
     };
   }
+  let rootReal: string;
+  try {
+    rootReal = realpathSync(rootAbs);
+  } catch (error) {
+    return {
+      ok: false,
+      code: 'analyse.unreadable',
+      why: `${targetPath}: ${(error as Error).message}`,
+    };
+  }
 
   let filesRead = 0;
   let bytesRead = 0;
@@ -329,21 +431,15 @@ export function readProjectFacts(
       estimated = true;
       return null;
     }
-    const full = join(rootAbs, relPath);
-    let st;
-    try {
-      st = lstatSync(full);
-    } catch {
-      return null;
-    }
-    if (st.isSymbolicLink() || !st.isFile()) return null;
-    if (st.size > maxFileBytes) {
+    const contained = resolveContainedFile(rootAbs, rootReal, relPath);
+    if (contained === null) return null;
+    if (contained.size > maxFileBytes) {
       estimated = true;
       return null;
     }
     let buf: Buffer;
     try {
-      buf = readFileSync(full);
+      buf = readFileSync(contained.full);
     } catch {
       return null;
     }
@@ -378,11 +474,7 @@ export function readProjectFacts(
   let fileList: string[] = [];
   let sizeSource = 'filesystem walk';
 
-  const lsFiles = spawnSync('git', ['-C', rootAbs, 'ls-files', '-z'], {
-    encoding: 'utf8',
-    timeout: Math.min(2_000, maxDurationMs),
-    maxBuffer: 8 * 1024 * 1024,
-  });
+  const lsFiles = runGitReadOnly(rootAbs, ['ls-files', '-z'], Math.min(2_000, maxDurationMs), 8 * 1024 * 1024);
   if (lsFiles.status === 0 && typeof lsFiles.stdout === 'string') {
     isGitRepo = true;
     sizeSource = 'git ls-files';
@@ -431,20 +523,16 @@ export function readProjectFacts(
   let totalFiles = 0;
   let totalLines = 0;
   const langStats = new Map<string, { files: number; lines: number }>();
+  const containedFileList: string[] = [];
 
   for (const relPath of fileList) {
     if (!withinBudget()) {
       estimated = true;
       break;
     }
-    const full = join(rootAbs, relPath);
-    let st;
-    try {
-      st = lstatSync(full);
-    } catch {
-      continue;
-    }
-    if (st.isSymbolicLink() || !st.isFile()) continue;
+    const contained = resolveContainedFile(rootAbs, rootReal, relPath);
+    if (contained === null) continue;
+    containedFileList.push(relPath);
     totalFiles += 1;
 
     const ext = extname(relPath).toLowerCase();
@@ -454,14 +542,14 @@ export function readProjectFacts(
     const cached = manifestTexts.get(relPath);
     if (cached !== undefined) {
       lines = countLines(cached);
-    } else if (st.size <= maxFileBytes) {
+    } else if (contained.size <= maxFileBytes) {
       const text = readBoundedText(relPath, true);
       if (text !== null) {
         lines = countLines(text);
       }
     } else {
       estimated = true;
-      lines = Math.round(st.size / 40);
+      lines = Math.round(contained.size / 40);
     }
     totalLines += lines;
 
@@ -472,6 +560,7 @@ export function readProjectFacts(
       langStats.set(lang, prev);
     }
   }
+  fileList = containedFileList;
 
   const totalLangLines = Array.from(langStats.values()).reduce((sum, item) => sum + item.lines, 0);
   const languages: LanguageShare[] = Array.from(langStats.entries())
@@ -558,10 +647,12 @@ export function readProjectFacts(
 
   const ci: string[] = [];
   const releaseWorkflows: string[] = [];
-  const workflowsDir = join(rootAbs, '.github', 'workflows');
+  const githubDir = join(rootAbs, '.github');
+  const workflowsDir = join(githubDir, 'workflows');
   try {
-    const wfStat = lstatSync(workflowsDir);
-    if (!wfStat.isSymbolicLink() && wfStat.isDirectory()) {
+    const ghStat = lstatSync(githubDir);
+    const wfStat = !ghStat.isSymbolicLink() && ghStat.isDirectory() ? lstatSync(workflowsDir) : null;
+    if (wfStat !== null && !wfStat.isSymbolicLink() && wfStat.isDirectory()) {
       const entries = readdirSync(workflowsDir, { withFileTypes: true }).sort((a, b) =>
         a.name.localeCompare(b.name),
       );
@@ -569,6 +660,7 @@ export function readProjectFacts(
         if (entry.isSymbolicLink() || !entry.isFile()) continue;
         if (!entry.name.endsWith('.yml') && !entry.name.endsWith('.yaml')) continue;
         const rel = `.github/workflows/${entry.name}`;
+        if (resolveContainedFile(rootAbs, rootReal, rel) === null) continue;
         ci.push(rel);
         const wfText = readBoundedText(rel, true);
         if (
@@ -585,10 +677,7 @@ export function readProjectFacts(
 
   let hasTags = false;
   if (isGitRepo) {
-    const tagRun = spawnSync('git', ['-C', rootAbs, 'tag', '-l'], {
-      encoding: 'utf8',
-      timeout: 1_000,
-    });
+    const tagRun = runGitReadOnly(rootAbs, ['tag', '-l'], 1_000);
     if (tagRun.status === 0 && typeof tagRun.stdout === 'string' && tagRun.stdout.trim() !== '') {
       hasTags = true;
     }
@@ -615,21 +704,11 @@ export function readProjectFacts(
   if (isGitRepo) {
     gitWalks += 1;
     const sinceEpochSec = Math.floor((now.getTime() - PACE_WINDOW_DAYS * 86_400_000) / 1000);
-    const logRun = spawnSync(
-      'git',
-      [
-        '-C',
-        rootAbs,
-        'log',
-        `--since=@${sinceEpochSec}`,
-        '--format=__COMMIT__%ct',
-        '--name-only',
-      ],
-      {
-        encoding: 'utf8',
-        timeout: Math.min(2_500, maxDurationMs),
-        maxBuffer: 8 * 1024 * 1024,
-      },
+    const logRun = runGitReadOnly(
+      rootAbs,
+      ['log', `--since=@${sinceEpochSec}`, '--format=__COMMIT__%ct', '--name-only'],
+      Math.min(2_500, maxDurationMs),
+      8 * 1024 * 1024,
     );
     if (logRun.status === 0 && typeof logRun.stdout === 'string') {
       const blocks = logRun.stdout.split('__COMMIT__').filter((b) => b.trim() !== '');
@@ -722,13 +801,7 @@ export function readProjectFacts(
   // 6. Open work from local task files (never connecting to a network broker)
   let openWork: OpenWorkSummary = { open: 0, blocked: 0, source: 'none' };
   for (const taskCandidate of ['.agents/tasks.md', '.agents/queue.yaml', '.agents/tasks.yaml']) {
-    const taskFull = join(rootAbs, taskCandidate);
-    try {
-      const st = lstatSync(taskFull);
-      if (st.isSymbolicLink() || !st.isFile()) continue;
-    } catch {
-      continue;
-    }
+    if (resolveContainedFile(rootAbs, rootReal, taskCandidate) === null) continue;
     const read = readFileSource(rootAbs, { path: taskCandidate, local: true });
     if (read.kind === 'records' && read.records.length > 0) {
       let open = 0;
@@ -763,10 +836,7 @@ export function readProjectFacts(
   } else if (pkgPrivate !== undefined) {
     visibility = { value: pkgPrivate ? 'private' : 'public', source: 'package.json' };
   } else if (isGitRepo) {
-    const remoteRun = spawnSync('git', ['-C', rootAbs, 'config', '--get', 'remote.origin.url'], {
-      encoding: 'utf8',
-      timeout: 1_000,
-    });
+    const remoteRun = runGitReadOnly(rootAbs, ['config', '--get', 'remote.origin.url'], 1_000);
     if (remoteRun.status === 0 && typeof remoteRun.stdout === 'string' && remoteRun.stdout.trim() !== '') {
       visibility = { value: 'private', source: 'git remote' };
     } else {

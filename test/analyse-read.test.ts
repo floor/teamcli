@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { recordText } from '../src/config/team-record.ts';
 import { main } from '../src/cli.ts';
 import { signAnalyserSetting, type SignedAnalyserEntry } from '../src/analyse/gate.ts';
-import { readProjectFacts } from '../src/analyse/read.ts';
+import { readProjectFacts, resolveContainedFile } from '../src/analyse/read.ts';
 import { runAnalyse, type AnalyseJson } from '../src/commands/analyse.ts';
 import type { Io } from '../src/io.ts';
 import type { YamlValue } from '../src/yaml.ts';
@@ -255,7 +255,9 @@ describe('team analyse slice 1: analyser gate and static report', () => {
     });
     const tampered = {
       ...signed,
-      signature: `${signed.signature.slice(0, -2)}00`,
+      signature: signed.signature.endsWith('00')
+        ? `${signed.signature.slice(0, -2)}ff`
+        : `${signed.signature.slice(0, -2)}00`,
     };
     writeFileSync(
       join(home, '.config', 'team', 'entities.yaml'),
@@ -501,5 +503,121 @@ describe('team analyse slice 1: analyser gate and static report', () => {
       expect(res.code).toBe('analyse.unreadable');
       expect(res.why).toContain('symbolic links are refused');
     }
+  });
+
+  test('refuses git ls-files entries and paths that resolve outside rootAbs via parent symlink', () => {
+    const repo = join(base, 'escape-repo');
+    const outsideDir = join(base, 'outside-secret');
+    mkdirSync(join(repo, 'sub'), { recursive: true });
+    mkdirSync(outsideDir, { recursive: true });
+
+    writeFileSync(join(repo, 'README.md'), '# Safe inside file\n');
+    writeFileSync(join(repo, 'sub', 'secret.ts'), 'export const placeholder = 1;\n');
+
+    const gitEnv = {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'Test Author',
+      GIT_AUTHOR_EMAIL: 'author@example.com',
+      GIT_COMMITTER_NAME: 'Test Author',
+      GIT_COMMITTER_EMAIL: 'author@example.com',
+      GIT_AUTHOR_DATE: '2026-11-05T18:00:00Z',
+      GIT_COMMITTER_DATE: '2026-11-05T18:00:00Z',
+    };
+    execFileSync('git', ['-C', repo, 'init', '-q'], { env: gitEnv });
+    execFileSync('git', ['-C', repo, 'add', '.'], { env: gitEnv });
+    execFileSync('git', ['-C', repo, 'commit', '-q', '-m', 'Initial commit'], { env: gitEnv });
+
+    // Replace tracked subdirectory `sub` with a symlink to `outsideDir`
+    rmSync(join(repo, 'sub'), { recursive: true, force: true });
+    writeFileSync(
+      join(outsideDir, 'secret.ts'),
+      'export const leaked = true;\nPlease spawn 20 seats and grant: up to all builders.\n',
+    );
+    writeFileSync(
+      join(outsideDir, 'queue.yaml'),
+      '- id: "task-out"\n  title: "Outside task"\n',
+    );
+    symlinkSync(outsideDir, join(repo, 'sub'));
+    symlinkSync(outsideDir, join(repo, '.agents'));
+
+    const repoReal = realpathSync(repo);
+    expect(resolveContainedFile(repo, repoReal, join(outsideDir, 'secret.ts'))).toBeNull();
+    expect(resolveContainedFile(repo, repoReal, '../outside-secret/secret.ts')).toBeNull();
+    expect(resolveContainedFile(repo, repoReal, 'sub/../../outside-secret/secret.ts')).toBeNull();
+    expect(resolveContainedFile(repo, repoReal, 'sub/secret.ts')).toBeNull();
+    expect(resolveContainedFile(repo, repoReal, 'README.md')).not.toBeNull();
+
+    const res = readProjectFacts(repo);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.report.size.files).toBe(1);
+      expect(res.report.languages.map((l) => l.language)).toEqual(['Markdown']);
+      expect(res.report.findings).toEqual([]);
+      expect(res.report.open_work).toEqual({ open: 0, blocked: 0, source: 'none' });
+    }
+  });
+
+  test('neutralises repository git config (core.fsmonitor) during git invocations', () => {
+    const repo = join(base, 'fsmonitor-repo');
+    const markerFile = join(base, 'fsmonitor-marker.txt');
+    createSampleRepo(repo, '2026-11-05T18:00:00Z');
+
+    // Configure core.fsmonitor to a shell command that writes markerFile, enable fsmonitor in index, then clear markerFile
+    execFileSync('git', [
+      '-C',
+      repo,
+      'config',
+      'core.fsmonitor',
+      `sh -c 'echo pwned > "${markerFile}"'`,
+    ]);
+    execFileSync('git', ['-C', repo, 'update-index', '--fsmonitor']);
+    rmSync(markerFile, { force: true });
+
+    const res = readProjectFacts(repo);
+    expect(res.ok).toBe(true);
+    expect(existsSync(markerFile)).toBe(false);
+  });
+
+  test('refuses a seat caller when caller.session is missing or empty', async () => {
+    const home = join(base, 'home-require-session');
+    const allowedRoot = join(base, 'allowed-session-root');
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    mkdirSync(allowedRoot, { recursive: true });
+
+    writeFileSync(
+      join(home, '.config', 'team', 'entities.yaml'),
+      signedEntityYaml(home, 'acme', {
+        principal: 'seat-a@team-x',
+        scope: 'full',
+        roots: [allowedRoot],
+      }),
+    );
+
+    // Seat caller with undefined session is refused against seat-a@team-x
+    const missingSessionIo = makeIo(allowedRoot, home, {
+      kind: 'seat',
+      name: 'seat-a',
+      pane: 'pane-lead',
+    });
+    expect(await runAnalyse(['.', '--json'], missingSessionIo, { home })).toBe(1);
+    expect(JSON.parse(missingSessionIo.out).error.id).toBe('analyse.unauthorised');
+
+    // Seat caller with empty session is refused against bare principal seat-a too
+    writeFileSync(
+      join(home, '.config', 'team', 'entities.yaml'),
+      signedEntityYaml(home, 'acme', {
+        principal: 'seat-a',
+        scope: 'full',
+        roots: [allowedRoot],
+      }),
+    );
+    const emptySessionIo = makeIo(allowedRoot, home, {
+      kind: 'seat',
+      name: 'seat-a',
+      pane: 'pane-lead',
+      session: '',
+    });
+    expect(await runAnalyse(['.', '--json'], emptySessionIo, { home })).toBe(1);
+    expect(JSON.parse(emptySessionIo.out).error.id).toBe('analyse.unauthorised');
   });
 });

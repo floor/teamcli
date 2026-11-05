@@ -389,13 +389,13 @@ function callerMatchesPrincipal(caller: Caller, principal: string): boolean {
   if (isOwner(caller)) return true;
   if (caller.kind !== 'seat') return false;
   if (principal === 'owner') return false;
+  if (typeof caller.session !== 'string' || caller.session.trim() === '') return false;
   const atIndex = principal.indexOf('@');
   if (atIndex >= 0) {
     const seatName = principal.slice(0, atIndex);
     const teamOrSession = principal.slice(atIndex + 1);
-    if (caller.name !== seatName) return false;
-    if (caller.session !== undefined && caller.session !== teamOrSession) return false;
-    return true;
+    if (seatName === '' || teamOrSession === '') return false;
+    return caller.name === seatName && caller.session === teamOrSession;
   }
   return caller.name === principal;
 }
