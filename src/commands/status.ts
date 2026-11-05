@@ -1040,12 +1040,23 @@ function liveRead<T>(read: () => T, fallback: T): T {
   }
 }
 
+/** How the machine-wide live reading answered. `none` is no live source at all (a caller that
+ *  reads the registry only); `unavailable` is a live source herdr did not answer — it threw, or
+ *  said it could not be asked; `read` is herdr's own list of sessions. */
+type ProjectLiveReading = 'read' | 'unavailable' | 'none';
+
 /** The project's teams as they stand now: the registry records for the team rows, and the live
- *  reader `team list --seats` uses for a running session's seats. A session herdr does not list
- *  as running — or does not list at all, because herdr is down — reads stopped, never an error. */
-function projectTeams(project: ProjectView, records: Record<string, TeamRecord>, sources: StatusSources): ProjectTeamReading[] {
+ *  reader `team list --seats` uses for a running session's seats. A session herdr lists as not
+ *  running — or does not list at all, because herdr is down — reads stopped, never an error; the
+ *  reading it returned says whether the count can be trusted. */
+function projectTeams(
+  project: ProjectView,
+  records: Record<string, TeamRecord>,
+  sources: StatusSources,
+): { teams: ProjectTeamReading[]; live: ProjectLiveReading } {
   const list = sources.list;
-  const sessions = list === undefined ? null : liveRead(() => list.sessions(), null);
+  const sessions = list === undefined ? undefined : liveRead(() => list.sessions(), null);
+  const liveReading: ProjectLiveReading = sessions === undefined ? 'none' : sessions === null ? 'unavailable' : 'read';
   const runningByName = new Map((sessions ?? []).map((session) => [session.name, session.running]));
   const membership = membershipsOf(project, records);
   const standing: Array<{ id: string; membership: 'home' | 'serves' }> = [
@@ -1072,13 +1083,17 @@ function projectTeams(project: ProjectView, records: Record<string, TeamRecord>,
     }
     teams.push({ name: id, membership: place, session, lifecycle: record?.lifecycle ?? null, seats, running, active, roster });
   }
-  return teams;
+  return { teams, live: liveReading };
 }
 
 /** The project's active agents: every seat the live reading says is ready, working or waiting.
- *  Null when a registered team's live roster could not be read, so the total never claims a
- *  complete count it does not have; a team no record holds adds nothing and keeps it a number. */
-function activeTotal(teams: ProjectTeamReading[]): number | null {
+ *  Null when a registered team's live roster could not be read, and when herdr could not be asked
+ *  at all: the total never claims a complete count it does not have. A team no record holds adds
+ *  nothing and keeps it a number, and a project with no registered team keeps it a number too. */
+function activeTotal(teams: ProjectTeamReading[], live: ProjectLiveReading): number | null {
+  // herdr did not answer, so no session's running state is known: every registered team's count
+  // is an unknown, not a zero read from the records.
+  if (live === 'unavailable' && teams.some((team) => team.session !== null)) return null;
   let total = 0;
   for (const team of teams) {
     if (team.active === null) {
@@ -1092,8 +1107,9 @@ function activeTotal(teams: ProjectTeamReading[]): number | null {
 
 /** The project reading as the plain table: a line per team (its record, where it stands and
  *  whether its session runs), then one row per seat with the team it belongs to, its state and
- *  its model, then the project's count of active agents. */
-function renderProject(project: ProjectView, teams: ProjectTeamReading[], total: number | null): string {
+ *  its model, then the project's count of active agents. When herdr did not answer, one line
+ *  says so above the count, which then reads `?`. */
+function renderProject(project: ProjectView, teams: ProjectTeamReading[], total: number | null, live: ProjectLiveReading): string {
   const lines = [projectContextLine(project)];
   for (const team of teams) {
     if (team.session === null) {
@@ -1111,6 +1127,7 @@ function renderProject(project: ProjectView, teams: ProjectTeamReading[], total:
       rows: teams.flatMap((team) => team.roster.map((seat) => [seat.team, seat.name, seat.state, seat.model])),
     }));
   }
+  if (live === 'unavailable') lines.push('herdr is not running: the live seat reading is unavailable');
   lines.push(total === null ? '? active agents' : pluralCount(total, 'active agent'));
   return `${lines.join('\n')}\n`;
 }
@@ -1139,13 +1156,13 @@ async function projectReport(name: string, out: Io, io: Io, sources: StatusSourc
   const wait = sources.wait ?? waitOrStop;
   for (;;) {
     const records = readTeams(sources.home ?? homedir());
-    const teams = projectTeams(project, records, sources);
-    const total = activeTotal(teams);
+    const reading = projectTeams(project, records, sources);
+    const total = activeTotal(reading.teams, reading.live);
     if (json) {
-      writeJson(io, 'team.status.project', { format: 1 as const, project, teams, active_agents: total });
+      writeJson(io, 'team.status.project', { format: 1 as const, project, teams: reading.teams, active_agents: total });
       break;
     }
-    const text = renderProject(project, teams, total);
+    const text = renderProject(project, reading.teams, total, reading.live);
     if (!watching) {
       out.stdout(text);
       break;

@@ -169,8 +169,11 @@ read through the live reader [`team list --seats`](list.md) uses:
   (`-` when no source names one, which is the case for a stopped session's seats, since the
   registry records no model);
 - the project's total: `n active agents` counting every seat that is ready, working or waiting,
-  or `? active agents` when a running session's roster could not be read — the total never claims
-  a count it does not have. A stopped session contributes none.
+  or `? active agents` when a running session's roster could not be read, and when herdr could not
+  be asked at all — the total never claims a count it does not have. A stopped session contributes
+  none. When herdr did not answer, one line above the total says
+  `herdr is not running: the live seat reading is unavailable`; a session herdr lists as down is a
+  complete reading and still contributes none.
 
 `--json` carries the same reading: the project record, each team's `membership`, `session`,
 `lifecycle`, `seats`, `running`, `active` (`ready`, `working`, `waiting`, `stopped`; null for a
@@ -200,7 +203,8 @@ answer once the caller has passed the gate: without it, `status` can't say anyth
 team file, no caller check — the way [team projects](projects.md) reads it, and each team's seats
 through the same live reader [`team list --seats`](list.md) uses, never a second reader. A team
 whose session is down — not listed as running, or not listed at all because herdr is down —
-reads `stopped`, not an error. `--session` and `--file` name one team's readings and do not apply
+reads `stopped`, not an error; when herdr cannot be asked at all, the active count reads `?`
+rather than `0`. `--session` and `--file` name one team's readings and do not apply
 beside it: aiming them together is the invocation refusal, exit 2.
 
 ## Output and exit codes
@@ -223,7 +227,7 @@ queues are not configured.
 | at least one difference | the same, then one `difference:` line with its `  repair:` and `  who:` lines under it per difference, and the count: `1 difference`, or `2 differences, 1 for the owner` when a repair is the owner's | 1 |
 | a flag the caller may not aim | the refusal every command gives it | 1 |
 | `--project` with a name no project holds | `team status: no project named "<name>"; nothing to show` | 1 |
-| `--project` covering a project | the project's name, id, entity and lead, then one line per team: its session, lifecycle, seat count, `home` or `serves`, and `running` or `stopped` (or `not registered` for a team no record holds), then one `TEAM SEAT STATE MODEL` row per seat, then `n active agents` (`? active agents` when a running session's roster could not be read) | 0 |
+| `--project` covering a project | the project's name, id, entity and lead, then one line per team: its session, lifecycle, seat count, `home` or `serves`, and `running` or `stopped` (or `not registered` for a team no record holds), then one `TEAM SEAT STATE MODEL` row per seat, then `n active agents` (`? active agents` when a running session's roster could not be read, or when herdr could not be asked, with the line `herdr is not running: the live seat reading is unavailable`) | 0 |
 | `--watch` without `--project`, or beside `--json` | the invocation refusal: `team status: --watch needs --project <name>`, or `team status: --watch and --json can't be used together` | 2 |
 | the invocation or the team file can't be read, herdr doesn't answer, or the caller may not read this team | `team status: <problem>`, `team status: herdr doesn't answer; is it installed and running?`, or the one fixed sentence | 2 |
 

@@ -292,7 +292,7 @@ test('team status --project reads each seat live: state, model and team, and cou
   }
 });
 
-test('a team whose session is down reads stopped, not an error; herdr down reads the same', async () => {
+test('a session herdr lists as down reads stopped; a herdr that cannot be asked leaves the count unknown', async () => {
   const place = home();
   try {
     upsertTeam(place.dir, TEAM_A, {
@@ -301,21 +301,35 @@ test('a team whose session is down reads stopped, not an error; herdr down reads
       root: '/work/teamcli',
       roster: [{ agent: 'agt_1', seat: 'lead', role: 'coordinator', leads: true }],
     });
-    const expected =
+    const rows =
       'project TeamCLI  4f2a1b7c9d0e  entity floor  lead agt_2b9f\n'
       + `  ${TEAM_A}  session "teamcli"  defined  1 seat  home  stopped\n`
       + `  ${TEAM_B}  not registered  home\n`
       + '  TEAM          SEAT  STATE    MODEL\n'
-      + `  ${TEAM_A}  lead  stopped  -\n`
-      + '0 active agents\n';
-    const scenarios: Array<ListedSession[] | null> = [[{ name: 'teamcli', running: false }], null];
-    for (const sessions of scenarios) {
-      const io = testIo('/anywhere');
-      const code = await runStatus(['--project', 'TeamCLI'], io, statusWith(place.dir, sourcesOf([project()]), liveSeats(sessions)));
-      expect(code).toBe(0);
-      expect(io.err).toBe('');
-      expect(io.out).toBe(expected);
-    }
+      + `  ${TEAM_A}  lead  stopped  -\n`;
+
+    // herdr answers and lists the session as down: a complete reading, and its stopped seats count none.
+    const down = testIo('/anywhere');
+    const downCode = await runStatus(['--project', 'TeamCLI'], down, statusWith(place.dir, sourcesOf([project()]), liveSeats(
+      [{ name: 'teamcli', running: false }],
+    )));
+    expect(downCode).toBe(0);
+    expect(down.err).toBe('');
+    expect(down.out).toBe(`${rows}0 active agents\n`);
+
+    // herdr cannot be asked: the teams still read stopped, but no live reading backs the count, so
+    // the total is `?` and the output says why. `--json` carries the same as a null total.
+    const noAnswer = testIo('/anywhere');
+    const noAnswerCode = await runStatus(['--project', 'TeamCLI'], noAnswer, statusWith(place.dir, sourcesOf([project()]), liveSeats(null)));
+    expect(noAnswerCode).toBe(0);
+    expect(noAnswer.err).toBe('');
+    expect(noAnswer.out).toBe(`${rows}herdr is not running: the live seat reading is unavailable\n? active agents\n`);
+
+    const json = testIo('/anywhere');
+    expect(await runStatus(['--project', 'TeamCLI', '--json'], json, statusWith(place.dir, sourcesOf([project()]), liveSeats(null)))).toBe(0);
+    const parsed = JSON.parse(json.out);
+    expect(parsed.teams[0]).toMatchObject({ running: false });
+    expect(parsed.active_agents).toBeNull();
   } finally {
     place.done();
   }
