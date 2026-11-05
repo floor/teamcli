@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { acquireSeatLock, holderText, lockSteps, seatLockHolder, seatLockPath, type LockSteps, type SeatLock } from '../../src/launch/seat-lock.ts';
@@ -13,8 +13,8 @@ function place(): { dir: string; path: string; claim: string } {
   return { dir, path, claim: `${path}.steal` };
 }
 
-// Synthetic process and boot facts for the scenes below: no scene reads the real process table
-// or the machine's own boot time. `HOLDER` is a pid number the test owns; whether it is alive,
+// Synthetic process and boot facts for every scene: no scene reads the real process table or
+// this machine's own boot instant. `HOLDER` is a pid number the test owns; whether it is alive,
 // when it started and when this machine booted are the scene's to say.
 const HOLDER = 4242;
 const BOOT = Date.parse('2026-11-05T09:00:00Z');
@@ -23,7 +23,7 @@ const START = Date.parse('2026-11-05T10:00:00Z');
 function facts(overrides: Partial<LockSteps> = {}): Partial<LockSteps> {
   return {
     pid: () => HOLDER,
-    alive: () => true,
+    alive: (pid) => pid !== DEAD,
     startOf: () => START,
     bootTime: () => BOOT,
     writtenAt: () => BOOT + 60_000,
@@ -33,21 +33,24 @@ function facts(overrides: Partial<LockSteps> = {}): Partial<LockSteps> {
 
 const token = (path: string): string => readFileSync(path, 'utf8').trim();
 const own = (lock: SeatLock): lock is { release(): void } => 'release' in lock;
+const fresh = new RegExp(`^${HOLDER} [0-9a-f]+ ${START}$`);
 
 describe('the seat lock', () => {
   test('a dead holder is taken over, and a live one is left alone', () => {
     const { dir, path } = place();
     writeFileSync(path, `${DEAD} deadbeef\n`);
-    const taken = acquireSeatLock(dir, 'acme', 'lead');
+    const taken = acquireSeatLock(dir, 'acme', 'lead', facts());
     expect(own(taken)).toBe(true);
-    expect(token(path)).toMatch(new RegExp(`^${process.pid} [0-9a-f]+(?: \\d+)?$`));
+    expect(token(path)).toMatch(fresh);
     if (own(taken)) taken.release();
     expect(statSync(path, { throwIfNoEntry: false })).toBeUndefined();
 
-    writeFileSync(path, `${process.pid} deadbeef\n`);
-    const held = acquireSeatLock(dir, 'acme', 'lead');
-    expect(held).toEqual({ held: process.pid, startedAt: null });
-    expect(token(path)).toBe(`${process.pid} deadbeef`);
+    // A token from before starts were recorded, whose pid is alive: it carries nothing to
+    // compare, so it is held exactly as it always was.
+    writeFileSync(path, `${HOLDER} deadbeef\n`);
+    const held = acquireSeatLock(dir, 'acme', 'lead', facts());
+    expect(held).toEqual({ held: HOLDER, startedAt: null });
+    expect(token(path)).toBe(`${HOLDER} deadbeef`);
   });
 
   test('the reviewer interleaving has no instant to land in: a taker stops before its one atomic step', () => {
@@ -60,11 +63,12 @@ describe('the seat lock', () => {
     let b: SeatLock | undefined;
     let stopped = false;
     const steps: Partial<LockSteps> = {
+      ...facts(),
       nonce: () => 'aaaaaaaaaaaa',
       publish: (from, to) => {
         if (to === path && !stopped) {
           stopped = true;
-          b = acquireSeatLock(dir, 'acme', 'lead');
+          b = acquireSeatLock(dir, 'acme', 'lead', facts());
         }
         lockSteps.publish(from, to);
       },
@@ -90,10 +94,11 @@ describe('the seat lock', () => {
     let b: SeatLock | undefined;
     let ran = false;
     const steps: Partial<LockSteps> = {
+      ...facts(),
       drop: (target) => {
         if (target === path && !ran) {
           ran = true;
-          b = acquireSeatLock(dir, 'acme', 'lead');
+          b = acquireSeatLock(dir, 'acme', 'lead', facts());
         }
         lockSteps.drop(target);
       },
@@ -103,7 +108,7 @@ describe('the seat lock', () => {
     expect(b).toBeDefined();
     expect('held' in (b as SeatLock)).toBe(true);
     // B was refused at the claim, so the lock A published is A's own and still there.
-    expect(token(path)).toMatch(new RegExp(`^${process.pid} [0-9a-f]+(?: \\d+)?$`));
+    expect(token(path)).toMatch(fresh);
     if (own(a)) a.release();
   });
 
@@ -113,11 +118,12 @@ describe('the seat lock', () => {
     let c: SeatLock | undefined;
     let ran = false;
     const steps: Partial<LockSteps> = {
+      ...facts(),
       drop: (target) => {
         lockSteps.drop(target);
         if (target === path && !ran) {
           ran = true;
-          c = acquireSeatLock(dir, 'acme', 'lead');
+          c = acquireSeatLock(dir, 'acme', 'lead', facts());
         }
       },
     };
@@ -125,31 +131,31 @@ describe('the seat lock', () => {
     expect('held' in a).toBe(true);
     expect(c).toBeDefined();
     expect(own(c as SeatLock)).toBe(true);
-    expect(token(path)).toMatch(new RegExp(`^${process.pid} [0-9a-f]+(?: \\d+)?$`));
+    expect(token(path)).toMatch(fresh);
     if (own(c as SeatLock)) (c as { release(): void }).release();
   });
 
   test('a lock that cannot be read or parsed is held, never stale', () => {
     const { dir, path } = place();
     writeFileSync(path, '');
-    expect(acquireSeatLock(dir, 'acme', 'lead')).toEqual({ held: -1, startedAt: null });
+    expect(acquireSeatLock(dir, 'acme', 'lead', facts())).toEqual({ held: -1, startedAt: null });
     expect(readFileSync(path, 'utf8')).toBe('');
 
     writeFileSync(path, 'nonsense\n');
-    expect(acquireSeatLock(dir, 'acme', 'lead')).toEqual({ held: -1, startedAt: null });
+    expect(acquireSeatLock(dir, 'acme', 'lead', facts())).toEqual({ held: -1, startedAt: null });
     expect(readFileSync(path, 'utf8')).toBe('nonsense\n');
 
     // A directory cannot be read as a token and cannot be replaced by `link`.
     lockSteps.drop(path);
     mkdirSync(path);
-    expect(acquireSeatLock(dir, 'acme', 'lead')).toEqual({ held: -1, startedAt: null });
+    expect(acquireSeatLock(dir, 'acme', 'lead', facts())).toEqual({ held: -1, startedAt: null });
     expect(statSync(path).isDirectory()).toBe(true);
     expect(readdirSync(join(dir, 'seat-locks', 'acme'))).toEqual(['lead']);
   });
 
   test('release removes only a lock that still carries this taker\'s token', () => {
     const { dir, path } = place();
-    const lock = acquireSeatLock(dir, 'acme', 'lead');
+    const lock = acquireSeatLock(dir, 'acme', 'lead', facts());
     expect(own(lock)).toBe(true);
     if (!own(lock)) return;
     const mine = token(path);
@@ -165,19 +171,19 @@ describe('the seat lock', () => {
     const { dir, path, claim } = place();
     writeFileSync(path, `${DEAD} deadbeef\n`);
     writeFileSync(claim, `${DEAD} deadbeef\n`);
-    const lock = acquireSeatLock(dir, 'acme', 'lead');
+    const lock = acquireSeatLock(dir, 'acme', 'lead', facts());
     expect(own(lock)).toBe(true);
-    expect(token(path)).toMatch(new RegExp(`^${process.pid} [0-9a-f]+(?: \\d+)?$`));
+    expect(token(path)).toMatch(fresh);
     if (own(lock)) lock.release();
   });
 
   test('a claim held by a live taker refuses the takeover and leaves the stale lock', () => {
     const { dir, path, claim } = place();
     writeFileSync(path, `${DEAD} deadbeef\n`);
-    writeFileSync(claim, `${process.pid} cafefeed\n`);
-    expect(acquireSeatLock(dir, 'acme', 'lead')).toEqual({ held: -1, startedAt: null });
+    writeFileSync(claim, `${HOLDER} cafefeed\n`);
+    expect(acquireSeatLock(dir, 'acme', 'lead', facts())).toEqual({ held: -1, startedAt: null });
     expect(readFileSync(path, 'utf8')).toBe(`${DEAD} deadbeef\n`);
-    expect(readFileSync(claim, 'utf8')).toBe(`${process.pid} cafefeed\n`);
+    expect(readFileSync(claim, 'utf8')).toBe(`${HOLDER} cafefeed\n`);
   });
 
   // A token records the holder's start: `<pid> <nonce> <startedAtMs>`. After a reboot the OS can
@@ -190,7 +196,7 @@ describe('the seat lock', () => {
       const lock = acquireSeatLock(dir, 'acme', 'lead', facts());
       expect(own(lock)).toBe(true);
       // The new token records this process's own start, so the lock is provably this process's.
-      expect(token(path)).toMatch(new RegExp(`^${HOLDER} [0-9a-f]+ ${START}$`));
+      expect(token(path)).toMatch(fresh);
       expect(statSync(claim, { throwIfNoEntry: false })).toBeUndefined();
       if (own(lock)) lock.release();
     });
@@ -214,7 +220,7 @@ describe('the seat lock', () => {
       writeFileSync(path, `${HOLDER} cafefeed ${START - 120_000}\n`);
       const lock = acquireSeatLock(dir, 'acme', 'lead', facts());
       expect(own(lock)).toBe(true);
-      expect(token(path)).toMatch(new RegExp(`^${HOLDER} [0-9a-f]+ ${START}$`));
+      expect(token(path)).toMatch(fresh);
       if (own(lock)) lock.release();
     });
 
@@ -224,22 +230,26 @@ describe('the seat lock', () => {
       expect(acquireSeatLock(dir, 'acme', 'lead', facts({ startOf: () => null }))).toEqual({ held: HOLDER, startedAt: START });
     });
 
-    // A lock written before tokens recorded a start cannot prove whose it is. It is stale only
-    // when its pid is dead or its file predates this boot; otherwise it stays held, as it always
-    // was. A lock written after this boot is a live command's, whatever its pid's provenance.
-    test('a start-less lock whose file predates this boot is taken over even though its pid is live', () => {
+    // A token written before tokens recorded a start has nothing to compare. A live pid at it
+    // keeps it held, whatever the file's own time says: after a clock step a file this boot's
+    // holder wrote can look older than the boot, and taking that lock would admit a second
+    // writer over a live one. Only a dead pid shows the token is not its writer's.
+    test('a start-less live lock whose file predates this boot stays held under a stepped clock', () => {
       const { dir, path } = place();
       writeFileSync(path, `${HOLDER} cafefeed\n`);
-      const lock = acquireSeatLock(dir, 'acme', 'lead', facts({ writtenAt: () => BOOT - 1 }));
-      expect(own(lock)).toBe(true);
-      expect(token(path)).toMatch(new RegExp(`^${HOLDER} [0-9a-f]+ ${START}$`));
-      if (own(lock)) lock.release();
+      // The clock stepped back after the file was written: its mtime now reads an hour before
+      // the boot instant, while the process that wrote it is still alive.
+      const stepped = new Date(BOOT - 3_600_000);
+      utimesSync(path, stepped, stepped);
+      const steppedAt = stepped.getTime();
+      expect(acquireSeatLock(dir, 'acme', 'lead', facts({ writtenAt: () => steppedAt }))).toEqual({ held: HOLDER, startedAt: null });
+      expect(token(path)).toBe(`${HOLDER} cafefeed`);
     });
 
     test('a start-less lock whose live pid is from this boot stays held', () => {
       const { dir, path } = place();
       writeFileSync(path, `${HOLDER} cafefeed\n`);
-      expect(acquireSeatLock(dir, 'acme', 'lead', facts({ writtenAt: () => BOOT }))).toEqual({ held: HOLDER, startedAt: null });
+      expect(acquireSeatLock(dir, 'acme', 'lead', facts())).toEqual({ held: HOLDER, startedAt: null });
       expect(token(path)).toBe(`${HOLDER} cafefeed`);
     });
 
@@ -249,14 +259,18 @@ describe('the seat lock', () => {
       expect(acquireSeatLock(dir, 'acme', 'lead', facts({ bootTime: () => null, writtenAt: () => 0 }))).toEqual({ held: HOLDER, startedAt: null });
     });
 
-    test('a takeover claim left before this boot does not block the next taker', () => {
+    test('a start-less claim with a live pid refuses the takeover too', () => {
+      // The claim's taker wrote no start either. Its pid is alive, so the claim is held, and the
+      // stale lock behind it is left exactly as it was.
       const { dir, path, claim } = place();
       writeFileSync(path, `${DEAD} deadbeef\n`);
       writeFileSync(claim, `${HOLDER} cafefeed\n`);
-      const lock = acquireSeatLock(dir, 'acme', 'lead', facts({ alive: (pid) => pid === HOLDER, writtenAt: () => BOOT - 1_000 }));
-      expect(own(lock)).toBe(true);
-      expect(token(path)).toMatch(new RegExp(`^${HOLDER} [0-9a-f]+ ${START}$`));
-      if (own(lock)) lock.release();
+      const stepped = new Date(BOOT - 60_000);
+      utimesSync(claim, stepped, stepped);
+      const steppedAt = stepped.getTime();
+      expect(acquireSeatLock(dir, 'acme', 'lead', facts({ writtenAt: () => steppedAt }))).toEqual({ held: -1, startedAt: null });
+      expect(readFileSync(path, 'utf8')).toBe(`${DEAD} deadbeef\n`);
+      expect(readFileSync(claim, 'utf8')).toBe(`${HOLDER} cafefeed\n`);
     });
   });
 
@@ -265,7 +279,7 @@ describe('the seat lock', () => {
   describe('a lock is read without being taken', () => {
     test('no file is no holder, and the file is still absent after the read', () => {
       const { dir, path } = place();
-      expect(seatLockHolder(dir, 'acme', 'lead')).toBeNull();
+      expect(seatLockHolder(dir, 'acme', 'lead', facts())).toBeNull();
       expect(statSync(path, { throwIfNoEntry: false })).toBeUndefined();
     });
 
