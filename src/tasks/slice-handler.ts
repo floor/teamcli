@@ -215,7 +215,7 @@ const UNAPPROVED_INSTALLER =
 function designationApproved(root: string, team: TeamFile, home: string): boolean {
   const standing = approvalStanding(root, home);
   if (standing.kind !== 'verified') return false;
-  return !approvalDifferencesOf(standing, team).includes('`installer` changed');
+  return !approvalDifferencesOf(standing, team, home).includes('`installer` changed');
 }
 
 function declaredSeat(team: TeamFile, caller: Caller): Extract<Caller, { kind: 'seat' }> | null {

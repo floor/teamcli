@@ -457,7 +457,7 @@ export function grantGate(input: {
     if (standing.kind !== 'verified') {
       return refuse('approval', `a grant needs a verified approval: ${notInForce(standing)}`);
     }
-    const differences = compare(approvedFingerprints(standing.record), fingerprints(loaded.team));
+    const differences = compare(approvedFingerprints(standing.record, home), fingerprints(loaded.team));
     const kept = differences.filter((difference) => difference.kind === 'section' && !ORDINARY_SECTIONS.includes(difference.name));
     if (kept.length > 0) {
       return refuse('not-ordinary', `this change needs the owner: ${kept.map(describe).join('; ')}`);

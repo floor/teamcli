@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import type { TeamFile } from '../file/types.ts';
 import { defaultWatch } from '../file/sections/watch.ts';
 import { parseYaml, type YamlNode } from '../yaml.ts';
+import { leadWordProblem } from '../lead.ts';
 import { LIVENESS_KEYS, type StateThresholds } from './inherit.ts';
 
 /** One `liveness:` map from a file, or undefined when the node is not one: only the three
@@ -51,6 +52,47 @@ export function machineLiveness(home: string | undefined): Partial<StateThreshol
   }
   if (root.kind !== 'map') return undefined;
   return livenessMap(root.entries.find((entry) => entry.key === 'liveness')?.value);
+}
+
+/** The universe's default lead, as the machine settings file stands in for it: a word, none, or
+ *  why the word does not read. */
+export type MachineLead = { ok: true; lead: string | null } | { ok: false; why: string };
+
+/**
+ * The universe's default lead. The universe has no runtime record in this build, so the machine's
+ * settings file carries the word a universe file writes as its optional `lead:` (the field
+ * `library/en/universes/olympus.yaml` holds); when the library's universe reader lands it
+ * supplies this level instead, and the lead chain is unchanged.
+ *
+ * A `lead:` under the file's top level, beside `liveness:`. An absent, unreadable or unparsable
+ * file declares none, as every reader here is silent about a file it cannot read. A file that
+ * does read and carries a word that is not a seat name is refused rather than read as no word:
+ * the universe is the widest level, so a typo there has no wider level to mask it, and the
+ * refusal names the file.
+ */
+export function machineLead(home: string | undefined): MachineLead {
+  if (home === undefined) return { ok: true, lead: null };
+  const path = machineSettingsPath(home);
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    return { ok: true, lead: null };
+  }
+  let root: YamlNode;
+  try {
+    root = parseYaml(text);
+  } catch {
+    return { ok: true, lead: null };
+  }
+  if (root.kind !== 'map') return { ok: true, lead: null };
+  const entry = root.entries.find((candidate) => candidate.key === 'lead');
+  if (entry === undefined) return { ok: true, lead: null };
+  const value = entry.value.kind === 'scalar' ? entry.value.value : undefined;
+  if (typeof value !== 'string') return { ok: false, why: `${path}: lead must be one seat name` };
+  const problem = leadWordProblem(value);
+  if (problem !== null) return { ok: false, why: `${path}: lead ${problem}` };
+  return { ok: true, lead: value };
 }
 
 /**

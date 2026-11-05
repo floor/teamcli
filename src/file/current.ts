@@ -79,10 +79,10 @@ function currentFrom(loaded: LoadResult, now: Date, home: string | undefined, re
   }
   if (!loaded.path || !existsSync(loaded.path)) return { ok: false, errors: loaded.errors };
   const dir = dirname(loaded.path);
-  const saved = lastValid(dir);
+  const root = dir.endsWith('.agents') ? dirname(dir) : dir;
+  const saved = lastValid(dir, home, root);
   if (!saved) return { ok: false, errors: loaded.errors };
   const first = loaded.errors[0];
-  const root = dir.endsWith('.agents') ? dirname(dir) : dir;
   const where = home ?? undefined;
   const registry = resolveTeamConfigSource(where !== undefined ? { home: where } : {});
   const team = saved.file !== undefined && registry.ok && registry.source === 'registry' && where !== undefined
@@ -130,11 +130,13 @@ function rememberText(dir: string, file: string, now: Date): void {
   }
 }
 
-function lastValid(dir: string): { team: TeamFile; file: string; readAt: string } | null {
+function lastValid(dir: string, home: string | undefined, root: string): { team: TeamFile; file: string; readAt: string } | null {
   try {
     const saved = readState(dir).last_valid;
     if (!saved) return null;
-    const result = validateTeamFile(saved.file);
+    // The remembered copy is read the way the invalid file was: a team whose lead comes from the
+    // default chain still resolves it, so the fallback stays a copy of the same team.
+    const result = validateTeamFile(saved.file, { home, root });
     return result.ok ? { team: result.team, file: saved.file, readAt: saved.read_at } : null;
   } catch {
     return null;

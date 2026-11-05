@@ -36,6 +36,9 @@ export function approvalOf(
     format: 2,
     approvedAt: now.toISOString(),
     root,
+    // The seat that leads, pinned: a stored copy verifies under the lead it was approved with,
+    // never under whatever the external default chain says later.
+    lead: team.orchestrator,
     fingerprints: fingerprints(team),
     ceilings: ceilingsOf(team),
     checks,
@@ -67,9 +70,16 @@ export function notInForce(standing: NotVerified, source?: 'registry' | 'team-fi
  * is unchanged (as `watch.checks` has since #48). A copy that can't be read leaves the record as
  * it is, and the section reads as a difference.
  */
-export function approvedFingerprints(record: ApprovalRecord): Fingerprints {
+export function approvedFingerprints(record: ApprovalRecord, home: string = homedir()): Fingerprints {
   const stored = record.approval.fingerprints;
-  const checked = validateTeamFile(record.file);
+  // The stored copy is read with the home and root it was approved under, and with the lead the
+  // approval pinned: a team whose lead comes from the default chain validates here too, and a
+  // later chain edit does not change how the stored copy reads.
+  const checked = validateTeamFile(record.file, {
+    home,
+    root: record.approval.root,
+    ...(record.approval.lead !== undefined ? { lead: record.approval.lead } : {}),
+  });
   let sections = stored.sections;
   if (!OWNER_SECTIONS.every((name) => stored.sections[name] !== undefined) && checked.ok) {
     sections = { ...fingerprints(checked.team).sections, ...stored.sections };
@@ -176,8 +186,8 @@ export function recordSeatDigestOf(standing: Standing, team: TeamFile, root: str
   if (standing.kind !== 'verified') return;
   const store = storePath(team.project, root, home);
   const record = standing.record;
-  if (!validateTeamFile(record.file).ok) return;
-  const approved = approvedFingerprints(record).seats[name];
+  if (!validateTeamFile(record.file, { home, root, ...(record.approval.lead !== undefined ? { lead: record.approval.lead } : {}) }).ok) return;
+  const approved = approvedFingerprints(record, home).seats[name];
   const digest = fingerprints(team).seats[name];
   if (approved === undefined || digest === undefined || record.approval.fingerprints.seats[name] === digest) return;
   const withStopped = (stopped: boolean) => fingerprints({
@@ -216,14 +226,18 @@ export function recordSeatRenameOf(
   if (standing.kind !== 'verified' || renames.length === 0) return;
   const store = storePath(team.project, root, home);
   const record = standing.record;
-  if (!validateTeamFile(record.file).ok) return;
+  const pin = record.approval.lead;
+  if (!validateTeamFile(record.file, { home, root, ...(pin !== undefined ? { lead: pin } : {}) }).ok) return;
   let renamedRecordFile = record.file;
   for (const { from, to } of renames) {
     renamedRecordFile = renameSeat(renamedRecordFile, from, to);
   }
-  const renamedRecord = validateTeamFile(renamedRecordFile);
+  // A rename of the seat the approval pinned carries the pin with it: the stored copy is read
+  // and signed under the new name, exactly as the live file now resolves it.
+  const renamedPin = pin === undefined ? undefined : renames.reduce((name, rename) => (name === rename.from ? rename.to : name), pin);
+  const renamedRecord = validateTeamFile(renamedRecordFile, { home, root, ...(renamedPin !== undefined ? { lead: renamedPin } : {}) });
   if (!renamedRecord.ok) return;
-  const approved = approvedFingerprints(record);
+  const approved = approvedFingerprints(record, home);
   const expectedAfter = fingerprints(renamedRecord.team);
   const live = fingerprints(team);
 
@@ -253,6 +267,7 @@ export function recordSeatRenameOf(
     {
       approval: {
         ...record.approval,
+        ...(renamedPin !== undefined ? { lead: renamedPin } : {}),
         fingerprints: {
           sections: nextSections,
           seats: nextSeats,
@@ -323,8 +338,9 @@ export function recordTeamRenameOf(
 export function approvalDifferencesOf(
   standing: Extract<Standing, { kind: 'verified' }>,
   team: TeamFile,
+  home: string = homedir(),
 ): string[] {
-  const approved = approvedFingerprints(standing.record);
+  const approved = approvedFingerprints(standing.record, home);
   const current = fingerprints(team);
   return compare(approved, current, team).map(describe);
 }
@@ -341,7 +357,7 @@ export function approvalDifferences(
   home: string = homedir(),
 ): string[] | null {
   const standing = approvalStanding(root, home);
-  return standing.kind === 'verified' ? approvalDifferencesOf(standing, team) : null;
+  return standing.kind === 'verified' ? approvalDifferencesOf(standing, team, home) : null;
 }
 
 /**
@@ -349,9 +365,9 @@ export function approvalDifferences(
  * under the old default (the project name alone) for a file whose session is now
  * `<entity>-<project>`. The same line the approval's own comparison names. Empty otherwise.
  */
-export function sessionDefaultMoveNotes(standing: Standing, team: TeamFile): string[] {
+export function sessionDefaultMoveNotes(standing: Standing, team: TeamFile, home: string = homedir()): string[] {
   if (standing.kind !== 'verified') return [];
-  return compare(approvedFingerprints(standing.record), fingerprints(team), team)
+  return compare(approvedFingerprints(standing.record, home), fingerprints(team), team)
     .filter((difference) => difference.kind === 'section' && difference.moved !== undefined)
     .map(describe);
 }
@@ -392,8 +408,8 @@ export function budgetsInForce(team: TeamFile, root: string, home: string = home
  * none. `none` is not a reason — nothing was ever approved, and the caller
  * says so in its own words.
  */
-export function approvalCase(standing: Standing, team: TeamFile): { differences: string[] | null; reason: string | null } {
-  if (standing.kind === 'verified') return { differences: approvalDifferencesOf(standing, team), reason: null };
+export function approvalCase(standing: Standing, team: TeamFile, home: string = homedir()): { differences: string[] | null; reason: string | null } {
+  if (standing.kind === 'verified') return { differences: approvalDifferencesOf(standing, team, home), reason: null };
   if (standing.kind === 'none') return { differences: null, reason: null };
   if (standing.kind === 'legacy') return { differences: null, reason: LEGACY_LINE };
   return { differences: null, reason: standing.why };

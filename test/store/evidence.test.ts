@@ -335,10 +335,11 @@ describe('a legacy record, written before records were signed', () => {
     const loaded = team();
     const store = storePath(loaded.team.project, loaded.root, home);
     mkdirSync(store, { recursive: true });
-    // What an earlier `team` wrote: format 1, no generation, no signature.
+    // What an earlier `team` wrote: format 1, no generation, no signature, and no lead pinned.
+    const { lead: _lead, ...earlier } = approvalOf(loaded.team, loaded.root);
     writeFileSync(
       join(store, 'approval.json'),
-      `${JSON.stringify({ ...approvalOf(loaded.team, loaded.root), format: 1, file: FILE }, null, 2)}\n`,
+      `${JSON.stringify({ ...earlier, format: 1, file: FILE }, null, 2)}\n`,
     );
   }
 
@@ -460,6 +461,7 @@ describe('round 2: the record\'s shape, the key file, and the root\'s identity',
     const legacyShaped = stored();
     delete legacyShaped.signature;
     delete legacyShaped.generation;
+    delete legacyShaped.lead;
     restore({ ...legacyShaped, format: 1 });
     expect(standing().kind).toBe('legacy');
   });

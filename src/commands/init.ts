@@ -549,7 +549,7 @@ export async function runInit(
     }
     // The stored copy is validated before anything is written: a copy that no longer validates
     // (a newer validator, a copy approved under rules since changed) is refused, never restored.
-    const restoredCheck = validateTeamFile(copy);
+    const restoredCheck = validateTeamFile(copy, { home, root });
     if (!restoredCheck.ok) {
       const first = restoredCheck.errors[0];
       refuse(io, json, 'init', {
@@ -585,7 +585,7 @@ export async function runInit(
     first = `Restored ${TEAM_FILE} from an archive. ${archiveProvenance(archived.manifest)}\n`;
   } else {
     text = skeleton(basename(root), git(root, 'rev-parse', 'HEAD'), version(), root, firstLoggedInCli(sources));
-    const check = validateTeamFile(text);
+    const check = validateTeamFile(text, { home, root });
     if (!check.ok) {
       refuse(io, json, 'init', {
         id: 'init.skeleton',

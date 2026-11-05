@@ -256,6 +256,11 @@
       },
       "$comment": "path ends with the segment {task} under a fixed folder of its own, inside a trust pattern; branch defaults to {task}, base and path are required when a seat works in worktrees — the validator checks what a pattern cannot say"
     },
+    "lead": {
+      "type": "string",
+      "minLength": 1,
+      "$comment": "the seat that leads by default when no seat carries `leads: true`; the file mark wins over it"
+    },
     "coordinator": {
       "type": "string",
       "minLength": 1,

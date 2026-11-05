@@ -815,7 +815,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...leadRoleNotes(team),
     // The default session moved to <entity>-<project>: the line the approval's own comparison
     // names, so the owner sees the old and the new session before the next launch.
-    ...sessionDefaultMoveNotes(standing, team),
+    ...sessionDefaultMoveNotes(standing, team, sources.home),
     ...lobbyNotes(team, root, sources.home, session),
     // A delivery_order word still naming `mcp-inbox`: the name is retired — the inbox is the
     // store's reader, not a leg (ADR D1) — and the word is read as an alias that is dropped from

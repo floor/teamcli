@@ -313,7 +313,7 @@ test('a record written before records were signed still reads as legacy', () => 
   const store = approve(root, home);
   const record = join(store, 'approval.json');
   const stored = JSON.parse(readFileSync(record, 'utf8')) as Record<string, unknown>;
-  const { generation: _generation, signature: _signature, ...plain } = stored;
+  const { generation: _generation, signature: _signature, lead: _lead, ...plain } = stored;
   writeFileSync(record, `${JSON.stringify({ ...plain, format: 1 }, null, 2)}\n`);
   expect(standingOf(root, home).kind).toBe('legacy');
   // The record itself is still what the store holds: a legacy record is displayed, never judged.

@@ -34,6 +34,13 @@ export interface Approval {
   approvedAt: string;
   /** The project root the approval is for. */
   root: string;
+  /**
+   * The lead the file resolved when it was approved, whatever named it: the file's own mark or
+   * word, or the default chain. Inside the signed bytes (`payloadOf` covers it), and the seat a
+   * stored copy verifies under — so a later edit to the external chain is section drift, not a
+   * broken signature. Absent on a record written before the lead could come from the chain.
+   */
+  lead?: string;
   fingerprints: Fingerprints;
   /** Fixed here, and never recomputed from the roster. */
   ceilings: Ceilings;
@@ -230,9 +237,12 @@ export const RECORD_DOMAIN = 'team-approval-v2\n';
  * or has no canonical form. The signature covers this, so a stored copy whose keys were
  * reordered or reformatted still verifies, and a copy whose meaning changed does not.
  */
-export function approvedRecordOf(file: string): string | null {
+export function approvedRecordOf(file: string, options: { home?: string; lead?: string; root?: string } = {}): string | null {
   try {
-    const checked = validateTeamFile(file);
+    // `lead` is the seat the approval pinned. A stored copy is read with it instead of the default
+    // chain (`src/lead-chain.ts`), so an edit to the external chain never changes the bytes under
+    // the signature. A copy with no pin is read with `home` and `root` as it would load.
+    const checked = validateTeamFile(file, { home: options.home, lead: options.lead, root: options.root });
     if (!checked.ok) return null;
     return canonicalRecord(teamRecordOf(checked.team as unknown as Record<string, unknown> & { seats: object[] }));
   } catch {
@@ -270,6 +280,7 @@ export function payloadOf(approval: Approval, file: string, generation: number):
       format: approval.format,
       approvedAt: approval.approvedAt,
       root: approval.root,
+      ...(approval.lead !== undefined ? { lead: approval.lead } : {}),
       fingerprints: { sections: approval.fingerprints.sections, seats: approval.fingerprints.seats },
       ceilings: { seats: approval.ceilings.seats, temporary: approval.ceilings.temporary, vendors: approval.ceilings.vendors },
       checks: approval.checks ?? null,
@@ -369,8 +380,9 @@ export function approvalStanding(root: string, home: string = homedir()): Standi
   let signedOver: SignedOver = 'record';
   try {
     // The canonical record first: what this version signs. The stored text must still parse to
-    // the record that was signed; a copy that does not validate verifies as nothing here.
-    const canonical = approvedRecordOf(record.file);
+    // the record that was signed, read with the lead the approval pinned rather than the live
+    // default chain; a copy that does not validate verifies as nothing here.
+    const canonical = approvedRecordOf(record.file, { home, root, ...(record.approval.lead !== undefined ? { lead: record.approval.lead } : {}) });
     valid = canonical !== null && verifyDomain(RECORD_DOMAIN, recordPayloadOf(record.approval, canonical, generation), signature, key.key);
     if (!valid) {
       // Compatibility: a record signed over the file text before the canonical record existed.
@@ -475,7 +487,7 @@ export function shapeProblem(record: unknown): string | null {
     return 'the record says format 1 but carries a signature';
   }
   const allowed = ['format', 'approvedAt', 'root', 'fingerprints', 'ceilings', 'file', 'checks', 'overrides'];
-  if (flat.format === 2) allowed.push('generation', 'signature', 'actor');
+  if (flat.format === 2) allowed.push('generation', 'signature', 'actor', 'lead');
   for (const key of Object.keys(flat)) {
     if (!allowed.includes(key)) return `the record carries a field this version does not know ("${key}")`;
   }
@@ -491,6 +503,7 @@ export function shapeProblem(record: unknown): string | null {
     if (flat.signature === undefined) return 'the record has no "signature"';
     if (typeof flat.signature !== 'string') return '"signature" is not a string';
     if (flat.actor !== undefined && typeof flat.actor !== 'string') return '"actor" is not a string';
+    if (flat.lead !== undefined && typeof flat.lead !== 'string') return '"lead" is not a string';
   }
   for (const key of ['fingerprints', 'ceilings']) {
     if (flat[key] === null || typeof flat[key] !== 'object' || Array.isArray(flat[key])) return `"${key}" is not an object`;
@@ -602,7 +615,7 @@ export function writeApproval(
   const key = keyOf(home);
   // Signed over the canonical team record, never the text: a file whose keys are reordered
   // signs the same bytes. A text with no canonical record is not signed at all.
-  const canonical = approvedRecordOf(record.file);
+  const canonical = approvedRecordOf(record.file, { home, root: record.approval.root, ...(record.approval.lead !== undefined ? { lead: record.approval.lead } : {}) });
   if (canonical === null) throw new Error('the copy to approve is not a team record; nothing signed');
   const generation = bumpGeneration(record.approval.root, home, now);
   const signature = signDomain(RECORD_DOMAIN, recordPayloadOf(record.approval, canonical, generation), key);

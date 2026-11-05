@@ -177,7 +177,7 @@ export function delegateGate(input: {
     if (standing.kind !== 'verified') {
       return refuse('delegate-approval', `delegation needs a verified approval: ${notInForce(standing)}`);
     }
-    const kept = compare(approvedFingerprints(standing.record), fingerprints(team)).filter(
+    const kept = compare(approvedFingerprints(standing.record, home), fingerprints(team)).filter(
       (difference) => difference.kind === 'section' && !ORDINARY_SECTIONS.includes(difference.name),
     );
     if (kept.length > 0) {

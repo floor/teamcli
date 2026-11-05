@@ -274,7 +274,7 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
       commentsKept = edited.kept;
       // A set on one of a seat's two names writes the other in the same edit, so the label's
       // persona and the record's nickname cannot be left apart by a config write.
-      const paired = syncSeatNames(next, path, changed.root);
+      const paired = syncSeatNames(next, path, changed.root, home, root);
       next = paired.text;
       commentsKept = commentsKept && paired.kept;
       pairedNames = paired.changed;
@@ -289,9 +289,9 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   // A nickname this write newly sets is held to the entity's `names.unique` word, before the
   // record is touched: the same check for an owner's set, an edit and a general grant. A file
   // that does not validate is left to the writer below, whose refusal names its own problems.
-  const namesAfter = validateTeamFile(next);
+  const namesAfter = validateTeamFile(next, { home, root });
   if (namesAfter.ok) {
-    const namesBefore = validateTeamFile(text);
+    const namesBefore = validateTeamFile(text, { home, root });
     const names = nicknameChangeGate({
       home,
       teamId: teamIdOf(root),
@@ -321,10 +321,10 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   // refusal above returned with the folder as it was.
   if (liftAudit !== null) liftAudit();
   if (kept !== null) rmSync(resolve(kept, '..'), { recursive: true, force: true });
-  const checked = validateTeamFile(next);
+  const checked = validateTeamFile(next, { home, root });
   // A seat whose launch line this edit changed: its agent record's launch recipe follows, so the
   // next up or restart runs the line the team now declares, not the one the record kept.
-  const synced = checked.ok ? syncAgentLaunches(home, teamIdOf(root), text, checked.team.seats) : [];
+  const synced = checked.ok ? syncAgentLaunches(home, teamIdOf(root), text, checked.team.seats, root) : [];
   if (!json) for (const name of synced) io.stdout(`agent record of ${name}: launch line updated to match\n`);
   if (!json) for (const change of pairedNames) io.stdout(`seats.${change.seat}.${change.field} updated with it: ${change.value}\n`);
   // The roster line the next message header reads is re-marked from the record just written, so a
@@ -349,10 +349,10 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
 
 /** The seats whose `launch` differs between the old record text and the new seats, with an agent
  *  record still holding the old line: that record is updated to the new line. Names updated. */
-export function syncAgentLaunches(home: string, teamId: string, oldText: string, seats: ReadonlyArray<{ name: string; launch: string }>): string[] {
+export function syncAgentLaunches(home: string, teamId: string, oldText: string, seats: ReadonlyArray<{ name: string; launch: string }>, root?: string): string[] {
   const before = new Map<string, string>();
   try {
-    const old = validateTeamFile(oldText);
+    const old = validateTeamFile(oldText, root === undefined ? { home } : { home, root });
     if (old.ok) for (const seat of old.team.seats) before.set(seat.name, seat.launch);
   } catch {}
   const updated: string[] = [];
@@ -394,6 +394,8 @@ function syncSeatNames(
   text: string,
   path: RecordPath,
   root: YamlValue,
+  home?: string,
+  rootPath?: string,
 ): { text: string; kept: boolean; changed: Array<{ seat: string; field: 'label' | 'nickname'; value: string }> } {
   const none = { text, kept: true, changed: [] as Array<{ seat: string; field: 'label' | 'nickname'; value: string }> };
   const named = nameFieldOf(path);
@@ -414,7 +416,10 @@ function syncSeatNames(
     // ordinary display labels, and refusing the label edit for a name it cannot carry would make
     // them unwritable. Nothing is slugged — the field keeps the name it had.
     if (!SEAT_NAME.test(persona)) return none;
-    const parsed = validateTeamFile(text);
+    const parsed = validateTeamFile(text, {
+      ...(home !== undefined ? { home } : {}),
+      ...(rootPath !== undefined ? { root: rootPath } : {}),
+    });
     if (!parsed.ok) return none;
     if (nicknameProblem(parsed.team.seats, persona, seatName) !== null) return none;
     field = 'nickname';

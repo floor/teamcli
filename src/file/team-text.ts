@@ -137,10 +137,14 @@ function provenanceOf(
 export function writeTeamText(path: string, text: string, options: TeamTextOptions = {}): { ok: true; target: TeamTextTarget['kind'] } | { ok: false; errors: Problem[] } {
   const target = teamTextTarget(path, options);
   if (target.kind === 'file') {
-    const wrote = writeTeamFile(path, text);
+    // A file under a project's own `.agents/` is a team the default lead chain can read for; any
+    // other path is read as the file it names, and the chain finds no home project of it.
+    const [dir, name] = TEAM_FILE.split('/') as [string, string];
+    const root = basename(path) === name && basename(dirname(path)) === dir ? dirname(dirname(path)) : dirname(path);
+    const wrote = writeTeamFile(path, text, { home: options.home ?? homedir(), root });
     return wrote.ok ? { ok: true, target: 'file' } : wrote;
   }
-  const parsed = validateTeamFile(text);
+  const parsed = validateTeamFile(text, { home: target.home, root: target.root });
   if (!parsed.ok) return { ok: false, errors: parsed.errors };
   const previous = readStoredTeamConfig(target.home, target.id);
   const now = (options.now ?? (() => new Date()))().toISOString();

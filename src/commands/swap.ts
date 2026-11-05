@@ -490,7 +490,7 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
   }
   let rowProblem: string | null;
   try {
-    rowProblem = queuedRowProblem(readTeamText(current.path, { home, command: 'swap' }), seat.name, request.to);
+    rowProblem = queuedRowProblem(readTeamText(current.path, { home, command: 'swap' }), seat.name, request.to, { home, root: current.root });
   } catch (error) {
     refuse(rawIo, io, json, 'swap.io', `the team cannot be read to check the swap's row: ${(error as Error).message}`, null, notice, null);
     return 'io';
@@ -739,9 +739,14 @@ function choose(
  * refused here, before `enqueueSwap` leaves a record a run could only fail. `text` is the
  * team's own text, read the way the run reads it; `fields` is the record's `to`.
  */
-export function queuedRowProblem(text: string, name: string, fields: SeatModelFields): string | null {
+export function queuedRowProblem(
+  text: string,
+  name: string,
+  fields: SeatModelFields,
+  options: { home?: string; root?: string } = {},
+): string | null {
   if (!hasSeat(text, name)) return `${name} is no longer in the team file`;
-  const parsed = validateTeamFile(rewriteSeatModel(text, name, fields));
+  const parsed = validateTeamFile(rewriteSeatModel(text, name, fields), options);
   if (parsed.ok) return null;
   const first = parsed.errors[0];
   if (first === undefined) return 'the rewritten file is invalid';
