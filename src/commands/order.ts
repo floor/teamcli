@@ -26,7 +26,9 @@ import { plainLine, plainText } from '../launch/plain.ts';
 import { logLine } from '../log.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { readState } from '../state.ts';
-import { approvalStanding, type Standing } from '../store/store.ts';
+import { unverifiedRecordSentence } from '../approve/unverified-record.ts';
+import { devModeState } from '../dev_mode.ts';
+import { approvalStanding, findStore, readApproval, type Standing } from '../store/store.ts';
 import { notInForce } from '../approve/approval.ts';
 import { realSources as restartSources, runRestart } from './restart.ts';
 
@@ -146,7 +148,15 @@ export async function runOrder(argv: string[], io: Io, sources: OrderSources = r
 
   const standing = sources.standing?.(root) ?? approvalStanding(root, sources.home);
   if (standing.kind !== 'verified' && standing.kind !== 'none') {
-    return callerRefused(out, notInForce(standing));
+    // Outside dev mode the refusal is the standing's own line. In dev mode the fold is the one
+    // restart uses: name the record, the unverified lines, and that standing cannot be renewed.
+    // Nothing here signs.
+    const dev = devModeState(io, { home: sources.home, team, root, now: sources.now() });
+    if (!dev.on) return callerRefused(out, notInForce(standing));
+    const store = findStore(root, home);
+    const file = store === null ? '' : (readApproval(store)?.file ?? '');
+    const sentence = unverifiedRecordSentence(`${team.project}'s approval record`, file);
+    out.stderr(`team order: ${plainText(sentence)}\n`);
   }
   // The gate is the map's own `order` row, read exactly as `restart` reads its own: the owner,
   // or a seat this team's file admits as `leads` placed on its recorded pane in this session.

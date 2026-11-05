@@ -408,7 +408,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   if (standing.kind !== 'verified' && standing.kind !== 'none') {
     // Outside dev mode the refusal is the standing's own line, exactly as before. In dev mode
     // the fold is the one `check` and `up` already apply: say it and continue. The sentence is
-    // the stored copy's lines and the re-sign command. Nothing here writes an approval.
+    // the stored copy's lines. Standing cannot be renewed in this build. Nothing here writes an approval.
     if (!dev.on) return callerRefused(out, json, notInForce(standing));
     const store = findStore(root, home);
     const file = store === null ? '' : (readApproval(store)?.file ?? '');
