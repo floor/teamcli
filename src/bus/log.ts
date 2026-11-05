@@ -122,6 +122,12 @@ export type EventPayload = {
    *  measurement (a refusal decided before anything was dialed), so it is kept apart from the
    *  sequence fields, which start at one. */
   ms?: number;
+  /** On a typed wake's `leg.tried`: the two measurements the bound is read from, both counted
+   *  from the moment the message was staged. `submit_ms` ends at the first read that showed the
+   *  wake's line gone after Enter (the gated point); `working_ms` ends at the profile's working
+   *  screen and is reported only. Either is absent when no read showed it. */
+  submit_ms?: number;
+  working_ms?: number;
   /** On a `config.changed` the reconcile pass appended for a signed record it found without one:
    *  `true`, so a reader can tell an event raised at write time from one raised after a crash. */
   reconciled?: string;
@@ -818,7 +824,7 @@ const OPTIONAL_SEQUENCE_FIELDS = ['dropped_oldest_seq', 'dropped_newest_seq', 'p
 
 /** Measured quantities carry a zero legitimately: an attempt refused before it dialed took no
  *  time. They are not sequences, and the one-based check above would refuse the honest value. */
-const OPTIONAL_MEASURE_FIELDS = ['ms'] as const;
+const OPTIONAL_MEASURE_FIELDS = ['ms', 'submit_ms', 'working_ms'] as const;
 
 /** The shape every event's `record_id` must have: a generated token — a UUID, a digest, or a
  *  colon-joined name — never free text. The append index searches a retained line for the id as a

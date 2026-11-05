@@ -107,8 +107,15 @@ export function webhookStep(fields: StepFields, outcome: { kind: 'posted' | 'fai
 }
 
 /** One leg of the walk was attempted: the leg's name, the walk's outcome word and the
- *  milliseconds from the run's start to the attempt's end. */
-export function legStep(fields: StepFields, attempt: { route: string; outcome: string; ms: number; reason?: string }, lockWaitMs?: number): StepResult {
+ *  milliseconds from the run's start to the attempt's end. A typed wake that knows them adds the
+ *  two measurements the delivery bound is read from, both counted from the message's staging:
+ *  `submitMs` to the first read that showed its line gone after Enter, `workingMs` to the
+ *  profile's working screen. */
+export function legStep(
+  fields: StepFields,
+  attempt: { route: string; outcome: string; ms: number; submitMs?: number; workingMs?: number; reason?: string },
+  lockWaitMs?: number,
+): StepResult {
   return appendStep(
     fields.store,
     {
@@ -118,6 +125,8 @@ export function legStep(fields: StepFields, attempt: { route: string; outcome: s
       via: attempt.route,
       outcome: attempt.outcome,
       ms: Math.max(0, Math.round(attempt.ms)),
+      ...(attempt.submitMs === undefined ? {} : { submit_ms: Math.max(0, Math.round(attempt.submitMs)) }),
+      ...(attempt.workingMs === undefined ? {} : { working_ms: Math.max(0, Math.round(attempt.workingMs)) }),
       ...(attempt.reason === undefined ? {} : { reason: attempt.reason }),
     },
     lockWaitMs,

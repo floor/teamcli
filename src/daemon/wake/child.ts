@@ -49,9 +49,16 @@ export async function serveWakeChild(request: WakeChildRequest, deps: WakeChildD
   const marker = wakePath(dirname(request.dropPath), request.id);
   const before = wakeMarkAt(marker);
 
-  const record = (reason: string, delivered: boolean, ms: number): void => {
+  /** A mark the walk took on its own clock, counted from the moment the message was staged —
+   *  the base the delivery bound reads its two times from. */
+  const sinceStaged = (at: number | undefined): number | undefined =>
+    at === undefined ? undefined : Math.max(0, at - request.stagedAt);
+
+  const record = (reason: string, delivered: boolean, ms: number, walked?: TypedWakeResult): void => {
     const at = deps.now().toISOString();
     const outcome = delivered ? 'delivered (typed wake)' : 'unreachable';
+    const submitMs = sinceStaged(walked?.submittedAt);
+    const workingMs = sinceStaged(walked?.workingAt);
     try {
       appendHistory(request.project, request.root, request.home, {
         ts: at,
@@ -82,7 +89,14 @@ export async function serveWakeChild(request: WakeChildRequest, deps: WakeChildD
           to: request.seat,
           ts: at,
         },
-        { route: 'typed', outcome: delivered ? 'delivered' : 'unreachable', ms, reason },
+        {
+          route: 'typed',
+          outcome: delivered ? 'delivered' : 'unreachable',
+          ms,
+          reason,
+          ...(submitMs === undefined ? {} : { submitMs }),
+          ...(workingMs === undefined ? {} : { workingMs }),
+        },
       );
     } catch {
       // A missing trace line is a missing record, never a failed wake.
@@ -140,7 +154,7 @@ export async function serveWakeChild(request: WakeChildRequest, deps: WakeChildD
     const ms = Math.max(0, deps.now().getTime() - request.stagedAt);
     if (!walk.delivered) {
       releaseWake(marker);
-      record(walk.reason, false, ms);
+      record(walk.reason, false, ms, walk);
       return { outcome: 'failed', reason: walk.reason };
     }
     markWake(marker, {
@@ -149,7 +163,7 @@ export async function serveWakeChild(request: WakeChildRequest, deps: WakeChildD
       state: 'sent',
       evidence: 'typed-wake',
     });
-    record(walk.reason, true, ms);
+    record(walk.reason, true, ms, walk);
     return { outcome: 'delivered', reason: walk.reason };
   } finally {
     lock.release();

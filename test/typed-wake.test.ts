@@ -130,7 +130,14 @@ describe('the typed wake: one line into an empty idle box', () => {
   test('two idle reads, one line, one Enter: the working screen is the delivery', async () => {
     const pane = wakeFake((read, enters) => (enters > 0 ? WORKING : read < 2 ? IDLE : holding(LINE)));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(out).toEqual({
+      delivered: true,
+      typed: true,
+      tries: 1,
+      reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
+    });
     expect(pane.typed).toEqual([LINE]);
     expect(pane.enters).toBe(1);
   });
@@ -148,7 +155,14 @@ describe('the typed wake: one line into an empty idle box', () => {
     });
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', { ...FAST, verifyMs: 3 });
     expect(post).toBe(3);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(out).toEqual({
+      delivered: true,
+      typed: true,
+      tries: 1,
+      reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
+    });
     expect(pane.typed).toEqual([LINE]);
     expect(pane.enters).toBe(1);
   });
@@ -169,7 +183,14 @@ describe('the typed wake: one line into an empty idle box', () => {
   test('the /goal hint is an empty box: two reads of it, one line, one Enter', async () => {
     const pane = wakeFake((read, enters) => (enters > 0 ? WORKING : read < 2 ? GOAL : holding(LINE)));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(out).toEqual({
+      delivered: true,
+      typed: true,
+      tries: 1,
+      reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
+    });
     expect(pane.typed).toEqual([LINE]);
     expect(pane.enters).toBe(1);
   });
@@ -177,7 +198,14 @@ describe('the typed wake: one line into an empty idle box', () => {
   test('the dim /loop hint is an empty box: two reads of it, one line, one Enter', async () => {
     const pane = wakeFake((read, enters) => (enters > 0 ? WORKING : read < 2 ? LOOP : holding(LINE)));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(out).toEqual({
+      delivered: true,
+      typed: true,
+      tries: 1,
+      reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
+    });
     expect(pane.typed).toEqual([LINE]);
     expect(pane.enters).toBe(1);
   });
@@ -209,7 +237,14 @@ describe('the typed wake: one line into an empty idle box', () => {
     });
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
     expect(settleReads).toBe(3);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 2, reason: 'the working screen showed after 2 Enters' });
+    expect(out).toEqual({
+      delivered: true,
+      typed: true,
+      tries: 2,
+      reason: 'the working screen showed after 2 Enters',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
+    });
     expect(pane.typed).toEqual([LINE]);
     expect(pane.enters).toBe(2);
   });
@@ -263,7 +298,15 @@ describe('the typed wake: one line into an empty idle box', () => {
   test('a box that clears without a working screen is not a delivery', async () => {
     const pane = wakeFake((_read, enters) => (enters > 0 ? IDLE : _read < 2 ? IDLE : holding(LINE)));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: false, typed: true, tries: 1, reason: 'the screen read idle and no working screen showed' });
+    // The Enter's read showed the line gone: submission was confirmed even though no working
+    // screen followed, so the bound's mark is taken and the working screen's is not.
+    expect(out).toEqual({
+      delivered: false,
+      typed: true,
+      tries: 1,
+      reason: 'the screen read idle and no working screen showed',
+      submittedAt: expect.any(Number),
+    });
     expect(pane.enters).toBe(1);
   });
 
@@ -466,7 +509,14 @@ describe('the typed wake: one line into an empty idle box', () => {
       wait: async () => {},
     };
     const out = await deliverTypedWake(asyncHost, 'pane-1', LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(out).toEqual({
+      delivered: true,
+      typed: true,
+      tries: 1,
+      reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
+    });
     expect(typed).toEqual([LINE]);
     expect(enters).toBe(1);
   });
@@ -480,7 +530,14 @@ describe('the typed wake: a line already in the box is pressed into, never typed
   test('a box that already holds exactly the line gets one guarded Enter and no second typing', async () => {
     const pane = stepFake((read, enters) => (read === 0 ? holding(LINE) : enters > 0 ? WORKING : holding(LINE)));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(out).toEqual({
+      delivered: true,
+      typed: true,
+      tries: 1,
+      reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
+    });
     expect(pane.typed).toEqual([]);
     expect(pane.steps.filter((step) => step.op === 'type')).toEqual([]);
     // The first look, the settle, the second look, then Enter: the same pair the typed path
@@ -566,7 +623,14 @@ describe('the waits before and after Enter are the walk’s guard, not fixed sle
       return holding(LINE).replace('Skills: 56 loaded', `Skills: ${String(56 + tick)} loaded`);
     });
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(out).toEqual({
+      delivered: true,
+      typed: true,
+      tries: 1,
+      reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
+    });
     expect(pane.typed).toEqual([LINE]);
     expect(pane.enters).toBe(1);
   });
@@ -607,7 +671,14 @@ describe('the waits before and after Enter are the walk’s guard, not fixed sle
   test('the first look after Enter waits one ack settle, never reading at zero delay', async () => {
     const pane = stepFake((read, enters) => (read < 2 ? IDLE : enters > 0 ? WORKING : holding(LINE)));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(out).toEqual({
+      delivered: true,
+      typed: true,
+      tries: 1,
+      reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
+    });
     const enteredAt = pane.steps.findIndex((step) => step.op === 'enter');
     expect(pane.steps[enteredAt + 1]).toEqual({ op: 'wait', ms: FAST.ackSettleMs });
     expect(pane.steps[enteredAt + 2]).toEqual({ op: 'read' });
@@ -619,7 +690,14 @@ describe('the waits before and after Enter are the walk’s guard, not fixed sle
       return enters < 2 ? holding(LINE) : WORKING;
     });
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 2, reason: 'the working screen showed after 2 Enters' });
+    expect(out).toEqual({
+      delivered: true,
+      typed: true,
+      tries: 2,
+      reason: 'the working screen showed after 2 Enters',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
+    });
     expect(pane.typed).toEqual([LINE]);
     expect(pane.enters).toBe(2);
   });
@@ -627,8 +705,67 @@ describe('the waits before and after Enter are the walk’s guard, not fixed sle
   test('an ack that shows the box emptied without a working screen is not a delivery', async () => {
     const pane = wakeFake((read, enters) => (enters > 0 ? IDLE : read < 2 ? IDLE : holding(LINE)));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: false, typed: true, tries: 1, reason: 'the screen read idle and no working screen showed' });
+    // The Enter's read showed the line gone: submission was confirmed even though no working
+    // screen followed, so the bound's mark is taken and the working screen's is not.
+    expect(out).toEqual({
+      delivered: false,
+      typed: true,
+      tries: 1,
+      reason: 'the screen read idle and no working screen showed',
+      submittedAt: expect.any(Number),
+    });
     expect(pane.enters).toBe(1);
+  });
+});
+
+describe('the typed wake marks its two times from the reads it takes', () => {
+  // Both marks are read off reads taken after an Enter this wake pressed: the first that shows
+  // the line gone is the submission confirmed (the bound's point); the first that shows the
+  // profile's working screen with the line gone is the redraw reported beside it. A clock handed
+  // in makes the marks exact; a wake that pressed no Enter, or whose working screen still held
+  // the line, stamps nothing.
+
+  test('a working screen on the Enter’s own read stamps both times at once', async () => {
+    const pane = wakeFake((read, enters) => (enters > 0 ? WORKING : read < 2 ? IDLE : holding(LINE)));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', { ...FAST, now: () => 5_000 });
+    expect(out.delivered).toBe(true);
+    expect(out.submittedAt).toBe(5_000);
+    expect(out.workingAt).toBe(5_000);
+  });
+
+  test('the line leaving before the working screen stamps submission first', async () => {
+    const clock = { at: 1_000 };
+    const pane = wakeFake((read, enters) => {
+      if (enters === 0) return read < 2 ? IDLE : holding(LINE);
+      if (read === 4) {
+        clock.at = 1_400;
+        return IDLE;
+      }
+      clock.at = 1_900;
+      return WORKING;
+    });
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', { ...FAST, now: () => clock.at });
+    expect(out.delivered).toBe(true);
+    expect(out.submittedAt).toBe(1_400);
+    expect(out.workingAt).toBe(1_900);
+  });
+
+  test('a working screen that still holds the line stamps neither time', async () => {
+    const pane = wakeFake((read, enters) => (enters === 0 ? (read < 2 ? IDLE : holding(LINE)) : workingHolding(LINE)));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', { ...FAST, now: () => 1_000 });
+    expect(out.delivered).toBe(false);
+    expect(out.tries).toBe(1);
+    expect(out.submittedAt).toBeUndefined();
+    expect(out.workingAt).toBeUndefined();
+  });
+
+  test('a wake that pressed no Enter stamps nothing', async () => {
+    const pane = wakeFake(() => IDLE);
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', { ...FAST, now: () => 1_000 });
+    expect(out.delivered).toBe(false);
+    expect(out.tries).toBe(0);
+    expect(out.submittedAt).toBeUndefined();
+    expect(out.workingAt).toBeUndefined();
   });
 });
 
@@ -902,6 +1039,7 @@ describe('team send: the typed wake', () => {
       typed: true,
       tries: 1,
       reason: 'the screen read idle and no working screen showed',
+      submittedAt: expect.any(Number),
     });
     expect(clearedMidPoll.typed).toEqual([LINE]);
     expect(clearedMidPoll.enters).toBe(1);

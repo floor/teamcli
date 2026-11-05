@@ -186,6 +186,8 @@ function document(
         ...(payload.via === undefined ? {} : { via: payload.via }),
         ...(payload.outcome === undefined ? {} : { outcome: payload.outcome }),
         ...(payload.ms === undefined ? {} : { ms: payload.ms }),
+        ...(payload.submit_ms === undefined ? {} : { submit_ms: payload.submit_ms }),
+        ...(payload.working_ms === undefined ? {} : { working_ms: payload.working_ms }),
         ...(payload.reason === undefined ? {} : { reason: payload.reason }),
         delta_ms: step.delta,
       };

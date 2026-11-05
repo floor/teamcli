@@ -78,6 +78,14 @@ export type TypedWakeResult = {
   /** How many Enters were pressed. */
   tries: number;
   reason: string;
+  /** When the first read after an Enter showed the wake's line gone, in the walk's clock's own
+   *  milliseconds: the submission-confirmed point the delivery bound ends at. Absent when no read
+   *  showed it (nothing was Entered, or every read held the line). */
+  submittedAt?: number;
+  /** When the first read after an Enter showed the profile's working screen with the line gone,
+   *  in the walk's clock's own milliseconds: the redraw the trace reports beside the bound's
+   *  point, never a second bound. Absent when the working screen never showed without the line. */
+  workingAt?: number;
 };
 
 export type TypedWakeOptions = {
@@ -93,7 +101,13 @@ export type TypedWakeOptions = {
   ackSettleMs?: number;
   /** How long one Enter is given to show the working screen. */
   verifyMs?: number;
+  /** The clock the two marks are taken with, in epoch milliseconds. The real walk uses
+   *  `Date.now`; a scene hands in its own so the marks are exact. */
+  now?: () => number;
 };
+
+/** The two marks one walk observed, filled in as its reads show them. */
+type WakeMarks = { submittedAt?: number; workingAt?: number };
 
 /** One word for the screen a read showed, for a reason line: the screen reading, or `unreadable`
  *  when the pane could not be read at all. */
@@ -122,6 +136,9 @@ async function pollSubmitted(
   line: string,
   pollMs: number,
   verifyMs: number,
+  /** Called for every read taken, so the caller's marks see a line that leaves the box before
+   *  the working screen is drawn. */
+  seen?: (read: string) => void,
 ): Promise<WakeAck> {
   const polls = Math.max(1, Math.ceil(verifyMs / pollMs));
   let sawWorkingWhileHeld = false;
@@ -130,6 +147,7 @@ async function pollSubmitted(
     await host.wait(pollMs);
     const screen = await host.read(pane);
     if (screen === null) continue;
+    seen?.(screen);
     const holds = boxHoldsText(cli, line, screen);
     lastHolds = holds;
     const working = readScreen(cli, screen).kind === 'working';
@@ -172,11 +190,25 @@ export async function deliverTypedWake(
   if (line.includes('\n') || line.length > MESSAGE_LINE_MAX) {
     return { delivered: false, typed: false, tries: 0, reason: `the line does not fit ${String(MESSAGE_LINE_MAX)} characters on one row; nothing was typed` };
   }
+  const marks: WakeMarks = {};
+  const result = await walkTypedWake(host, pane, line, cli, options, marks);
+  return { ...result, ...marks };
+}
+
+async function walkTypedWake(
+  host: TypedWakeHost,
+  pane: string,
+  line: string,
+  cli: string,
+  options: TypedWakeOptions,
+  marks: WakeMarks,
+): Promise<TypedWakeResult> {
   const settleMs = options.settleMs ?? SETTLE_MS;
   const enterSettleMs = options.enterSettleMs ?? WAKE_ENTER_SETTLE_MS;
   const pollMs = options.pollMs ?? POLL_MS;
   const ackSettleMs = options.ackSettleMs ?? pollMs;
   const verifyMs = options.verifyMs ?? WAKE_VERIFY_MS;
+  const clock = options.now ?? Date.now;
   const firstScreen = await host.read(pane);
   const first = seenOf(cli, firstScreen);
   // The line may already be in the box — a wake child killed after typing, a wake asked twice,
@@ -281,7 +313,21 @@ export async function deliverTypedWake(
     const why = kind === 'unsent' ? 'the box held text other than the line' : `the screen read ${kind}`;
     return pressed ? `${why} and no working screen showed` : `${why} after the line was ${typedWord}; no Enter was pressed`;
   };
+  /** Reads the two marks off a post-Enter read: the first read that shows the line gone is the
+   *  submission confirmed (the bound's point), the first that shows the profile's working screen
+   *  with the line gone is the redraw the trace reports beside it. Both are stamped once, from
+   *  the clock the caller named, and a read before any Enter by this wake stamps nothing. */
+  const observe = (read: string | null): void => {
+    if (read === null || tries === 0) return;
+    const kind = readScreen(cli, read).kind;
+    if (kind !== 'working' && kind !== 'idle') return;
+    if (boxHoldsText(cli, line, read)) return;
+    const at = clock();
+    if (marks.submittedAt === undefined) marks.submittedAt = at;
+    if (kind === 'working' && marks.workingAt === undefined) marks.workingAt = at;
+  };
   for (;;) {
+    observe(screen);
     if (screen === null) {
       return {
         delivered: false,
@@ -345,6 +391,7 @@ export async function deliverTypedWake(
     // second Enter and then wait a poll. The look itself classifies the outcome.
     await host.wait(ackSettleMs);
     const after = await host.read(pane);
+    observe(after);
     if (after !== null) {
       const working = readScreen(cli, after).kind === 'working';
       const holds = boxHoldsText(cli, line, after);
@@ -358,7 +405,7 @@ export async function deliverTypedWake(
         continue;
       }
     }
-    const ack = await pollSubmitted(host, pane, cli, line, pollMs, verifyMs);
+    const ack = await pollSubmitted(host, pane, cli, line, pollMs, verifyMs, observe);
     if (ack === 'submitted') {
       return { delivered: true, typed: putKeys(), tries, reason: `the working screen showed after ${String(tries)} Enter${tries === 1 ? '' : 's'}` };
     }

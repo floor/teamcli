@@ -154,6 +154,37 @@ describe('the wake child runs one wake and records what it saw', () => {
     expect(logOf(made)).toContain('send [owner] muse: delivered (typed wake) (drop 5 characters, typed; the working screen showed after 1 Enter)');
   });
 
+  test('a walk that saw its two times writes both on the trace step, counted from staging', async () => {
+    const made = scratch();
+    const request = staged(made);
+    reserve(request);
+    // The walk marks on its own clock; the child is the one that knows when the message was
+    // staged, so the two times are the marks minus that base, not the raw instants.
+    const walked = deps({
+      result: {
+        delivered: true,
+        typed: true,
+        tries: 1,
+        reason: 'the working screen showed after 1 Enter',
+        submittedAt: STAGED_AT + 400,
+        workingAt: STAGED_AT + 900,
+      },
+    });
+
+    await serveWakeChild(request, walked);
+
+    const step = stepsOf(made)[0];
+    expect(step).toMatchObject({
+      kind: 'leg.tried',
+      record_id: `${ID}:leg.tried:typed`,
+      outcome: 'delivered',
+      submit_ms: 400,
+      working_ms: 900,
+      // The step's own cost still counts the whole walk, not either mark.
+      ms: MS,
+    });
+  });
+
   test('a walk that does not deliver gives the reservation back and records an unreachable line', async () => {
     const made = scratch();
     const request = staged(made);
@@ -169,6 +200,9 @@ describe('the wake child runs one wake and records what it saw', () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ id: ID, outcome: 'unreachable', note: 'the box held text other than the line after the line was typed; no Enter was pressed', ms: MS, via: 'typed' });
     expect(stepsOf(made)[0]).toMatchObject({ kind: 'leg.tried', outcome: 'unreachable', reason: 'the box held text other than the line after the line was typed; no Enter was pressed' });
+    // A walk that observed no mark writes no time: the step carries neither field.
+    expect(stepsOf(made)[0]?.submit_ms).toBeUndefined();
+    expect(stepsOf(made)[0]?.working_ms).toBeUndefined();
     expect(logOf(made)).toContain(`muse: the typed wake did not land (the box held text other than the line after the line was typed; no Enter was pressed); the drop is at ${request.dropPath}`);
   });
 
