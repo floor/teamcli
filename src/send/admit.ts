@@ -53,11 +53,11 @@ export type AdmitTeam = {
 export type AdmitTeams = Record<string, AdmitTeam>;
 
 /** One registered project as admission reads it: the lead, by agent id, and the teams it names.
- *  The project registry's own record (`readProjects`) is wider and satisfies this shape as it
- *  stands. */
+ *  The project registry's derived records (`list`) satisfy this shape with team memberships;
+ *  raw metadata from `readProjects` is not a membership source. */
 export type AdmitProject = { lead: string | null; teams: string[] };
 
-/** Every registered project, by project id — `readProjects`' own shape. */
+/** Every registered project, keyed by id, with memberships derived from team records. */
 export type AdmitProjects = Record<string, AdmitProject>;
 
 /** The two reply contexts a reply command may hand in: the general open-thread reply, and the

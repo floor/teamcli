@@ -8,7 +8,7 @@
 // synchronous 120 s cap) are constants of the child, not values here.
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
-import { readProjects } from '../registry/projects.ts';
+import { list as listProjects } from '../registry/projects.ts';
 import { readTeams, teamIdOf } from '../registry/teams.ts';
 import { readEntityPolicySource, readTeamPolicySource } from './sources.ts';
 import {
@@ -121,7 +121,7 @@ function assembleRouterPolicy(root: string, home: string, now: Date, team: TeamF
     if (entityScopes === null) {
       try {
         const viaProject = new Set<string>();
-        for (const project of Object.values(readProjects(home))) {
+        for (const project of listProjects(home)) {
           if (project.entity !== entity) continue;
           for (const id of project.teams) viaProject.add(id);
         }
