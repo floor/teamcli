@@ -42,6 +42,8 @@ export type HostedWatchInput = {
    *  cross-route pulse, never this route's own. It must be synchronous and must not touch this
    *  route's state: the yielding pass can hold that state's lock. */
   onBeat?: () => void;
+  /** Runs when a hosted pass finishes one loop turn. */
+  onCycle?: (at: Date) => void;
   now?: () => Date;
 };
 
@@ -142,6 +144,7 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
       // A completed pass answers the failure reason a restarted run was carrying.
       why = null;
       if (phase === 'starting') phase = 'running';
+      input.onCycle?.(at);
     },
     standby(reason) {
       if (stopped) return;
@@ -151,12 +154,16 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
       // through its own end instead of running another pass.
       settleWaiters(false);
     },
-    beat() {
-      // A stop owns the exit: nothing beats after it. Whether a beat is due, and which routes
-      // still need one, is the daemon's decision, not this host's.
-      if (stopped) return;
-      input.onBeat?.();
-    },
+    ...(input.onBeat === undefined
+      ? {}
+      : {
+          beat() {
+            // A stop owns the exit: nothing beats after it. Whether a beat is due, and which routes
+            // still need one, is the daemon's decision, not this host's.
+            if (stopped) return;
+            input.onBeat?.();
+          },
+        }),
   };
 
   /**

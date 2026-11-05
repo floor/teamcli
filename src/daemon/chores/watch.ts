@@ -43,6 +43,8 @@ export type ChoresWatchInput = {
   /** The route's pass reached a host seam and a daemon beat is due: the daemon's cross-route
    *  pulse, never this route's own. Synchronous, like the seam that calls it. */
   pulse(root: string, at: Date): void;
+  /** The route's pass finished one loop turn. */
+  cycle?: (root: string, at: Date) => void;
   /** The answer to one diagnostic: `left` when a faulted run's exit has been recorded, `refused`
    *  when the child had no run to end. */
   faultResult(root: string, outcome: 'left' | 'refused', why: string): void;
@@ -121,6 +123,7 @@ function startRoute(input: ChoresWatchInput, route: ChoresChildRoute, now: () =>
     // A due beat landing inside this route's pass asks the daemon to renew the other routes; the
     // daemon never renews this one through its own pass's lock.
     onBeat: () => input.pulse(hosted.root, now()),
+    onCycle: (at) => input.cycle?.(hosted.root, at),
   });
   return { host, reading };
 }

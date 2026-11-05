@@ -121,7 +121,7 @@ export type ChoresMarkerCache = { read: number; reused: number; cached: number }
  *  work; `note` is a diagnostic line the host writes to its own log. `watch-state` mirrors one
  *  hosted watch's whole state after a beat or a fault, so the daemon's own record carries what
  *  the child proved rather than a guess; `watch-pulse` is one cross-route beat a hosted pass
- *  carried to the others; and
+ *  carried to the others; `watch-cycle` marks one hosted watch pass that finished its loop turn; and
  *  `watch-fault-result` answers a diagnostic once its run has left its seam (`left`) or the
  *  child had no run to end (`refused`). */
 export type ChoresChildMessage =
@@ -152,6 +152,7 @@ export type ChoresChildMessage =
     }
   | { type: 'watch-state'; root: string; state: HostedWatchState }
   | { type: 'watch-pulse'; root: string; at: string }
+  | { type: 'watch-cycle'; root: string; at: string }
   | { type: 'watch-fault-result'; root: string; outcome: 'left' | 'refused'; why: string }
   | { type: 'note'; text: string }
   | { type: 'stopped'; why: string };
@@ -412,6 +413,10 @@ export function readChildMessage(raw: Record<string, unknown>): ChoresChildMessa
       if (typeof raw.root !== 'string' || raw.root === '') return null;
       if (typeof raw.at !== 'string' || raw.at === '') return null;
       return { type: 'watch-pulse', root: raw.root, at: raw.at };
+    case 'watch-cycle':
+      if (typeof raw.root !== 'string' || raw.root === '') return null;
+      if (typeof raw.at !== 'string' || raw.at === '') return null;
+      return { type: 'watch-cycle', root: raw.root, at: raw.at };
     case 'watch-fault-result':
       if (typeof raw.root !== 'string' || raw.root === '') return null;
       if (raw.outcome !== 'left' && raw.outcome !== 'refused') return null;

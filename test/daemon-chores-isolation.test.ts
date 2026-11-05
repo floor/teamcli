@@ -1563,6 +1563,122 @@ describe('the fleet presence nudge', () => {
     } });
     expect(fleet.watchFor(made.root, () => null)).toBeNull();
   });
+
+  test('watch-pulse and watch-cycle count as liveness, the same as a heartbeat', () => {
+    const made = world();
+    const clock = { at: NOW };
+    const fake = fakeChild(4598);
+    const pulses: string[] = [];
+    let cpu = 5_000;
+    const fleet = createChoresFleet({
+      home: made.home,
+      beatMs: 1000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [routeInput(made.root, policy({ missedBeats: 2 }))],
+      log: () => {},
+      cpuTimeOf: () => cpu,
+      watchPulse: (root, at) => pulses.push(`${root} ${at.toISOString()}`),
+      factory: () => fake.child,
+    });
+    const tickAt = (offset: number): void => {
+      clock.at = NOW + offset;
+      fleet.tick(new Date(clock.at));
+    };
+
+    tickAt(0);
+    fake.emit({ type: 'ready', pid: 4598, at: AT });
+    fake.emit({ type: 'heartbeat', at: AT, rssBytes: 40 * 1024 * 1024, busy: null, markerCache: null });
+
+    // A watch-pulse on the first beat proves the child's second beat and forwards the pulse.
+    clock.at = NOW + 1000;
+    const pulseAt = new Date(clock.at).toISOString();
+    fake.emit({ type: 'watch-pulse', root: made.root, at: pulseAt });
+    expect(pulses).toEqual([`${made.root} ${pulseAt}`]);
+    tickAt(1000);
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      state: 'ok',
+      missed: 0,
+      heartbeatAt: pulseAt,
+    });
+
+    // Across the next beats the child speaks only through watch-pulse and watch-cycle: neither
+    // misses a beat nor ends the child.
+    clock.at = NOW + 2000;
+    const cycleAt = new Date(clock.at).toISOString();
+    fake.emit({ type: 'watch-cycle', root: made.root, at: cycleAt } as unknown as ChoresChildMessage);
+    tickAt(2000);
+    tickAt(3000);
+    expect(fake.kills).toHaveLength(0);
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      state: 'ok',
+      missed: 0,
+      heartbeatAt: cycleAt,
+    });
+
+    // A child spared while working returns to ok as soon as a watch-pulse or watch-cycle arrives.
+    cpu = 5_200;
+    tickAt(4000);
+    tickAt(5000);
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      state: 'late',
+      missed: 2,
+      why: 'the child has missed 2 heartbeats but is still working',
+    });
+    clock.at = NOW + 5500;
+    const recoveredAt = new Date(clock.at).toISOString();
+    fake.emit({ type: 'watch-cycle', root: made.root, at: recoveredAt } as unknown as ChoresChildMessage);
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      state: 'ok',
+      missed: 0,
+      why: null,
+      heartbeatAt: recoveredAt,
+    });
+
+    // Across 615 beats (615 s, past the 600 s hung ceiling), a busy child that emits watch-pulse
+    // between watch steps is never marked late and never killed at the ceiling.
+    for (let step = 6; step <= 620; step += 1) {
+      cpu += 200;
+      clock.at = NOW + step * 1000;
+      fake.emit({ type: 'watch-pulse', root: made.root, at: new Date(clock.at).toISOString() });
+      tickAt(step * 1000);
+    }
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      state: 'ok',
+      missed: 0,
+    });
+    expect(fake.kills).toHaveLength(0);
+
+    // By contrast, a busy child that emits nothing across those 600 s is marked late and then
+    // killed at the ceiling.
+    for (let step = 621; step <= 1219; step += 1) {
+      cpu += 200;
+      tickAt(step * 1000);
+    }
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      state: 'late',
+      missed: 2,
+      why: 'the child has missed 598 heartbeats but is still working',
+    });
+    expect(fake.kills).toHaveLength(0);
+    cpu += 200;
+    tickAt(1220 * 1000);
+    expect(fake.kills).toEqual(['the child has not beaten for 600000 ms while its CPU kept advancing']);
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      state: 'late',
+      missed: 2,
+      why: 'the child has not beaten for 600000 ms while its CPU kept advancing',
+    });
+
+    // The protocol reader accepts a well-formed watch-cycle and drops a malformed one.
+    expect(readChildMessage({ type: 'watch-cycle', root: made.root, at: recoveredAt })).toEqual({
+      type: 'watch-cycle',
+      root: made.root,
+      at: recoveredAt,
+    } as unknown as ChoresChildMessage);
+    expect(readChildMessage({ type: 'watch-cycle', root: '', at: recoveredAt })).toBeNull();
+    expect(readChildMessage({ type: 'watch-cycle', root: made.root, at: '' })).toBeNull();
+  });
 });
 
 describe('the presence frames', () => {

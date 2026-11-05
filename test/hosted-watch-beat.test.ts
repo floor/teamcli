@@ -346,4 +346,82 @@ describe('the beat between hosted routes', () => {
     expect(ticked).toEqual(['/repo/b']);
     expect(logs).toEqual(['root /repo/a: the hosted watch tick failed: the state lock is held']);
   });
+
+  test('yieldBeat yields a macrotask so an interval beat timer fires between synchronous watch sub-steps', async () => {
+    const world = makeWorld('macrotask');
+    const route = routeOfWorld(world);
+    const clock = { at: NOW };
+    const beat = createHostedBeat({
+      intervalMs: 5_000,
+      watches: () => [],
+      log: () => {},
+      now: () => new Date(clock.at),
+    });
+    const budget = writePolicySet(world.home, {
+      level: 'team',
+      target: teamIdOf(world.root),
+      teamRoot: world.root,
+      name: 'watch-read-budget-ms',
+      value: 30_000,
+    }, { now: new Date(NOW) });
+    expect(budget.ok).toBe(true);
+
+    const spinMs = (ms: number): void => {
+      const end = Date.now() + ms;
+      while (Date.now() < end) {}
+    };
+    let timerBeats = 0;
+    let beatsSeenInPass: number[] = [];
+    const timer = setInterval(() => {
+      timerBeats += 1;
+    }, 15);
+
+    try {
+      const slowSyncSources: WatchSources = {
+        ...quietSources(world, clock),
+        live: () => {
+          spinMs(30);
+          return live();
+        },
+        readChecks: () => {
+          beatsSeenInPass.push(timerBeats);
+          spinMs(30);
+          return [];
+        },
+        machine: () => {
+          beatsSeenInPass.push(timerBeats);
+          spinMs(30);
+          return fine;
+        },
+        readMailbox: () => {
+          beatsSeenInPass.push(timerBeats);
+          spinMs(30);
+          return [];
+        },
+      };
+      const build = hostedWatchAuthority({
+        route,
+        teamFile: world.teamFile,
+        log: () => {},
+        now: () => new Date(clock.at),
+        base: slowSyncSources,
+      });
+      const host = hostOf(route, build, clock, beat);
+      try {
+        await waitUntil(() => host.state().cycles >= 1, 5000);
+      } finally {
+        await host.stop('test end');
+      }
+    } finally {
+      clearInterval(timer);
+    }
+
+    // Each synchronous sub-step spun past the 15 ms interval, and the macrotask yield after each
+    // sub-step let the interval timer fire before the next sub-step began.
+    expect(beatsSeenInPass.length).toBeGreaterThanOrEqual(3);
+    expect(beatsSeenInPass[0]).toBeGreaterThanOrEqual(1);
+    expect(beatsSeenInPass[1]).toBeGreaterThan(beatsSeenInPass[0]!);
+    expect(beatsSeenInPass[2]).toBeGreaterThan(beatsSeenInPass[1]!);
+    expect(timerBeats).toBeGreaterThan(beatsSeenInPass[2]!);
+  });
 });
