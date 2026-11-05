@@ -27,7 +27,8 @@ export type LeadChainInput = {
   root: string;
   /** The team file's `lead:` word, when its section found one. */
   team?: string | null;
-  /** The project the file names (`in_project:`), used when the team is not yet in `projects.yaml`. */
+  /** The project the file names (`in_project:`), used only when the team is not yet in
+   *  `projects.yaml` and that project lists no team at all. */
   inProject?: string | null;
   /** The entity the file names; the home project's entity when the file names none. */
   entity?: string | null;
@@ -44,12 +45,15 @@ export function readLeadChain(input: LeadChainInput): LeadChainRead {
 
   let project: ProjectRecord | null;
   try {
-    project =
-      input.inProject !== undefined && input.inProject !== null
-        ? (byName(input.home, input.inProject) ??
-          get(input.home, projectIdOf(input.inProject)) ??
-          ofTeam(input.home, teamIdOf(input.root)))
-        : ofTeam(input.home, teamIdOf(input.root));
+    project = ofTeam(input.home, teamIdOf(input.root));
+    if (project === null && input.inProject !== undefined && input.inProject !== null) {
+      // The declared `in_project` stands in for the home project only while no team has claimed
+      // that record: it names the project a team is about before the team is registered. A
+      // project that lists teams belongs to them alone — a declared name never adopts another
+      // team's project or the lead_seat it carries.
+      const declared = byName(input.home, input.inProject) ?? get(input.home, projectIdOf(input.inProject));
+      if (declared !== null && declared.teams.length === 0) project = declared;
+    }
   } catch (error) {
     return { ok: false, why: `this team's home project cannot be read: ${(error as Error).message}` };
   }

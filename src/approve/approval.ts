@@ -253,13 +253,13 @@ export function recordSeatRenameOf(
   const nextSections = { ...record.approval.fingerprints.sections };
   for (const section of ['orchestrator', 'operator', 'grant'] as const) {
     const after = expectedAfter.sections[section];
-    if (
-      record.approval.fingerprints.sections[section] !== undefined &&
-      after !== undefined &&
-      live.sections[section] === after
-    ) {
-      nextSections[section] = after;
-    }
+    if (record.approval.fingerprints.sections[section] === undefined || after === undefined) continue;
+    // The stored copy resolves its lead under the pin it is signed with, so when the pin moves
+    // with a renamed seat the orchestrator digest always moves with it: the signed record must
+    // agree with its own `approval.lead`, never with the live chain. Drift in that chain then
+    // shows as a difference against the live file — it is reported, not signed over.
+    const followsPin = section === 'orchestrator' && renamedPin !== undefined;
+    if (followsPin || live.sections[section] === after) nextSections[section] = after;
   }
 
   writeApproval(
@@ -295,9 +295,14 @@ export function recordTeamRenameOf(
   if (standing.kind !== 'verified') return;
   const store = storePath(team.project, root, home);
   const record = standing.record;
-  if (!validateTeamFile(record.file).ok) return;
+  const pin = record.approval.lead;
+  if (!validateTeamFile(record.file, { home, root, ...(pin !== undefined ? { lead: pin } : {}) }).ok) return;
   const renamedRecordFile = renameTeamIdentity(record.file, opts);
-  const renamedRecord = validateTeamFile(renamedRecordFile);
+  const renamedRecord = validateTeamFile(renamedRecordFile, {
+    home,
+    root,
+    ...(pin !== undefined ? { lead: pin } : {}),
+  });
   if (!renamedRecord.ok) return;
   const expectedAfter = fingerprints(renamedRecord.team);
   const live = fingerprints(team);
