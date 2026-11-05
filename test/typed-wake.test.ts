@@ -396,6 +396,34 @@ describe('the typed wake: one line into an empty idle box', () => {
       expect(afterType.enters).toBe(0);
     }
   });
+
+  test('deliverTypedWake awaits an asynchronous terminal-host adapter for read, type, and enter', async () => {
+    let reads = 0;
+    let enters = 0;
+    const typed: string[] = [];
+    const asyncHost: TypedWakeHost = {
+      read: async () => {
+        const at = reads++;
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        return enters > 0 ? WORKING : at < 2 ? IDLE : holding(typed[typed.length - 1] ?? '');
+      },
+      type: async (_pane, text) => {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        typed.push(text);
+        return true;
+      },
+      enter: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        enters += 1;
+        return true;
+      },
+      wait: async () => {},
+    };
+    const out = await deliverTypedWake(asyncHost, 'pane-1', LINE, 'muse', FAST);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(typed).toEqual([LINE]);
+    expect(enters).toBe(1);
+  });
 });
 
 describe('the typed wake is a profile word', () => {

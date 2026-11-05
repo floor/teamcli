@@ -1029,7 +1029,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             const agent = live.agents.find((candidate) => candidate.name === seat.name);
             if (!agent) continue;
             panesBySeat[seat.name] = agent.pane;
-            const hasSidebarLabel = Boolean(memory.seatLabels[seat.name]?.title);
+            const hasSidebarLabel = hosted !== undefined || Boolean(memory.seatLabels[seat.name]?.title);
             const readScreenNow = shouldReadScreenForStatus(seat, agent.status, hasSidebarLabel);
             const liveScreen = live.screens[agent.pane];
             // The fallback read is the same bounded, awaited call when the source supplies one:
@@ -1333,6 +1333,14 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         }
         for (const label of result.labels) {
           const slot = (memory.seatLabels[label.name] ??= {});
+          if (hosted !== undefined) {
+            if (label.title) slot.title = label.title;
+            if (label.displayAgent) {
+              slot.line = label.displayAgent;
+              slot.reportedAt = now;
+            }
+            continue;
+          }
           if (label.title && sources.renameWorkspace) {
             if (sources.renameWorkspace(session, label.workspace, label.title)) slot.title = label.title;
             else say(`${label.name}: its title was not reported`, false);
@@ -1385,7 +1393,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // even when the matching mailbox record's separate receipt is not present.
         const promotedReads = !foreign
           ? promoteInboxDrops({
-            dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
+            dir, session, root, home: sources.home, team, live, processes, ownPane, sources, now: sources.now(), say,
           })
           : new Set<string>();
         await yieldBeat();
@@ -1417,7 +1425,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // gives up. `--no-nudge` is the watch that types nothing, and this types too.
         if (!foreign && !quiet && hosted === undefined && paceVerified) {
           await retryHeldDrops({
-            dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
+            dir, session, root, home: sources.home, team, live, processes, ownPane, sources, now: sources.now(), say,
             nativeHeld: nativeHeldNow,
             // The channel's one redelivery dials the receiving session's socket with the stored
             // signed record; a seat whose launch the socket gate refuses falls through to the
@@ -1445,11 +1453,11 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // so a watch without nudges still keeps that word for the sender.
         if (!foreign) {
           await expirePendingNative(
-            { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow },
+            { dir, session, root, home: sources.home, team, live, processes, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow },
             { noNudge: quiet },
           );
           confirmTakenDrops({
-            dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
+            dir, session, root, home: sources.home, team, live, processes, ownPane, sources, now: sources.now(), say,
           });
           await yieldBeat();
           // A delivery is a deposit until the seat's signed receipt follows: a message still
@@ -1499,11 +1507,11 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             stuckReading,
           );
           await wakeUnreadDrops(
-            { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow, ...(mail === undefined ? {} : { mail }) },
+            { dir, session, root, home: sources.home, team, live, processes, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow, ...(mail === undefined ? {} : { mail }) },
             { unreadAfter: inForce.unreadAfter, seatWindow: unreadWindowOf, rung, ...(quiet || !paceVerified ? { noNudge: true } : {}) },
           );
           reportUnreadDrops(
-            { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say, ...(mail === undefined ? {} : { mail }) },
+            { dir, session, root, home: sources.home, team, live, processes, ownPane, sources, now: sources.now(), say, ...(mail === undefined ? {} : { mail }) },
             { unreadAfter: inForce.unreadAfter, seatWindow: unreadWindowOf },
             stuckReading,
           );

@@ -82,6 +82,8 @@ export type RetryScene = {
   home?: string;
   team: TeamFile;
   live: Live;
+  /** The pass's per-pane process snapshot when the caller already read it. */
+  processes?: Readonly<Record<string, PaneProcesses | null>>;
   /** The watch's own pane: never typed into. */
   ownPane: string | null;
   sources: RetrySources;
@@ -97,6 +99,34 @@ export type RetryScene = {
    *  Absent, this pass takes its own — the same answer, read once more in the pass. */
   mail?: MailPass;
 };
+
+/** The pane's status from the pass's live snapshot when the snapshot carries whole-session
+ *  pane readings, falling back to `sources.status` only for minimal test scenes that omit them. */
+export function passPaneStatus(scene: RetryScene, pane: string, agentStatus?: string): string | null {
+  if (pane in scene.live.screens || scene.live.processes !== undefined) {
+    if (agentStatus !== undefined && agentStatus !== '') return agentStatus;
+    const found = scene.live.agents.find((agent) => agent.pane === pane);
+    return found?.status ?? null;
+  }
+  return scene.sources.status(pane, scene.session);
+}
+
+/** The pane's visible screen from the pass's live snapshot when present, falling back to
+ *  `sources.screen` only for minimal test scenes whose `live` snapshot omits pane readings. */
+export function passPaneScreen(scene: RetryScene, pane: string): string | null {
+  if (pane in scene.live.screens) return scene.live.screens[pane] ?? null;
+  if (scene.live.processes !== undefined) return null;
+  return scene.sources.screen(pane, scene.session);
+}
+
+/** The pane's process identity from the pass's snapshot when present, falling back to
+ *  `sources.processes` only for direct scenes that supply no process map. */
+export function passPaneProcesses(scene: RetryScene, pane: string): PaneProcesses | null {
+  if (scene.processes !== undefined && pane in scene.processes) return scene.processes[pane] ?? null;
+  if (scene.live.processes !== undefined && pane in scene.live.processes) return scene.live.processes[pane] ?? null;
+  if (scene.processes !== undefined || scene.live.processes !== undefined) return null;
+  return scene.sources.processes?.(pane, scene.session) ?? null;
+}
 
 /** The drop's words, minus the trigger line: one sentence for the watch's log. An inbox send
  *  was `sent (unconfirmed)` rather than held — the seat's own client never read it — and the

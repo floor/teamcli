@@ -21,6 +21,7 @@ import { dropMessage } from '../src/send/native.ts';
 import { signRecord } from '../src/send/record.ts';
 import { deliverTypedWake, type TypedWakeResult } from '../src/send/typed-wake.ts';
 import type { Live } from '../src/status/compare.ts';
+import { markTaken, readTaken } from '../src/send/taken.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { reportedPath, wakePath, wakeTryPath } from '../src/watch/unread.ts';
 
@@ -564,6 +565,151 @@ describe('the unread pass of a daemon-hosted watch', () => {
       expect(rawWrites).toBe(0);
       expect(existsSync(wakePath(dropDir, UNREAD))).toBe(false);
       expect(existsSync(reportedPath(dropDir, UNREAD))).toBe(true);
+    } finally {
+      await host.stop('the test is done');
+    }
+  });
+
+  test('hosted watch no-ops label rename and display-agent report and reuses the pass live snapshot in confirmTakenDrops and wakeUnreadDrops without synchronous terminal-host reads', async () => {
+    const made = scratch();
+    world = made;
+    const dropDir = seedMessage(made, UNREAD, new Date(NOW - 75_000));
+    const takenId = 'cccccccc-0000-4000-8000-000000000202';
+    markTaken(dropDir, {
+      id: takenId,
+      from: 'owner',
+      to: 'worker-1',
+      body: 'from the owner\n\nnobody came',
+      ts: new Date(NOW - 75_000).toISOString(),
+      before: 'working',
+    });
+
+    const clock = { at: NOW };
+    let syncStatusCalls = 0;
+    let syncScreenCalls = 0;
+    let syncProcessCalls = 0;
+    let renameCalls = 0;
+    let displayCalls = 0;
+    const typed: { pane: string; line: string; cli: string }[] = [];
+
+    const baseSources: WatchSources = {
+      live: () => ({
+        running: true,
+        agents: [
+          { name: 'crew-lead', agent: 'claude', pane: 'lead-pane', workspace: 'lead-work', status: 'idle', cwd: null },
+          { name: 'worker-1', agent: 'codex', pane: 'fixture-pane-1', workspace: 'fixture-work-1', status: 'idle', cwd: null },
+        ],
+        workspaces: [
+          { id: 'lead-work', label: 'crew-lead' },
+          { id: 'fixture-work-1', label: 'worker-1' },
+        ],
+        screens: {
+          'lead-pane': idleScreen,
+          'fixture-pane-1': CODEX_INTERRUPTED,
+        },
+        processes: {
+          'lead-pane': { shell: 10, foreground: [11] },
+          'fixture-pane-1': { shell: 20, foreground: [21] },
+        },
+        foreground: {
+          'lead-pane': ['claude'],
+          'fixture-pane-1': ['codex'],
+        },
+      }),
+      machine: () => fine,
+      standing: () => ({ kind: 'none' }),
+      readChecks: () => [],
+      screen: () => {
+        syncScreenCalls += 1;
+        return CODEX_INTERRUPTED;
+      },
+      status: () => {
+        syncStatusCalls += 1;
+        return 'idle';
+      },
+      foreground: () => ['codex'],
+      processes: () => {
+        syncProcessCalls += 1;
+        return null;
+      },
+      renameWorkspace: () => {
+        renameCalls += 1;
+        return true;
+      },
+      reportDisplayAgent: () => {
+        displayCalls += 1;
+        return true;
+      },
+      typeText: () => false,
+      pressEnter: () => false,
+      sendKey: () => false,
+      sleep: async () => {},
+      notify: () => {},
+      now: () => new Date(clock.at),
+      wait: async () => false,
+      alive: () => true,
+      pid: 4244,
+      home: made.home,
+      statusSource: {
+        async waitStatus() {
+          return { outcome: 'timeout', at: clock.at };
+        },
+        promptKind: () => 'unknown',
+      },
+      typedWake: async (pane, line, cli) => {
+        typed.push({ pane, line, cli });
+        return TYPED_DELIVERED;
+      },
+    };
+
+    const route = routeOf(made.root, 'acme-web', 'crew', ['crew-lead', 'crew-op', 'worker-1']);
+    const wired = hostedWatchSources(route, {
+      signal: new AbortController().signal,
+      cycled: () => {},
+      standby: () => {},
+      wait: async () => false,
+    }, baseSources, undefined, 4244);
+    expect(typeof wired.renameWorkspace).toBe('function');
+    expect(typeof wired.reportDisplayAgent).toBe('function');
+    expect(wired.renameWorkspace?.('crew', 'fixture-work-1', 'worker-1')).toBe(true);
+    expect(wired.reportDisplayAgent?.('crew', 'fixture-pane-1', 'codex')).toBe(true);
+    expect(renameCalls).toBe(0);
+    expect(displayCalls).toBe(0);
+
+    const host = createHostedWatch({
+      route,
+      now: () => new Date(clock.at),
+      effects: 'open',
+      run: async (loop) =>
+        runWatch(
+          [],
+          {
+            stdout: () => {},
+            stderr: () => {},
+            cwd: route.root,
+            env: {},
+            stdinIsTTY: false,
+            stdoutIsTTY: false,
+            stderrIsTTY: false,
+          },
+          {
+            ...hostedWatchSources(route, loop, baseSources, undefined, 4244),
+            renameWorkspace: baseSources.renameWorkspace,
+            reportDisplayAgent: baseSources.reportDisplayAgent,
+          },
+        ),
+    });
+
+    try {
+      await waitUntil(() => host.state().cycles === 1);
+      expect(readTaken(dropDir)).toEqual([]);
+      expect(typed).toHaveLength(1);
+      expect(existsSync(wakePath(dropDir, UNREAD))).toBe(true);
+      expect(syncStatusCalls).toBe(0);
+      expect(syncScreenCalls).toBe(0);
+      expect(syncProcessCalls).toBe(0);
+      expect(renameCalls).toBe(0);
+      expect(displayCalls).toBe(0);
     } finally {
       await host.stop('the test is done');
     }

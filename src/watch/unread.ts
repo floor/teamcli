@@ -81,7 +81,7 @@ import { wakeTrigger, wakeWordsFor, type WakeWords } from '../send/wake.ts';
 import { DELIVERY_LEGS } from '../settings/inherit.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { MailPass, STUCK_MARKER } from './mail-pass.ts';
-import type { RetryScene } from './retry.ts';
+import { passPaneProcesses, passPaneScreen, passPaneStatus, type RetryScene } from './retry.ts';
 import { readScreen } from './screen.ts';
 
 /** The marker beside a message whose one wake line was typed. */
@@ -599,11 +599,12 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       return reason === undefined ? {} : { failed: [reason] };
     };
     const agents = scene.live.agents.filter((agent) => agent.name === seat.name);
-    const found = agents.length === 1 ? agents[0]?.pane : undefined;
+    const agent = agents.length === 1 ? agents[0] : undefined;
+    const found = agent?.pane;
     const pane = found === scene.ownPane ? undefined : found;
     if (pane === undefined) continue;
-    const status = scene.sources.status(pane, scene.session);
-    const screen = scene.sources.screen(pane, scene.session);
+    const status = passPaneStatus(scene, pane, agent?.status);
+    const screen = passPaneScreen(scene, pane);
     // A box that cannot be read is not typed into. The delivery below reads it again; this is
     // only the pass's own look, so a dialog is never entered and a busy seat is not nudged.
     if (screen === null) continue;
@@ -637,7 +638,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     const lock = acquireSeatLock(scene.dir, scene.session, seat.name);
     if (!('release' in lock)) continue;
     try {
-      if (isBareShellPane(scene.dir, scene.session, seat.name, scene.sources.processes?.(pane, scene.session) ?? null)) continue;
+      if (isBareShellPane(scene.dir, scene.session, seat.name, passPaneProcesses(scene, pane))) continue;
       // The oldest due message that verifies supplies the audit: the read the trigger names
       // serves the whole folder, and the history line says which message the wake was for. A
       // message that does not verify cannot be read, so it neither earns a wake nor spends one,

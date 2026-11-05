@@ -23,14 +23,14 @@ import {
   TAKEN_MAX_AGE_MS,
   type TakenDrop,
 } from '../send/taken.ts';
-import type { RetryScene } from './retry.ts';
+import { passPaneScreen, passPaneStatus, type RetryScene } from './retry.ts';
 
 /** The two statuses a free seat reads: past the grace, a taken line it never showed is gone. */
 const FREE = new Set(['idle', 'done']);
 
 /** One taken drop, looked at on this pass. Confirmed on the first sign; reported once the window
  *  passes with none. Nothing here ever types: a taken line is never submitted again. */
-function confirmOne(scene: RetryScene, pane: string | undefined, dropDir: string, drop: TakenDrop): void {
+function confirmOne(scene: RetryScene, pane: string | undefined, agentStatus: string | undefined, dropDir: string, drop: TakenDrop): void {
   const age = scene.now.getTime() - Date.parse(drop.ts);
   // The read itself: the trigger the send typed is the seat's own drop read, so a signed receipt
   // that verifies for this message, seat, checkout and session is the sign the send's window
@@ -50,8 +50,8 @@ function confirmOne(scene: RetryScene, pane: string | undefined, dropDir: string
     return;
   }
   if (pane !== undefined) {
-    const screen = scene.sources.screen(pane, scene.session);
-    const status = scene.sources.status(pane, scene.session);
+    const screen = passPaneScreen(scene, pane);
+    const status = passPaneStatus(scene, pane, agentStatus);
     const line = triggerLine(join(dropDir, drop.id));
     // The transcript's sign, for a trigger that names the drop's path: a row that names the
     // drop's id and is not the trigger's own echo. The trigger line may be unreadable (a path too
@@ -104,8 +104,9 @@ export function confirmTakenDrops(scene: RetryScene): void {
     const drops = readTaken(dropDir);
     if (drops.length === 0) continue;
     const agents = scene.live.agents.filter((agent) => agent.name === seat.name);
-    const found = agents.length === 1 ? agents[0]?.pane : undefined;
+    const agent = agents.length === 1 ? agents[0] : undefined;
+    const found = agent?.pane;
     const pane = found === scene.ownPane ? undefined : found;
-    for (const drop of drops) confirmOne(scene, pane, dropDir, drop);
+    for (const drop of drops) confirmOne(scene, pane, agent?.status, dropDir, drop);
   }
 }
