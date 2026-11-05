@@ -207,10 +207,10 @@ const DELIVERY_LEGS_SCHEMA_FRAGMENT: JsonSchema = {
     additionalProperties: false,
     required: ['leg', 'state'],
     properties: {
-      // The report names the channel push and the sender-posted webhook among the walk's
-      // legs. No policy declares either — the seat's own server and its adapter row decide
-      // them — so both are added here, where the report's shape is published, and not to the
-      // declared-order schemas below.
+      // The report names two legs no declared order may carry: the sender-posted webhook, which
+      // the receiving seat's adapter row decides, and the development channel, which the
+      // receiver's launch flag, live listener and listener declaration decide. Both belong here,
+      // where the report's shape is published, and not to the declared-order schemas below.
       leg: { type: 'string', enum: [...DELIVERY_LEGS, 'channel', 'webhook'] },
       state: { type: 'string', enum: ['attempted', 'queued', 'skipped', 'refused', 'not-reached', 'candidate'] },
       eligible: { type: 'boolean' },
