@@ -253,14 +253,22 @@ screen:
       at_composer: true
   working:
     - any: ['esc to interrupt']
-  # A pane scrolled back over its transcript hides the composer and draws this footer on its
-  # last non-blank row (reported from a live seat's own view; no capture of that view exists, so
-  # only this exact row is declared). The footer's own `esc` is the return to the prompt. Read
-  # only where the composer cannot be read, after every caution stage, so a working turn or a
-  # draft that still draws them keeps its own reading; an unobserved footer variant stays
-  # unread — `unknown`, never typed into.
+  # A pane scrolled back over its transcript draws its own rows in the composer's place: either
+  # the footer `New activity · ↓ Back to bottom · esc` on its last non-blank row, with the
+  # composer out of sight, or — the second reported layout — the marker `↓ Back to bottom · esc`
+  # directly above the composer, with the status footer `Earlier messages available.  enter/esc
+  # latest · ? shortcuts … ⚠ 1 warning · f2 to view` on the last non-blank row. The marker layout
+  # keeps the composer drawn, but the status footer under the status line is not this profile's
+  # chrome, so the composer alone reads unknown there; the bottom region is the reading, and its
+  # own `esc` is the return to the prompt. Each row is read as the whole row it draws, from that
+  # region only — never a transcript line that quotes it higher up. Read only where the composer
+  # cannot be read, after every caution stage, so a working turn or a draft that still draws them
+  # keeps its own reading; an unobserved footer variant stays unread — `unknown`, never typed
+  # into.
   scroll_back:
     footer: '^\s*New activity · ↓ Back to bottom · esc\s*$'
+    marker: '^\s*↓ Back to bottom · esc\s*$'
+    status_footer: '^\s*Earlier messages available\.\s+enter/esc latest · \? shortcuts(?:\s+⚠ \d+ warnings? · f2 to view)?\s*$'
     return_key: escape
   # The question each answerable dialog carries, as the 0.161.0 captures draw it: the question
   # dialog's own text row under its `Question N/N (N unanswered)` header, and the plan approval's

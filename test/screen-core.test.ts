@@ -1291,3 +1291,68 @@ describe('status-then-one status row trailing path matching', () => {
     expect(statusRowOf(data, lines, { cwd: liveDir, home })).toBeNull();
   });
 });
+
+describe('the scroll_back declaration', () => {
+  const snippet = (scrollBack: string) => `
+format: 1
+cli: sample
+screen:
+  composer:
+    mode: status-last
+    status_line: ['^  STATUS']
+    prompt: '^>'
+    placeholders:
+      - equals: ''
+${scrollBack}
+`;
+
+  test('the footer layout and the marker layout both load', () => {
+    const footer = loadScreen(snippet(`  scroll_back:
+    footer: '^NEW ACTIVITY$'
+    return_key: escape`));
+    expect(footer.scrollBack?.footer?.test('NEW ACTIVITY')).toBe(true);
+    expect(footer.scrollBack?.marker).toBeUndefined();
+    expect(footer.scrollBack?.statusFooter).toBeUndefined();
+    expect(footer.scrollBack?.returnKey).toBe('escape');
+    const marker = loadScreen(snippet(`  scroll_back:
+    marker: '^BACK$'
+    status_footer: '^EARLIER$'
+    return_key: escape`));
+    expect(marker.scrollBack?.marker?.test('BACK')).toBe(true);
+    expect(marker.scrollBack?.statusFooter?.test('EARLIER')).toBe(true);
+    expect(marker.scrollBack?.footer).toBeUndefined();
+    expect(marker.scrollBack?.returnKey).toBe('escape');
+    const both = loadScreen(snippet(`  scroll_back:
+    footer: '^NEW ACTIVITY$'
+    marker: '^BACK$'
+    status_footer: '^EARLIER$'
+    return_key: escape`));
+    expect(both.scrollBack?.footer?.test('NEW ACTIVITY')).toBe(true);
+    expect(both.scrollBack?.marker?.test('BACK')).toBe(true);
+  });
+
+  test('half a marker layout is refused in words that name both keys', () => {
+    expect(() => loadScreen(snippet(`  scroll_back:
+    marker: '^BACK$'
+    return_key: escape`))).toThrow('"scroll_back" must declare both "marker" and "status_footer"');
+    expect(() => loadScreen(snippet(`  scroll_back:
+    status_footer: '^EARLIER$'
+    return_key: escape`))).toThrow('"scroll_back" must declare both "marker" and "status_footer"');
+    expect(() => loadScreen(snippet(`  scroll_back:
+    return_key: escape`))).toThrow('"scroll_back" must declare "footer", or "marker" and "status_footer"');
+  });
+
+  test('every row is the whole line the pane draws, and each is anchored', () => {
+    expect(() => loadScreen(snippet(`  scroll_back:
+    footer: '^NEW'
+    return_key: escape`))).toThrow('a scroll_back footer must match the whole line');
+    expect(() => loadScreen(snippet(`  scroll_back:
+    marker: 'BACK'
+    status_footer: '^EARLIER$'
+    return_key: escape`))).toThrow('a scroll_back marker must match the whole line');
+    expect(() => loadScreen(snippet(`  scroll_back:
+    marker: '^BACK$'
+    status_footer: 'EARLIER'
+    return_key: escape`))).toThrow('a scroll_back status footer must match the whole line');
+  });
+});

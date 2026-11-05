@@ -170,23 +170,46 @@ function screenOf(node: YamlNode, topScreenModule?: YamlEntry, baseDir?: string,
  *  guess: the wake presses this key into a pane whose composer it cannot see. */
 const SCROLL_BACK_KEYS = ['escape'] as const;
 
-/** A pane scrolled back over its transcript draws the CLI's own footer on its last non-blank
- *  row, in the composer's place. The footer is the whole row, as the pane draws it; the return
- *  key is the one its own footer names, from the list above. */
-function scrollBackOf(entry: YamlEntry): { footer: RegExp; returnKey: string } {
+/** A pane scrolled back over its transcript reads from the bottom region the profile declares,
+ *  as whole rows: either the CLI's footer on the pane's last non-blank row, in the composer's
+ *  place (`footer`), or the marker row directly above the drawn composer together with the
+ *  status footer on the last non-blank row (`marker` and `status_footer`). A profile declares
+ *  one layout or both; half of the marker layout is refused, and so is neither. The return key
+ *  is the one the CLI's own row names, from the list above. */
+function scrollBackOf(entry: YamlEntry): { footer?: RegExp; marker?: RegExp; statusFooter?: RegExp; returnKey: string } {
   const entries = mapping(entry.value, 'scroll_back');
-  only(entries, ['footer', 'return_key']);
-  const footer = required(entries, 'footer', entry.line);
-  const footerText = stringOf(footer.value);
-  if (footerText === null) fail(footer.line, '"scroll_back.footer" must be a string');
-  if (!anchored(footerText)) fail(footer.line, 'a scroll_back footer must match the whole line: "^…$"');
+  only(entries, ['footer', 'marker', 'status_footer', 'return_key']);
   const key = required(entries, 'return_key', entry.line);
   const keyText = stringOf(key.value);
   if (keyText === null) fail(key.line, '"scroll_back.return_key" must be a string');
   if (!(SCROLL_BACK_KEYS as readonly string[]).includes(keyText)) {
     fail(key.line, `"scroll_back.return_key" must be one of ${SCROLL_BACK_KEYS.join(', ')}: only a key a run established`);
   }
-  return { footer: patternOf(footerText, false, footer.line), returnKey: keyText };
+  const row = (name: 'footer' | 'marker' | 'status_footer'): RegExp | undefined => {
+    const found = optional(entries, name);
+    if (found === undefined) return undefined;
+    const text = stringOf(found.value);
+    if (text === null) fail(found.line, `"scroll_back.${name}" must be a string`);
+    if (!anchored(text)) fail(found.line, `a scroll_back ${name.replace(/_/g, ' ')} must match the whole line: "^…$"`);
+    return patternOf(text, false, found.line);
+  };
+  const footer = row('footer');
+  const marker = row('marker');
+  const statusFooter = row('status_footer');
+  if (marker === undefined || statusFooter === undefined) {
+    if (marker !== undefined || statusFooter !== undefined) {
+      fail(entry.line, '"scroll_back" must declare both "marker" and "status_footer": the marker sits above the composer and the status footer is the last row');
+    }
+    if (footer === undefined) {
+      fail(entry.line, '"scroll_back" must declare "footer", or "marker" and "status_footer"');
+    }
+  }
+  return {
+    ...(footer === undefined ? {} : { footer }),
+    ...(marker === undefined ? {} : { marker }),
+    ...(statusFooter === undefined ? {} : { statusFooter }),
+    returnKey: keyText,
+  };
 }
 
 /**

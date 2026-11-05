@@ -139,8 +139,9 @@ async function pollSubmitted(
  * Types one trigger line into the profile's idle composer and presses Enter, then waits for the
  * profile's working screen. Both idle reads happen before any key goes out, spaced by a settle:
  * a pane that is working, holds unsent text, shows a dialog or cannot be read is refused with
- * nothing typed. A pane scrolled back over its transcript — the profile's footer on its last
- * row, the composer hidden — is returned to the prompt first, with the one key its footer names,
+ * nothing typed. A pane scrolled back over its transcript — the profile's own bottom rows: a
+ * footer in the composer's place, or a marker above a drawn composer with a status footer under
+ * it — is returned to the prompt first, with the one key its row names,
  * and the two idle reads are taken after that key: the return is the only key this module sends
  * into a screen it read as scrolled back, and it is sent once. A box that already holds exactly
  * the line is not typed again: Enter is pressed into it. After the line is typed, Enter is
@@ -180,10 +181,10 @@ export async function deliverTypedWake(
     screen = opening;
   } else {
     if (first === 'scroll back') {
-      // The pane sits scrolled back over its transcript: the composer is hidden and the CLI's
-      // own footer stands where it was. One press of the key that footer names returns to the
-      // prompt; the box is read twice after it, exactly as it is on any other wake, so a draft
-      // the scroll was hiding refuses and nothing working is typed into.
+      // The pane sits scrolled back over its transcript: the CLI's own bottom rows stand there,
+      // either in the composer's place or around a drawn one. One press of the key those rows
+      // name returns to the prompt; the box is read twice after it, exactly as it is on any
+      // other wake, so a draft the scroll was hiding refuses and nothing working is typed into.
       const returnKey = screenData(cli)?.scrollBack?.returnKey;
       if (returnKey === undefined || host.key === undefined) {
         return { delivered: false, typed: false, tries: 0, reason: 'the screen is scrolled back and no return key is bound; nothing was typed' };
