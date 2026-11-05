@@ -1530,6 +1530,13 @@
     {
       "code": 0,
       "command": "config",
+      "id": "config.entity.composed-value",
+      "meaning": "the team file's composed rules are printed",
+      "trigger": "team config get composed.rules"
+    },
+    {
+      "code": 0,
+      "command": "config",
       "id": "config.entity.unchanged",
       "meaning": "the entity already writes that value; nothing was written",
       "trigger": "team config set <entity>.names.unique off"
@@ -1547,6 +1554,20 @@
       "id": "config.entity.written",
       "meaning": "the entity's value was written",
       "trigger": "team config set <entity>.names.unique off"
+    },
+    {
+      "code": 0,
+      "command": "config",
+      "id": "config.project.rules-unchanged",
+      "meaning": "the project already writes those rules; nothing was written",
+      "trigger": "team config set project.<name>.rules [ ]"
+    },
+    {
+      "code": 0,
+      "command": "config",
+      "id": "config.project.rules-written",
+      "meaning": "the project's rules were written",
+      "trigger": "team config set project.<name>.rules [ ]"
     },
     {
       "code": 0,

@@ -256,7 +256,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     } else {
       io.stdout(formatComposedRules(loaded.team, seat, loaded.root, undefined, home));
     }
-    // exit: config.entity.value
+    // exit: config.entity.composed-value
     return 0;
   }
 
@@ -353,7 +353,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     if (!outcome.changed) {
       if (json) writeJson(io, 'team.config-edit', { format: 1, verb, path: `${entityName}.${key as string}`, changed: false, ...(dryRun ? { dry_run: true } : {}), source: 'project', comments_kept: true });
       else io.stdout(`nothing changed in ${file}\n`);
-      // exit: config.entity.unchanged
+      // exit: config.project.rules-unchanged
       return 0;
     }
     if (json) {
@@ -368,7 +368,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
         if (!outcome.kept) io.stderr(`team config: the projects file was rewritten whole to change ${entityName}.${key as string}; its comments were not kept\n`);
       }
     }
-    // exit: config.entity.written
+    // exit: config.project.rules-written
     return 0;
   }
 
