@@ -85,7 +85,46 @@ function wakeFake(
   };
 }
 
-const FAST = { settleMs: 1, enterSettleMs: 1, pollMs: 1, verifyMs: 1 };
+const FAST = { settleMs: 1, enterSettleMs: 1, pollMs: 1, ackSettleMs: 1, verifyMs: 1 };
+
+type WakeStep = { op: 'read' } | { op: 'type' } | { op: 'enter' } | { op: 'wait'; ms: number };
+
+/** A pane scripted as `wakeFake`, recording every step in the order the wake took it: the walk's
+ *  shape is what a wait cut changes, so the scenes read the sequence, not just the result. */
+function stepFake(
+  screen: (read: number, enters: number, typed: readonly string[]) => string | null,
+): { host: TypedWakeHost; steps: WakeStep[]; typed: string[]; enters: number } {
+  const steps: WakeStep[] = [];
+  const typed: string[] = [];
+  const state = { enters: 0, reads: 0 };
+  const host: TypedWakeHost = {
+    read: () => {
+      steps.push({ op: 'read' });
+      return screen(state.reads++, state.enters, typed);
+    },
+    type: (_pane: string, text: string) => {
+      steps.push({ op: 'type' });
+      typed.push(text);
+      return true;
+    },
+    enter: () => {
+      steps.push({ op: 'enter' });
+      state.enters += 1;
+      return true;
+    },
+    wait: async (ms: number) => {
+      steps.push({ op: 'wait', ms });
+    },
+  };
+  return {
+    host,
+    steps,
+    typed,
+    get enters() {
+      return state.enters;
+    },
+  };
+}
 
 describe('the typed wake: one line into an empty idle box', () => {
   test('two idle reads, one line, one Enter: the working screen is the delivery', async () => {
@@ -430,6 +469,84 @@ describe('the typed wake: one line into an empty idle box', () => {
     expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
     expect(typed).toEqual([LINE]);
     expect(enters).toBe(1);
+  });
+});
+
+describe('the waits before and after Enter are the walk’s guard, not fixed sleeps', () => {
+  test('a ticking frame that still holds the line is pressed, not refused', async () => {
+    // The two looks agree on the facts that matter — the box holds exactly the line — not on the
+    // whole frame: a counter elsewhere on screen ticks between them and must not stop the Enter.
+    let tick = 0;
+    const pane = wakeFake((read, enters) => {
+      if (read < 2) return IDLE;
+      if (enters > 0) return WORKING;
+      tick += 1;
+      return holding(LINE).replace('Skills: 56 loaded', `Skills: ${String(56 + tick)} loaded`);
+    });
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(pane.typed).toEqual([LINE]);
+    expect(pane.enters).toBe(1);
+  });
+
+  test('the second look at the drawn line follows at once, with one settle after the typing', async () => {
+    // No sleep between the two looks: the pair is the guard, and the line is typed once.
+    const pane = stepFake((read, enters) => (read < 2 ? IDLE : enters > 0 ? WORKING : holding(LINE)));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
+    expect(out.delivered).toBe(true);
+    expect(pane.enters).toBe(1);
+    const typedAt = pane.steps.findIndex((step) => step.op === 'type');
+    const enteredAt = pane.steps.findIndex((step) => step.op === 'enter');
+    expect(pane.steps.slice(typedAt + 1, enteredAt)).toEqual([
+      { op: 'wait', ms: FAST.enterSettleMs },
+      { op: 'read' },
+      { op: 'read' },
+    ]);
+  });
+
+  test('a look that holds the line and then a different box refuses before any Enter', async () => {
+    // The two looks disagree: the box that held the line now holds someone else's text. No Enter.
+    const pane = wakeFake((read, enters) => {
+      if (read < 2) return IDLE;
+      if (enters > 0) return WORKING;
+      return read === 2 ? holding(LINE) : holding('a draft I did not type');
+    });
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
+    expect(out).toEqual({
+      delivered: false,
+      typed: true,
+      tries: 0,
+      reason: 'the box held text other than the line after the line was typed; no Enter was pressed',
+    });
+    expect(pane.typed).toEqual([LINE]);
+    expect(pane.enters).toBe(0);
+  });
+
+  test('the first look after Enter waits one ack settle, never reading at zero delay', async () => {
+    const pane = stepFake((read, enters) => (read < 2 ? IDLE : enters > 0 ? WORKING : holding(LINE)));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    const enteredAt = pane.steps.findIndex((step) => step.op === 'enter');
+    expect(pane.steps[enteredAt + 1]).toEqual({ op: 'wait', ms: FAST.ackSettleMs });
+    expect(pane.steps[enteredAt + 2]).toEqual({ op: 'read' });
+  });
+
+  test('an ack that shows the line still held presses again, bounded, and never types it twice', async () => {
+    const pane = wakeFake((read, enters) => {
+      if (read < 2) return IDLE;
+      return enters < 2 ? holding(LINE) : WORKING;
+    });
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 2, reason: 'the working screen showed after 2 Enters' });
+    expect(pane.typed).toEqual([LINE]);
+    expect(pane.enters).toBe(2);
+  });
+
+  test('an ack that shows the box emptied without a working screen is not a delivery', async () => {
+    const pane = wakeFake((read, enters) => (enters > 0 ? IDLE : read < 2 ? IDLE : holding(LINE)));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
+    expect(out).toEqual({ delivered: false, typed: true, tries: 1, reason: 'the screen read idle and no working screen showed' });
+    expect(pane.enters).toBe(1);
   });
 });
 
