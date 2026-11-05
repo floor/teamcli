@@ -114,6 +114,12 @@ rows changed, as a seat's own screen draws them.
   view` is the last row. The bottom region was reported from a live seat's saved screen; the
   transcript rows above it are this file's own, in `scroll-back.txt`'s voice. Read `unknown`
   before the profile declared the marker and the status footer, and `scroll back` after.
+- `esc-hint.txt`: the screen the same seat drew after the scroll-back return key: the composer
+  is back with its empty placeholder, the status row is above it, and the hint `esc again to
+  edit previous message` is the last non-blank row. The hint row was reported from that saved
+  screen (it stands until the next keypress); the transcript above it is this file's own, in
+  `scroll-back.txt`'s voice. Read `unknown` before the profile declared the hint as the one
+  chrome row under the status line, and `idle` after.
 
 The used variant is Codex's own: `strings` on the installed `codex-cli 0.161.0` prints
 `Context `, `% left`, `Context `, `% used` beside the status-surface ids

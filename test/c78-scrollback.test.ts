@@ -36,6 +36,10 @@ const NO_FOOTER = SCROLL_BACK.split('\n').filter((line) => !line.startsWith('New
 // status footer on the last row.
 const SCROLL_BACK_MARKER = readFileSync(join(FIXTURES, 'scroll-back-marker.txt'), 'utf8');
 const MARKER = '↓ Back to bottom · esc';
+// The third screen: the return key has left scroll-back, the composer is drawn with its empty
+// placeholder, and the hint codex draws until the next keypress is the last non-blank row.
+const ESC_HINT_SCREEN = readFileSync(join(FIXTURES, 'esc-hint.txt'), 'utf8');
+const ESC_HINT = 'esc again to edit previous message';
 
 const NOW = new Date('2026-11-04T15:00:00.000Z');
 const N = 600;
@@ -61,6 +65,11 @@ function markerReplaced(row: string): string {
   return SCROLL_BACK_MARKER.split('\n')
     .map((line) => (line.trim() === MARKER ? row : line))
     .join('\n');
+}
+
+/** The esc-hint frame with `text` drawn in place of the grey suggestion. */
+function hintHolding(text: string): string {
+  return ESC_HINT_SCREEN.replace('› Ask Codex to do anything', `› ${text}`);
 }
 
 /** A pane scripted by how many reads and Enters it has seen, and by the lines typed into it.
@@ -299,6 +308,50 @@ describe('the second reported scroll-back layout reads from its bottom region', 
   });
 });
 
+describe('the esc hint under an empty composer reads idle', () => {
+  test('the reported hint on the last row, under the drawn empty prompt, reads idle', () => {
+    expect(readScreen('codex', ESC_HINT_SCREEN).kind).toBe('idle');
+    expect(screenWord(readScreen('codex', ESC_HINT_SCREEN))).toBe('idle');
+    // The composer alone reads the idle prompt: the hint is the pane's own row under the status
+    // row, not text in the box.
+    expect(classifyComposer('codex', ESC_HINT_SCREEN.split('\n')).kind).toBe('idle');
+  });
+
+  test('only the exact hint on the last non-blank row, under an empty composer, is the hint', () => {
+    // A near miss is no chrome row: the composer read stays unknown.
+    expect(readScreen('codex', ESC_HINT_SCREEN.replace(ESC_HINT, 'esc again to edit the previous message')).kind).toBe('unknown');
+    expect(readScreen('codex', ESC_HINT_SCREEN.replace(ESC_HINT, `${ESC_HINT} now`)).kind).toBe('unknown');
+    // A row under the hint means the hint is not the last non-blank row.
+    expect(readScreen('codex', `${ESC_HINT_SCREEN}\n• a row the seat printed\n`).kind).toBe('unknown');
+    // Trailing blank rows are dropped; the hint stays the last non-blank row.
+    expect(readScreen('codex', `${ESC_HINT_SCREEN}\n\n\n`).kind).toBe('idle');
+    // The hint as the last row with no composer and no status row is no prompt at all.
+    expect(readScreen('codex', `• a row the seat printed\n  ${ESC_HINT}\n`).kind).toBe('unknown');
+  });
+
+  test('a composer holding text is not the empty prompt, hint or no hint', () => {
+    const draft = hintHolding('a draft I did not write');
+    expect(readScreen('codex', draft).kind).toBe('unsent');
+    expect(readScreen('codex', draft).kind).not.toBe('idle');
+  });
+
+  test('a transcript line quoting the hint is never the hint row', () => {
+    // The phrase in the transcript does not turn a scrolled-back pane into an idle prompt.
+    const quoted = SCROLL_BACK_MARKER.replace(
+      '• Merged into the release branch.',
+      `• the pane printed “${ESC_HINT}”`,
+    );
+    expect(readScreen('codex', quoted).kind).toBe('scroll back');
+    // The same quote above the prompt leaves the ordinary idle prompt idle: the hint is not
+    // read from the transcript.
+    const idleWithQuote = IDLE.replace(
+      '› Ask Codex to do anything',
+      `• the pane printed “${ESC_HINT}”\n\n› Ask Codex to do anything`,
+    );
+    expect(readScreen('codex', idleWithQuote).kind).toBe('idle');
+  });
+});
+
 describe('the typed wake returns to the prompt, then keeps every guard', () => {
   test('the scroll-back footer is escaped once, then two idle reads and the guarded Enter deliver', async () => {
     const screens = [SCROLL_BACK, IDLE, IDLE, holding(LINE), holding(LINE), WORKING];
@@ -371,6 +424,62 @@ describe('the typed wake returns to the prompt, then keeps every guard', () => {
       typed: false,
       tries: 0,
       reason: 'the pane did not take the return key; nothing was typed',
+    });
+    expect(wake.keys).toEqual(['escape']);
+    expect(wake.typed).toEqual([]);
+    expect(wake.enters).toBe(0);
+  });
+});
+
+describe('the wake returns through the esc hint with exactly one key', () => {
+  test('the hint screen after the return is idle: two idle reads and the guarded Enter deliver, one esc', async () => {
+    // The live shape: the marker layout, one esc, the third screen on both idle reads (the hint
+    // stands until the next keypress, which is the line the wake types).
+    const screens = [SCROLL_BACK_MARKER, ESC_HINT_SCREEN, ESC_HINT_SCREEN, holding(LINE), holding(LINE), WORKING];
+    const wake = wakeFake((read) => screens[Math.min(read, screens.length - 1)] ?? null);
+    const out = await deliverTypedWake(wake.host, 'pane-1', LINE, 'codex', FAST);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(wake.keys).toEqual(['escape']);
+    expect(wake.typed).toEqual([LINE]);
+    expect(wake.enters).toBe(1);
+  });
+
+  test('the footer layout returns through the same hint screen, one esc', async () => {
+    const screens = [SCROLL_BACK, ESC_HINT_SCREEN, ESC_HINT_SCREEN, holding(LINE), holding(LINE), WORKING];
+    const wake = wakeFake((read) => screens[Math.min(read, screens.length - 1)] ?? null);
+    const out = await deliverTypedWake(wake.host, 'pane-1', LINE, 'codex', FAST);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(wake.keys).toEqual(['escape']);
+    expect(wake.typed).toEqual([LINE]);
+    expect(wake.enters).toBe(1);
+  });
+
+  test('a return that does not reveal the prompt never presses the key a second time', async () => {
+    // The pane still reads scroll back after the one return: a second esc would open codex's
+    // edit-previous-message, so the wake refuses with the one key sent.
+    const wake = wakeFake(() => SCROLL_BACK_MARKER);
+    const out = await deliverTypedWake(wake.host, 'pane-1', LINE, 'codex', FAST);
+    expect(out).toEqual({
+      delivered: false,
+      typed: true,
+      tries: 0,
+      reason: 'the screen read scroll back after the return key, not an empty idle prompt; no wake line was typed',
+    });
+    expect(wake.keys).toEqual(['escape']);
+    expect(wake.typed).toEqual([]);
+    expect(wake.enters).toBe(0);
+  });
+
+  test('an unrecognised screen after the return refuses with the one key sent', async () => {
+    // The pre-C7.8e third screen: nothing is typed into a screen the profile cannot read, and
+    // the wake never answers an unknown screen with esc.
+    const wake = wakeFake((read) => (read === 0 ? SCROLL_BACK_MARKER : NO_FOOTER));
+    const out = await deliverTypedWake(wake.host, 'pane-1', LINE, 'codex', FAST);
+    expect(out).toEqual({
+      delivered: false,
+      typed: true,
+      tries: 0,
+      reason: 'the screen read unknown after the return key, not an empty idle prompt; no wake line was typed',
     });
     expect(wake.keys).toEqual(['escape']);
     expect(wake.typed).toEqual([]);
