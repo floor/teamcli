@@ -13,15 +13,19 @@ function place(): { dir: string; path: string; claim: string } {
   return { dir, path, claim: `${path}.steal` };
 }
 
-// Synthetic process facts for every scene: no scene reads the real process table. `HOLDER` is a
-// pid number the test owns; whether it is alive and when it started are the scene's to say.
+// Synthetic process facts for every scene: no scene reads the real process table. `HOLDER` is the
+// taker's own pid number and `FOREIGN` another process's; whether it is alive and when it started
+// are the scene's to say. The taker's own start is a fact of this process, so `facts()` gives it
+// too, and a scene that fails the table's read still has one.
 const HOLDER = 4242;
+const FOREIGN = 5151;
 const BOOT = Date.parse('2026-11-05T09:00:00Z');
 const START = Date.parse('2026-11-05T10:00:00Z');
 
 function facts(overrides: Partial<LockSteps> = {}): Partial<LockSteps> {
   return {
     pid: () => HOLDER,
+    ownStart: () => START,
     alive: (pid) => pid !== DEAD,
     startOf: () => START,
     ...overrides,
@@ -207,9 +211,9 @@ describe('the seat lock', () => {
 
     test('a start inside the start line\'s one-second resolution still matches', () => {
       const { dir, path } = place();
-      writeFileSync(path, `${HOLDER} cafefeed ${START}\n`);
+      writeFileSync(path, `${FOREIGN} cafefeed ${START}\n`);
       const lock = acquireSeatLock(dir, 'acme', 'lead', facts({ startOf: () => START + 1_500 }));
-      expect(lock).toEqual({ held: HOLDER, startedAt: START });
+      expect(lock).toEqual({ held: FOREIGN, startedAt: START });
     });
 
     test('a pid whose start differs is a reused pid, and the lock is taken over', () => {
@@ -221,10 +225,18 @@ describe('the seat lock', () => {
       if (own(lock)) lock.release();
     });
 
-    test('a live pid whose start cannot be read is held, never taken for a reused pid', () => {
+    test('a live pid whose start cannot be read is held, and the taker still records its own', () => {
       const { dir, path } = place();
-      writeFileSync(path, `${HOLDER} cafefeed ${START}\n`);
-      expect(acquireSeatLock(dir, 'acme', 'lead', facts({ startOf: () => null }))).toEqual({ held: HOLDER, startedAt: START });
+      // A live process the table cannot describe is held, never taken for a reused pid.
+      writeFileSync(path, `${FOREIGN} cafefeed ${START}\n`);
+      expect(acquireSeatLock(dir, 'acme', 'lead', facts({ startOf: () => null }))).toEqual({ held: FOREIGN, startedAt: START });
+
+      // With the name free, the same failing table read changes nothing: the taker's own start
+      // is a fact of the process itself, so the token it publishes records one.
+      lockSteps.drop(path);
+      const lock = acquireSeatLock(dir, 'acme', 'lead', facts({ startOf: () => null }));
+      expect(own(lock)).toBe(true);
+      expect(token(path)).toMatch(fresh);
     });
 
     // A token written before tokens recorded a start has nothing to compare. A live pid at it
@@ -281,9 +293,17 @@ describe('the seat lock', () => {
 
     test('a dead pid and a pid whose start moved are both no holder', () => {
       const { dir, path } = place();
-      writeFileSync(path, `${HOLDER} cafefeed ${START}\n`);
+      writeFileSync(path, `${FOREIGN} cafefeed ${START}\n`);
       expect(seatLockHolder(dir, 'acme', 'lead', facts({ alive: () => false }))).toBeNull();
       expect(seatLockHolder(dir, 'acme', 'lead', facts({ startOf: () => START - 120_000 }))).toBeNull();
+    });
+
+    // The taker's own start is never asked of the process table, so the table cannot contradict
+    // a lock this very process holds: the token it wrote is judged by the start it wrote.
+    test('a token naming this process is judged by this process\'s own start, not the table\'s', () => {
+      const { dir, path } = place();
+      writeFileSync(path, `${HOLDER} cafefeed ${START}\n`);
+      expect(seatLockHolder(dir, 'acme', 'lead', facts({ startOf: () => START - 120_000 }))).toEqual({ held: HOLDER, startedAt: START });
     });
 
     test('a start-less lock with a live pid is a holder, whatever its file\'s time', () => {
