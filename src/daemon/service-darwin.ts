@@ -18,7 +18,7 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
   chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync,
-  renameSync, rmSync, statSync, unlinkSync, writeFileSync,
+  realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { DAEMON_LABEL, daemonLogPath, daemonRuntimeRoot, machineConfigDir } from './paths.ts';
@@ -204,15 +204,20 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
    * ProgramArguments. This seat could not run the manager's commands itself, so the parser is
    * tolerant of both forms and its exact output is not claimed as measured here.
    */
-  const jobRecord = (): ServiceJobRecord | null => {
+  const jobRecord = (): (ServiceJobRecord & { path: string | null }) | null => {
     const printed = run('launchctl', ['print', service]);
     if (printed.status === 0) {
       const pid = /^\s*pid = (\d+)\s*$/m.exec(printed.stdout)?.[1];
+      const path = /^\s*path = (.+?)\s*$/m.exec(printed.stdout)?.[1];
       // A record with no program line still carries the job's own first argument; either is
       // the executable the job was started from, and the admission compares it by real path.
       const program = /^\s*program = (.+?)\s*$/m.exec(printed.stdout)?.[1]
         ?? /^\s*arguments = \{\s*\n\s*([^\n]+?)\s*$/m.exec(printed.stdout)?.[1];
-      return { pid: pid === undefined ? null : Number(pid), program: program ?? null };
+      return {
+        pid: pid === undefined ? null : Number(pid),
+        program: program ?? null,
+        path: path ?? null,
+      };
     }
     const listed = run('launchctl', ['list', DAEMON_LABEL]);
     if (listed.status !== 0) return null;
@@ -221,6 +226,7 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
     return {
       pid: pid === undefined ? null : Number(pid),
       program: quoted === undefined ? null : quoted.replace(/\\(.)/g, '$1'),
+      path: null,
     };
   };
 
@@ -761,7 +767,22 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
     job: (home) => {
       const unit = unitRecord(home);
       if (unit === null || unit.label !== DAEMON_LABEL) return null;
-      return jobRecord();
+      let expectedPath: string;
+      try {
+        expectedPath = realpathSync(unitPath(home));
+      } catch {
+        return null;
+      }
+      const record = jobRecord();
+      if (record === null || record.path === null) return null;
+      let loadedPath = record.path;
+      try {
+        loadedPath = realpathSync(record.path);
+      } catch {
+        // Keep the literal string from the record when it cannot be resolved.
+      }
+      if (loadedPath !== expectedPath) return null;
+      return { pid: record.pid, program: record.program };
     },
     unit: (home) => unitRecord(home),
 

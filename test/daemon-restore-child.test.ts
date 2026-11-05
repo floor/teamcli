@@ -54,17 +54,19 @@ function scratch(): { base: string; root: string; home: string; bin: string } {
   mkdirSync(bin, { recursive: true });
   // Place a synthetic service-manager unit and shim first on PATH so subprocess scenes never
   // reach the live system service manager and always report this test runner process as the
-  // daemon job for `home`.
+  // daemon job loaded from `home`'s own unit path.
   mkdirSync(join(home, 'Library', 'LaunchAgents'), { recursive: true });
+  const unitFile = join(home, 'Library', 'LaunchAgents', `${DAEMON_LABEL}.plist`);
   writeFileSync(
-    join(home, 'Library', 'LaunchAgents', `${DAEMON_LABEL}.plist`),
+    unitFile,
     `<plist version="1.0"><dict><key>Label</key><string>${DAEMON_LABEL}</string></dict></plist>\n`,
     { mode: 0o600 },
   );
+  const unitRealpath = realpathSync(unitFile);
   const launchctl = join(bin, 'launchctl');
   writeFileSync(
     launchctl,
-    `#!/bin/sh\nprintf 'pid = %s\\nprogram = %s\\n' "${String(process.pid)}" "${process.execPath}"\n`,
+    `#!/bin/sh\nprintf 'path = %s\\npid = %s\\nprogram = %s\\n' "${unitRealpath}" "${String(process.pid)}" "${process.execPath}"\n`,
     { mode: 0o755 },
   );
   chmodSync(launchctl, 0o755);
@@ -555,6 +557,7 @@ describe('independent adversarial checks: restore spawn abort, deadline, spawn e
         `const at = process.argv.indexOf('--inherited');`,
         `discardRestoreInherit(process.env.HOME ?? '', process.argv[at + 1] ?? '');`,
         `process.stdout.write('x'.repeat(70 * 1024));`,
+        `await new Promise((resolve) => setTimeout(resolve, 1_000));`,
       ].join('\n'),
     );
     await expect(

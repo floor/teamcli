@@ -924,35 +924,47 @@ describe('team up --all single-command multi-team restore', () => {
     expect(existsSync(pathExp)).toBe(false);
     expect(readdirSync(machineConfigDir(home)).filter((name) => name.startsWith('restore.inherit.'))).toEqual([]);
 
-    // 9. Adapter job(home) binding: a token whose claims name a home with no installed unit (or a
-    //    unit with a different label), even under the machine daemon as direct parent, is refused
-    //    and spends nothing; once that home's own unit is installed with DAEMON_LABEL, it is admitted.
+    // 9. Adapter job(home) binding: a token whose claims name a scratch home — even when a plist
+    //    naming DAEMON_LABEL is dropped into that scratch home — is refused without spending while
+    //    the service manager's loaded job path is the machine unit; only the home whose unitPath
+    //    realpath equals the loaded job path is admitted.
+    const machineUnitDir = join(home, 'Library', 'LaunchAgents');
+    mkdirSync(machineUnitDir, { recursive: true });
+    const machineUnitFile = join(machineUnitDir, `${DAEMON_LABEL}.plist`);
+    writeFileSync(
+      machineUnitFile,
+      `<plist version="1.0"><dict><key>Label</key><string>${DAEMON_LABEL}</string></dict></plist>\n`,
+      { mode: 0o600 },
+    );
+    const machineUnitRealpath = realpathSync(machineUnitFile);
     const darwinService = systemServiceManager({
       platform: 'darwin',
       runner: () => ({
         status: 0,
-        stdout: `\tpid = ${String(DAEMON_PID)}\n\tprogram = ${process.execPath}\n`,
+        stdout: `\tpath = ${machineUnitRealpath}\n\tpid = ${String(DAEMON_PID)}\n\tprogram = ${process.execPath}\n`,
         stderr: '',
       }),
     });
     expect(darwinService).not.toBeNull();
     if (darwinService === null) return;
 
-    const scratchHomeNoUnit = join(base, 'scratch-home-no-unit');
-    mkdirSync(scratchHomeNoUnit, { recursive: true });
-    const noUnitMint = writeRestoreDoor({
+    const scratchHome = join(base, 'scratch-home');
+    mkdirSync(scratchHome, { recursive: true });
+    const scratchMint = writeRestoreDoor({
       version: 1,
-      home: scratchHomeNoUnit,
+      home: scratchHome,
       root: alphaTeam.root,
       daemonPid: DAEMON_PID,
     });
-    const noUnitTokenPath = restoreInheritPath(scratchHomeNoUnit, noUnitMint.nonce);
-    expect(darwinService.job(scratchHomeNoUnit)).toBeNull();
+    const scratchTokenPath = restoreInheritPath(scratchHome, scratchMint.nonce);
+
+    // 9a. Scratch home with no installed unit is refused and spends nothing.
+    expect(darwinService.job(scratchHome)).toBeNull();
     expect(
       acceptRestoreDoor({
-        home: scratchHomeNoUnit,
-        nonce: noUnitMint.nonce,
-        text: restoreDoorText(noUnitMint.nonce, noUnitMint.secret),
+        home: scratchHome,
+        nonce: scratchMint.nonce,
+        text: restoreDoorText(scratchMint.nonce, scratchMint.secret),
         parentPid: DAEMON_PID,
         service: darwinService,
       }),
@@ -960,50 +972,55 @@ describe('team up --all single-command multi-team restore', () => {
       kind: 'refused',
       why: "the system's service manager records no running machine daemon",
     });
-    expect(existsSync(noUnitTokenPath)).toBe(true);
+    expect(existsSync(scratchTokenPath)).toBe(true);
 
-    // A unit at that home's path naming a different label is also refused without spending.
-    const unitFile = darwinService.unitPath(scratchHomeNoUnit);
-    mkdirSync(join(scratchHomeNoUnit, 'Library', 'LaunchAgents'), { recursive: true });
+    // 9b. Dropping a valid plist naming DAEMON_LABEL into the scratch home is STILL refused and
+    //     spends nothing while the service manager's loaded job path is the machine unit.
+    const scratchUnitFile = darwinService.unitPath(scratchHome);
+    mkdirSync(join(scratchHome, 'Library', 'LaunchAgents'), { recursive: true });
     writeFileSync(
-      unitFile,
-      `<plist version="1.0"><dict><key>Label</key><string>other.label</string></dict></plist>\n`,
-      { mode: 0o600 },
-    );
-    expect(darwinService.job(scratchHomeNoUnit)).toBeNull();
-    expect(
-      acceptRestoreDoor({
-        home: scratchHomeNoUnit,
-        nonce: noUnitMint.nonce,
-        text: restoreDoorText(noUnitMint.nonce, noUnitMint.secret),
-        parentPid: DAEMON_PID,
-        service: darwinService,
-      }),
-    ).toEqual({
-      kind: 'refused',
-      why: "the system's service manager records no running machine daemon",
-    });
-    expect(existsSync(noUnitTokenPath)).toBe(true);
-
-    // Installing that home's own unit naming DAEMON_LABEL allows job(home) to return the job and admits the token.
-    writeFileSync(
-      unitFile,
+      scratchUnitFile,
       `<plist version="1.0"><dict><key>Label</key><string>${DAEMON_LABEL}</string></dict></plist>\n`,
       { mode: 0o600 },
     );
-    expect(darwinService.job(scratchHomeNoUnit)).toEqual({ pid: DAEMON_PID, program: process.execPath });
+    expect(darwinService.job(scratchHome)).toBeNull();
     expect(
       acceptRestoreDoor({
-        home: scratchHomeNoUnit,
-        nonce: noUnitMint.nonce,
-        text: restoreDoorText(noUnitMint.nonce, noUnitMint.secret),
+        home: scratchHome,
+        nonce: scratchMint.nonce,
+        text: restoreDoorText(scratchMint.nonce, scratchMint.secret),
+        parentPid: DAEMON_PID,
+        service: darwinService,
+      }),
+    ).toEqual({
+      kind: 'refused',
+      why: "the system's service manager records no running machine daemon",
+    });
+    expect(existsSync(scratchTokenPath)).toBe(true);
+    discardRestoreInherit(scratchHome, scratchMint.nonce);
+
+    // 9c. For the machine home whose unitPath realpath matches the loaded job path, job(home)
+    //     returns the running job and acceptRestoreDoor admits the token.
+    const machineMint = writeRestoreDoor({
+      version: 1,
+      home,
+      root: alphaTeam.root,
+      daemonPid: DAEMON_PID,
+    });
+    const machineTokenPath = restoreInheritPath(home, machineMint.nonce);
+    expect(darwinService.job(home)).toEqual({ pid: DAEMON_PID, program: process.execPath });
+    expect(
+      acceptRestoreDoor({
+        home,
+        nonce: machineMint.nonce,
+        text: restoreDoorText(machineMint.nonce, machineMint.secret),
         parentPid: DAEMON_PID,
         service: darwinService,
       }),
     ).toEqual({
       kind: 'ok',
-      request: { version: 1, home: scratchHomeNoUnit, root: alphaTeam.root },
+      request: { version: 1, home, root: alphaTeam.root },
     });
-    expect(existsSync(noUnitTokenPath)).toBe(false);
+    expect(existsSync(machineTokenPath)).toBe(false);
   });
 });

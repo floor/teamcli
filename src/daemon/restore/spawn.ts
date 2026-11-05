@@ -250,6 +250,7 @@ export async function runRestoreSweepInChild(input: SpawnRestoreInput): Promise<
     if (stdoutBuffer.length > FRAME_LIMIT) {
       stdoutBuffer = '';
       settleFailure('the restore child wrote a line over the frame limit and was not understood');
+      endRunning();
     }
   });
 
