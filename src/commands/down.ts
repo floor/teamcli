@@ -35,6 +35,7 @@ import {
   typeText,
   workspaceClose,
   paneProcesses,
+  workspacePanes,
   type HerdrAgent,
   type PaneProcesses,
 } from '../herdr.ts';
@@ -90,6 +91,9 @@ export type DownSources = {
   /** Pids in the pane, for a seat whose record holds the process `up` launched. Absent: a
    *  record with no process is matched on pane and workspace alone. */
   processes?(session: string, pane: string): PaneProcesses | null;
+  /** Pane ids in a workspace as herdr lists them now; null when the list can't be read. The
+   *  vacated-workspace sweep reads it immediately before a close. */
+  workspacePanes?(session: string, workspace: string): string[] | null;
   now(): Date;
   sleep?(ms: number): Promise<void>;
   /** Approval store home. The real command uses the owner's home. */
@@ -197,6 +201,7 @@ export const realSources: DownSources = {
   shellBack: (session, pane) => paneShellBack(pane, aim(session)),
   foregroundCwd: (session, pane) => paneForegroundCwd(pane, aim(session)),
   processes: (session, pane) => paneProcesses(pane, aim(session)),
+  workspacePanes: (session, workspace) => workspacePanes(workspace, aim(session)),
   now: () => new Date(),
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   home: homedir(),

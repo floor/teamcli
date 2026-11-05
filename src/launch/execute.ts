@@ -165,6 +165,9 @@ export type Host = {
   /** The session's recorded seats, read fresh; null when unreadable. The waiting proof refuses a
    *  pane or workspace any other seat's record names. */
   seatStates?(session: string): Record<string, SeatState> | null;
+  /** The pane this command itself runs in, when the caller's placement or the environment names
+   *  one. A sweep or a close-leftover never closes a workspace holding it. */
+  callerPane?: string;
   classify(session: string, pane: string, cli: string): ScreenKind;
   /** The pane's visible text, ANSI styling and all, or null when the pane can't be read. */
   paneText?(session: string, pane: string): string | null;
@@ -500,6 +503,9 @@ export async function executePlan(
   const logged = new Set<string>();
   let serverFailed = false;
   let watchFailed = false;
+  // The Bus this run started or found already answering. A stray Bus workspace closes only
+  // once this is true, so a failed start never leaves the team with no Bus at all.
+  let busLive = false;
   // A stale watch that was not confirmed gone suppresses the replacement's workspace and pane
   // command: the run holds instead of leaving two watches on the route.
   let watchHeld = false;
@@ -1007,7 +1013,8 @@ export async function executePlan(
     }
     // The old workspace's close is the one step a settled seat still runs: it is planned after
     // everything that makes the seat ready, and it reads the seat's own record before closing.
-    const leftover = op?.do === 'close-leftover';
+    // A vacated workspace's sweep is the same kind of step, for a seat this run settled.
+    const leftover = op?.do === 'close-leftover' || op?.do === 'sweep';
     if (seat && dropped.has(seat) && !leftover) return;
     // A seat settled ready during its idle wait — the owner answered its prompt with
     // `team answer` — has nothing left in the plan: a rename would overwrite the ready stage,
@@ -1915,6 +1922,53 @@ export async function executePlan(
         break;
       }
       case 'bus': {
+        if (op.pane !== undefined && op.workspace !== undefined) {
+          // The Bus workspace outlived the Bus: its pane is reused, and every reading the typing
+          // is judged by is taken here, immediately before it. A pane holding anything beside its
+          // own shell — or one the host cannot read — is not typed into, and no second workspace
+          // is made in its place: a duplicate Bus would answer the same route twice.
+          const said = (why: string) => {
+            host.say(`bus: its workspace ${op.workspace} ${why}\n`);
+            host.log('bus', `its workspace ${op.workspace} ${why}`);
+          };
+          const panes = host.workspacePanes?.(session, op.workspace) ?? null;
+          if (panes === null) {
+            said('could not be read; not started there, and no second workspace was made');
+            break;
+          }
+          if (!panes.includes(op.pane)) {
+            said('no longer lists its pane; not started there, and no second workspace was made');
+            break;
+          }
+          const process = host.processInfo?.(session, op.pane) ?? null;
+          if (process === null) {
+            said('holds a pane that could not be read; not started there, and no second workspace was made');
+            break;
+          }
+          if (!paneHoldsOnlyShell(process)) {
+            said('holds a process beside its shell; not started there');
+            break;
+          }
+          const named = host.agentList?.(session) ?? null;
+          if (named === null) {
+            said('holds a pane whose name could not be read; not started there, and no second workspace was made');
+            break;
+          }
+          if (named.some((agent) => agent.pane === op.pane && agent.name !== null)) {
+            said('holds a pane named for a seat; not started there, and no second workspace was made');
+            break;
+          }
+          if (!host.paneRun(session, op.pane, op.command)) {
+            host.say('bus: it did not start; seats poll their inboxes\n');
+            host.log('bus', 'it did not start');
+            break;
+          }
+          host.noteBus?.(op.pane, op.workspace);
+          busLive = true;
+          host.say('bus: started\n');
+          host.log('bus', 'started');
+          break;
+        }
         const here = places.get(op.label);
         if (!here || !host.paneRun(session, here.pane, op.command)) {
           host.say('bus: it did not start; seats poll their inboxes\n');
@@ -1922,6 +1976,7 @@ export async function executePlan(
           break;
         }
         host.noteBus?.(here.pane, here.workspace);
+        busLive = true;
         host.say('bus: started\n');
         host.log('bus', 'started');
         break;
@@ -2389,6 +2444,10 @@ export async function executePlan(
           said('could not be read; left as it is');
           break;
         }
+        if (host.callerPane !== undefined && panes.includes(host.callerPane)) {
+          said('holds the pane this command runs in; left as it is');
+          break;
+        }
         if (!panes.includes(op.pane)) {
           said('no longer lists its old pane; left as it is');
           break;
@@ -2434,6 +2493,100 @@ export async function executePlan(
         }
         host.say(`${op.seat}: its recorded workspace ${op.workspace} was closed\n`);
         host.log(op.seat, `its recorded workspace ${op.workspace} was closed`);
+        break;
+      }
+      case 'sweep': {
+        // A workspace a seat vacated — a stopped seat's, a record the file no longer declares, or
+        // the one a host-moved seat left — is closed only from readings taken here, immediately
+        // before the close, and never from the plan's. It closes when every pane in it is back at
+        // its own shell alone, no pane is named, no other seat's record names the workspace, and
+        // no screen is working or holding unsent text. Anything else leaves it exactly as it is
+        // and says why. A stray Bus workspace waits for the Bus this run started (`after: 'bus'`);
+        // a replacement's workspace waits for the seat to be ready on another pane (`replaced`).
+        const who = op.seat ?? 'bus';
+        const said = (why: string) => {
+          host.say(`${who}: its workspace ${op.workspace} ${why}\n`);
+          host.log(who, `its workspace ${op.workspace} ${why}`);
+        };
+        if (op.after === 'bus' && !busLive) {
+          said('was left as it is; the Bus is not up');
+          break;
+        }
+        if (op.replaced === true && op.seat !== undefined) {
+          const current = host.seatStates?.(session)?.[op.seat];
+          if (current?.stage !== 'ready' || current.pane === undefined || (op.pane !== undefined && current.pane === op.pane)) {
+            said('was left as it is; the seat is not ready on a replacement');
+            break;
+          }
+        }
+        const panes = host.workspacePanes?.(session, op.workspace) ?? null;
+        // An empty list is not a workspace with nothing in it: a workspace is closed with its
+        // last pane, so no panes means the reading proved nothing and the close is not made.
+        if (panes === null || panes.length === 0) {
+          said('could not be read; left as it is');
+          break;
+        }
+        if (host.callerPane !== undefined && panes.includes(host.callerPane)) {
+          said('holds the pane this command runs in; left as it is');
+          break;
+        }
+        if (op.pane !== undefined && !panes.includes(op.pane)) {
+          said('no longer lists its pane; left as it is');
+          break;
+        }
+        // Every name and record below is read with the panes: a workspace the host gives another
+        // seat, or one another seat's own record still names, is that seat's to keep. A reading
+        // that cannot be taken leaves the workspace alone, as every unreadable reading here does.
+        const seats = host.seatStates?.(session) ?? null;
+        if (seats === null) {
+          said('was left as it is; the seat records could not be read');
+          break;
+        }
+        if (Object.entries(seats).some(([other, held]) => other !== op.seat && held.workspace === op.workspace)) {
+          said("is named by another seat's record; left as it is");
+          break;
+        }
+        const agents = host.agentList?.(session) ?? null;
+        if (agents === null) {
+          said('holds panes whose names could not be read; left as it is');
+          break;
+        }
+        if (agents.some((agent) => agent.pane !== undefined && panes.includes(agent.pane) && agent.name !== null && agent.name !== op.seat)) {
+          said('holds a pane named for another seat; left as it is');
+          break;
+        }
+        let blocked: string | undefined;
+        for (const pane of panes) {
+          const process = host.processInfo?.(session, pane) ?? null;
+          if (process === null) {
+            blocked = `holds a pane (${pane}) that could not be read; left as it is`;
+            break;
+          }
+          if (!paneHoldsOnlyShell(process)) {
+            blocked = 'holds a process beside its shell; left as it is';
+            break;
+          }
+          const kind = host.classify(session, pane, op.cli ?? '');
+          if (kind === 'working') {
+            blocked = 'holds a screen that is working; left as it is';
+            break;
+          }
+          if (kind === 'unsent') {
+            blocked = 'holds unsent text; left as it is';
+            break;
+          }
+        }
+        if (blocked !== undefined) {
+          said(blocked);
+          break;
+        }
+        if (!host.closeWorkspace(session, op.workspace)) {
+          held = true;
+          said('did not close; left as it is');
+          break;
+        }
+        host.say(`${who}: its workspace ${op.workspace} was closed\n`);
+        host.log(who, `its workspace ${op.workspace} was closed`);
         break;
       }
       case 'kill': {
