@@ -17,6 +17,7 @@ import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeT
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
 import { withoutGrokSandbox, writeGrokSandbox } from './grok-sandbox.ts';
 import { launchedIdentity, paneHoldsOnlyShell, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
+import { restoreProof } from './restore-proof.ts';
 import type { CliWatcher } from './cli-hook.ts';
 import { codexEndpointConfig, IDLE_POLL_MS, remoteCodexCommand, type Op, type Step, type UpSeat } from './plan.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from './codex-endpoint.ts';
@@ -1683,6 +1684,53 @@ export async function executePlan(
           `  timed out after ${waited} s waiting for its idle prompt; the screen last read ${last}; left at launched\n`
             + `${paneExcerpt(read, op.command)}  run \`team up\` again to resume it\n`,
         );
+        break;
+      }
+      case 'adopt': {
+        reportProgress(op.seat, 'naming');
+        // The host is read again with nothing between the readings and the write, and the same
+        // proof the plan ran decides again. A changed world is a refusal, never a partial
+        // adoption: no rename, no record.
+        const agentsNow = host.agentList?.(session) ?? null;
+        const processNow = host.processInfo?.(session, op.pane) ?? null;
+        const proof = restoreProof({
+          seat: { name: op.seat, cli: op.cli },
+          recorded: { stage: 'ready', pane: op.pane, workspace: op.workspace, launched: op.recordedLaunched },
+          agents: agentsNow,
+          process: processNow,
+          foreground: host.foreground?.(session, op.pane) ?? null,
+          recordedSession: op.session,
+          screen: host.paneText?.(session, op.pane) ?? null,
+        });
+        if (proof.kind === 'none') {
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: proof.why });
+          break;
+        }
+        if (!host.renameAgent(session, op.pane, op.seat)) {
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: 'its pane was not named; left as the host restored it' });
+          break;
+        }
+        // Line 2, after the name, as the launch's own rename does. A failed call is one line;
+        // the seat stays re-tied.
+        if (op.displayAgent && host.reportDisplayAgent && !host.reportDisplayAgent(session, op.pane, op.displayAgent)) {
+          sayForSeat(op.seat, `${op.seat}: its display was not reported\n`);
+        }
+        recordSeat(op.seat, {
+          stage: 'ready',
+          pane: op.pane,
+          workspace: op.workspace,
+          // The identity the pane holds now, read in the same breath as the proof; the plan's
+          // is the fallback for a reading the host could not give twice.
+          launched: launchedIdentity(processNow) ?? op.launched,
+          ...(proof.kind === 'session' && op.session !== undefined ? { agent_session: op.session } : {}),
+        });
+        provedRestored.add(op.seat);
+        dropped.add(op.seat);
+        final(op.seat, { kind: 'ready' }, `  restored and re-tied: ${proof.sentence}\n`);
         break;
       }
       case 'rename': {

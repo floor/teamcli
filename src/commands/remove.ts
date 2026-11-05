@@ -697,7 +697,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // got past the gate. The lock is released on every exit path (`launch/run-lock.ts`).
   const runLock = acquireRunLock(dir, session);
   if ('held' in runLock) {
-    refuse(io, json, 'remove', { id: 'remove.run-lock', message: runLockText(runLock.held, session, dir), repair: null });
+    refuse(io, json, 'remove', { id: 'remove.run-lock', message: runLockText(runLock.held, session, dir, runLock.startedAt), repair: null });
     // exit: remove.run-lock
     return 1;
   }

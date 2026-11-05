@@ -1827,7 +1827,7 @@ describe('team add, the session mutator lock', () => {
     const io = testIo(project, owner);
     expect(await runAdd(['worker'], io, sources(made))).toBe(1);
     expect(io.err).toBe(
-      `team add: another session-mutating run is holding session acme (pid ${process.pid}); try again when it is done\n`,
+      `team add: another session-mutating run is holding session acme (pid ${process.pid}, no start time recorded); try again when it is done\n`,
     );
     expect(io.out).toBe('');
     expect(made.session).toBe('absent');

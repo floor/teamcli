@@ -22,7 +22,7 @@ import { agentList, agentStatus, paneForegroundCwd, paneProcesses, paneRead, typ
 import type { Command, Io } from '../io.ts';
 import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, wakeableWhileIdle, WEBHOOK_QUEUED_WORDS, type DeliveryClass, type WakeOutcome } from '../launch/delivery-class.ts';
 import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
-import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
+import { acquireSeatLock, holderText, seatLockHolder, seatLockPath, type LockHolder } from '../launch/seat-lock.ts';
 import { readState, type SeatState } from '../state.ts';
 import { logLine } from '../log.ts';
 import { briefTransportOf, MEMORY_TRANSPORT_UNSUPPORTED } from '../policy/brief-transport.ts';
@@ -3617,16 +3617,16 @@ function queuedBusy(
   seatName: string,
   leg: 'typed' | 'drop',
   msgId: string,
-  /** The pid holding the seat's lock, when this process met it; null for the daemon's own
-   *  queue, which keeps the message itself and writes its own log line. */
-  held: number | null,
+  /** The lock's holder, when this process met one; null for the daemon's own queue, which
+   *  keeps the message itself and writes its own log line. */
+  held: LockHolder | null,
   host: SendHost,
   report: Report,
   startedAt: number,
 ): number {
   report.sent = msgId;
   if (held !== null) {
-    const why = `another command holds the seat (pid ${String(held)})`;
+    const why = `another command holds the seat (${holderText(held)})`;
     logLine(dir, 'send', who, `${seatName}: queued (receiver busy) (${leg}; ${why}; id ${msgId})`, host.now());
   }
   const ms = host.now().getTime() - startedAt;
@@ -3828,12 +3828,12 @@ function findAgent(host: SendHost, session: string, seatName: string): Found {
 }
 
 /** What storing a record in the seat's own drop folder took. The caller owns the ending and
- *  releases the lock after it. `busy` is another command holding the seat: nothing was written
- *  here, and the leg's own queued answer (which writes the record without that lock) is the
- *  caller's. */
+ *  releases the lock after it. `busy` is another command holding the seat — its pid and the start
+ *  its token records — and nothing was written here, so the leg's own queued answer (which writes
+ *  the record without that lock) is the caller's. */
 type DropStore =
   | { ok: true; release: () => void }
-  | { ok: false; busy: number }
+  | { ok: false; busy: number; startedAt: number | null }
   | { ok: false; reason: string };
 
 /**
@@ -3862,7 +3862,7 @@ async function storeDropRecord(
   project: string,
 ): Promise<DropStore> {
   const lock = acquireSeatLock(dir, session, seatName);
-  if (!('release' in lock)) return { ok: false, busy: lock.held };
+  if (!('release' in lock)) return { ok: false, busy: lock.held, startedAt: lock.startedAt };
   try {
     try {
       sealDropTree(dir, session, seatName);
@@ -4038,7 +4038,7 @@ async function deliverDropped(
     ms: host.now().getTime() - startedAt,
     ...failed,
   });
-  return queuedBusy(io, dir, who, seatName, 'drop', msgId, stored.busy, host, report, startedAt);
+  return queuedBusy(io, dir, who, seatName, 'drop', msgId, { held: stored.busy, startedAt: stored.startedAt }, host, report, startedAt);
 }
 
 /**
@@ -4106,7 +4106,7 @@ async function deliverNative(
     }
     const queuedEntry = { ts: host.now().toISOString(), from, to: seatName, ...(sentAs === null ? {} : sentAs), body, id: msgId, thread: payload.thread };
     markPending(dropDir, queuedEntry);
-    walkNote?.(walkAttempt('typed', 'delivered', false, host.now(), startedAt, { reason: `another command holds the seat (pid ${String(lock.held)}); queued for the watch` }));
+    walkNote?.(walkAttempt('typed', 'delivered', false, host.now(), startedAt, { reason: `another command holds the seat (${holderText(lock)}); queued for the watch` }));
     appendHistory(project, root, host.home, {
       ...queuedEntry,
       ...historySender(report),
@@ -4114,7 +4114,7 @@ async function deliverNative(
       ms: host.now().getTime() - startedAt,
       ...failed,
     });
-    return queuedBusy(io, dir, who, seatName, 'typed', msgId, lock.held, host, report, startedAt);
+    return queuedBusy(io, dir, who, seatName, 'typed', msgId, lock, host, report, startedAt);
   }
   let taken = false;
   // An unsent draft the delivery moved out of the box and put back: its one-line word rides
@@ -4268,7 +4268,7 @@ async function deliverTypedWakeSeat(
 ): Promise<{ delivered: true } | { delivered: false; reason: string }> {
   const lock = acquireSeatLock(dir, session, seatName);
   if (!('release' in lock)) {
-    return { delivered: false, reason: `another command holds the seat (pid ${String(lock.held)}); nothing was typed` };
+    return { delivered: false, reason: `another command holds the seat (${holderText(lock)}); nothing was typed` };
   }
   try {
     try {
@@ -4404,7 +4404,7 @@ async function deliverComposeSeat(
     // A compose seat is typed on its CLI's own screens, and nothing on the watch's side walks
     // those screens: there is no queued leg to leave the record for, so the send is refused and
     // says so — and says that the way forward is another send once the seat is free.
-    const why = `another command holds it (pid ${String(lock.held)}); nothing was sent and a compose send is not queued; run it again when the seat is free`;
+    const why = `another command holds it (${holderText(lock)}); nothing was sent and a compose send is not queued; run it again when the seat is free`;
     note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: why }));
     return refuse(io, dir, who, `${seatName}: ${why}`, host, report);
   }
@@ -5669,9 +5669,10 @@ async function deliverSocketFrame(
   if (!found.ok) return { kind: 'fallback', reason: found.reason };
   // The seat lock stays the gate: a command that holds it — a send typing a trigger, an `up`,
   // an outstanding --wait — keeps this fast path out, and the typed path below answers the
-  // refusal exactly as it always has. The lock file is read here, never taken: the fallback's
-  // own delivery takes it for real.
-  if (existsSync(seatLockPath(to.dir, to.session, to.seat))) {
+  // refusal exactly as it always has. The lock is read here, never taken: the fallback's own
+  // delivery takes it for real. Held is not the same as present: a file a dead process, or a
+  // process whose pid the OS has reused, left behind holds nothing, and the socket is walked.
+  if (seatLockHolder(to.dir, to.session, to.seat) !== null) {
     return { kind: 'fallback', reason: 'another command holds the seat' };
   }
   const first = socketPathFor(host, to, found.pane);

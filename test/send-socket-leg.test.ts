@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { cliHookSettings, cliHookSettingsPath, installCliHooks } from '../src/launch/cli-hook.ts';
+import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
 import { writePolicySet } from '../src/policy/index.ts';
 import { registerAgent } from '../src/registry/agents.ts';
@@ -110,6 +111,39 @@ test('an accepting Claude seat with no declared order walks the socket first, af
   expect(atDial.length).toBe(1);
   // The record alone: the fallback episode's marker beside it is a sidecar, never a message.
   expect(readdirSync(drops).filter((name) => !name.includes('.')).length).toBe(1);
+});
+
+// The socket fast path's gate is the seat's lock, not its file. A lock file a dead process left
+// behind holds nothing, so a frame that meets one still walks the socket. The lock is placed in
+// the window between the record's staging and the fast path's own look — the only window the old
+// `existsSync` gate covered, since staging's unread hint already clears an older stale lock.
+test('a stale lock that appears after staging does not keep a send off the socket', async () => {
+  const made = world(null);
+  cleanup = made.cleanup;
+  declareEntity(made, 'floor');
+  declare(made, 'accept');
+  mkdirSync(join(made.dir, 'seat-locks', 'acme'), { recursive: true });
+  const lockPath = seatLockPath(made.dir, 'acme', 'lead');
+  const frames: string[] = [];
+  const host = fake(made, {
+    agents: () => {
+      writeFileSync(lockPath, `${2147483646} deadbeef\n`);
+      return [{ name: 'lead', pane: 'fixture-pane-lead' }];
+    },
+    deliver: async (_path: string, frame: string) => {
+      frames.push(frame);
+      return { ok: true };
+    },
+  });
+
+  const code = await runSend(['lead', 'a note'], owner(made.root), host);
+
+  expect(code).toBe(0);
+  expect(frames).toHaveLength(1);
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok).toBe(true);
+  if (!history.ok) return;
+  expect(history.entries.at(-1)).toMatchObject({ to: 'lead', outcome: 'delivered', via: 'socket' });
 });
 
 test('every socket frame ends with the reader line that names its own message id', async () => {

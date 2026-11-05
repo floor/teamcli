@@ -176,6 +176,27 @@ export type Op =
    *  when a fresh reading still shows that workspace holding the one old pane with no CLI in it.
    *  Every other reading leaves the workspace and says why. */
   | { do: 'close-leftover'; seat: string; pane: string; workspace: string; cli?: string }
+  /**
+   * The host restored the seat's pane and cleared its name. Re-read the host, re-run the same
+   * proof, and only then rename the pane back and record the identity it holds now. No typing,
+   * no launch, no close, and no `team register` call.
+   */
+  | {
+      do: 'adopt';
+      seat: string;
+      cli: string;
+      pane: string;
+      workspace: string;
+      /** The pids the plan read; the execute re-reads them and records the live identity. */
+      launched: LaunchedIdentity;
+      /** The launch's own identity: what the execute's re-run of the proof reads the pane
+       *  against. It is never the identity the record takes (that is `launched`). */
+      recordedLaunched: LaunchedIdentity;
+      /** The recorded conversation the proof named; absent on a declared-CLI proof. */
+      session?: string;
+      /** Sidebar line 2, painted by the rename's own step (`also`). */
+      displayAgent?: string;
+    }
   | { do: 'watch'; label: string; command: string; file?: string }
   /** The event bus's pane: `team bus` in its own workspace, recorded like the watch's. */
   | { do: 'bus'; label: string; command: string }
@@ -367,6 +388,22 @@ export interface UpSeat {
    * `workspace` are set when the seat came back on another pane: the record moves with it.
    */
   restored?: { launched: LaunchedIdentity; session: string; detail: string; pane?: string; workspace?: string };
+  /**
+   * The host restored the pane and cleared the seat's name: the place and the process prove the
+   * seat without it. `up` renames the pane back and records the identity it holds now — no
+   * launch, no typing, no close. `via` is the proof: the recorded conversation, or the declared
+   * CLI alone. `sentence` is the proof's own words, for the plan and the audit line.
+   */
+  adopted?: {
+    pane: string;
+    workspace: string;
+    /** The launch's own identity, for the execute's re-run of the proof. */
+    recordedLaunched: LaunchedIdentity;
+    launched: LaunchedIdentity;
+    session?: string;
+    via: 'session' | 'cli';
+    sentence: string;
+  };
   /** A bound registry policy. Its launch/model are authoritative over the team file. */
   registry?: { launch: string; model: string; version: string; sessionId?: string };
   /**
@@ -773,6 +810,32 @@ export function upPlan(input: UpInput): Step[] {
           },
         });
       }
+      continue;
+    }
+    if (seat.adopted) {
+      // The pane is renamed back in one line, its sidebar line with it; the re-tie itself is the
+      // record step the run makes when that rename lands. Nothing is launched, typed or closed.
+      steps.push({
+        kind: 'run',
+        argv: herdr(session, 'agent', 'rename', seat.adopted.pane, seat.name),
+        ...(seat.displayAgent
+          ? { also: herdr(session, 'pane', 'report-metadata', seat.adopted.pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', seat.displayAgent) }
+          : {}),
+        do: {
+          do: 'adopt',
+          seat: seat.name,
+          cli: seat.cli,
+          pane: seat.adopted.pane,
+          workspace: seat.adopted.workspace,
+          launched: seat.adopted.launched,
+          recordedLaunched: seat.adopted.recordedLaunched,
+          ...(seat.displayAgent ? { displayAgent: seat.displayAgent } : {}),
+          ...(seat.adopted.session === undefined ? {} : { session: seat.adopted.session }),
+        },
+      });
+      // The plan's own line. It carries no `do`: the re-tie is the run step above, so a walk
+      // that stops before it leaves the seat exactly as the host restored it.
+      steps.push({ kind: 'skip', text: `${seat.name}: restored and re-tied: ${seat.adopted.sentence}; left as it is` });
       continue;
     }
     if (seat.restored) {
