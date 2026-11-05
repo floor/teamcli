@@ -336,7 +336,7 @@ describe("the restore child's authority is the one-use token", () => {
     expect(tokenFiles(home)).toEqual([]);
   }, 30_000);
 
-  test('a machine folder this child cannot claim in refuses the token', async () => {
+  test.skipIf(offDarwin)('a machine folder this child cannot claim in refuses the token', async () => {
     const { root, home } = scratch();
     const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid });
     const dir = machineConfigDir(home);
