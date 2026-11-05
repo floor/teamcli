@@ -16,9 +16,17 @@ import {
 
 test('a split file becomes its parts, each a fraction of its time', () => {
   const all = units(['test/a.test.ts', 'test/exit-codes.test.ts', 'test/a.test.ts']);
-  expect(all).toEqual(['test/a.test.ts', 'test/exit-codes.test.ts#0/4', 'test/exit-codes.test.ts#1/4', 'test/exit-codes.test.ts#2/4', 'test/exit-codes.test.ts#3/4']);
-  const w = weights(all, { 'test/a.test.ts': 10, 'test/exit-codes.test.ts': 400 }, () => 100);
-  expect(w.get('test/exit-codes.test.ts#2/4')).toBe(100);
+  expect(all).toEqual([
+    'test/a.test.ts',
+    'test/exit-codes.test.ts#0/6',
+    'test/exit-codes.test.ts#1/6',
+    'test/exit-codes.test.ts#2/6',
+    'test/exit-codes.test.ts#3/6',
+    'test/exit-codes.test.ts#4/6',
+    'test/exit-codes.test.ts#5/6',
+  ]);
+  const w = weights(all, { 'test/a.test.ts': 10, 'test/exit-codes.test.ts': 600 }, () => 100);
+  expect(w.get('test/exit-codes.test.ts#2/6')).toBe(100);
 });
 
 test('every unit lands in exactly one shard, longest first to the lightest', () => {
@@ -41,8 +49,8 @@ test('an untimed unit weighs the measured average when the assignment is made, n
   const w = assignmentWeights(['test/new.test.ts', 'test/old.test.ts'], { 'test/old.test.ts': 1200 }, (f) => sizes[f] ?? 0);
   expect(w.get('test/new.test.ts')).toBe(UNTIMED_MS);
   expect(w.get('test/old.test.ts')).toBe(1200);
-  const part = assignmentWeights(['test/exit-codes.test.ts#1/4'], {}, () => 0);
-  expect(part.get('test/exit-codes.test.ts#1/4')).toBe(Math.round(UNTIMED_MS / 4));
+  const part = assignmentWeights(['test/exit-codes.test.ts#1/6'], {}, () => 0);
+  expect(part.get('test/exit-codes.test.ts#1/6')).toBe(Math.round(UNTIMED_MS / 6));
 });
 
 test('the packed plan is checked in as a sorted unit-to-shard map', () => {
@@ -70,10 +78,12 @@ const CLEAN = {
   shards: 2,
   units: {
     'test/a.test.ts': 0,
-    'test/exit-codes.test.ts#0/4': 1,
-    'test/exit-codes.test.ts#1/4': 1,
-    'test/exit-codes.test.ts#2/4': 0,
-    'test/exit-codes.test.ts#3/4': 0,
+    'test/exit-codes.test.ts#0/6': 1,
+    'test/exit-codes.test.ts#1/6': 1,
+    'test/exit-codes.test.ts#2/6': 0,
+    'test/exit-codes.test.ts#3/6': 0,
+    'test/exit-codes.test.ts#4/6': 1,
+    'test/exit-codes.test.ts#5/6': 0,
   },
 };
 
@@ -89,7 +99,18 @@ test('--check names a test file with no shard, a stray unit and an empty shard',
   const stray = { ...CLEAN, units: { ...CLEAN.units, 'test/gone.test.ts': 1 } };
   expect(assignmentProblems(stray, TRACKED).join('\n')).toContain('not a tracked test');
 
-  const oneShard = { shards: 2, units: { 'test/a.test.ts': 0, 'test/exit-codes.test.ts#0/4': 0, 'test/exit-codes.test.ts#1/4': 0, 'test/exit-codes.test.ts#2/4': 0, 'test/exit-codes.test.ts#3/4': 0 } };
+  const oneShard = {
+    shards: 2,
+    units: {
+      'test/a.test.ts': 0,
+      'test/exit-codes.test.ts#0/6': 0,
+      'test/exit-codes.test.ts#1/6': 0,
+      'test/exit-codes.test.ts#2/6': 0,
+      'test/exit-codes.test.ts#3/6': 0,
+      'test/exit-codes.test.ts#4/6': 0,
+      'test/exit-codes.test.ts#5/6': 0,
+    },
+  };
   expect(assignmentProblems(oneShard, TRACKED).join('\n')).toContain('shard 1: no units');
 });
 

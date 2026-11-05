@@ -2,15 +2,15 @@
 // Splits the test files over shards by recorded duration, so one shard no longer gets most of the
 // time (round-robin by position put exit-codes and broker on the same shard as hundreds of others).
 //
-//   bun scripts/ci-shard-tests.ts --shard 1 --shards 4 [tests...]   one shard's units, space-separated
+//   bun scripts/ci-shard-tests.ts --shard 1 --shards 6 [tests...]   one shard's units, space-separated
 //     (a unit is a test file, or `<file>#<i>/<n>`: part i of n of a SPLIT file)
-//   bun scripts/ci-shard-tests.ts --plan --shards 4 [tests...]      every shard with its estimate (stderr)
-//   bun scripts/ci-shard-tests.ts --assigned --shard 1 --shards 4   one shard of the checked-in assignment
+//   bun scripts/ci-shard-tests.ts --plan --shards 6 [tests...]      every shard with its estimate (stderr)
+//   bun scripts/ci-shard-tests.ts --assigned --shard 1 --shards 6   one shard of the checked-in assignment
 //   bun scripts/ci-shard-tests.ts --assigned --plan                 the checked-in assignment with estimates
 //   bun scripts/ci-shard-tests.ts --check                           fail unless every tracked test is assigned once
 //   bun scripts/ci-shard-tests.ts --write                           drop deleted units, append new ones, move none
-//   bun scripts/ci-shard-tests.ts --rebalance [--shards 4]          rewrite the assignment by recorded duration
-//   bun scripts/ci-shard-tests.ts --run 1/4                         run one shard locally, files then parts
+//   bun scripts/ci-shard-tests.ts --rebalance [--shards 6]          rewrite the assignment by recorded duration
+//   bun scripts/ci-shard-tests.ts --run 1/6                         run one shard locally, files then parts
 //   bun scripts/ci-shard-tests.ts --record <log> [log...]           merge timings from shard job logs of one system
 //   bun scripts/ci-shard-tests.ts --junit <report.xml> [--label <unit>]  print a run's unit times for --record
 //
@@ -46,7 +46,7 @@ export type Assignment = { shards: number; units: Record<string, number> };
  * the timings have one, else 1/n of the file.
  * exit-codes alone is ~44% of the suite; whole, it would set every PR's wall time.
  */
-export const SPLIT: Record<string, number> = { 'test/exit-codes.test.ts': 4 };
+export const SPLIT: Record<string, number> = { 'test/exit-codes.test.ts': 6 };
 
 /** The units to pack: every file, with a split file replaced by its parts. */
 export function units(files: string[]): string[] {
@@ -214,7 +214,7 @@ export function readAssignment(path = ASSIGNMENT): Assignment {
   for (const [unit, shard] of Object.entries((raw.units ?? {}) as Record<string, unknown>)) {
     units[unit] = Number(shard);
   }
-  return { shards: Number(raw.shards ?? 4), units: sortedUnits(units) };
+  return { shards: Number(raw.shards ?? 6), units: sortedUnits(units) };
 }
 
 function writeAssignment(assignment: Assignment): void {
@@ -418,7 +418,7 @@ if (import.meta.main) {
     const tracked = allTests();
     const want = units(tracked);
     const base = existsSync(ASSIGNMENT) ? readAssignment() : null;
-    const shards = Number(get('--shards') ?? base?.shards ?? 4);
+    const shards = Number(get('--shards') ?? base?.shards ?? 6);
     if (!Number.isInteger(shards) || shards < 1) usage();
     if (base && base.shards !== shards && Object.keys(base.units).length) {
       console.error(`ci:shard: --write never moves a unit, so it cannot take the file from ${base.shards} shards to ${shards}; run --rebalance`);
@@ -437,7 +437,7 @@ if (import.meta.main) {
     const tracked = allTests();
     const want = units(tracked);
     const base = existsSync(ASSIGNMENT) ? readAssignment() : null;
-    const shards = Number(get('--shards') ?? base?.shards ?? 4);
+    const shards = Number(get('--shards') ?? base?.shards ?? 6);
     if (!Number.isInteger(shards) || shards < 1) usage();
     const next = assignmentOf(plan(want, shards, assignmentWeights(want, readTimings())));
     writeAssignment(next);
@@ -501,7 +501,7 @@ if (import.meta.main) {
     process.exit(0);
   }
 
-  const shards = Number(get('--shards') ?? 4);
+  const shards = Number(get('--shards') ?? 6);
   const shard = get('--shard');
   const rest = a.filter((x, i) => !x.startsWith('--') && !['--shards', '--shard', '--record'].includes(a[i - 1] ?? ''));
   const fromEnv = (process.env.TESTS ?? '').split(/\s+/).filter(Boolean);
