@@ -36,12 +36,18 @@ export function stepRecordId(id: string, step: string, tail?: string): string {
 }
 
 /** One step, appended under the message id's own record id. Never throws. */
-export function appendStep(store: StepStore, input: EventAppendInput, lockWaitMs = STEP_APPEND_MS): StepResult {
+export function appendStep(
+  store: StepStore,
+  input: EventAppendInput,
+  lockWaitMs = STEP_APPEND_MS,
+  options: { maxBytes?: number; kept?: number; maxTotalBytes?: number; retentionSeconds?: number } = {},
+): StepResult {
   try {
     const result = appendEvent(store.project, store.root, store.home, input, {
+      ...options,
       lockWaitMs,
       deduplicate: true,
-      retain: false,
+      retain: 'cap',
     });
     return result.ok ? { ok: true, duplicate: result.duplicate } : { ok: false, reason: result.reason };
   } catch (error) {

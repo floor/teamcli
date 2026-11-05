@@ -10,6 +10,7 @@ import {
   appendEvent,
   eventLogPath,
   readEvents,
+  retainedLogBytes,
   sealUnsealedSegments,
   sealUnsealedSegmentsSteps,
   verifyEventLogSeals,
@@ -411,5 +412,91 @@ describe('migration of an older store', () => {
     if (!nextAfterSplit.ok) return;
     expect(nextAfterSplit.duplicate).toBe(false);
     expect(nextAfterSplit.record.payload.seq).toBe(43);
+  });
+
+  test('with no daemon passes, when retained bytes reach the cap the next append rotates, prunes, and declares the drop while staying within the cap', () => {
+    const world = makeWorld('cap-no-daemon');
+    const segmentBytes = 1_000;
+    const maxTotalBytes = 8_000;
+    const kept = 4;
+    const openPath = livePath(world);
+
+    let seq = 0;
+    const sendStep = (): void => {
+      seq += 1;
+      const res = appendStep(
+        { project: PROJECT, root: world.root, home: world.home },
+        {
+          ts: NOW.toISOString(),
+          kind: 'message.staged',
+          session: 'acme',
+          record_id: `daemon-down-${String(seq)}:staged`,
+          from: 'lead',
+          to: 'helper',
+          outcome: 'delivered',
+          ms: 1,
+        },
+        100,
+        { maxBytes: segmentBytes, kept, maxTotalBytes },
+      );
+      expect(res.ok).toBe(true);
+    };
+
+    // Push the open file past the segment bound (and past 2x segmentBytes) right up to `maxTotalBytes`
+    // without crossing it: below the cap, sender appends never rotate.
+    while (!existsSync(openPath) || statSync(openPath).size + 350 <= maxTotalBytes) {
+      sendStep();
+      expect(existsSync(`${openPath}.1`)).toBe(false);
+    }
+    expect(statSync(openPath).size).toBeGreaterThan(segmentBytes * 6);
+    expect(statSync(openPath).size).toBeLessThanOrEqual(maxTotalBytes);
+
+    // The next append crosses `maxTotalBytes`: even on a sender step and on a file past 2x
+    // `segmentBytes`, it rotates, prunes the closed segment over the cap, and declares the drop.
+    const seqBeforeCap = seq;
+    while (seq < seqBeforeCap + 5) {
+      sendStep();
+      expect(retainedLogBytes(PROJECT, world.root, world.home, { kept })).toBeLessThanOrEqual(maxTotalBytes);
+    }
+
+    const read = readEvents(PROJECT, world.root, world.home, { kept });
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    const drops = read.events.filter((e) => e.payload.kind === 'team.event-log-dropped');
+    expect(drops.length).toBeGreaterThanOrEqual(1);
+    expect(drops[0]!.payload.dropped_oldest_seq).toBe(1);
+    expect(drops[0]!.payload.dropped_newest_seq).toBeGreaterThanOrEqual(seqBeforeCap);
+    expect(drops[0]!.payload.reason).toBe('size');
+  });
+
+  test('below the total cap, a file only over the segment bound is not rotated by a sender append', () => {
+    const world = makeWorld('below-cap-no-rotate');
+    const segmentBytes = 1_000;
+    const maxTotalBytes = 20_000;
+    const kept = 4;
+    const openPath = livePath(world);
+
+    for (let i = 1; i <= 15; i += 1) {
+      const res = appendStep(
+        { project: PROJECT, root: world.root, home: world.home },
+        {
+          ts: NOW.toISOString(),
+          kind: 'message.staged',
+          session: 'acme',
+          record_id: `below-cap-${String(i)}:staged`,
+          from: 'lead',
+          to: 'helper',
+          outcome: 'delivered',
+          ms: 1,
+        },
+        100,
+        { maxBytes: segmentBytes, kept, maxTotalBytes },
+      );
+      expect(res.ok).toBe(true);
+    }
+
+    expect(statSync(openPath).size).toBeGreaterThan(segmentBytes * 3);
+    expect(retainedLogBytes(PROJECT, world.root, world.home, { kept })).toBeLessThan(maxTotalBytes);
+    expect(existsSync(`${openPath}.1`)).toBe(false);
   });
 });

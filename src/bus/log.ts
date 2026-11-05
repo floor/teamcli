@@ -3575,8 +3575,11 @@ export function appendEvent(
     maxTotalBytes?: number;
     retentionSeconds?: number;
     /** When false the append performs no retention of its own: the drop record written by a
-     *  dropping pass uses this so declaring a drop cannot drop again. */
-    retain?: boolean;
+     *  dropping pass uses this so declaring a drop cannot drop again. When `'cap'`, a sender step
+     *  (`appendStep`) skips rotation, sealing, pruning, and drop declarations while the retained
+     *  bytes stay below `maxTotalBytes` (`EVENT_LOG_TOTAL_BYTES`, 100 MB), and runs the full
+     *  retaining path once the retained bytes reach that cap. */
+    retain?: boolean | 'cap';
     /** How long the append waits for the event lock. Omitted, it waits the lock's own budget;
      *  0 tries once and answers `busy` instead of pausing, so a caller on an event loop can
      *  defer the record without freezing the loop. */
@@ -3644,7 +3647,9 @@ export function appendEvent(
   }
 
   const path = join(storeDir, EVENT_LOG_FILE);
-  const retain = options.retain ?? true;
+  const retainMode = options.retain ?? true;
+  const maxTotal = retention.maxTotalBytes ?? EVENT_LOG_TOTAL_BYTES;
+  let retain = retainMode === true;
   const drops: DroppedSegment[] = [];
   /** Declares whatever this append rotated away, on every exit that does not reach the write's
    *  own declaration. Best effort: retention never fails the caller. */
@@ -3660,14 +3665,20 @@ export function appendEvent(
   // A live file already at or past the segment bound rotates before this append's index is
   // built: the index then reads the set it will keep answering for, instead of reading the live
   // file and re-reading it as the just-sealed segment on the next append. A file that still has
-  // room is left to the write path below, which knows the exact line length.
-  if (retain) {
+  // room is left to the write path below, which knows the exact line length. Below the total cap
+  // (`maxTotal`), a sender (`retain: 'cap'`) or an unmigrated open file (`>= 2 * maxBytes`) leaves
+  // rotation to the daemon's housekeeping; once retained bytes reach `maxTotal`, the append runs
+  // the full retaining path so the cap holds even when the daemon is down.
+  if (retainMode === true) {
     try {
       const current = heldAt(path);
       if (current.kind === 'file') {
         const size = statSync(path).size;
-        const unmigratedOversize = maxBytes >= 1_000 && size >= maxBytes * 2;
-        if (size > 0 && size >= maxBytes && !unmigratedOversize) {
+        const unmigratedBelowCap =
+          maxBytes >= 1_000 &&
+          size >= maxBytes * 2 &&
+          retainedLogBytes(project, root, home, { kept }) < maxTotal;
+        if (size > 0 && size >= maxBytes && !unmigratedBelowCap) {
           const rotated = rotateLive(path, kept, storeDir, home, 'rotation');
           if (rotated.problem !== null) return { ok: false, reason: rotated.problem };
           if (rotated.dropped !== null) drops.push(rotated.dropped);
@@ -3726,26 +3737,34 @@ export function appendEvent(
   const bytes = Buffer.from(line, 'utf8');
 
   try {
-    if (retain) {
+    if (retainMode !== false) {
+      let totalRetainedBytes = 0;
+      for (const stamp of indexed.index.files) {
+        if (stamp !== null) totalRetainedBytes += stamp.size;
+      }
+      const atCap = totalRetainedBytes >= maxTotal || totalRetainedBytes + bytes.length > maxTotal;
+      if (atCap) retain = true;
       const current = heldAt(path);
       const currentSize = current.kind === 'file' ? statSync(path).size : 0;
-      const unmigratedOversize = maxBytes >= 1_000 && currentSize >= maxBytes * 2;
-      // An idle live file is sealed first, so the append starts a new segment and the records the
-      // old one holds are dropped by the prune below as one past-the-window segment.
-      try {
-        if (retentionSeconds > 0 && !unmigratedOversize) {
-          const sealed = sealIdleLiveFile(path, home, kept, Date.now() - retentionSeconds * 1_000, storeDir);
-          if (sealed !== null) drops.push(sealed);
+      const unmigratedBelowCap = maxBytes >= 1_000 && currentSize >= maxBytes * 2 && !atCap;
+      if (retain && !unmigratedBelowCap) {
+        // An idle live file is sealed first, so the append starts a new segment and the records the
+        // old one holds are dropped by the prune below as one past-the-window segment.
+        try {
+          if (retentionSeconds > 0) {
+            const sealed = sealIdleLiveFile(path, home, kept, Date.now() - retentionSeconds * 1_000, storeDir);
+            if (sealed !== null) drops.push(sealed);
+          }
+        } catch {
+          // Retention never fails an append: the write below carries on.
         }
-      } catch {
-        // Retention never fails an append: the write below carries on.
-      }
-      if (!unmigratedOversize && heldAt(path).kind === 'file') {
-        const size = statSync(path).size;
-        if (size > 0 && size + bytes.length > maxBytes) {
-          const rotated = rotateLive(path, kept, storeDir, home, 'rotation');
-          if (rotated.problem !== null) return { ok: false, reason: rotated.problem };
-          if (rotated.dropped !== null) drops.push(rotated.dropped);
+        if (heldAt(path).kind === 'file') {
+          const size = statSync(path).size;
+          if (size > 0 && size + bytes.length > maxBytes) {
+            const rotated = rotateLive(path, kept, storeDir, home, 'rotation');
+            if (rotated.problem !== null) return { ok: false, reason: rotated.problem };
+            if (rotated.dropped !== null) drops.push(rotated.dropped);
+          }
         }
       }
     }
