@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import type { TeamFile } from './file/types.ts';
-import { agentList, paneRootPid } from './herdr.ts';
+import { activeHerdrSnapshotId, agentList, paneRootPid } from './herdr.ts';
 import type { HerdrAgent } from './herdr.ts';
 import type { Io } from './io.ts';
 import { readState, type SeatState } from './state.ts';
@@ -410,7 +410,7 @@ export function judgeCallerOf(io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'ca
   const caller = callerOf(io, session);
   // A caller a test handed in is itself; a seat placed in the session asked about is described
   // by that placement. Anything else is described by its own placement.
-  if (io.caller !== undefined || caller.kind !== 'unplaced') return { caller, shown: caller };
+  if (io.caller !== undefined || caller.kind !== 'unplaced' || session === undefined) return { caller, shown: caller };
   return { caller, shown: callerOf(io) };
 }
 
@@ -522,6 +522,34 @@ export const readWithPs: ReadProcess = (pid) => {
   }
 };
 
+// One process snapshot from `ps -ax -o pid=,ppid=,comm=`: pid, ppid and command name only, never
+// arguments or environment variables.
+export function parsePsSnapshot(text: string): ReadonlyMap<number, { ppid: number; name: string }> {
+  const table = new Map<number, { ppid: number; name: string }>();
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const match = /^(\d+)\s+(\d+)\s+(.+)$/.exec(line);
+    if (!match) continue;
+    const pid = Number(match[1]);
+    const ppid = Number(match[2]);
+    const name = processName(match[3] as string);
+    if (Number.isInteger(pid) && pid > 0 && Number.isInteger(ppid) && ppid >= 0 && name) {
+      table.set(pid, { ppid, name });
+    }
+  }
+  return table;
+}
+
+function readPsSnapshot(): ReadonlyMap<number, { ppid: number; name: string }> | null {
+  try {
+    const out = execFileSync('ps', ['-ax', '-o', 'pid=,ppid=,comm='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    return parsePsSnapshot(out);
+  } catch {
+    return null;
+  }
+}
+
 // "10 (herdr) S 1 10 …", one line of /proc/<pid>/stat: the name in parentheses — it can hold
 // spaces and parentheses, so the last of them closes it — then the state, then the parent.
 export function parseStat(text: string): { ppid: number; name: string } | null {
@@ -550,15 +578,22 @@ export function processReader(platform: string = process.platform): ReadProcess 
   return platform === 'linux' ? readWithProc : readWithPs;
 }
 
-// The parent processes of `pid`, nearest first, up to the system's first process. Null when a
-// process on the way can't be read, or the chain is longer than any real one: a partial list
-// could hide the herdr server above it.
-export function readAncestors(pid: number = process.ppid, read: ReadProcess = processReader()): Process[] | null {
+let cachedAncestorsSnapshotId: number | null = null;
+let cachedDefaultAncestors: Process[] | null | undefined;
+
+function walkAncestors(pid: number, read: ReadProcess): Process[] | null {
+  if (pid <= 1) return [];
+  const step: ReadProcess = read === readWithPs
+    ? (() => {
+        const snapshot = readPsSnapshot();
+        return snapshot ? (at: number) => snapshot.get(at) ?? null : () => null;
+      })()
+    : read;
   const out: Process[] = [];
   let at = pid;
   for (let depth = 0; depth < 64; depth++) {
     if (at <= 1) return out;
-    const found = read(at);
+    const found = step(at);
     if (!found) return null;
     out.push({ pid: at, name: found.name });
     at = found.ppid;
@@ -566,17 +601,63 @@ export function readAncestors(pid: number = process.ppid, read: ReadProcess = pr
   return null;
 }
 
+// The parent processes of `pid`, nearest first, up to the system's first process. Null when a
+// process on the way can't be read, or the chain is longer than any real one: a partial list
+// could hide the herdr server above it.
+export function readAncestors(pid: number = process.ppid, read: ReadProcess = processReader()): Process[] | null {
+  const snapId = activeHerdrSnapshotId();
+  if (snapId !== cachedAncestorsSnapshotId) {
+    cachedAncestorsSnapshotId = snapId;
+    cachedDefaultAncestors = undefined;
+  }
+  if (snapId !== null && pid === process.ppid && read === processReader()) {
+    if (cachedDefaultAncestors === undefined) {
+      cachedDefaultAncestors = walkAncestors(pid, read);
+    }
+    return cachedDefaultAncestors;
+  }
+  return walkAncestors(pid, read);
+}
+
+let cachedCallerSnapshotId: number | null = null;
+let cachedCallerSourcesRef: Io['callerSources'] | undefined;
+const cachedCurrentCallers = new Map<string, Caller>();
+
 // The caller of a command: the one a test handed in, the one test sources place, or the one the
 // processes show. The sources are asked about the session the command asks about, so a test sees
-// the placement the command itself made.
+// the placement the command itself made. Memoized only within an active per-send snapshot.
 export function callerOf(io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>, session?: string): Caller {
   if (io.caller !== undefined) return io.caller;
-  if (io.callerSources !== undefined) return placeCaller(io.callerSources(session), session);
-  return currentCaller(io, session);
+  const snapId = activeHerdrSnapshotId();
+  if (snapId !== cachedCallerSnapshotId || io.callerSources !== cachedCallerSourcesRef) {
+    cachedCallerSnapshotId = snapId;
+    cachedCallerSourcesRef = io.callerSources;
+    cachedCurrentCallers.clear();
+  }
+  const key = `${session ?? ''}\0${io.stdinIsTTY ? '1' : '0'}\0${io.env.HERDR_PANE_ID ?? ''}\0${io.env.AGENT_UNATTENDED ?? ''}`;
+  if (snapId !== null) {
+    const hit = cachedCurrentCallers.get(key);
+    if (hit !== undefined) return hit;
+  }
+  const placed = io.callerSources !== undefined
+    ? placeCaller(io.callerSources(session), session)
+    : currentCaller(io, session);
+  if (snapId !== null) cachedCurrentCallers.set(key, placed);
+  return placed;
 }
 
 export function currentCaller(io: { env: Record<string, string | undefined>; stdinIsTTY: boolean }, session?: string): Caller {
-  return placeCaller({
+  const snapId = activeHerdrSnapshotId();
+  if (snapId !== cachedCallerSnapshotId) {
+    cachedCallerSnapshotId = snapId;
+    cachedCurrentCallers.clear();
+  }
+  const key = `${session ?? ''}\0${io.stdinIsTTY ? '1' : '0'}\0${io.env.HERDR_PANE_ID ?? ''}\0${io.env.AGENT_UNATTENDED ?? ''}`;
+  if (snapId !== null) {
+    const hit = cachedCurrentCallers.get(key);
+    if (hit !== undefined) return hit;
+  }
+  const placed = placeCaller({
     ancestors: () => readAncestors(),
     agents: () => agentList(session),
     paneRootPid: (pane) => paneRootPid(pane, session),
@@ -584,4 +665,6 @@ export function currentCaller(io: { env: Record<string, string | undefined>; std
     stdinIsTTY: io.stdinIsTTY,
     managedEndpointSeat: (pid) => seatOfManagedEndpoint(pid),
   }, session);
+  if (snapId !== null) cachedCurrentCallers.set(key, placed);
+  return placed;
 }
