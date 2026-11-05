@@ -25,8 +25,11 @@ import { lobbyDir } from '../src/lobby/gate.ts';
 import { listUnread, MESSAGE_ID, readMessage, receiptPath } from '../src/mcp/inbox.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { readEvents } from '../src/bus/log.ts';
+import { reconcilePass } from '../src/bus/reconcile.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
-import { appendHistory, readHistory } from '../src/send/history.ts';
+import { appendHistory, readHistory, statusOfOutcome } from '../src/send/history.ts';
+import { storePath } from '../src/store/store.ts';
 import { dropMessage, readTriggerLine } from '../src/send/native.ts';
 import { markPending, pendingDropPath } from '../src/send/pending.ts';
 import { readRecord, signReceiptPayload, signRecord, verifyRecord, writeReceipt } from '../src/send/record.ts';
@@ -102,12 +105,14 @@ const CODEX_INTERRUPTED = readFileSync(new URL('./fixtures/codex/0.161.0/interru
 /** The same team with the helper seat on a CLI whose profile declares the typed wake (Muse,
  *  Cursor, or Codex): the watch's retry is on for it by default. `extra` adds seat-file keys
  *  after the launch line, as a team file writes them. */
-function typedTeamText(root: string, lobby: string, cli: 'muse' | 'cursor' | 'codex', extra = ''): string {
+function typedTeamText(root: string, lobby: string, cli: 'muse' | 'cursor' | 'codex' | 'antigravity', extra = ''): string {
   const seat = cli === 'muse'
     ? { vendor: 'meta', model: 'Muse Wonder Full', launch: 'muse' }
     : cli === 'cursor'
       ? { vendor: 'cursor', model: 'Cursor', launch: 'cursor-agent' }
-      : { vendor: 'test', model: 'Test', launch: 'codex' };
+      : cli === 'antigravity'
+        ? { vendor: 'google', model: 'Gemini 4 Argon', launch: 'agy' }
+        : { vendor: 'test', model: 'Test', launch: 'codex' };
   return teamText(root, lobby).replace(
     `  - role: implementer
     name: helper
@@ -2298,5 +2303,513 @@ describe('the unread window a seat earns', () => {
     const pace = { preset: 'normal' as const, sweepSeconds: 120 };
     expect(declaredUnreadAfter(defaultWatch(), pace)).toBeNull();
     expect(declaredUnreadAfter({ ...defaultWatch(), unreadAfter: 90 }, pace)).toBe(90);
+  });
+});
+
+describe('an unrecognised screen tells the lead once within 2N', () => {
+  const ANTIGRAVITY_SURVEY_FRAME = [
+    '● Done.',
+    '',
+    "How's the CLI experience so far? [1] Good [2] Fine [3] Bad [0] Skip",
+  ].join('\n');
+
+  const ANTIGRAVITY_IDLE_FRAME = readFileSync(
+    new URL('./fixtures/antigravity/1.4.2/idle.txt', import.meta.url),
+    'utf8',
+  );
+
+  const ANTIGRAVITY_PERMISSION_FRAME = readFileSync(
+    new URL('./fixtures/antigravity/1.4.2/permission.txt', import.meta.url),
+    'utf8',
+  );
+
+  const ANTIGRAVITY_RATE_LIMIT_FRAME = (() => {
+    const lines = ANTIGRAVITY_IDLE_FRAME.split('\n');
+    const at = lines.findIndex((line) => line.startsWith('─'));
+    return [...lines.slice(0, at), 'Individual quota reached', 'Resets in 47h31m', ...lines.slice(at)].join('\n');
+  })();
+
+  const CLAUDE_RATE_LIMIT_FRAME = `API Error: Request rejected (429) · Usage limit reached for 5 hour. Your limit will reset at 11:00\n${claudeBox('')}`;
+  const CLAUDE_PROVIDER_ERROR_FRAME = `API Error: Connection lost mid-response. The response above may be incomplete.\n${claudeBox('')}`;
+
+  test('an Antigravity survey frame is never typed into, tells the lead once within 2N, and counts the message as delivered-but-blocked via lead-report', async () => {
+    expect(readScreen('antigravity', ANTIGRAVITY_SURVEY_FRAME).kind).toBe('unknown');
+
+    const made = world();
+    const team = teamOf(typedTeamText(made.root, lobbyDir(made.home), 'antigravity'));
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nsurvey covered', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(ANTIGRAVITY_SURVEY_FRAME, 'done');
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane', 'done');
+    const said: string[] = [];
+
+    // First pass within 2N (11 min, N = 10 min, 2N = 20 min): refuses to type, tells the lead once,
+    // and marks the message delivered-but-blocked.
+    await wakeUnreadDrops(sceneOf(made, team, one, said, { sources, live, now: NOW }), { unreadAfter: N });
+
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(one.keys).toEqual([]);
+    expect(calls).toEqual([]);
+
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('helper');
+    expect(said[0]).toContain('blocked by a dialog');
+    expect(said[0]).toContain('unknown');
+    expect(said[0]).toContain('delivered-but-blocked');
+
+    const events = readEvents('acme', made.root, made.home);
+    expect(events.ok).toBe(true);
+    if (events.ok) {
+      const blocked = events.events.filter((e) => e.payload.kind === 'seat.blocked');
+      expect(blocked).toHaveLength(1);
+      expect(blocked[0]?.payload).toMatchObject({
+        kind: 'seat.blocked',
+        seat: 'helper',
+        subject: 'helper',
+        to: 'lead',
+        prompt: 'unknown',
+        outcome: 'delivered-but-blocked',
+      });
+      expect(blocked[0]?.payload.reason).toContain('blocked by a dialog');
+      expect(blocked[0]?.payload.reason).toContain('helper');
+      expect(blocked[0]?.payload.reason).toContain('unknown');
+    }
+
+    const toLead = leadReportBody(made.dir, UNREAD_A);
+    expect(toLead).toContain('helper');
+    expect(toLead).toContain('blocked by a dialog');
+    expect(toLead).toContain('unknown');
+    expect(toLead).toContain('delivered-but-blocked');
+    expect(toLead).not.toContain('queued, not woken');
+
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok).toBe(true);
+    if (history.ok) {
+      expect(history.entries).toHaveLength(1);
+      expect(history.entries[0]).toMatchObject({
+        id: UNREAD_A,
+        to: 'helper',
+        outcome: 'delivered-but-blocked',
+        via: 'lead-report',
+      });
+      expect(history.entries[0]?.via).not.toBe('typed');
+    }
+    expect(statusOfOutcome('delivered-but-blocked')).toBe('delivered');
+
+    // Reconcile copies `via: 'lead-report'` and `outcome: 'delivered-but-blocked'` onto `message.delivered`, never `'typed'`.
+    reconcilePass({ project: 'acme', root: made.root, home: made.home, session: 'acme', now: NOW });
+    const reconciled = readEvents('acme', made.root, made.home);
+    expect(reconciled.ok).toBe(true);
+    if (reconciled.ok) {
+      const delivered = reconciled.events.filter(
+        (e) => e.payload.kind === 'message.delivered' && e.payload.record_id === `${UNREAD_A}:delivered`,
+      );
+      expect(delivered).toHaveLength(1);
+      expect(delivered[0]?.payload).toMatchObject({
+        kind: 'message.delivered',
+        record_id: `${UNREAD_A}:delivered`,
+        outcome: 'delivered-but-blocked',
+        via: 'lead-report',
+      });
+    }
+
+    const mark = JSON.parse(readFileSync(wakePath(dropDir, UNREAD_A), 'utf8')) as Record<string, unknown>;
+    expect(mark).toMatchObject({
+      id: UNREAD_A,
+      state: 'blocked',
+      outcome: 'delivered-but-blocked',
+      screen: 'unknown',
+      to: 'lead',
+    });
+
+    // Second pass within 2N (15 min) and report pass at 2N (21 min): no second event, no second drop,
+    // no typing, and the message is not reported as lost (`queued, not woken`).
+    await wakeUnreadDrops(
+      sceneOf(made, team, one, said, { sources, live, now: new Date(NOW.getTime() + 4 * MIN) }),
+      { unreadAfter: N },
+    );
+    reportUnreadDrops(
+      sceneOf(made, team, one, said, { sources, live, now: new Date(NOW.getTime() + 10 * MIN) }),
+      { unreadAfter: N },
+    );
+
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(calls).toEqual([]);
+    expect(said).toHaveLength(1);
+    const eventsAfter = readEvents('acme', made.root, made.home);
+    expect(eventsAfter.ok && eventsAfter.events.filter((e) => e.payload.kind === 'seat.blocked')).toHaveLength(1);
+    expect(leadReportBody(made.dir, UNREAD_A)).toBe(toLead);
+    const toOwner = mailboxBody(made.root, 'owner', `unread-${UNREAD_A}`);
+    expect(toOwner.body).toContain('delivered-but-blocked');
+    expect(toOwner.body).not.toContain('queued, not woken');
+  });
+
+  test('recognised non-idle screens (rate limit, provider error, permission) are never claimed delivered-but-blocked and do not stop a later idle screen from typing', async () => {
+    expect(readScreen('antigravity', ANTIGRAVITY_RATE_LIMIT_FRAME).kind).toBe('rate limit');
+    expect(readScreen('antigravity', ANTIGRAVITY_PERMISSION_FRAME).kind).toBe('permission');
+    expect(readScreen('claude-code', CLAUDE_RATE_LIMIT_FRAME).kind).toBe('rate limit');
+    expect(readScreen('claude-code', CLAUDE_PROVIDER_ERROR_FRAME).kind).toBe('provider error');
+
+    for (const recognisedFrame of [ANTIGRAVITY_RATE_LIMIT_FRAME, ANTIGRAVITY_PERMISSION_FRAME]) {
+      const made = world();
+      const team = teamOf(typedTeamText(made.root, lobbyDir(made.home), 'antigravity'));
+      const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nrecognised screen', new Date(NOW.getTime() - 11 * MIN));
+      const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+      const live = liveWith('helper', 'helper-pane', 'done');
+      const said: string[] = [];
+
+      // Pass 1 on the recognised non-idle screen: neither types nor claims delivered-but-blocked nor writes `.wake`.
+      const recognisedPane = pane(recognisedFrame, 'done');
+      const recognisedSources = typedSources(recognisedPane, typedSeam([TYPED_DELIVERED], calls));
+      await wakeUnreadDrops(sceneOf(made, team, recognisedPane, said, { sources: recognisedSources, live, now: NOW }), { unreadAfter: N });
+
+      expect(calls).toEqual([]);
+      expect(said).toEqual([]);
+      expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+      const events = readEvents('acme', made.root, made.home);
+      expect(events.ok && events.events.filter((e) => e.payload.kind === 'seat.blocked')).toHaveLength(0);
+      const historyBefore = readHistory('acme', made.root, made.home);
+      expect(historyBefore.ok && historyBefore.entries).toEqual([]);
+
+      // Pass 2 after the recognised screen clears back to idle: the wake types and delivers normally.
+      const idlePane = pane(ANTIGRAVITY_IDLE_FRAME, 'idle');
+      const idleSources = typedSources(idlePane, typedSeam([TYPED_DELIVERED], calls));
+      await wakeUnreadDrops(
+        sceneOf(made, team, idlePane, said, { sources: idleSources, live, now: new Date(NOW.getTime() + 1 * MIN) }),
+        { unreadAfter: N },
+      );
+
+      expect(calls).toHaveLength(1);
+      const historyAfter = readHistory('acme', made.root, made.home);
+      expect(historyAfter.ok && historyAfter.entries).toHaveLength(1);
+      if (historyAfter.ok) {
+        expect(historyAfter.entries[0]?.outcome).toBe('delivered (typed wake)');
+      }
+      made.cleanup();
+      base = '';
+    }
+
+    for (const recognisedFrame of [CLAUDE_RATE_LIMIT_FRAME, CLAUDE_PROVIDER_ERROR_FRAME]) {
+      const made = world();
+      const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+      const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nclaude recognised screen', new Date(NOW.getTime() - 11 * MIN));
+      const one = pane(recognisedFrame, 'done');
+      const said: string[] = [];
+
+      await wakeUnreadDrops(sceneOf(made, team, one, said, { now: NOW }), { unreadAfter: N });
+
+      expect(said).toEqual([]);
+      expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+      const events = readEvents('acme', made.root, made.home);
+      expect(events.ok && events.events.filter((e) => e.payload.kind === 'seat.blocked')).toHaveLength(0);
+      const historyBefore = readHistory('acme', made.root, made.home);
+      expect(historyBefore.ok && historyBefore.entries).toEqual([]);
+      made.cleanup();
+      base = '';
+    }
+  });
+
+  test('a failing history write leaves no blocked marker or seat.blocked event, a retry within 2N speaks once, and an unrecovered failure still reports queued, not woken at 2N', async () => {
+    const made = world();
+    const team = teamOf(typedTeamText(made.root, lobbyDir(made.home), 'antigravity'));
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nhistory fails', new Date(NOW.getTime() - 11 * MIN));
+    // Replace messages.jsonl with a directory so appendHistory fails.
+    const historyDirAsFile = join(storePath('acme', made.root, made.home), 'messages.jsonl');
+    mkdirSync(historyDirAsFile, { recursive: true });
+
+    const one = pane(ANTIGRAVITY_SURVEY_FRAME, 'done');
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane', 'done');
+    const said: string[] = [];
+
+    // Within 2N (11 min): history write fails, so no `.wake` blocked marker, no lead drop, no `seat.blocked` event, and no scene line claim delivery.
+    await wakeUnreadDrops(sceneOf(made, team, one, said, { sources, live, now: NOW }), { unreadAfter: N });
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+    expect(said).toEqual([]);
+    const leadDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    expect(existsSync(leadDir) ? readdirSync(leadDir) : []).toEqual([]);
+    const eventsAfterFail = readEvents('acme', made.root, made.home);
+    expect(eventsAfterFail.ok && eventsAfterFail.events.filter((e) => e.payload.kind === 'seat.blocked')).toEqual([]);
+
+    // At 2N (21 min) if history is still broken: the loss report fires (`queued, not woken`) and the bus still holds no `seat.blocked` claim.
+    const at2N = new Date(NOW.getTime() + 10 * MIN);
+    const reportSaid: string[] = [];
+    reportUnreadDrops(sceneOf(made, team, one, reportSaid, { sources, live, now: at2N }), { unreadAfter: N });
+
+    expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(true);
+    const toOwner = mailboxBody(made.root, 'owner', `unread-${UNREAD_A}`);
+    expect(toOwner.body).toContain('queued, not woken - unread for 21 min');
+    expect(toOwner.body).not.toContain('delivered-but-blocked');
+    const eventsAt2N = readEvents('acme', made.root, made.home);
+    expect(eventsAt2N.ok && eventsAt2N.events.filter((e) => e.payload.kind === 'seat.blocked')).toEqual([]);
+    made.cleanup();
+    base = '';
+
+    // Now test recovery within 2N: first try fails on history, then history is restored within 2N and the retry speaks once.
+    const madeRetry = world();
+    const teamRetry = teamOf(typedTeamText(madeRetry.root, lobbyDir(madeRetry.home), 'antigravity'));
+    const dropDirRetry = seedMessage(madeRetry, 'acme', 'helper', UNREAD_A, 'from the owner\n\nhistory fails then retries', new Date(NOW.getTime() - 11 * MIN));
+    const historyDirRetry = join(storePath('acme', madeRetry.root, madeRetry.home), 'messages.jsonl');
+    mkdirSync(historyDirRetry, { recursive: true });
+    const firstSaid: string[] = [];
+
+    await wakeUnreadDrops(sceneOf(madeRetry, teamRetry, one, firstSaid, { sources, live, now: NOW }), { unreadAfter: N });
+    expect(existsSync(wakePath(dropDirRetry, UNREAD_A))).toBe(false);
+    expect(firstSaid).toEqual([]);
+    const eventsBeforeRetry = readEvents('acme', madeRetry.root, madeRetry.home);
+    expect(eventsBeforeRetry.ok && eventsBeforeRetry.events.filter((e) => e.payload.kind === 'seat.blocked')).toEqual([]);
+
+    rmSync(historyDirRetry, { recursive: true });
+    const retrySaid: string[] = [];
+    await wakeUnreadDrops(
+      sceneOf(madeRetry, teamRetry, one, retrySaid, { sources, live, now: new Date(NOW.getTime() + 4 * MIN) }),
+      { unreadAfter: N },
+    );
+    expect(existsSync(wakePath(dropDirRetry, UNREAD_A))).toBe(true);
+    expect(retrySaid).toHaveLength(1);
+    expect(retrySaid[0]).toContain('blocked by a dialog (unknown)');
+    expect(retrySaid[0]).toContain('delivered-but-blocked');
+    const eventsAfterRetry = readEvents('acme', madeRetry.root, madeRetry.home);
+    expect(eventsAfterRetry.ok && eventsAfterRetry.events.filter((e) => e.payload.kind === 'seat.blocked')).toHaveLength(1);
+    const historyAfterRetry = readHistory('acme', madeRetry.root, madeRetry.home);
+    expect(historyAfterRetry.ok && historyAfterRetry.entries).toHaveLength(1);
+    if (historyAfterRetry.ok) {
+      expect(historyAfterRetry.entries[0]?.outcome).toBe('delivered-but-blocked');
+      expect(historyAfterRetry.entries[0]?.via).toBe('lead-report');
+    }
+  });
+
+  test('the event append fails after a good history write; the next pass appends seat.blocked exactly once, and the drop and marker stay', async () => {
+    const made = world();
+    const team = teamOf(typedTeamText(made.root, lobbyDir(made.home), 'antigravity'));
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nevent fails after history', new Date(NOW.getTime() - 11 * MIN));
+    // Replace events.jsonl with a directory so appendEvent fails on the first pass after appendHistory succeeds.
+    const eventsDirAsFile = join(storePath('acme', made.root, made.home), 'events.jsonl');
+    mkdirSync(eventsDirAsFile, { recursive: true });
+
+    const one = pane(ANTIGRAVITY_SURVEY_FRAME, 'done');
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane', 'done');
+    const said: string[] = [];
+
+    // First pass within 2N: history write succeeds, so the lead drop, the `.wake` blocked marker,
+    // the history record, and the scene line all stand even though appendEvent failed.
+    await wakeUnreadDrops(sceneOf(made, team, one, said, { sources, live, now: NOW }), { unreadAfter: N });
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+    expect(JSON.parse(readFileSync(wakePath(dropDir, UNREAD_A), 'utf8'))).toMatchObject({
+      id: UNREAD_A,
+      state: 'blocked',
+      outcome: 'delivered-but-blocked',
+      screen: 'unknown',
+      to: 'lead',
+    });
+    const toLead = leadReportBody(made.dir, UNREAD_A);
+    expect(toLead).toContain('blocked by a dialog (unknown)');
+    expect(toLead).toContain('delivered-but-blocked');
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('blocked by a dialog (unknown)');
+    expect(said[0]).toContain('delivered-but-blocked');
+    const historyAfterFirst = readHistory('acme', made.root, made.home);
+    expect(historyAfterFirst.ok && historyAfterFirst.entries).toHaveLength(1);
+    if (historyAfterFirst.ok) {
+      expect(historyAfterFirst.entries[0]?.id).toBe(UNREAD_A);
+      expect(historyAfterFirst.entries[0]?.outcome).toBe('delivered-but-blocked');
+      expect(historyAfterFirst.entries[0]?.via).toBe('lead-report');
+    }
+
+    // Restore events.jsonl: the next pass catches up the missing seat.blocked event once,
+    // keeps the standing drop and marker, and does not speak or write history a second time.
+    rmSync(eventsDirAsFile, { recursive: true });
+    const nextSaid: string[] = [];
+    await wakeUnreadDrops(
+      sceneOf(made, team, one, nextSaid, { sources, live, now: new Date(NOW.getTime() + 4 * MIN) }),
+      { unreadAfter: N },
+    );
+
+    expect(nextSaid).toEqual([]);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+    expect(leadReportBody(made.dir, UNREAD_A)).toBe(toLead);
+    const eventsAfterCatchUp = readEvents('acme', made.root, made.home);
+    expect(eventsAfterCatchUp.ok).toBe(true);
+    if (eventsAfterCatchUp.ok) {
+      const blocked = eventsAfterCatchUp.events.filter((e) => e.payload.kind === 'seat.blocked');
+      expect(blocked).toHaveLength(1);
+      expect(blocked[0]?.payload).toMatchObject({
+        kind: 'seat.blocked',
+        seat: 'helper',
+        subject: 'helper',
+        to: 'lead',
+        prompt: 'unknown',
+        outcome: 'delivered-but-blocked',
+      });
+    }
+    const historyAfterSecond = readHistory('acme', made.root, made.home);
+    expect(historyAfterSecond.ok && historyAfterSecond.entries).toHaveLength(1);
+
+    // A third pass is idempotent by message id: still one seat.blocked event.
+    await wakeUnreadDrops(
+      sceneOf(made, team, one, nextSaid, { sources, live, now: new Date(NOW.getTime() + 5 * MIN) }),
+      { unreadAfter: N },
+    );
+    const eventsAfterThird = readEvents('acme', made.root, made.home);
+    expect(eventsAfterThird.ok && eventsAfterThird.events.filter((e) => e.payload.kind === 'seat.blocked')).toHaveLength(1);
+  });
+
+  test('concurrent history lines appended by another writer survive a failed event append', async () => {
+    const made = world();
+    const baseTeam = teamOf(typedTeamText(made.root, lobbyDir(made.home), 'antigravity'));
+    seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nblocked while another writer appends', new Date(NOW.getTime() - 11 * MIN));
+    seedSendLine(made, 'helper', UNREAD_A, { via: 'socket' });
+    const eventsDirAsFile = join(storePath('acme', made.root, made.home), 'events.jsonl');
+    mkdirSync(eventsDirAsFile, { recursive: true });
+
+    // Simulate another writer appending a concurrent history line while reportBlockedScreenToLead is in flight
+    // (after any pre-write snapshot, before appendEvent fails).
+    let injected = false;
+    let projectReads = 0;
+    const teamProxy = new Proxy(baseTeam, {
+      get(target, prop, receiver) {
+        if (prop === 'project') {
+          projectReads += 1;
+          if (!injected && projectReads >= 3) {
+            injected = true;
+            appendHistory('acme', made.root, made.home, {
+              ts: NOW.toISOString(),
+              from: 'owner',
+              to: 'lead',
+              body: 'concurrent line from another writer',
+              id: UNREAD_B,
+              outcome: 'delivered',
+              via: 'socket',
+            });
+          }
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const one = pane(ANTIGRAVITY_SURVEY_FRAME, 'done');
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane', 'done');
+    const said: string[] = [];
+
+    await wakeUnreadDrops(sceneOf(made, teamProxy, one, said, { sources, live, now: NOW }), { unreadAfter: N });
+    expect(injected).toBe(true);
+
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok).toBe(true);
+    if (history.ok) {
+      expect(history.entries.some((e) => e.id === UNREAD_B && e.outcome === 'delivered' && e.body === 'concurrent line from another writer')).toBe(true);
+      expect(history.entries.some((e) => e.id === UNREAD_A && e.outcome === 'delivered-but-blocked' && e.via === 'lead-report')).toBe(true);
+    }
+  });
+
+  test('a message only counts as delivered-but-blocked if the lead is told in time (within 2N)', async () => {
+    const made = world();
+    const team = teamOf(typedTeamText(made.root, lobbyDir(made.home), 'antigravity'));
+    // Already past 2N (21 min >= 20 min) before any wake pass tells the lead.
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\ntoo late', new Date(NOW.getTime() - 21 * MIN));
+    const one = pane(ANTIGRAVITY_SURVEY_FRAME, 'done');
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane', 'done');
+    const said: string[] = [];
+
+    await wakeUnreadDrops(sceneOf(made, team, one, said, { sources, live, now: NOW }), { unreadAfter: N });
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+    const eventsBefore = readEvents('acme', made.root, made.home);
+    expect(eventsBefore.ok && eventsBefore.events.filter((e) => e.payload.kind === 'seat.blocked')).toHaveLength(0);
+
+    // At 2N, because the lead was not told in time, the message is reported as lost (`queued, not woken`).
+    reportUnreadDrops(sceneOf(made, team, one, said, { sources, live, now: NOW }), { unreadAfter: N });
+    expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(true);
+    const toOwner = mailboxBody(made.root, 'owner', `unread-${UNREAD_A}`);
+    expect(toOwner.body).toContain('queued, not woken - unread for 21 min');
+    expect(toOwner.body).not.toContain('delivered-but-blocked');
+  });
+
+  test('a refused lead write within 2N does not mark the message delivered-but-blocked; a retry within 2N after restoring the lead folder succeeds once', async () => {
+    const made = world();
+    const team = teamOf(typedTeamText(made.root, lobbyDir(made.home), 'antigravity'));
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nlead refused', new Date(NOW.getTime() - 11 * MIN));
+    const leadDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    mkdirSync(join(made.dir, 'send-drops', 'acme'), { recursive: true });
+    writeFileSync(leadDir, 'not a drop folder');
+    const one = pane(ANTIGRAVITY_SURVEY_FRAME, 'done');
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane', 'done');
+    const said: string[] = [];
+
+    // Within 2N, telling the lead fails because `leadDir` cannot be written: nothing is marked delivered-but-blocked.
+    await wakeUnreadDrops(sceneOf(made, team, one, said, { sources, live, now: NOW }), { unreadAfter: N });
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+    const historyBefore = readHistory('acme', made.root, made.home);
+    expect(historyBefore.ok && historyBefore.entries).toEqual([]);
+
+    // Restore the lead folder while still within 2N (15 min < 20 min): the retry tells the lead once and marks delivered-but-blocked.
+    rmSync(leadDir);
+    mkdirSync(leadDir, { recursive: true });
+    const within2N = new Date(NOW.getTime() + 4 * MIN);
+    const retrySaid: string[] = [];
+    await wakeUnreadDrops(sceneOf(made, team, one, retrySaid, { sources, live, now: within2N }), { unreadAfter: N });
+
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+    expect(retrySaid).toHaveLength(1);
+    expect(retrySaid[0]).toContain('blocked by a dialog (unknown)');
+    expect(retrySaid[0]).toContain('delivered-but-blocked');
+    const historyAfter = readHistory('acme', made.root, made.home);
+    expect(historyAfter.ok && historyAfter.entries).toHaveLength(1);
+    if (historyAfter.ok) {
+      expect(historyAfter.entries[0]?.outcome).toBe('delivered-but-blocked');
+    }
+  });
+
+  test('a second message becoming due within the same 2N window shares the single lead notice and also counts as delivered-but-blocked', async () => {
+    const made = world();
+    const team = teamOf(typedTeamText(made.root, lobbyDir(made.home), 'antigravity'));
+    seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nfirst', new Date(NOW.getTime() - 11 * MIN));
+    seedMessage(made, 'acme', 'helper', UNREAD_B, 'from the owner\n\nsecond', new Date(NOW.getTime() - 8 * MIN));
+    const one = pane(ANTIGRAVITY_SURVEY_FRAME, 'done');
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane', 'done');
+    const said: string[] = [];
+
+    // First pass at NOW: UNREAD_A (11 min) is due; UNREAD_B (8 min) is not yet due.
+    await wakeUnreadDrops(sceneOf(made, team, one, said, { sources, live, now: NOW }), { unreadAfter: N });
+    expect(said).toHaveLength(1);
+
+    // Second pass 4 minutes later (still within 2N of the first notice): UNREAD_B (12 min) is now due.
+    const later = new Date(NOW.getTime() + 4 * MIN);
+    await wakeUnreadDrops(sceneOf(made, team, one, said, { sources, live, now: later }), { unreadAfter: N });
+
+    // Only ONE lead notice drop and one scene line are emitted across the 2N window, while each
+    // delivered-but-blocked history line is mirrored once onto the bus by message id.
+    expect(said).toHaveLength(1);
+    const leadDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    expect(readdirSync(leadDir).filter((name) => MESSAGE_ID.test(name))).toHaveLength(1);
+    const events = readEvents('acme', made.root, made.home);
+    expect(events.ok).toBe(true);
+    if (events.ok) {
+      expect(events.events.filter((e) => e.payload.kind === 'seat.blocked').map((e) => e.payload.record_id)).toEqual([
+        `unread-blocked:${UNREAD_A}`,
+        `unread-blocked:${UNREAD_B}`,
+      ]);
+    }
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok).toBe(true);
+    if (history.ok) {
+      expect(history.entries.map((e) => ({ id: e.id, outcome: e.outcome }))).toEqual([
+        { id: UNREAD_A, outcome: 'delivered-but-blocked' },
+        { id: UNREAD_B, outcome: 'delivered-but-blocked' },
+      ]);
+    }
   });
 });
