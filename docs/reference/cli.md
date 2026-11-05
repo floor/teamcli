@@ -3800,8 +3800,9 @@ Hidden: no
 Usage:
 
     team up [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]
+    team up --all [--dry-run] [--serial] [--no-launch] [--json]
     team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--json]
-    team up --general <grant.json> --key <client-key> [--dry-run] [--serial] [--no-launch] [--json]
+    team up --general <grant.json> --key <client-key> [--all] [--dry-run] [--serial] [--no-launch] [--json]
     team up --request [--reason <text>] [--serial] [--json]
     team up --approval <request-id> [--dry-run] [--serial] [--json]
 
@@ -3813,6 +3814,7 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--all` | no | no | no |
 | `--approval` | yes | no | no |
 | `--client` | yes | no | no |
 | `--dry-run` | no | no | no |

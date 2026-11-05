@@ -12,9 +12,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startMachineDaemon } from '../src/daemon/host.ts';
-import { machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
+import { DAEMON_LABEL, machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
 import { restoreEntryOf, runRestoreSweepInChild } from '../src/daemon/restore/spawn.ts';
-import { readRestoreInherit, writeRestoreInherit } from '../src/daemon/restore/token.ts';
+import { acceptRestoreDoor, discardRestoreInherit, restoreDoorText, writeRestoreDoor } from '../src/daemon/restore/token.ts';
 import { readDaemonState } from '../src/daemon/state.ts';
 
 /** The timed scene runs under /private/tmp where a bun child starts quickly; elsewhere the
@@ -41,17 +41,39 @@ seats:
 const ENTRY = fileURLToPath(new URL('../src/daemon/restore/entry.ts', import.meta.url));
 
 const bases: string[] = [];
+const ORIGINAL_PATH = process.env.PATH;
 
-function scratch(): { base: string; root: string; home: string } {
+function scratch(): { base: string; root: string; home: string; bin: string } {
   const base = realpathSync(mkdtempSync(join(BASE, 'team-restore-child-')));
   bases.push(base);
   const root = join(base, 'repo');
   const home = join(base, 'home');
+  const bin = join(base, 'bin');
   mkdirSync(join(root, '.agents'), { recursive: true });
   mkdirSync(home);
+  mkdirSync(bin, { recursive: true });
+  // Place a synthetic service-manager unit and shim first on PATH so subprocess scenes never
+  // reach the live system service manager and always report this test runner process as the
+  // daemon job loaded from `home`'s own unit path.
+  mkdirSync(join(home, 'Library', 'LaunchAgents'), { recursive: true });
+  const unitFile = join(home, 'Library', 'LaunchAgents', `${DAEMON_LABEL}.plist`);
+  writeFileSync(
+    unitFile,
+    `<plist version="1.0"><dict><key>Label</key><string>${DAEMON_LABEL}</string></dict></plist>\n`,
+    { mode: 0o600 },
+  );
+  const unitRealpath = realpathSync(unitFile);
+  const launchctl = join(bin, 'launchctl');
+  writeFileSync(
+    launchctl,
+    `#!/bin/sh\nprintf 'path = %s\\npid = %s\\nprogram = %s\\n' "${unitRealpath}" "${String(process.pid)}" "${process.execPath}"\n`,
+    { mode: 0o755 },
+  );
+  chmodSync(launchctl, 0o755);
+  process.env.PATH = `${bin}:${ORIGINAL_PATH ?? '/usr/bin:/bin'}`;
   spawnSync('git', ['init', '-q'], { cwd: root });
   writeFileSync(join(root, '.agents', 'team.yaml'), TEAM);
-  return { base, root, home };
+  return { base, root, home, bin };
 }
 
 /** The route's record: one seat recorded ready, so a pass proceeds past the recorded-session
@@ -79,12 +101,27 @@ function recordSeat(root: string): void {
 }
 
 /** The child entry run as its own program, the way the daemon starts it. */
-function runEntry(home: string, args: string[], cwd: string): { status: number | null; stdout: string; stderr: string } {
+function runEntry(
+  home: string,
+  args: string[],
+  cwd: string,
+  doorText?: string,
+): { status: number | null; stdout: string; stderr: string } {
+  if (doorText === undefined) {
+    const ran = spawnSync(process.execPath, [ENTRY, ...args], {
+      cwd,
+      env: { ...process.env, HOME: home },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return { status: ran.status, stdout: ran.stdout ?? '', stderr: ran.stderr ?? '' };
+  }
   const ran = spawnSync(process.execPath, [ENTRY, ...args], {
     cwd,
     env: { ...process.env, HOME: home },
     encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
+    input: doorText,
   });
   return { status: ran.status, stdout: ran.stdout ?? '', stderr: ran.stderr ?? '' };
 }
@@ -94,23 +131,29 @@ function runEntryInBackground(
   home: string,
   args: string[],
   cwd: string,
+  doorText?: string,
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [ENTRY, ...args], {
       cwd,
       env: { ...process.env, HOME: home },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: doorText === undefined ? ['ignore', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe', 'pipe'],
     });
     let stdout = '';
     let stderr = '';
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk: string) => {
+    child.stdout!.setEncoding('utf8');
+    child.stderr!.setEncoding('utf8');
+    child.stdout!.on('data', (chunk: string) => {
       stdout += chunk;
     });
-    child.stderr.on('data', (chunk: string) => {
+    child.stderr!.on('data', (chunk: string) => {
       stderr += chunk;
     });
+    const door = child.stdio[3];
+    if (doorText !== undefined && door && 'end' in door) {
+      door.on('error', () => {});
+      door.end(doorText);
+    }
     child.on('close', (status) => resolve({ status, stdout, stderr }));
   });
 }
@@ -122,51 +165,122 @@ const tokenFiles = (home: string): string[] => {
 };
 
 afterEach(() => {
+  if (ORIGINAL_PATH === undefined) delete process.env.PATH;
+  else process.env.PATH = ORIGINAL_PATH;
   for (const base of bases.splice(0)) rmSync(base, { recursive: true, force: true });
 });
 
 describe("the restore child's authority is the one-use token", () => {
+  const daemonPid = process.pid;
+  const service = { job: () => ({ pid: daemonPid, program: process.execPath }) };
+
   test('the daemon writes it 0600 and reading it consumes it', () => {
     const { root, home } = scratch();
-    const nonce = writeRestoreInherit({ version: 1, home, root });
+    const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid });
     const path = restoreInheritPath(home, nonce);
     expect(existsSync(path)).toBe(true);
     expect(statSync(path).mode & 0o777).toBe(0o600);
-    expect(readRestoreInherit(home, nonce)).toEqual({ kind: 'ok', request: { version: 1, home, root } });
+    expect(
+      acceptRestoreDoor({
+        home,
+        nonce,
+        text: restoreDoorText(nonce, secret),
+        parentPid: daemonPid,
+        service,
+      }),
+    ).toEqual({ kind: 'ok', request: { version: 1, home, root } });
     // One token starts one pass: the read unlinked it.
     expect(existsSync(path)).toBe(false);
-    expect(readRestoreInherit(home, nonce)).toEqual({ kind: 'refused', why: 'no one-use token names this child' });
+    expect(
+      acceptRestoreDoor({
+        home,
+        nonce,
+        text: restoreDoorText(nonce, secret),
+        parentPid: daemonPid,
+        service,
+      }),
+    ).toEqual({ kind: 'refused', why: 'no one-use token names this child' });
   });
 
   test('a name this program never writes, and a name with no token, are both refused', () => {
     const { root, home } = scratch();
-    expect(readRestoreInherit(home, 'not-a-token')).toEqual({
+    const dummySecret = 'a'.repeat(64);
+    expect(
+      acceptRestoreDoor({
+        home,
+        nonce: 'not-a-token',
+        text: restoreDoorText('not-a-token', dummySecret),
+        parentPid: daemonPid,
+        service,
+      }),
+    ).toEqual({
       kind: 'refused',
       why: 'the token name is not one this daemon writes',
     });
-    expect(readRestoreInherit(home, '../daemon.state.json')).toEqual({
+    expect(
+      acceptRestoreDoor({
+        home,
+        nonce: '../daemon.state.json',
+        text: restoreDoorText('../daemon.state.json', dummySecret),
+        parentPid: daemonPid,
+        service,
+      }),
+    ).toEqual({
       kind: 'refused',
       why: 'the token name is not one this daemon writes',
     });
-    expect(readRestoreInherit(home, 'a'.repeat(32))).toEqual({
+    expect(
+      acceptRestoreDoor({
+        home,
+        nonce: 'a'.repeat(32),
+        text: restoreDoorText('a'.repeat(32), dummySecret),
+        parentPid: daemonPid,
+        service,
+      }),
+    ).toEqual({
       kind: 'refused',
       why: 'no one-use token names this child',
     });
     // Nothing was consumed by the refusals: a real token still reads.
-    const nonce = writeRestoreInherit({ version: 1, home, root });
-    expect(readRestoreInherit(home, nonce).kind).toBe('ok');
+    const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid });
+    expect(
+      acceptRestoreDoor({
+        home,
+        nonce,
+        text: restoreDoorText(nonce, secret),
+        parentPid: daemonPid,
+        service,
+      }).kind,
+    ).toBe('ok');
   });
 
   test('a token whose content is not a request this child can run is refused, and consumed', () => {
     const { root, home } = scratch();
+    const dummySecret = 'b'.repeat(64);
     mkdirSync(machineConfigDir(home), { recursive: true, mode: 0o700 });
     const unknown = 'b'.repeat(32);
     writeFileSync(restoreInheritPath(home, unknown), `${JSON.stringify({ version: 2, home, root })}\n`, { mode: 0o600 });
-    expect(readRestoreInherit(home, unknown)).toEqual({ kind: 'refused', why: 'the token names an unknown format' });
+    expect(
+      acceptRestoreDoor({
+        home,
+        nonce: unknown,
+        text: restoreDoorText(unknown, dummySecret),
+        parentPid: daemonPid,
+        service,
+      }),
+    ).toEqual({ kind: 'refused', why: 'the token names an unknown format' });
     expect(existsSync(restoreInheritPath(home, unknown))).toBe(false);
     const unparseable = 'c'.repeat(32);
     writeFileSync(restoreInheritPath(home, unparseable), 'not json\n', { mode: 0o600 });
-    expect(readRestoreInherit(home, unparseable)).toEqual({ kind: 'refused', why: 'the token is not readable JSON' });
+    expect(
+      acceptRestoreDoor({
+        home,
+        nonce: unparseable,
+        text: restoreDoorText(unparseable, dummySecret),
+        parentPid: daemonPid,
+        service,
+      }),
+    ).toEqual({ kind: 'refused', why: 'the token is not readable JSON' });
   });
 
   test('started with no token the child refuses, exits 2, and reports no pass', () => {
@@ -182,14 +296,14 @@ describe("the restore child's authority is the one-use token", () => {
     expect(forged.stderr).toContain('no one-use token names this child');
   });
 
-  test('a replayed token starts no second pass', () => {
+  test('a replayed token starts no second pass', async () => {
     const { root, home } = scratch();
-    const nonce = writeRestoreInherit({ version: 1, home, root });
-    const first = runEntry(home, ['--inherited', nonce], root);
+    const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid });
+    const first = await runEntryInBackground(home, ['--inherited', nonce], root, restoreDoorText(nonce, secret));
     expect(first.status).toBe(0);
     expect(JSON.parse(first.stdout.trim())).toEqual({ ok: true, result: { kind: 'no-recorded-session' } });
     // The token was spent by the first child: the same command line now refuses.
-    const replayed = runEntry(home, ['--inherited', nonce], root);
+    const replayed = await runEntryInBackground(home, ['--inherited', nonce], root, restoreDoorText(nonce, secret));
     expect(replayed.status).toBe(2);
     expect(replayed.stdout).toBe('');
     expect(replayed.stderr).toContain('no one-use token names this child');
@@ -199,12 +313,13 @@ describe("the restore child's authority is the one-use token", () => {
   test('two children started with one token at once: exactly one runs the pass', async () => {
     const { root, home } = scratch();
     for (let round = 0; round < 4; round += 1) {
-      const nonce = writeRestoreInherit({ version: 1, home, root });
+      const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid });
+      const doorText = restoreDoorText(nonce, secret);
       // Both start before either can finish: the claim is the file system's rename, which admits
       // one mover, so the race cannot hand the same token to both.
       const pair = await Promise.all([
-        runEntryInBackground(home, ['--inherited', nonce], root),
-        runEntryInBackground(home, ['--inherited', nonce], root),
+        runEntryInBackground(home, ['--inherited', nonce], root, doorText),
+        runEntryInBackground(home, ['--inherited', nonce], root, doorText),
       ]);
       const ran = pair.filter((one) => one.status === 0);
       const refused = pair.filter((one) => one.status === 2);
@@ -217,15 +332,15 @@ describe("the restore child's authority is the one-use token", () => {
     expect(tokenFiles(home)).toEqual([]);
   }, 30_000);
 
-  test('a machine folder this child cannot claim in refuses the token', () => {
+  test('a machine folder this child cannot claim in refuses the token', async () => {
     const { root, home } = scratch();
-    const nonce = writeRestoreInherit({ version: 1, home, root });
+    const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid });
     const dir = machineConfigDir(home);
     // Traversal and reading stay possible for this uid; only the claim (a rename in the folder)
     // is not. The token starts nothing.
     chmodSync(dir, 0o500);
     try {
-      const ran = runEntry(home, ['--inherited', nonce], root);
+      const ran = await runEntryInBackground(home, ['--inherited', nonce], root, restoreDoorText(nonce, secret));
       expect(ran.status).toBe(2);
       expect(ran.stdout).toBe('');
       expect(ran.stderr).toContain('no one-use token names this child');
@@ -251,7 +366,7 @@ describe("the daemon's beat while a restore pass runs", () => {
     recordSeat(root);
     const bin = join(base, 'bin');
     const herdrLog = join(base, 'herdr.log');
-    mkdirSync(bin);
+    mkdirSync(bin, { recursive: true });
     const shim = join(bin, 'herdr');
     writeFileSync(
       shim,
@@ -384,11 +499,11 @@ describe('independent adversarial checks: restore spawn abort, deadline, spawn e
     ).rejects.toThrow(/did not answer within 0 s and was ended/);
     expect(tokenFiles(home)).toEqual([]);
 
-    // 2. Spawn error (`cwd` does not exist -> asynchronous `'error'` event on child): discards token and rejects.
+    // 2. Spawn error (`cwd` does not exist -> asynchronous `'error'` event or missing stdio on child): discards token and rejects.
     const missingCwd = join(base, 'no-such-cwd');
     await expect(
       runRestoreSweepInChild({ home, root: missingCwd, entry: hangEntry, timeoutMs: 5_000 }),
-    ).rejects.toThrow(/the restore child (?:failed|could not be started)/);
+    ).rejects.toThrow(/the restore child (?:failed|could not be started|could not open its inherited door descriptor)/);
     expect(tokenFiles(home)).toEqual([]);
 
     // 3. Early exit without claiming token (exits 1 with stderr diagnostic): discards token and includes last stderr line.
@@ -422,9 +537,9 @@ describe('independent adversarial checks: restore spawn abort, deadline, spawn e
     writeFileSync(
       failReportEntry,
       [
-        `import { readRestoreInherit } from ${JSON.stringify(fileURLToPath(new URL('../src/daemon/restore/token.ts', import.meta.url)))};`,
+        `import { discardRestoreInherit } from ${JSON.stringify(fileURLToPath(new URL('../src/daemon/restore/token.ts', import.meta.url)))};`,
         `const at = process.argv.indexOf('--inherited');`,
-        `readRestoreInherit(process.env.HOME ?? '', process.argv[at + 1] ?? '');`,
+        `discardRestoreInherit(process.env.HOME ?? '', process.argv[at + 1] ?? '');`,
         `process.stdout.write(JSON.stringify({ ok: false, reason: 'synthetic pass failure' }) + '\\n');`,
       ].join('\n'),
     );
@@ -438,10 +553,11 @@ describe('independent adversarial checks: restore spawn abort, deadline, spawn e
     writeFileSync(
       oversizedEntry,
       [
-        `import { readRestoreInherit } from ${JSON.stringify(fileURLToPath(new URL('../src/daemon/restore/token.ts', import.meta.url)))};`,
+        `import { discardRestoreInherit } from ${JSON.stringify(fileURLToPath(new URL('../src/daemon/restore/token.ts', import.meta.url)))};`,
         `const at = process.argv.indexOf('--inherited');`,
-        `readRestoreInherit(process.env.HOME ?? '', process.argv[at + 1] ?? '');`,
+        `discardRestoreInherit(process.env.HOME ?? '', process.argv[at + 1] ?? '');`,
         `process.stdout.write('x'.repeat(70 * 1024));`,
+        `await new Promise((resolve) => setTimeout(resolve, 1_000));`,
       ].join('\n'),
     );
     await expect(
@@ -461,7 +577,7 @@ describe('independent adversarial checks: restore spawn abort, deadline, spawn e
 
     const bin = join(base, 'bin');
     const herdrLog = join(base, 'herdr.log');
-    mkdirSync(bin);
+    mkdirSync(bin, { recursive: true });
     const shim = join(bin, 'herdr');
     writeFileSync(
       shim,

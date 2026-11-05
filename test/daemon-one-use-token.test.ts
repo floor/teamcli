@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
 import { claimOneUseToken } from '../src/daemon/one-use-token.ts';
 import { readChoresInherit, writeChoresInherit } from '../src/daemon/chores/token.ts';
-import { readRestoreInherit, restoreRequestProblem, writeRestoreInherit } from '../src/daemon/restore/token.ts';
+import { acceptRestoreDoor, restoreDoorText, restoreRequestProblem, writeRestoreDoor } from '../src/daemon/restore/token.ts';
 import type { ChoresChildConfig } from '../src/daemon/chores/protocol.ts';
 
 /** Timed scenes run under /private/tmp where a bun child starts quickly. */
@@ -189,8 +189,15 @@ describe('independent adversarial checks: one-use token, malformed nonces, unrea
 
   test('malformed nonces and cross-channel nonces (chores vs restore) are refused without consuming valid tokens', () => {
     const { root, home } = scratch();
+    const daemonPid = 9_876;
+    const service = { job: () => ({ pid: daemonPid, program: process.execPath }) };
     const choresNonce = writeChoresInherit(configOf(home, root));
-    const restoreNonce = writeRestoreInherit({ version: 1, home, root });
+    const { nonce: restoreNonce, secret: restoreSecret } = writeRestoreDoor({
+      version: 1,
+      home,
+      root,
+      daemonPid,
+    });
 
     const malformed = [
       '',
@@ -209,14 +216,31 @@ describe('independent adversarial checks: one-use token, malformed nonces, unrea
         kind: 'refused',
         why: 'the token name is not one this daemon writes',
       });
-      expect(readRestoreInherit(home, bad), bad).toEqual({
+      expect(
+        acceptRestoreDoor({
+          home,
+          nonce: bad,
+          text: restoreDoorText(bad, restoreSecret),
+          parentPid: daemonPid,
+          service,
+        }),
+        bad,
+      ).toEqual({
         kind: 'refused',
         why: 'the token name is not one this daemon writes',
       });
     }
 
     // Cross-channel: a chores nonce cannot be claimed by restore, and a restore nonce cannot be claimed by chores.
-    expect(readRestoreInherit(home, choresNonce)).toEqual({
+    expect(
+      acceptRestoreDoor({
+        home,
+        nonce: choresNonce,
+        text: restoreDoorText(choresNonce, restoreSecret),
+        parentPid: daemonPid,
+        service,
+      }),
+    ).toEqual({
       kind: 'refused',
       why: 'no one-use token names this child',
     });
@@ -231,11 +255,27 @@ describe('independent adversarial checks: one-use token, malformed nonces, unrea
       kind: 'refused',
       why: 'no one-use token names this child',
     });
-    expect(readRestoreInherit(home, restoreNonce)).toEqual({
+    expect(
+      acceptRestoreDoor({
+        home,
+        nonce: restoreNonce,
+        text: restoreDoorText(restoreNonce, restoreSecret),
+        parentPid: daemonPid,
+        service,
+      }),
+    ).toEqual({
       kind: 'ok',
       request: { version: 1, home, root },
     });
-    expect(readRestoreInherit(home, restoreNonce)).toEqual({
+    expect(
+      acceptRestoreDoor({
+        home,
+        nonce: restoreNonce,
+        text: restoreDoorText(restoreNonce, restoreSecret),
+        parentPid: daemonPid,
+        service,
+      }),
+    ).toEqual({
       kind: 'refused',
       why: 'no one-use token names this child',
     });
@@ -243,6 +283,9 @@ describe('independent adversarial checks: one-use token, malformed nonces, unrea
 
   test('a restore token naming a second root (array or chores routes list) or malformed fields is refused and consumed', () => {
     const { base, root, home } = scratch();
+    const daemonPid = 9_876;
+    const service = { job: () => ({ pid: daemonPid, program: process.execPath }) };
+    const secret = 'f'.repeat(64);
     const secondRoot = join(base, 'repo-two');
     mkdirSync(secondRoot, { recursive: true });
     mkdirSync(machineConfigDir(home), { recursive: true, mode: 0o700 });
@@ -262,7 +305,16 @@ describe('independent adversarial checks: one-use token, malformed nonces, unrea
       expect(restoreRequestProblem(payload), nonce).toBe(why);
       const file = restoreInheritPath(home, nonce);
       writeFileSync(file, `${JSON.stringify(payload)}\n`, { mode: 0o600 });
-      expect(readRestoreInherit(home, nonce), nonce).toEqual({ kind: 'refused', why });
+      expect(
+        acceptRestoreDoor({
+          home,
+          nonce,
+          text: restoreDoorText(nonce, secret),
+          parentPid: daemonPid,
+          service,
+        }),
+        nonce,
+      ).toEqual({ kind: 'refused', why });
       // Consumed even when invalid.
       expect(existsSync(file), nonce).toBe(false);
     }

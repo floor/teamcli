@@ -6,7 +6,7 @@
 // This file exists so the sync terminal-host reads of a restore pass block this process alone.
 // The daemon's own loop only awaits the result line, so its heartbeat is never held by a pass.
 import { runRestoreSweepForRoute, type RestoreSweepResult } from '../../launch/restore-sweep.ts';
-import { readRestoreInherit } from './token.ts';
+import { acceptRestoreDoor, readRestoreDoor } from './token.ts';
 
 /** One result line, or a refusal. The parent reads exactly this shape from stdout. */
 type Report = { ok: true; result: RestoreSweepResult } | { ok: false; reason: string };
@@ -27,7 +27,7 @@ const at = process.argv.indexOf('--inherited');
 const nonce = at === -1 ? '' : process.argv[at + 1] ?? '';
 const read = home === ''
   ? { kind: 'refused' as const, why: 'the restore child was started without a home' }
-  : readRestoreInherit(home, nonce);
+  : acceptRestoreDoor({ home, nonce, text: readRestoreDoor() });
 
 if (read.kind === 'refused') {
   process.stderr.write(`team daemon: ${read.why}\n`);

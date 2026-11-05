@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { budgetsInForceOf, ceilingsOf, notInForce, watchInForceOf } from '../approve/approval.ts';
 import { KEY_ISOLATION_LINE, activeClientUpGrant, withClientGrantLock, type ClientUpGrantRecord } from '../client/records.ts';
@@ -14,7 +14,7 @@ import { readArgs, type Args } from '../args.ts';
 import { callerLabel, callerOf, describeCaller, detachedRefusal, judgeCallerIn, mayLaunchSeats, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { daemonHealth, type DaemonHealth } from '../daemon/health.ts';
 import { delegateGate, delegateNamedFor, logDelegated } from '../delegate.ts';
-import { devModeCallerGate, devModeExpiryLine, devModeExpiryNote, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { devModeCallerGate, devModeExpiryLine, devModeExpiryNote, devModeMark, devModeOwnerLift, devModeOwnerLiftAtCwd, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { gateVerdict } from '../permissions/who.ts';
@@ -96,7 +96,7 @@ import { ensureSeatLine, registerRun } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { findAgent } from '../registry/agents.ts';
 import { continuityIdOf, continuityIdsOf, recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
-import { teamIdOf } from '../registry/teams.ts';
+import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { nativePushBindingFor } from '../send/push.ts';
 import { refreshAgentAddress } from '../send/address.ts';
@@ -378,14 +378,23 @@ export const realSources: UpSources = {
 /** The reason the hold `up --no-launch` places carries. */
 export const QUIET_HOLD_REASON = 'quiet start (team up --no-launch): the watch wakes no seat; release with team hold --release';
 
-export const USAGE = 'Usage: team up [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--json]\n       team up --general <grant.json> --key <client-key> [--dry-run] [--serial] [--no-launch] [--json]\n       team up --request [--reason <text>] [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--json]\n\n--no-launch is a quiet start: the seats get their rules only, told to read their inbox and act on what is addressed to them, and not to continue earlier work unless a message asks for it; no general seat brief (the launch message) is dropped or typed, and a team hold stops the watch typing anything automatic until team hold --release.\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
+export const USAGE = 'Usage: team up [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]\n       team up --all [--dry-run] [--serial] [--no-launch] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--json]\n       team up --general <grant.json> --key <client-key> [--all] [--dry-run] [--serial] [--no-launch] [--json]\n       team up --request [--reason <text>] [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--json]\n\n--all runs the restore pass across every registered team whose session is running in the terminal host with recorded seats, in parent-first then session order, without cold-starting inactive teams.\n\n--no-launch is a quiet start: the seats get their rules only, told to read their inbox and act on what is addressed to them, and not to continue earlier work unless a message asks for it; no general seat brief (the launch message) is dropped or typed, and a team hold stops the watch typing anything automatic until team hold --release.\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
 
 export const up: Command = (argv, io) => runUp(argv, io, realSources);
 export default up;
 
-/** The invocation problems the client form owns, or null: it takes its grant and its key together,
- *  never the owner's `--file` or `--session`, and `--team` only names the team the grant is for. */
+/** The invocation problems the client form or `--all` owns, or null: `--client` takes its grant and
+ *  its key together, never the owner's `--file` or `--session`, `--team` only names the team the
+ *  grant is for, and `--all` takes no single-team flag. */
 function clientInvocationProblem(args: Args): string | null {
+  if (args.flags.has('all')) {
+    if (args.values.file !== undefined) return '--all and --file can\'t be used together: --all reads every registered team';
+    if (args.values.session !== undefined) return '--all and --session can\'t be used together: each registered team uses its own session';
+    if (args.values.client !== undefined || args.values.team !== undefined) return '--client runs the one team its grant names; it takes no --all';
+    if (args.flags.has('request') || args.values.approval !== undefined || args.values.reason !== undefined) {
+      return '--all takes no single-team owner-seat request flag';
+    }
+  }
   const client = args.values.client !== undefined;
   if (client && args.values.key === undefined) return '--client needs --key <client-key-file>';
   if (args.values.general !== undefined) return client || args.values.key === undefined ? '--general takes --key <client-key-file> and no --client' : null;
@@ -1227,6 +1236,423 @@ export type UpInternal = {
   nonInteractive?: boolean;
 };
 
+type UpAllTeamEntry = {
+  project: string;
+  session: string;
+  root: string;
+  status: 'ready' | 'dry-run' | 'pending' | 'lock-held' | 'unreadable' | 'refused';
+  failed: boolean;
+  summary: string;
+  restore_summary?: RestoreSweepSummary;
+};
+
+function canonicalTeamRoot(root: string): string {
+  try {
+    return realpathSync(root);
+  } catch {
+    return resolve(root);
+  }
+}
+
+function holdsTeamRoot(parent: string, child: string): boolean {
+  const rel = relative(canonicalTeamRoot(parent), canonicalTeamRoot(child));
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+function lastSaidFrom(err: string[], out: string[]): string | undefined {
+  const lines = `${err.join('')}\n${out.join('')}`
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '');
+  const said = lines.at(-1);
+  if (said === undefined) return undefined;
+  return said.length > 400 ? `${said.slice(0, 397)}...` : said;
+}
+
+async function runUpAll(
+  args: Args,
+  io: Io,
+  out: Io,
+  sources: UpSources,
+  json: boolean,
+  dry: boolean,
+  noLaunch: boolean,
+  jsonNotes: string[],
+  stderrLine: (text: string) => void,
+): Promise<0 | 1 | 2> {
+  const home = sources.home ?? homedir();
+  const now = sources.now?.() ?? new Date();
+  const refusal = 'only the owner or a lead in development mode runs team up --all';
+
+  if (args.values.general === undefined) {
+    const walked = walkCaller(io);
+    if (walked.kind === 'owner-no-tty') {
+      const detached = detachedRefusal(walked, {
+        who: 'the owner or a lead in development mode',
+        where: "a terminal outside the terminal host or the lead's own pane",
+      }) ?? "only the owner or a lead in development mode runs this, from a terminal outside the terminal host or the lead's own pane";
+      refuse(io, json, 'up', { id: 'up.detached', message: plainText(detached), repair: null });
+      return 1;
+    }
+    if (walked.kind !== 'owner') {
+      let lift = devModeOwnerLiftAtCwd(io, {
+        command: 'up',
+        refusal,
+        home,
+        now,
+        admitsOperator: false,
+        audit: 'later',
+      });
+      if ((lift === null || !lift.lifted) && (walked.kind === 'seat' || (walked.kind === 'unplaced' && walked.reason === 'it runs under herdr'))) {
+        try {
+          const registry = readTeams(home);
+          for (const record of Object.values(registry)) {
+            if (record.lifecycle === 'stopped' || record.lifecycle === 'archived') continue;
+            const placed = callerOf(io, record.session);
+            if (placed.kind !== 'seat' || placed.session !== record.session) continue;
+            let loaded: ReturnType<typeof readTeamConfig>;
+            try {
+              loaded = readTeamConfig(record.root, { home });
+            } catch {
+              continue;
+            }
+            if (!loaded.ok) continue;
+            const candidate = devModeOwnerLift(io, {
+              command: 'up',
+              refusal,
+              home,
+              team: loaded.team,
+              root: loaded.root,
+              dir: dirname(loaded.path),
+              now,
+              admitsOperator: false,
+              audit: 'later',
+            });
+            if (candidate.lifted) {
+              lift = candidate;
+              break;
+            }
+          }
+        } catch {
+          // A corrupt registry is reported at the registry read below once the caller gate passes.
+        }
+      }
+      if (lift === null || !lift.lifted) {
+        refuse(io, json, 'up', { id: 'up.not-owner', message: refusal, repair: null });
+        return 1;
+      }
+      if (lift.warning !== null) stderrLine(`${plainText(lift.warning)}\n`);
+      if (!dry) lift.audit();
+    }
+  }
+
+  let recordsById: Record<string, TeamRecord>;
+  try {
+    recordsById = readTeams(home);
+  } catch (error) {
+    refuse(io, json, 'up', {
+      id: 'up.file',
+      message: plainText(error instanceof Error ? error.message : String(error)),
+      repair: null,
+    });
+    return 2;
+  }
+
+  const seenRoots = new Set<string>();
+  const activeRecords: TeamRecord[] = [];
+  for (const record of Object.values(recordsById)) {
+    if (record.lifecycle === 'stopped' || record.lifecycle === 'archived') continue;
+    const canon = canonicalTeamRoot(record.root);
+    if (seenRoots.has(canon)) continue;
+    seenRoots.add(canon);
+    activeRecords.push(record);
+  }
+
+  if (activeRecords.length === 0) {
+    refuse(io, json, 'up', {
+      id: 'up.pending',
+      message: 'nothing restored yet: no teams are registered',
+      repair: null,
+    });
+    return 1;
+  }
+
+  const ancestorsOf = (record: TeamRecord): number =>
+    activeRecords.filter((other) => other !== record && holdsTeamRoot(other.root, record.root)).length;
+  activeRecords.sort(
+    (a, b) =>
+      ancestorsOf(a) - ancestorsOf(b) ||
+      a.session.localeCompare(b.session) ||
+      (a.id ?? '').localeCompare(b.id ?? ''),
+  );
+
+  let anyStateAnswered = false;
+  let nullStateCount = 0;
+  let inactiveSkipped = 0;
+  let swept = 0;
+  let totalRepaired = 0;
+  let totalSkipped = 0;
+  let totalRefused = 0;
+  const allSeats: string[] = [];
+  const teamEntries: UpAllTeamEntry[] = [];
+
+  for (const record of activeRecords) {
+    const state = resolveState(sources, record.session);
+    if (state === null) {
+      nullStateCount += 1;
+      continue;
+    }
+    anyStateAnswered = true;
+    if (state !== 'running') {
+      inactiveSkipped += 1;
+      continue;
+    }
+
+    let loaded: ReturnType<typeof readTeamConfig>;
+    try {
+      loaded = readTeamConfig(record.root, { home });
+    } catch (error) {
+      swept += 1;
+      const reason = plainText(error instanceof Error ? error.message : String(error));
+      teamEntries.push({
+        project: record.project,
+        session: record.session,
+        root: record.root,
+        status: 'unreadable',
+        failed: true,
+        summary: reason,
+      });
+      stderrLine(`team up: ${plainText(record.project)} (session ${plainText(record.session)}): ${reason}\n`);
+      continue;
+    }
+    if (!loaded.ok) {
+      swept += 1;
+      const said = plainText(loaded.errors.map((problem) => problem.message).join('; ') || 'the team file could not be read');
+      teamEntries.push({
+        project: record.project,
+        session: record.session,
+        root: record.root,
+        status: 'unreadable',
+        failed: true,
+        summary: said,
+      });
+      stderrLine(`team up: ${plainText(record.project)} (session ${plainText(record.session)}): ${said}\n`);
+      continue;
+    }
+
+    const dir = dirname(loaded.path);
+    const session = loaded.team.session;
+    let hasRecordedSeats = false;
+    try {
+      const recorded = readState(dir).sessions[session];
+      hasRecordedSeats = recorded !== undefined && Object.keys(recorded.seats).length > 0;
+    } catch (error) {
+      swept += 1;
+      const reason = plainText(error instanceof Error ? error.message : String(error));
+      teamEntries.push({
+        project: loaded.team.project,
+        session,
+        root: loaded.root,
+        status: 'unreadable',
+        failed: true,
+        summary: reason,
+      });
+      stderrLine(`team up: ${plainText(loaded.team.project)} (session ${plainText(session)}): ${reason}\n`);
+      continue;
+    }
+    if (!hasRecordedSeats) {
+      inactiveSkipped += 1;
+      continue;
+    }
+
+    swept += 1;
+    for (const seat of loaded.team.seats) {
+      allSeats.push(`${loaded.team.project}/${seat.name}`);
+    }
+
+    const lock = dry ? null : acquireRunLock(dir, session);
+    if (lock !== null && 'held' in lock) {
+      const reason = plainText(runLockText(lock.held, session, dir, lock.startedAt));
+      teamEntries.push({
+        project: loaded.team.project,
+        session,
+        root: loaded.root,
+        status: 'lock-held',
+        failed: true,
+        summary: reason,
+      });
+      stderrLine(`team up: ${plainText(loaded.team.project)} (session ${plainText(session)}): ${reason}\n`);
+      continue;
+    }
+
+    try {
+      const launchFile = launchTeamFile(loaded);
+      const subArgv: string[] = [];
+      if (launchFile !== undefined) subArgv.push('--file', launchFile);
+      if (dry) subArgv.push('--dry-run');
+      if (args.flags.has('serial')) subArgv.push('--serial');
+      if (noLaunch) subArgv.push('--no-launch');
+
+      const subOut: string[] = [];
+      const subErr: string[] = [];
+      const seen: { report: Report | null } = { report: null };
+      const subIo: Io = {
+        cwd: loaded.root,
+        env: { ...io.env },
+        stdinIsTTY: false,
+        stdoutIsTTY: false,
+        stderrIsTTY: false,
+        caller: { kind: 'owner' },
+        stdout: (text) => subOut.push(text),
+        stderr: (text) => subErr.push(text),
+      };
+      const exit = await runUp(subArgv, subIo, sources, {
+        caller: { kind: 'owner' },
+        lockHeld: !dry,
+        nonInteractive: true,
+        onReport: (next) => {
+          seen.report = next;
+        },
+      });
+
+      if (dry) {
+        if (exit !== 0) {
+          const detail = plainText(lastSaidFrom(subErr, subOut) ?? `exited ${exit}`);
+          teamEntries.push({
+            project: loaded.team.project,
+            session,
+            root: loaded.root,
+            status: 'refused',
+            failed: true,
+            summary: detail,
+          });
+          stderrLine(`team up: ${plainText(loaded.team.project)} (session ${plainText(session)}): ${detail}\n`);
+        } else {
+          teamEntries.push({
+            project: loaded.team.project,
+            session,
+            root: loaded.root,
+            status: 'dry-run',
+            failed: false,
+            summary: 'dry run: nothing was run',
+          });
+          if (!json) {
+            out.stdout(`=== ${plainText(loaded.team.project)} (session ${plainText(session)}) ===\n${subOut.join('')}`);
+          }
+        }
+        continue;
+      }
+
+      if (seen.report === null) {
+        const detail = plainText(lastSaidFrom(subErr, subOut) ?? `exited ${exit}`);
+        teamEntries.push({
+          project: loaded.team.project,
+          session,
+          root: loaded.root,
+          status: 'refused',
+          failed: true,
+          summary: detail,
+        });
+        stderrLine(`team up: ${plainText(loaded.team.project)} (session ${plainText(session)}): ${detail}\n`);
+        continue;
+      }
+
+      const summary = restoreSummaryOf(seen.report.restoreBuckets);
+      const line = plainText(lastSaidFrom(subErr, []) ?? summary.line);
+      totalRepaired += summary.repaired;
+      totalSkipped += summary.skipped_working;
+      totalRefused += summary.refused;
+      const cleanedSummary: RestoreSweepSummary = {
+        ...summary,
+        refused_seats: summary.refused_seats.map((entry) => ({
+          seat: entry.seat,
+          reason: plainText(entry.reason),
+        })),
+        line,
+      };
+      teamEntries.push({
+        project: loaded.team.project,
+        session,
+        root: loaded.root,
+        status: exit === 0 ? 'ready' : 'pending',
+        failed: exit !== 0,
+        summary: line,
+        restore_summary: cleanedSummary,
+      });
+      stderrLine(`${plainText(loaded.team.project)} (session ${plainText(session)}): ${line}\n`);
+    } catch (error) {
+      const reason = plainText(error instanceof Error ? error.message : String(error));
+      teamEntries.push({
+        project: loaded.team.project,
+        session,
+        root: loaded.root,
+        status: 'unreadable',
+        failed: true,
+        summary: reason,
+      });
+      stderrLine(`team up: ${plainText(loaded.team.project)} (session ${plainText(session)}): ${reason}\n`);
+    } finally {
+      if (lock !== null && 'release' in lock) lock.release();
+    }
+  }
+
+  if (!anyStateAnswered && nullStateCount > 0) {
+    refuse(io, json, 'up', {
+      id: 'up.herdr',
+      message: "the terminal host doesn't answer",
+      repair: null,
+    });
+    return 1;
+  }
+
+  if (swept === 0) {
+    refuse(io, json, 'up', {
+      id: 'up.pending',
+      message: 'nothing restored yet: no registered team has a running session in the terminal host',
+      repair: null,
+    });
+    return 1;
+  }
+
+  const anyFailed = teamEntries.some((entry) => entry.failed);
+  const inactiveClause = inactiveSkipped > 0 ? `; ${inactiveSkipped} inactive skipped` : '';
+  const aggregateLine = dry
+    ? `all teams: ${swept} team${swept === 1 ? '' : 's'} planned${inactiveClause}`
+    : `all teams: ${swept} team${swept === 1 ? '' : 's'} swept (${totalRepaired} seat${totalRepaired === 1 ? '' : 's'} repaired, ${totalSkipped} skipped, ${totalRefused} refused)${inactiveClause}`;
+
+  if (!dry) {
+    stderrLine(`${aggregateLine}\n`);
+  }
+
+  if (json) {
+    if (anyFailed) {
+      const failedSummary = teamEntries
+        .filter((entry) => entry.failed)
+        .map((entry) => `${entry.project} (${entry.session}): ${entry.summary}`)
+        .join('; ');
+      refuse(io, true, 'up', {
+        id: 'up.pending',
+        message: `${aggregateLine} — ${failedSummary}`,
+        repair: null,
+      });
+    } else {
+      writeJson(io, 'team.up', {
+        format: 1,
+        all: true,
+        dry_run: dry,
+        ...(noLaunch ? { no_launch: true } : {}),
+        status: dry ? 'dry-run' : 'ready',
+        action_summary: aggregateLine,
+        seats: [...new Set(allSeats)],
+        teams: teamEntries,
+        notes: jsonNotes,
+      });
+    }
+  }
+
+  return anyFailed ? 1 : 0;
+}
+
 export async function runUp(argv: string[], io: Io, sources: UpSources, internal?: UpInternal): Promise<number> {
   // Every line this run writes goes through the cleaned writers from here; the raw pair stays
   // reachable for the progress writer alone, which draws its own `\r\x1b[K` on a TTY.
@@ -1234,7 +1660,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval', 'general', 'reason'], ['dry-run', 'serial', 'json', 'request', 'no-launch']);
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval', 'general', 'reason'], ['dry-run', 'serial', 'json', 'request', 'no-launch', 'all']);
   // The lines plain output writes beside the records ride on the document as notes under
   // `--json`; stdout carries the one document and nothing else.
   const jsonNotes: string[] = [];
@@ -1246,16 +1672,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     else out.stderr(text);
   };
   const clientProblem = args.error === undefined && args.rest.length === 0 ? clientInvocationProblem(args) : null;
-  if (args.error || args.rest.length || clientProblem !== null) {
-    refuse(io, json, 'up', {
-      id: 'up.invocation',
-      message: plainText(args.error ?? (args.rest.length ? `unexpected "${args.rest[0]}"` : clientProblem!)),
-      repair: null,
-      usage: USAGE,
-    });
-    // exit: up.invocation
-    return 2;
-  }
+  const badInvocation = Boolean(args.error || args.rest.length || clientProblem !== null);
   const dry = args.flags.has('dry-run');
   // `--no-launch`: seats get their rules and nothing else — no general seat brief is dropped in
   // their folder and no launch-line inbox route names a brief epoch.
@@ -1265,7 +1682,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // folder alone — a no-terminal owner launch that never prompts, whose seats are the signed team
   // file's and no others. Every other caller goes through the ordinary gates below, unchanged.
   let clientUp: { grant: ClientUpGrantRecord; signature: string; requestId: string } | null = null;
-  if (args.values.client !== undefined) {
+  if (!badInvocation && args.values.client !== undefined) {
     stderrLine(`${KEY_ISOLATION_LINE}\n`);
     const clientNow = sources.now?.() ?? new Date();
     const verified = verifyClientUp({
@@ -1308,12 +1725,14 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // admitted run is a no-terminal owner launch: it never prompts and never types into a pane.
   // A general grant (src/client/general-grant.ts): the owner signed this principal once for this
   // entity, so the run is admitted as an owner-seat approval would admit it, with no request.
-  if (args.values.general !== undefined) {
+  if (!badInvocation && args.values.general !== undefined) {
     let entity: string | null = null;
-    try {
-      const here = readTeamConfig(io.cwd, { home: sources.home, checkOnly: true });
-      if (here.ok) entity = here.team.entity;
-    } catch {}
+    if (!args.flags.has('all')) {
+      try {
+        const here = readTeamConfig(io.cwd, { home: sources.home, checkOnly: true });
+        if (here.ok) entity = here.team.entity;
+      } catch {}
+    }
     const general = admitGeneral(sources.home ?? homedir(), resolve(io.cwd, args.values.general), resolve(io.cwd, args.values.key!), 'up', entity, sources.now?.() ?? new Date());
     if (!general.ok) {
       refuse(io, json, 'up', { id: 'up.general-refused', message: general.why, repair: null });
@@ -1322,16 +1741,33 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     }
     stderrLine(`team up: admitted by general grant ${general.grant.grant_id} (${general.grant.client_id})\n`);
   }
-  const seatStep = args.values.general !== undefined
+  const allCode = !badInvocation && args.flags.has('all')
+    ? await runUpAll(args, io, out, sources, json, dry, noLaunch, jsonNotes, stderrLine)
+    : null;
+  const seatStep = badInvocation || allCode !== null
+    ? { kind: 'pass' as const }
+    : args.values.general !== undefined
     ? { kind: 'admitted' as const }
     : clientUp !== null && (args.flags.has('request') || args.values.approval !== undefined)
     ? (refuse(io, json, 'up', { id: 'up.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
     : ownerSeatStep('up', 'team-up', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason }, io, sources);
-  if (seatStep.kind === 'requested') {
+  if (badInvocation || allCode === 2) {
+    if (badInvocation) {
+      refuse(io, json, 'up', {
+        id: 'up.invocation',
+        message: plainText(args.error ?? (args.rest.length ? `unexpected "${args.rest[0]}"` : clientProblem!)),
+        repair: null,
+        usage: USAGE,
+      });
+    }
+    // exit: up.invocation
+    return 2;
+  }
+  if (allCode === 0 || seatStep.kind === 'requested') {
     // exit: up.approval-requested
     return 0;
   }
-  if (seatStep.kind === 'refused') {
+  if (allCode === 1 || seatStep.kind === 'refused') {
     // exit: up.approval-refused
     return 1;
   }

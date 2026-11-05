@@ -270,6 +270,16 @@ export type StartMachineDaemonInput = {
    */
   restoreSweep?: boolean | ((root: string, teamFile: string | undefined) => Promise<RestoreSweepResult>);
   /**
+   * The growing-gap retry schedule when a canonical route's session is not yet running in the
+   * terminal host at daemon start: `restoreRetryInitialDelayMs` (5 s default) doubles each retry
+   * up to `restoreRetryMaxDelayMs` (60 s default) over a total bound of `restoreRetryBudgetMs`
+   * (315 s / 5m 15s default). A test shortens these to observe the retry schedule without
+   * waiting the production window.
+   */
+  restoreRetryInitialDelayMs?: number;
+  restoreRetryMaxDelayMs?: number;
+  restoreRetryBudgetMs?: number;
+  /**
    * Whether the daemon isolates the heavy per-root chores in supervised children. Off by
    * default, like the other hosting seams: a daemon started without it runs exactly the inline
    * path, and a test harness that never opted in behaves as it always did. The mode per route is
@@ -2499,6 +2509,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             signal: restoreAbort.signal,
           });
     restoreSweepRun = (async (): Promise<void> => {
+      let pendingRoutes: HostedRoute[] = [];
       for (const route of routes) {
         if (closed) return;
         const entry = routeTeams.get(route.root);
@@ -2511,6 +2522,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             logLine(`restore ${route.root}: another session-mutating run holds the session; skipped`);
           } else if (result.kind === 'not-running') {
             logLine(`restore ${route.root}: the session is ${result.state ?? 'unreadable'}; skipped`);
+            pendingRoutes.push(route);
           } else if (result.kind === 'unreadable') {
             logLine(`restore ${route.root}: ${result.reason}`);
           } else if (result.kind === 'refused') {
@@ -2520,6 +2532,78 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         } catch (error) {
           logLine(`restore ${route.root}: ${messageOf(error)}`);
         }
+      }
+      if (pendingRoutes.length === 0 || closed || restoreAbort.signal.aborted) return;
+
+      const initialDelayMs = Math.max(1, input.restoreRetryInitialDelayMs ?? 5_000);
+      const maxDelayMs = Math.max(initialDelayMs, input.restoreRetryMaxDelayMs ?? 60_000);
+      const budgetMs = Math.max(0, input.restoreRetryBudgetMs ?? 315_000);
+      let currentDelayMs = initialDelayMs;
+      let elapsedMs = 0;
+      let attempt = 1;
+
+      const formatWait = (ms: number): string =>
+        ms >= 1_000 && ms % 1_000 === 0 ? `${ms / 1_000}s` : `${ms}ms`;
+
+      const waitAbortable = (ms: number): Promise<boolean> =>
+        new Promise((resolveWait) => {
+          if (closed || restoreAbort.signal.aborted) {
+            resolveWait(false);
+            return;
+          }
+          const onAbort = (): void => {
+            clearTimeout(waitTimer);
+            resolveWait(false);
+          };
+          const waitTimer = setTimeout(() => {
+            restoreAbort.signal.removeEventListener('abort', onAbort);
+            resolveWait(!closed && !restoreAbort.signal.aborted);
+          }, ms);
+          restoreAbort.signal.addEventListener('abort', onAbort, { once: true });
+        });
+
+      while (pendingRoutes.length > 0 && elapsedMs < budgetMs && !closed && !restoreAbort.signal.aborted) {
+        const delayMs = Math.min(currentDelayMs, maxDelayMs, budgetMs - elapsedMs);
+        if (delayMs <= 0) break;
+        logLine(
+          `restore: waiting ${formatWait(delayMs)} for the terminal host to restore ${pendingRoutes.length} session${pendingRoutes.length === 1 ? '' : 's'} (attempt ${attempt}, elapsed ${formatWait(elapsedMs)}/${formatWait(budgetMs)})`,
+        );
+        const waited = await waitAbortable(delayMs);
+        if (!waited || closed || restoreAbort.signal.aborted) return;
+        elapsedMs += delayMs;
+        currentDelayMs = Math.min(currentDelayMs * 2, maxDelayMs);
+        attempt += 1;
+
+        const stillPending: HostedRoute[] = [];
+        for (const route of pendingRoutes) {
+          if (closed || restoreAbort.signal.aborted) return;
+          const entry = routeTeams.get(route.root);
+          if (entry === undefined) continue;
+          try {
+            const result = await runner(route.root, entry.file);
+            if (result.kind === 'ran') {
+              logLine(`restore ${route.root}: ${result.summary.line}`);
+            } else if (result.kind === 'lock-held') {
+              logLine(`restore ${route.root}: another session-mutating run holds the session; skipped`);
+            } else if (result.kind === 'not-running') {
+              stillPending.push(route);
+            } else if (result.kind === 'unreadable') {
+              logLine(`restore ${route.root}: ${result.reason}`);
+            } else if (result.kind === 'refused') {
+              const detail = result.detail === undefined ? '' : `: ${result.detail}`;
+              logLine(`restore ${route.root}: the run exited ${String(result.exit)} before it planned a seat${detail}`);
+            }
+          } catch (error) {
+            logLine(`restore ${route.root}: ${messageOf(error)}`);
+          }
+        }
+        pendingRoutes = stillPending;
+      }
+
+      if (pendingRoutes.length > 0 && !closed && !restoreAbort.signal.aborted) {
+        logLine(
+          `restore: pending (${pendingRoutes.length} session${pendingRoutes.length === 1 ? '' : 's'} still restoring in the terminal host after ${formatWait(elapsedMs)}; run "team up --all" once the terminal host finishes restoring)`,
+        );
       }
     })().catch((error: unknown) => {
       // The loop above already logs each route's failure; this catches the log write itself (or
