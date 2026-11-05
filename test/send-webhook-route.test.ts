@@ -7,7 +7,7 @@
 // The team is a synthetic world under a temp folder and the secret is a fixture file. No live
 // seat, no real routine.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startBus, type BusHandle } from '../src/bus/server.ts';
@@ -15,6 +15,7 @@ import type { SignedEventRecord } from '../src/bus/log.ts';
 import { runSend } from '../src/commands/send.ts';
 import { readTeamConfig } from '../src/file/team-config.ts';
 import { seatDeliveryClass } from '../src/launch/delivery-class.ts';
+import { dropNames } from './helpers.ts';
 import { dropDir, fake, owner, world, type World } from './send-native-fixtures.ts';
 
 const extras: string[] = [];
@@ -112,7 +113,7 @@ describe('team send names the webhook route', () => {
     // The drop the seat's pull reads stays, beside the send's own bookkeeping files.
     const dir = dropDir(at.dir, 'iris');
     expect(existsSync(dir)).toBe(true);
-    const record = readdirSync(dir).find((name) => !name.endsWith('.pending') && !name.endsWith('.fallback.json'));
+    const record = dropNames(dir).find((name) => !name.endsWith('.pending') && !name.endsWith('.fallback.json'));
     expect(record).toBeDefined();
     expect(readFileSync(join(dir, record!), 'utf8')).toContain('the gate is green');
   });
@@ -161,7 +162,7 @@ describe('team send names the webhook route', () => {
     expect(io.out).toContain('queued; iris reads it at its next turn, and nothing here gives it one (pull-only)');
     expect(io.out).not.toContain('woken through its event adapter');
     const dir = dropDir(at.dir, 'iris');
-    const record = readdirSync(dir).find((name) => !name.endsWith('.pending') && !name.endsWith('.fallback.json'));
+    const record = dropNames(dir).find((name) => !name.endsWith('.pending') && !name.endsWith('.fallback.json'));
     expect(record).toBeDefined();
     expect(readFileSync(join(dir, record!), 'utf8')).toContain('the gate is green');
   });

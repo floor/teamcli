@@ -30,7 +30,7 @@ import type { SendOutcome } from '../src/send/uds.ts';
 import { LOG_FILE, updateState } from '../src/state.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import { storePath } from '../src/store/store.ts';
-import { testIo } from './helpers.ts';
+import { dropNames, testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 type FeedDoc = {
@@ -236,7 +236,7 @@ describe('team send history log & team feed', () => {
     const dropDir = join(dir, 'send-drops', 'acme', 'lead');
     const recordPath = join(dropDir, sentDoc.ids.sent);
     expect(statSync(dropDir).mode & 0o777).toBe(0o700);
-    expect(readdirSync(dropDir).sort()).toEqual([
+    expect(dropNames(dropDir).sort()).toEqual([
       sentDoc.ids.sent,
       `${sentDoc.ids.sent}.fallback.json`,
       `${sentDoc.ids.sent}.pending`,
