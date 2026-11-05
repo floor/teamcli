@@ -1391,9 +1391,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // an unverified pace holds the ring with the rest of the automatic work.
         // Resolve receipts before the ring: an inbox/drop receipt can prove this id was read
         // even when the matching mailbox record's separate receipt is not present.
+        const readOptions = () => gate.take();
         const promotedReads = !foreign
           ? promoteInboxDrops({
-            dir, session, root, home: sources.home, team, live, processes, ownPane, sources, now: sources.now(), say,
+            dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say,
           })
           : new Set<string>();
         await yieldBeat();
@@ -1425,7 +1426,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // gives up. `--no-nudge` is the watch that types nothing, and this types too.
         if (!foreign && !quiet && hosted === undefined && paceVerified) {
           await retryHeldDrops({
-            dir, session, root, home: sources.home, team, live, processes, ownPane, sources, now: sources.now(), say,
+            dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say,
             nativeHeld: nativeHeldNow,
             // The channel's one redelivery dials the receiving session's socket with the stored
             // signed record; a seat whose launch the socket gate refuses falls through to the
@@ -1453,11 +1454,11 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // so a watch without nudges still keeps that word for the sender.
         if (!foreign) {
           await expirePendingNative(
-            { dir, session, root, home: sources.home, team, live, processes, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow },
+            { dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow },
             { noNudge: quiet },
           );
           await confirmTakenDrops({
-            dir, session, root, home: sources.home, team, live, processes, ownPane, sources, now: sources.now(), say,
+            dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say,
           });
           await yieldBeat();
           // A delivery is a deposit until the seat's signed receipt follows: a message still
@@ -1507,11 +1508,11 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             stuckReading,
           );
           await wakeUnreadDrops(
-            { dir, session, root, home: sources.home, team, live, processes, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow, ...(mail === undefined ? {} : { mail }) },
+            { dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow, ...(mail === undefined ? {} : { mail }) },
             { unreadAfter: inForce.unreadAfter, seatWindow: unreadWindowOf, rung, ...(quiet || !paceVerified ? { noNudge: true } : {}) },
           );
           reportUnreadDrops(
-            { dir, session, root, home: sources.home, team, live, processes, ownPane, sources, now: sources.now(), say, ...(mail === undefined ? {} : { mail }) },
+            { dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say, ...(mail === undefined ? {} : { mail }) },
             { unreadAfter: inForce.unreadAfter, seatWindow: unreadWindowOf },
             stuckReading,
           );

@@ -20,8 +20,10 @@
 // drop no watcher read is given up on with the file's path, never typed and never called lost.
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import type { ChildOptions } from '../child.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import type { PaneProcesses } from '../herdr.ts';
+import { READ_LIMITS_DEFAULT_MS } from './read-limits.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { isBareShellPane } from '../send/daemon.ts';
 import { claimBindingIn, currentClaimIn, INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, inboxLive, receiptHeld } from '../mcp/inbox.ts';
@@ -57,7 +59,7 @@ import { readScreen } from './screen.ts';
 /** What a retry reads and types through: the watch's own sources, narrowed to the pane calls. */
 export type RetrySources = {
   screen(pane: string, session: string): string | null;
-  screenAsync?(pane: string, session: string): Promise<string | null>;
+  screenAsync?(pane: string, session: string, options: ChildOptions): Promise<string | null>;
   status(pane: string, session: string): string | null;
   typeText(pane: string, text: string, session: string): boolean;
   pressEnter(pane: string, session: string): boolean;
@@ -85,6 +87,9 @@ export type RetryScene = {
   live: Live;
   /** The pass's per-pane process snapshot when the caller already read it. */
   processes?: Readonly<Record<string, PaneProcesses | null>>;
+  /** How one fallback async screen read is bounded in this pass (or the options directly).
+   *  Absent in direct test scenes, the read uses the documented per-read timeout. */
+  readOptions?: ChildOptions | (() => ChildOptions | null);
   /** The watch's own pane: never typed into. */
   ownPane: string | null;
   sources: RetrySources;
@@ -131,7 +136,11 @@ export async function passPaneScreenAsync(scene: RetryScene, pane: string): Prom
   let cached = fallbackScreens.get(scene.live);
   if (cached !== undefined && cached.has(pane)) return cached.get(pane) ?? null;
   if (scene.sources.screenAsync !== undefined) {
-    const read = await scene.sources.screenAsync(pane, scene.session);
+    const options = typeof scene.readOptions === 'function'
+      ? scene.readOptions()
+      : (scene.readOptions ?? { timeoutMs: READ_LIMITS_DEFAULT_MS.timeout });
+    if (options === null) return null;
+    const read = await scene.sources.screenAsync(pane, scene.session, options);
     if (cached === undefined) {
       cached = new Map();
       fallbackScreens.set(scene.live, cached);

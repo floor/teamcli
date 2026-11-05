@@ -733,6 +733,8 @@ describe('the unread pass of a daemon-hosted watch', () => {
     let syncScreenCalls = 0;
     let asyncScreenCalls = 0;
     let asyncScreenReply: string | null = null;
+    const seenReadTimeouts: (number | undefined)[] = [];
+    const seenReadSignals: (AbortSignal | undefined)[] = [];
 
     const baseSources: WatchSources = {
       live: () => ({
@@ -765,8 +767,10 @@ describe('the unread pass of a daemon-hosted watch', () => {
         syncScreenCalls += 1;
         return CODEX_INTERRUPTED;
       },
-      screenAsync: async () => {
+      screenAsync: async (_pane, _session, options) => {
         asyncScreenCalls += 1;
+        seenReadTimeouts.push(options.timeoutMs);
+        seenReadSignals.push(options.signal);
         return asyncScreenReply;
       },
       status: () => 'idle',
@@ -819,6 +823,8 @@ describe('the unread pass of a daemon-hosted watch', () => {
       expect(readTaken(dropDir)).toHaveLength(1);
       expect(readTaken(dropDir)[0]?.id).toBe(takenId);
       expect(asyncScreenCalls).toBe(1);
+      expect(seenReadTimeouts).toEqual([2000]);
+      expect(seenReadSignals[0]).toBeDefined();
       expect(syncScreenCalls).toBe(0);
 
       // Cycle 2: `screenAsync` now returns the pane's screen showing a transcript row with the
@@ -829,6 +835,8 @@ describe('the unread pass of a daemon-hosted watch', () => {
       await waitUntil(() => host.state().cycles === 2);
       expect(readTaken(dropDir)).toEqual([]);
       expect(asyncScreenCalls).toBe(2);
+      expect(seenReadTimeouts).toEqual([2000, 2000]);
+      expect(seenReadSignals[1]).toBeDefined();
       expect(syncScreenCalls).toBe(0);
     } finally {
       await host.stop('the test is done');
