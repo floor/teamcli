@@ -473,8 +473,10 @@ function modelDrift(
 ): { kind: 'skip' } | { kind: 'hold'; detail: string } | { kind: 'cycle'; way: string } | { kind: 'refuse'; detail: string } {
   if (!recorded.launched || !recorded.pane || !recorded.workspace || !seat.version) return { kind: 'skip' };
   if (!restored && seatProcessVerdict(recorded.launched, processes[seat.name] ?? null) !== 'same') return { kind: 'skip' };
+  // The entry is the seat's by its place: a restore clears the name it was given, and a cleared
+  // name is no other seat's. Only an entry named for another seat is not this seat's.
   const listed = agents.find((agent) => agent.pane === recorded.pane);
-  if (!listed || listed.name !== seat.name) return { kind: 'skip' };
+  if (!listed || (listed.name !== null && listed.name !== seat.name)) return { kind: 'skip' };
   const text = screenOf(recorded.pane);
   if (text == null || text === '') return { kind: 'skip' };
   // Registry signing governs even a model that the team file says a different CLI hosts (for
@@ -928,11 +930,40 @@ function seatPlan(
     });
     if (proof.kind === 'none') {
       restoreRefusal = proof.why;
-    } else if (relaunchWithOwnLine(seat, recorded, proof)) {
-      // A seat whose own launch line carries what the bare restored CLI does not is never adopted
-      // in place. The seam answers false in this slice, so this holds only for a later slice's
-      // wrapper seat, which routes it through its own line instead.
-      restoreRefusal = 'its launch line carries more than its pane does; team leaves it to the relaunch';
+    } else if (proof.kind === 'session' && continuitySession !== null
+      && relaunchWithOwnLine(effectiveSeatOf(seat, planned), recorded, proof)) {
+      // A seat whose own launch line carries what the bare restored CLI does not (a wrapper's
+      // alternate endpoint) is never adopted in place: the bare CLI would fail every turn. The
+      // bare CLI is exited in its recorded pane and the seat is launched again there through
+      // its own line plus `--resume <the proven conversation>`. The plan reads the pane here,
+      // so a dry run and a live run hold a working or unsent pane the same way: nothing is
+      // typed into it. The line checked is the one the relaunch would run — the record's
+      // launch, not the file's — and a conversation that line cannot carry stops the relaunch
+      // before any key is typed.
+      const held = replacedScreenRefusal(seat, recorded.pane, screenOf, known.find((agent) => agent.pane === recorded.pane)?.status);
+      if (held) {
+        return {
+          ...planned,
+          stage: 'ready',
+          sessionDoubt: held.why,
+          ...(held.working ? { doubtWorking: true } : {}),
+        };
+      }
+      const resumeHold = uncarryableResume(planned, continuitySession);
+      if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+      return {
+        ...planned,
+        pane: recorded.pane,
+        workspace: recorded.workspace,
+        repair: {
+          pane: recorded.pane,
+          workspace: recorded.workspace,
+          launched: recorded.launched,
+          cli: seat.cli,
+          ownLine: { session: continuitySession },
+        },
+        resume: continuitySession,
+      };
     } else {
       const next = launchedIdentity(processes[seat.name] ?? null);
       if (next) {
@@ -988,10 +1019,16 @@ function seatPlan(
       if (drift.kind === 'refuse') return { ...planned, stage: 'ready', driftRefused: drift.detail };
       // The pane's own agent names the conversation the records bind: a relaunch may resume it,
       // even where the state copy names no id. A pane naming another session proves nothing.
+      // The entry is the seat's by its place: a restore clears the name it was given, so an
+      // entry with no name on the recorded pane is still the seat's, and the conversation it
+      // reports is the record's. Only an entry named for another seat is not this seat's.
+      const paneEntry = recorded.pane
+        ? known.find((agent) => agent.pane === recorded.pane && (agent.name === null || agent.name === seat.name))
+        : undefined;
       const provenSession = continuitySession !== null
-        && onRecordedPane?.session !== undefined
-        && onRecordedPane.session !== ''
-        && onRecordedPane.session === continuitySession
+        && paneEntry?.session !== undefined
+        && paneEntry.session !== ''
+        && paneEntry.session === continuitySession
         ? continuitySession
         : undefined;
       if (drift.kind === 'cycle' && recorded.pane && recorded.workspace && recorded.launched) {
@@ -2636,6 +2673,14 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         ? { renameWorkspace: (session: string, workspace: string, label: string) => launch.renameWorkspace!(session, workspace, label) }
         : {}),
       typeLine: () => false,
+      // The bare restored CLI's exit, typed in place by a wrapper seat's relaunch: the same two
+      // raw calls `deliverRules` types with, with no read-back — the exit's own step reads the
+      // pane's process after it, not the screen before it.
+      typeText: (session, pane, text) => launch.typeText?.(session, pane, text) ?? false,
+      pressEnter: (session, pane) => launch.pressEnter?.(session, pane) ?? false,
+      ...(launch.sendKey
+        ? { sendKey: (session: string, pane: string, key: string) => launch.sendKey!(session, pane, key) }
+        : {}),
       deliverRules: async (session, pane, cli, planned, seconds) => {
         // A quiet start (`--no-launch`) adds its stop instruction to the rules file itself, so the
         // typed line keeps its ordinary length and shape — only the hash it names changes.

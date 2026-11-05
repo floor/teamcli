@@ -18,6 +18,7 @@ import { profileFor } from '../profiles/index.ts';
 import { readScreen } from '../watch/screen.ts';
 import { reportedLiveAgent } from './agent.ts';
 import { seatProcessVerdict } from './identity.ts';
+import { usesLauncher } from './line.ts';
 
 export type RestoreProof =
   /** The pane runs the conversation the launch recorded: the strongest proof there is. */
@@ -134,19 +135,24 @@ function workingWhy(seat: string): string {
 
 /**
  * Whether a proven seat must be relaunched through its own launch line instead of adopted in
- * place. False here: a proven conversation is re-tied where it stands. This is the seam a wrapper
- * seat's slice answers: a seat whose launch line carries something the bare restored CLI does not
- * (an alternate endpoint) returns true for a `session` proof, and `team up` routes it through the
- * repair path — its own line plus `--resume <the proof's conversation>` — rather than renaming the
- * bare CLI back and leaving the wrapper behind.
+ * place. A `session` proof on a seat whose launch line starts something other than the CLI's own
+ * binary — or whose file says the launcher chooses the model — is the wrapper case: the restored
+ * pane runs the bare CLI without the wrapper's settings (an alternate endpoint), so adopting it
+ * would leave every turn failing. `team up` then closes it without input and relaunches the seat
+ * through its own line plus `--resume <the proof's conversation>`. Any other proof, or a line
+ * that is the CLI itself, is re-tied where it stands. The `launch` is the line the relaunch would
+ * run — the record's own where there is one, never the file's line edited since.
  */
 export function relaunchWithOwnLine(
-  seat: Pick<Seat, 'name' | 'cli'>,
+  seat: Pick<Seat, 'name' | 'cli'> & { launch?: string; modelFrom?: Seat['modelFrom'] },
   recorded: Pick<SeatState, 'stage' | 'pane' | 'workspace' | 'launched' | 'waiting'>,
   proof: RestoreProof,
 ): boolean {
-  void seat;
   void recorded;
-  void proof;
-  return false;
+  if (proof.kind !== 'session' || seat.launch === undefined) return false;
+  return usesLauncher({
+    cli: seat.cli,
+    launch: seat.launch,
+    ...(seat.modelFrom === undefined ? {} : { modelFrom: seat.modelFrom }),
+  });
 }
