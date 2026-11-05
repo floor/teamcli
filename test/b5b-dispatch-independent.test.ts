@@ -28,6 +28,7 @@ import type { Caller } from '../src/caller.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPlan } from '../src/commands/plan.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
+import { SEND_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { runUp, type UpSources } from '../src/commands/up.ts';
 import { handleNext } from '../src/daemon/next.ts';
 import { routeOf } from '../src/daemon/routes.ts';
@@ -47,6 +48,7 @@ import { storePath, writeApproval } from '../src/store/store.ts';
 import { dispatchIdleWork, forgetIdleEpisodes, type IdleDispatchInput, type WorkPush, type WorkPushRequest } from '../src/watch/dispatch.ts';
 import { idleClaimOf } from '../src/watch/claim.ts';
 import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
+import { assertMatchesOutputSchema } from './helpers/output.ts';
 import { StandInStore, standInKeyText } from './workflow/reservation-stand-in-store.ts';
 import type { ItemIdentity } from '../src/workflow/reservation/index.ts';
 
@@ -978,5 +980,65 @@ describe('a recorded socket that is gone is reported, never dialed', () => {
     ]);
     const drops = join(world.dir, 'send-drops', 'acme', 'recorder');
     expect(readdirSync(drops).filter((name) => !name.includes('.')).length).toBe(1);
+  });
+
+  test('a stale socket on a seat whose launch carries the event adapter is not called a wake', async () => {
+    made = sendWorld(['socket', 'typed']);
+    const world = made;
+    const settings = cliHookSettingsPath(world.dir, 'acme', 'push-seat');
+    if (settings === null) throw new Error('the fixture declares no settings path');
+    mkdirSync(join(settings, '..'), { recursive: true });
+    writeFileSync(settings, JSON.stringify({ crossSessionInbound: 'accept' }));
+    const gone = join(world.sockets, '424242.sock');
+    const id = teamIdOf(world.root);
+    const record = registerAgent(world.home, {
+      name: 'push-seat',
+      signing: { model: 'Test', version: '1', role: 'implementer' },
+      lab: 'test-lab',
+      cli: 'claude-code',
+      launcher: null,
+      launch: PUSH_LAUNCH,
+      reach: { team: id, seat: 'push-seat', session: 'acme', pane: 'fixture-pane-push-seat', address: gone },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'up',
+    });
+    upsertTeam(world.home, id, {
+      project: 'acme',
+      entity: 'floor',
+      session: 'acme',
+      root: world.root,
+      lobby: resolveLobby(world.home, { entity: 'floor' }),
+      roster: [{ agent: record.id, seat: 'push-seat', role: 'implementer', leads: false }],
+      lifecycle: 'running',
+    });
+    recordSeat(world, 'push-seat', { cli: 'claude-code', launch_line: PUSH_LAUNCH });
+    let dialed = 0;
+    const io = testIo(world.root, { kind: 'owner' });
+    const host = sendHost(world, {
+      agents: () => [{ name: 'push-seat', pane: 'fixture-pane-push-seat' }],
+      deliver: async () => {
+        dialed += 1;
+        return { ok: true };
+      },
+    });
+    const code = await runSend(['push-seat', 'hello', '--json'], io, host);
+    expect(code).toBe(0);
+    expect(dialed).toBe(0);
+    expect(host.frames).toEqual([]);
+    const doc = assertMatchesOutputSchema<{ delivery?: { leg: string; reason?: string }[] }>(io.out, SEND_OUTPUT_SCHEMA);
+    const reported = doc.delivery?.find((entry) => entry.leg === 'socket');
+    expect(reported?.reason).toContain('is gone');
+    expect(reported?.reason).not.toContain('woken through');
+    const history = readHistory('acme', world.root, world.home);
+    expect(history.ok).toBe(true);
+    if (!history.ok) return;
+    const failed = history.entries.at(-1)?.failed ?? [];
+    const socketLine = failed.find((line) => line.startsWith('socket:'));
+    expect(socketLine).toBeDefined();
+    expect(socketLine).toContain('is gone');
+    expect(socketLine).not.toContain('woken through');
+    expect(failed.join('\n')).not.toContain('woken through');
   });
 });
