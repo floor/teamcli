@@ -16,7 +16,7 @@ import { runSend, type SendHost } from '../../src/commands/send.ts';
 import { lobbyDir } from '../../src/lobby/gate.ts';
 import { readTriggerLine, type NativePane } from '../../src/send/native.ts';
 import { sendFrame, type SendOutcome } from '../../src/send/uds.ts';
-import { recordBody, testIo } from '../helpers.ts';
+import { recordBody, testIo, withoutUnreadHint } from '../helpers.ts';
 import { withoutSendId } from '../helpers/output.ts';
 
 const NOW = new Date('2026-10-16T04:00:00.000Z');
@@ -152,15 +152,14 @@ async function listen(sockets: string, pid: number): Promise<{ path: string; rec
 
 const owner = (root: string) => testIo(root, { kind: 'owner' });
 
-/** Files the delivery walk leaves beside a message record: the unread hint
- *  (`.unread.json`), the watch's retry record (`.pending`) and the fallback episode
- *  marker (`.fallback.json`). None of them is a message. */
-const derivative = (name: string): boolean =>
-  name === '.unread.json' || name.endsWith('.pending') || name.endsWith('.fallback.json');
+/** Files the delivery walk leaves beside a message record: the watch's retry record
+ *  (`.pending`) and the fallback episode marker (`.fallback.json`). The unread hint is
+ *  removed by `withoutUnreadHint`. None of them is a message. */
+const derivative = (name: string): boolean => name.endsWith('.pending') || name.endsWith('.fallback.json');
 
 /** The one signed record in a drop folder, with the episode marker asserted by its id. */
 function dropRecord(drops: string): string {
-  const names = readdirSync(drops);
+  const names = withoutUnreadHint(readdirSync(drops));
   const records = names.filter((name) => !derivative(name));
   expect(records.length).toBe(1);
   const id = records[0] as string;

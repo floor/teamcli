@@ -27,14 +27,9 @@ import {
 import { updateState } from '../src/state.ts';
 import { expirePendingNative } from '../src/watch/native.ts';
 import type { RetryScene } from '../src/watch/retry.ts';
-import { recordBody, testIo, wrapperPane, type TestIo } from './helpers.ts';
+import { dropNames, recordBody, testIo, wrapperPane, type TestIo } from './helpers.ts';
 import { NOW, dropDir, fake, filed, owner, scripted, world, type Fake, type World } from './send-native-fixtures.ts';
 import { withoutSendId } from './helpers/output.ts';
-
-/** Names in a drop folder apart from the unread hint. The hint is written beside a record and is not one. */
-function listed(dir: string): string[] {
-  return readdirSync(dir).filter((name) => name !== '.unread.json');
-}
 
 let cleanup: () => void = () => {};
 
@@ -471,7 +466,7 @@ test('a claude-code seat gets the native handoff: a pending record, the exact ta
   expect(host.frames).toEqual([]);
   expect(pane.typed).toEqual([]);
   const drops = join(made.dir, 'send-drops', 'acme', 'lead');
-  expect(listed(drops)).toEqual([ID]);
+  expect(dropNames(drops)).toEqual([ID]);
   expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
   // One pending record, the caller's own, at 0600 — and no history line yet.
   const path = pending(made);
@@ -924,7 +919,7 @@ test('expiry after 10m falls through to drop for a human-pane seat ([native, dro
   expect(watchPane.enters).toBe(0);
 
   const drops = dropDir(made.dir, 'lead');
-  const files = listed(drops).sort();
+  const files = dropNames(drops).sort();
   expect(files).toEqual([ID, `${ID}.pending`]);
   expect(statSync(join(drops, ID)).mode & 0o777).toBe(0o600);
   expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
@@ -1092,7 +1087,7 @@ test('confirm after expiry is refused and never causes a second delivery', async
   expect(history.ok && history.entries.length).toBe(1);
   expect(history.ok && history.entries[0]?.via).toBe('drop');
   // The drop file and its marker: a late confirm never delivers twice. The unread hint is not a message.
-  expect(listed(dropDir(made.dir, 'lead')).sort()).toEqual([ID, `${ID}.pending`]);
+  expect(dropNames(dropDir(made.dir, 'lead')).sort()).toEqual([ID, `${ID}.pending`]);
 });
 
 test('confirm inside the 10m window leaves no fallback triggered', async () => {
@@ -1116,7 +1111,7 @@ test('confirm inside the 10m window leaves no fallback triggered', async () => {
   expect(existsSync(pending(made))).toBe(true);
   // The handoff wrote its signed record; the watch's passes have written no second file.
   const drops = dropDir(made.dir, 'lead');
-  expect(listed(drops)).toEqual([ID]);
+  expect(dropNames(drops)).toEqual([ID]);
   expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
 
   // Confirm inside the window records native delivery; a subsequent watch pass past 10m sees no
@@ -1129,7 +1124,7 @@ test('confirm inside the 10m window leaves no fallback triggered', async () => {
   const pastWindow = new Date(NOW.getTime() + PENDING_NATIVE_CONFIRM_WINDOW_MS + 60_000);
   await expirePendingNative(watchScene(made, pastWindow).scene);
 
-  expect(listed(drops)).toEqual([ID]);
+  expect(dropNames(drops)).toEqual([ID]);
   expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok && history.entries).toEqual([
@@ -1172,7 +1167,7 @@ test('an expired handoff lands in the bus inbox, and its history names the refus
   expect(said.join('\n')).toContain('sent (unconfirmed) (dropped');
 
   const drops = dropDir(made.dir, 'lead');
-  expect(listed(drops).sort()).toEqual([ID, `${ID}.pending`]);
+  expect(dropNames(drops).sort()).toEqual([ID, `${ID}.pending`]);
   expect(statSync(join(drops, ID)).mode & 0o777).toBe(0o600);
   expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
   expect(JSON.parse(readFileSync(join(drops, `${ID}.pending`), 'utf8'))).toEqual({
@@ -1276,7 +1271,7 @@ test('an expired handoff writes its record, marker and history under the record\
   expect(said.join('\n')).toContain('sent (unconfirmed) (dropped');
 
   const drops = join(made.dir, 'send-drops', 'other', 'lead');
-  expect(listed(drops).sort()).toEqual([ID, `${ID}.pending`]);
+  expect(dropNames(drops).sort()).toEqual([ID, `${ID}.pending`]);
   expect(statSync(join(drops, ID)).mode & 0o777).toBe(0o600);
   expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
   expect(JSON.parse(readFileSync(join(drops, `${ID}.pending`), 'utf8'))).toMatchObject({
@@ -1342,7 +1337,7 @@ test('an expiry whose typed trigger never runs writes no receipt: the drop stays
   expect(receipt.at).toBeNull();
   expect(existsSync(join(drops, `${ID}.read.json`))).toBe(false);
   expect(said.join('\n')).toContain('sent (unconfirmed) (dropped');
-  expect(listed(drops).sort()).toEqual([ID, `${ID}.pending`]);
+  expect(dropNames(drops).sort()).toEqual([ID, `${ID}.pending`]);
   expect(statSync(join(drops, ID)).mode & 0o777).toBe(0o600);
   expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
   expect(JSON.parse(readFileSync(join(drops, `${ID}.pending`), 'utf8'))).toMatchObject({
@@ -1425,7 +1420,7 @@ test('an expired handoff whose recorded pane was replaced still writes its recor
   expect(said.join('\n')).toContain('sent (unconfirmed) (dropped');
 
   const drops = join(made.dir, 'send-drops', 'other', 'lead');
-  expect(listed(drops).sort()).toEqual([ID, `${ID}.pending`]);
+  expect(dropNames(drops).sort()).toEqual([ID, `${ID}.pending`]);
   expect(statSync(join(drops, ID)).mode & 0o777).toBe(0o600);
   expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
   expect(JSON.parse(readFileSync(join(drops, `${ID}.pending`), 'utf8'))).toMatchObject({
