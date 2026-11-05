@@ -689,7 +689,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // still ends here.
   if (delegatePane !== null) {
     const stanza = fingerprints(team).seats[built.name];
-    const inCopy = standing.kind === 'verified' ? approvedFingerprints(standing.record).seats[built.name] : undefined;
+    const inCopy = standing.kind === 'verified' ? approvedFingerprints(standing.record, sources.home).seats[built.name] : undefined;
     let admitted = built.edited === original && inCopy !== undefined && inCopy === stanza;
     // The seat a delegate adds by copy is new to the file, so the record cannot hold it: the
     // source is what is compared, hash for hash with the record's own seat, and the edit is the
@@ -698,7 +698,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // owner's.
     if (!admitted && built.copiedFrom !== undefined && standing.kind === 'verified') {
       const beside = fingerprints(team).seats[built.copiedFrom];
-      const held = approvedFingerprints(standing.record).seats[built.copiedFrom];
+      const held = approvedFingerprints(standing.record, sources.home).seats[built.copiedFrom];
       admitted = held !== undefined && held === beside && copySeat(original, built.copiedFrom, built.name) === built.edited;
     }
     if (!admitted) {

@@ -287,7 +287,7 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
     );
   } else {
     const changes = [
-      ...compare(approvedFingerprints(previous), fingerprints(team), team).map(describe),
+      ...compare(approvedFingerprints(previous, sources.home), fingerprints(team), team).map(describe),
       ...checkDrift(previous.approval.checks, resolved.checks),
       // A record that does not verify is not an approval: this one is needed whatever the diff says.
       ...(standing.kind === 'legacy' ? ['the record predates signed records'] : []),
@@ -540,7 +540,7 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
   const changed =
     (delegatedPane === undefined && grantedSeat === undefined) || previous === null
       ? undefined
-      : compare(approvedFingerprints(previous), fingerprints(team), team).map(describe).join('; ');
+      : compare(approvedFingerprints(previous, sources.home), fingerprints(team), team).map(describe).join('; ');
   if (grantedSeat !== undefined) return writeApproved(caller, undefined, changed, grantedSeat);
   return delegatedPane === undefined ? writeApproved(caller) : writeApproved(caller, delegatedPane, changed);
 }

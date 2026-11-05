@@ -74,9 +74,10 @@ const NO_LEAD = 'the file has no seat that leads: put `leads: true` on one seat'
 /**
  * The lead in force: the file's own mark or key when it names one, else the chain's default —
  * the team file's `lead:` field, the home project's `lead_seat`, the entity's `lead`, then the
- * universe's default, most specific first. A reader that knows no home or root (a validator
- * holding only the text) reads no chain: a file that names no lead is refused exactly as it was
- * before the setting existed. A level that declares a word naming no seat is refused at its own
+ * universe's default, most specific first. A reader handed the approved pin reads that seat in
+ * the chain's place, so a stored copy verifies without it. A reader that knows no home or root (a
+ * validator holding only the text) reads no chain: a file that names no lead is refused exactly
+ * as it was before the setting existed. A level that declares a word naming no seat is refused at its own
  * line, and a level that cannot be read refuses rather than falling through to a wider one: a
  * typo never silently moves the lead to someone else.
  */
@@ -87,6 +88,12 @@ export function resolveLeadField(entry: YamlEntry | undefined, ctx: Ctx): string
   if (field.kind === 'refused') return '';
   const team = valueOf<string | null>(ctx, 'lead');
   if (team !== null) return team;
+  if (ctx.leadPin !== undefined) {
+    // A stored copy is read with the seat its approval pinned. The external chain is not read
+    // again, so an edit to it shows as section drift instead of breaking the signature.
+    seatProblems(ctx.leadPin, `the approved lead "${ctx.leadPin}"`, 1, seats, ctx.broken, ctx.check);
+    return ctx.leadPin;
+  }
   if (ctx.leadHome === undefined || ctx.rootDir === undefined) {
     ctx.check.fail(1, NO_LEAD);
     return '';
