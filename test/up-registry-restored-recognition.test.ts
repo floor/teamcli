@@ -278,19 +278,22 @@ test('a restored seat is repainted from the record: both lines, nothing typed, n
 });
 
 test('a live conversation that is not the recorded one is left as it is', async () => {
+  // The proof names the conversation it saw and the one the launch ran: the doubt is that
+  // sentence, not the generic one.
+  const why = `its pane holds another conversation (ses_other; the record's launch ran ${SESSION_ID})`;
   record(RECORD);
   const dry = testIo(root, { kind: 'owner' });
   expect(await runUp(['--dry-run'], dry, sources('ses_other').sources)).toBe(0);
-  expect(dry.out).toContain(`  skip ${SEAT}: ${DOUBT}`);
+  expect(dry.out).toContain(`  skip ${SEAT}: ${why}`);
 
   const made = sources('ses_other');
   const io = testIo(root, { kind: 'owner' });
   expect(await runUp([], io, made.sources)).toBe(1);
   // The doubt is refused and held: the record says left out with the reason, the summary counts
   // the refusal, and the run exits nonzero even though nothing was touched.
-  expect(io.out).toContain(`${SEAT}: left out: ${DOUBT}\n`);
-  expect(io.err).toContain(DOUBT);
-  expect(io.err).toContain(`0 seats repaired, 0 skipped (working), 1 refused (${SEAT}: ${DOUBT})\n`);
+  expect(io.out).toContain(`${SEAT}: left out: ${why}\n`);
+  expect(io.err).toContain(why);
+  expect(io.err).toContain(`0 seats repaired, 0 skipped (working), 1 refused (${SEAT}: ${why})\n`);
   expect(touchedSeat(made.trace)).toEqual({ created: [], closed: [], typed: [] });
   // The record is not re-pointed at a conversation it cannot prove.
   expect(seatState()?.agent_session).toBeUndefined();
@@ -302,10 +305,12 @@ test('a state naming another session withholds the registry binding', async () =
   const made = sources(SESSION_ID);
   const io = testIo(root, { kind: 'owner' });
   expect(await runUp([], io, made.sources)).toBe(1);
-  // The two records disagree: neither speaks for the seat.
-  expect(io.out).toContain(`${SEAT}: left out: ${DOUBT}\n`);
-  expect(io.err).toContain(DOUBT);
-  expect(io.err).toContain(`0 seats repaired, 0 skipped (working), 1 refused (${SEAT}: ${DOUBT})\n`);
+  // The two records disagree: neither speaks for the seat, and the pane's own conversation is
+  // one the launch never named.
+  const why = `its pane holds a conversation (${SESSION_ID}) the record's launch never named`;
+  expect(io.out).toContain(`${SEAT}: left out: ${why}\n`);
+  expect(io.err).toContain(why);
+  expect(io.err).toContain(`0 seats repaired, 0 skipped (working), 1 refused (${SEAT}: ${why})\n`);
   expect(touchedSeat(made.trace)).toEqual({ created: [], closed: [], typed: [] });
   expect(seatState()?.agent_session).toBe('ses_stale');
 });
@@ -315,9 +320,12 @@ test('a record that ran another CLI is not this seat', async () => {
   const made = sources('ses_claude');
   const io = testIo(root, { kind: 'owner' });
   expect(await runUp([], io, made.sources)).toBe(1);
-  expect(io.out).toContain(`${SEAT}: left out: ${DOUBT}\n`);
-  expect(io.err).toContain(DOUBT);
-  expect(io.err).toContain(`0 seats repaired, 0 skipped (working), 1 refused (${SEAT}: ${DOUBT})\n`);
+  // The binding was written for another CLI: it binds nothing here, and the conversation the
+  // pane shows is one this launch never named.
+  const why = "its pane holds a conversation (ses_claude) the record's launch never named";
+  expect(io.out).toContain(`${SEAT}: left out: ${why}\n`);
+  expect(io.err).toContain(why);
+  expect(io.err).toContain(`0 seats repaired, 0 skipped (working), 1 refused (${SEAT}: ${why})\n`);
   expect(touchedSeat(made.trace)).toEqual({ created: [], closed: [], typed: [] });
 });
 
@@ -326,9 +334,11 @@ test('a seat herdr names on another pane is not adopted', async () => {
   const made = sources(SESSION_ID, { pane: 'w9:p1' });
   const io = testIo(root, { kind: 'owner' });
   expect(await runUp([], io, made.sources)).toBe(1);
-  expect(io.out).toContain(`${SEAT}: left out: ${DOUBT}\n`);
-  expect(io.err).toContain(DOUBT);
-  expect(io.err).toContain(`0 seats repaired, 0 skipped (working), 1 refused (${SEAT}: ${DOUBT})\n`);
+  // The host no longer lists the recorded pane: the place proof cannot be made.
+  const why = 'the terminal host does not list the pane any more; team cannot re-tie it';
+  expect(io.out).toContain(`${SEAT}: left out: ${why}\n`);
+  expect(io.err).toContain(why);
+  expect(io.err).toContain(`0 seats repaired, 0 skipped (working), 1 refused (${SEAT}: ${why})\n`);
   // The recorded workspace is not closed: the match on the pane is what would allow it.
   expect(made.trace.closed).toEqual([]);
   expect(made.trace.typed).toEqual([]);
@@ -369,8 +379,11 @@ test('a record that names no session proves nothing and is left as it is', async
   const made = sources(SESSION_ID);
   const io = testIo(root, { kind: 'owner' });
   expect(await runUp([], io, made.sources)).toBe(1);
-  expect(io.out).toContain(`${SEAT}: left out: ${DOUBT}\n`);
-  expect(io.err).toContain(DOUBT);
-  expect(io.err).toContain(`0 seats repaired, 0 skipped (working), 1 refused (${SEAT}: ${DOUBT})\n`);
+  // The record names no conversation, so the pane's own is one the launch never named: the
+  // one-sided reading is refused, never weakened to the declared CLI.
+  const why = `its pane holds a conversation (${SESSION_ID}) the record's launch never named`;
+  expect(io.out).toContain(`${SEAT}: left out: ${why}\n`);
+  expect(io.err).toContain(why);
+  expect(io.err).toContain(`0 seats repaired, 0 skipped (working), 1 refused (${SEAT}: ${why})\n`);
   expect(touchedSeat(made.trace)).toEqual({ created: [], closed: [], typed: [] });
 });

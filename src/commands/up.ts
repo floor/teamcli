@@ -69,6 +69,7 @@ import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../daemon/p
 import { inspectRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
 import { currentBriefClaim, currentBriefEpochs, deliverBriefForAttribution, GENERAL_BRIEF_SHA256, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
+import { restoreProof, relaunchWithOwnLine } from '../launch/restore-proof.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { launchRefusal, readEntityModelRule, type EntityModelRule } from '../launch/model-guard.ts';
 import { charterGate } from '../charter/check.ts';
@@ -606,6 +607,8 @@ function seatPlan(
   origin: RulesOrigin = 'file',
   /** What `team down` kept of a seat it stopped: its handle and the conversation it ran. */
   retained?: RetainedSeat,
+  /** The recorded pane's foreground argv0 names, read for the restore proof; null when unread. */
+  foregroundOf: (pane: string) => string[] | null = () => null,
 ): UpSeat {
   // After `team down` the seat has no state record, only what down retained. That is still the
   // state's half of the resume binding: without it the registry's recorded conversation was
@@ -874,11 +877,58 @@ function seatPlan(
       };
     }
   }
+  // The host restored the pane and cleared the name: the record's place still holds a process,
+  // and the proof says whether the program there is the seat's own. Adoption renames the pane
+  // back and records the identity it holds now — no launch, no typing, no close, and no
+  // `team register` call, so the root gate keeps that command the owner's walk. It never closes,
+  // so the drift reading (which decides closes) is not consulted here; the next `up` reads the
+  // seat as the record's own and handles a drift the way it always does.
+  let restoreRefusal: string | undefined;
+  if (verdict === 'replaced' && recorded.pane && recorded.workspace && recorded.launched) {
+    const proof = restoreProof({
+      seat,
+      recorded,
+      agents,
+      process: processes[seat.name] ?? null,
+      foreground: foregroundOf(recorded.pane),
+      recordedSession: continuitySession ?? undefined,
+      screen: screenOf(recorded.pane),
+    });
+    if (proof.kind === 'none') {
+      restoreRefusal = proof.why;
+    } else if (relaunchWithOwnLine(seat, recorded, proof)) {
+      // A seat whose own launch line carries what the bare restored CLI does not is never adopted
+      // in place. The seam answers false in this slice, so this holds only for a later slice's
+      // wrapper seat, which routes it through its own line instead.
+      restoreRefusal = 'its launch line carries more than its pane does; team leaves it to the relaunch';
+    } else {
+      const next = launchedIdentity(processes[seat.name] ?? null);
+      if (next) {
+        return {
+          ...planned,
+          stage: 'ready',
+          adopted: {
+            pane: recorded.pane,
+            workspace: recorded.workspace,
+            // The launch's own identity, which the execute re-reads the world against — a proof
+            // run against the identity the pane holds now would read its own adoption as `same`.
+            recordedLaunched: recorded.launched,
+            launched: next,
+            via: proof.kind,
+            sentence: proof.sentence,
+            ...(proof.kind === 'session' && continuitySession !== null ? { session: continuitySession } : {}),
+          },
+        };
+      }
+    }
+  }
   // A program is in front and the session cannot be shown. Leave the record. Do not close.
   // A working or unsent screen keeps the refusal the close used to give.
   if (continuity === 'doubt' && recorded.workspace && recorded.pane && recorded.launched) {
     const held = replacedScreenRefusal(seat, recorded.pane, screenOf, onRecordedPane?.status);
-    const refusal = held?.why;
+    // The proof's own reason replaces the generic sentence when it says something specific; a
+    // working or unsent screen keeps the refusal the close used to give.
+    const refusal = held?.why ?? restoreRefusal;
     return {
       ...planned,
       stage: recorded.stage,
@@ -1585,13 +1635,34 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       // its name" — is the run's own half-finished work, and herdr lists its agent with no name
       // (or another one) on the pane this state records. That pane is known the way the waiting
       // one is: the resume path verifies pane, process and rename before recording anything.
-      // Only `launched` qualifies — a seat at `named` or `ready` has its name, so a foreign
-      // agent on its pane is refused exactly as before, and so is any pane no record names.
+      // Only `launched` qualifies here — a seat at `named` or `ready` normally has its name, so
+      // a foreign agent on its pane is refused exactly as before. The exception is the host
+      // restore below: a launch record's pane comes back unnamed, and only the proof may decide
+      // it.
       const launchedPanes = new Set(
         Object.entries(recorded)
           .filter(([name, seat]) => seat.stage === 'launched' && seatOfFile(name, seat, declared))
           .map(([, seat]) => seat.pane)
           .filter((pane) => pane !== undefined),
+      );
+      // A host restore keeps the places and clears the names: a launch record's pane comes back
+      // with an entry the host does not name (or names with something else). That pane is still
+      // this state's own to read: `seatPlan` proves it — the recorded place, the process the
+      // launch did not leave, the declared CLI and the conversation — and adopts it only when
+      // the proof holds. A failed proof is that seat's `left out`, never a touch, so the run
+      // goes on instead of refusing the whole session for a record it can examine. A pane no
+      // launch record names still refuses exactly as before.
+      const launchRecords = Object.entries(recorded)
+        .filter(([name, seat]) => seat.stage === 'ready' && seat.pane !== undefined && seat.workspace !== undefined && seat.launched !== undefined && seat.waiting === undefined && seatOfFile(name, seat, declared));
+      const restorePanes = new Set(launchRecords.map(([, seat]) => seat.pane).filter((pane) => pane !== undefined));
+      // The workspace is part of the same reading: a restore can leave a second pane beside the
+      // seat's own in it, and the weak proof is the reading that refuses that seat when the
+      // second pane leaves no way to tell which is the seat. The pane itself is never touched.
+      const restoreWorkspaces = new Set(
+        launchRecords
+          .filter(([, seat]) => agents.some((agent) => agent.pane === seat.pane && agent.name === null))
+          .map(([, seat]) => seat.workspace)
+          .filter((workspace) => workspace !== undefined),
       );
       // A force-close — a non-owner's `remove` — leaves its seat's pane running and renames the
       // agent out of the seat's name (`<name>-left`, then `-left-2`, `-left-3`, …: remove.ts's
@@ -1604,7 +1675,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
           !(agent.name && Object.hasOwn(recorded, agent.name)) &&
           !(agent.name && leftoverName(agent.name)) &&
           !waitingPanes.has(agent.pane) &&
-          !launchedPanes.has(agent.pane),
+          !launchedPanes.has(agent.pane) &&
+          !restorePanes.has(agent.pane) &&
+          !restoreWorkspaces.has(agent.workspace),
       );
       if (unknown.length) {
         refusals.push({
@@ -1726,6 +1799,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       caller.kind === 'seat' ? caller.name : null,
       rulesOriginOf(loaded.source),
       recorded?.seats[seat.name] === undefined ? recorded?.retained_seats?.[seat.name] : undefined,
+      (pane) => sources.launch?.foreground(session, pane) ?? null,
     );
     // The granted seat's own pane is not relaunched and not closed. The skip is the whole of
     // that seat's plan, including a repair the owner's `up` would have performed.
