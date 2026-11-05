@@ -7680,6 +7680,12 @@
           "takesValue": true
         },
         {
+          "hidden": false,
+          "name": "--watch",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -7692,6 +7698,7 @@
       "subcommands": [],
       "usage": [
         "team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]",
+        "team status --project <name> --watch",
         "team status --client <grant-file> --key <client-key> [--team <team>] [--json]"
       ],
       "who": {
