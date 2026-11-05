@@ -1,6 +1,5 @@
 // Synthetic homes, messages and process ancestry only; never herdr, an owner's CLI or signals.
 import { afterAll, afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
-import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -9,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Io } from '../src/io.ts';
 import type { ServeOptions, ServeStreams } from '../src/mcp/serve.ts';
+import { discardFixtures } from './fixture-cleanup.ts';
 // HOME-sensitive modules are imported only after this file has made its own home.
 const priorHome = process.env.HOME;
 const suiteHome = realpathSync(mkdtempSync(join(tmpdir(), 'inbox-proof-home-')));
@@ -44,10 +44,10 @@ beforeEach(() => {
   });
   epoch(oldEpoch);
 });
-afterEach(() => { kills.mockRestore(); execFileSync('/usr/bin/trash', [base]); });
+afterEach(() => { kills.mockRestore(); discardFixtures([base]); });
 afterAll(() => {
   if (priorHome === undefined) delete process.env.HOME; else process.env.HOME = priorHome;
-  execFileSync('/usr/bin/trash', [suiteHome]);
+  discardFixtures([suiteHome]);
 });
 function epoch(value: string) {
   updateState(dir, state => {
