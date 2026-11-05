@@ -1,7 +1,8 @@
 // Synthetic teams, claims, folders and a fake pane host. No CLI-home reads or live launches.
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import * as fs from 'node:fs';
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readTeamConfig } from '../src/file/team-config.ts';
@@ -70,7 +71,8 @@ ${['alpha', 'beta', 'plain'].map((name) => `  - name: ${name}
   if (!loaded.ok) throw new Error('synthetic team fixture could not load');
   const input = (seat = 'alpha', epoch: string | undefined = FIRST) => ({ root, home, seat, session: SESSION, cwd: join(lobby, seat), epoch });
   const config = (seat = 'alpha') => join(lobby, seat, '.mcp.json');
-  return { base, home, root, lobby, file, claim, team: loaded.team, input, config };
+  const approval = (seat = 'alpha') => join(lobby, seat, '.claude/settings.local.json');
+  return { base, home, root, lobby, file, claim, team: loaded.team, input, config, approval };
 }
 type World = ReturnType<typeof world>;
 
@@ -101,9 +103,15 @@ function host(w: World, onRun: () => boolean = () => true) {
       calls.push('create');
       expect(cwd).toBe(join(w.lobby, 'alpha'));
       expect(entry(w).args.at(-1)).toBe(FIRST);
+      expect(JSON.parse(readFileSync(w.approval(), 'utf8')).enabledMcpjsonServers).toContain('team-inbox');
       return { pane: 'pane-alpha', workspace: 'workspace-alpha' };
     },
-    paneRun: () => { calls.push('spawn'); expect(entry(w).args.at(-1)).toBe(FIRST); return onRun(); },
+    paneRun: () => {
+      calls.push('spawn');
+      expect(entry(w).args.at(-1)).toBe(FIRST);
+      expect(JSON.parse(readFileSync(w.approval(), 'utf8')).enabledMcpjsonServers).toContain('team-inbox');
+      return onRun();
+    },
     registerInbox: () => { calls.push('register'); return null; },
     typeLine: () => false, renameAgent: () => true, closeWorkspace: () => true, stopSession: () => true,
     kill: () => true, agentPanes: () => [], classify: () => 'idle', sleep: async () => {}, now: () => 0,
@@ -178,8 +186,10 @@ describe('launch-scoped channel config', () => {
     const w = world();
     const first = prepare(w);
     const saved = readFileSync(w.config(), 'utf8');
+    const approval = readFileSync(w.approval(), 'utf8');
     expect(prepareChannelConfig(w.input()).ok).toBe(false);
     expect(readFileSync(w.config(), 'utf8')).toBe(saved);
+    expect(readFileSync(w.approval(), 'utf8')).toBe(approval);
     expect(existsSync(join(w.lobby, 'alpha/.team-channel.lock'))).toBe(true);
     first.release();
     prepare(w).release();
@@ -200,6 +210,7 @@ describe('launch-scoped channel config', () => {
     const w = world();
     const lease = prepare(w);
     const saved = readFileSync(w.config(), 'utf8');
+    const approval = readFileSync(w.approval(), 'utf8');
     const script = `import { prepareChannelConfig } from ${JSON.stringify(join(import.meta.dir, '../src/mcp/launch-config.ts'))};
       const read = prepareChannelConfig(${JSON.stringify(w.input())});
       if (read.ok) read.lease.release();
@@ -207,6 +218,7 @@ describe('launch-scoped channel config', () => {
     const other = spawnSync(process.execPath, ['--eval', script], { encoding: 'utf8' });
     expect(other.status).toBe(3);
     expect(readFileSync(w.config(), 'utf8')).toBe(saved);
+    expect(readFileSync(w.approval(), 'utf8')).toBe(approval);
     lease.check();
     lease.release();
   });
@@ -286,6 +298,158 @@ describe('launch-scoped channel config', () => {
     expect(code).toBe(2);
     expect(io.err).toContain('not the seat\'s current launch epoch');
     expect(existsSync(join(w.root, '.agents/send-drops', SESSION, 'alpha/listener.json'))).toBe(false);
+  });
+});
+
+describe('named project channel approval', () => {
+  function settings(w: World, text: string) {
+    mkdirSync(join(w.lobby, 'alpha'), { mode: 0o700 });
+    mkdirSync(join(w.lobby, 'alpha/.claude'), { mode: 0o755 });
+    writeFileSync(w.approval(), text);
+  }
+
+  test('fresh isolated folders approve only the named server without private settings metadata', () => {
+    const w = world();
+    for (const seat of ['alpha', 'beta']) {
+      prepare(w, seat).release();
+      expect(JSON.parse(readFileSync(w.approval(seat), 'utf8'))).toEqual({ enabledMcpjsonServers: ['team-inbox'] });
+      expect(statSync(w.approval(seat)).mode & 0o777).toBe(0o600);
+    }
+    expect(existsSync(join(w.lobby, '.claude'))).toBe(false);
+    expect(existsSync(join(w.lobby, 'plain'))).toBe(false);
+    expect(existsSync(join(w.home, '.claude'))).toBe(false);
+  });
+
+  for (const broad of [undefined, false, true]) {
+    test(`preserves existing settings and names without changing an existing ${String(broad)} approval switch`, () => {
+      const w = world();
+      const original = { enabledMcpjsonServers: ['other', 'another'], disabledMcpjsonServers: ['rejected'],
+        disabledMcpServers: ['unavailable'], nested: { keep: ['value'] }, enableAllProjectMcpServers: broad };
+      settings(w, JSON.stringify(original));
+      const mode = statSync(join(w.lobby, 'alpha/.claude')).mode;
+      prepare(w).release();
+      expect(JSON.parse(readFileSync(w.approval(), 'utf8'))).toEqual({ ...JSON.parse(JSON.stringify(original)),
+        enabledMcpjsonServers: ['other', 'another', 'team-inbox'] });
+      expect(statSync(join(w.lobby, 'alpha/.claude')).mode).toBe(mode);
+      const saved = readFileSync(w.approval(), 'utf8');
+      const inode = statSync(w.approval()).ino;
+      w.claim(NEXT);
+      prepare(w, 'alpha', NEXT).release();
+      expect(readFileSync(w.approval(), 'utf8')).toBe(saved);
+      expect(statSync(w.approval()).ino).toBe(inode);
+      expect(entry(w).args.at(-1)).toBe(NEXT);
+    });
+  }
+
+  test('already-approved settings retain their exact bytes and existing duplicate names', () => {
+    const w = world();
+    const saved = '{ "enabledMcpjsonServers": ["team-inbox", "other", "team-inbox"], "keep": true }\n';
+    settings(w, saved);
+    prepare(w).release();
+    expect(readFileSync(w.approval(), 'utf8')).toBe(saved);
+  });
+
+  for (const text of ['{', '[]', 'null', '{"enabledMcpjsonServers":true}', '{"enabledMcpjsonServers":[3]}',
+    '{"disabledMcpjsonServers":null}', '{"disabledMcpServers":{}}', '{"enableAllProjectMcpServers":"yes"}',
+    '{"enabledMcpjsonServers":["team-inbox"],"disabledMcpjsonServers":["team-inbox"]}',
+    '{"disabledMcpServers":["team-inbox"]}']) {
+    test(`refuses invalid or denied local settings unchanged: ${text}`, async () => {
+      const w = world();
+      settings(w, text);
+      writeFileSync(w.config(), '{"keep":"unchanged"}');
+      const h = host(w);
+      const report = await executePlan(plan(w).filter((step) => step.do?.do === 'create' || step.do?.do === 'launch'), SESSION, h.fake);
+      expect(report.dropped).toEqual(['alpha']);
+      expect(h.calls).toEqual([]);
+      expect(readFileSync(w.approval(), 'utf8')).toBe(text);
+      expect(readFileSync(w.config(), 'utf8')).toBe('{"keep":"unchanged"}');
+      expect(existsSync(join(w.lobby, 'alpha/.team-channel.lock'))).toBe(false);
+    });
+  }
+
+  for (const shape of ['folder-link', 'dangling-folder-link', 'folder-file', 'settings-link', 'settings-hardlink']) {
+    test(`refuses unsafe approval path ${shape} without changing unrelated data`, () => {
+      const w = world();
+      mkdirSync(join(w.lobby, 'alpha'), { mode: 0o700 });
+      const elsewhere = join(w.base, 'unrelated');
+      mkdirSync(elsewhere, { mode: 0o700 });
+      const marker = join(elsewhere, 'settings.local.json');
+      writeFileSync(marker, '{"keep":true}');
+      const folder = join(w.lobby, 'alpha/.claude');
+      if (shape === 'folder-link') symlinkSync(elsewhere, folder);
+      else if (shape === 'dangling-folder-link') symlinkSync(join(w.base, 'absent'), folder);
+      else if (shape === 'folder-file') writeFileSync(folder, 'keep');
+      else {
+        mkdirSync(folder, { mode: 0o700 });
+        if (shape === 'settings-link') symlinkSync(marker, w.approval());
+        else linkSync(marker, w.approval());
+      }
+      expect(prepareChannelConfig(w.input()).ok).toBe(false);
+      expect(existsSync(w.config())).toBe(false);
+      expect(readFileSync(marker, 'utf8')).toBe('{"keep":true}');
+    });
+  }
+
+  for (const unsafe of ['foreign-folder', 'foreign-file', 'writable-folder', 'special-folder']) {
+    test(`synthetic metadata refuses ${unsafe} before publishing either file`, () => {
+      const w = world();
+      settings(w, '{"keep":true}');
+      const target = unsafe === 'foreign-file' ? w.approval() : join(w.lobby, 'alpha/.claude');
+      const original = fs.lstatSync;
+      const metadata = spyOn(fs, 'lstatSync').mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => {
+        const actual = Reflect.apply(original, fs, args);
+        if (args[0] !== target) return actual;
+        return Object.assign(Object.create(actual), unsafe.startsWith('foreign-')
+          ? { uid: (process.getuid?.() ?? 0) + 1 }
+          : { mode: actual.mode | (unsafe === 'writable-folder' ? 0o022 : 0o2000) });
+      }) as never);
+      try {
+        expect(prepareChannelConfig(w.input()).ok).toBe(false);
+        expect(existsSync(w.config())).toBe(false);
+        expect(readFileSync(w.approval(), 'utf8')).toBe('{"keep":true}');
+      } finally { metadata.mockRestore(); }
+    });
+  }
+
+  for (const change of ['edit', 'replace', 'parent']) {
+    test(`a settings ${change} revokes the two-file lease without deleting the changed data`, () => {
+      const w = world();
+      const lease = prepare(w);
+      const mcp = readFileSync(w.config(), 'utf8');
+      if (change === 'replace') renameSync(w.approval(), `${w.approval()}.old`);
+      if (change === 'parent') {
+        renameSync(join(w.lobby, 'alpha/.claude'), join(w.lobby, 'alpha/.claude-old'));
+        mkdirSync(join(w.lobby, 'alpha/.claude'), { mode: 0o700 });
+      }
+      writeFileSync(w.approval(), '{"keep":"changed"}');
+      expect(() => lease.check()).toThrow();
+      lease.release();
+      expect(readFileSync(w.approval(), 'utf8')).toBe('{"keep":"changed"}');
+      expect(readFileSync(w.config(), 'utf8')).toBe(mcp);
+      expect(existsSync(join(w.lobby, 'alpha/.team-channel.lock'))).toBe(false);
+    });
+  }
+
+  test('a failed second publication never creates a workspace and leaves only bounded files', async () => {
+    const w = world();
+    const h = host(w);
+    const rename = fs.renameSync;
+    let rejected = 0;
+    const fail = spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (to === w.approval()) { rejected += 1; throw new Error('synthetic second-write failure'); }
+      return rename(from, to);
+    });
+    try {
+      const report = await executePlan(plan(w).filter((step) => step.do?.do === 'create' || step.do?.do === 'launch'), SESSION, h.fake);
+      expect(rejected).toBe(1);
+      expect(report.dropped).toEqual(['alpha']);
+      expect(h.calls).toEqual([]);
+      expect(entry(w).args.at(-1)).toBe(FIRST);
+      expect(existsSync(w.approval())).toBe(false);
+      expect(readdirSync(join(w.lobby, 'alpha/.claude'))).toEqual([]);
+      expect(existsSync(join(w.lobby, 'alpha/.team-channel.lock'))).toBe(false);
+    } finally { fail.mockRestore(); }
+    prepare(w).release();
   });
 });
 
@@ -379,8 +543,22 @@ describe('claim, config, create and spawn ordering', () => {
     expect(report.dropped).toEqual(['alpha']);
     expect(readFileSync(keep, 'utf8')).toBe('keep');
     expect(JSON.parse(readFileSync(w.config(), 'utf8')).unrelated).toBe(true);
+    expect(JSON.parse(readFileSync(w.approval(), 'utf8'))).toEqual({ enabledMcpjsonServers: ['team-inbox'] });
     expect(existsSync(join(w.lobby, 'alpha/.team-channel.lock'))).toBe(false);
   });
+
+  for (const path of ['config', 'approval'] as const) {
+    test(`a ${path} edit during registration prevents spawn with an unverified pair`, async () => {
+      const w = world();
+      const h = host(w);
+      h.fake.registerInbox = () => { h.calls.push('register'); writeFileSync(w[path](), '{"keep":"edited"}'); return null; };
+      const report = await executePlan(plan(w).filter((step) => step.do?.do === 'create' || step.do?.do === 'launch'), SESSION, h.fake);
+      expect(report.dropped).toEqual(['alpha']);
+      expect(h.calls).toEqual(['create', 'register']);
+      expect(readFileSync(w[path](), 'utf8')).toBe('{"keep":"edited"}');
+      expect(existsSync(join(w.lobby, 'alpha/.team-channel.lock'))).toBe(false);
+    });
+  }
 
   test('config conflict or failed workspace creation never spawns', async () => {
     const w = world();

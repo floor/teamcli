@@ -38,13 +38,63 @@ function absent(error: unknown): boolean { return (error as NodeJS.ErrnoExceptio
 function present(path: string): Seen | null {
   try { return lstatSync(path); } catch (error) { if (absent(error)) return null; throw error; }
 }
-function directory(path: string): Seen {
+function directory(path: string, privateMode = true): Seen {
   const stat = lstatSync(path);
-  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid?.() || (stat.mode & 0o7777) !== 0o700) {
-    throw new ConfigRefusal('the channel folder must be an owned real directory with mode 0700');
+  const mode = stat.mode & 0o7777;
+  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid?.()
+    || (privateMode ? mode !== 0o700 : (mode & 0o700) !== 0o700 || (mode & 0o7022) !== 0)) {
+    throw new ConfigRefusal('the channel folder must be an owned real directory with safe permissions');
   }
   if (realpathSync(path) !== resolve(path)) throw new ConfigRefusal('the channel folder resolves through a symbolic link');
   return stat;
+}
+
+/** A snapshot of one owned project JSON file. Both snapshots are validated before publishing
+ *  either member of the pair; their exact bytes and identities are then bound to the lease. */
+function configDocument(path: string) {
+  const previous = present(path);
+  const bytes = (expected: Seen): string => {
+    const now = lstatSync(path);
+    if (!now.isFile() || now.isSymbolicLink() || now.uid !== process.getuid?.() || now.nlink !== 1 || !same(now, expected)) {
+      throw new ConfigRefusal('the channel configuration is not the same owned regular file');
+    }
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      if (!same(fstatSync(fd), expected)) throw new ConfigRefusal('the channel configuration changed before it could be read');
+      return readFileSync(fd, 'utf8');
+    } finally { closeSync(fd); }
+  };
+  const before = previous === null ? undefined : bytes(previous);
+  const parsed: unknown = before === undefined ? {} : JSON.parse(before);
+  if (!object(parsed)) throw new ConfigRefusal('the channel configuration must hold a JSON object');
+  return { path, before, value: parsed,
+    unchanged: (): boolean => previous === null ? present(path) === null : bytes(previous) === before,
+    bind: (text: string): (() => boolean) => {
+      const published = lstatSync(path);
+      return () => bytes(published) === text;
+    },
+  };
+}
+
+/** Only the documented named approval is added. Existing data, other names and rejection
+ *  lists stay intact; an explicit local rejection is a refusal, never something to erase. */
+function approveChannel(settings: ObjectMap): ObjectMap {
+  const names = (key: string): string[] => {
+    const value = settings[key];
+    if (value === undefined) return [];
+    if (!Array.isArray(value) || value.some((name) => typeof name !== 'string')) {
+      throw new ConfigRefusal('the local channel approval lists must be arrays of server names');
+    }
+    return value as string[];
+  };
+  const enabled = names('enabledMcpjsonServers');
+  if (names('disabledMcpjsonServers').includes(CHANNEL_SERVER) || names('disabledMcpServers').includes(CHANNEL_SERVER)) {
+    throw new ConfigRefusal('the local settings explicitly reject the channel server');
+  }
+  if (settings.enableAllProjectMcpServers !== undefined && typeof settings.enableAllProjectMcpServers !== 'boolean') {
+    throw new ConfigRefusal('the existing project-server approval switch is malformed');
+  }
+  return enabled.includes(CHANNEL_SERVER) ? settings : { ...settings, enabledMcpjsonServers: [...enabled, CHANNEL_SERVER] };
 }
 
 const OWNER_ENV = 'TEAMCLI_CHANNEL_SCOPE';
@@ -106,12 +156,16 @@ export function prepareChannelConfig(input: ChannelLaunchScope & { seat: string;
     mkdirSync(lock, { mode: 0o700 }); // no stale recovery or foreign lock removal
     const lockSeen = directory(lock);
     let held = true;
-    let configMatches: (() => boolean) | undefined;
+    const configMatches: Array<() => boolean> = [];
+    let settingsFolder: { path: string; seen: Seen } | undefined;
     const check = (): void => {
       if (!held || !same(directory(lobby), lobbySeen) || !same(directory(folder), folderSeen)
         || !same(directory(lock), lockSeen)) throw new ConfigRefusal('the channel config claim or folder changed');
       claimMatches();
-      if (configMatches !== undefined && !configMatches()) throw new ConfigRefusal('the prepared channel config changed before launch');
+      if (settingsFolder !== undefined && !same(directory(settingsFolder.path, false), settingsFolder.seen)) {
+        throw new ConfigRefusal('the channel approval folder changed before launch');
+      }
+      if (configMatches.some((matches) => !matches())) throw new ConfigRefusal('the prepared channel config changed before launch');
     };
     release = (): void => {
       if (!held) return;
@@ -124,23 +178,8 @@ export function prepareChannelConfig(input: ChannelLaunchScope & { seat: string;
       } catch { /* retain an unproven lock */ }
     };
     check();
-    const path = join(folder, '.mcp.json');
-    const previous = present(path);
-    let existing: ObjectMap = {};
-    let before: string | undefined;
-    if (previous !== null) {
-      if (!previous.isFile() || previous.isSymbolicLink() || previous.uid !== process.getuid?.() || previous.nlink !== 1) {
-        throw new ConfigRefusal('the channel project config is not an owned regular file');
-      }
-      const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-      try {
-        if (!same(fstatSync(fd), previous)) throw new ConfigRefusal('the channel config changed before it could be read');
-        before = readFileSync(fd, 'utf8');
-      } finally { closeSync(fd); }
-      const parsed: unknown = JSON.parse(before);
-      if (!object(parsed)) throw new ConfigRefusal('the channel project config is not a JSON object');
-      existing = parsed;
-    }
+    const mcp = configDocument(join(folder, '.mcp.json'));
+    const existing = mcp.value;
     const servers = existing.mcpServers === undefined ? {} : existing.mcpServers;
     if (!object(servers)) throw new ConfigRefusal('the channel project config has invalid mcpServers');
     const owner = JSON.stringify({ v: 1, team: teamIdOf(loaded.root), seat: input.seat, session: input.session });
@@ -152,38 +191,41 @@ export function prepareChannelConfig(input: ChannelLaunchScope & { seat: string;
       args: [runner.entry, ...inboxServeArgs(input.seat, input.session, undefined, epoch)],
       env: { [OWNER_ENV]: owner } };
     const text = `${JSON.stringify({ ...existing, mcpServers: { ...servers, [CHANNEL_SERVER]: entry } }, null, 2)}\n`;
-    const unchanged = (): boolean => {
-      const now = present(path);
-      if (previous === null) return now === null;
-      if (now === null || !same(now, previous) || !now.isFile() || now.isSymbolicLink()) return false;
-      const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-      try { return same(fstatSync(fd), previous) && readFileSync(fd, 'utf8') === before; }
-      finally { closeSync(fd); }
-    };
-    if (before !== text) {
-      const temp = join(folder, `.mcp.${randomBytes(12).toString('hex')}.tmp`);
+    const approvalDir = join(folder, '.claude');
+    check();
+    try { mkdirSync(approvalDir, { mode: 0o700 }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+    settingsFolder = { path: approvalDir, seen: directory(approvalDir, false) };
+    const approval = configDocument(join(approvalDir, 'settings.local.json'));
+    const approved = approveChannel(approval.value);
+    const approvalText = approved === approval.value ? approval.before! : `${JSON.stringify(approved, null, 2)}\n`;
+    const documents = [{ doc: mcp, text }, { doc: approval, text: approvalText }];
+    for (let index = 0; index < documents.length; index += 1) {
+      const next = documents[index]!;
+      const pendingUnchanged = (): boolean => documents.slice(index).every(({ doc }) => doc.unchanged());
       check();
+      if (!pendingUnchanged()) throw new ConfigRefusal('the channel configuration pair changed during preparation');
+      if (next.doc.before === next.text) {
+        configMatches.push(next.doc.bind(next.text));
+        continue;
+      }
+      const parent = dirname(next.doc.path);
+      const parentSeen = parent === folder ? folderSeen : settingsFolder.seen;
+      const temp = join(parent, `.team-channel.${randomBytes(12).toString('hex')}.tmp`);
       const fd = openSync(temp, 'wx', 0o600);
       const tempSeen = fstatSync(fd);
       cleanTemp = () => {
         const now = present(temp);
-        if (now !== null && same(now, tempSeen) && same(directory(lobby), lobbySeen)
-          && same(directory(folder), folderSeen)) unlinkSync(temp);
+        if (held && now !== null && same(now, tempSeen) && same(directory(lobby), lobbySeen)
+          && same(directory(folder), folderSeen) && same(directory(lock), lockSeen)
+          && same(directory(parent, parent === folder), parentSeen)) unlinkSync(temp);
       };
-      try { writeFileSync(fd, text); fsyncSync(fd); } finally { closeSync(fd); }
+      try { writeFileSync(fd, next.text); fsyncSync(fd); } finally { closeSync(fd); }
       check();
-      if (!unchanged()) throw new ConfigRefusal('the channel project config changed during preparation');
-      renameSync(temp, path);
+      if (!pendingUnchanged()) throw new ConfigRefusal('the channel configuration pair changed during preparation');
+      renameSync(temp, next.doc.path);
       cleanTemp = undefined;
+      configMatches.push(next.doc.bind(next.text));
     }
-    const published = lstatSync(path);
-    configMatches = () => {
-      const now = present(path);
-      if (now === null || !now.isFile() || now.isSymbolicLink() || !same(now, published) || now.nlink !== 1) return false;
-      const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-      try { return same(fstatSync(fd), published) && readFileSync(fd, 'utf8') === text; }
-      finally { closeSync(fd); }
-    };
     check();
     return { ok: true, lease: { check, release } };
   } catch (error) {

@@ -30,6 +30,14 @@ the launching install's runner and entry script, `--seat`, `--session` and the e
 It resolves the team through the registry, without a shared lobby config or a team-file guess
 from its starting folder. A relaunch updates only the generated entry; an unowned entry with
 that name is refused. Starting an old config after a new claim still fails the epoch guard.
+The same exclusive launch lease prepares `.claude/settings.local.json` in that seat folder,
+adding only `team-inbox` to `enabledMcpjsonServers`. Existing names and unrelated settings stay;
+no approve-all switch is added or changed. Malformed settings, explicit local rejection of
+`team-inbox`, unsafe paths or a changed file refuse launch. Both files are rechecked before
+spawn. A failed preparation can leave a bounded config but never starts an unverified pair.
+[Claude's named project approvals](https://code.claude.com/docs/en/settings-reference#enabledmcpjsonservers)
+still depend on [workspace trust](https://code.claude.com/docs/en/mcp#project-server-approvals-and-workspace-trust);
+TeamCLI's lobby record does not establish Claude's trust, and this flow changes no trust store.
 The listener's optional `epoch` records only its validated explicit startup argument. It stays
 at that value if the claim later changes; older or unbound markers may omit it. This unsigned
 metadata supports read-only inspection and grants no permission or replacement launch binding.

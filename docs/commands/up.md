@@ -12,9 +12,12 @@ it is — and it does not count as short of ready.
 A Claude seat whose launch enables the `team-inbox` development channel starts in its own
 `<lobby>/<seat>/` folder, including a lead seat. The lobby must already be registered and trusted.
 After the launch claim exists and before workspace creation and Claude startup, TeamCLI writes
-that folder's `.mcp.json` with the exact claimed epoch. It preserves other server entries and
-keys, refuses conflicting or unsafe config paths, and makes no new CLI trust entry. A failed
-start leaves the bounded config for the next launch and releases only its own config claim.
+that folder's `.mcp.json` with the exact claimed epoch and adds the named `team-inbox` approval
+to `.claude/settings.local.json`. It preserves other server entries, enabled names and settings,
+refuses malformed settings, explicit local rejection and unsafe or changed paths, and rechecks
+both files under the same exclusive lease before spawn. It adds no approve-all switch or CLI
+trust entry; Claude's workspace trust remains a separate condition. A failed start leaves the
+bounded config for the next launch and releases only its own config claim.
 
 The watch is read against both records: the watch the session's state carries and the hosted watch
 the machine daemon records for this route. A hosted watch that is not standing by is already
