@@ -58,7 +58,7 @@ import {
 } from '../store/keys.ts';
 import {
   fileStatStamp,
-  isRead,
+  isReadOrCleared,
   keyPrintForCache,
   recordAuthOfSealed,
   recordFile,
@@ -308,7 +308,7 @@ function candidates(root: string, session: string): Candidate[] {
  *  watch does not ring for a message that was already answered. */
 function recordReadHeld(candidate: Candidate, root: string, session: string, key: KeyObject): boolean {
   const context = { to: candidate.seat, root, session: candidate.session ?? session };
-  return isRead(recordDir(root, context.session, candidate.seat), candidate.id, context, key);
+  return isReadOrCleared(recordDir(root, context.session, candidate.seat), candidate.id, context, key);
 }
 
 const UNACKED_STAMP_CACHE_LIMIT = 4096;

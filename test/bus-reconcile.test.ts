@@ -10,7 +10,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { appendHistory } from '../src/send/history.ts';
 import { dropMessage } from '../src/send/native.ts';
 import { markPending } from '../src/send/pending.ts';
-import { signRecord, type RecordPayload } from '../src/send/record.ts';
+import { signReceiptPayload, signRecord, type RecordPayload } from '../src/send/record.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { messageKeyOf, RECEIPT_DOMAIN, signDomain } from '../src/store/keys.ts';
 
@@ -191,6 +191,56 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
       .filter((record) => record.payload.kind === 'message.arrived')
       .map((record) => record.payload.record_id);
     expect(arrived).toEqual(['drop-9']);
+  });
+
+  test('a lead-ack receipt is raised as cleared by its writer, never as the seat\'s own read', () => {
+    const { root, home } = makeScratch();
+    const seatDir = join(root, '.agents', 'send-drops', 'acme', 'worker-1');
+    mkdirSync(seatDir, { recursive: true });
+    dropRecord({ root, home }, 'worker-1', 'drop-9');
+    dropRecord({ root, home }, 'worker-1', 'drop-10');
+    // The two receipts have the same name shape and signature; only the lead's names who cleared.
+    const cleared = signReceiptPayload({
+      kind: 'receipt',
+      status: 'read',
+      id: 'drop-9',
+      to: 'worker-1',
+      root,
+      session: 'acme',
+      at: '2026-10-18T12:05:00.000Z',
+      read_by: 'lead-ack:clerk',
+    }, home);
+    writeFileSync(join(seatDir, 'drop-9.read.json'), `${JSON.stringify(cleared, null, 2)}\n`);
+    const plain = signReceiptPayload({
+      kind: 'receipt',
+      status: 'read',
+      id: 'drop-10',
+      to: 'worker-1',
+      root,
+      session: 'acme',
+      at: '2026-10-18T12:06:00.000Z',
+    }, home);
+    writeFileSync(join(seatDir, 'drop-10.read.json'), `${JSON.stringify(plain, null, 2)}\n`);
+
+    const pass = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      now: new Date('2026-10-18T12:10:00.000Z'),
+    });
+    expect(pass.ok).toBe(true);
+    if (!pass.ok) return;
+    const reads = pass.raised.filter((record) => record.payload.kind === 'message.read');
+    const byId = (id: string) => reads.find((record) => record.payload.record_id === id);
+    // The lead's receipt is a clearance, and the step says who wrote it. It is still not the
+    // seat's read, so no `delivered (read)` consequence follows from it anywhere.
+    expect(byId('drop-9:read')?.payload.outcome).toBe('cleared by clerk');
+    expect(byId('drop-9:read')?.payload.reason).toBe('cleared by clerk');
+    // A receipt without `read_by` is the ordinary read it always was, with no clearance note.
+    expect(byId('drop-10:read')).toBeDefined();
+    expect(byId('drop-10:read')?.payload.outcome).toBeUndefined();
+    expect(byId('drop-10:read')?.payload.reason).toBeUndefined();
   });
 
   test('a pass verifies the whole log once, then only the events appended since its last read', () => {

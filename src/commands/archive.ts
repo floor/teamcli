@@ -19,7 +19,7 @@ import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { ensureFoldersBelow } from '../send/history.ts';
-import { manifestPath, moveFamily, parseDuration, scanArchiveSeat, scanLegacySeat, writeManifest, type MovedFile } from '../send/message-archive.ts';
+import { manifestPath, moveFamily, parseDuration, scanArchiveSeat, scanLegacySeat, seatClearTargetStatus, writeManifest, type MovedFile } from '../send/message-archive.ts';
 import { STATE_FILE } from '../state.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { storePath, storesFolder } from '../store/store.ts';
@@ -383,7 +383,13 @@ async function runScopedArchive(
   const window = args.values['older-than'];
   if (seat === undefined) return invocation(io, '--older-than needs --seat <seat>');
   if (window === undefined) return invocation(io, '--seat needs --older-than <dur>');
-  if (!team.seats.some((member) => member.name === seat)) return invocation(io, `"${seat}" is not a seat of this team`);
+  // A retired seat is still a seat while its folder remembers it; a running one is refused below,
+  // after the caller is admitted, so the refusal never tells a stranger what the seat is doing.
+  const target = seatClearTargetStatus({ agents, session, seat, seats: team.seats });
+  if (target.kind === 'unknown') return invocation(io, `"${seat}" is not a seat of this team`);
+  if (target.kind === 'unreadable') {
+    return invocation(io, `the team state cannot be read, so "${seat}" cannot be known to have stopped: ${target.reason}`);
+  }
   const olderThanMs = parseDuration(window);
   if (olderThanMs === null) return invocation(io, `"${window}" is not a duration; write 90m, 12h or 7d`);
 
@@ -396,6 +402,9 @@ async function runScopedArchive(
       io,
       `only the owner or a seat this team marks \`leads\` moves another seat's messages; this call is ${describeCaller(judged.caller)}`,
     );
+  }
+  if (target.kind === 'running') {
+    return scopedRefused(io, `seat ${seat} is running; stop or retire ${seat} before moving its messages`);
   }
   const keyState = messageKeyState(home);
   if (keyState.kind !== 'key') return scopedRefused(io, 'no message key; nothing was moved');

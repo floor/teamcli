@@ -45,6 +45,7 @@ import { markOrphanedSeats } from '../registry/sync.ts';
 import { machineSettingsPath } from '../settings/declared.ts';
 import { HISTORY_KEPT, readHistorySteps, type HistoryEntry } from '../send/history.ts';
 import type { PendingDrop } from '../send/pending.ts';
+import { leadAckActorOf } from '../send/record.ts';
 import { readState } from '../state.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { compareSeatNames } from '../seat-names.ts';
@@ -145,7 +146,14 @@ export type ReconcileStats = {
 type DropEntry =
   | { kind: 'drop'; verified: true; event: EventAppendInput }
   | { kind: 'drop'; verified: false };
-type ReceiptEntry = { kind: 'receipt'; receipt: 'delivered' | 'read' | 'replied'; id: string; at: string };
+type ReceiptEntry = {
+  kind: 'receipt';
+  receipt: 'delivered' | 'read' | 'replied';
+  id: string;
+  at: string;
+  /** The lead or owner a lead-ack read receipt names: the step is a clearance, not a seat read. */
+  clearedBy?: string;
+};
 type PendingEntry = { kind: 'pending'; drop: PendingDrop | null };
 type MessageEntry = {
   kind: 'message';
@@ -321,6 +329,25 @@ function receiptOf(file: string): { receipt: 'delivered' | 'read' | 'replied'; i
     }
   }
   return null;
+}
+
+/** The actor a lead-ack read receipt names, when the file carries one: the one note the receipt
+ *  scan takes from a receipt's bytes, since the step must never present a clearance as a read.
+ *  The name still decides that a receipt was raised — as it always has — so an unreadable or
+ *  forged file raises the same step, only without the note. */
+function leadAckActorAt(path: string): string | null {
+  if (!path.endsWith('.read.json')) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const payload = (parsed as { payload?: unknown }).payload;
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const readBy = (payload as { read_by?: unknown }).read_by;
+  return typeof readBy === 'string' ? leadAckActorOf(readBy) : null;
 }
 
 function fileStampOf(path: string): { stamp: string; mtimeIso: string; size: number } | null {
@@ -895,7 +922,14 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
             yield;
             continue;
           }
-          entry = { kind: 'receipt', receipt: receipt.receipt, id: receipt.id, at: fresh.mtimeIso };
+          const clearedBy = receipt.receipt === 'read' ? leadAckActorAt(fullPath) : null;
+          entry = {
+            kind: 'receipt',
+            receipt: receipt.receipt,
+            id: receipt.id,
+            at: fresh.mtimeIso,
+            ...(clearedBy === null ? {} : { clearedBy }),
+          };
           storeEntry(state, seatDir, file, fresh.stamp, entry);
         } else {
           stats.filesReused += 1;
@@ -908,6 +942,12 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
           record_id: `${entry.id}:${entry.receipt}`,
           to: seat,
           ...(from !== undefined ? { from } : {}),
+          // A lead's clearance is the message.read step with what it actually was written into
+          // it: the trace and the feed read the outcome, never a `delivered (read)` the seat
+          // never earned.
+          ...(entry.clearedBy === undefined
+            ? {}
+            : { outcome: `cleared by ${entry.clearedBy}`, reason: `cleared by ${entry.clearedBy}` }),
         });
         yield;
       }

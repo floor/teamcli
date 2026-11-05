@@ -50,7 +50,7 @@ import {
   writeJsonError,
 } from '../output/index.ts';
 import { namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
-import { fileStatStamp, isRead, keyPrintForCache, signedRecordOf, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
+import { fileStatStamp, isReadOrCleared, keyPrintForCache, signedRecordOf, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
 
 export const USAGE = `Usage: team drops [--follow] [--json]
@@ -311,7 +311,7 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
     // delivery does not count for this one.
     const binding = claim !== null && name === claim.id ? briefBindingOf(claim) : undefined;
     const hasReceiptFile = nameSet.has(`${name}.read.json`) || nameSet.has(`${name}.replied.json`);
-    if (key !== undefined && context !== undefined && hasReceiptFile && isRead(dropDir, name, context, key, binding)) continue;
+    if (key !== undefined && context !== undefined && hasReceiptFile && isReadOrCleared(dropDir, name, context, key, binding)) continue;
     const stamp = fileStatStamp(path);
     let from: string | null = null;
     let fromId: string | null = null;

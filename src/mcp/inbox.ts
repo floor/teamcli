@@ -37,7 +37,9 @@ import { readState } from '../state.ts';
 import {
   fileStatStamp,
   isRead,
+  isReadOrCleared,
   keyPrintForCache,
+  leadAckReceiptAt,
   readRecord,
   readSealedRecord,
   receiptFile,
@@ -496,7 +498,8 @@ export function listUnread(
     if (heldAt(at).kind !== 'file') continue;
     const binding = claim !== null && name === claim.id ? briefBindingOf(claim) : undefined;
     const hasReceiptFile = nameSet.has(`${name}.read.json`) || nameSet.has(`${name}.replied.json`);
-    if (key.kind === 'key' && hasReceiptFile && isRead(dropDir, name, context, key.key, binding)) continue;
+    // A message a lead cleared is settled exactly as one the seat read: it is not waiting mail.
+    if (key.kind === 'key' && hasReceiptFile && isReadOrCleared(dropDir, name, context, key.key, binding)) continue;
     const payload = readRecordAt === null ? null : readRecordAt(at, name);
     if (payload !== null && supersededBrief(payload, name, context, claim)) continue;
     let size = 0;
@@ -716,6 +719,10 @@ export function readMessage(
   // the signed receipt with `link`; exactly one wins, and only the winner returns the body.
   const context: StatusContext = { to: target.seat, root: target.root, session: target.session };
   const receiptHeldNow = (): boolean => isRead(target.dropDir, id, context, key.key, binding);
+  // A lead's clearance holds the one read name without being the seat's read: the id is served
+  // and no body follows. A brief's own delivery never takes this path — only a seat reads it.
+  const clearedNow = (): boolean =>
+    binding === undefined && leadAckReceiptAt(target.dropDir, id, context, key.key) !== null;
   const alreadyServed = (): InboxRead => ({
     ok: false,
     reason: `message ${JSON.stringify(id)} was already served in this inbox`,
@@ -731,7 +738,7 @@ export function readMessage(
   });
   if (receiptHeldNow()) return alreadyServed();
   const atRead = heldAt(readName);
-  if (atRead.kind === 'file') return receiptHeldNow() ? alreadyServed() : occupied();
+  if (atRead.kind === 'file') return receiptHeldNow() ? alreadyServed() : clearedNow() ? alreadyServed() : occupied();
   if (atRead.kind !== 'missing') {
     return { ok: false, reason: 'the receipt path is held by something that is not a file' };
   }
@@ -788,7 +795,7 @@ export function readMessage(
     // A rival won the name between the check and this link. Its receipt is the single serving of
     // this id: verify it, and never replace it. If it does not verify, the name is uncertain and
     // stays as evidence; either way this read returns no body.
-    return receiptHeldNow() ? alreadyServed() : occupied();
+    return receiptHeldNow() ? alreadyServed() : clearedNow() ? alreadyServed() : occupied();
   }
   if (published === 'failed') {
     return { ok: false, reason: 'the receipt could not be written, so the message is not returned' };
