@@ -1,11 +1,23 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { readWithPs } from '../src/caller.ts';
+import { selectCommits } from '../src/check/git.ts';
+import { privateDiffCorpus } from '../src/check/private-names.ts';
+import { scanPublicNames } from '../src/check/public-names.ts';
+import { headOf } from '../src/client/owner-action-step.ts';
+import { branchPresent } from '../src/end/condition.ts';
+import { branchProblem } from '../src/end/until.ts';
 import { findRoot, loadTeamFile, NOT_A_REPO } from '../src/file/load.ts';
 import type { LoadResult } from '../src/file/types.ts';
+import { commitTrace } from '../src/labels/traces.ts';
+import { codexCommandOf, processStartOf as codexProcessStartOf } from '../src/launch/codex-endpoint.ts';
+import { processCommandOf, processStartOf as watchProcessStartOf } from '../src/watch/pane.ts';
+import { processWorkingFolderOf } from '../src/watch/process-adapter.ts';
+import { createFixture } from './docs/fixture.ts';
 import { gitEnv } from './helpers.ts';
 
 const example = new URL('./fixtures/example.yaml', import.meta.url).pathname;
@@ -293,3 +305,72 @@ test('the comparison catches a load.ts that drifted', async () => {
     rmSync(fixture, { recursive: true, force: true });
   }
 }, 30_000);
+
+describe('synchronous child calls bound their wait and close stdin', () => {
+  test('sleeping git, ps and lsof stubs time out with a clear error instead of hanging', () => {
+    const stubDir = realpathSync(mkdtempSync(join(tmpdir(), 'team-sync-stub-')));
+    const originalPath = process.env.PATH;
+    const originalTimeout = process.env.TEAM_SYNC_CHILD_TIMEOUT_MS;
+    try {
+      const writeStub = (name: string, stdoutLine: string): void => {
+        const file = join(stubDir, name);
+        writeFileSync(
+          file,
+          [
+            '#!/bin/sh',
+            '# If stdin is not closed, reading it hangs until the deadline.',
+            'cat >/dev/null',
+            'sleep 0.4',
+            `printf '%s\\n' ${JSON.stringify(stdoutLine)}`,
+            '',
+          ].join('\n'),
+        );
+        chmodSync(file, 0o755);
+      };
+      writeStub('git', '/tmp/fake-repo/.git');
+      writeStub('ps', '1 /usr/local/bin/codex');
+      writeStub('lsof', 'n/tmp/fake-cwd');
+
+      process.env.PATH = `${stubDir}:${originalPath ?? ''}`;
+      process.env.TEAM_SYNC_CHILD_TIMEOUT_MS = '60';
+
+      const startedAt = performance.now();
+      expect(findRoot(project)).toBeNull();
+      expect(performance.now() - startedAt).toBeLessThan(350);
+
+      expect(() => selectCommits(project, 'HEAD')).toThrow(/can't run git:.*ETIMEDOUT/);
+      const publicScan = scanPublicNames(project, []);
+      expect('problem' in publicScan).toBe(true);
+      if ('problem' in publicScan) {
+        expect(publicScan.problem).toMatch(/cannot list the tracked files.*ETIMEDOUT/);
+      }
+      const privateDiff = privateDiffCorpus(project, 'HEAD');
+      expect('problem' in privateDiff).toBe(true);
+      if ('problem' in privateDiff) {
+        expect(privateDiff.problem).toContain('cannot read the diff against HEAD');
+      }
+
+      expect(commitTrace(project)).toBeNull();
+      expect(branchPresent(project, 'main')).toBeNull();
+      expect(branchProblem(project, 'main')).toBe('"main" is not a branch name');
+      expect(headOf(project)).toBeNull();
+
+      expect(codexCommandOf(process.pid)).toBeNull();
+      expect(codexProcessStartOf(process.pid)).toBeNull();
+      expect(processCommandOf(process.pid)).toBeNull();
+      expect(watchProcessStartOf(process.pid)).toBeNull();
+      if (process.platform !== 'linux') {
+        expect(processWorkingFolderOf(process.pid)).toBeNull();
+      }
+      expect(readWithPs(process.pid)).toBeNull();
+
+      expect(() => createFixture('acme', { at: 1_700_000_000 })).toThrow(/git init:.*ETIMEDOUT/);
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      if (originalTimeout === undefined) delete process.env.TEAM_SYNC_CHILD_TIMEOUT_MS;
+      else process.env.TEAM_SYNC_CHILD_TIMEOUT_MS = originalTimeout;
+      rmSync(stubDir, { recursive: true, force: true });
+    }
+  });
+});
