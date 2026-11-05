@@ -1,10 +1,12 @@
 // Item 7: a seat launched through a wrapper (an alternate endpoint chosen by the launcher) that
 // a terminal-host restore brings back as the bare CLI. Every turn then fails on the wrapper's
-// missing endpoint settings, so the pane is never adopted in place: `team up` closes it without
-// input and launches the seat again through its own launch line plus `--resume <the recorded
-// conversation>`, in a new workspace. The scenes also pin the boundaries: a bare CLI seat is
-// still adopted, a line that cannot carry the conversation closes nothing, and a drifted model on
-// a pane whose name the restore cleared is seen. All of it is synthetic: no live host, no CLI.
+// missing endpoint settings, so the pane is never adopted in place: `team up` exits the bare CLI
+// in its own pane, in its recorded workspace — no workspace is closed and none is made — and
+// launches the seat again there through its own launch line plus `--resume <the recorded
+// conversation>`. The scenes also pin the boundaries: a bare CLI seat is still adopted, a line
+// that cannot carry the conversation types nothing, a working or unsent pane is left where it
+// stands before any key is typed, and a drifted model on a pane whose name the restore cleared
+// keeps the conversation the records name. All of it is synthetic: no live host, no CLI.
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -19,7 +21,7 @@ import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-11-05T02:10:00Z');
 const SESSION = 'acme';
@@ -162,6 +164,9 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
   const trace: Trace = { created: [], closed: [], typed: [], runs: [], renamed: [] };
   const made = new Map<string, string>();
   const madeSpaces = new Map<string, string[]>();
+  // The bare CLI the restore left was exited by the run's own typing: the pane is its shell
+  // alone from then until the seat's launch command runs in it.
+  let exited = false;
   const agents = (): HerdrAgent[] | null => [{
     name: scene.name === undefined ? null : scene.name,
     agent: 'claude',
@@ -186,12 +191,15 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
     paneRun(_session, pane, command) {
       trace.runs.push({ pane, command });
       made.set(pane, CLAUDE_IDLE);
+      exited = false;
       return true;
     },
-    typeText(_session, _pane, text) {
+    typeText(_session, pane, text) {
       trace.typed.push(text);
+      if (pane === PANE && text === '/exit') exited = true;
       return true;
     },
+    pressEnter: () => true,
     renameWorkspace: () => true,
     renameAgent(_session, pane, name) {
       trace.renamed.push({ pane, name });
@@ -209,7 +217,11 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
     },
     paneText: (_session, pane) => (pane === PANE && scene.screen !== undefined ? scene.screen : made.get(pane) ?? CLAUDE_IDLE),
     foreground: () => (scene.foreground === undefined ? ['claude'] : scene.foreground),
-    processInfo: (_session, pane) => (pane === PANE && scene.process !== undefined ? scene.process : RESTORED),
+    processInfo: (_session, pane) => {
+      if (pane === PANE && scene.process !== undefined) return scene.process;
+      if (pane === PANE && exited) return { shell: RESTORED.shell, foreground: [RESTORED.shell] };
+      return RESTORED;
+    },
     sleep: async () => {},
     now: () => NOW,
   };
@@ -266,34 +278,37 @@ afterEach(() => {
   rmSync(base, { recursive: true, force: true });
 });
 
-test('a wrapper seat restored to its bare CLI is relaunched through its own line, with the recorded conversation', async () => {
+test('a wrapper seat restored to its bare CLI is relaunched in place, with the recorded conversation', async () => {
   setup(WRAPPER);
   record(WRAPPER, { ...RECORD, agent_session: SESSION_ID });
-  // The plan says the close and the relaunch before anything runs, and never the adoption.
+  // The plan exits the bare CLI in its recorded pane and launches the seat again there: no
+  // workspace is closed, none is made, and the pane is renamed back once the launch is up.
   const dry = testIo(root, { kind: 'owner' });
   expect(await runUp(['--dry-run'], dry, sources().sources)).toBe(0);
-  expect(dry.out).toContain(`workspace close ${WORKSPACE}`);
-  expect(dry.out).toContain('closed without input: its pane holds the bare restored CLI, not its launch line');
+  expect(dry.out).not.toContain(`workspace close ${WORKSPACE}`);
+  expect(dry.out).not.toContain(`--label ${SEAT}`);
+  expect(dry.out).toContain(`pane run ${PANE} /exit`);
+  expect(dry.out).toContain('its pane holds the bare restored CLI, not its launch line; exited in place and launched again here');
   expect(dry.out).toContain(`team-deepseek --resume ${SESSION_ID}`);
-  expect(dry.out).not.toContain(`agent rename ${PANE} ${SEAT}`);
+  expect(dry.out).toContain(`agent rename ${PANE} ${SEAT}`);
   expect(seatState()?.launched).toEqual(RECORD.launched);
 
   const made = sources();
   const io = testIo(root, { kind: 'owner' });
   expect(await runUp([], io, made.sources)).toBe(0);
-  // The recorded workspace goes without input; the seat is launched again in a new one.
-  expect(made.trace.closed).toEqual([WORKSPACE]);
-  expect(seatCreated(made.trace)).toEqual([SEAT]);
-  expect(made.trace.typed).toEqual([]);
+  // The recorded pane is kept: the exit is typed into it and the seat's line runs in it.
+  expect(made.trace.closed).toEqual([]);
+  expect(seatCreated(made.trace)).toEqual([]);
+  expect(made.trace.typed).toEqual(['/exit']);
   // Exactly one launch, and it is the seat's own line carrying the conversation, never `claude`.
   expect(seatRuns(made.trace)).toHaveLength(1);
+  expect(seatRuns(made.trace)[0]?.pane).toBe(PANE);
   expect(firstWord(seatRuns(made.trace)[0]?.command ?? '')).toBe('team-deepseek');
   expect(seatRuns(made.trace)[0]?.command).toContain(`--resume ${SESSION_ID}`);
-  // The only name written is the one on the new pane: the restored pane is never renamed back.
-  expect(made.trace.renamed).toEqual([{ pane: 'made-1', name: SEAT }]);
+  expect(made.trace.renamed).toEqual([{ pane: PANE, name: SEAT }]);
   expect(seatState()?.stage).toBe('ready');
-  expect(seatState()?.pane).toBe('made-1');
-  expect(seatState()?.workspace).toBe('ws-1');
+  expect(seatState()?.pane).toBe(PANE);
+  expect(seatState()?.workspace).toBe(WORKSPACE);
 });
 
 test('a seat whose launch line is the CLI itself is still adopted in place', async () => {
@@ -312,7 +327,7 @@ test('a seat whose launch line is the CLI itself is still adopted in place', asy
   expect(seatState()?.agent_session).toBe(SESSION_ID);
 });
 
-test('a wrapper line that resumes another conversation closes nothing and holds the seat', async () => {
+test('a wrapper line that resumes another conversation types nothing and holds the seat', async () => {
   const other: Spec = { ...WRAPPER, launch: 'team-deepseek --resume ses_other' };
   setup(other);
   record(other, { ...RECORD, agent_session: SESSION_ID });
@@ -325,8 +340,58 @@ test('a wrapper line that resumes another conversation closes nothing and holds 
   expect(made.trace.closed).toEqual([]);
   expect(seatCreated(made.trace)).toEqual([]);
   expect(seatRuns(made.trace)).toEqual([]);
+  expect(made.trace.typed).toEqual([]);
   expect(made.trace.renamed).toEqual([]);
   expect(seatState()?.launched).toEqual(RECORD.launched);
+});
+
+test('a wrapper pane that is working or holds unsent text is left as it is, before any key is typed', async () => {
+  setup(WRAPPER);
+  record(WRAPPER, { ...RECORD, agent_session: SESSION_ID });
+  // herdr reports the pane working: the plan holds it and the run does not fail on it.
+  const working = sources({ status: 'working' });
+  const dry = testIo(root, { kind: 'owner' });
+  expect(await runUp(['--dry-run'], dry, working.sources)).toBe(0);
+  expect(dry.out).toContain('the process in its pane is working; nothing closed');
+  expect(dry.out).not.toContain(`pane run ${PANE} /exit`);
+  expect(dry.out).not.toContain('--resume');
+
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, working.sources)).toBe(0);
+  expect(working.trace.typed).toEqual([]);
+  expect(working.trace.closed).toEqual([]);
+  expect(seatCreated(working.trace)).toEqual([]);
+  expect(seatRuns(working.trace)).toEqual([]);
+  expect(seatState()?.launched).toEqual(RECORD.launched);
+  expect(seatState()?.pane).toBe(PANE);
+
+  // An unsent box is a refusal: the run exits 1 and nothing is typed into it either.
+  const unsent = sources({ screen: claudeBox('/exit') });
+  const denied = testIo(root, { kind: 'owner' });
+  expect(await runUp([], denied, unsent.sources)).toBe(1);
+  expect(denied.err).toContain(
+    `  the process in its pane holds unsent text; nothing closed (send or clear it there, or run team remove ${SEAT})\n`,
+  );
+  expect(unsent.trace.typed).toEqual([]);
+  expect(unsent.trace.closed).toEqual([]);
+  expect(seatCreated(unsent.trace)).toEqual([]);
+  expect(seatRuns(unsent.trace)).toEqual([]);
+  expect(seatState()?.launched).toEqual(RECORD.launched);
+});
+
+test('an unnamed drifted pane keeps the conversation the records name', async () => {
+  setup(WRAPPER);
+  // The state names the conversation; the registry's reach holds none, and the restored pane
+  // kept it without a name. The drift cycle must still resume the conversation it holds.
+  record(WRAPPER, { ...RECORD, agent_session: SESSION_ID }, { session: null });
+  const made = sources({ process: { shell: RECORD.launched.shell, foreground: RECORD.launched.cli }, screen: DRIFTED });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources)).toBe(0);
+  expect(made.trace.closed).toEqual([WORKSPACE]);
+  expect(seatCreated(made.trace)).toEqual([SEAT]);
+  expect(seatRuns(made.trace)).toHaveLength(1);
+  expect(firstWord(seatRuns(made.trace)[0]?.command ?? '')).toBe('team-deepseek');
+  expect(seatRuns(made.trace)[0]?.command).toContain(`--resume ${SESSION_ID}`);
 });
 
 test('a drifted model on a pane whose name the restore cleared is seen and relaunched', async () => {

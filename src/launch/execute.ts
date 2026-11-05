@@ -16,7 +16,7 @@ import { refusalReport, type Refusal } from './deliver.ts';
 import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeTarget, withoutResume, conversationMissingOnScreen } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
 import { withoutGrokSandbox, writeGrokSandbox } from './grok-sandbox.ts';
-import { launchedIdentity, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
+import { launchedIdentity, paneHoldsOnlyShell, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
 import { restoreProof } from './restore-proof.ts';
 import type { CliWatcher } from './cli-hook.ts';
 import { codexEndpointConfig, IDLE_POLL_MS, remoteCodexCommand, type Op, type Step, type UpSeat } from './plan.ts';
@@ -114,6 +114,12 @@ export type Host = {
   /** The live exit typing; see `ExitTyping`. May wait: the pane draws typed text late, and the
    *  reading that decides the Enter or the clearing key waits for it. */
   typeLine(session: string, pane: string, text: string): ExitTyping | Promise<ExitTyping>;
+  /** Types text into the pane's box, with no read-back and no Enter: the bare restored CLI's
+   *  own exit word (`profile.exit`), typed by a wrapper seat's relaunch. False when the text
+   *  was not typed; the caller then presses no Enter. */
+  typeText?(session: string, pane: string, text: string): boolean | Promise<boolean>;
+  /** Presses Enter in the pane, straight after `typeText`. False when the key was not sent. */
+  pressEnter?(session: string, pane: string): boolean | Promise<boolean>;
   /** The live key exit, for a CLI whose TUI takes no exit text: the profile's keys, pressed at
    *  the seat's idle screen only; see `ExitKeys`. Present where a seat can be stopped. */
   pressKeys?(session: string, pane: string, cli: string, keys: readonly string[]): ExitKeys | Promise<ExitKeys>;
@@ -759,7 +765,7 @@ export async function executePlan(
     } else if (verdict === 'drift') {
       final(seat, { kind: 'ready' }, '  its model drifted; closed without input and launched again\n');
     } else if (verdict === 'own-line') {
-      final(seat, { kind: 'ready' }, '  its pane held the bare restored CLI, not its launch line; closed without input and launched again\n');
+      final(seat, { kind: 'ready' }, '  its pane held the bare restored CLI, not its launch line; exited in place and launched again in the same pane\n');
     } else final(seat, { kind: 'ready' });
   };
   // The identity read after the idle prompt, to carry into every later record of the seat.
@@ -1199,7 +1205,7 @@ export async function executePlan(
             break;
           }
         }
-        const here = place(op.seat, op.pane);
+        const here = place(op.seat, op.pane, op.workspace);
         // The rules line rides this launch: its file is written before anything starts, so the
         // CLI reads it on its first turn, and a file that cannot be written leaves the seat out
         // before a managed endpoint is started for it. Whether the launch carries the line is the
@@ -1943,12 +1949,12 @@ export async function executePlan(
         reportProgress(op.seat, 'launching');
         // The plan proved a restored conversation in a pane running the bare CLI, on a seat whose
         // own launch line starts a wrapper: adopting the bare CLI would leave the wrapper's
-        // settings (an alternate endpoint) behind. The workspace is closed without input and the
-        // steps after this one launch the seat through its own line plus `--resume`. The plan's
-        // reading may be minutes old, so the host is read again with nothing between the readings
-        // and the close, and the same proof decides: a changed world is a refusal, never a
-        // partial close. Only a workspace holding this single pane is closed, and only at a free
-        // prompt: a working turn or unsent text is left where it stands.
+        // settings (an alternate endpoint) behind. The bare CLI is exited in that same pane — its
+        // recorded workspace is neither closed nor replaced — and the steps after this one launch
+        // the seat through its own line plus `--resume` there. The plan's reading may be minutes
+        // old, so the host is read again with nothing between the readings and the exit, and the
+        // same proof decides: a changed world is a refusal, never a partial exit. A working turn
+        // or unsent text is left where it stands.
         const agentsNow = host.agentList?.(session) ?? null;
         const processNow = host.processInfo?.(session, op.pane) ?? null;
         const proof = restoreProof({
@@ -1967,41 +1973,90 @@ export async function executePlan(
             kind: 'left out',
             reason: proof.kind === 'none'
               ? proof.why
-              : 'its pane no longer proves the recorded conversation; nothing closed',
+              : 'its pane no longer proves the recorded conversation; nothing typed',
           });
-          break;
-        }
-        const panes = host.workspacePanes ? host.workspacePanes(session, op.workspace) : null;
-        if (panes === null || panes.length === 0) {
-          held = true;
-          dropped.add(op.seat);
-          final(op.seat, { kind: 'left out', reason: 'its pane could not be read; nothing closed' });
-          break;
-        }
-        if (panes.length !== 1 || panes[0] !== op.pane) {
-          held = true;
-          dropped.add(op.seat);
-          final(op.seat, { kind: 'left out', reason: 'its workspace holds other panes; nothing closed (close its pane there, then run team up)' });
           break;
         }
         const listedNow = agentsNow?.find((agent) => agent.pane === op.pane && (agent.name === null || agent.name === op.seat));
         const kind = host.classify(session, op.pane, op.cli);
         if (listedNow?.status === 'working' || kind === 'working') {
-          held = true;
+          // A seat that came back working is left to finish its turn: nothing is typed and the
+          // run does not fail on it (the restore sweep reports it as skipped working).
+          skippedWorking.add(op.seat);
           dropped.add(op.seat);
-          final(op.seat, { kind: 'left out', reason: 'is working; nothing closed' });
+          final(op.seat, { kind: 'left out', reason: 'is working; nothing typed' });
           break;
         }
         if (kind === 'unsent') {
           held = true;
           dropped.add(op.seat);
-          final(op.seat, { kind: 'left out', reason: 'holds unsent text; nothing closed' });
+          final(op.seat, { kind: 'left out', reason: 'holds unsent text; nothing typed' });
           break;
         }
-        if (!host.closeWorkspace(session, op.workspace)) {
+        const profile = profileFor(op.cli);
+        if (profile === null) {
           held = true;
           dropped.add(op.seat);
-          final(op.seat, { kind: 'left out', reason: 'its workspace did not close; left as it is' });
+          final(op.seat, { kind: 'left out', reason: 'its CLI has no profile to exit with; left as it is' });
+          break;
+        }
+        // The CLI's own way out, exactly as its profile measured it: the exit word and Enter,
+        // or the profile's keys at its idle screen. Nothing else is typed into the pane.
+        let refused: string | null = null;
+        if (profile.exit !== null) {
+          const typed = await host.typeText?.(session, op.pane, profile.exit);
+          const pressed = typed === true && (await host.pressEnter?.(session, op.pane)) === true;
+          if (!pressed) refused = 'its exit was not typed; left as it is';
+        } else {
+          for (const key of profile.exitKeys) {
+            if (!(host.sendKey?.(session, op.pane, key) ?? false)) {
+              refused = 'its exit was not sent; left as it is';
+              break;
+            }
+          }
+        }
+        if (refused !== null) {
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: refused });
+          break;
+        }
+        // The pane is back at its own shell when nothing but the shell is in front. The wait is
+        // the profile's exit time; a pane that does not come back is left exactly as it is, its
+        // record untouched, so the next run reads the same world this one left.
+        const back = await until(
+          profile.exitTimeout,
+          2000,
+          host,
+          () => paneHoldsOnlyShell(host.processInfo?.(session, op.pane) ?? null),
+          sharedSleep,
+          () => stopped || closing(),
+        );
+        if (!back) {
+          if (closing()) {
+            stopped = true;
+            abort = true;
+            break;
+          }
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: `its pane was not back at its shell in ${profile.exitTimeout} s; left as it is` });
+          break;
+        }
+        // The same pane, still in its recorded workspace, named for no other seat: the launch
+        // steps after this one run there. Anything else is left exactly as it is.
+        const agentsAfter = host.agentList ? host.agentList(session) : null;
+        const entryAfter = agentsAfter?.find((agent) => agent.pane === op.pane);
+        const foreign = entryAfter !== undefined && entryAfter.name !== null && entryAfter.name !== op.seat;
+        const panesAfter = host.workspacePanes ? host.workspacePanes(session, op.workspace) : null;
+        const inWorkspace = panesAfter !== null
+          ? panesAfter.includes(op.pane)
+          : entryAfter?.workspace === op.workspace;
+        if (agentsAfter === null || foreign || !inWorkspace
+          || !paneHoldsOnlyShell(host.processInfo?.(session, op.pane) ?? null)) {
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: 'its pane did not come back to its shell in the recorded workspace; left as it is' });
           break;
         }
         if (!dropRecord(op.seat)) break;

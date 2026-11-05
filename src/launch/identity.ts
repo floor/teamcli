@@ -29,6 +29,14 @@ export function paneHoldsShell(pane: PaneProcesses | null | undefined): boolean 
   return pane.foreground.includes(pane.shell);
 }
 
+/** The pane holds its own shell and nothing else: no CLI, no helper, nothing in front. Read
+ *  after an exit is typed, to know the CLI is back at the shell the seat will launch from.
+ *  An empty foreground, or no reading at all, is not a shell — herdr could not say. */
+export function paneHoldsOnlyShell(pane: PaneProcesses | null | undefined): boolean {
+  if (!pane || pane.foreground.length === 0) return false;
+  return pane.foreground.every((pid) => pid === pane.shell);
+}
+
 export function seatProcessVerdict(recorded: LaunchedIdentity | undefined, pane: PaneProcesses | null | undefined): SeatProcessVerdict {
   if (!recorded || !pane || pane.foreground.length === 0) return 'unknown';
   if (recorded.shell === pane.shell && recorded.cli.some((pid) => pane.foreground.includes(pid))) return 'same';
