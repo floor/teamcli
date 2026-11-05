@@ -51,6 +51,7 @@ import type { TeamFile } from '../file/types.ts';
 import { folderProblem, folderProblemAt } from '../held.ts';
 import { GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE, isGeneralBriefRecord } from '../launch/general-brief.ts';
 import { heldAt } from '../launch/rules-file.ts';
+import { channelCommitActive } from '../mcp/channel.ts';
 import { currentClaimIn } from '../mcp/inbox.ts';
 import { DAEMON_BACKLOG_DEFAULTS, eventThresholdsInForce } from '../policy/index.ts';
 import { messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
@@ -117,6 +118,9 @@ const KNOWN_SIDECAR_SUFFIXES: readonly string[] = [
   '.pending',
   '.taken',
   '.fallback.json',
+  // The commit lock is a synchronization file. It is expected beside a record and it is never
+  // moved: archiving it would free the name while a holder still has the inode.
+  '.channel-commit.lock',
 ];
 
 const FALLBACK_NOTE_SUFFIX = /^\.fallback-note-[0-9a-f]{16}\.json$/;
@@ -907,6 +911,10 @@ function isExpectedSeatDropFile(name: string): boolean {
   const suffix = name.slice(dot);
   if (id === '' || !RECORD_NAME.test(id) || id.startsWith(WORK_PREFIX)) return false;
   if (KNOWN_SIDECAR_SUFFIXES.includes(suffix)) return true;
+  if (/^\.channel-commit\.prep-[0-9]+-[0-9a-f]+$/.test(suffix)) return true;
+  if (suffix === '.channel-commit.reclaim' || /^\.channel-commit\.dead-[0-9]+$/.test(suffix)) return true;
+  if (/^\.channel-commit\.reclaim-aside-[0-9]+-[0-9a-f]+$/.test(suffix)) return true;
+  if (suffix === '.channel-commit.reclaim.stall') return true;
   if (FALLBACK_NOTE_SUFFIX.test(suffix) || RECEIPT_TEMP_SUFFIX.test(suffix)) return true;
   return false;
 }
@@ -1515,6 +1523,13 @@ export function* dropRetirementSteps(
             fileSet.has(`${name}.fallback.json`) ||
             fallbackNoteIds.has(name)
           ) {
+            stayed += 1;
+            continue;
+          }
+          // A live, initializing, or malformed commit lock owns the name. Moving the family
+          // would not move that lock, and a new taker could publish another lock while the
+          // holder still has the inode. An abandoned dead pid is not active and does not stay.
+          if (fileSet.has(`${name}.channel-commit.lock`) && channelCommitActive(seatDir, name)) {
             stayed += 1;
             continue;
           }

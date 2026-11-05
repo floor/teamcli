@@ -66,7 +66,7 @@ import { bindPane, deliverTrigger, draftNote, showsTranscriptToken, TRIGGER_TAKE
 import { dropMessage, readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { deliverTypedWake, herdrTypedWakeHost, type TypedWakeHost } from '../send/typed-wake.ts';
 import { awaitReceipt, claimBindingIn, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld, type InboxLiveness } from '../mcp/inbox.ts';
-import { channelLaunchEnabled, channelPushed, recordChannelHeld, CHANNEL_HELD_RECEIPT, CHANNEL_PUSH_GRACE_MS, CHANNEL_TICK_MS, CHANNEL_UNCONFIRMED_REASON } from '../mcp/channel.ts';
+import { channelLaunchEnabled, channelNotified, recordChannelHeld, reserveChannelFallback, CHANNEL_HELD_RECEIPT, CHANNEL_PUSH_GRACE_MS, CHANNEL_TICK_MS, CHANNEL_UNCONFIRMED_REASON } from '../mcp/channel.ts';
 import { beginFallbackWalk, type FallbackWalk, type WalkAttempt } from '../send/fallback-walk.ts';
 import type { AttemptOutcome, RelayReceipt } from '../send/fallback-events.ts';
 import { markTaken } from '../send/taken.ts';
@@ -2102,7 +2102,32 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       await ensureEpisode();
       const staged = await stageChannelRecord(dir, to.session, to.seat, dropDir, record, from, host, report, to.sentAs, to.project, stagedWrittenOf());
       const grace = host.channelGraceMs ?? CHANNEL_PUSH_GRACE_MS;
-      const miss = staged ?? (await awaitChannelPush(dropDir, msgId, grace, host) ? null : `no push receipt within ${String(grace)} ms`);
+      let miss = staged ?? (await awaitChannelPush(dropDir, msgId, grace, host) ? null : `no push receipt within ${String(grace)} ms`);
+      if (miss !== null && staged === null) {
+        // A completed notification is the delivery. The claim shares the commit lock with the
+        // server's write. A hold that could not be written is not a hold: no later leg starts.
+        const claim = reserveChannelFallback(dropDir, {
+          v: 1,
+          kind: CHANNEL_HELD_RECEIPT,
+          id: msgId,
+          at: host.now().toISOString(),
+          reason: miss,
+        });
+        if (claim === 'notified') miss = null;
+        else if (claim === 'unguarded' || claim === 'uncertain') {
+          clearPending(dropDir, msgId);
+          const why = claim === 'uncertain'
+            ? `${miss}; the notification was started and its completion was not recorded, so no later leg was started`
+            : `${miss}; the push name could not be reserved, so no later leg was started`;
+          failures.push(`channel: ${why}`);
+          const ms = host.now().getTime() - startedAt;
+          const entry = { ts: host.now().toISOString(), from, to: to.seat, ...(to.sentAs === null ? {} : to.sentAs), body, id: msgId, thread: record.thread };
+          // The record stays in the inbox without a read receipt. A later inbox read can recover
+          // it. The history line is the trace that no later leg was started.
+          appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'unreachable', ms, via: 'channel', failed: [...failures] });
+          return unreachable(io, dir, who, to.seat, why, host, report);
+        }
+      }
       if (miss !== null) {
         // The record was written but nothing pushed it: the channel took nothing, so its marker
         // is cleared and no later pass may redeliver a send its own run is still walking.
@@ -4778,10 +4803,10 @@ async function stageChannelRecord(
 async function awaitChannelPush(dropDir: string, id: string, graceMs: number, host: SendHost): Promise<boolean> {
   const polls = Math.max(1, Math.ceil(Math.max(0, graceMs) / CHANNEL_TICK_MS));
   for (let at = 0; at < polls; at += 1) {
-    if (channelPushed(dropDir, id)) return true;
+    if (channelNotified(dropDir, id)) return true;
     if (at + 1 < polls) await host.native.wait(CHANNEL_TICK_MS);
   }
-  return channelPushed(dropDir, id);
+  return channelNotified(dropDir, id);
 }
 
 /** A compose seat's typed leg: the drop file is written, then the profile's module walks the
@@ -5539,7 +5564,25 @@ export async function walkReplyDelivery(input: {
       await ensureStaged();
       const staged = await stageChannelRecord(input.dir, input.session, seatName, dropDir, input.payload, from, input.host, report, null, input.project, stagedRecordOf());
       const grace = input.host.channelGraceMs ?? CHANNEL_PUSH_GRACE_MS;
-      const miss = staged ?? ((await awaitChannelPush(dropDir, msgId, grace, input.host)) ? null : `no push receipt within ${String(grace)} ms`);
+      let miss = staged ?? ((await awaitChannelPush(dropDir, msgId, grace, input.host)) ? null : `no push receipt within ${String(grace)} ms`);
+      if (miss !== null && staged === null) {
+        const claim = reserveChannelFallback(dropDir, {
+          v: 1,
+          kind: CHANNEL_HELD_RECEIPT,
+          id: msgId,
+          at: input.host.now().toISOString(),
+          reason: miss,
+        });
+        if (claim === 'notified') miss = null;
+        else if (claim === 'unguarded' || claim === 'uncertain') {
+          clearPending(dropDir, msgId);
+          const why = claim === 'uncertain'
+            ? `${miss}; the notification was started and its completion was not recorded, so no later leg was started`
+            : `${miss}; the push name could not be reserved, so no later leg was started`;
+          failures.push(`channel: ${why}`);
+          return ended({ via: 'drop', walked: true, unconfirmed: false, summary: null });
+        }
+      }
       if (miss !== null) {
         clearPending(dropDir, msgId);
         failures.push(`channel: ${miss}`);

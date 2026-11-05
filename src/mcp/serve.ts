@@ -47,9 +47,14 @@ import {
   CHANNEL_READ_BY,
   CHANNEL_SAFETY_MS,
   CHANNEL_TICK_MS,
+  channelAborted,
   channelLaunchEnabled,
+  channelNotified,
   channelPushHeld,
+  markChannelNotified,
+  recordChannelEmitted,
   recordChannelPush,
+  withChannelCommit,
 } from './channel.ts';
 import {
   MESSAGE_ID,
@@ -94,6 +99,9 @@ export type ServeHost = {
   build?: BuildIdentity;
   installed?: () => InstallIdentity;
   restart?: (installed: InstallIdentity) => void;
+  /** Test seam. When set, replaces the completion-flag write. False means the handoff marker
+   *  stays and no read receipt is written. */
+  channelMark?: (dropDir: string, id: string) => boolean;
 };
 
 export const realServeHost: ServeHost = { home: homedir() };
@@ -221,6 +229,7 @@ type Serving = {
    *  channel push asks before it exposes a record or writes a receipt: a stopped, replaced or
    *  relaunched seat's left-over process is inert, not a second reader. */
   alive?: () => string | null;
+  channelMark?: (dropDir: string, id: string) => boolean;
 };
 
 /** Whether two roots are the same folder once links are resolved, as the inbox checks do. */
@@ -413,44 +422,50 @@ function watchChannel(
     // An earlier server may have pushed this id before this one started, and a sender whose own
     // walk takes the message leaves a held marker at the same name: either marker says this id
     // is not to be pushed, and a second notification is a duplicate wake.
-    if (channelPushHeld(serving.dropDir, id)) return;
+    if (channelPushHeld(serving.dropDir, id) || channelNotified(serving.dropDir, id) || channelAborted(serving.dropDir, id)) return;
     const push = channelPushOf(serving, id);
     if (push === null) {
       // Not this seat's signed record yet (or never): a later read may still find it.
       seen.delete(id);
       return;
     }
-    // The declaration is looked at again after the record verified and before the reservation:
-    // a seat stopped, dropped or moved while its record was read pushes nothing and writes no
-    // marker. The last look is before the notification itself; if it refuses there, the marker
-    // stands (it is a reservation, not an exposure) and the body does not leave.
-    const beforeMarker = serving.alive?.();
-    if (beforeMarker !== undefined && beforeMarker !== null) return;
-    // The marker is the reservation: it is written exclusively before the notification, so a
-    // sender's held marker that lands after the check above wins the name and this server
-    // never pushes the id; a marker this server cannot write means no push at all.
-    const reserved = recordChannelPush(serving.dropDir, {
-      v: 1,
-      kind: 'channel-push',
-      id,
-      seat: serving.seat,
-      session: serving.session,
-      root: serving.root,
-      at: new Date().toISOString(),
-      meta: push.meta as { id: string; from: string; seat: string; team: string },
-      content_sha256: createHash('sha256').update(push.content).digest('hex'),
-      status: CHANNEL_PUSH_STATUS,
+    // The abort check, the reservation, the handoff marker, the notification write, and the
+    // completion flag share one lock with the sender's fallback. The handoff marker is written
+    // before the line. If the completion flag cannot be published, the sender sees that marker
+    // and does not start another leg. The record stays unread until ack, inbox read, or reply.
+    // A stream write still does not prove the client processed the line.
+    const committed = withChannelCommit(serving.dropDir, id, () => {
+      if (channelAborted(serving.dropDir, id) || channelNotified(serving.dropDir, id) || channelPushHeld(serving.dropDir, id)) {
+        return 'skip' as const;
+      }
+      const beforeMarker = serving.alive?.();
+      if (beforeMarker !== undefined && beforeMarker !== null) return 'skip' as const;
+      const reserved = recordChannelPush(serving.dropDir, {
+        v: 1,
+        kind: 'channel-push',
+        id,
+        seat: serving.seat,
+        session: serving.session,
+        root: serving.root,
+        at: new Date().toISOString(),
+        meta: push.meta as { id: string; from: string; seat: string; team: string },
+        content_sha256: createHash('sha256').update(push.content).digest('hex'),
+        status: CHANNEL_PUSH_STATUS,
+      });
+      if (!reserved || channelAborted(serving.dropDir, id)) return 'skip' as const;
+      const beforeWrite = serving.alive?.();
+      if (beforeWrite !== undefined && beforeWrite !== null) return 'skip' as const;
+      if (!recordChannelEmitted(serving.dropDir, id, new Date().toISOString())) return 'skip' as const;
+      write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: push }));
+      const marked = serving.channelMark
+        ? serving.channelMark(serving.dropDir, id)
+        : markChannelNotified(serving.dropDir, id);
+      if (!marked) return 'uncertain' as const;
+      return 'pushed' as const;
     });
-    if (!reserved) return;
-    // The body leaves here: the declaration is asked one last time, after the reservation, so a
-    // seat that lost its place during the marker write receives no notification.
-    const beforeWrite = serving.alive?.();
-    if (beforeWrite !== undefined && beforeWrite !== null) return;
-    // What the client receives is content and meta alone. The reservation suppresses another
-    // channel wake; it cannot settle the message or suppress recovery without a consumer read.
-    // The seat's signed read stays on ack, inbox_read and reply, and that receipt still carries
-    // the launch epoch when the seat holds one.
-    write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: push }));
+    if (committed === 'busy') {
+      seen.delete(id);
+    }
   };
   /** The whole inbox, read and verified: the startup prime, the fallback poll without a bus, and
    *  the slow safety pass beside a live one. */
@@ -992,6 +1007,7 @@ export async function runMcpServe(
     },
     channel,
     brief,
+    ...(host.channelMark === undefined ? {} : { channelMark: host.channelMark }),
     // Re-proved on every use, not only at start: the seat may be stopped, replaced or relaunched
     // while this process lives, and a launcher-written config that names it again must not make
     // the old process a reader of the new seat. The team file itself is read again: the
