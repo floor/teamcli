@@ -16,8 +16,9 @@
 // page bound inside its signature, and its request id is claimed under the grant lock before any
 // row is scanned or printed. Rows are shown only when the record verifies, names this client and
 // its own thread, and was written by the seat and agent the thread's originating canonical grant
-// signed. The grant need not still be active: history survives revocation and reissue. It does
-// have to be in the canonical store.
+// signs: its one recipient seat and id for a plain grant, or a seat a bundle grant's `send` may
+// reach, bound to the root's own addressee. The grant need not still be active: history survives
+// revocation and reissue. It does have to be in the canonical store.
 
 import { clientPaneGuard } from './pane-guard.ts';
 import { randomBytes, type KeyObject } from 'node:crypto';
@@ -54,11 +55,12 @@ import { claimClientRequest } from './replay.ts';
 import {
   KEY_ISOLATION_LINE,
   activeClientGrant,
-  readClientGrant,
   readClientGrantFile,
+  readClientThreadGrant,
   resolveEntityCoordinator,
   withClientGrantLock,
   type ClientGrantRecord,
+  type ClientUpGrantRecord,
   type EntityCoordinator,
 } from './records.ts';
 import { CLIENT_REPLY_ID_PATTERN, verifyClientRead, type ClientReadRequest } from './verify.ts';
@@ -269,15 +271,18 @@ function refusedRow(id: string, payload: RecordPayload | null, why: string): Ref
 }
 
 type ThreadRead =
-  | { ok: true; grant: ClientGrantRecord; root: RecordPayload }
+  | { ok: true; kind: 'grant'; grant: ClientGrantRecord; root: RecordPayload }
+  | { ok: true; kind: 'bundle'; grant: ClientUpGrantRecord; root: RecordPayload }
   | { ok: false; why: string; payload: RecordPayload | null };
 
 /**
  * Whether `payload` is a reply onto this client's own verified thread, and what the thread's
  * originating grant is. Every check is provenance: the addressee is the client, the thread root
- * sits in the thread grant's recipient seat folder and names the same grant, and the writer is
- * exactly that grant's signed recipient seat and agent id. The grant is read from the canonical
- * store and must verify under the owner key; it need not still be active — history stays readable.
+ * sits in the answering seat's folder and names the same grant, and the writer is exactly the
+ * recipient the origin grant signs — the one recipient seat and agent id for a plain grant, or a
+ * seat its `send` may reach, bound to the root's own addressee, for a bundle. The grant is read
+ * from the canonical store and must verify under the owner key; it need not still be active —
+ * history stays readable.
  */
 function threadOf(context: ScanContext, payload: RecordPayload): ThreadRead {
   if (payload.to_client === undefined) {
@@ -302,21 +307,42 @@ function threadOf(context: ScanContext, payload: RecordPayload): ThreadRead {
     return { ok: false, why: `the record is bound to session ${JSON.stringify(payload.session)}`, payload };
   }
   const grantId = payload.to_client.grant_id;
-  const grant = readClientGrant(context.home, grantId);
-  if (!grant.ok) {
-    return { ok: false, why: `the thread's originating grant ${grantId} does not verify in the canonical store: ${grant.why}`, payload };
+  const origin = readClientThreadGrant(context.home, grantId);
+  if (!origin.ok) {
+    return { ok: false, why: `the thread's originating grant ${grantId} does not verify in the canonical store: ${origin.why}`, payload };
   }
-  if (grant.grant.clientId !== context.clientId) {
-    return { ok: false, why: `the thread's grant ${grantId} names client "${grant.grant.clientId}", not "${context.clientId}"`, payload };
+  if (origin.grant.clientId !== context.clientId) {
+    return { ok: false, why: `the thread's grant ${grantId} names client "${origin.grant.clientId}", not "${context.clientId}"`, payload };
   }
-  if (payload.from !== grant.grant.recipientSeat) {
-    return { ok: false, why: `the reply names sender "${payload.from}", not the thread grant's seat "${grant.grant.recipientSeat}"`, payload };
-  }
-  if (payload.from_id === null || payload.from_id !== grant.grant.recipientId) {
-    return { ok: false, why: `the reply's from_id is not the thread grant's agent id ${grant.grant.recipientId}`, payload };
+  // The writer and the folder the root must sit in: a plain grant signs one recipient seat and
+  // agent id; a bundle signs the seats its send may reach, and the root is the one that fixes
+  // which of them this thread belongs to. Only fields the origin grant signs decide.
+  let writerSeat: string;
+  let writerId: string;
+  if (origin.kind === 'grant') {
+    if (payload.from !== origin.grant.recipientSeat) {
+      return { ok: false, why: `the reply names sender "${payload.from}", not the thread grant's seat "${origin.grant.recipientSeat}"`, payload };
+    }
+    if (payload.from_id === null || payload.from_id !== origin.grant.recipientId) {
+      return { ok: false, why: `the reply's from_id is not the thread grant's agent id ${origin.grant.recipientId}`, payload };
+    }
+    writerSeat = origin.grant.recipientSeat;
+    writerId = origin.grant.recipientId;
+  } else {
+    if (!origin.grant.ops.includes('send')) {
+      return { ok: false, why: `the thread's bundle grant ${grantId} does not carry send, so no thread root can name it`, payload };
+    }
+    if (!(origin.grant.seats ?? []).includes(payload.from)) {
+      return { ok: false, why: `the reply names sender "${payload.from}", not a seat the bundle grant ${grantId} may send to (${(origin.grant.seats ?? []).join(', ') || 'none'})`, payload };
+    }
+    if (payload.from_id === null) {
+      return { ok: false, why: 'the reply carries no from_id', payload };
+    }
+    writerSeat = payload.from;
+    writerId = payload.from_id;
   }
 
-  const seatDir = recordDir(context.root, context.session, grant.grant.recipientSeat);
+  const seatDir = recordDir(context.root, context.session, writerSeat);
   const rootPath = recordFile(seatDir, payload.thread);
   const rootRead = readRecord(rootPath, payload.thread);
   if (!rootRead.ok) {
@@ -341,16 +367,20 @@ function threadOf(context: ScanContext, payload: RecordPayload): ThreadRead {
   if (root.thread !== root.id) {
     return { ok: false, why: `the thread root ${payload.thread} is not its own thread`, payload };
   }
-  if (root.to !== grant.grant.recipientSeat) {
-    return { ok: false, why: `the thread root is addressed to "${root.to}", not the grant's seat "${grant.grant.recipientSeat}"`, payload };
+  if (root.to !== writerSeat) {
+    return { ok: false, why: `the thread root is addressed to "${root.to}", not the thread grant's seat "${writerSeat}"`, payload };
   }
-  if (root.to_id !== grant.grant.recipientId) {
-    return { ok: false, why: `the thread root's to_id is not the grant's agent id ${grant.grant.recipientId}`, payload };
+  if (root.to_id !== writerId) {
+    return { ok: false, why: `the thread root's to_id is not the grant's agent id ${writerId}`, payload };
   }
   if (root.session !== context.session || !sameFolder(root.root, context.root)) {
     return { ok: false, why: 'the thread root is bound to another session or checkout', payload };
   }
-  return { ok: true, grant: grant.grant, root };
+  // The two verified shapes stay apart in the return type: a plain grant's record and a bundle's
+  // are different signed records, and only the caller that read the fields knows which it read.
+  return origin.kind === 'grant'
+    ? { ok: true, kind: 'grant', grant: origin.grant, root }
+    : { ok: true, kind: 'bundle', grant: origin.grant, root };
 }
 
 /**

@@ -953,6 +953,32 @@ export function readClientGrant(home: string, grantId: string): ClientGrantRead 
 }
 
 /**
+ * One verified owner-signed grant that may be the origin of a client thread: a plain client grant
+ * (vocabularies 1 and 2, read as before) or a bundle grant (vocabularies 5 to 7). The two carry
+ * different signed fields — a plain grant signs one recipient seat and agent, a bundle signs a team
+ * and the seats its `send` may reach — so the reader says which it is and the route binds the
+ * thread with the fields that kind signs. Neither a file that claims to be a bundle nor one that
+ * claims to be a plain grant is admitted on the claim: the reader it picks verifies the record whole
+ * under the owner key, and the other reader's refusal is never the one reported.
+ */
+export type ClientThreadGrantRead =
+  | { ok: true; kind: 'grant'; grant: ClientGrantRecord; signature: string }
+  | { ok: true; kind: 'bundle'; grant: ClientUpGrantRecord; signature: string }
+  | { ok: false; why: string };
+
+/** The verified origin grant of a client thread, plain or bundle, or the reason it is not one. */
+export function readClientThreadGrant(home: string, grantId: string): ClientThreadGrantRead {
+  if (!CLIENT_GRANT_ID_PATTERN.test(grantId)) return refusal(`"${grantId}" is not a client grant id`);
+  const path = clientGrantPath(home, grantId);
+  if (claimsBundleGrantFile(path)) {
+    const bundle = readClientUpGrantFile(home, path);
+    return bundle.ok ? { ok: true, kind: 'bundle', grant: bundle.grant, signature: bundle.signature } : bundle;
+  }
+  const plain = readClientGrant(home, grantId);
+  return plain.ok ? { ok: true, kind: 'grant', grant: plain.grant, signature: plain.signature } : plain;
+}
+
+/**
  * Whether the presented grant is the canonical store's own record for its id: the canonical file
  * exists, verifies under the owner key, and every field and the signature match the presented
  * copy. A detached copy is never a bearer token by itself.
