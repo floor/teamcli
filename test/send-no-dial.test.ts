@@ -24,7 +24,7 @@ import type { SendOutcome } from '../src/send/uds.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
-import { claudeBox, recordBody, testIo } from './helpers.ts';
+import { claudeBox, dropNames, recordBody, testIo } from './helpers.ts';
 import { withoutSendId } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-17T05:00:00.000Z');
@@ -159,7 +159,7 @@ const owner = (root: string) => testIo(root, { kind: 'owner' });
 
 function dropped(root: string, seat: string): string {
   const dir = join(root, '.agents', 'send-drops', 'acme', seat);
-  return join(dir, readdirSync(dir).sort()[0] as string);
+  return join(dir, dropNames(dir).sort()[0] as string);
 }
 
 describe('the sending paths never dial while the socket is off', () => {
