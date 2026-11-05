@@ -134,6 +134,16 @@ launched from the beginning in a workspace of its own, and the old workspace is 
 input once the seat is ready, only if it still holds only the old pane and is not named for
 another seat.
 
+A launch in that same pane waits on its line differently. The shell was already at its prompt
+when the line was typed into it, so the echo on the screen is not by itself evidence that the
+line ran: the wait confirms the line was submitted — the echo left the prompt row, something was
+drawn below it, or the foreground left the shell — and reads the end of the launch from the
+foreground, the pane's own shell back in front through three consecutive readings. A line still
+sitting at that prompt past the longest unread echo captured is given one more Enter — only while
+the pane's own shell is in front and the line is exactly where it was, and only once. A pane whose
+screen shows no echo of the line is never typed into, and a line whose second Enter does not land
+either is reported at the deadline, never as a CLI that ended.
+
 ## A team still in its file
 
 Since 0.5.5 the team lives in the registry. When the owner runs `team up` in a project whose
