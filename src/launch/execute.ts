@@ -731,7 +731,7 @@ export async function executePlan(
   // launched again; it is ready when it reaches its prompt, and the detail says why it was
   // launched. Any other end of that seat keeps its own record, and the close is what the plan
   // and the state already show.
-  const relaunched = new Map<string, 'gone' | 'replaced' | 'drift'>();
+  const relaunched = new Map<string, 'gone' | 'replaced' | 'drift' | 'own-line'>();
   // The conversation id each launch is known to carry: the `--session-id` it minted, or the id its
   // line resumes. The seat state records it (and the registry's reach from it), so the next
   // relaunch can resume it when herdr's reading after the launch has none (herdr's reading, when present, wins).
@@ -758,6 +758,8 @@ export async function executePlan(
       final(seat, { kind: 'ready' }, '  its pane held a process team did not launch; closed without input and launched again\n');
     } else if (verdict === 'drift') {
       final(seat, { kind: 'ready' }, '  its model drifted; closed without input and launched again\n');
+    } else if (verdict === 'own-line') {
+      final(seat, { kind: 'ready' }, '  its pane held the bare restored CLI, not its launch line; closed without input and launched again\n');
     } else final(seat, { kind: 'ready' });
   };
   // The identity read after the idle prompt, to carry into every later record of the seat.
@@ -1937,6 +1939,75 @@ export async function executePlan(
         }
         break;
       }
+      case 'relaunch': {
+        reportProgress(op.seat, 'launching');
+        // The plan proved a restored conversation in a pane running the bare CLI, on a seat whose
+        // own launch line starts a wrapper: adopting the bare CLI would leave the wrapper's
+        // settings (an alternate endpoint) behind. The workspace is closed without input and the
+        // steps after this one launch the seat through its own line plus `--resume`. The plan's
+        // reading may be minutes old, so the host is read again with nothing between the readings
+        // and the close, and the same proof decides: a changed world is a refusal, never a
+        // partial close. Only a workspace holding this single pane is closed, and only at a free
+        // prompt: a working turn or unsent text is left where it stands.
+        const agentsNow = host.agentList?.(session) ?? null;
+        const processNow = host.processInfo?.(session, op.pane) ?? null;
+        const proof = restoreProof({
+          seat: { name: op.seat, cli: op.cli },
+          recorded: { stage: 'ready', pane: op.pane, workspace: op.workspace, launched: op.launched },
+          agents: agentsNow,
+          process: processNow,
+          foreground: host.foreground?.(session, op.pane) ?? null,
+          recordedSession: op.session,
+          screen: host.paneText?.(session, op.pane) ?? null,
+        });
+        if (proof.kind !== 'session') {
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, {
+            kind: 'left out',
+            reason: proof.kind === 'none'
+              ? proof.why
+              : 'its pane no longer proves the recorded conversation; nothing closed',
+          });
+          break;
+        }
+        const panes = host.workspacePanes ? host.workspacePanes(session, op.workspace) : null;
+        if (panes === null || panes.length === 0) {
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: 'its pane could not be read; nothing closed' });
+          break;
+        }
+        if (panes.length !== 1 || panes[0] !== op.pane) {
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: 'its workspace holds other panes; nothing closed (close its pane there, then run team up)' });
+          break;
+        }
+        const listedNow = agentsNow?.find((agent) => agent.pane === op.pane && (agent.name === null || agent.name === op.seat));
+        const kind = host.classify(session, op.pane, op.cli);
+        if (listedNow?.status === 'working' || kind === 'working') {
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: 'is working; nothing closed' });
+          break;
+        }
+        if (kind === 'unsent') {
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: 'holds unsent text; nothing closed' });
+          break;
+        }
+        if (!host.closeWorkspace(session, op.workspace)) {
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: 'its workspace did not close; left as it is' });
+          break;
+        }
+        if (!dropRecord(op.seat)) break;
+        relaunched.set(op.seat, 'own-line');
+        break;
+      }
       case 'repair': {
         reportProgress(op.seat, 'launching');
         // The pane holds a process team did not launch (or no CLI at all): the workspace is
@@ -1952,7 +2023,14 @@ export async function executePlan(
         // the one team launched, the model must still differ, and the seat must still be free.
         // Anything else: nothing closed, nothing launched for this seat, its state left as it
         // is, and the seat out of this run.
-        const listed = host.agentList ? host.agentList(session)?.find((agent) => agent.name === op.seat) : null;
+        const agentListNow = host.agentList ? host.agentList(session) : null;
+        const named = agentListNow?.find((agent) => agent.name === op.seat);
+        // A drift close re-reads the pane even when the host cleared the seat's name (a restore
+        // clears it): the process identity and the model, not the name, are what it closes on.
+        // A seat the host names on another pane still refuses; any other repair keeps the name
+        // binding it always had.
+        const listed = named
+          ?? (op.drift ? agentListNow?.find((agent) => agent.pane === op.pane && agent.name === null) : undefined);
         if (!listed || listed.pane !== op.pane || listed.workspace !== op.workspace) {
           held = true;
           dropped.add(op.seat);

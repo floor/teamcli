@@ -160,6 +160,23 @@ export type Op =
       reload?: { detail: string };
     }
   /**
+   * A restored pane runs the bare CLI where the seat's own launch line starts a wrapper (a
+   * launcher that selects an alternate endpoint). Re-read the host, re-run the same restore
+   * proof, and close only a workspace holding that single pane, at a free prompt; the steps
+   * after this one launch the seat through its own line plus `--resume <session>`.
+   */
+  | {
+      do: 'relaunch';
+      seat: string;
+      cli: string;
+      pane: string;
+      workspace: string;
+      /** The launch record's identity: the proof's expected side, re-read at the close. */
+      launched: LaunchedIdentity;
+      /** The recorded conversation the relaunch resumes. */
+      session: string;
+    }
+  /**
    * The host restored the seat's pane and cleared its name. Re-read the host, re-run the same
    * proof, and only then rename the pane back and record the identity it holds now. No typing,
    * no launch, no close, and no `team register` call.
@@ -342,6 +359,10 @@ export interface UpSeat {
     drift?: { way: string };
     /** Set by `team reload`: close only at an idle prompt, then launch the file's line. */
     reload?: { detail: string };
+    /** The restored pane runs the bare CLI where this seat's launch line starts a wrapper. The
+     *  close re-proves the recorded conversation and closes without input; the seat is then
+     *  launched through its own line plus `--resume <session>`, never adopted in place. */
+    ownLine?: { session: string };
   };
   /** A ready seat whose model drifted and that this `up` will not close: herdr reports it
    *  working, or its screen shows a running turn. The record stays ready. */
@@ -1057,28 +1078,42 @@ export function upPlan(input: UpInput): Step[] {
       // the seat, so it is closed with no key and no text, and everything after this step
       // launches the seat from the beginning, in a workspace of its own.
       if (seat.repair) {
-        const drift = !seat.repair.reload && seat.repair.drift && seat.model !== undefined && seat.version !== undefined
+        const drift = !seat.repair.reload && !seat.repair.ownLine && seat.repair.drift && seat.model !== undefined && seat.version !== undefined
           ? { model: seat.model, version: seat.version, way: seat.repair.drift.way }
           : undefined;
         const reload = seat.repair.reload;
+        const ownLine = seat.repair.ownLine;
+        const repair = seat.repair;
         steps.push({
           kind: 'run',
-          argv: herdr(session, 'workspace', 'close', seat.repair.workspace),
-          note: reload
-            ? 'closed without input, at an idle prompt: its declared model, effort or rules differ from the launch'
-            : drift
-              ? 'closed without input: its model drifted from the file'
-              : 'closed without input: its pane no longer holds the process team launched',
-          do: {
-            do: 'repair',
-            seat: seat.name,
-            cli: seat.repair.cli,
-            pane: seat.repair.pane,
-            workspace: seat.repair.workspace,
-            launched: seat.repair.launched,
-            ...(drift ? { drift } : {}),
-            ...(reload ? { reload } : {}),
-          },
+          argv: herdr(session, 'workspace', 'close', repair.workspace),
+          note: ownLine
+            ? 'closed without input: its pane holds the bare restored CLI, not its launch line'
+            : reload
+              ? 'closed without input, at an idle prompt: its declared model, effort or rules differ from the launch'
+              : drift
+                ? 'closed without input: its model drifted from the file'
+                : 'closed without input: its pane no longer holds the process team launched',
+          do: ownLine
+            ? {
+                do: 'relaunch',
+                seat: seat.name,
+                cli: repair.cli,
+                pane: repair.pane,
+                workspace: repair.workspace,
+                launched: repair.launched,
+                session: ownLine.session,
+              }
+            : {
+                do: 'repair',
+                seat: seat.name,
+                cli: repair.cli,
+                pane: repair.pane,
+                workspace: repair.workspace,
+                launched: repair.launched,
+                ...(drift ? { drift } : {}),
+                ...(reload ? { reload } : {}),
+              },
         });
       }
       const said = takeNotice();
