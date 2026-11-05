@@ -19,3 +19,14 @@ footer, at the widths the panes drew them.
 The three screens the typed wake reads back (empty idle box, box holding text, working row) are
 pinned by `test/antigravity-typed-wake.test.ts`. The trigger line that test draws into the idle
 box is synthetic; no frame here holds one.
+
+## Not produced
+
+- `trust`: not produced, the panes were already trusted, so no trust question was drawn.
+- `unsent`: not produced as an `unsent.txt` frame; the only real unsent screen here is the
+  `/exit` completion row (`exit-completion-unsent.txt`), not a rules line waiting in the box.
+- `working`: not produced, the working row is constructed in `working-synthetic.txt`; no live
+  working screen was captured in this folder.
+- `question`: not produced, no question dialog was drawn on 1.4.12 here.
+- `permission`: not produced, no permission dialog was drawn on 1.4.12 here.
+- `unknown`: not produced, the folder holds no shell-return frame.

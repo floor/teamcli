@@ -12,3 +12,17 @@ into the input row. The shipped `1.0.52/working.txt` printed `kind=working`, and
 
 The banner in the capture reads `Grok Build  1.0.70`. The profile's tested range is
 unchanged: this folder is the frame the typed wake reads, not a new tested ceiling.
+
+- `idle.txt`: the welcome frame described above, the provided capture, sanitized. It reads as
+  `idle`.
+
+## Not produced
+
+- `trust`: not produced, the capture came from a folder the CLI already trusted, so no trust
+  question was drawn.
+- `unsent`: not produced, no live unsent frame is stored; the grammar check above drew a line
+  into the input row of this frame rather than capturing a typed box.
+- `working`: not produced, the welcome frame is a ready box; no turn was run in this folder.
+- `question`: not produced, no question dialog was drawn in this folder.
+- `permission`: not produced, no permission dialog was drawn in this folder.
+- `unknown`: not produced, the folder holds no shell-return frame.
