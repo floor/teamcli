@@ -8,6 +8,7 @@ import { createConnection } from 'node:net';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runAck } from '../../src/commands/ack.ts';
+import { runAnalyse } from '../../src/commands/analyse.ts';
 import { runShow } from '../../src/commands/show.ts';
 import { runAdd } from '../../src/commands/add.ts';
 import { runAgents } from '../../src/commands/agents.ts';
@@ -323,6 +324,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runAck(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'agents':
       return runAgents(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
+    case 'analyse':
+      return runAnalyse(rest, io, { home: fixture.home, now: () => new Date(spec.now), durationMs: 1 });
     case 'fallback':
       return runFallback(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'add':

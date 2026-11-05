@@ -3307,10 +3307,199 @@ export const WORKFLOW_OUTPUT_SCHEMA: CommandSchemaSpec = {
   ],
 };
 
+export const ANALYSE_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.analyse',
+  fileName: 'analyse.schema.json',
+  title: 'team analyse --json output',
+  required: ['format', 'at', 'analyser', 'source', 'analysis_cost', 'report', 'proposal'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    at: { type: 'string', minLength: 1 },
+    analyser: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['principal', 'authorized_by', 'scope'],
+      properties: {
+        principal: { type: 'string', minLength: 1 },
+        authorized_by: { type: 'string', const: 'owner' },
+        scope: { type: 'string', enum: ['full', 'public'] },
+      },
+    },
+    source: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['name', 'kind', 'level'],
+      properties: {
+        name: { type: 'string', minLength: 1 },
+        kind: { type: 'string', enum: ['teamcli', 'tool', 'tracker', 'lab'] },
+        level: { type: 'string', enum: ['default', 'machine', 'entity', 'project'] },
+      },
+    },
+    analysis_cost: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['duration_ms', 'git_walks', 'files_read', 'bytes_read', 'tokens', 'usd'],
+      properties: {
+        duration_ms: { type: 'integer', minimum: 0 },
+        git_walks: { type: 'integer', minimum: 0 },
+        files_read: { type: 'integer', minimum: 0 },
+        bytes_read: { type: 'integer', minimum: 0 },
+        tokens: { type: 'integer', const: 0 },
+        usd: { type: 'number', const: 0 },
+      },
+    },
+    report: {
+      type: 'object',
+      additionalProperties: false,
+      required: [
+        'root',
+        'visibility',
+        'manifests',
+        'size',
+        'languages',
+        'stack_skills',
+        'checks',
+        'ci',
+        'release',
+        'pace',
+        'open_work',
+        'topology',
+        'findings',
+      ],
+      properties: {
+        root: { type: 'string', minLength: 1 },
+        visibility: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['value', 'source'],
+          properties: {
+            value: { type: 'string', enum: ['public', 'private', 'not known'] },
+            source: { type: 'string', minLength: 1 },
+          },
+        },
+        manifests: {
+          type: 'array',
+          items: { type: 'string', minLength: 1 },
+        },
+        size: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['files', 'lines', 'mark', 'source'],
+          properties: {
+            files: { type: 'integer', minimum: 0 },
+            lines: { type: 'integer', minimum: 0 },
+            mark: { type: 'string', enum: ['measured', 'estimated'] },
+            source: { type: 'string', minLength: 1 },
+          },
+        },
+        languages: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['language', 'files', 'lines', 'share_pct'],
+            properties: {
+              language: { type: 'string', minLength: 1 },
+              files: { type: 'integer', minimum: 0 },
+              lines: { type: 'integer', minimum: 0 },
+              share_pct: { type: 'number', minimum: 0, maximum: 100 },
+            },
+          },
+        },
+        stack_skills: {
+          type: 'array',
+          items: { type: 'string', minLength: 1 },
+        },
+        checks: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['command', 'source'],
+            properties: {
+              command: { type: 'string', minLength: 1 },
+              source: { type: 'string', minLength: 1 },
+            },
+          },
+        },
+        ci: {
+          type: 'array',
+          items: { type: 'string', minLength: 1 },
+        },
+        release: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['tags', 'workflows', 'source'],
+          properties: {
+            tags: { type: 'boolean' },
+            workflows: {
+              type: 'array',
+              items: { type: 'string', minLength: 1 },
+            },
+            source: { type: 'string', minLength: 1 },
+          },
+        },
+        pace: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['window_days', 'commits_per_day', 'active_hours_per_day', 'rhythm', 'source'],
+          properties: {
+            window_days: { type: 'integer', minimum: 1 },
+            commits_per_day: { type: 'number', minimum: 0 },
+            active_hours_per_day: { type: 'number', minimum: 0 },
+            rhythm: { type: 'string', enum: ['idle', 'steady-idle', 'active', 'bursty', 'sparse'] },
+            source: { type: 'string', minLength: 1 },
+          },
+        },
+        open_work: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['open', 'blocked', 'source'],
+          properties: {
+            open: { type: 'integer', minimum: 0 },
+            blocked: { type: 'integer', minimum: 0 },
+            source: { type: 'string', minLength: 1 },
+          },
+        },
+        topology: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['parallelizable', 'serial'],
+          properties: {
+            parallelizable: {
+              type: 'array',
+              items: { type: 'string', minLength: 1 },
+            },
+            serial: {
+              type: 'array',
+              items: { type: 'string', minLength: 1 },
+            },
+          },
+        },
+        findings: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['kind', 'source', 'summary'],
+            properties: {
+              kind: { type: 'string', const: 'untrusted-instruction-ignored' },
+              source: { type: 'string', minLength: 1 },
+              summary: { type: 'string', minLength: 1 },
+            },
+          },
+        },
+      },
+    },
+    proposal: { type: ['object', 'null'] },
+  },
+};
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
   ABOUT_OUTPUT_SCHEMA,
+  ANALYSE_OUTPUT_SCHEMA,
   STATUS_OUTPUT_SCHEMA,
   SEATS_OUTPUT_SCHEMA,
   PROJECTS_OUTPUT_SCHEMA,

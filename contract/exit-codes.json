@@ -549,6 +549,41 @@
     },
     {
       "code": 0,
+      "command": "analyse",
+      "id": "analyse.report",
+      "meaning": "the project analysis report was printed",
+      "trigger": "team analyse ."
+    },
+    {
+      "code": 1,
+      "command": "analyse",
+      "id": "analyse.scope",
+      "meaning": "the named analyser has scope: public and the target project is not public",
+      "trigger": "team analyse ."
+    },
+    {
+      "code": 1,
+      "command": "analyse",
+      "id": "analyse.unauthorised",
+      "meaning": "no analyser is named for the target project, or the caller is not the named analyser",
+      "trigger": "team analyse ."
+    },
+    {
+      "code": 1,
+      "command": "analyse",
+      "id": "analyse.unreadable",
+      "meaning": "the target project path cannot be read or is a symbolic link",
+      "trigger": "team analyse missing-dir"
+    },
+    {
+      "code": 2,
+      "command": "analyse",
+      "id": "analyse.invocation",
+      "meaning": "the invocation cannot be read",
+      "trigger": "team analyse --nope"
+    },
+    {
+      "code": 0,
       "command": "answer",
       "id": "answer.question",
       "meaning": "the question dialog was answered: dismissed with the recorded key, and the seat sent the decision line",
