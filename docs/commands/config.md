@@ -43,7 +43,7 @@ team runs.
 | the path holds nothing (`get`), cannot be set, the caller is not the owner, or the change does not validate | 1 |
 | a bad invocation, no team found, a record that cannot be read, or the editor failed | 2 |
 
-## The entity's record: names.unique and reminders
+## The entity's and project's records: names.unique, reminders, and rules
 
     team config get <entity>.names.unique [--json]
     team config set <entity>.names.unique <word>
@@ -51,11 +51,21 @@ team runs.
     team config get <entity>.reminders [--json]
     team config set <entity>.reminders <yaml list>
     team config set <entity>.reminders <yaml list> --general <grant.json> --key <client.key> [--json]
+    team config get <entity>.rules [--json]
+    team config set <entity>.rules <yaml list> [--dry-run] [--json]
+    team config get project.<id>.rules [--json]
+    team config set project.<id>.rules <yaml list> [--dry-run] [--json]
+    team config get composed.rules [--json]
 
 A path whose last segment is `names.unique` or `reminders` names one key of an entity's own
 entry, not the team's record. Both live with the rest of the entry in the owner's entities file
 (`~/.config/team/entities.yaml`), and the form reads no team, so it runs outside a checkout and
-the entity name may itself carry dots (the last segment is the key).
+the entity name may itself carry dots (the last segment is the key). Likewise, `<entity>.rules`
+reads or writes the entity-wide standing rules in `~/.config/team/entities.yaml`, and
+`project.<id>.rules` (or `projects.<id>.rules`) reads or writes the project-wide standing rules in
+`~/.config/team/projects.yaml`. Passing `--dry-run` to `set` prints the planned change without
+writing to disk. `team config get composed.rules` prints the composed rules (entity, home project,
+and team) with their origin headings.
 
 `<entity>.names.unique` says how far apart seat nicknames stay — `entity` (the default, across
 every team of the entity), `project` (within one project), `team` (within one team) or `off`.

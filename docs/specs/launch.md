@@ -60,9 +60,17 @@ Then, in this order:
 | Part | Written from |
 |---|---|
 | the profile's own rules | the profile's `standing_rules`, a safety line the CLI makes necessary; often empty |
+| the entity's rules | `<entity>.rules` in `~/.config/team/entities.yaml` when the team belongs to an entity that declares rules |
+| the home project's rules | `projects.<id>.rules` in `~/.config/team/projects.yaml` for the team's **home** project only (`in_project` / `project_id`; served projects do not apply) |
 | the file's rules | the team file's `rules` list |
 | the signature lines | two lines, from the file's signature templates and the seat |
 | the workspace lines | the protected checkouts, and the worktree or shared-folder line |
+
+When entity rules or home-project rules are present, each present part (`Entity rules (<entity>):`,
+`Project rules (<project>):`, `Team rules:`) sits under its own short heading so a seat sees where a
+line came from. Rules are text: there is no precedence, override, or merge; order is the whole
+meaning, and a team cannot drop an entity rule. One text, one hash, and one delivery cover the
+composed sequence, and `team status` / `team doctor` check the rules file against the composed text.
 
 The signature lines:
 

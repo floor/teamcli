@@ -9,8 +9,21 @@
 // read-modify-write under a lock ending in an atomic replace, exactly like teams.ts, so a reader
 // never sees half a file and two writers never lose each other's update.
 
-import { closeSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
+import { editedRecordText, withValue } from '../config/team-record.ts';
+import type { RulesEditPlan } from '../entities.ts';
 import {
   DELIVERY_LEGS,
   isLivenessSeconds,
@@ -24,6 +37,7 @@ import {
 import { writeAtomic } from '../state.ts';
 import { currentRunMemo } from '../run-memo.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
+import { teamIdOf } from './teams.ts';
 
 export type ProjectProvenance = { registered_by: string; registered_at: string; updated_at: string };
 
@@ -63,6 +77,8 @@ export type ProjectRecord = {
   policies?: Record<string, YamlValue>;
   /** Owner-signed project-level settings, one signed entry per key, when present. */
   settings?: Record<string, YamlValue>;
+  /** Project-wide standing rules (`projects.<id>.rules`), inherited by every home team's seats. */
+  rules?: string[];
   provenance: ProjectProvenance;
 };
 
@@ -107,6 +123,7 @@ function cloneProjectRecord(record: ProjectRecord): ProjectRecord {
     provenance: { ...record.provenance },
     ...(record.policies !== undefined ? { policies: { ...record.policies } } : {}),
     ...(record.settings !== undefined ? { settings: { ...record.settings } } : {}),
+    ...(record.rules !== undefined ? { rules: [...record.rules] } : {}),
   };
 }
 
@@ -255,8 +272,20 @@ export function upsertProject(home: string, id: string, patch: ProjectPatch): Pr
         ...(fields.senderName !== undefined ? { senderName: fields.senderName } : {}),
         ...(fields.policies !== undefined ? { policies: fields.policies } : {}),
         ...(fields.settings !== undefined ? { settings: fields.settings } : {}),
+        ...(fields.rules !== undefined ? { rules: fields.rules } : {}),
         provenance: { registered_by: by ?? 'team', registered_at: at, updated_at: at },
       };
+    }
+    if (record.rules !== undefined) {
+      if (!Array.isArray(record.rules)) throw new ProjectsError('"rules" must be a list of strings');
+      const cleaned: string[] = [];
+      for (const r of record.rules) {
+        if (typeof r !== 'string') throw new ProjectsError('a rule in "rules" must be text');
+        const trimmed = r.trim();
+        if (trimmed.length > 0) cleaned.push(trimmed);
+      }
+      if (cleaned.length > 0) record.rules = cleaned;
+      else delete record.rules;
     }
     if (settingsDelta !== undefined) {
       const settings: Record<string, YamlValue> = { ...(record.settings ?? {}) };
@@ -452,6 +481,12 @@ function emit(projects: Record<string, ProjectRecord>): string {
     if (project.settings && Object.keys(project.settings).length > 0) {
       lines.push(...emitSettings('    ', project.settings));
     }
+    if (project.rules && project.rules.length > 0) {
+      lines.push('    rules:');
+      for (const rule of project.rules) {
+        lines.push(`      - ${JSON.stringify(rule)}`);
+      }
+    }
     const p = project.provenance;
     lines.push(`    provenance: { registered_by: ${scalar(p.registered_by)}, registered_at: ${scalar(p.registered_at)}, updated_at: ${scalar(p.updated_at)} }`);
   }
@@ -516,6 +551,17 @@ function recordOf(id: string, raw: YamlValue, path: string): ProjectRecord {
   }
   const policies = isMap(raw.policies) && Object.keys(raw.policies).length > 0 ? raw.policies : undefined;
   const settings = isMap(raw.settings) && Object.keys(raw.settings).length > 0 ? raw.settings : undefined;
+  let rules: string[] | undefined;
+  if (raw.rules !== undefined) {
+    if (!Array.isArray(raw.rules)) bad('"rules" must be a list of strings');
+    const cleaned: string[] = [];
+    for (const [i, item] of (raw.rules as YamlValue[]).entries()) {
+      if (typeof item !== 'string') bad(`rules line ${i + 1} must be text`);
+      const trimmed = item.trim();
+      if (trimmed.length > 0) cleaned.push(trimmed);
+    }
+    if (cleaned.length > 0) rules = cleaned;
+  }
   const prov = raw.provenance;
   if (!isMap(prov)) return bad('"provenance" must be a map');
   for (const key of ['registered_by', 'registered_at', 'updated_at']) {
@@ -532,6 +578,7 @@ function recordOf(id: string, raw: YamlValue, path: string): ProjectRecord {
     ...(senderNameWord !== undefined ? { senderName: senderNameWord as SenderNameMode } : {}),
     ...(policies !== undefined ? { policies } : {}),
     ...(settings !== undefined ? { settings } : {}),
+    ...(rules !== undefined ? { rules } : {}),
     provenance: { registered_by: prov.registered_by as string, registered_at: prov.registered_at as string, updated_at: prov.updated_at as string },
   };
 }
@@ -539,3 +586,221 @@ function recordOf(id: string, raw: YamlValue, path: string): ProjectRecord {
 function isMap(value: YamlValue | undefined): value is { [key: string]: YamlValue } {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
+
+/**
+ * Each project's declared standing rules (`projects.<id>.rules`), read directly from
+ * `<home>/.config/team/projects.yaml` (including minimal test fixtures without provenance).
+ */
+export function declaredProjectRules(home: string): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  const path = projectsFile(home);
+  if (!existsSync(path)) return out;
+  try {
+    const parsed = toValue(parseYaml(readFileSync(path, 'utf8')));
+    if (!isMap(parsed) || !isMap(parsed.projects)) return out;
+    for (const [id, raw] of Object.entries(parsed.projects)) {
+      if (!isMap(raw) || !Array.isArray(raw.rules)) continue;
+      const list: string[] = [];
+      for (const item of raw.rules) {
+        if (typeof item !== 'string') continue;
+        const line = item.trim();
+        if (line !== '') list.push(line);
+      }
+      if (list.length > 0) {
+        out.set(id, list);
+      }
+    }
+  } catch {
+    return out;
+  }
+  return out;
+}
+
+/**
+ * Resolve one project's declared rules at `home` by project ID (or display name).
+ */
+export function projectRules(home: string | undefined, projectId: string | null): string[] {
+  if (home === undefined || projectId === null) return [];
+  const map = declaredProjectRules(home);
+  const direct = map.get(projectId);
+  if (direct !== undefined) return direct;
+  try {
+    const slug = projectIdOf(projectId);
+    const bySlug = map.get(slug);
+    if (bySlug !== undefined) return bySlug;
+  } catch {}
+  return [];
+}
+
+/**
+ * Resolve a team's **home** project ID only (Zeus §2 / §3b: a served project's rules never apply).
+ * Checks `team.inProject` first, then `teams.yaml` `project_id`, and only falls back to a single
+ * non-served entry in `projects.yaml` when neither `in_project` nor `teams.yaml` is present.
+ */
+export function homeProjectIdOf(
+  home: string,
+  root: string,
+  team?: { inProject?: string | null; alsoIn?: string[] } | null,
+): string | null {
+  const projPath = projectsFile(home);
+  let rawProjects: Record<string, YamlValue> | null = null;
+  if (existsSync(projPath)) {
+    try {
+      const parsed = toValue(parseYaml(readFileSync(projPath, 'utf8')));
+      if (isMap(parsed) && isMap(parsed.projects)) {
+        rawProjects = parsed.projects;
+      }
+    } catch {}
+  }
+
+  if (team?.inProject !== undefined && team.inProject !== null && team.inProject.trim() !== '') {
+    const target = team.inProject.trim();
+    if (rawProjects !== null) {
+      if (Object.hasOwn(rawProjects, target)) return target;
+      for (const [id, raw] of Object.entries(rawProjects)) {
+        if (isMap(raw) && raw.name === target) return id;
+      }
+    }
+    try {
+      return projectIdOf(target);
+    } catch {
+      return target;
+    }
+  }
+
+  const tId = teamIdOf(root);
+  const teamsPath = join(home, '.config', 'team', 'teams.yaml');
+  if (existsSync(teamsPath)) {
+    try {
+      const parsed = toValue(parseYaml(readFileSync(teamsPath, 'utf8')));
+      if (isMap(parsed) && isMap(parsed.teams) && Object.hasOwn(parsed.teams, tId)) {
+        const rec = parsed.teams[tId];
+        if (isMap(rec)) {
+          return typeof rec.project_id === 'string' && rec.project_id.trim() !== ''
+            ? rec.project_id.trim()
+            : null;
+        }
+      }
+    } catch {}
+  }
+
+  // If `team` explicitly says `inProject: null`, do not guess a project when `teams.yaml` exists or
+  // when multiple projects or `also_in` name this team. When no `teams.yaml` exists and a synthetic
+  // test placed `tId` in a single project in `projects.yaml` without `also_in`, return that project.
+  if (rawProjects !== null) {
+    const servedSet = new Set((team?.alsoIn ?? []).map((n) => n.toLowerCase()));
+    const matches: string[] = [];
+    for (const [id, raw] of Object.entries(rawProjects)) {
+      if (!isMap(raw) || !Array.isArray(raw.teams)) continue;
+      if (!raw.teams.includes(tId)) continue;
+      const nameLower = typeof raw.name === 'string' ? raw.name.toLowerCase() : '';
+      if (servedSet.has(id.toLowerCase()) || (nameLower !== '' && servedSet.has(nameLower))) continue;
+      matches.push(id);
+    }
+    if (matches.length === 1 && team?.inProject === undefined) {
+      return matches[0] ?? null;
+    }
+    if (matches.length === 1 && !existsSync(teamsPath) && team?.inProject === null) {
+      return matches[0] ?? null;
+    }
+  }
+  return null;
+}
+
+function renderProjectDiff(path: string, before: string, after: string): string {
+  if (before === after) return `nothing changed in ${path}`;
+  const beforeLines = before === '' ? [] : before.replace(/\n$/, '').split('\n');
+  const afterLines = after === '' ? [] : after.replace(/\n$/, '').split('\n');
+  const out: string[] = [`--- ${path}`, `+++ ${path}`];
+  const max = Math.max(beforeLines.length, afterLines.length);
+  for (let i = 0; i < max; i += 1) {
+    const b = beforeLines[i];
+    const a = afterLines[i];
+    if (b === a && b !== undefined) continue;
+    if (b !== undefined) out.push(`- ${b}`);
+    if (a !== undefined) out.push(`+ ${a}`);
+  }
+  return out.join('\n');
+}
+
+/**
+ * Plan setting `projects.<id>.rules` in `<home>/.config/team/projects.yaml` without writing to disk.
+ * Used for `--dry-run` (Zeus §5.10) and before applying an owner write.
+ */
+export function planProjectRulesSet(home: string, projectId: string, rules: string[]): RulesEditPlan {
+  const path = projectsFile(home);
+  const cleaned = rules.map((r) => r.trim()).filter((r) => r.length > 0);
+  if (!existsSync(path)) {
+    throw new ProjectsError(`${path} does not exist: no entry for project "${projectId}"`);
+  }
+  const before = readFileSync(path, 'utf8');
+  const parsed = toValue(parseYaml(before));
+  if (!isMap(parsed) || !isMap(parsed.projects)) {
+    throw new ProjectsError(`${path}: expected a map with a "projects" key`);
+  }
+  let resolvedId = projectId;
+  if (!Object.hasOwn(parsed.projects, resolvedId)) {
+    const byDisplay = Object.entries(parsed.projects).find(
+      ([, raw]) => isMap(raw) && raw.name === projectId,
+    );
+    if (byDisplay) resolvedId = byDisplay[0];
+    else {
+      throw new ProjectsError(`${path}: no entry for project "${projectId}"`);
+    }
+  }
+  const recordPath = ['projects', resolvedId, 'rules'];
+  const changed = withValue(parsed, recordPath, cleaned);
+  if (!changed.ok) {
+    throw new ProjectsError(`project "${resolvedId}" rules: ${changed.why}`);
+  }
+  if (!changed.changed) {
+    return {
+      path,
+      before,
+      after: before,
+      diff: `nothing changed in ${path}`,
+      changed: false,
+      kept: true,
+    };
+  }
+  const edited = editedRecordText(before, recordPath, cleaned, changed.root);
+  return {
+    path,
+    before,
+    after: edited.text,
+    diff: renderProjectDiff(path, before, edited.text),
+    changed: true,
+    kept: edited.kept,
+  };
+}
+
+/**
+ * Write `projects.<id>.rules` in `<home>/.config/team/projects.yaml` (or return the plan without
+ * writing when `opts.dryRun` is true).
+ */
+export function writeProjectRulesSet(
+  home: string,
+  projectId: string,
+  rules: string[],
+  opts: { dryRun?: boolean } = {},
+): RulesEditPlan & { written: boolean } {
+  const plan = planProjectRulesSet(home, projectId, rules);
+  if (opts.dryRun || !plan.changed) {
+    return { ...plan, written: false };
+  }
+  mkdirSync(dirname(plan.path), { recursive: true });
+  let mode = 0o600;
+  try {
+    mode = statSync(plan.path).mode & 0o777;
+  } catch {}
+  const tmp = `${plan.path}.${process.pid}.tmp`;
+  writeFileSync(tmp, plan.after, { mode });
+  renameSync(tmp, plan.path);
+  const memo = currentRunMemo();
+  if (memo !== null) {
+    memo.projects.clear();
+    memo.projectsRaw.clear();
+  }
+  return { ...plan, written: true };
+}
+

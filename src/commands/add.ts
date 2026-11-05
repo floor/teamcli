@@ -1482,7 +1482,7 @@ function seatPlan(
     // A human's pane: no launch, no key, no line. The plan skips it before any of that.
     ...(seat.human ? { human: true as const } : {}),
     // An option seat's launch line and a message seat's rules file both come from the live file.
-    rules: rulesOf(team, seat, root, undefined, origin),
+    rules: rulesOf(team, seat, root, undefined, origin, home),
     sessionName: seatSessionName(seat, {
       team: teamIdOf(root),
       teamName: team.project,

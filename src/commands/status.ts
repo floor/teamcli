@@ -921,7 +921,7 @@ export function rulesFileProblem(
   if ((profileFor(seat.cli)?.rulesMode ?? 'message') !== 'message') return null;
   const path = rulesFilePath(team.project, root, home, seat.name);
   if (path === null) return null;
-  const check = checkRulesFile(path, rulesOf(team, seat, root, undefined, origin), origin);
+  const check = checkRulesFile(path, rulesOf(team, seat, root, undefined, origin, home), origin);
   return check.ok ? null : check.what;
 }
 

@@ -1852,7 +1852,7 @@ function buildUpSeat(
     stopped: false,
     // A human's pane: no launch, no key, no line. The plan skips it before any of that.
     ...(seat.human ? { human: true as const } : {}),
-    rules: rulesOf(team, seat, root, undefined, origin),
+    rules: rulesOf(team, seat, root, undefined, origin, home),
     sessionName: seatSessionName(seat, {
       team: teamIdOf(root),
       teamName: team.project,

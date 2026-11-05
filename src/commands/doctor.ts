@@ -692,7 +692,7 @@ export function doctorFindings(
       if (seat.stopped || (profileFor(seat.cli)?.rulesMode ?? 'message') !== 'message') continue;
       const path = rulesFilePath(approved.project, root, sources.home, seat.name);
       if (path === null) continue;
-      const check = checkRulesFile(path, rulesOf(approved, seat, root, undefined, rulesOrigin), rulesOrigin);
+      const check = checkRulesFile(path, rulesOf(approved, seat, root, undefined, rulesOrigin, sources.home), rulesOrigin);
       if (!check.ok) findings.push({ level: 'warn', text: `${seat.name}: ${check.what}; run team reload ${seat.name}` });
     }
   }

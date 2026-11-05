@@ -87,15 +87,23 @@ export type ConfigSources = {
 export async function runConfig(argv: string[], rawIo: Io, sources: ConfigSources = {}): Promise<number> {
   const io = cleanedIo(rawIo);
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['approval', 'general', 'key', 'reason'], ['json', 'request']);
+  const args = readArgs(
+    argv.filter((arg) => arg !== '--dry-run'),
+    ['approval', 'general', 'key', 'reason'],
+    ['json', 'request'],
+  );
   const verb = args.rest[0];
   if (verb === 'get' || verb === 'set' || verb === 'unset' || verb === 'edit') {
-    // A path whose last segment is `names.unique` or `reminders` is an entity's own record, not
-    // this team's: the entry lives in the owner's entities file, and no team is read
-    // (src/config/entity-edit.ts). The team's record has no key of either name, so nothing else
-    // can be meant.
+    // A path whose last segment is `names.unique`, `reminders`, or `<entity|project>.rules` is an
+    // entity or project record in the owner's registry files, not this team's
+    // (src/config/entity-edit.ts).
     const entityPath = args.rest[1] ?? '';
-    if (verb !== 'edit' && (entityPath.endsWith('.names.unique') || entityPath.endsWith('.reminders'))) {
+    if (
+      verb !== 'edit' &&
+      (entityPath.endsWith('.names.unique') ||
+        entityPath.endsWith('.reminders') ||
+        (entityPath.endsWith('.rules') && entityPath.includes('.')))
+    ) {
       const { runEntityRecordEdit } = await import('../config/entity-edit.ts');
       return runEntityRecordEdit(argv, rawIo, sources);
     }
