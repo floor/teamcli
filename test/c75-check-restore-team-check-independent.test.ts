@@ -29,6 +29,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFi
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as realHerdr from '../src/herdr.ts';
+import { discardFixtures } from './fixture-cleanup.ts';
 
 const SESSION = 'acme-restore-check';
 const LEAD_PANE = 'pane-lead';
@@ -298,7 +299,7 @@ afterEach(() => {
 
 afterAll(() => {
   mock.module('../src/herdr.ts', () => ({ ...realHerdr }));
-  execFileSync('/usr/bin/trash', [base]);
+  discardFixtures([base]);
 });
 
 describe('runTeamCheck live read: provable restores read with repair team up, including foreground', () => {

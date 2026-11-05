@@ -68,13 +68,16 @@ test('a quoted line: quoted words arrive whole, options still before the --', ()
   ]);
 });
 
-test('a nested script line: the additions ride inside the script the CLI reads', () => {
+// Known for 0.5.12.1: nested zsh -lc on /usr/bin:/bin and ANSI-C $'--' under /bin/sh assume macOS.
+const offDarwin = process.platform !== 'darwin';
+
+test.skipIf(offDarwin)('a nested script line: the additions ride inside the script the CLI reads', () => {
   launches(`zsh -lc 'codex --skip-git-repo-check -- a nested task'`, [
     '--skip-git-repo-check', ...ADDED, '--', 'a', 'nested', 'task', RULES,
   ]);
 });
 
-test('a decodable ANSI-C delimiter still splits: the options stand before it', () => {
+test.skipIf(offDarwin)('a decodable ANSI-C delimiter still splits: the options stand before it', () => {
   launches(`codex exec $'--' plain task`, [
     'exec', ...ADDED, '--', 'plain', 'task', RULES,
   ]);

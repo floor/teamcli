@@ -23,7 +23,7 @@ import { lobbyDir } from '../src/lobby/gate.ts';
 import { readAllHistories } from '../src/send/history.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { LOG_FILE } from '../src/state.ts';
-import { testIo, type TestIo } from './helpers.ts';
+import { dropNames, testIo, type TestIo } from './helpers.ts';
 import { withoutSendId } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-17T13:00:00.000Z');
@@ -258,8 +258,9 @@ describe('the same seat without the stopped mark plans and delivers normally', (
     );
     expect(host.typed.length).toBe(0);
     // No event adapter took it, so the drop waits with its pending mark beside it.
-    expect(dropFiles(w).filter((path) => !path.endsWith('.fallback.json') && !path.endsWith('.pending')).length).toBe(1);
-    expect(dropFiles(w).filter((path) => path.endsWith('.pending')).length).toBe(1);
+    const names = dropNames(join(w.dir, 'send-drops', SESSION, STOPPED));
+    expect(names.filter((name) => !name.endsWith('.fallback.json') && !name.endsWith('.pending')).length).toBe(1);
+    expect(names.filter((name) => name.endsWith('.pending')).length).toBe(1);
     expect(sendRecords(w)).toEqual(['queued, not woken']);
   });
 });

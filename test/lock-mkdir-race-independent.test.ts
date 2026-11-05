@@ -1,9 +1,9 @@
 // Synthetic paths and child processes only; no keys, CLI state, or nonzero signals.
 import { afterAll, expect, test } from 'bun:test';
-import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { discardFixtures } from './fixture-cleanup.ts';
 
 const base = mkdtempSync(join(tmpdir(), 'independent-lock-mkdir-'));
 const worker = join(base, 'worker.ts');
@@ -61,7 +61,7 @@ console.log(JSON.stringify({ scene, mkdirCalls, openCalls, workCalls, nestedWork
   keyExists: real.existsSync(path), target: real.existsSync(join(root, 'target')) && !real.statSync(join(root, 'target')).isDirectory()
     ? real.readFileSync(join(root, 'target'), 'utf8') : null }));
 `);
-afterAll(() => execFileSync('/usr/bin/trash', [base]));
+afterAll(() => discardFixtures([base]));
 
 async function run(scene: string) {
   const root = join(base, scene);

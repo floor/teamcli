@@ -8,6 +8,7 @@
 
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_CHILD_TIMEOUT_MS, execText, wasAborted, wasKilled } from '../src/child.ts';
 
@@ -19,7 +20,7 @@ afterEach(() => {
 
 /** An executable script in its own scratch folder, printing just what it is written to print. */
 function script(body: string): { path: string; dir: string } {
-  const dir = mkdtempSync(join('/private/tmp', 'team-child-exec-'));
+  const dir = mkdtempSync(join(tmpdir(), 'team-child-exec-'));
   made.push(dir);
   const path = join(dir, 'child');
   writeFileSync(path, `#!/bin/sh\n${body}\n`, { mode: 0o755 });

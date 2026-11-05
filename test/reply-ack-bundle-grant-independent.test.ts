@@ -23,7 +23,8 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { discardFixtures } from './fixture-cleanup.ts';
 import { BUNDLE_OP_ROUTES, type BundleName, type BundleOp } from '../src/client/bundle-ops.ts';
 import { clientInboxFolder, ensureClientInbox, scanClientInbox, writeClientInboxFile } from '../src/client/inbox.ts';
 import {
@@ -59,7 +60,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  execFileSync('/usr/bin/trash', [suiteBase]);
+  discardFixtures([suiteBase], { roots: [dirname(suiteBase)] });
 });
 
 function nextUuid(): string {

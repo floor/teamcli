@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import type { Io } from '../src/io.ts';
 import type { Seat } from '../src/file/types.ts';
 import type { CredentialProbe } from '../src/profiles/credentials.ts';
+import { discardFixtures } from './fixture-cleanup.ts';
 
 const realFs = { ...fs };
 const base = fs.mkdtempSync(join(tmpdir(), 'vendor-switch-independent-'));
@@ -43,7 +44,7 @@ afterAll(() => {
   mock.module('../src/profiles/credentials.ts', () => credentialApi);
   if (priorHome === undefined) delete process.env.HOME; else process.env.HOME = priorHome;
   if (priorSource === undefined) delete process.env.TEAM_CONFIG_SOURCE; else process.env.TEAM_CONFIG_SOURCE = priorSource;
-  execFileSync('/usr/bin/trash', [base]);
+  discardFixtures([base]);
   expect(defaultProbeSelections).toBe(0);
   expect(descriptorReads).toBe(0);
 });

@@ -26,6 +26,7 @@ import { execFileSync } from 'node:child_process';
 import {
   existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { loadTeamFile } from '../src/file/load.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
@@ -110,7 +111,8 @@ type World = {
 };
 
 function setupWorld(order = 'delivery_order: [typed]\n', helperExtra = ''): World {
-  base = realpathSync(mkdtempSync(join('/private/tmp', 'rhad-dloop-')));
+  const short = existsSync('/private/tmp') ? '/private/tmp' : tmpdir();
+  base = realpathSync(mkdtempSync(join(short, 'rhad-dloop-')));
   const home = join(base, 'home');
   const root = join(base, PROJECT);
   const dir = join(root, '.agents');

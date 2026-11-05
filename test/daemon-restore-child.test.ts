@@ -21,6 +21,10 @@ import { readDaemonState } from '../src/daemon/state.ts';
  *  system temporary folder. */
 const BASE = existsSync('/private/tmp') ? '/private/tmp' : tmpdir();
 
+// Known for 0.5.12.1: the real restore child entry verifies its parent through
+// systemServiceManager(), which is implemented for macOS launchctl only.
+const offDarwin = process.platform !== 'darwin';
+
 const TEAM = `format: 1
 project: restore-child
 coordinator: worker
@@ -296,7 +300,7 @@ describe("the restore child's authority is the one-use token", () => {
     expect(forged.stderr).toContain('no one-use token names this child');
   });
 
-  test('a replayed token starts no second pass', async () => {
+  test.skipIf(offDarwin)('a replayed token starts no second pass', async () => {
     const { root, home } = scratch();
     const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid });
     const first = await runEntryInBackground(home, ['--inherited', nonce], root, restoreDoorText(nonce, secret));
@@ -310,7 +314,7 @@ describe("the restore child's authority is the one-use token", () => {
     expect(tokenFiles(home)).toEqual([]);
   });
 
-  test('two children started with one token at once: exactly one runs the pass', async () => {
+  test.skipIf(offDarwin)('two children started with one token at once: exactly one runs the pass', async () => {
     const { root, home } = scratch();
     for (let round = 0; round < 4; round += 1) {
       const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid });
@@ -349,7 +353,7 @@ describe("the restore child's authority is the one-use token", () => {
     }
   });
 
-  test('the spawner runs the real pass and leaves no token behind', async () => {
+  test.skipIf(offDarwin)('the spawner runs the real pass and leaves no token behind', async () => {
     const { root, home } = scratch();
     expect(restoreEntryOf()).toBe(ENTRY);
     expect(await runRestoreSweepInChild({ home, root, timeoutMs: 60_000 })).toEqual({ kind: 'no-recorded-session' });
@@ -358,7 +362,7 @@ describe("the restore child's authority is the one-use token", () => {
 });
 
 describe("the daemon's beat while a restore pass runs", () => {
-  test('a terminal host answering in five seconds holds the child, never the heartbeat', async () => {
+  test.skipIf(offDarwin)('a terminal host answering in five seconds holds the child, never the heartbeat', async () => {
     const { base, root, home } = scratch();
     // The route records a seat, so the pass reads the session's state and reaches the terminal
     // host. The fake answers every call after five seconds and logs the call first, so a landed
@@ -566,7 +570,7 @@ describe('independent adversarial checks: restore spawn abort, deadline, spawn e
     expect(tokenFiles(home)).toEqual([]);
   }, 30_000);
 
-  test('a token for one root never touches a second root, and closing the daemon during a slow herdr call keeps the beat live and leaves no token behind', async () => {
+  test.skipIf(offDarwin)('a token for one root never touches a second root, and closing the daemon during a slow herdr call keeps the beat live and leaves no token behind', async () => {
     const { base, root: rootA, home } = scratch();
     const rootB = join(base, 'repo-b');
     mkdirSync(join(rootB, '.agents'), { recursive: true });

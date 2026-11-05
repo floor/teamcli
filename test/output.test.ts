@@ -989,7 +989,7 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           notes: [],
           differences: [],
           summary: { differences: 0, owner_differences: 0 },
-          counts: { messages: 0, shown: 0, refused: 0 },
+          counts: { messages: 0, shown: 0, refused: 0, waiting: 0 },
         }),
       ],
       'team.messages.client': [
