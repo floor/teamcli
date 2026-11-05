@@ -3904,10 +3904,12 @@ function noteDaemonOutcome(note: WalkNote | null, res: DaemonSendResponse, at: D
     note(walkAttempt('typed', 'delivered', false, at, startedAt));
     return;
   }
-  // The typed wake was handed to the daemon's child: the typed route carried the send, and the
-  // child's walk is its delivery. The episode records the route taken, never a delivery.
+  // The typed wake was handed to the daemon's child: the daemon's route carried the send, and
+  // the child's walk is its delivery. The episode records the route taken, never a delivery, and
+  // the typed step is the child's own — the daemon files it in the receiving store after this run
+  // has exited, so this step must not take the typed record id.
   if (res.outcome === 'handed') {
-    note(walkAttempt('typed', 'delivered', false, at, startedAt, { reason: 'handed to the daemon for a typed wake' }));
+    note(walkAttempt('daemon', 'delivered', false, at, startedAt, { reason: 'handed to the daemon for a typed wake' }));
     return;
   }
   const outcome: AttemptOutcome =

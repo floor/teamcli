@@ -24,6 +24,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { readEvents } from '../src/bus/log.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { TeamFile } from '../src/file/types.ts';
@@ -39,6 +40,7 @@ import {
   type WakeHandoff,
 } from '../src/send/daemon.ts';
 import { readHistory } from '../src/send/history.ts';
+import { legStep } from '../src/send/steps.ts';
 import type { TypedWakeHost } from '../src/send/typed-wake.ts';
 import { wakeMarkAt, wakePath } from '../src/send/wake-marker.ts';
 import { testIo } from './helpers.ts';
@@ -273,6 +275,36 @@ describe('the typed wake handed to the daemon', () => {
     const history = readHistory('acme', world.root, world.home);
     expect(history.ok).toBe(true);
     if (history.ok) expect(history.entries).toEqual([]);
+
+    // The CLI's own step names the handoff route, not the typed walk. The child files the typed
+    // step in this same store after the CLI has exited, so a record id the CLI already used
+    // would make that step a duplicate the log refuses — and its outcome and trace times would
+    // never land.
+    const eventLog = readEvents('acme', world.root, world.home);
+    expect(eventLog.ok).toBe(true);
+    if (eventLog.ok) {
+      const steps = eventLog.events
+        .map((one) => one.payload)
+        .filter((one) => one.record_id.startsWith(`${id}:leg.tried`));
+      const routes = steps.map((one) => one.record_id);
+      expect(routes).toContain(`${id}:leg.tried:daemon`);
+      expect(routes).not.toContain(`${id}:leg.tried:typed`);
+      const handed = steps.find((one) => one.record_id === `${id}:leg.tried:daemon`);
+      expect(handed?.outcome).toBe('delivered');
+      expect(handed?.reason).toBe('handed to the daemon for a typed wake');
+    }
+    const childStep = legStep(
+      {
+        store: { project: 'acme', root: world.root, home: world.home },
+        id,
+        session: 'acme',
+        from: 'lead',
+        to: 'native',
+        ts: NOW.toISOString(),
+      },
+      { route: 'typed', outcome: 'delivered', ms: 12, reason: 'the working screen showed after 1 Enter' },
+    );
+    expect(childStep).toEqual({ ok: true, duplicate: false });
   });
 
   test('a daemon that runs no wake child refuses without staging, and this process runs the walk exactly once', async () => {
