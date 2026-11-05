@@ -70,7 +70,8 @@ import type { HostedLoop } from '../watch/hosted.ts';
 import { reminderTick, type ReminderSend, type ReminderSpec } from '../reminder/run.ts';
 import {
   ensureMachineDir,
-  writeDaemonState,
+  serializeDaemonState,
+  writeDaemonStateText,
   type DaemonFeatures,
   type DaemonRootState,
   type DaemonStuckRequest,
@@ -303,6 +304,12 @@ export type StartMachineDaemonInput = {
    * pipe, so a daemon given one delivers inline even when its chores fleet is hosted.
    */
   reminderSend?: ReminderSend;
+  /**
+   * The state record's physical writer. The default writes the record atomically off the
+   * event loop; a test injects a counting or slow writer to prove one write per beat, a
+   * write only on change, and a probe that answers while a write is in flight.
+   */
+  stateWriter?: (home: string, text: string) => Promise<void>;
   /**
    * Whether the daemon isolates the heavy per-root chores in supervised children. Off by
    * default, like the other hosting seams: a daemon started without it runs exactly the inline
@@ -773,8 +780,46 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     });
   };
 
-  const writeState = (afterClose = false): void => {
-    if (closed && !afterClose) return;
+  // The state record's writes, serialized off this loop: at most one physical write in
+  // flight, a newer text replacing a queued one, and no write at all when the text is the
+  // one already written, writing or queued. The probe answers from memory, so a slow disk
+  // delays only the file, never the answer.
+  const stateWriter = input.stateWriter ?? writeDaemonStateText;
+  let lastWrittenStateText: string | null = null;
+  let writingStateText: string | null = null;
+  let queuedStateText: string | null = null;
+  let stateWriteDrain: Promise<void> | null = null;
+  const queueStateWrite = (text: string): Promise<void> => {
+    if (text === lastWrittenStateText || text === writingStateText || text === queuedStateText) {
+      return stateWriteDrain ?? Promise.resolve();
+    }
+    queuedStateText = text;
+    if (stateWriteDrain === null) {
+      stateWriteDrain = (async (): Promise<void> => {
+        while (queuedStateText !== null) {
+          const current = queuedStateText;
+          queuedStateText = null;
+          writingStateText = current;
+          try {
+            await stateWriter(home, current);
+            lastWrittenStateText = current;
+          } catch {
+            // The next beat tries again; an unwritable record is reported as unknown, never healthy.
+          } finally {
+            writingStateText = null;
+          }
+        }
+        stateWriteDrain = null;
+      })();
+    }
+    return stateWriteDrain;
+  };
+  const flushStateWrites = async (): Promise<void> => {
+    while (stateWriteDrain !== null) await stateWriteDrain;
+  };
+
+  const writeState = (afterClose = false): Promise<void> => {
+    if (closed && !afterClose) return Promise.resolve();
     for (const one of hostedWatches) one.status.watch = one.watch.state();
     for (const refresh of passRefreshers) refresh();
     // Each route's chores record is this beat's reading, never a stored word: the supervisor
@@ -785,26 +830,22 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         if (chores !== undefined) status.chores = chores;
       }
     }
-    try {
-      writeDaemonState(home, {
-        format: 1,
-        pid,
-        uid,
-        since,
-        startedBy,
-        version: input.version,
-        gitHead: input.gitHead ?? null,
-        heartbeatAt,
-        socket: socketPath,
-        features,
-        stuck: stuckNow(),
-        roots: [...roots],
-        ...(heartbeatSeconds === null ? {} : { heartbeatSeconds }),
-        ...(mailboxRouter === null ? {} : { mailbox: { heartbeatAt: mailboxRouter.state().heartbeatAt } }),
-      });
-    } catch {
-      // The next heartbeat tries again; an unwritable record is reported as unknown, never healthy.
-    }
+    return queueStateWrite(serializeDaemonState({
+      format: 1,
+      pid,
+      uid,
+      since,
+      startedBy,
+      version: input.version,
+      gitHead: input.gitHead ?? null,
+      heartbeatAt,
+      socket: socketPath,
+      features,
+      stuck: stuckNow(),
+      roots: [...roots],
+      ...(heartbeatSeconds === null ? {} : { heartbeatSeconds }),
+      ...(mailboxRouter === null ? {} : { mailbox: { heartbeatAt: mailboxRouter.state().heartbeatAt } }),
+    }));
   };
 
   /**
@@ -964,7 +1005,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     };
   }
   chmodSync(socketPath, 0o600);
-  writeState();
+  await writeState();
 
   const sendHandles: SendDaemonHandle[] = [];
   const busHandles: BusHandle[] = [];
@@ -981,8 +1022,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   let beat: (() => void) | null = null;
   const beatTick = (): void => {
     heartbeatAt = now().toISOString();
-    writeState();
     beat?.();
+    // One write per beat, at its end, so the record carries everything the beat itself
+    // changed and the disk is never visited twice for one heartbeat.
+    void writeState();
   };
   let timer = setInterval(beatTick, heartbeatMs);
   timer.unref();
@@ -1030,7 +1073,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       if (registered) return;
       registered = true;
       roots.push(status);
-      writeState();
+      void writeState();
     };
     const loaded = readTeamConfig(rootArg, { home });
     if (!loaded.ok) {
@@ -2109,7 +2152,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         logLine(`root ${root}: the endpoint refresh failed: ${messageOf(one.reason)}`);
       }
     } finally {
-      writeState();
+      void writeState();
     }
   };
   const refreshHostedEndpoints = (): Promise<void> => {
@@ -2149,7 +2192,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       factory: input.mailboxFactory,
     });
   }
-  writeState();
+  // The start does not answer until this write lands: a reader who finds the socket bound
+  // must find the record naming the roots it hosts, never the empty startup record.
+  await writeState();
 
   // The first retirement pass waits one full interval after the daemon started: a restart's first
   // ticks never rewrite history a caller may still be reading, and the clock a test pins at a
@@ -2235,7 +2280,6 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     // its replacement starts on a later beat, so this tick returns at once whatever it is doing.
     choresFleet?.tick(now());
     mailboxRouter?.tick(now());
-    writeState();
     void refreshHostedEndpoints();
     // One fallback sweep rides the existing heartbeat: no second timer, process or socket. Each
     // hosted root reads its own validated team file and its markers' durable due instants; the
@@ -2481,7 +2525,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           status.presence = { state: 'pending', why: 'the daemon is closing' };
         }
       }
-      writeState(true);
+      await writeState(true);
       await Promise.all(admissions);
       // Every watch stop above has settled, so a fault that had not reached its seam when the
       // close began can never reach one now: its writer is answered `not reached` instead of
@@ -2497,7 +2541,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     const refresh = refreshRun;
     if (refresh !== null && !(await settlesWithin(refresh, refreshCloseBoundMs))) {
       logLine('close pending: the endpoint refresh did not settle', true);
-      writeState(true);
+      await writeState(true);
       return;
     }
     // Presence drain: the in-flight pass of each route (an ingester step and the activity write
@@ -2560,10 +2604,12 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         if (status !== undefined) status.presence = { state: 'pending', why: one.why };
         logLine(`presence ${one.route.root}: close pending: ${one.why}`, true);
       }
-      writeState(true);
+      await writeState(true);
       return;
     }
     await host.close();
+    // No queued state write may land after the record is unlinked below and recreate it.
+    await flushStateWrites();
     try {
       if (existsSync(socketPath)) unlinkSync(socketPath);
     } catch {

@@ -2,6 +2,7 @@
 // The daemon writes it at start and refreshes `heartbeatAt` while it serves; `team status`,
 // `team check` and the daemon's own health answer read it through this module.
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { chmod, mkdir, rename, writeFile } from 'node:fs/promises';
 import { pidAlive } from '../state.ts';
 import { DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
 import type { HostedWatchState } from '../watch/hosted.ts';
@@ -518,15 +519,33 @@ function choresOf(raw: unknown): DaemonChoresState | null {
   };
 }
 
+/** The state record as it stands on disk: pretty JSON, one trailing newline. */
+export function serializeDaemonState(state: DaemonState): string {
+  return `${JSON.stringify(state, null, 2)}\n`;
+}
+
 /** Writes the state record atomically, 0600, in a 0700 machine folder. */
 export function writeDaemonState(home: string, state: DaemonState): void {
   ensureMachineDir(home);
   const path = daemonStatePath(home);
   const temporary = `${path}.${String(process.pid)}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(temporary, serializeDaemonState(state), { mode: 0o600 });
   chmodSync(temporary, 0o600);
   renameSync(temporary, path);
   chmodSync(path, 0o600);
+}
+
+/** The same atomic write off the event loop, for a caller that must never block on the disk. */
+export async function writeDaemonStateText(home: string, text: string): Promise<void> {
+  const dir = machineConfigDir(home);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await chmod(dir, 0o700);
+  const path = daemonStatePath(home);
+  const temporary = `${path}.${String(process.pid)}.tmp`;
+  await writeFile(temporary, text, { mode: 0o600 });
+  await chmod(temporary, 0o600);
+  await rename(temporary, path);
+  await chmod(path, 0o600);
 }
 
 /** Whether the recorded process still exists. A dead pid makes the record stale. */
