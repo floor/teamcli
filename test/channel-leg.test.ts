@@ -33,6 +33,7 @@ import {
   type ChannelPushReceipt,
 } from '../src/mcp/channel.ts';
 import { MESSAGE_ID, receiptPath, writeListener } from '../src/mcp/inbox.ts';
+import { SEND_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { publishRecordRead } from '../src/send/read-receipt.ts';
 import { readHistory } from '../src/send/history.ts';
 import { dropMessage } from '../src/send/native.ts';
@@ -44,7 +45,7 @@ import { promoteInboxDrops, retryHeldDrops, type RetryScene, type RetrySources }
 import { teamIdOf } from '../src/registry/teams.ts';
 import { claudeBox, recordBody } from './helpers.ts';
 import { NOW, dropDir, fake, owner, world, type World } from './send-native-fixtures.ts';
-import { withoutSendId } from './helpers/output.ts';
+import { assertMatchesOutputSchema, withoutSendId } from './helpers/output.ts';
 
 const SESSION = 'acme';
 const CHANNEL_LAUNCH = 'claude --dangerously-load-development-channels server:team-inbox';
@@ -310,6 +311,20 @@ describe('the channel leg', () => {
       via: 'channel',
       failed: [`typed: ${NO_PANE_MESSAGING}`],
     });
+  });
+
+  test('a channel walk names that leg in --json and the send schema accepts it', async () => {
+    const made = channelWorld();
+    listening(made);
+    const one: Watched = { typed: [], enters: [] };
+    const host = senderHost(made, one, true, { channelGraceMs: 500 });
+    const io = owner(made.root);
+
+    const code = await runSend(['lead', TRIGGER, '--json'], io, host);
+
+    expect(code).toBe(0);
+    const doc = assertMatchesOutputSchema<{ delivery?: { leg: string; state: string; reason?: string }[] }>(io.out, SEND_OUTPUT_SCHEMA);
+    expect(doc.delivery?.some((entry) => entry.leg === 'channel')).toBe(true);
   });
 
   test('a push then its ack is one delivery: the marker settles delivered (read) and the watch types nothing', async () => {
