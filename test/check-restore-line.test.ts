@@ -7,6 +7,9 @@
 // - the pane never came back: the missing row says the CLI did not come back after a restore;
 // - the seat was never launched, or nothing is running: today's line and repair are unchanged.
 //
+// The restore reading is also driven through the check's shipped live sources in its own process,
+// so the foreground the proof needs is measured where the command itself reads it.
+//
 // Every pane, process and screen here is a synthetic fixture; no live host, registry home or CLI
 // transcript is read.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
@@ -185,6 +188,18 @@ describe('a seat whose CLI did not come back', () => {
     expect(difference?.who).toBe("the team's lead");
   });
 
+  test('with every name cleared, the restore repair is still the team lead\'s to run', async () => {
+    record({ stage: 'ready', pane: PANE, workspace: SPACE, launched: { shell: 20, cli: [22] } });
+    const at = world({ worker: null });
+    at.agents = at.agents.map((agent) => ({ ...agent, name: null }));
+    const { code, doc } = await readStatus(at);
+    expect(code).toBe(1);
+    const difference = differenceFor(doc, 'worker');
+    expect(difference?.what).toBe('worker was running and its CLI did not come back (the terminal host restored the session without it)');
+    expect(difference?.repair).toBe('team up');
+    expect(difference?.who).toBe("the team's lead");
+  });
+
   test('a seat that was never launched keeps today\'s line and repair', async () => {
     record({ stage: 'named' });
     const { doc } = await readStatus(world({ worker: null }));
@@ -198,5 +213,21 @@ describe('a seat whose CLI did not come back', () => {
     const { doc } = await readStatus(world({ worker: null, running: false }));
     const difference = differenceFor(doc, 'worker');
     expect(difference?.what).toBe('worker is in the file and is not running');
+  });
+});
+
+describe("the check's own live read", () => {
+  test('a pane the host restored without a name reaches the proof through the shipped sources', async () => {
+    const proc = Bun.spawn(['bun', 'test/check-restore-live-run.ts'], {
+      cwd: new URL('..', import.meta.url).pathname,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const exit = await proc.exited;
+    const out = await new Response(proc.stdout).text();
+    const err = await new Response(proc.stderr).text();
+    expect(exit, err || out).toBe(0);
+    const parsed = JSON.parse(out) as { code: number; out: string };
+    expect(parsed.out).toContain("worker was restored by the terminal host; its pane holds the seat's declared CLI — team up re-ties it");
   });
 });
