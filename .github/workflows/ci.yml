@@ -30,6 +30,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # `team check` reads the history; the PR test selection diffs against the base
+          fetch-tags: true
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
@@ -110,6 +111,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # `team check` reads the history; the PR test selection diffs against the base
+          fetch-tags: true
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
@@ -164,6 +166,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # `team check` reads the history
+          fetch-tags: true
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
@@ -244,6 +247,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          fetch-tags: true
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
