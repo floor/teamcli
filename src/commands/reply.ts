@@ -47,7 +47,7 @@ import { projectIdOfTeam } from '../dev_mode.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
-import { acquireSeatLock } from '../launch/seat-lock.ts';
+import { acquireSeatLock, holderText } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { contextLine, hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { eventThresholdsInForce, type EventThresholds } from '../policy/index.ts';
@@ -558,7 +558,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     const lockSeat = me;
     const lock = acquireSeatLock(dir, session, lockSeat);
     if (!('release' in lock)) {
-      return refused(io, json, `${lockSeat}: another command holds it (pid ${String(lock.held)}); nothing was written`);
+      return refused(io, json, `${lockSeat}: another command holds it (${holderText(lock)}); nothing was written`);
     }
     try {
       try {
@@ -705,7 +705,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
         const active = activeClientGrant(host.home, { grant, signature: origin.signature }, host.now());
         if (!active.ok) return { ok: false, why: `the originating grant ${grant.grantId} is not active: ${active.why}; nothing was written` };
         const seatLock = acquireSeatLock(dir, session, me);
-        if (!('release' in seatLock)) return { ok: false, why: `${me}: another command holds it (pid ${String(seatLock.held)}); nothing was written` };
+        if (!('release' in seatLock)) return { ok: false, why: `${me}: another command holds it (${holderText(seatLock)}); nothing was written` };
         try {
           sealDropTree(dir, session, me);
           // Both publication locks are held here. The thread facts and the registry binding were
@@ -985,7 +985,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   let landed = false;
   const lock = acquireSeatLock(toDir, toSession, targetSeat);
   if (!('release' in lock)) {
-    return refused(io, json, `${targetSeat}: another command holds it (pid ${String(lock.held)}); nothing was written`);
+    return refused(io, json, `${targetSeat}: another command holds it (${holderText(lock)}); nothing was written`);
   }
   try {
     try {

@@ -564,7 +564,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     case 'herdr':
       return herdrRefused(out, json);
     case 'run-lock':
-      return runLockRefused(out, json, performed.held, session, dir);
+      return runLockRefused(out, json, performed.held, session, dir, performed.startedAt);
     case 'ready':
       return readyExit(
         out,
@@ -682,7 +682,7 @@ export type PerformResult =
   | { kind: 'busy'; message: string }
   | { kind: 'not-ready'; message: string }
   | { kind: 'herdr' }
-  | { kind: 'run-lock'; held: number }
+  | { kind: 'run-lock'; held: number; startedAt: number | null }
   | {
       kind: 'ready';
       oldPane: string;
@@ -873,7 +873,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   // the holder named and nothing stopped once the wait is spent.
   const runLock = await acquireRunLockWithin(dir, session, { sleep: (ms) => sources.upLaunch.sleep(ms) });
   if ('held' in runLock) {
-    return { kind: 'run-lock', held: runLock.held };
+    return { kind: 'run-lock', held: runLock.held, startedAt: runLock.startedAt };
   }
   // A revival's sign-off comes off before the launch reads the file, and the `finally` below
   // puts it back unless the launch reached ready: a run that fails, returns early or throws
@@ -2272,8 +2272,8 @@ function notReadyRefused(out: Io, json: boolean, message: string): number {
   return 1;
 }
 
-function runLockRefused(out: Io, json: boolean, held: number, session: string, dir: string): number {
-  refuse(out, json, 'restart', { id: 'restart.run-lock', message: runLockText(held, session, dir), repair: null });
+function runLockRefused(out: Io, json: boolean, held: number, session: string, dir: string, startedAt: number | null = null): number {
+  refuse(out, json, 'restart', { id: 'restart.run-lock', message: runLockText(held, session, dir, startedAt), repair: null });
   // exit: restart.run-lock
   return 1;
 }

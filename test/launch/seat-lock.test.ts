@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { acquireSeatLock, lockSteps, seatLockPath, type LockSteps, type SeatLock } from '../../src/launch/seat-lock.ts';
+import { acquireSeatLock, holderText, lockSteps, seatLockHolder, seatLockPath, type LockSteps, type SeatLock } from '../../src/launch/seat-lock.ts';
 
 const DEAD = 2147483646;
 
@@ -257,6 +257,58 @@ describe('the seat lock', () => {
       expect(own(lock)).toBe(true);
       expect(token(path)).toMatch(new RegExp(`^${HOLDER} [0-9a-f]+ ${START}$`));
       if (own(lock)) lock.release();
+    });
+  });
+
+  // The send fast path reads a lock without taking it: a live holder keeps the send off the
+  // socket, and a file with no live holder behind it does not.
+  describe('a lock is read without being taken', () => {
+    test('no file is no holder, and the file is still absent after the read', () => {
+      const { dir, path } = place();
+      expect(seatLockHolder(dir, 'acme', 'lead')).toBeNull();
+      expect(statSync(path, { throwIfNoEntry: false })).toBeUndefined();
+    });
+
+    test('a live holder behind a matching start is reported, and its lock is left in place', () => {
+      const { dir, path } = place();
+      writeFileSync(path, `${HOLDER} cafefeed ${START}\n`);
+      expect(seatLockHolder(dir, 'acme', 'lead', facts())).toEqual({ held: HOLDER, startedAt: START });
+      expect(token(path)).toBe(`${HOLDER} cafefeed ${START}`);
+    });
+
+    test('a dead pid and a pid whose start moved are both no holder', () => {
+      const { dir, path } = place();
+      writeFileSync(path, `${HOLDER} cafefeed ${START}\n`);
+      expect(seatLockHolder(dir, 'acme', 'lead', facts({ alive: () => false }))).toBeNull();
+      expect(seatLockHolder(dir, 'acme', 'lead', facts({ startOf: () => START - 120_000 }))).toBeNull();
+    });
+
+    test('a start-less lock is no holder when its file predates this boot, and held otherwise', () => {
+      const { dir, path } = place();
+      writeFileSync(path, `${HOLDER} cafefeed\n`);
+      expect(seatLockHolder(dir, 'acme', 'lead', facts({ writtenAt: () => BOOT - 1 }))).toBeNull();
+      expect(seatLockHolder(dir, 'acme', 'lead', facts({ writtenAt: () => BOOT }))).toEqual({ held: HOLDER, startedAt: null });
+    });
+
+    test('a lock that cannot be read is reported as an unreadable holder, and never removed', () => {
+      const { dir, path } = place();
+      writeFileSync(path, 'nonsense\n');
+      expect(seatLockHolder(dir, 'acme', 'lead', facts())).toEqual({ held: -1, startedAt: null });
+      expect(readFileSync(path, 'utf8')).toBe('nonsense\n');
+    });
+  });
+
+  describe('a refusal names the holder it found', () => {
+    test('a token with a start names the pid and the instant it records', () => {
+      expect(holderText({ held: HOLDER, startedAt: START })).toBe(`pid ${HOLDER}, started ${new Date(START).toISOString()}`);
+    });
+
+    test('a token with no start names only the pid, as it always did', () => {
+      expect(holderText({ held: HOLDER, startedAt: null })).toBe(`pid ${HOLDER}`);
+    });
+
+    test('an unreadable lock names no pid', () => {
+      expect(holderText({ held: -1, startedAt: null })).toBe('an unreadable lock');
     });
   });
 });
