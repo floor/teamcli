@@ -443,7 +443,7 @@ seats:
       state.sessions.acme = { seats } as never;
     });
     const loaded = readTeamConfig(root, { home });
-    if (!loaded.ok) throw new Error(loaded.error);
+    if (!loaded.ok) throw new Error(loaded.errors.join('\n'));
     return { root, agentsDir, home, team: loaded.team };
   }
 
@@ -465,15 +465,15 @@ seats:
         return null;
       },
       socketsDir: socks,
-      deliver: async () => ({ outcome: 'delivered' }),
+      deliver: async () => ({ ok: true }),
       native: {
-        stage: () => false,
-        deliver: () => true,
+        typeText: () => false,
+        pressEnter: () => false,
+        status: () => 'idle',
+        wait: async () => {},
         paneText: () => '',
         foregroundCwd: () => null,
-        status: () => 'idle',
       },
-      sleep: async () => {},
     };
   }
 
@@ -506,7 +506,8 @@ seats:
       worker: { stage: 'ready', pane: 'pane2' },
     });
     const shellChain: Process[] = [{ pid: 900, name: 'zsh' }, { pid: 10, name: 'herdr' }];
-    const io = testIo(root, undefined, { HERDR_PANE_ID: 'pane9' });
+    const io = testIo(root);
+    io.env = { HERDR_PANE_ID: 'pane9' };
     delete io.caller;
     io.callerSources = () => sources(shellChain, {
       agents: () => [agent('lead', 'pane1'), agent('worker', 'pane2')],
@@ -516,7 +517,7 @@ seats:
 
     const judged = judgeCallerIn(io, agentsDir, team);
     expect(judged.caller).toEqual({ kind: 'pane', pane: 'pane9', session: 'acme' });
-    expect(judged.verdict).toEqual({ kind: 'refused' });
+    expect(callerVerdict(judged.caller, 'worker', standingOf(agentsDir, judged.session, judged.caller))).toEqual({ kind: 'refused' });
     expect(describeCaller(judged.shown)).toBe('it runs in pane acme/pane9, which no grant lists');
 
     const code = await runSend(['lead', 'from non-seat pane'], io, sendHost(home));
@@ -570,7 +571,7 @@ seats:
 
       const judged = judgeCallerIn(io, agentsDir, team);
       expect(judged.caller.kind).toBe('unplaced');
-      expect(judged.verdict).toEqual({ kind: 'refused' });
+      expect(callerVerdict(judged.caller, 'worker', standingOf(agentsDir, judged.session, judged.caller))).toEqual({ kind: 'refused' });
       expect(describeCaller(judged.shown)).toMatch(one.expectedReason);
 
       const code = await runSend(['lead', `attempt: ${one.label}`], io, sendHost(home));
@@ -641,7 +642,8 @@ seats:
     // (200 -> worker on pane2), never the forged environment variable, and refuses because worker's
     // recorded pane is pane99.
     const impostorSeatChain: Process[] = [{ pid: 210, name: 'zsh' }, { pid: 200, name: 'claude' }, { pid: 10, name: 'herdr' }];
-    const ioSeat = testIo(root, undefined, { HERDR_PANE_ID: 'pane1', HERDR_SESSION: 'acme' });
+    const ioSeat = testIo(root);
+    ioSeat.env = { HERDR_PANE_ID: 'pane1', HERDR_SESSION: 'acme' };
     delete ioSeat.caller;
     ioSeat.callerSources = () => sources(impostorSeatChain, {
       agents: () => [agent('lead', 'pane1'), agent('worker', 'pane2')],
@@ -665,7 +667,8 @@ seats:
     // root pid 100). Because pid 100 is not in the caller's ancestor chain [900, 10], placement
     // refuses to vouch pane1 and returns unplaced.
     const impostorShellChain: Process[] = [{ pid: 900, name: 'zsh' }, { pid: 10, name: 'herdr' }];
-    const ioShell = testIo(root, undefined, { HERDR_PANE_ID: 'pane1' });
+    const ioShell = testIo(root);
+    ioShell.env = { HERDR_PANE_ID: 'pane1' };
     delete ioShell.caller;
     ioShell.callerSources = () => sources(impostorShellChain, {
       agents: () => [agent('lead', 'pane1'), agent('worker', 'pane2')],
@@ -675,7 +678,7 @@ seats:
 
     const judgedShell = judgeCallerIn(ioShell, agentsDir, team);
     expect(judgedShell.caller).toMatchObject({ kind: 'unplaced', reason: expect.stringMatching(/pane without an agent/) });
-    expect(judgedShell.verdict).toEqual({ kind: 'refused' });
+    expect(callerVerdict(judgedShell.caller, 'worker', standingOf(agentsDir, judgedShell.session, judgedShell.caller))).toEqual({ kind: 'refused' });
 
     const shellCode = await runSend(['lead', 'impostor shell claiming lead pane'], ioShell, sendHost(home));
     expect(shellCode).toBe(1);
