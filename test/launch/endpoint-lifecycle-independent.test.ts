@@ -586,7 +586,12 @@ function launchDeps(prior: Record<string, unknown>, seen: {
 }) {
   return {
     alive: () => true,
-    commandOf: () => `codex app-server --listen ${prior.url as string}`,
+    commandOf: () => {
+      const words = Array.isArray(prior.config) && prior.config.every((w): w is string => typeof w === 'string') && prior.config.length > 0
+        ? ` ${prior.config.join(' ')}`
+        : '';
+      return `codex app-server --listen ${prior.url as string}${words}`;
+    },
     startOf: () => T0_MS + 500,
     isPlainDir: () => true,
     isSocket: () => true,

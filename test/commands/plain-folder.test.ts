@@ -356,7 +356,7 @@ describe('a folder with no git repository', () => {
     const watchdog = made.creates.find((created) => created.label === watchLabel('acme'));
     expect(watchdog?.cwd).toBe(root);
     expect(io.err).toContain('watch: started\n');
-    const command = made.runs.find((run) => run.command.includes(' watch'))?.command ?? '';
+    const command = made.runs.find((run) => /\bwatch\b/.test(run.command))?.command ?? '';
     expect(command).toContain(' watch');
     expect(command).not.toContain('--file');
 
@@ -471,7 +471,7 @@ describe('a file the watch would not read', () => {
     expect(code, io.out + io.err).toBe(0);
     const watchdog = made.creates.find((created) => created.label === watchLabel('acme'));
     expect(watchdog?.cwd).toBe(customDir);
-    const run = made.runs.find((item) => item.command.includes(' watch'));
+    const run = made.runs.find((item) => /\bwatch\b/.test(item.command));
     expect(run?.command).toContain(' watch');
     expect(run?.command).not.toContain('--file');
     expect(run?.command).toContain(`--session ${SESSION}`);
@@ -529,7 +529,7 @@ describe('a file the watch would not read', () => {
     const code = await runUp(['--file', custom], io, upSources(home, made));
     expect(code, io.out + io.err).toBe(0);
     expect(made.creates.some((created) => created.label === watchLabel('acme'))).toBe(true);
-    const command = made.runs.find((run) => run.command.includes(' watch'))?.command ?? '';
+    const command = made.runs.find((run) => /\bwatch\b/.test(run.command))?.command ?? '';
     expect(command).not.toContain('--file');
     expect(command.includes('\x1b')).toBe(false);
     expect(io.out.includes('\x1b')).toBe(false);

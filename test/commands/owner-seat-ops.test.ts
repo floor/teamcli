@@ -199,6 +199,23 @@ describe('send, down and bus through the owner seat', () => {
     expect(stopped.n).toBe(1);
   });
 
+  test('an always rule admits a no-terminal owner on down; without the rule it is refused', async () => {
+    const p = place();
+    const stopped = { n: 0 };
+    const sources = downSources(p.home, p.store, stopped);
+    const plain = ioOf(p.root, detached);
+    expect(await runDown([], plain, sources)).toBe(1);
+    expect(plain.err).toContain('only the owner or a `leads` seat runs this');
+    expect(stopped.n).toBe(0);
+    const ask = ioOf(p.root, detached);
+    expect(await runDown(['--request'], ask, sources), ask.err).toBe(0);
+    const id = requestId(ask.out);
+    expect(approveOwnerAction(p.home, id, 'always', p.store, NOW)).toMatchObject({ ok: true, choice: 'always' });
+    const ran = ioOf(p.root, detached);
+    expect(await runDown([], ran, sources), ran.err + ran.out).toBe(0);
+    expect(stopped.n).toBe(1);
+  });
+
   test('a leads seat on its own pane starts the bus; a worker does not; --approval does', async () => {
     const p = place();
     updateState(join(p.root, '.agents'), (state) => {

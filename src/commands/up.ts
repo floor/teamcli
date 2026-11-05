@@ -746,8 +746,10 @@ function seatPlan(
       // pane when the launch line can carry it — never replaced by a blank one — and the
       // replaced pane is named only on that path: a record with no conversation to protect
       // takes the ordinary fresh launch, with no notice about a pane nothing was resumed from.
-      // A line that cannot carry the conversation stops before anything is launched, and the
-      // recorded workspace, when the host still lists it, is named and left.
+      // A line that cannot carry the conversation stops before anything is launched. The
+      // recorded workspace, when the host still lists it, is closed only after the seat is
+      // ready on its replacement (`plan.ts`'s close-leftover step), never before it: this
+      // reading only says the host listed it then, and the close re-reads everything itself.
       if (continuitySession === null) return planned;
       const resumeHold = uncarryableResume(planned, continuitySession);
       if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
@@ -756,7 +758,7 @@ function seatPlan(
         ...planned,
         replacedPane: movedPane,
         resume: continuitySession,
-        ...(leftWorkspace ? { leftWorkspace } : {}),
+        ...(leftWorkspace ? { closeLeftover: { pane: movedPane, workspace: leftWorkspace } } : {}),
       };
     }
     const candidate = named.length === 1 ? named[0] : undefined;
@@ -967,11 +969,14 @@ function seatPlan(
       ...(held?.working ? { doubtWorking: true } : {}),
     };
   }
-  // The shell is in front. The seat's name surviving on the pane does not make it the CLI.
+  // The shell is in front. The seat's name surviving on the pane does not make it the CLI. The
+  // pane is still the seat's own, at its shell: the launch line runs there, and nothing is
+  // created or closed. The live run re-reads the pane and its workspace immediately before the
+  // launch (`execute.ts`), and a changed reading leaves the seat out with nothing launched.
   if (verdict === 'gone' && recorded.workspace && recorded.pane && recorded.launched) {
     return {
       ...planned,
-      repair: { pane: recorded.pane, workspace: recorded.workspace, launched: recorded.launched, cli: seat.cli },
+      repair: { pane: recorded.pane, workspace: recorded.workspace, launched: recorded.launched, cli: seat.cli, reuse: true },
     };
   }
   const named = known.find((agent) => agent.name === seat.name);

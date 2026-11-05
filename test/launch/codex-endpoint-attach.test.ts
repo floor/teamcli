@@ -106,7 +106,7 @@ describe('the launch and the managed Codex endpoint', () => {
     const said: string[] = [];
     const host = hostOf({ calls, said, logged: [] });
     await executePlan(launchStep({ dir: STATE_DIR }), 'acme', host);
-    expect(calls).toEqual(['paneRun:codex']);
+    expect(calls).toEqual(['paneRun:codex --no-daemon']);
     expect(said.join('')).toContain('coder: the managed Codex endpoint was not started: this launch starts no managed Codex endpoint');
   });
 
@@ -118,7 +118,7 @@ describe('the launch and the managed Codex endpoint', () => {
       managed: () => ({ kind: 'unmanaged', why: 'the seat records no valid presence binding' }),
     });
     await executePlan(launchStep({ dir: STATE_DIR }), 'acme', host);
-    expect(calls).toEqual(['managed', 'paneRun:codex']);
+    expect(calls).toEqual(['managed', 'paneRun:codex --no-daemon']);
     expect(said.join('')).toContain('coder: the managed Codex endpoint was not started: the seat records no valid presence binding');
   });
 
@@ -183,7 +183,7 @@ describe('the launch and the managed Codex endpoint', () => {
       paneRan: false,
     });
     await executePlan(launchStep(), 'acme', host);
-    expect(calls).toEqual(['paneRun:codex']);
+    expect(calls).toEqual(['paneRun:codex --no-daemon']);
     expect(said.join('')).not.toContain('managed Codex endpoint');
   });
 });
