@@ -34,7 +34,7 @@ import { currentClaimIn, listUnread, readMessage } from '../src/mcp/inbox.ts';
 import { agentsDir, registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { signRecord, writeRecord } from '../src/send/record.ts';
-import { attributedBody, attributionBanner, attributeSenderClaim } from '../src/send/sender-claim.ts';
+import { attributedBody, attributeSenderClaim } from '../src/send/sender-claim.ts';
 import { updateState } from '../src/state.ts';
 import { installKey } from '../src/store/keys.ts';
 import { fixtureBase, gitEnv, testIo } from './helpers.ts';
@@ -250,7 +250,7 @@ describe('feat/sender-attributed independent verification', () => {
 
     // Direct helper check for a body without a standard `from ... — admitted by: ...` header
     expect(attributedBody('Plain body text', 'orchestrator')).toBe(
-      '[attributed sender: orchestrator]\n\nPlain body text',
+      'from orchestrator:\n\nPlain body text',
     );
   });
 

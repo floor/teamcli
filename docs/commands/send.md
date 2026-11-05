@@ -573,7 +573,7 @@ declaration is re-confirmed. No leg writes a second record: each write accepts t
 same id, and a frame the socket takes writes no receipt — only the seat writes a read receipt, so
 the record stays unread until the seat's own read, and the watch re-wakes it like any other
 message. The frame
-opens with the compact client header `Grok Bot, a client (owner relay):` — every sender
+opens with the compact client header `Client Grok Bot (owner relay):` — every sender
 a reader displays is an attribution, never a verification — followed by the body and the one-line
 reader footer `↩ team reply <prefix> "…" · team ack <prefix>`, so the receiving seat reads a
 person's client message and not a seat address. The walk's ending
@@ -639,11 +639,11 @@ which also surfaces in [`team trace`](trace.md) on `message.staged`). The signed
 bytes too. When a reader renders the message (a socket frame, `team drops --read`, `inbox_read`, or
 `team messages` text), it folds the sender and admission rule into one compact header line:
 `from <name> (<short rule>):` for a Claude seat or the owner (`from the owner (owner):`),
-`<Display>, a client (owner relay):` for a client, and `Gemini seat <name> (<short rule>):`,
+`Client <Display> (owner relay):` for a client, and `Gemini seat <name> (<short rule>):`,
 `Codex seat <name> (<short rule>):`, or `Grok seat <name> (<short rule>):` when the sender is a
 non-Claude seat so the first words say what it is (the host agent wrapper labels every socket
-delivery as coming from another session of its own kind). A body without a standard header still
-opens with `[attributed sender: <caller>]`. A sender the
+delivery as coming from another session of its own kind). A body without an inline `from … — admitted by: …`
+line folds its record sender and rule into the same compact header (`from <caller> (<short rule>):` or `from <caller>:`). A sender the
 registry holds no record for is spelled as the file's seat in the signed record — `from the file's seat <name>
 (no registry record yet) — admitted by: <rule>` — so a receiver inspecting the record reads why the id is absent.
 
@@ -693,7 +693,7 @@ naming the message its frame carried, because either act settles that exact reco
 `zeus-message-path`, D3).
 
 A socket frame is not a message-display line. The frame an agent seat receives opens with the
-single compact header line (`from <name> (<short rule>):`, `<Display>, a client (owner relay):`, or
+single compact header line (`from <name> (<short rule>):`, `Client <Display> (owner relay):`, or
 `<Kind> seat <name> (<short rule>):` for a Gemini, Codex or Grok seat, where `<name>` is the
 nickname the registry holds, the name the seat's written label carries before the middle dot, or its
 seat name), then a blank line, the message body, and the one-line reader footer ADR

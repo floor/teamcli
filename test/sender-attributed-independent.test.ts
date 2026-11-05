@@ -45,7 +45,6 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { signRecord, writeRecord } from '../src/send/record.ts';
 import {
   attributedBody,
-  attributionBanner,
   attributeSenderClaim,
   type SenderAttribution,
 } from '../src/send/sender-claim.ts';
@@ -153,7 +152,7 @@ describe('1. team messages — FROM cell, served body mark, and JSON sender_attr
     const ioBanner = testIo(f.root, { kind: 'owner' });
     expect(await runMessages([], ioBanner, { home: f.home, now: () => NOW })).toBe(0);
     expect(ioBanner.out).toContain('owner (attributed)');
-    expect(ioBanner.out).toContain(`[attributed sender: owner]\n\n${plainBody.trimEnd()}`);
+    expect(ioBanner.out).toContain(`from owner (owner):\n\n${plainBody.trimEnd()}`);
 
     rmSync(f.dropDir, { recursive: true, force: true });
     const id3 = '10000000-0000-4000-8000-000000000003';
@@ -267,7 +266,7 @@ describe('1. team messages — FROM cell, served body mark, and JSON sender_attr
     expect(await runMessages([], ioText, { home: f.home, now: () => NOW })).toBe(1);
     expect(ioText.out).toContain('orchestrator (attributed)');
     expect(ioText.out).toContain('owner (unattributed)');
-    expect(ioText.out).toContain('[attributed sender: orchestrator]\n\nlegacy note');
+    expect(ioText.out).toContain('from orchestrator:\n\nlegacy note');
     expect(ioText.out).not.toContain('forged legacy');
   });
 

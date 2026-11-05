@@ -242,6 +242,8 @@ export function legacyHolds(root: string, id: string): boolean {
   return seats.some((seat) => NAME.test(seat) && isFile(join(dir, seat, `${id}.json`)));
 }
 
+export const MIN_ID_PREFIX_LEN = 8;
+
 /** The seat folders this session names: a listing of the session's own folder, one entry per
  *  seat, never a listing of the records in them. */
 function seatNamesOf(root: string, session: string): string[] {
@@ -295,6 +297,12 @@ export function findRecord(hits: { seat: string; path: string }[], root: string,
     verified.push({ seat: hit.seat, path: hit.path, record: read.record });
   }
   if (verified.length === 0) return legacyHolds(root, id) ? { kind: 'legacy' } : { kind: 'none' };
+  if (id.length < MIN_ID_PREFIX_LEN && verified.some((found) => found.record.payload.id !== id)) {
+    return {
+      kind: 'refused',
+      why: `record prefix "${id}" is shorter than ${String(MIN_ID_PREFIX_LEN)} characters; pass at least ${String(MIN_ID_PREFIX_LEN)} characters`,
+    };
+  }
   const mine = verified.filter((found) => found.record.payload.to === me);
   if (mine.length === 0) {
     return { kind: 'refused', why: `record ${verified[0]?.record.payload.id ?? id} is addressed to ${verified[0]?.record.payload.to ?? 'nobody'}, not to ${me}` };
@@ -500,6 +508,9 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   if (hits.length === 0) {
     if (legacyHolds(root, id)) {
       return refused(io, json, `the message ${id} was written by an earlier build and has no thread; it is read, not answered`);
+    }
+    if (id.length < MIN_ID_PREFIX_LEN) {
+      return refused(io, json, `record prefix "${id}" is shorter than ${String(MIN_ID_PREFIX_LEN)} characters; pass at least ${String(MIN_ID_PREFIX_LEN)} characters`);
     }
     return refused(io, json, `no record named ${id} waits in this project's session "${session}"`);
   }

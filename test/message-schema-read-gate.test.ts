@@ -20,7 +20,7 @@ const SEAT = 'lead';
 const ID = '4f0b8d82-7a8e-4da2-9e6f-9b5aac2d3e45';
 const BODY = 'the body only a verified record may expose';
 /** The body as the reader serves it: nothing attests the fixture's claim, so it opens marked. */
-const SERVED = `[attributed sender: worker]\n\n${BODY}`;
+const SERVED = `from worker (owner):\n\n${BODY}`;
 
 type Place = { base: string; root: string; home: string; dropDir: string; cleanup(): void };
 

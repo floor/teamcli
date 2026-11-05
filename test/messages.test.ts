@@ -59,7 +59,7 @@ const SHOWN = `team acme, session "acme"
   m1  harness (attributed)  lead  0s ago  shown
 
 lead/m1:
-[attributed sender: harness]
+from harness:
 
 ${BODY}
 
@@ -179,7 +179,7 @@ describe('team messages', () => {
     plantRecord(home, plain, 'acme', 'lead', 'm1', BODY, { from: 'harness', at: '2026-10-04T09:00:00.000Z' });
     const io = testIo(plain, LEAD);
     expect(await runMessages([], io, { home, now: () => NOW })).toBe(0);
-    expect(io.out).toBe(SHOWN);
+    expect(io.out).toBe(SHOWN.replace('from harness:', 'from harness (team lead):'));
     expect(io.err).toBe('');
     expect(existsSync(join(recordDir(plain, 'acme', 'lead'), 'm1.read.json'))).toBe(true);
   });
@@ -375,7 +375,7 @@ difference: lead/m1 does not verify: the record is not a message
       .map((seat) => `  m1  harness (attributed)  ${seat.padEnd(11)}  0s ago  ${seat === 'builder' ? 'shown' : 'waiting'}`)
       .join('\n');
     expect(result.out).toBe(
-      `team acme, session "acme"\n  ID  FROM                  TO           SENT    STATUS\n${rows}\n\nbuilder/m1:\n[attributed sender: harness]\n\nbody from builder\n\n` +
+      `team acme, session "acme"\n  ID  FROM                  TO           SENT    STATUS\n${rows}\n\nbuilder/m1:\nfrom harness:\n\nbody from builder\n\n` +
         'note: 4 messages addressed to another mailbox are waiting; they are listed without their bodies, and no receipts are written for them.\n\n' +
         '5 messages\n',
     );
@@ -559,7 +559,7 @@ difference: lead/m1 does not verify: the record is not a message
     const key = messageKey();
 
     const read = readMessage({ dropDir: scene.dropDir, root: scene.found, seat: 'lead', session: 'acme' }, ID, home);
-    expect(read).toEqual({ ok: true, body: `[attributed sender: lead]\n\n${BODY}` });
+    expect(read).toEqual({ ok: true, body: `from lead (team lead):\n\n${BODY}` });
     const receiptPath = recordReceiptFile(scene.dropDir, ID, 'read');
     const receipt = readFileSync(receiptPath, 'utf8');
     expect(statusOf(scene.dropDir, ID, scene.context, key)).toBe('read');
@@ -851,7 +851,7 @@ console.log(JSON.stringify(readMessage({ dropDir, root, seat, session }, id, hom
     // lost with the child's stdout. Counted, never inferred: exactly one side returns the body.
     // The automatic reader's copy opens with the attributed mark; the manual reader's output is
     // text, so the body's own bytes are what it carries.
-    const markedBody = `[attributed sender: lead]\n\n${BODY}`;
+    const markedBody = `from lead (team lead):\n\n${BODY}`;
     const exposed = (manualResult.out.includes(BODY) ? 1 : 0) + (automaticResult.body === markedBody ? 1 : 0);
     expect({ exposed, detail }).toEqual({ exposed: 1, detail });
     if (automaticResult.ok) {
@@ -923,7 +923,7 @@ console.log(JSON.stringify(readMessage({ dropDir, root, seat, session }, id, hom
     const result = await run([], WORKER);
     expect(result.code).toBe(0);
     expect(result.err).toBe('');
-    expect(result.out).toContain(`worker/m1:\n[attributed sender: harness]\n\n${BODY}`);
+    expect(result.out).toContain(`worker/m1:\nfrom harness (team lead):\n\n${BODY}`);
     expect(result.out).toContain(
       "note: worker: the general seat brief is not shown here; the seat's own turn-start reader serves it.",
     );

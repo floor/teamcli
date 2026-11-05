@@ -63,12 +63,6 @@ export function attributeSenderClaim(
   return 'attributed';
 }
 
-/** The one-line mark a reader puts above a body when it carries no sender header: the sender is
- *  attributed, and the name is the record's claim. */
-export function attributionBanner(claimed: string): string {
-  return `[attributed sender: ${claimed}]`;
-}
-
 /** The sender header every sent body opens with: `from <claimed> — admitted by: <rule>`, then the
  *  body under one empty line. */
 const SENDER_HEADER = /^from ([^\n]*?) — admitted by: ([^\n]*)\n\n?/;
@@ -86,6 +80,7 @@ export function compactRule(rule: string): string {
     case "a seat to its own team's orchestrator":
       return 'to orchestrator';
     case 'an orchestrator or operator to a seat of its own team':
+    case 'the lead to a seat of its own team':
       return 'team lead';
     case 'an orchestrator to another orchestrator':
       return 'orchestrator';
@@ -202,24 +197,25 @@ function resolveSenderCli(context: SenderRenderContext, claimed: string): string
 
 /**
  * Formats the single-line compact sender header for a rendered message:
- * - Client:      `"<Name>, a client (<short rule>):"`
- * - Non-Claude:  `"<Kind> seat <Name> (<short rule>):"`
- * - Claude/else: `"from <Name> (<short rule>):"`
+ * - Client:      `"Client <Name> (<short rule>):"` (or `"Client <Name>:"` when no rule is given)
+ * - Non-Claude:  `"<Kind> seat <Name> (<short rule>):"` (or `"<Kind> seat <Name>:"` when no rule is given)
+ * - Claude/else: `"from <Name> (<short rule>):"` (or `"from <Name>:"` when no rule is given)
  */
 export function compactSenderHeader(
   name: string,
-  rule: string,
+  rule = '',
   options: { client?: boolean; cli?: string | null } = {},
 ): string {
   const shortRule = compactRule(rule);
+  const ruleSuffix = shortRule === '' ? '' : ` (${shortRule})`;
   if (options.client === true) {
-    return `${name}, a client (${shortRule}):`;
+    return `Client ${name}${ruleSuffix}:`;
   }
   const kind = seatKindPrefix(options.cli);
   if (kind !== null) {
-    return `${kind} ${name} (${shortRule}):`;
+    return `${kind} ${name}${ruleSuffix}:`;
   }
-  return `from ${name} (${shortRule}):`;
+  return `from ${name}${ruleSuffix}:`;
 }
 
 /**
@@ -228,9 +224,9 @@ export function compactSenderHeader(
  *
  * - A body opening with `from <name> — admitted by: <rule>` folds into the compact header
  *   (`Gemini seat Argon (to orchestrator):`, `from Bea (to orchestrator):`, etc.).
- * - A client record (`from_client` or `client:<id>`) renders `<Name>, a client (<short rule>):`.
- * - A headerless plain body with no client or explicit rule context keeps the fallback
- *   `[attributed sender: <claimed>]` banner.
+ * - A client record (`from_client` or `client:<id>`) renders `Client <Name> (<short rule>):`.
+ * - A headerless plain body folds into the compact header using the record's sender and rule
+ *   (or `from <claimed>:` when no rule is present).
  */
 export function attributedBody(body: string, claimed: string, context: SenderRenderContext = {}): string {
   const header = SENDER_HEADER.exec(body);
@@ -261,9 +257,11 @@ export function attributedBody(body: string, claimed: string, context: SenderRen
     const rule = context.record?.rule ?? context.rule ?? 'a client grant, to the entity orchestrator';
     return `${compactSenderHeader(display, rule, { client: true })}\n\n${body}`;
   }
-  if (context.displayName && context.displayName !== '' && context.rule && context.rule !== '') {
-    const cli = isSystemOrOwner(claimed, context.displayName) ? null : resolveSenderCli(context, claimed);
-    return `${compactSenderHeader(context.displayName, context.rule, { cli })}\n\n${body}`;
-  }
-  return `${attributionBanner(claimed)}\n\n${body}`;
+  const display =
+    context.displayName && context.displayName !== ''
+      ? context.displayName
+      : claimed;
+  const rule = context.record?.rule ?? context.rule ?? '';
+  const cli = isSystemOrOwner(claimed, display) ? null : resolveSenderCli(context, claimed);
+  return `${compactSenderHeader(display, rule, { cli })}\n\n${body}`;
 }

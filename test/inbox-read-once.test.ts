@@ -30,7 +30,7 @@ const SESSION = 'acme';
 const LEAD_ID = '4f0b8d82-7a8e-4da2-9e6f-9b5aac2d3e45';
 const BODY = 'the one body this id may expose';
 /** The body as the reader serves it: nothing attests the fixture's claim, so it opens marked. */
-const MARKED_BODY = `[attributed sender: worker]\n\n${BODY}`;
+const MARKED_BODY = `Codex seat worker (owner):\n\n${BODY}`;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const moduleUrl = (relative: string): string => pathToFileURL(join(HERE, '..', relative)).href;

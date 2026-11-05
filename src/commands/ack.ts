@@ -43,6 +43,7 @@ import { messageKeyState } from '../store/keys.ts';
 import {
   findRecord,
   legacyHolds,
+  MIN_ID_PREFIX_LEN,
   raiseSecurityRefusal,
   recordHits,
   samePath,
@@ -185,6 +186,9 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
   if (hits.length === 0) {
     if (legacyHolds(root, id)) {
       return refused(io, json, `the message ${id} was written by an earlier build; it is read with team messages, not acknowledged`);
+    }
+    if (id.length < MIN_ID_PREFIX_LEN) {
+      return refused(io, json, `record prefix "${id}" is shorter than ${String(MIN_ID_PREFIX_LEN)} characters; pass at least ${String(MIN_ID_PREFIX_LEN)} characters`);
     }
     return refused(io, json, `no record named ${id} waits in this project's session "${session}"`);
   }
