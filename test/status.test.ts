@@ -748,7 +748,7 @@ describe('team status', () => {
     }], NOW.getTime());
     const { code, out } = await status();
     expect(code).toBe(0);
-    expect(out).toContain('openai  weekly  left 5%  used 95%  resets unknown  -  read 2m ago  check  fresh, inside reserve 10%');
+    expect(out).toContain('openai  weekly  left 5%  used 95%  resets not printed  -  read 2m ago  check  fresh, inside reserve 10%');
     const doc = JSON.parse((await status('--json')).out);
     expect(doc.budgets).toEqual([
       { account: 'openai', window: 'weekly', left: 5, used: 95, resetsIn: null, seat: null, age: '2m', source: 'check', fallback: false, state: 'fresh', inside: true, reserve: 10, expired: false },

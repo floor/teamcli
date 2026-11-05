@@ -85,7 +85,9 @@ export function budgetLine(row: BudgetRow): string {
   if (row.state === 'unknown' || row.left === null || row.used === null) {
     return [row.account, row.window, 'unknown'].filter((part) => part).join('  ');
   }
-  const reset = row.resetsIn === null ? 'resets unknown' : `resets in ${row.resetsIn}`;
+  // The reading's source printed the figure and no reset: the reset is not unknown to the CLI,
+  // it is off the surface this tool reads, and the line says which fact it has.
+  const reset = row.resetsIn === null ? 'resets not printed' : `resets in ${row.resetsIn}`;
   const state = row.inside && row.reserve !== null ? `${row.state}, inside reserve ${row.reserve}%` : row.state;
   return `${row.account}  ${row.window}  left ${row.left}%  used ${row.used}%  ${reset}  ${row.seat ?? '-'}  ${whenWord(row)} ${row.age} ago  ${source}  ${state}`;
 }

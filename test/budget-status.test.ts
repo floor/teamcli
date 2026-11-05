@@ -71,7 +71,7 @@ describe('the budgets table', () => {
     // Well outside — more than the reserve again — the room last seen is still shown.
     const lastSeen = budgetTable(team(10).budgets, [reading({ ...at, left: 70, used: 30 })], now)[0];
     expect(lastSeen?.state).toBe('stale');
-    expect(budgetLine(lastSeen!)).toBe('openai  weekly  left 70%  used 30%  resets unknown  one  last seen 30m ago  status line  stale');
+    expect(budgetLine(lastSeen!)).toBe('openai  weekly  left 70%  used 30%  resets not printed  one  last seen 30m ago  status line  stale');
   });
 
   test('a named account with no reading is its own unknown row', () => {

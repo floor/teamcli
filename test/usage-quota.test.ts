@@ -152,7 +152,7 @@ describe('the quota model', () => {
       '      session  used 40%  left 60%  resets in 3h  margin 0%  (status line, read 1m ago)',
       '      weekly  used 12%  left 88%  resets in 125h26m  margin +13.3%  (status line, read 1m ago)',
       '    openai  walled  resets 2h  seats: scout, +2 on another team',
-      '      weekly  used 95%  left 5%  resets unknown  margin not known  (machine reading, read 2m ago)',
+      '      weekly  used 95%  left 5%  resets not printed  margin not known  (machine reading, read 2m ago)',
       'advice: swap scout off anthropic/openai (walled) to anthropic (weekly used 12%, margin +13.3%)',
     ]);
   });

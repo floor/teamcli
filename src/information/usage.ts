@@ -1414,12 +1414,23 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
   const mineAccounts = new Set((mineEntry?.usage.accounts ?? []).map((declared) => declared.account));
   for (const account of machine.machineAccounts) mineAccounts.add(account);
   const visible = (account: string) => view.full || mineAccounts.has(account);
-  // The accounts a CLI screen on this machine can expose a figure for: any shipped quota
-  // pattern's account, plus any account a team's own seats' patterns read. An account outside
-  // the set prints `not readable from a CLI screen` — the truth about where its figure can come
-  // from, never `unknown`, which reads as a figure not yet seen.
+  // The accounts a stored reading may count for: any shipped quota pattern's account, plus any
+  // account a team's own seats' patterns read. The store is machine-wide and outlives a seat, so
+  // the gate for it is every account a profile or a team's overrides can name.
   const readable = new Set<string>([...shippedQuotaAccounts(), ...USAGE_ACCOUNTS]);
   for (const team of machine.teams) for (const account of team.usage.quotaAccounts) readable.add(account);
+  // The accounts a screen on this machine can answer for NOW: a seat's CLI either has a pattern
+  // for it, or is a CLI whose own usage print measures it. A shipped pattern is the tool's
+  // knowledge of a CLI, not a screen — with no seat running that CLI here, nothing can answer.
+  // An account outside this set prints `not readable from a CLI screen` — the truth about where
+  // its figure can come from, never `unknown`, which reads as a figure not yet seen.
+  const screenReadable = new Set<string>();
+  for (const team of machine.teams) {
+    for (const account of team.usage.quotaAccounts) screenReadable.add(account);
+    for (const seat of team.usage.seatAccounts) {
+      if (seat.cli === 'antigravity' || seat.cli === 'agy') for (const account of USAGE_ACCOUNTS) screenReadable.add(account);
+    }
+  }
 
   const labs: ReportLab[] = [];
   /** The accounts some line of this report carries a figure for: the why-lines print only under
@@ -1450,7 +1461,7 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
         accounts.push(entry);
       } else {
         for (const line of account.lines) {
-          const entry = subscriptionEntryOf(account.account, line, view, mineEntry, now, readable.has(account.account), allTeams);
+          const entry = subscriptionEntryOf(account.account, line, view, mineEntry, now, screenReadable.has(account.account), allTeams);
           if (entry.machine.state !== 'unknown') withFigure.add(account.account);
           accounts.push(entry);
         }
@@ -1533,7 +1544,7 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
   // The zero-config accounts: a figure no visible lab names lands under its lab's own account
   // name, and gets the table rows above from the freshest reading. A declared account never
   // comes here, so `accounts.yaml` is still the way to name an account or split a lab.
-  const synthesized = synthesizeAccounts(labs, machine, view, mineEntry, now, observations, withFigure, readable);
+  const synthesized = synthesizeAccounts(labs, machine, view, mineEntry, now, observations, withFigure, screenReadable);
   const quotaLabs: QuotaLabInput[] = labs.map((lab) => {
     const seenAccounts = new Set<string>();
     const accounts: QuotaLabInput['accounts'] = [];
@@ -2051,7 +2062,7 @@ function seatFiguresText(block: ReportTeamBlock): string[] {
       }
       const left = one.left === null ? 'left unknown' : `left ${one.left}%`;
       const used = one.used === null ? 'used unknown' : `used ${one.used}%`;
-      const reset = one.resetsIn === null ? 'resets unknown' : `resets in ${one.resetsIn}`;
+      const reset = one.resetsIn === null ? 'resets not printed' : `resets in ${one.resetsIn}`;
       const stale = one.stale ? '  stale' : '';
       lines.push(`  ${seat.seat}  ${seat.cli}  ${one.account}  ${one.window}  ${left}  ${used}  ${reset}  ${marginWord(one.margin)}  ${one.mark}  ${one.source}  read ${one.age} ago${stale}`);
     }
@@ -2108,7 +2119,10 @@ function accountCells(entry: ReportAccount, report: UsageReport): string[] {
     const state = quotaAccountState(report.quota, entry.account, entry.kind === 'subscription' ? entry.pool : undefined);
     return [account, m.window ?? '-', '-', '-', '-', '-', '-', '-', `${state}${entry.readable ? '' : '  not readable from a CLI screen'}`];
   }
-  const reset = m.resetsIn === null ? 'unknown' : `in ${m.resetsIn}`;
+  // The figure's source is the fact: a surface that printed a percentage and no reset printed
+  // no reset — the reset is not unknown to the CLI, it is simply not on the surface this tool
+  // reads (the Codex bar carries percentages only; the reset lives in its status view).
+  const reset = m.resetsIn === null ? 'not printed' : `in ${m.resetsIn}`;
   const reserve = m.inside && m.reserve !== null ? `inside reserve ${m.reserve}%` : '-';
   // The block's own window for this row: its state, its margin and its clock, one lookup so the
   // two faces cannot disagree. The pace where one is known; where it is not, the margin the tree

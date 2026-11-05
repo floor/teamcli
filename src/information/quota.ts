@@ -369,6 +369,21 @@ export function adviceOf(labs: readonly ReportQuotaLab[], expired: readonly stri
   const noFresh = expired.length === 0
     ? null
     : `no fresh reading on ${expired.slice(0, 2).join(', ')}${expired.length > 2 ? ` and ${expired.length - 2} more` : ''}: a running seat's status line or the CLI's own usage command reads one on the next run`;
+  // A fresh figure whose source printed no reset has no clock to read a margin against, and the
+  // CLI's own status view is where that clock is printed. Named on the same line, so `not
+  // printed` in a cell never stands without a route to the reset it says is off-screen. A window
+  // whose row printed its own margin needs no route — the pace is the figure advice uses — and a
+  // walled account's advice is the move, not an errand for a clock.
+  const noReset = all.flatMap((one) => one.account.windows
+    .filter((w) => one.account.state !== 'walled' && !w.wall && !w.stale && !w.expired
+      && w.used !== null && w.resetsIn === null && w.margin === null)
+    .map((w) => `${named(one.account, one.lab)} (${w.window})`));
+  const notes: string[] = [];
+  if (noFresh !== null) notes.push(noFresh);
+  if (noReset.length > 0) {
+    const list = `${noReset.slice(0, 2).join(', ')}${noReset.length > 2 ? ` and ${noReset.length - 2} more` : ''}`;
+    notes.push(`no reset printed on ${list}: the CLI's own status view shows it`);
+  }
   if (all.length === 0) return 'no lab is declared on this machine: declare an account first';
   const targets = all
     .filter((one) => one.account.state === 'ok' && one.margin !== null && one.margin >= HEADROOM)
@@ -386,7 +401,7 @@ export function adviceOf(labs: readonly ReportQuotaLab[], expired: readonly stri
     if (one.margin !== null) parts.push(`margin ${signed(one.margin)}%`);
     return `${named(one.account, one.lab)} (${figure?.window ?? 'weekly'} ${parts.join(', ')})`;
   };
-  const withNote = (line: string): string => (noFresh === null ? line : `${line}; ${noFresh}`);
+  const withNote = (line: string): string => (notes.length === 0 ? line : `${line}; ${notes.join('; ')}`);
   if (walled.length > 0) {
     const moves: string[] = [];
     for (const one of walled.slice(0, 2)) {
@@ -407,7 +422,7 @@ export function adviceOf(labs: readonly ReportQuotaLab[], expired: readonly stri
   if (targets.length > 0) {
     return withNote(`headroom on ${targets.slice(0, 2).map((one) => describe(one)).join('; ')}`);
   }
-  if (noFresh !== null) return noFresh;
+  if (notes.length > 0) return notes.join('; ');
   if (withFigures.length > 0) return `no account has headroom yet (no fresh margin at or above ${signed(HEADROOM)}%)`;
   return 'no readings yet: no seat status line and no CLI usage command has answered';
 }
@@ -429,7 +444,11 @@ export function marginWord(margin: number | null): string {
  *  A window running ahead of its clock by the headroom band prints the run-out sentence in place
  *  of the reset countdown and the margin, which it already carries both hours of. */
 function windowText(one: ReportQuotaWindow): string {
-  const reset = one.resetsIn === null ? 'resets unknown' : `resets in ${one.resetsIn}`;
+  // A figure whose source printed no reset says so; a wall's reset is the limit lifting, which
+  // no figure names either, so the wall keeps `unknown` for a screen that named none.
+  const reset = one.wall
+    ? (one.resetsIn === null ? 'resets unknown' : `resets in ${one.resetsIn}`)
+    : (one.resetsIn === null ? 'resets not printed' : `resets in ${one.resetsIn}`);
   const from = `(${one.source}, read ${one.age} ago)`;
   if (one.wall) return `${one.window}  walled  ${reset}  ${from}`;
   // A reading older than its own window is of a passed instance: the words, the age and the
