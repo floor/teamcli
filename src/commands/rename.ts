@@ -1,6 +1,6 @@
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { recordSeatRenameOf, recordTeamRenameOf } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import {
@@ -57,6 +57,7 @@ import { seatNumberingInForce } from '../settings/seat-numbering.ts';
 import { emptySession, readState, sessionMap, updateState, withLock, writeAtomic } from '../state.ts';
 import {
   MESSAGE_DOMAIN,
+  keyState,
   messageKeyState,
   RECEIPT_DOMAIN,
   signDomain,
@@ -912,7 +913,7 @@ async function executeTeamRename(
   const { caller, shown, session } = judged;
 
   const dev = resolveDevMode('rename', io, { home, team, root, now });
-  logDevModeState(dir, 'rename', describeCaller(shown), dev, now);
+  let devWarning: string | null = null;
   const verdict = verdictOf(caller, standingOf(dir, session, caller));
 
   if (verdict.kind === 'no-pane') {
@@ -942,7 +943,7 @@ async function executeTeamRename(
     );
     if (folded !== null) {
       io.stderr(`team rename: ${folded}\n`);
-      logDevMode(dir, 'rename', describeCaller(shown), folded, now);
+      devWarning = folded;
     }
   }
 
@@ -1000,6 +1001,52 @@ async function executeTeamRename(
     return 'invalid';
   }
 
+  // Both modes must reach these refusals before any mutation, including audit writes. A team
+  // rename carries an existing signed approval; it must never bootstrap a missing signing key
+  // or silently leave the approval, state, or another team's lobby behind.
+  const oldRoot = priorRecord !== null && rekey ? priorRecord.root : root;
+  const oldId = priorRecord?.id && rekey ? priorRecord.id : currentId;
+  const oldStore = storePath(oldProject, oldRoot, home);
+  const newStore = storePath(newTeamName, root, home);
+  let stateFolderExists = false;
+  try {
+    stateFolderExists = lstatSync(oldStore).isDirectory();
+  } catch {}
+  if (!stateFolderExists) {
+    io.stderr(`team rename: refused: state folder ${oldStore} is missing or unreadable as a directory; restore it before renaming the team\n`);
+    return 'refused';
+  }
+  const signingKey = keyState(home);
+  if (signingKey.kind !== 'key') {
+    const reason = signingKey.kind === 'unreadable' ? signingKey.why : 'it is missing';
+    io.stderr(`team rename: refused: the owner signing key must be available to preserve approval and re-sign grants (${reason}); restore it before renaming the team\n`);
+    return 'refused';
+  }
+  const standing = (sources.standing ?? ((at) => approvalStanding(at, home)))(oldRoot);
+  if (standing.kind !== 'verified') {
+    const reason = standing.kind === 'refused' ? `: ${standing.why}` : ` (${standing.kind})`;
+    io.stderr(`team rename: refused: approval must be verified before renaming the team${reason}\n`);
+    return 'refused';
+  }
+
+  const defaultOldLobby = join(home, '.config', 'team', 'lobbies', oldProject);
+  const defaultNewLobby = join(home, '.config', 'team', 'lobbies', newTeamName);
+  const priorLobby = allTeams[oldId]?.lobby;
+  if (oldProject !== newTeamName && (priorLobby === defaultOldLobby || existsSync(defaultOldLobby))) {
+    const lobbyPath = (path: string): string => {
+      try { return realpathSync(path); } catch { return resolve(path); }
+    };
+    const moving = new Set([lobbyPath(defaultOldLobby), lobbyPath(defaultNewLobby)]);
+    for (const [id, record] of Object.entries(allTeams)) {
+      if (ownIds.has(id)) continue;
+      const claimed = [record.lobby, ...Object.values(record.lobbies)].filter(Boolean);
+      if (claimed.some((path) => moving.has(lobbyPath(path)))) {
+        io.stderr(`team rename: refused: lobby is used by another team (${id}); leave that team's lobby in place\n`);
+        return 'refused';
+      }
+    }
+  }
+
   if (dryRun) {
     if (json) {
       io.stdout(
@@ -1022,13 +1069,10 @@ async function executeTeamRename(
     return 'ok';
   }
 
-  const oldRoot = priorRecord !== null && rekey ? priorRecord.root : root;
-  const oldId = priorRecord?.id && rekey ? priorRecord.id : currentId;
-  const standing = (sources.standing ?? ((at) => approvalStanding(at, home)))(oldRoot);
+  logDevModeState(dir, 'rename', describeCaller(shown), dev, now);
+  if (devWarning !== null) logDevMode(dir, 'rename', describeCaller(shown), devWarning, now);
   const moved: string[] = ['team config'];
 
-  const oldStore = storePath(oldProject, oldRoot, home);
-  const newStore = storePath(newTeamName, root, home);
   if (oldStore !== newStore && existsSync(oldStore)) {
     if (moveFolder(oldStore, newStore)) {
       moved.push(newStore);
@@ -1076,8 +1120,6 @@ async function executeTeamRename(
   }
 
   const existing = getTeam(home, oldId);
-  const defaultOldLobby = join(home, '.config', 'team', 'lobbies', oldProject);
-  const defaultNewLobby = join(home, '.config', 'team', 'lobbies', newTeamName);
   let nextLobby = existing?.lobby ?? '';
   if (oldProject !== newTeamName && (nextLobby === defaultOldLobby || existsSync(defaultOldLobby))) {
     moveFolder(defaultOldLobby, defaultNewLobby);

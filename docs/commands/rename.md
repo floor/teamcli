@@ -8,6 +8,15 @@ the approval record, the state, the registry, herdr, and on-disk seat files.
 
     team rename <seat> <new-seat> [--session <name>] [--file <path>] [--json]
     team rename --renumber [--dry-run] [--session <name>] [--file <path>] [--json]
+    team rename --team <new-name> [--from <old-name>] [--in-project <project>] [--session <name>] [--rekey] [--dry-run] [--file <path>] [--json]
+
+With `--team`, the command renames the team while carrying its registry identity, approval,
+state directory, lobby, sessions and grants. Admission is the owner, or the team's lead in
+development mode. Both the preview and live run require the existing owner signing key, a
+verified approval and an existing state directory. A lobby referenced by another team's
+registry record cannot be moved or used as the destination. These refusals use `rename.refused`
+(exit 1) and leave all files unchanged. A successful team dry run also writes no audit log and
+never creates a replacement signing key.
 
 ## What it carries over
 
@@ -28,7 +37,7 @@ Renaming `<seat>` to `<new-seat>` moves the seat's name while keeping the same s
 | Flag | Value | Effect |
 | --- | --- | --- |
 | `--renumber` | — | renumber every numbered seat (such as `builder-1` -> `builder-01`) to match the `seat_numbering` policy in force (`min_width`, `pad_char`, `separator`), leaving unnumbered single seats untouched |
-| `--dry-run` | — | with `--renumber`, print the planned renames (`<from> -> <to> (dry run)`) without writing any file or state |
+| `--dry-run` | — | with `--renumber` or `--team`, run the shared checks and print the planned renames (`<from> -> <to> (dry run)`) without writing any file or state |
 | `--session` | `<name>` | the herdr session, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's alone |
 | `--json` | — | print `{ "dryRun": boolean, "renames": [...] }` on stdout |

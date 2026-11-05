@@ -11,7 +11,7 @@ team rename --team <new-name> [--from <old-name>] [--in-project <project>] [--se
 Existing seat forms (`team rename <seat> <new-seat>` and `team rename --renumber`) are unchanged.
 
 - **Admission (§5.1):** No new capability word and no create-grant or project-grant path. Admitted only by the owner, or by a seat holding `leads` on the team while `development_mode` is active for `'rename'`.
-- **Dry-run parity (§5.10):** `--dry-run` executes the identical admission, root-move, name-collision, session-collision, and validation pipeline as the live run, reaching every refusal the real run would before touching disk, and prints (or emits via `--json`) the planned mutations. Nothing is applied to a live Floor record without the owner; the motivating duplicate-name case serves only as the fixture shape.
+- **Dry-run parity (§5.10):** `--dry-run` executes the identical admission, root-move, name-collision, session-collision, and validation pipeline as the live run, reaching every refusal the real run would before touching disk, and prints (or emits via `--json`) the planned mutations. Both modes require an existing state directory, the existing owner signing key, and verified approval, and refuse moving a lobby claimed by another team (including the destination). Refusal and dry-run paths write no audit log, regenerate no key, and change no files. Nothing is applied to a live record without the owner; the motivating duplicate-name case serves only as the fixture shape.
 
 ## 2. Ids Are Keys & Root Moves (§1.3, §5.4)
 
