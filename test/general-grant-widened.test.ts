@@ -107,11 +107,12 @@ const NEWEST_ROW = OP_RELEASE_GROUPS.reduce((late, row) => (Date.parse(row.at) >
  *  table's own tags are the yardstick: a clone that fetched no tags, or only some, would
  *  otherwise read as "no release ships the op", and the walk would pass without measuring
  *  anything. A plain refusal names the missing tags, never a silent pass. The newest table row
- *  names the release being cut, so its tag may lag the table; every older table tag is required. */
+ *  names the release being cut, so its tag may lag the table, and local `-hotfix.` tags are
+ *  covered by their release tag on the remote; every other published release tag is required. */
 function tagSetProblem(tags: readonly string[]): string | null {
   if (tags.length === 0) return NEEDS_RELEASE_TAGS;
   const missing = OP_RELEASE_GROUPS.map((row) => row.tag).filter(
-    (tag) => tag !== NEWEST_ROW.tag && !tags.includes(tag),
+    (tag) => tag !== NEWEST_ROW.tag && !tag.includes('-hotfix.') && !tags.includes(tag),
   );
   return missing.length === 0 ? null : `${NEEDS_RELEASE_TAGS}; it reads no ${missing.join(', ')}`;
 }
