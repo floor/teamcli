@@ -685,6 +685,45 @@ function startBaseline(input: ChoresFleetInput, group: Group, child: ChoresChild
   keep(answer);
 }
 
+function recordChildLiveness(input: ChoresFleetInput, group: Group, frameAt: string): number {
+  // The daemon's own clock at the read, before the frame's `at` is parsed: a beat the child
+  // wrote before a daemon stall is heard now, and the silence that follows it is counted from
+  // now. A frame written while this loop was held must not be charged to the child's own
+  // cadence, which is what reading the child's `at` as the reference did.
+  const readAt = input.now().getTime();
+  // A child the daemon asked to end that answers with a beat is still working: the handle's
+  // guard withholds the forced end from a child that keeps consuming CPU, and the supervisor
+  // must not leave a live child out of service forever. An ordinary end request is withdrawn
+  // and the next late window is judged afresh. A child that was in teardown anyway exits on
+  // its own, and that exit still schedules the replacement exactly as before.
+  //
+  // A deliberate end is not withdrawn: the hung ceiling's request is already going to force
+  // the child, so a beat inside its grace must not put a child that is about to be forced
+  // back into service. The ceiling sentence in the row marks that deliberate request; the
+  // generic bookkeeping below clears it, and `killing` then falls back to the ceiling's reason.
+  if (group.killing && group.rowWhy === null) {
+    group.killing = false;
+    group.why = null;
+  }
+  // A beat closes the window a probe may still be judging: its answer is for a child that
+  // has spoken since, and is dropped. The beat also carries the child's own CPU total, so
+  // the baseline for the next late decision costs no process query at all.
+  group.judgeToken += 1;
+  group.probePending = false;
+  group.lastBeatReadMs = readAt;
+  group.lastBeatMs = Date.parse(frameAt);
+  if (!Number.isFinite(group.lastBeatMs)) group.lastBeatMs = readAt;
+  group.beats += 1;
+  group.spareWhy = null;
+  group.rowWhy = null;
+  group.spareLogged = false;
+  // Two heartbeats span a full beat interval: this child's loop moved on its own after it
+  // started, so the next failure waits the first step again. A child that dies before its
+  // second beat is a start that did not take, and keeps the doubling wait.
+  if (group.ready && group.beats >= 2) group.backoff = 0;
+  return readAt;
+}
+
 function onChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild, event: ChoresChildEvent): void {
   if (group.child !== child) return;
   if (event.kind === 'note') {
@@ -700,50 +739,17 @@ function onChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild,
     case 'ready':
       group.ready = true;
       return;
-    case 'heartbeat':
-      // The daemon's own clock at the read, before the frame's `at` is parsed: a beat the child
-      // wrote before a daemon stall is heard now, and the silence that follows it is counted from
-      // now. A frame written while this loop was held must not be charged to the child's own
-      // cadence, which is what reading the child's `at` as the reference did.
-      const readAt = input.now().getTime();
-      // A child the daemon asked to end that answers with a beat is still working: the handle's
-      // guard withholds the forced end from a child that keeps consuming CPU, and the supervisor
-      // must not leave a live child out of service forever. An ordinary end request is withdrawn
-      // and the next late window is judged afresh. A child that was in teardown anyway exits on
-      // its own, and that exit still schedules the replacement exactly as before.
-      //
-      // A deliberate end is not withdrawn: the hung ceiling's request is already going to force
-      // the child, so a beat inside its grace must not put a child that is about to be forced
-      // back into service. The ceiling sentence in the row marks that deliberate request; the
-      // generic bookkeeping below clears it, and `killing` then falls back to the ceiling's reason.
-      if (group.killing && group.rowWhy === null) {
-        group.killing = false;
-        group.why = null;
-      }
-      // A beat closes the window a probe may still be judging: its answer is for a child that
-      // has spoken since, and is dropped. The beat also carries the child's own CPU total, so
-      // the baseline for the next late decision costs no process query at all.
-      group.judgeToken += 1;
-      group.probePending = false;
-      group.lastBeatReadMs = readAt;
-      group.lastBeatMs = Date.parse(message.at);
-      if (!Number.isFinite(group.lastBeatMs)) group.lastBeatMs = readAt;
+    case 'heartbeat': {
+      const readAt = recordChildLiveness(input, group, message.at);
       group.rssBytes = message.rssBytes;
       group.busy = message.busy;
       group.markerCache = message.markerCache;
-      group.beats += 1;
       if (typeof message.cpuMs === 'number' && Number.isFinite(message.cpuMs)) {
         group.cpuSampleMs = message.cpuMs;
         group.cpuSampleAtMs = readAt;
       }
-      group.spareWhy = null;
-      group.rowWhy = null;
-      group.spareLogged = false;
-      // Two heartbeats span a full beat interval: this child's loop moved on its own after it
-      // started, so the next failure waits the first step again. A child that dies before its
-      // second beat is a start that did not take, and keeps the doubling wait.
-      if (group.ready && group.beats >= 2) group.backoff = 0;
       return;
+    }
     case 'pass':
       for (const pass of message.passes) {
         group.lastPass.set(pass.root, { at: pass.at, notes: pass.notes });
@@ -778,7 +784,11 @@ function onChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild,
       group.watchState.set(message.root, message.state);
       return;
     case 'watch-pulse':
+      recordChildLiveness(input, group, message.at);
       input.watchPulse?.(message.root, new Date(message.at));
+      return;
+    case 'watch-cycle':
+      recordChildLiveness(input, group, message.at);
       return;
     case 'watch-fault-result': {
       // A result with no accepted fault waiting is a late answer: dropped, never written twice.

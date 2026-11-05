@@ -726,10 +726,13 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   };
   const say = (text: string, desktop: boolean) => tell(text, desktop && !args.flags.has('no-notify'));
 
-  // A hosted pass yields to the daemon's beat between its blocking reads: one synchronous seam,
-  // a clock comparison between beats. A CLI watch has no host and yields nothing.
-  const yieldBeat = (): void => {
-    hosted?.beat?.();
+  // A hosted pass yields to the daemon's beat between its blocking reads and synchronous sub-steps:
+  // it fires the host's cross-route beat and yields a macrotask so an interval beat timer on this
+  // loop can run between steps. A CLI watch has no host and yields nothing.
+  const yieldBeat = async (): Promise<void> => {
+    if (hosted === undefined) return;
+    hosted.beat?.();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
   };
 
   // Whether the host has stopped this loop. A call, not an inline comparison, so the flow
@@ -892,7 +895,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       const gate = readGate(() => sources.now().getTime(), limits, hosted?.signal);
       // Before the one whole-session read: a beat overdue from the last pass lands here, so the
       // other hosted routes are renewed going into a call that can hold the loop for seconds.
-      yieldBeat();
+      await yieldBeat();
       const liveCall = gate.take();
       let live: Live | null = null;
       let liveSkipped = false;
@@ -914,7 +917,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         live = sources.live(session, team);
       }
       lastLive = live;
-      yieldBeat();
+      await yieldBeat();
       // A stop that landed while the read was in flight ends the pass here: the children it was
       // waiting on are killed with the signal the read was given.
       if (stopped()) break;
@@ -979,7 +982,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           const panesBySeat: Record<string, string> = {};
           for (const seat of team.seats) {
             // Between seats: the screen read below is synchronous and can be slow.
-            yieldBeat();
+            await yieldBeat();
             if (seat.human === true || seat.stopped === true) continue;
             const agent = live.agents.find((candidate) => candidate.name === seat.name);
             if (!agent) continue;
@@ -1032,7 +1035,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // pass reads what they read, and nothing else. Only their state is ever said — a
         // contract failure or a timeout says `unreadable`, never a line of what they printed.
         if (checksAt === null || now - checksAt >= budget.checkEvery * 1000) {
-          yieldBeat();
+          await yieldBeat();
           const checkCall = gate.take();
           // A pass whose budget is spent before the checks leaves `checksAt` where it is, so the
           // next pass runs them rather than skipping a whole cadence. A stop between two check
@@ -1044,7 +1047,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
               : sources.readChecks(standing, team, now);
             // A check command is awaited (or synchronous) and can run for its own timeout: the
             // beat it displaced lands as soon as it returns.
-            yieldBeat();
+            await yieldBeat();
             // The money a spend check counted is kept, like the pass's screen readings: the launch
             // gate of `up` and `add` reads it later, and one that is stale by then reads unknown
             // (§ 5). An account whose check did not run keeps its stored reading.
@@ -1079,7 +1082,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           for (const agent of live.agents) {
             // Between seats: the process read, one per figure when the seam has no whole-session
             // map to offer.
-            yieldBeat();
+            await yieldBeat();
             foreground[agent.pane] = await foregroundRead(sources, gate, agent.pane, session);
             processes[agent.pane] = await processesRead(sources, gate, agent.pane, session);
           }
@@ -1095,7 +1098,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           : sources.machineAsync !== undefined
             ? await sources.machineAsync(root, machineCall)
             : sources.machine(root);
-        yieldBeat();
+        await yieldBeat();
         if (stopped()) break;
         if (readingsAt === null || now - readingsAt >= READINGS_EVERY * 1000) {
           readingsAt = now;
@@ -1177,6 +1180,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // the write. A watch on a foreign session still folds, for its reports, and saves
         // nothing.
         const snapshot = loadReadings(dir);
+        await yieldBeat();
         const computed = run(snapshot);
         const result = foreign
           ? computed
@@ -1185,6 +1189,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             value: computed,
           }), { skipIdentical: true });
         if (!foreign && sources.home) saveMachineReadings(sources.home, result.machineReadings, now);
+        await yieldBeat();
         // The entity's model rule, carried out without a caller: a breaching seat the queue does
         // not hold yet is queued here. Only the file's own watch queues — a foreign session
         // writes nothing, and a watch with no home has no policy chain to read the wait from.
@@ -1228,6 +1233,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             // counts it with the picker's own rules and never reads the tracker itself.
             ...(broker === undefined ? {} : { broker }),
           });
+        await yieldBeat();
         for (const item of idleDispatch.pushed) {
           if (item.ok) continue;
           const standing = item.staged === true
@@ -1338,6 +1344,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
           })
           : new Set<string>();
+        await yieldBeat();
         const ring = result.ring;
         const rung = new Set<string>();
         if (ring && delivered.size === 0 && !suppressed.has(ring.to) && hosted === undefined && paceVerified && sources.home !== undefined) {
@@ -1400,6 +1407,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           confirmTakenDrops({
             dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
           });
+          await yieldBeat();
           // A delivery is a deposit until the seat's signed receipt follows: a message still
           // unread its seat's window after it landed gets the next leg down the cascade — the
           // webhook adapter before the typed line (ADR zeus-message-path, D2) — and one still
@@ -1441,6 +1449,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           );
         }
         if (result.mailboxNote) tell(result.mailboxNote, true);
+        await yieldBeat();
         // A hosted watch closes no seat, removes no worktree and runs no swap: those are
         // destructive actions, and the quiet foundation leaves them to a watch whose effects
         // are open. The reads that decide an end still happen where a caller asks for them.

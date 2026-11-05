@@ -344,6 +344,7 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
       log: (text) => write({ type: 'note', text }),
       report: (root, state) => write({ type: 'watch-state', root, state }),
       pulse: (root, at) => write({ type: 'watch-pulse', root, at: at.toISOString() }),
+      cycle: (root, at) => write({ type: 'watch-cycle', root, at: at.toISOString() }),
       faultResult: (root, outcome, why) => write({ type: 'watch-fault-result', root, outcome, why }),
       now,
       ...(input.watchBase === undefined ? {} : { base: input.watchBase }),

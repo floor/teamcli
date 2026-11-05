@@ -253,4 +253,29 @@ describe('the chores child\'s hosted watch', () => {
       await watch.stop('the test is done');
     }
   }, 15_000);
+
+  test('emits pulse during a pass and cycle when a pass completes', async () => {
+    bind();
+    const clock = { at: NOW };
+    const pulses: { root: string; at: string }[] = [];
+    const cycles: { root: string; at: string }[] = [];
+    const watch = createChoresWatch({
+      routes: [route()],
+      log: () => {},
+      report: () => {},
+      pulse: (one, at) => pulses.push({ root: one, at: at.toISOString() }),
+      cycle: (one, at) => cycles.push({ root: one, at: at.toISOString() }),
+      faultResult: () => {},
+      now: () => new Date(clock.at),
+      base: quietSources(clock),
+    } as Parameters<typeof createChoresWatch>[0]);
+    try {
+      await waitUntil(() => cycles.length >= 1);
+      expect(pulses.length).toBeGreaterThan(0);
+      expect(pulses[0]).toEqual({ root, at: iso(NOW) });
+      expect(cycles).toEqual([{ root, at: iso(NOW) }]);
+    } finally {
+      await watch.stop('the test is done');
+    }
+  }, 15_000);
 });
