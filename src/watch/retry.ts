@@ -49,11 +49,13 @@ import { wakeStep } from '../send/steps.ts';
 import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from '../send/deliver.ts';
 import { appendHistory } from '../send/history.ts';
 import { readTriggerLine } from '../send/native.ts';
+import { leadAckReceiptAt } from '../send/record.ts';
 import type { TypedWakeResult } from '../send/typed-wake.ts';
 import { markTaken } from '../send/taken.ts';
 import { verifiedPayloadOf, wakeTrigger } from '../send/wake.ts';
 import type { Live } from '../status/compare.ts';
 import type { MailPass } from './mail-pass.ts';
+import { messageKeyState } from '../store/keys.ts';
 import { readScreen } from './screen.ts';
 
 /** What a retry reads and types through: the watch's own sources, narrowed to the pane calls. */
@@ -168,6 +170,20 @@ function heldWords(drop: PendingDrop): string {
   if (drop.leg === 'mcp-inbox') return `an inbox send from ${drop.from}`;
   if (drop.leg === 'channel') return `a channel send from ${drop.from}`;
   return `a held send from ${drop.from}`;
+}
+
+/** The lead's clearance of a message, when this home's message key proves one: a stopped seat's
+ *  swept mail is settled, and no retry may type it or report the seat as its reader. */
+export function clearedAt(
+  scene: Pick<RetryScene, 'home' | 'root' | 'session'>,
+  dropDir: string,
+  id: string,
+  to: string,
+): { by: string; at: string } | null {
+  if (scene.home === undefined) return null;
+  const key = messageKeyState(scene.home);
+  if (key.kind !== 'key') return null;
+  return leadAckReceiptAt(dropDir, id, { to, root: scene.root, session: scene.session }, key.key);
 }
 
 /** Why this marker's delivery ended on another leg, as the history line's failed note. The
@@ -352,6 +368,23 @@ async function retryOne(scene: RetryScene, seat: Seat, pane: string, dropDir: st
       giveUp(scene, dropDir, drop, 'the seat is back at its shell; nothing was typed');
       return;
     }
+    // A lead's clearance that landed after the retry records were read settles the drop the
+    // same way: nothing is typed, and the history names who cleared it rather than claiming the
+    // seat read it.
+    const cleared = clearedAt(scene, dropDir, drop.id, drop.to);
+    if (cleared !== null) {
+      clearPending(dropDir, drop.id);
+      appendHistory(scene.team.project, scene.root, home, {
+        ts: scene.now.toISOString(),
+        from: drop.from,
+        to: drop.to,
+        body: drop.body,
+        id: drop.id,
+        outcome: `cleared by ${cleared.by}`,
+      });
+      scene.say(`${drop.to}: ${heldWords(drop)} was cleared by ${cleared.by}`, false);
+      return;
+    }
     const receipt = (): boolean => receiptHeld(dropDir, drop.id, { to: drop.to, root: scene.root, session: scene.session }, home, claimBindingIn(scene.root, scene.session, drop.to, drop.id));
     // A receipt that landed since the retry records were read is the read itself: nothing is
     // typed, and the marker is settled with the words a receipt inside the retry's window earns.
@@ -490,6 +523,22 @@ async function redeliverChannel(scene: RetryScene, seat: Seat, pane: string, dro
     giveUp(scene, dropDir, drop, 'this watch has no home to verify its sender with');
     return;
   }
+  // A lead's clearance that landed after the promotion pass read the markers settles the drop:
+  // nothing is redelivered, and the history names the clearer rather than the seat as its reader.
+  const cleared = clearedAt(scene, dropDir, drop.id, drop.to);
+  if (cleared !== null) {
+    clearPending(dropDir, drop.id);
+    appendHistory(scene.team.project, scene.root, home, {
+      ts: scene.now.toISOString(),
+      from: drop.from,
+      to: drop.to,
+      body: drop.body,
+      id: drop.id,
+      outcome: `cleared by ${cleared.by}`,
+    });
+    scene.say(`${drop.to}: ${heldWords(drop)} was cleared by ${cleared.by}`, false);
+    return;
+  }
   const receipt = (): boolean => receiptHeld(dropDir, drop.id, { to: drop.to, root: scene.root, session: scene.session }, home, claimBindingIn(scene.root, scene.session, drop.to, drop.id));
   // A receipt that arrived after the promotion pass read the markers is the read itself: an
   // acknowledged message is never touched again.
@@ -553,6 +602,29 @@ export function promoteInboxDrops(scene: RetryScene): ReadonlySet<string> {
       // send's proof and never this one's.
       if (drop.leg === undefined) continue;
       if (scene.home === undefined) continue;
+      // A lead's clearance is not a read: the marker goes, the ring learns nothing, and the one
+      // history line names the clearer.
+      const cleared = clearedAt(scene, dropDir, drop.id, seat.name);
+      if (cleared !== null) {
+        clearPending(dropDir, drop.id);
+        appendHistory(scene.team.project, scene.root, scene.home, {
+          ts: scene.now.toISOString(),
+          from: drop.from,
+          to: drop.to,
+          body: drop.body,
+          id: drop.id,
+          outcome: `cleared by ${cleared.by}`,
+        });
+        scene.say(
+          drop.leg === 'drop'
+            ? `${seat.name}: a dropped send from ${drop.from} was cleared by ${cleared.by}`
+            : drop.leg === 'channel'
+              ? `${seat.name}: a channel send from ${drop.from} was cleared by ${cleared.by}`
+              : `${seat.name}: an inbox send from ${drop.from} was cleared by ${cleared.by}`,
+          false,
+        );
+        continue;
+      }
       if (!receiptHeld(dropDir, drop.id, { to: seat.name, root: scene.root, session: scene.session }, scene.home, claimBindingIn(scene.root, scene.session, seat.name, drop.id))) continue;
       read.add(`${seat.name}\n${drop.id}`);
       clearPending(dropDir, drop.id);
@@ -613,6 +685,24 @@ export async function retryHeldDrops(scene: RetryScene): Promise<void> {
     // reads it (a receipt bound to the claim) or when a newer claim supersedes it.
     const owed = new Set<string>();
     const pending = drops.filter((drop) => {
+      // A lead's sweep of a stopped seat's mail settles the marker here, before any pane is
+      // looked for: the seat is gone, nothing is typed, and the history names the clearer.
+      const cleared = clearedAt(scene, dropDir, drop.id, seat.name);
+      if (cleared !== null) {
+        clearPending(dropDir, drop.id);
+        if (scene.home !== undefined) {
+          appendHistory(scene.team.project, scene.root, scene.home, {
+            ts: scene.now.toISOString(),
+            from: drop.from,
+            to: drop.to,
+            body: drop.body,
+            id: drop.id,
+            outcome: `cleared by ${cleared.by}`,
+          });
+        }
+        scene.say(`${seat.name}: ${heldWords(drop)} was cleared by ${cleared.by}`, false);
+        return false;
+      }
       if (claim === null || drop.from !== GENERAL_BRIEF_FROM) return true;
       if (drop.id === claim.id) {
         if (!read) {

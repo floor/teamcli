@@ -31,6 +31,7 @@ import type { HerdrAgent } from '../src/herdr.ts';
 import { generalBriefRecord } from '../src/launch/general-brief.ts';
 import {
   isRead,
+  leadAckReceiptAt,
   signReceiptPayload,
   signRecord,
   statusOf,
@@ -177,7 +178,7 @@ function putReceipt(
   fx: Fixture,
   id: string,
   status: ReceiptStatus,
-  over: { home?: string; root?: string; session?: string; tamper?: boolean } = {},
+  over: { home?: string; root?: string; session?: string; readBy?: string; tamper?: boolean } = {},
 ): void {
   mkdirSync(dropDir(fx), { recursive: true });
   const signed = signReceiptPayload(
@@ -189,6 +190,7 @@ function putReceipt(
       root: over.root ?? fx.root,
       session: over.session ?? SESSION,
       at: NOW.toISOString(),
+      ...(over.readBy === undefined ? {} : { read_by: over.readBy }),
     },
     over.home ?? fx.home,
   );
@@ -431,6 +433,18 @@ describe('the assigned-work check reads signed receipts, not only file names', (
     putReceipt(fx, MESSAGE_ID, 'read');
     expect(statusOf(dropDir(fx), MESSAGE_ID, context(fx), keyOf(fx))).toBe('read');
     expect(isRead(dropDir(fx), MESSAGE_ID, context(fx), keyOf(fx))).toBe(true);
+    expect(assigned(fx)).toBe(false);
+  });
+
+  test("a lead's clearance settles the message without being the seat's read", () => {
+    const fx = makeFixture();
+    putMessage(fx);
+    putReceipt(fx, MESSAGE_ID, 'read', { readBy: 'lead-ack:owner' });
+    // The file verifies, and it says who cleared it — never that the address read it.
+    expect(leadAckReceiptAt(dropDir(fx), MESSAGE_ID, context(fx), keyOf(fx))?.by).toBe('owner');
+    expect(statusOf(dropDir(fx), MESSAGE_ID, context(fx), keyOf(fx))).toBe('sent');
+    expect(isRead(dropDir(fx), MESSAGE_ID, context(fx), keyOf(fx))).toBe(false);
+    // Cleared mail is not work a returning seat still owes.
     expect(assigned(fx)).toBe(false);
   });
 

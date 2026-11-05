@@ -42,7 +42,7 @@ import type { BusPublishOutcome } from '../bus/server.ts';
 import { EVENT_THRESHOLDS } from '../policy/events.ts';
 import { herdrUnreliable } from '../profiles/index.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { isRead, readRecord, RECEIPT_STATUSES, sameFolder, verifyRecord } from '../send/record.ts';
+import { isReadOrCleared, readRecord, RECEIPT_STATUSES, sameFolder, verifyRecord } from '../send/record.ts';
 import { readState } from '../state.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { minutes } from './check.ts';
@@ -577,9 +577,10 @@ export function seatHasAssignedWorkOnDisk(
         }
         if (key !== undefined) {
           // The seat took this message: a signed read or reply receipt verifies for its id, this
-          // seat, this checkout and this session. A tampered, foreign-key or other-session
-          // receipt is not a read, and the name stays work.
-          if (isRead(dropDir, name, context, key)) continue;
+          // seat, this checkout and this session — or a lead's clearance settles it for a seat
+          // that is not coming back. A tampered, foreign-key or other-session receipt is not a
+          // read, and the name stays work.
+          if (isReadOrCleared(dropDir, name, context, key)) continue;
           // Every delivery of this build's brief is the launch's, not assigned work: the current
           // id is skipped above from the claim, and a superseded id the state no longer lists is
           // recognized from the record itself — same key, same sender, same checkout, same

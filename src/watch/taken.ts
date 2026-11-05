@@ -23,7 +23,7 @@ import {
   TAKEN_MAX_AGE_MS,
   type TakenDrop,
 } from '../send/taken.ts';
-import { passPaneScreen, passPaneScreenAsync, passPaneStatus, type RetryScene } from './retry.ts';
+import { clearedAt, passPaneScreen, passPaneScreenAsync, passPaneStatus, type RetryScene } from './retry.ts';
 
 /** The two statuses a free seat reads: past the grace, a taken line it never showed is gone. */
 const FREE = new Set(['idle', 'done']);
@@ -39,6 +39,24 @@ function confirmOne(
   drop: TakenDrop,
 ): void {
   const age = scene.now.getTime() - Date.parse(drop.ts);
+  // A lead's sweep of a stopped seat's mail settles the marker: the line was never acted on by
+  // the seat, and the chair is never called its reader. The clearance needs no pane.
+  const cleared = clearedAt(scene, dropDir, drop.id, drop.to);
+  if (cleared !== null) {
+    clearTaken(dropDir, drop.id);
+    if (scene.home !== undefined) {
+      appendHistory(scene.team.project, scene.root, scene.home, {
+        ts: scene.now.toISOString(),
+        from: drop.from,
+        to: drop.to,
+        body: drop.body,
+        id: drop.id,
+        outcome: `cleared by ${cleared.by}`,
+      });
+    }
+    scene.say(`${drop.to}: a send from ${drop.from} was cleared by ${cleared.by}`, false);
+    return;
+  }
   // The read itself: the trigger the send typed is the seat's own drop read, so a signed receipt
   // that verifies for this message, seat, checkout and session is the sign the send's window
   // missed. It needs no pane — a seat that already ran the read is done, not unconfirmed.
