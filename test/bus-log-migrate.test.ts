@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import {
   appendEvent,
   eventLogPath,
+  readEvents,
   sealUnsealedSegments,
   sealUnsealedSegmentsSteps,
   verifyEventLogSeals,
@@ -17,6 +18,7 @@ import { createReconcileState, reconcilePass } from '../src/bus/reconcile.ts';
 import { indexPathOf, sealPathOf } from '../src/bus/seal.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
+import { appendStep } from '../src/send/steps.ts';
 
 const PROJECT = 'acme';
 const NOW = new Date('2026-10-19T12:00:00.000Z');
@@ -234,5 +236,180 @@ describe('migration of an older store', () => {
     const checked = verifyEventLogSeals(PROJECT, world.root, world.home, { kept: KEPT });
     if (!checked.ok) throw new Error(checked.reason);
     expect(checked.segments.map((segment) => segment.state)).toEqual(['sealed', 'sealed']);
+  });
+
+  test('an oversized pre-migration open events.jsonl is not rotated by a sender append, and is split into sealed segments by the migration pass', () => {
+    const world = makeWorld('oversize-open');
+    const segmentBytes = 4_000;
+    const kept = 6;
+    // Seed a single open `events.jsonl` of ~14 KB (> 3 * segmentBytes) without rotating, as a
+    // store written under an older larger segment bound holds.
+    for (let i = 1; i <= 40; i += 1) {
+      const res = appendEvent(
+        PROJECT,
+        world.root,
+        world.home,
+        {
+          ts: NOW.toISOString(),
+          kind: 'message.arrived',
+          session: 'acme',
+          record_id: `big-${String(i)}`,
+          reason: 'x'.repeat(200),
+        },
+        { maxBytes: 1_000_000, kept, retain: false },
+      );
+      expect(res.ok).toBe(true);
+    }
+
+    const openPath = livePath(world);
+    expect(statSync(openPath).size).toBeGreaterThan(segmentBytes * 3);
+    expect(existsSync(`${openPath}.1`)).toBe(false);
+
+    // 1. A sender's `appendStep` (and a cold `appendEvent` under the smaller `segmentBytes`) must
+    //    NOT rotate or seal the oversized open file under `locks/events`; it stays correct by
+    //    reading the open file, refusing duplicates across it, and minting the next sequence.
+    appendStep(
+      { project: PROJECT, root: world.root, home: world.home },
+      {
+        ts: NOW.toISOString(),
+        kind: 'message.staged',
+        session: 'acme',
+        record_id: 'msg-step-1:staged',
+        from: 'lead',
+        to: 'helper',
+        outcome: 'delivered',
+        ms: 1,
+      },
+    );
+    expect(existsSync(`${openPath}.1`)).toBe(false);
+
+    const dupInBigOpen = appendEvent(
+      PROJECT,
+      world.root,
+      world.home,
+      {
+        ts: NOW.toISOString(),
+        kind: 'message.arrived',
+        session: 'acme',
+        record_id: 'big-1',
+        reason: 'x'.repeat(200),
+      },
+      { maxBytes: segmentBytes, kept },
+    );
+    expect(dupInBigOpen.ok).toBe(true);
+    if (!dupInBigOpen.ok) return;
+    expect(dupInBigOpen.duplicate).toBe(true);
+    expect(dupInBigOpen.record.payload.seq).toBe(1);
+    expect(existsSync(`${openPath}.1`)).toBe(false);
+
+    const freshBeforeSplit = appendEvent(
+      PROJECT,
+      world.root,
+      world.home,
+      {
+        ts: NOW.toISOString(),
+        kind: 'message.arrived',
+        session: 'acme',
+        record_id: 'big-42',
+        reason: 'x'.repeat(200),
+      },
+      { maxBytes: segmentBytes, kept },
+    );
+    expect(freshBeforeSplit.ok).toBe(true);
+    if (!freshBeforeSplit.ok) return;
+    expect(freshBeforeSplit.duplicate).toBe(false);
+    expect(freshBeforeSplit.record.payload.seq).toBe(42);
+    expect(existsSync(`${openPath}.1`)).toBe(false);
+
+    // 2. The sliced migration pass splits and seals the oversized open file into `<= segmentBytes`
+    //    sealed segments, leaving `< segmentBytes` in the open `events.jsonl`.
+    const steps = sealUnsealedSegmentsSteps(PROJECT, world.root, world.home, {
+      kept,
+      segmentBytes,
+      sliceLines: 5,
+    });
+    let turns = 0;
+    const sealed = (() => {
+      for (;;) {
+        const next = steps.next();
+        if (next.done) return next.value;
+        turns += 1;
+      }
+    })();
+    expect(turns).toBeGreaterThan(0);
+    expect(sealed.length).toBeGreaterThanOrEqual(3);
+    expect(statSync(openPath).size).toBeLessThan(segmentBytes);
+
+    const checked = verifyEventLogSeals(PROJECT, world.root, world.home, { kept });
+    if (!checked.ok) throw new Error(checked.reason);
+    expect(checked.problems).toEqual([]);
+    expect(checked.segments.length).toBe(sealed.length);
+    for (const seg of checked.segments) {
+      expect(seg.state).toBe('sealed');
+      expect(seg.seal!.bytes).toBeLessThanOrEqual(segmentBytes);
+    }
+
+    // 3. All 42 records remain intact in sequence order, duplicates in the newly sealed segments
+    //    and in the open tail are refused, and the next sequence is 43.
+    const allRead = readEvents(PROJECT, world.root, world.home, { kept });
+    expect(allRead.ok).toBe(true);
+    if (!allRead.ok) return;
+    expect(allRead.events.map((e) => e.payload.seq)).toEqual(
+      Array.from({ length: 42 }, (_, idx) => idx + 1),
+    );
+
+    const dupInSealed = appendEvent(
+      PROJECT,
+      world.root,
+      world.home,
+      {
+        ts: NOW.toISOString(),
+        kind: 'message.arrived',
+        session: 'acme',
+        record_id: 'big-1',
+        reason: 'x'.repeat(200),
+      },
+      { maxBytes: segmentBytes, kept },
+    );
+    expect(dupInSealed.ok).toBe(true);
+    if (!dupInSealed.ok) return;
+    expect(dupInSealed.duplicate).toBe(true);
+    expect(dupInSealed.record.payload.seq).toBe(1);
+
+    const dupInOpenTail = appendEvent(
+      PROJECT,
+      world.root,
+      world.home,
+      {
+        ts: NOW.toISOString(),
+        kind: 'message.arrived',
+        session: 'acme',
+        record_id: 'big-42',
+        reason: 'x'.repeat(200),
+      },
+      { maxBytes: segmentBytes, kept },
+    );
+    expect(dupInOpenTail.ok).toBe(true);
+    if (!dupInOpenTail.ok) return;
+    expect(dupInOpenTail.duplicate).toBe(true);
+    expect(dupInOpenTail.record.payload.seq).toBe(42);
+
+    const nextAfterSplit = appendEvent(
+      PROJECT,
+      world.root,
+      world.home,
+      {
+        ts: NOW.toISOString(),
+        kind: 'message.arrived',
+        session: 'acme',
+        record_id: 'big-43',
+        reason: 'x'.repeat(200),
+      },
+      { maxBytes: segmentBytes, kept },
+    );
+    expect(nextAfterSplit.ok).toBe(true);
+    if (!nextAfterSplit.ok) return;
+    expect(nextAfterSplit.duplicate).toBe(false);
+    expect(nextAfterSplit.record.payload.seq).toBe(43);
   });
 });

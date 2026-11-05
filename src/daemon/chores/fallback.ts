@@ -10,6 +10,7 @@
 // start: a root's first pass here only escalates, and retirement follows once the interval has
 // passed, so a restart never rewrites a store's history more often than the daemon did. The
 // interval and the per-pass limit come from the sweep module, one source for both processes.
+import { sealUnsealedSegmentsSteps } from '../../bus/log.ts';
 import { type DropRetirementReport, retireDropsSliced } from '../../send/drop-retention.ts';
 import {
   FALLBACK_STORE_PASS_LIMIT,
@@ -118,6 +119,25 @@ export function createFallbackPass(config: ChoresChildConfig): ChoresPass {
         limit: FALLBACK_STORE_PASS_LIMIT,
         slices,
       });
+      if (!slices.stopping()) {
+        const sealSteps = sealUnsealedSegmentsSteps(route.team, entry.root, config.home, {
+          session: route.session,
+        });
+        let sliceStart = Date.now();
+        for (;;) {
+          if (slices.stopping()) break;
+          const step = sealSteps.next();
+          if (step.done) break;
+          if (Date.now() - sliceStart >= slices.sliceMs) {
+            const more = await slices.yield();
+            if (!more || slices.stopping()) {
+              sealSteps.return([]);
+              break;
+            }
+            sliceStart = Date.now();
+          }
+        }
+      }
     }
     return passNotes(entry, drops);
   };

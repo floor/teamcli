@@ -309,13 +309,14 @@ function receiptOf(file: string): { receipt: 'delivered' | 'read' | 'replied'; i
   return null;
 }
 
-function fileStampOf(path: string): { stamp: string; mtimeIso: string } | null {
+function fileStampOf(path: string): { stamp: string; mtimeIso: string; size: number } | null {
   try {
     const stat = lstatSync(path);
     if (!stat.isFile()) return null;
     return {
       stamp: `${String(stat.ino)}:${String(stat.size)}:${String(stat.mtimeMs)}:${String(stat.ctimeMs)}`,
       mtimeIso: new Date(stat.mtimeMs).toISOString(),
+      size: stat.size,
     };
   } catch {
     return null;
@@ -544,12 +545,22 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       }
     }
     state.log = cachedLog;
-    if (existing.unsealed > 0 && !state.sealAttempted) {
-      // The one-time migration of a store written before seals: each segment is verified in
-      // slices and the append lock is held only for the seal write itself, so the bus keeps
-      // serving while an old log is sealed.
+    const openOversized =
+      options.maxBytes !== undefined &&
+      options.maxBytes > 0 &&
+      (fileStampOf(existing.path)?.size ?? 0) >= options.maxBytes;
+    if ((existing.unsealed > 0 || openOversized) && !state.sealAttempted) {
+      // The one-time migration of a store written before seals or under a larger segment bound:
+      // each segment is verified in slices and the append lock is held only for the seal write
+      // itself, so the bus keeps serving while an old log is sealed.
       state.sealAttempted = true;
-      yield* sealUnsealedSegmentsSteps(project, root, home, { kept, signal: options.signal });
+      yield* sealUnsealedSegmentsSteps(project, root, home, {
+        kept,
+        segmentBytes: options.maxBytes,
+        retentionSeconds: options.retentionSeconds,
+        session,
+        signal: options.signal,
+      });
     }
   }
 

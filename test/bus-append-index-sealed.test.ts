@@ -236,4 +236,67 @@ describe('the append index hydrates from the sealed indexes', () => {
     expect(reads.bytes).toBeGreaterThanOrEqual(retainedBytes);
     expect(reads.bytes).toBeLessThan(retainedBytes + 2_048);
   });
+
+  test('a sealed index walks past earlier decoy occurrences of the record id and finds the real duplicate later', () => {
+    const world = makeWorld('sealed-decoy');
+    // 1. An earlier event in what will become `.2` whose `from` field in `.index.jsonl` spells `"sealed-decoy-1"`.
+    const decoyFrom = appendEvent(
+      PROJECT,
+      world.root,
+      world.home,
+      {
+        ts: NOW.toISOString(),
+        kind: 'message.arrived',
+        session: 'acme',
+        record_id: 'other-id-1',
+        from: 'sealed-decoy-1',
+        to: 'builder',
+        reason: 'x'.repeat(160),
+      },
+      RETENTION,
+    );
+    expect(decoyFrom.ok).toBe(true);
+
+    // 2. An earlier event in `.2` with the same `record_id` under another kind (`message.staged`).
+    const decoyKind = appendEvent(
+      PROJECT,
+      world.root,
+      world.home,
+      {
+        ts: NOW.toISOString(),
+        kind: 'message.staged',
+        session: 'acme',
+        record_id: 'sealed-decoy-1',
+        from: 'lead',
+        to: 'builder',
+        reason: 'x'.repeat(160),
+      },
+      RETENTION,
+    );
+    expect(decoyKind.ok).toBe(true);
+
+    // 3. The real `message.arrived` record for `sealed-decoy-1` comes later in `.2`.
+    const real = append(world, 'sealed-decoy-1');
+    expect(real.duplicate).toBe(false);
+
+    fillUntilSealed(world, 2, 'r');
+    append(world, 'open-1');
+
+    const live = livePath(world);
+    const openBytes = statSync(live).size;
+    const sealedBytes = statSync(`${live}.2`).size + statSync(`${live}.1`).size;
+    chmodSync(`${live}.1`, 0o000);
+    coldStart(`${live}.1`);
+
+    resetAppendIndexReads();
+    const replay = append(world, 'sealed-decoy-1');
+    expect(replay.duplicate).toBe(true);
+    expect(replay.record.payload.seq).toBe(real.record.payload.seq);
+    const reads = appendIndexReads();
+    expect(reads.files).toBe(1);
+    expect(reads.lines).toBe(2);
+    expect(reads.bytes).toBeGreaterThanOrEqual(openBytes);
+    expect(reads.bytes).toBeLessThan(openBytes + 2_048);
+    expect(reads.bytes).toBeLessThan(sealedBytes);
+  });
 });

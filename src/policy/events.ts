@@ -185,7 +185,7 @@ export type EventThreshold = keyof typeof EVENT_THRESHOLDS;
  * both sit under the cap. A segment at or above the cap could never leave room for the one it
  * replaces.
  */
-export const EVENT_SEGMENT_MB = 8;
+export const EVENT_SEGMENT_MB = 2;
 
 /** The segment size's upper bound: half of the 100 MB retained-size cap. */
 export const EVENT_SEGMENT_MB_MAX = 50;
