@@ -819,16 +819,18 @@ describe('a team record names its issue tracker', () => {
     }
   });
 
-  test('a team that names none reads as before: no field, and a rewrite leaves the file byte for byte', () => {
+  test('a team that names no tracker keeps it absent when a rewrite records memberships', () => {
     mkdirSync(join(home, '.config', 'team'), { recursive: true });
     writeFileSync(teamsFile(home), OLD_FILE);
     const read = getTeam(home, id);
     expect(read).not.toBeNull();
     expect(read).not.toHaveProperty('issueTracker');
-    // A write that changes nothing but the lifecycle it already holds moves only updated_at.
+    // A legacy record gains the explicit membership list; no tracker is added.
     const later = '2026-10-17T08:00:00.000Z';
     upsertTeam(home, id, { lifecycle: 'running', at: later });
-    expect(readFileSync(teamsFile(home), 'utf8')).toBe(OLD_FILE.replace(`updated_at: "${AT}"`, `updated_at: "${later}"`));
+    expect(readFileSync(teamsFile(home), 'utf8')).toBe(OLD_FILE
+      .replace('    project_id: null\n', '    project_id: null\n    projects: []\n')
+      .replace(`updated_at: "${AT}"`, `updated_at: "${later}"`));
     expect(readFileSync(teamsFile(home), 'utf8')).not.toContain('issue_tracker');
   });
 
