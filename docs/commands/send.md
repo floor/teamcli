@@ -361,7 +361,10 @@ leg stored the record and its marker for the delivery that follows when the seat
 `skipped` (a rule kept it out, with the `reason`),
 `refused` (a rule ended the walk, with the `reason`) or leaves it `not-reached` (the walk ended
 before it), and a Claude receiver whose files keep the implied socket default out gets a
-`skipped` socket entry naming the word that did. `--list` prints its own document —
+`skipped` socket entry naming the word that did. A Claude receiver whose chain declares no
+order and whose walk leaves the development channel out gets a `skipped` channel entry the same
+way, naming the missing word: the launch's own flag, a live inbox listener, or that listener's
+declaration of the channel. `--list` prints its own document —
 `{format, project, session, seats, summary}`. A run that exits 1 or 2 writes the structured
 error document instead — `{error: {id, message, repair}}` — and stderr stays empty; a send that
 resolved its walk carries the same `delivery` list on that document.
@@ -373,8 +376,9 @@ then that chain for a sender whose own file declares Claude Code and a receiver 
 adds `native`, and only an order that keeps no leg this build can walk prints `no leg of its
 delivery order this build can walk`. Under `--json`, its `delivery` lists every leg of the walk
 as `candidate` (with `eligible: true`) or `skipped` (with `eligible: false` and the `reason`),
-including the implied socket leg a Claude receiver's files do not let the walk dial, so an
-omitted socket always carries its reason. It
+including the implied socket leg a Claude receiver's files do not let the walk dial and the
+development channel the walk leaves out, so an omitted socket and an omitted channel always
+carry their reasons. It
 writes no record, dials no socket, types nothing and appends no line to `.agents/team.log`: a
 dry run writes nothing, and the log records writes.
 

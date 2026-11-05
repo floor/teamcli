@@ -941,6 +941,8 @@ type WalkOrderPlan = {
   channelProbe: InboxLiveness | null;
   channelFirst: boolean;
   staleChannel: InboxLiveness | null;
+  /** Why the walk does not take the development channel first, or null when it does. */
+  channelSkip: string | null;
   sessionFirst: boolean;
   ordered: readonly DeliveryLeg[];
   human: boolean;
@@ -1053,6 +1055,10 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   const staleChannel = channelProbe !== null && channelProbe.live === false && channelProbe.listener?.channel === true
     ? channelProbe
     : null;
+  // The word the channel leg is missing, for the report: the launch does not flag it, the seat's
+  // inbox server is not serving, or it serves without declaring the channel. A walk that takes
+  // the channel has no such word and reports the leg itself.
+  const channelSkip = channelSkipReason(input.declared?.launch, channelProbe);
   // The fourth implied default: a receiving CLI whose profile declares its own session call
   // (`session_cli`) takes the send there first, while no level of its chain declares an order.
   // The call is the only route such a CLI has that reaches an agent at all — it has no inbox, no
@@ -1139,6 +1145,7 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
     channelProbe,
     channelFirst,
     staleChannel,
+    channelSkip,
     sessionFirst,
     ordered,
     human,
@@ -1670,7 +1677,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   });
   const {
     dropDir, order, inbound, socketWord, heldStanding, socketNow, declaredOrder,
-    staleChannel, human, typedWake, walkingTyped, webhookWalked, webhookReason,
+    staleChannel, channelSkip, human, typedWake, walkingTyped, webhookWalked, webhookReason,
     typingSetAside, noEventAdapter, chosen,
   } = plan;
   // A direct-only walk (the watch's idle dispatch) is a wake or nothing: only a route that
@@ -1710,15 +1717,21 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   // walked leg is the drop file, so the legs the ruling kept out are listed in the order they
   // were set aside, then the drop. A Claude receiver whose chain declares no order but whose
   // files do not let the socket be dialed has the implied socket default listed as skipped with
-  // its reason: the omission the report used to leave unexplained. A run that resolved no walk
-  // carries no list at all.
+  // its reason: the omission the report used to leave unexplained. Its development channel is
+  // named the same way, ahead of the socket it would have led: the launch word, the live listener
+  // marker or the listener's own declaration was missing, and the entry says which. A run that
+  // resolved no walk carries no list at all.
   const planLegs: readonly WalkLeg[] = human
     ? [...(webhookWalked ? ['webhook' as const] : []), ...(order.includes('drop') ? order : ([...order, 'drop'] as WalkLeg[]))]
     : walk;
+  const impliedChannelReason = !human && to.cli === 'claude-code' && !declaredOrder && !chosen.includes('channel')
+    ? channelSkip
+    : null;
   const impliedSocketReason = !human && to.cli === 'claude-code' && !declaredOrder && !order.includes('socket')
     ? socketIneligibleReason(to.cli, socketWord, inbound, heldStanding, true)
     : null;
   report.delivery = [
+    ...(impliedChannelReason === null ? [] : [{ leg: 'channel' as const, state: 'skipped' as const, reason: impliedChannelReason }]),
     ...(impliedSocketReason === null ? [] : [{ leg: 'socket' as const, state: 'skipped' as const, reason: impliedSocketReason }]),
     ...planLegs.map((leg) => ({ leg, state: 'not-reached' as const })),
   ];
@@ -1744,6 +1757,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       cli: to.cli,
       declaredOrder,
       human,
+      channelReason: impliedChannelReason,
       socketReason: socketIneligibleReason(to.cli, socketWord, inbound, heldStanding, true),
       webhookReason,
       handoffEligible: callerNative && !wait,
@@ -2963,6 +2977,17 @@ function nativeIneligibleReason(cli: string, handoffEligible: boolean): string |
   return `${cli} sessions have no native route this build can walk`;
 }
 
+/** Why a receiving Claude seat's development channel is not the first leg its walk takes, or
+ *  null when the walk carries it. The three words the walk reads in this order: the launch's own
+ *  development-channel flag, a live inbox listener, and that listener's declaration of the
+ *  channel. A report names the one that is missing. */
+function channelSkipReason(launch: string | undefined, probe: InboxLiveness | null): string | null {
+  if (!channelLaunchEnabled(launch)) return "the receiving seat's launch carries no development channel";
+  if (probe === null) return null;
+  if (probe.live === false) return probe.reason;
+  return probe.listener.channel === true ? null : "the receiving seat's inbox server does not declare the development channel";
+}
+
 /** The human ruling's reason for one leg, or null for the drop file. These are the same words
  *  the history line records, without the leg prefix the report entry already carries. The
  *  retired `mcp-inbox` name never reaches here (ADR D1): it is dropped from every order before
@@ -2978,14 +3003,16 @@ function humanSkipReason(leg: DeliveryLeg): string | null {
 
 /** The dry run's ordered leg list: the same walk a real send would make, with each leg's
  *  eligibility and the word that keeps it out. A Claude receiver with no declared order also
- *  lists the implied socket candidate the walk did not take, so a socket omission always has
- *  its reason. Nothing here reads a pane, dials a socket or writes a file. */
+ *  lists the implied socket candidate the walk did not take, and the development channel the
+ *  walk left out, so an omission always has its reason. Nothing here reads a pane, dials a
+ *  socket or writes a file. */
 function dryDeliveryPlan(input: {
   walk: readonly WalkLeg[];
   order: readonly DeliveryLeg[];
   cli: string;
   declaredOrder: boolean;
   human: boolean;
+  channelReason: string | null;
   socketReason: string | null;
   webhookReason: string | null;
   handoffEligible: boolean;
@@ -3009,6 +3036,13 @@ function dryDeliveryPlan(input: {
       : { leg, state: 'skipped', eligible: false, reason };
   };
   const entries: LegReport[] = [];
+  // The implied channel default: a Claude receiver whose chain declares no order takes the
+  // channel first when the launch flags it and its server is live with the channel declared.
+  // When any of the three is missing the walk leaves the leg out, and the caller hands the word
+  // that is missing here.
+  if (input.channelReason !== null) {
+    entries.push({ leg: 'channel', state: 'skipped', eligible: false, reason: input.channelReason });
+  }
   // The implied socket default: a Claude receiver whose chain declares no order walks socket
   // first when it may be dialed. When it may not, the walk leaves it out entirely, and this is
   // the entry that says why — the omission the report used to leave unexplained.

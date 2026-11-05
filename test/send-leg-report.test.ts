@@ -1,7 +1,8 @@
 // The delivery report a send prints under `--json`: the resolved walk's legs in order, each
 // attempted, skipped, refused or not reached, with the word that kept it out. A dry run walks
-// nothing, so its entries are candidate or skipped with `eligible`, and the implied socket leg a
-// Claude receiver's files do not let the walk dial is listed too rather than left out. Every scene
+// nothing, so its entries are candidate or skipped with `eligible`. The implied socket leg a
+// Claude receiver's files do not let the walk dial, and the development channel a walk leaves
+// out, are listed too rather than omitted. Every scene
 // is synthetic: a temporary team, a fake pane, a fake socket write and a settings file this test
 // writes itself. No live session is read and nothing real is dialed or written.
 import { afterEach, expect, test } from 'bun:test';
@@ -87,6 +88,7 @@ test('a dry run lists the implied socket leg as a candidate when the receiver ma
   // The default order is typed, drop; this CLI declares no wake for the typed leg, so the dry
   // run names the drop alone behind the implied socket candidate.
   expect(deliveryOf(io)).toEqual([
+    { leg: 'channel', state: 'skipped', eligible: false, reason: "the receiving seat's launch carries no development channel" },
     { leg: 'socket', state: 'candidate', eligible: true },
     { leg: 'drop', state: 'candidate', eligible: true },
   ]);
@@ -106,6 +108,7 @@ test('a dry run lists the socket the walk would not dial with its reason instead
 
   expect(code).toBe(0);
   expect(deliveryOf(io)).toEqual([
+    { leg: 'channel', state: 'skipped', eligible: false, reason: "the receiving seat's launch carries no development channel" },
     {
       leg: 'socket',
       state: 'skipped',
