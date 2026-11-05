@@ -14,10 +14,11 @@
 //   bun scripts/ci-shard-tests.ts --record <log> [log...]           merge timings from shard job logs of one system
 //   bun scripts/ci-shard-tests.ts --junit <report.xml> [--label <unit>]  print a run's unit times for --record
 //
-// With no test arguments, the list is read from $TESTS; `full` (or MODE=full) means every
-// tracked test file. The PR job packs the selected tests at run time; the whole suite uses the
-// checked-in assignment (scripts/ci-shard-assignment.json), so adding a test file appends it to the
-// lightest shard and moves no existing unit. Weights come from scripts/ci-test-timings.json
+// With no test arguments, the list is read from $TESTS. A full suite (MODE=full, or TESTS=full)
+// with no files named on the command line reads the checked-in assignment
+// (scripts/ci-shard-assignment.json) and appends any tracked unit that file does not name,
+// so the shards stay the balance `--rebalance` wrote and a file added since still runs.
+// A selected list still packs at run time. `--write` is the same append, saved back to the file. Weights come from scripts/ci-test-timings.json
 // (milliseconds of wall time per file, from a `full` job log); a file with no recorded time weighs
 // its size in bytes times the suite's median milliseconds-per-byte, so a new file still lands
 // somewhere sensible. The assignment paths instead weigh an untimed unit at UNTIMED_MS, the
@@ -227,7 +228,8 @@ export type ShardQuery = {
   fromEnv: readonly string[];
   modeFull: boolean;
   shards: number;
-  assignment: Assignment;
+  /** Checked-in assignment, or null when that file is absent. */
+  assignment: Assignment | null;
   /** Every tracked test. Used when a full suite still packs at run time. */
   allTracked: readonly string[];
   timings: Record<string, number>;
@@ -235,10 +237,31 @@ export type ShardQuery = {
 };
 
 /**
- * The plan for every shard. A full suite and a selected list both pack at run time from
- * recorded weights, with an untimed file weighed by its size.
+ * The plan for every shard.
+ *
+ * A full suite (`MODE=full`, or `$TESTS` equal to `full`) with no files named on the command
+ * line reads the checked-in assignment, when that file exists and the requested shard count
+ * matches it. A tracked unit the assignment does not name joins the lightest shard, and a unit
+ * whose file is gone is dropped, so a stale assignment cannot skip a test or keep a deleted one.
+ * Packing that suite from recorded weights leaves a long file alone in one shard, because an
+ * untimed file weighs only its size. A selected list, a full suite with no assignment file, and
+ * a full suite asked to pack into a different count, still pack at run time.
  */
 export function shardPlan(q: ShardQuery): Plan {
+  const envFull = q.fromEnv.length === 1 && q.fromEnv[0] === 'full';
+  if (q.named.length === 0 && (q.modeFull || envFull) && q.assignment !== null && q.shards === q.assignment.shards) {
+    const want = units([...q.allTracked]);
+    const weight = assignmentWeights(want, q.timings, q.size);
+    const next = appendUnits(q.assignment, want, weight, q.shards);
+    const bins: Plan = Array.from({ length: q.shards }, () => ({ files: [], ms: 0 }));
+    for (const [unit, shard] of Object.entries(next.units)) {
+      if (!Number.isInteger(shard) || shard < 0 || shard >= q.shards) continue;
+      bins[shard]!.files.push(unit);
+      bins[shard]!.ms += weight.get(unit) ?? 0;
+    }
+    for (const bin of bins) bin.files.sort();
+    return bins;
+  }
   let tests: readonly string[] = q.named.length ? q.named : q.fromEnv;
   if (q.modeFull || (tests.length === 1 && tests[0] === 'full')) tests = q.allTracked;
   const all = units([...tests]);
@@ -487,7 +510,7 @@ if (import.meta.main) {
     fromEnv,
     modeFull: process.env.MODE === 'full',
     shards,
-    assignment: { shards, units: {} },
+    assignment: existsSync(ASSIGNMENT) ? readAssignment() : null,
     allTracked: allTests(),
     timings: readTimings(),
   });

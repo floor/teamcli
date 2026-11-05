@@ -241,3 +241,20 @@ test('a full suite asked for a different shard count still packs at run time', (
   const bins = shardPlan(fullQuery({ shards: 2 }));
   expect(bins).toEqual(plan(units(FULL_FILES), 2, weights(units(FULL_FILES), FULL_TIMINGS, fullSize)));
 });
+
+test('a full suite with no assignment file still packs at run time', () => {
+  const bins = shardPlan(fullQuery({ assignment: null }));
+  expect(bins).toEqual(plan(units(FULL_FILES), 4, weights(units(FULL_FILES), FULL_TIMINGS, fullSize)));
+});
+
+test('a full suite keeps the assignment and appends a tracked file it does not name', () => {
+  const bins = shardPlan(fullQuery({ allTracked: [...FULL_FILES, 'test/new.test.ts'] }));
+  expect(bins.map((bin) => bin.files)).toEqual([
+    ['test/a.test.ts', 'test/broker.test.ts'],
+    ['test/b.test.ts', 'test/c.test.ts', 'test/new.test.ts'],
+    ['test/d.test.ts', 'test/e.test.ts'],
+    ['test/f.test.ts', 'test/g.test.ts'],
+  ]);
+  const dropped = shardPlan(fullQuery({ allTracked: FULL_FILES.filter((file) => file !== 'test/g.test.ts') }));
+  expect(dropped.flatMap((bin) => bin.files)).not.toContain('test/g.test.ts');
+});
