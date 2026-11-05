@@ -93,7 +93,7 @@ function daemonLine(health: DaemonHealth): string {
   const parts: string[] = rootsPhrase(health.roots, health.probe.at);
   parts.push(...choresPhrase(health.roots, health.probe.at));
   if (health.probe.state === 'unanswered') {
-    parts.push(`it did not answer the health probe (${health.probe.reason}), so it may be hung`);
+    parts.push(unansweredPhrase(health));
   } else if (health.probe.state === 'refused') {
     parts.push(`it refused the health probe (${health.probe.code}: ${health.probe.message})`);
   } else if (health.probe.state === 'unknown') {
@@ -101,6 +101,41 @@ function daemonLine(health: DaemonHealth): string {
   }
   if (health.stuck.length > 0) parts.push(stuckPhrase(health.stuck));
   return parts.length === 0 ? head : `${head}; ${parts.join('; ')}`;
+}
+
+/** A heartbeat younger than this — three release beats — is recent: the loop wrote the record
+ *  moments ago, so one timed-out 500 ms probe reads as a stall, not as a hang. The display's own
+ *  ceiling, because the renderer judges from the record it was handed and that record's heartbeat
+ *  word is optional. */
+const RECENT_HEARTBEAT_MS = 15_000;
+
+/**
+ * The daemon's unanswered probe as its one sentence. The subject is always the machine daemon:
+ * the sentence follows the roots and chores clauses, and a bare "it" was read as the last late
+ * root. A timeout with a recent heartbeat is the busy-or-descheduled reading, never the hung one;
+ * a closed socket, an unorderable instant and a heartbeat older than the ceiling keep "may be
+ * hung", because then nothing shows the loop ran after the probe failed.
+ */
+function unansweredPhrase(health: DaemonHealth): string {
+  const reason = health.probe.state === 'unanswered' ? health.probe.reason : 'timeout';
+  const head = `the machine daemon did not answer the health probe (${reason})`;
+  const age = recentHeartbeatAge(health);
+  if (age !== null) {
+    return `${head} while its last heartbeat was ${durationPhrase(age)} old, so it is probably busy or the machine is loaded`;
+  }
+  return `${head}, so it may be hung`;
+}
+
+/** The heartbeat's age at the probe instant, when a timed-out probe and a recent heartbeat make
+ *  the busy reading fair. Null for any other probe, an unorderable instant or an old heartbeat. */
+function recentHeartbeatAge(health: DaemonHealth): number | null {
+  if (health.probe.state !== 'unanswered' || health.probe.reason !== 'timeout') return null;
+  if (health.heartbeatAt === null || health.heartbeatAt === '') return null;
+  const at = Date.parse(health.probe.at);
+  const beat = Date.parse(health.heartbeatAt);
+  if (!Number.isFinite(at) || !Number.isFinite(beat)) return null;
+  const age = at - beat;
+  return Number.isFinite(age) && age >= 0 && age <= RECENT_HEARTBEAT_MS ? age : null;
 }
 
 /** The record's launcher as the role word it is meant to be, never the platform's own name. */
