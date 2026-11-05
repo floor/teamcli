@@ -12,6 +12,7 @@ import { machine } from './machine.ts';
 import { rules } from './rules.ts';
 import { identity } from './identity.ts';
 import { workspace } from './workspace.ts';
+import { lead } from './lead.ts';
 import { orchestrator } from './orchestrator.ts';
 import { operator } from './operator.ts';
 import { session } from './session.ts';
@@ -67,6 +68,10 @@ export const SECTIONS: readonly Section[] = [
   rules,
   identity,
   workspace,
+  // The team file's own default lead word, `lead: <seat>`: it names the seat the team leads by
+  // when no seat carries `leads: true`. It runs before the lead's own section, whose value is
+  // the resolved lead either way.
+  lead,
   // The lead's section, canonical name `orchestrator`, declared key `coordinator`: the position,
   // the `after` and the owner bucket stay where they were, under the canonical name.
   orchestrator,

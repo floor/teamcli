@@ -296,7 +296,7 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
     const lines = formatDiff(previous.file, text);
     if (lines.length === 0)
       io.stdout(`${path}: the same text as the copy approved on ${previous.approval.approvedAt}.\n\n`);
-    else if (approvedRecordOf(previous.file) !== null && approvedRecordOf(previous.file) === approvedRecordOf(text))
+    else if (approvedRecordOf(previous.file, { home: sources.home, root }) !== null && approvedRecordOf(previous.file, { home: sources.home, root }) === approvedRecordOf(text, { home: sources.home, root }))
       // The signature covers the canonical record: a reordered or reformatted file is the same record.
       io.stdout(`${path}: the same record as the copy approved on ${previous.approval.approvedAt}; only its layout changed.\n\n`);
     else {

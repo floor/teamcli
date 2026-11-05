@@ -6,6 +6,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseYaml, type YamlEntry, type YamlNode } from './yaml.ts';
+import { leadWordProblem } from './lead.ts';
 import { livenessMap } from './settings/declared.ts';
 import type { StateThresholds } from './settings/inherit.ts';
 
@@ -116,6 +117,30 @@ export function declaredNamesUnique(home: string): Map<string, NicknameScope> {
 export function namesUniqueFor(home: string | undefined, entity: string | null): NicknameScope {
   if (home === undefined || entity === null) return 'off';
   return declaredNamesUnique(home).get(entity) ?? NICKNAME_SCOPE_DEFAULT;
+}
+
+/** One entity's `lead:` word: a seat name, none, or why the entry's word does not read. */
+export type EntityLead = { ok: true; lead: string | null } | { ok: false; why: string };
+
+/**
+ * The entity's default lead, from its entry's `lead:` field: `<entity>: { lead: <seat> }`. The
+ * entity level of the lead chain: the word names a seat in every team of the entity
+ * unless the home project or the team file names another. Absent when the file or the entry is
+ * absent, or the entry declares no word — the entry is the owner's own, and only a word it
+ * actually writes is read. A word it writes that is not a seat name is refused, never read as no
+ * word, so a typo does not silently move the lead to a wider level.
+ */
+export function declaredEntityLead(home: string, entity: string | null): EntityLead {
+  if (entity === null) return { ok: true, lead: null };
+  const entry = entityEntries(home).find((candidate) => candidate.key === entity);
+  if (entry === undefined || entry.value.kind !== 'map') return { ok: true, lead: null };
+  const field = entry.value.entries.find((candidate) => candidate.key === 'lead');
+  if (field === undefined) return { ok: true, lead: null };
+  const value = field.value.kind === 'scalar' ? field.value.value : undefined;
+  if (typeof value !== 'string') return { ok: false, why: `entity "${entity}" lead must be one seat name` };
+  const problem = leadWordProblem(value);
+  if (problem !== null) return { ok: false, why: `entity "${entity}" lead ${problem}` };
+  return { ok: true, lead: value };
 }
 
 /** One entity's `clients:` word: seats by client id, or why the map does not read. */

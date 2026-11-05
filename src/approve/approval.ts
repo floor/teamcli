@@ -176,7 +176,7 @@ export function recordSeatDigestOf(standing: Standing, team: TeamFile, root: str
   if (standing.kind !== 'verified') return;
   const store = storePath(team.project, root, home);
   const record = standing.record;
-  if (!validateTeamFile(record.file).ok) return;
+  if (!validateTeamFile(record.file, { home, root }).ok) return;
   const approved = approvedFingerprints(record).seats[name];
   const digest = fingerprints(team).seats[name];
   if (approved === undefined || digest === undefined || record.approval.fingerprints.seats[name] === digest) return;
@@ -216,12 +216,12 @@ export function recordSeatRenameOf(
   if (standing.kind !== 'verified' || renames.length === 0) return;
   const store = storePath(team.project, root, home);
   const record = standing.record;
-  if (!validateTeamFile(record.file).ok) return;
+  if (!validateTeamFile(record.file, { home, root }).ok) return;
   let renamedRecordFile = record.file;
   for (const { from, to } of renames) {
     renamedRecordFile = renameSeat(renamedRecordFile, from, to);
   }
-  const renamedRecord = validateTeamFile(renamedRecordFile);
+  const renamedRecord = validateTeamFile(renamedRecordFile, { home, root });
   if (!renamedRecord.ok) return;
   const approved = approvedFingerprints(record);
   const expectedAfter = fingerprints(renamedRecord.team);

@@ -51,9 +51,9 @@ export function rulesFilePath(project: string, root: string, home: string, seat:
  *  from the live file's new name, the file would land where `status` and `doctor` never look.
  *  Null when no approval is in force or its stored copy can't be read: there is no folder to
  *  name then. */
-export function approvedProjectOf(standing: Standing): string | null {
+export function approvedProjectOf(standing: Standing, options: { home?: string; root?: string } = {}): string | null {
   if (standing.kind !== 'verified') return null;
-  const copy = validateTeamFile(standing.record.file);
+  const copy = validateTeamFile(standing.record.file, options);
   return copy.ok ? copy.team.project : null;
 }
 
@@ -62,7 +62,7 @@ export function approvedProjectOf(standing: Standing): string | null {
  *  folder. Null when no approval is in force, its stored copy can't be read, or the seat name
  *  is refused: no caller resolves this folder on its own. */
 export function rulesFilePathOf(standing: Standing, seat: string, root: string, home: string): string | null {
-  const project = approvedProjectOf(standing);
+  const project = approvedProjectOf(standing, { home, root });
   return project === null ? null : rulesFilePath(project, root, home, seat);
 }
 

@@ -22,6 +22,7 @@ import {
   type SenderNameMode,
 } from '../settings/inherit.ts';
 import { writeAtomic } from '../state.ts';
+import { leadWordProblem } from '../lead.ts';
 import { currentRunMemo } from '../run-memo.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
 
@@ -36,6 +37,13 @@ export type ProjectRecord = {
   entity: string | null;
   /** The project lead, by agent ID — never a seat or a role name. Null until set. */
   lead: string | null;
+  /**
+   * The seat that leads this project's teams by default, by seat name — not the
+   * project lead above, which is an agent ID. Absent when the project declares none: the
+   * entity's word, then the universe's, stands. Written under `lead_seat`; no command writes it
+   * in this build, but a hand-written one reads, and an upsert keeps it.
+   */
+  leadSeat?: string;
   /** The team IDs this project groups. */
   teams: string[];
   /**
@@ -249,6 +257,7 @@ export function upsertProject(home: string, id: string, patch: ProjectPatch): Pr
         name: fields.name,
         entity: fields.entity ?? null,
         lead: fields.lead ?? null,
+        ...(fields.leadSeat !== undefined ? { leadSeat: fields.leadSeat } : {}),
         teams: fields.teams ?? [],
         ...(fields.deliveryOrder !== undefined ? { deliveryOrder: fields.deliveryOrder } : {}),
         ...(fields.liveness !== undefined ? { liveness: fields.liveness } : {}),
@@ -276,6 +285,11 @@ export function upsertProject(home: string, id: string, patch: ProjectPatch): Pr
     if (typeof record.name !== 'string' || !record.name) throw new ProjectsError('a project needs a name');
     if (record.entity !== null && typeof record.entity !== 'string') throw new ProjectsError('"entity" must be text or null');
     if (record.lead !== null && typeof record.lead !== 'string') throw new ProjectsError('"lead" must be an agent ID or null');
+    if (record.leadSeat !== undefined) {
+      if (typeof record.leadSeat !== 'string') throw new ProjectsError('"lead_seat" must be one seat name');
+      const problem = leadWordProblem(record.leadSeat);
+      if (problem !== null) throw new ProjectsError(`"lead_seat" ${problem}`);
+    }
     if (!Array.isArray(record.teams)) throw new ProjectsError('"teams" must be a list of team IDs');
     for (const team of record.teams) {
       if (typeof team !== 'string' || !team) throw new ProjectsError('a team ID in "teams" must be text');
@@ -435,6 +449,7 @@ function emit(projects: Record<string, ProjectRecord>): string {
     lines.push(`    name: ${scalar(project.name)}`);
     lines.push(`    entity: ${nullable(project.entity)}`);
     lines.push(`    lead: ${nullable(project.lead)}`);
+    if (project.leadSeat !== undefined) lines.push(`    lead_seat: ${scalar(project.leadSeat)}`);
     lines.push(project.teams.length ? `    teams: [${project.teams.map(scalar).join(', ')}]` : '    teams: []');
     // Only when the project declares one: a registry written before the field keeps its bytes,
     // so a record read and written back is the file it was.
@@ -484,6 +499,14 @@ function recordOf(id: string, raw: YamlValue, path: string): ProjectRecord {
   if (entity !== null && typeof entity !== 'string') bad('"entity" must be text or null');
   const lead = raw.lead ?? null;
   if (lead !== null && typeof lead !== 'string') bad('"lead" must be an agent ID or null');
+  const leadSeatRaw = raw.lead_seat ?? undefined;
+  let leadSeat: string | undefined;
+  if (leadSeatRaw !== undefined) {
+    if (typeof leadSeatRaw !== 'string') bad('"lead_seat" must be one seat name');
+    const problem = leadWordProblem(leadSeatRaw as string);
+    if (problem !== null) bad(`"lead_seat" ${problem}`);
+    leadSeat = leadSeatRaw as string;
+  }
   const teams = raw.teams ?? [];
   if (!Array.isArray(teams)) bad('"teams" must be a list of team IDs');
   for (const [i, team] of (teams as YamlValue[]).entries()) {
@@ -526,6 +549,7 @@ function recordOf(id: string, raw: YamlValue, path: string): ProjectRecord {
     name: text('name'),
     entity: entity as string | null,
     lead: lead as string | null,
+    ...(leadSeat !== undefined ? { leadSeat } : {}),
     teams: teams as string[],
     ...(order !== undefined ? { deliveryOrder: order as OrderWord[] } : {}),
     ...(liveness !== undefined ? { liveness } : {}),

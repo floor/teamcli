@@ -153,7 +153,16 @@ budgets:                      # the owner's: reserve or floor per account, marks
   that lobby for the session. The `workspace.mode` bullet below states the whole resolution order.
 - `coordinator` and `operator` name seats: the coordinator dispatches work, the operator receives
   the watch's reports. `leads: true` on a seat is the same lead, spelled on the seat
-  the way `coordinator:` names it. `assistant: true` marks a seat as its entity's assistant — the
+  the way `coordinator:` names it.
+- `lead` names the seat that leads when no seat carries `leads: true`, by a seat name in this
+  file — the team level of the default lead's chain. It is a default, never a power:
+  the mark still decides the lead whenever the file has one, and the seat `lead` names is the
+  same resolved lead everything else already reads. A file that marks no seat takes its lead
+  from the narrowest level that declares one: its own `lead:`, then the home project's
+  `lead_seat:`, the entity's `lead:` in `entities.yaml`, and the universe's default — which
+  this build reads from a top-level `lead:` in `~/.config/team/settings.yaml` until the
+  universe's own reader lands. A word that names no declared seat is refused, at the level that
+  named it; a file and a chain that both name none keeps the refusal it always had. `assistant: true` marks a seat as its entity's assistant — the
   one seat `team send` admits to its entity's lead coordinator, by its place in the chain and
   never by a role's name. At most one seat of a record carries the mark, and never a seat with
   `count`; the entity's assistant is the first mark found walking its teams in chain order — the
@@ -814,7 +823,8 @@ grant:
 - `session` is the team's own session: the `session` key, or `<entity>-<project>` when that key is
   omitted and the record names an entity (the project name alone when it names none). Any other value
   is `grant.session must be the file's session "<session>": "<written>"`.
-- `seat` is the orchestrator's name, the one `coordinator:` or `leads: true` resolves. The
+- `seat` is the orchestrator's name: the one `coordinator:` or `leads: true` resolves, or the
+  default the lead chain resolves when the file marks none. The
   operator's name, and any other name, is `grant.seat must name the orchestrator "<seat>":
   "<written>"`.
 - `scope` names acts from the closed set `up`, `down`, `approve`, `init`, `reload` and `swap`. The

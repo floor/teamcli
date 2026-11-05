@@ -230,9 +230,12 @@ export const RECORD_DOMAIN = 'team-approval-v2\n';
  * or has no canonical form. The signature covers this, so a stored copy whose keys were
  * reordered or reformatted still verifies, and a copy whose meaning changed does not.
  */
-export function approvedRecordOf(file: string): string | null {
+export function approvedRecordOf(file: string, options: { home?: string; root?: string } = {}): string | null {
   try {
-    const checked = validateTeamFile(file);
+    // `home` and `root` are the ones the copy would load with: a team whose lead comes from the
+    // default chain (`src/lead-chain.ts`) carries the resolved seat in its canonical record, so
+    // the record is computed again from the same home, never from a narrower one.
+    const checked = validateTeamFile(file, { home: options.home, root: options.root });
     if (!checked.ok) return null;
     return canonicalRecord(teamRecordOf(checked.team as unknown as Record<string, unknown> & { seats: object[] }));
   } catch {
@@ -370,7 +373,7 @@ export function approvalStanding(root: string, home: string = homedir()): Standi
   try {
     // The canonical record first: what this version signs. The stored text must still parse to
     // the record that was signed; a copy that does not validate verifies as nothing here.
-    const canonical = approvedRecordOf(record.file);
+    const canonical = approvedRecordOf(record.file, { home, root });
     valid = canonical !== null && verifyDomain(RECORD_DOMAIN, recordPayloadOf(record.approval, canonical, generation), signature, key.key);
     if (!valid) {
       // Compatibility: a record signed over the file text before the canonical record existed.
@@ -602,7 +605,7 @@ export function writeApproval(
   const key = keyOf(home);
   // Signed over the canonical team record, never the text: a file whose keys are reordered
   // signs the same bytes. A text with no canonical record is not signed at all.
-  const canonical = approvedRecordOf(record.file);
+  const canonical = approvedRecordOf(record.file, { home, root: record.approval.root });
   if (canonical === null) throw new Error('the copy to approve is not a team record; nothing signed');
   const generation = bumpGeneration(record.approval.root, home, now);
   const signature = signDomain(RECORD_DOMAIN, recordPayloadOf(record.approval, canonical, generation), key);

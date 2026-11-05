@@ -80,8 +80,8 @@ export async function runTempo(argv: string[], io: Io, sources: { home?: string 
     const team = { project: loaded.team.project, session: loaded.team.session };
     const next = setTempo(loaded.text, word);
     // Same is decided on the canonical team record an approval signs, not on the text.
-    const before = approvedRecordOf(loaded.text);
-    if (next === loaded.text || (before !== null && before === approvedRecordOf(next))) {
+    const before = approvedRecordOf(loaded.text, { home: sources.home ?? homedir(), root: loaded.root });
+    if (next === loaded.text || (before !== null && before === approvedRecordOf(next, { home: sources.home ?? homedir(), root: loaded.root }))) {
       summary(io, json, team, word, 'same');
       // exit: tempo.unchanged
       return 0;

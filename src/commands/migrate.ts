@@ -419,7 +419,7 @@ export async function runTeamImport(
       // its absence) as the failure; records that differ are an earlier one; a record that
       // cannot be compared proves neither.
       const live = readTeamConfig(io.cwd, { home, source: 'registry' });
-      const approvedCopy = approvedRecordOf(beforeStanding.record.file);
+      const approvedCopy = approvedRecordOf(beforeStanding.record.file, { home, root });
       const unchanged = live.ok && approvedCopy !== null && approvedCopy === canonicalTeam(live.team);
       const state = approvalStateWords(afterStanding);
       const repair = 'this version has no command to refresh that snapshot';
