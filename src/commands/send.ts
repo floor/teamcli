@@ -61,7 +61,7 @@ import {
   type HeadlessResumeSpawn,
 } from '../send/push-adapters.ts';
 import { bindPane, deliverTrigger, draftNote, showsTranscriptToken, TRIGGER_TAKEN_NOTE, type DeliverResult } from '../send/deliver.ts';
-import { readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
+import { dropMessage, readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { deliverTypedWake, herdrTypedWakeHost, type TypedWakeHost } from '../send/typed-wake.ts';
 import { awaitReceipt, claimBindingIn, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld, type InboxLiveness } from '../mcp/inbox.ts';
 import { channelLaunchEnabled, channelPushed, recordChannelHeld, CHANNEL_HELD_RECEIPT, CHANNEL_PUSH_GRACE_MS, CHANNEL_TICK_MS, CHANNEL_UNCONFIRMED_REASON } from '../mcp/channel.ts';
@@ -520,6 +520,10 @@ type Report = {
    *  summary line. Absent when nothing was posted — no adapter, a route that names nothing usable,
    *  or an id whose record was already there — and the class words then stand as before. */
   webhookPost?: SenderPostOutcome;
+  /** Set when the native route's recorded socket is not listening. The drop ending prints the
+   *  blocked line, the same line is written to the lead, and the history outcome stays
+   *  `queued, not woken`. The value is the probe's own reason. */
+  endpointBlocked?: string;
 };
 
 /** The address as the caller wrote it, kept on the history line beside the resolved seat: the
