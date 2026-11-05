@@ -3623,6 +3623,7 @@ Hidden: no
 Usage:
 
     team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]
+    team status --project <name> --watch
     team status --client <grant-file> --key <client-key> [--team <team>] [--json]
 
 ### Who may run it
@@ -3643,6 +3644,7 @@ Usage:
 | `--project` | yes | no | no |
 | `--session` | yes | no | no |
 | `--team` | yes | no | no |
+| `--watch` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
