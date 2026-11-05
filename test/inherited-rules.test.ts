@@ -1,40 +1,43 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runConfig } from '../src/commands/config';
-import { doctorFindings } from '../src/commands/doctor';
+import { runConfig } from '../src/commands/config.ts';
 import {
   rulesFileDifferences,
   rulesFileProblem,
-} from '../src/commands/status';
+} from '../src/commands/status.ts';
 import {
   entityRules,
   planEntityRulesSet,
   writeEntityRulesSet,
-} from '../src/entities';
-import { validateTeamFile } from '../src/file/validate';
-import type { Seat, TeamFile } from '../src/file/types';
+} from '../src/entities.ts';
+import { validateTeamFile } from '../src/file/validate.ts';
+import type { Seat, TeamFile } from '../src/file/types.ts';
 import {
   composedRulesOf,
   formatComposedRules,
   rulesOf,
-} from '../src/launch/rules';
+} from '../src/launch/rules.ts';
 import {
   checkRulesFile,
   rulesDeliveryOf,
   rulesFileHash,
   writeRulesFile,
-} from '../src/launch/rules-file';
+} from '../src/launch/rules-file.ts';
 import {
+  get as getProject,
   homeProjectIdOf,
   planProjectRulesSet,
   projectRules,
+  projectsFile,
+  setProjectRules,
+  upsertProject,
   writeProjectRulesSet,
-} from '../src/registry/projects';
-import { teamIdOf } from '../src/registry/teams';
-import type { Standing } from '../src/trust/types';
-import { testIo } from './helpers';
+} from '../src/registry/projects.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
+import type { Standing } from '../src/store/store.ts';
+import { testIo } from './helpers.ts';
 
 const OWNER_NO_BLOCKING_RULE =
   'No seat ever waits on a blocking prompt to a human … questions go to the orchestrator with team send.';
@@ -70,13 +73,13 @@ function makeTeam(opts: {
   entity?: string | null;
   inProject?: string | null;
   rules?: string[];
-}): { team: TeamFile; rey: Seat; rawYaml: string } {
+}): { team: TeamFile; worker: Seat; rawYaml: string } {
   const lines = [
     'format: 1',
-    `project: ${opts.project ?? 'jedi'}`,
+    `project: ${opts.project ?? 'alpha'}`,
     'coordinator: orchestrator',
     'operator: orchestrator',
-    `session: ${opts.project ?? 'jedi'}`,
+    `session: ${opts.project ?? 'alpha'}`,
   ];
   if (opts.entity !== undefined && opts.entity !== null) {
     lines.push(`entity: ${opts.entity}`);
@@ -104,7 +107,7 @@ function makeTeam(opts: {
     '    version: "1"',
     '    launch: claude',
     '  - role: builder',
-    '    name: rey',
+    '    name: worker',
     '    cli: gemini',
     '    vendor: google',
     '    model: Gemini 3.1 Pro',
@@ -117,15 +120,15 @@ function makeTeam(opts: {
     throw new Error(`Invalid team YAML: ${JSON.stringify(validated.errors)}`);
   }
   const team = validated.team;
-  const rey = team.seats.find((s) => s.name === 'rey')!;
-  return { team, rey, rawYaml };
+  const worker = team.seats.find((s) => s.name === 'worker')!;
+  return { team, worker, rawYaml };
 }
 
 function verifiedStanding(rawYaml: string): Standing {
   return {
     kind: 'verified',
     record: {
-      project: 'jedi',
+      project: 'alpha',
       root: teamRoot,
       fileHash: '0'.repeat(64),
       file: rawYaml,
@@ -137,7 +140,7 @@ function verifiedStanding(rawYaml: string): Standing {
   } as unknown as Standing;
 }
 
-describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
+describe('inherited entity-wide and project-wide rules', () => {
   test('1. inheritance: entity, home project, and team rules render in order under short headings in one text, one hash, one delivery', () => {
     const id = teamIdOf(teamRoot);
     writeEntitiesYaml(
@@ -154,8 +157,8 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
     writeProjectsYaml(
       [
         'projects:',
-        '  floor:',
-        '    name: Floor',
+        '  beacon:',
+        '    name: Beacon',
         '    entity: acme-corp',
         `    teams: [${id}]`,
         '    rules:',
@@ -167,27 +170,27 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
       [
         'teams:',
         `  ${id}:`,
-        '    name: jedi',
+        '    name: alpha',
         `    path: ${teamRoot}`,
-        '    project_id: floor',
-        `    projects: [floor]`,
+        '    project_id: beacon',
+        `    projects: [beacon]`,
         '    registered_at: "2026-11-05T00:00:00Z"',
         '',
       ].join('\n'),
     );
 
-    const { team, rey, rawYaml } = makeTeam({
-      project: 'jedi',
+    const { team, worker, rawYaml } = makeTeam({
+      project: 'alpha',
       entity: 'acme-corp',
-      inProject: 'Floor',
+      inProject: 'Beacon',
       rules: ['Commit with Agent trailer.', 'Run inbox_check every turn.'],
     });
 
-    const text = rulesOf(team, rey, teamRoot, undefined, 'file', home);
+    const text = rulesOf(team, worker, teamRoot, undefined, 'file', home);
     expect(text).toContain('Entity rules (acme-corp):');
     expect(text).toContain(`- ${OWNER_NO_BLOCKING_RULE}`);
     expect(text).toContain('- Never force-push shared branches.');
-    expect(text).toContain('Project rules (floor):');
+    expect(text).toContain('Project rules (beacon):');
     expect(text).toContain('- Write red tests before implementation.');
     expect(text).toContain('Team rules:');
     expect(text).toContain('- Commit with Agent trailer.');
@@ -196,7 +199,7 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
     const entityIdx = text.indexOf('Entity rules (acme-corp):');
     const entityRule1Idx = text.indexOf(`- ${OWNER_NO_BLOCKING_RULE}`);
     const entityRule2Idx = text.indexOf('- Never force-push shared branches.');
-    const projectIdx = text.indexOf('Project rules (floor):');
+    const projectIdx = text.indexOf('Project rules (beacon):');
     const projectRuleIdx = text.indexOf('- Write red tests before implementation.');
     const teamIdx = text.indexOf('Team rules:');
     const teamRule1Idx = text.indexOf('- Commit with Agent trailer.');
@@ -212,7 +215,7 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
     expect(teamRule2Idx).toBeGreaterThan(teamRule1Idx);
 
     const standing = verifiedStanding(rawYaml);
-    const delivery = rulesDeliveryOf(standing, team, rey, teamRoot, home);
+    const delivery = rulesDeliveryOf(standing, team, worker, teamRoot, home);
     expect('text' in delivery).toBe(true);
     if ('text' in delivery) {
       expect(delivery.text).toBe(text);
@@ -230,12 +233,12 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
         '',
       ].join('\n'),
     );
-    const { team, rey } = makeTeam({
-      project: 'jedi',
+    const { team, worker } = makeTeam({
+      project: 'alpha',
       entity: 'acme-corp',
       rules: [],
     });
-    const text = rulesOf(team, rey, teamRoot, undefined, 'file', home);
+    const text = rulesOf(team, worker, teamRoot, undefined, 'file', home);
     expect(text).toContain(`- ${OWNER_NO_BLOCKING_RULE}`);
   });
 
@@ -253,8 +256,8 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
     writeProjectsYaml(
       [
         'projects:',
-        '  floor:',
-        '    name: Floor',
+        '  beacon:',
+        '    name: Beacon',
         '    entity: acme-corp',
         '    teams: []',
         '    rules:',
@@ -266,7 +269,7 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
       [
         'teams:',
         `  ${id}:`,
-        '    name: jedi',
+        '    name: alpha',
         `    path: ${teamRoot}`,
         '    project_id: null',
         '    projects: []',
@@ -275,15 +278,15 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
       ].join('\n'),
     );
 
-    const { team, rey } = makeTeam({
-      project: 'jedi',
+    const { team, worker } = makeTeam({
+      project: 'alpha',
       entity: 'acme-corp',
       inProject: null,
       rules: ['Team local rule.'],
     });
 
     expect(homeProjectIdOf(home, teamRoot, team)).toBeNull();
-    const text = rulesOf(team, rey, teamRoot, undefined, 'file', home);
+    const text = rulesOf(team, worker, teamRoot, undefined, 'file', home);
     expect(text).toContain('Entity rules (acme-corp):');
     expect(text).toContain(`- ${OWNER_NO_BLOCKING_RULE}`);
     expect(text).not.toContain('Project rules');
@@ -325,7 +328,7 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
       [
         'teams:',
         `  ${id}:`,
-        '    name: jedi',
+        '    name: alpha',
         `    path: ${teamRoot}`,
         '    project_id: home-proj',
         '    projects: [home-proj, served-proj]',
@@ -334,15 +337,15 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
       ].join('\n'),
     );
 
-    const { team, rey } = makeTeam({
-      project: 'jedi',
+    const { team, worker } = makeTeam({
+      project: 'alpha',
       entity: 'acme-corp',
       inProject: 'HomeProj',
       rules: ['Team rule applies.'],
     });
 
     expect(homeProjectIdOf(home, teamRoot, team)).toBe('home-proj');
-    const text = rulesOf(team, rey, teamRoot, undefined, 'file', home);
+    const text = rulesOf(team, worker, teamRoot, undefined, 'file', home);
     expect(text).toContain('Project rules (home-proj):');
     expect(text).toContain('- Home project rule applies.');
     expect(text).not.toContain('served-proj');
@@ -353,7 +356,7 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
       [
         'teams:',
         `  ${id}:`,
-        '    name: jedi',
+        '    name: alpha',
         `    path: ${teamRoot}`,
         '    project_id: null',
         '    projects: [served-proj]',
@@ -361,8 +364,8 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
         '',
       ].join('\n'),
     );
-    const { team: unassignedTeam, rey: unassignedRey } = makeTeam({
-      project: 'jedi',
+    const { team: unassignedTeam, worker: unassignedWorker } = makeTeam({
+      project: 'alpha',
       entity: 'acme-corp',
       inProject: null,
       rules: ['Team rule applies.'],
@@ -370,7 +373,7 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
     expect(homeProjectIdOf(home, teamRoot, unassignedTeam)).toBeNull();
     const unassignedText = rulesOf(
       unassignedTeam,
-      unassignedRey,
+      unassignedWorker,
       teamRoot,
       undefined,
       'file',
@@ -397,8 +400,8 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
     writeProjectsYaml(
       [
         'projects:',
-        '  floor:',
-        '    name: Floor',
+        '  beacon:',
+        '    name: Beacon',
         '    entity: acme-corp',
         `    teams: [${id}]`,
         '    rules:',
@@ -410,31 +413,31 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
       [
         'teams:',
         `  ${id}:`,
-        '    name: jedi',
+        '    name: alpha',
         `    path: ${teamRoot}`,
-        '    project_id: floor',
-        '    projects: [floor]',
+        '    project_id: beacon',
+        '    projects: [beacon]',
         '    registered_at: "2026-11-05T00:00:00Z"',
         '',
       ].join('\n'),
     );
 
-    const { team, rey, rawYaml } = makeTeam({
-      project: 'jedi',
+    const { team, worker, rawYaml } = makeTeam({
+      project: 'alpha',
       entity: 'acme-corp',
-      inProject: 'Floor',
+      inProject: 'Beacon',
       rules: ['Team rule.'],
     });
     const standing = verifiedStanding(rawYaml);
 
-    // Write the initial rules file on disk for seat rey
-    const initialDelivery = rulesDeliveryOf(standing, team, rey, teamRoot, home);
+    // Write the initial rules file on disk for seat worker
+    const initialDelivery = rulesDeliveryOf(standing, team, worker, teamRoot, home);
     expect('text' in initialDelivery).toBe(true);
     if (!('text' in initialDelivery)) return;
     const initialHash = rulesFileHash(initialDelivery.text);
     const wrote = writeRulesFile(
       standing,
-      'rey',
+      'worker',
       teamRoot,
       home,
       initialDelivery.text,
@@ -446,7 +449,7 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
 
     // Status and rulesFileChecks report no drift initially
     expect(checkRulesFile(initialDelivery.path, initialDelivery.text).ok).toBe(true);
-    expect(rulesFileProblem(standing, team, rey, teamRoot, home)).toBeNull();
+    expect(rulesFileProblem(standing, team, worker, teamRoot, home)).toBeNull();
     expect(rulesFileDifferences(standing, team, teamRoot, home)).toEqual([]);
 
     // Now the owner updates an entity rule in entities.yaml
@@ -461,25 +464,25 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
       ].join('\n'),
     );
 
-    const updatedDelivery = rulesDeliveryOf(standing, team, rey, teamRoot, home);
+    const updatedDelivery = rulesDeliveryOf(standing, team, worker, teamRoot, home);
     expect('text' in updatedDelivery).toBe(true);
     if (!('text' in updatedDelivery)) return;
     const updatedHash = rulesFileHash(updatedDelivery.text);
     expect(updatedHash).not.toBe(initialHash);
 
-    // Status and checkRulesFile report drift for rey
+    // Status and checkRulesFile report drift for worker
     const check = checkRulesFile(initialDelivery.path, updatedDelivery.text);
     expect(check.ok).toBe(false);
-    const problem = rulesFileProblem(standing, team, rey, teamRoot, home);
+    const problem = rulesFileProblem(standing, team, worker, teamRoot, home);
     expect(problem).toContain("its rules file differs from the team file's rules");
     const diffs = rulesFileDifferences(standing, team, teamRoot, home);
     expect(diffs).toHaveLength(1);
-    expect(diffs[0]?.what).toContain('rey:');
+    expect(diffs[0]?.what).toContain('worker:');
     expect(diffs[0]?.what).toContain("its rules file differs from the team file's rules");
-    expect(diffs[0]?.repair).toBe('team reload rey');
+    expect(diffs[0]?.repair).toBe('team reload worker');
   });
 
-  test('5. owner writes entity and project rules with --dry-run (Zeus §5.10) and applies them', async () => {
+  test('5. owner writes entity and project rules with --dry-run and applies them', async () => {
     writeEntitiesYaml(
       [
         'acme-corp:',
@@ -490,8 +493,8 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
     writeProjectsYaml(
       [
         'projects:',
-        '  floor:',
-        '    name: Floor',
+        '  beacon:',
+        '    name: Beacon',
         '    entity: acme-corp',
         '    teams: []',
         '',
@@ -503,9 +506,9 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
     expect(entityPlan.diff).toContain(OWNER_NO_BLOCKING_RULE);
     expect(entityRules(home, 'acme-corp')).toEqual([]);
 
-    const projectPlan = planProjectRulesSet(home, 'floor', ['Write red tests first.']);
+    const projectPlan = planProjectRulesSet(home, 'beacon', ['Write red tests first.']);
     expect(projectPlan.diff).toContain('Write red tests first.');
-    expect(projectRules(home, 'floor')).toEqual([]);
+    expect(projectRules(home, 'beacon')).toEqual([]);
 
     // Dry-run via CLI `team config set <entity>.rules ... --dry-run`
     const dryIo = testIo(teamRoot, { kind: 'owner' });
@@ -529,26 +532,26 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
     expect(applyCode).toBe(0);
     expect(entityRules(home, 'acme-corp')).toEqual([OWNER_NO_BLOCKING_RULE]);
 
-    // Dry-run via CLI `team config set project.floor.rules ... --dry-run`
+    // Dry-run via CLI `team config set project.beacon.rules ... --dry-run`
     const projDryIo = testIo(teamRoot, { kind: 'owner' });
     const projDryCode = await runConfig(
-      ['set', 'project.floor.rules', '["Write red tests first."]', '--dry-run'],
+      ['set', 'project.beacon.rules', '["Write red tests first."]', '--dry-run'],
       projDryIo,
       { home },
     );
     expect(projDryCode).toBe(0);
     expect(projDryIo.out).toContain('Write red tests first.');
-    expect(projectRules(home, 'floor')).toEqual([]);
+    expect(projectRules(home, 'beacon')).toEqual([]);
 
-    // Apply project rules via CLI `team config set project.floor.rules`
+    // Apply project rules via CLI `team config set project.beacon.rules`
     const projApplyIo = testIo(teamRoot, { kind: 'owner' });
     const projApplyCode = await runConfig(
-      ['set', 'project.floor.rules', '["Write red tests first."]'],
+      ['set', 'project.beacon.rules', '["Write red tests first."]'],
       projApplyIo,
       { home },
     );
     expect(projApplyCode).toBe(0);
-    expect(projectRules(home, 'floor')).toEqual(['Write red tests first.']);
+    expect(projectRules(home, 'beacon')).toEqual(['Write red tests first.']);
 
     // Read back via CLI `team config get <entity>.rules` and `team config get project.<id>.rules`
     const getEntityIo = testIo(teamRoot, { kind: 'owner' });
@@ -556,7 +559,7 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
     expect(getEntityIo.out).toContain(OWNER_NO_BLOCKING_RULE);
 
     const getProjectIo = testIo(teamRoot, { kind: 'owner' });
-    expect(await runConfig(['get', 'project.floor.rules'], getProjectIo, { home })).toBe(0);
+    expect(await runConfig(['get', 'project.beacon.rules'], getProjectIo, { home })).toBe(0);
     expect(getProjectIo.out).toContain('Write red tests first.');
 
     // Write via programmatic writer with dryRun: false
@@ -570,18 +573,18 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
       'Always verify scoped tests.',
     ]);
 
-    const wroteProject = writeProjectRulesSet(home, 'floor', [
+    const wroteProject = writeProjectRulesSet(home, 'beacon', [
       'Write red tests first.',
       'Document launch.md.',
     ]);
     expect(wroteProject.written).toBe(true);
-    expect(projectRules(home, 'floor')).toEqual([
+    expect(projectRules(home, 'beacon')).toEqual([
       'Write red tests first.',
       'Document launch.md.',
     ]);
 
     // Non-owner is rejected
-    const nonOwnerIo = testIo(teamRoot, { kind: 'seat', name: 'rey', pane: 'pane1' });
+    const nonOwnerIo = testIo(teamRoot, { kind: 'seat', name: 'worker', pane: 'pane1' });
     const nonOwnerCode = await runConfig(
       ['set', 'acme-corp.rules', '["Forbidden"]'],
       nonOwnerIo,
@@ -606,8 +609,8 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
     writeProjectsYaml(
       [
         'projects:',
-        '  floor:',
-        '    name: Floor',
+        '  beacon:',
+        '    name: Beacon',
         '    entity: acme-corp',
         `    teams: [${id}]`,
         '    rules:',
@@ -619,23 +622,23 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
       [
         'teams:',
         `  ${id}:`,
-        '    name: jedi',
+        '    name: alpha',
         `    path: ${teamRoot}`,
-        '    project_id: floor',
-        '    projects: [floor]',
+        '    project_id: beacon',
+        '    projects: [beacon]',
         '    registered_at: "2026-11-05T00:00:00Z"',
         '',
       ].join('\n'),
     );
 
-    const { team, rey } = makeTeam({
-      project: 'jedi',
+    const { team, worker } = makeTeam({
+      project: 'alpha',
       entity: 'acme-corp',
-      inProject: 'Floor',
+      inProject: 'Beacon',
       rules: ['Commit with Agent trailer.'],
     });
 
-    const composed = composedRulesOf(team, rey, teamRoot, undefined, 'file', home);
+    const composed = composedRulesOf(team, worker, teamRoot, undefined, 'file', home);
     const entityEntries = composed.filter((item) => item.origin === 'entity');
     const projectEntries = composed.filter((item) => item.origin === 'project');
     const teamEntries = composed.filter((item) => item.origin === 'team');
@@ -650,24 +653,129 @@ describe('FLO-1123: inherited entity-wide and project-wide rules', () => {
     expect(projectEntries).toEqual([
       {
         origin: 'project',
-        source: 'floor',
+        source: 'beacon',
         rule: 'Write red tests before implementation.',
       },
     ]);
     expect(teamEntries).toEqual([
       {
         origin: 'team',
-        source: 'jedi',
+        source: 'alpha',
         rule: 'Commit with Agent trailer.',
       },
     ]);
 
-    const view = formatComposedRules(team, rey, teamRoot, undefined, home);
+    const view = formatComposedRules(team, worker, teamRoot, undefined, home);
     expect(view).toContain('Entity rules (acme-corp):');
     expect(view).toContain(OWNER_NO_BLOCKING_RULE);
-    expect(view).toContain('Project rules (floor):');
+    expect(view).toContain('Project rules (beacon):');
     expect(view).toContain('Write red tests before implementation.');
-    expect(view).toContain('Team rules (jedi):');
+    expect(view).toContain('Team rules (alpha):');
     expect(view).toContain('Commit with Agent trailer.');
+  });
+
+  test('7. concurrent upsertProject and project rules write serialize on projects.yaml.lock and lose neither update', async () => {
+    upsertProject(home, 'beacon', {
+      name: 'Beacon',
+      entity: 'acme-corp',
+      lead: null,
+      teams: [],
+      by: 'owner',
+      at: '2026-11-05T00:00:00Z',
+    });
+
+    // Simulate an in-flight upsertProject holding `projects.yaml.lock`: while the lock is held,
+    // a background worker updates `lead` and `teams` on disk and then releases `projects.yaml.lock`.
+    // Meanwhile, `team config set project.beacon.rules` must wait on `projects.yaml.lock`, re-read
+    // `projects.yaml` under the lock after the concurrent writer finishes, and write `rules`
+    // without clobbering `lead` or `teams`.
+    const path = projectsFile(home);
+    const lockPath = `${path}.lock`;
+    writeFileSync(lockPath, `${process.pid}\n`, { flag: 'wx' });
+
+    const concurrentText = [
+      'projects:',
+      '  beacon:',
+      '    name: Beacon',
+      '    entity: acme-corp',
+      '    lead: agent-lead-01',
+      '    teams: [team-a]',
+      '    provenance: { registered_by: owner, registered_at: "2026-11-05T00:00:00Z", updated_at: "2026-11-05T00:00:01Z" }',
+      '',
+    ].join('\n');
+
+    const workerScript = `
+      import { writeFileSync, renameSync, unlinkSync } from 'node:fs';
+      setTimeout(() => {
+        const tmp = ${JSON.stringify(`${path}.worker.tmp`)};
+        writeFileSync(tmp, ${JSON.stringify(concurrentText)}, { mode: 0o600 });
+        renameSync(tmp, ${JSON.stringify(path)});
+        unlinkSync(${JSON.stringify(lockPath)});
+        self.postMessage('released');
+      }, 45);
+    `;
+    const blobUrl = URL.createObjectURL(
+      new Blob([workerScript], { type: 'application/javascript' }),
+    );
+    const worker = new globalThis.Worker(blobUrl);
+    const workerDone = new Promise<void>((resolve) => {
+      worker.addEventListener('message', () => resolve());
+    });
+
+    try {
+      const cliIo = testIo(teamRoot, { kind: 'owner' });
+      const code = await runConfig(
+        ['set', 'project.beacon.rules', '["Keep locks on every write.", "Re-read under the lock."]'],
+        cliIo,
+        { home },
+      );
+      expect(code).toBe(0);
+      await workerDone;
+    } finally {
+      worker.terminate();
+      URL.revokeObjectURL(blobUrl);
+      try {
+        unlinkSync(lockPath);
+      } catch {}
+    }
+
+    // Neither the concurrent upsertProject fields (`lead`, `teams`) nor the CLI rules write was lost:
+    const afterCli = getProject(home, 'beacon');
+    expect(afterCli).not.toBeNull();
+    expect(afterCli?.lead).toBe('agent-lead-01');
+    expect(afterCli?.teams).toEqual(['team-a']);
+    expect(afterCli?.rules).toEqual([
+      'Keep locks on every write.',
+      'Re-read under the lock.',
+    ]);
+    expect(projectRules(home, 'beacon')).toEqual([
+      'Keep locks on every write.',
+      'Re-read under the lock.',
+    ]);
+
+    // Subsequent `upsertProject` preserves `rules`, and `setProjectRules` preserves `upsertProject`:
+    upsertProject(home, 'beacon', {
+      teams: ['team-a', 'team-b'],
+      at: '2026-11-05T00:00:02Z',
+    });
+    expect(getProject(home, 'beacon')?.rules).toEqual([
+      'Keep locks on every write.',
+      'Re-read under the lock.',
+    ]);
+
+    setProjectRules(home, 'beacon', [
+      'Keep locks on every write.',
+      'Re-read under the lock.',
+      'Never drop sibling fields.',
+    ]);
+    const finalRecord = getProject(home, 'beacon');
+    expect(finalRecord?.lead).toBe('agent-lead-01');
+    expect(finalRecord?.teams).toEqual(['team-a', 'team-b']);
+    expect(finalRecord?.rules).toEqual([
+      'Keep locks on every write.',
+      'Re-read under the lock.',
+      'Never drop sibling fields.',
+    ]);
+    expect(readFileSync(path, 'utf8')).toContain('Never drop sibling fields.');
   });
 });

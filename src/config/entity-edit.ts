@@ -26,8 +26,7 @@ import { isEntityName } from '../file/sections/entity.ts';
 import { cleanedIo, type Io } from '../io.ts';
 import { composedRulesOf, formatComposedRules } from '../launch/rules.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
-import { projectsFile } from '../registry/projects.ts';
-import { currentRunMemo } from '../run-memo.ts';
+import { ProjectsError, projectsFile, setProjectRules } from '../registry/projects.ts';
 import { editedRecordText, getAt, parseValue, shownValue, withValue } from './team-record.ts';
 import { machineZone, readReminders } from '../reminder/config.ts';
 import { parseYaml, toValue, YamlError, type YamlNode, type YamlValue } from '../yaml.ts';
@@ -337,50 +336,83 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     }
   }
 
-  if (!existsSync(file)) {
+  if (isProjectRules) {
+    let outcome: ReturnType<typeof setProjectRules>;
+    try {
+      outcome = setProjectRules(home, targetName, list as string[], {
+        dryRun,
+        allowDisplayName: false,
+      });
+    } catch (error) {
+      const msg = error instanceof ProjectsError || error instanceof Error ? error.message : String(error);
+      if (msg.endsWith('; nothing was written')) {
+        return pathRefused(io, json, msg);
+      }
+      return unreadable(io, json, msg);
+    }
+    if (!outcome.changed) {
+      if (json) writeJson(io, 'team.config-edit', { format: 1, verb, path: `${entityName}.${key as string}`, changed: false, ...(dryRun ? { dry_run: true } : {}), source: 'project', comments_kept: true });
+      else io.stdout(`nothing changed in ${file}\n`);
+      // exit: config.entity.unchanged
+      return 0;
+    }
+    if (json) {
+      writeJson(io, 'team.config-edit', { format: 1, verb, path: `${entityName}.${key as string}`, changed: true, ...(dryRun ? { dry_run: true } : {}), source: 'project', comments_kept: outcome.kept });
+    } else {
+      const count = list?.length ?? 0;
+      const shown = `${String(count)} rule${count === 1 ? '' : 's'}`;
+      if (dryRun) {
+        io.stdout(`dry-run: would set ${entityName}.${key as string}: ${shown} in ${file}\n${outcome.after}`);
+      } else {
+        io.stdout(`set ${entityName}.${key as string}: ${shown} in ${file}\n`);
+        if (!outcome.kept) io.stderr(`team config: the projects file was rewritten whole to change ${entityName}.${key as string}; its comments were not kept\n`);
+      }
+    }
+    // exit: config.entity.written
+    return 0;
+  }
+
+  const entitiesFile = entitiesPath(home);
+  if (!existsSync(entitiesFile)) {
     return pathRefused(
       io,
       json,
-      `${file} does not exist: no entry for ${isProjectRules ? 'project' : 'entity'} "${targetName}"; nothing was written`,
+      `${entitiesFile} does not exist: no entry for entity "${targetName}"; nothing was written`,
     );
   }
   let text: string;
   try {
-    text = readFileSync(file, 'utf8');
+    text = readFileSync(entitiesFile, 'utf8');
   } catch (error) {
-    return unreadable(io, json, `${file}: ${(error as Error).message}`);
+    return unreadable(io, json, `${entitiesFile}: ${(error as Error).message}`);
   }
   let root: YamlNode;
   try {
     root = parseYaml(text);
   } catch (error) {
-    return unreadable(io, json, `${file}: ${unreadableReason(error)}`);
+    return unreadable(io, json, `${entitiesFile}: ${unreadableReason(error)}`);
   }
   const record = toValue(root);
-  if (!isMap(record)) return unreadable(io, json, `${file}: expected a map of ${isProjectRules ? 'projects' : 'entities'}`);
-  const wrapped = !isProjectRules && hasEntitiesWrapper(record);
-  const entryLookup = isProjectRules
-    ? ['projects', targetName]
-    : wrapped
-      ? ['entities', targetName]
-      : [targetName];
+  if (!isMap(record)) return unreadable(io, json, `${entitiesFile}: expected a map of entities`);
+  const wrapped = hasEntitiesWrapper(record);
+  const entryLookup = wrapped ? ['entities', targetName] : [targetName];
   const entry = getAt(record, entryLookup);
   if (!entry.found) {
     return pathRefused(
       io,
       json,
-      `${file}: no entry for ${isProjectRules ? 'project' : 'entity'} "${targetName}"; nothing was written`,
+      `${entitiesFile}: no entry for entity "${targetName}"; nothing was written`,
     );
   }
   if (!isMap(entry.value)) {
     return pathRefused(
       io,
       json,
-      `${file}: ${isProjectRules ? 'project' : 'entity'} "${targetName}" is not a map; nothing was written`,
+      `${entitiesFile}: entity "${targetName}" is not a map; nothing was written`,
     );
   }
   // The record nests the word (`<entity>: names: unique:`), while a reminder or rules list sits
-  // directly under the entity (or under `projects.<id>.rules`).
+  // directly under the entity.
   const recordPath =
     key === NAMES_KEY
       ? [...entryLookup, 'names', 'unique']
@@ -391,12 +423,12 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     return pathRefused(
       io,
       json,
-      `${isProjectRules ? 'project' : 'entity'} "${targetName}" ${key as string}: ${changed.why}; nothing was written`,
+      `entity "${targetName}" ${key as string}: ${changed.why}; nothing was written`,
     );
   }
   if (!changed.changed) {
-    if (json) writeJson(io, 'team.config-edit', { format: 1, verb, path: `${entityName}.${key as string}`, changed: false, ...(dryRun ? { dry_run: true } : {}), source: isProjectRules ? 'project' : 'entity', comments_kept: true });
-    else io.stdout(`nothing changed in ${file}\n`);
+    if (json) writeJson(io, 'team.config-edit', { format: 1, verb, path: `${entityName}.${key as string}`, changed: false, ...(dryRun ? { dry_run: true } : {}), source: 'entity', comments_kept: true });
+    else io.stdout(`nothing changed in ${entitiesFile}\n`);
     // exit: config.entity.unchanged
     return 0;
   }
@@ -413,7 +445,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     try {
       candidate = parseYaml(edited.text);
     } catch (error) {
-      return unreadable(io, json, `${file}: the edited text cannot be read: ${unreadableReason(error)}`);
+      return unreadable(io, json, `${entitiesFile}: the edited text cannot be read: ${unreadableReason(error)}`);
     }
     const before = new Set(readReminders(root, { defaultZone: machineZone() }).problems.map(problemKey));
     const refused = readReminders(candidate, { defaultZone: machineZone() }).problems.find(
@@ -422,26 +454,19 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     if (refused !== undefined) return remindersProblem(io, json, refused.why);
   }
   if (!dryRun) {
-    writeOwnerFile(file, edited.text);
-    if (isProjectRules) {
-      const memo = currentRunMemo();
-      if (memo !== null) {
-        memo.projects.clear();
-        memo.projectsRaw.clear();
-      }
-    }
+    writeOwnerFile(entitiesFile, edited.text);
   }
   if (json) {
-    writeJson(io, 'team.config-edit', { format: 1, verb, path: `${entityName}.${key as string}`, changed: true, ...(dryRun ? { dry_run: true } : {}), source: isProjectRules ? 'project' : 'entity', comments_kept: edited.kept });
+    writeJson(io, 'team.config-edit', { format: 1, verb, path: `${entityName}.${key as string}`, changed: true, ...(dryRun ? { dry_run: true } : {}), source: 'entity', comments_kept: edited.kept });
   } else {
     const count = list?.length ?? 0;
     const itemLabel = key === RULES_KEY ? 'rule' : 'reminder';
     const shown = key === NAMES_KEY ? (word as string) : `${String(count)} ${itemLabel}${count === 1 ? '' : 's'}`;
     if (dryRun) {
-      io.stdout(`dry-run: would set ${entityName}.${key as string}: ${shown} in ${file}\n${edited.text}`);
+      io.stdout(`dry-run: would set ${entityName}.${key as string}: ${shown} in ${entitiesFile}\n${edited.text}`);
     } else {
-      io.stdout(`set ${entityName}.${key as string}: ${shown} in ${file}\n`);
-      if (!edited.kept) io.stderr(`team config: the ${isProjectRules ? 'projects' : 'entities'} file was rewritten whole to change ${entityName}.${key as string}; its comments were not kept\n`);
+      io.stdout(`set ${entityName}.${key as string}: ${shown} in ${entitiesFile}\n`);
+      if (!edited.kept) io.stderr(`team config: the entities file was rewritten whole to change ${entityName}.${key as string}; its comments were not kept\n`);
     }
   }
   // exit: config.entity.written

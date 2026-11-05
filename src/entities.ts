@@ -232,7 +232,7 @@ function isRecordMap(value: YamlValue): value is { [key: string]: YamlValue } {
 
 /**
  * Plan setting `<entity>.rules` in `<home>/.config/team/entities.yaml` without writing to disk.
- * Used for `--dry-run` (Zeus §5.10) and before applying an owner write.
+ * Used for `--dry-run` and before applying an owner write.
  */
 export function planEntityRulesSet(home: string, entity: string, rules: string[]): RulesEditPlan {
   const path = entitiesPath(home);

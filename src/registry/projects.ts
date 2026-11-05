@@ -376,6 +376,11 @@ function locked<T>(home: string, work: () => T): T {
     }
   }
   try {
+    const memo = currentRunMemo();
+    if (memo !== null) {
+      memo.projects.delete(home);
+      memo.projectsRaw.delete(home);
+    }
     return work();
   } finally {
     try {
@@ -556,7 +561,7 @@ function recordOf(id: string, raw: YamlValue, path: string): ProjectRecord {
     if (!Array.isArray(raw.rules)) bad('"rules" must be a list of strings');
     const cleaned: string[] = [];
     for (const [i, item] of (raw.rules as YamlValue[]).entries()) {
-      if (typeof item !== 'string') bad(`rules line ${i + 1} must be text`);
+      if (typeof item !== 'string') return bad(`rules line ${i + 1} must be text`);
       const trimmed = item.trim();
       if (trimmed.length > 0) cleaned.push(trimmed);
     }
@@ -633,7 +638,7 @@ export function projectRules(home: string | undefined, projectId: string | null)
 }
 
 /**
- * Resolve a team's **home** project ID only (Zeus §2 / §3b: a served project's rules never apply).
+ * Resolve a team's **home** project ID only (a served project's rules never apply).
  * Checks `team.inProject` first, then `teams.yaml` `project_id`, and only falls back to a single
  * non-served entry in `projects.yaml` when neither `in_project` nor `teams.yaml` is present.
  */
@@ -723,35 +728,73 @@ function renderProjectDiff(path: string, before: string, after: string): string 
   return out.join('\n');
 }
 
+export type SetProjectRulesRefusal = {
+  ok: false;
+  kind: 'path' | 'unreadable';
+  why: string;
+};
+
+export type SetProjectRulesOutcome =
+  | ({ ok: true; written: boolean } & RulesEditPlan)
+  | SetProjectRulesRefusal;
+
 /**
  * Plan setting `projects.<id>.rules` in `<home>/.config/team/projects.yaml` without writing to disk.
- * Used for `--dry-run` (Zeus §5.10) and before applying an owner write.
+ * Used for `--dry-run` and inside `setProjectRules` under `projects.yaml.lock`.
  */
-export function planProjectRulesSet(home: string, projectId: string, rules: string[]): RulesEditPlan {
+export function planProjectRulesSet(
+  home: string,
+  projectId: string,
+  rules: string[],
+  opts: { allowDisplayName?: boolean } = {},
+): RulesEditPlan {
   const path = projectsFile(home);
   const cleaned = rules.map((r) => r.trim()).filter((r) => r.length > 0);
   if (!existsSync(path)) {
-    throw new ProjectsError(`${path} does not exist: no entry for project "${projectId}"`);
+    throw new ProjectsError(`${path} does not exist: no entry for project "${projectId}"; nothing was written`);
   }
-  const before = readFileSync(path, 'utf8');
-  const parsed = toValue(parseYaml(before));
-  if (!isMap(parsed) || !isMap(parsed.projects)) {
-    throw new ProjectsError(`${path}: expected a map with a "projects" key`);
+  let before: string;
+  try {
+    before = readFileSync(path, 'utf8');
+  } catch (error) {
+    throw new ProjectsError(`${path}: ${(error as Error).message}`);
+  }
+  let parsed: YamlValue;
+  try {
+    parsed = toValue(parseYaml(before));
+  } catch (error) {
+    if (error instanceof YamlError) {
+      throw new ProjectsError(`${path}: line ${error.line}: ${error.message}`);
+    }
+    throw new ProjectsError(`${path}: ${(error as Error).message}`);
+  }
+  if (!isMap(parsed)) {
+    throw new ProjectsError(`${path}: expected a map of projects`);
+  }
+  if (!isMap(parsed.projects)) {
+    throw new ProjectsError(`${path}: no entry for project "${projectId}"; nothing was written`);
   }
   let resolvedId = projectId;
   if (!Object.hasOwn(parsed.projects, resolvedId)) {
-    const byDisplay = Object.entries(parsed.projects).find(
-      ([, raw]) => isMap(raw) && raw.name === projectId,
-    );
+    const byDisplay =
+      opts.allowDisplayName !== false
+        ? Object.entries(parsed.projects).find(
+            ([, raw]) => isMap(raw) && raw.name === projectId,
+          )
+        : undefined;
     if (byDisplay) resolvedId = byDisplay[0];
     else {
-      throw new ProjectsError(`${path}: no entry for project "${projectId}"`);
+      throw new ProjectsError(`${path}: no entry for project "${projectId}"; nothing was written`);
     }
+  }
+  const entry = parsed.projects[resolvedId];
+  if (!isMap(entry)) {
+    throw new ProjectsError(`${path}: project "${resolvedId}" is not a map; nothing was written`);
   }
   const recordPath = ['projects', resolvedId, 'rules'];
   const changed = withValue(parsed, recordPath, cleaned);
   if (!changed.ok) {
-    throw new ProjectsError(`project "${resolvedId}" rules: ${changed.why}`);
+    throw new ProjectsError(`project "${resolvedId}" rules: ${changed.why}; nothing was written`);
   }
   if (!changed.changed) {
     return {
@@ -775,8 +818,47 @@ export function planProjectRulesSet(home: string, projectId: string, rules: stri
 }
 
 /**
+ * Single locked writer for `projects.<id>.rules` in `<home>/.config/team/projects.yaml`.
+ * Acquires `projects.yaml.lock` via `locked()`, re-reads `projects.yaml` under the lock,
+ * applies the edit, and writes atomically so concurrent `upsertProject` and rules writes
+ * never overwrite one another. Used by both `team config set project.<id>.rules` and
+ * `writeProjectRulesSet`.
+ */
+export function setProjectRules(
+  home: string,
+  projectId: string,
+  rules: string[],
+  opts: { dryRun?: boolean; allowDisplayName?: boolean } = {},
+): RulesEditPlan & { written: boolean } {
+  if (opts.dryRun) {
+    const plan = planProjectRulesSet(home, projectId, rules, opts);
+    return { ...plan, written: false };
+  }
+  return locked(home, () => {
+    const plan = planProjectRulesSet(home, projectId, rules, opts);
+    if (!plan.changed) {
+      return { ...plan, written: false };
+    }
+    mkdirSync(dirname(plan.path), { recursive: true });
+    let mode = 0o600;
+    try {
+      mode = statSync(plan.path).mode & 0o777;
+    } catch {}
+    const tmp = `${plan.path}.${process.pid}.tmp`;
+    writeFileSync(tmp, plan.after, { mode });
+    renameSync(tmp, plan.path);
+    const memo = currentRunMemo();
+    if (memo !== null) {
+      memo.projects.clear();
+      memo.projectsRaw.clear();
+    }
+    return { ...plan, written: true };
+  });
+}
+
+/**
  * Write `projects.<id>.rules` in `<home>/.config/team/projects.yaml` (or return the plan without
- * writing when `opts.dryRun` is true).
+ * writing when `opts.dryRun` is true), delegating to `setProjectRules` under `projects.yaml.lock`.
  */
 export function writeProjectRulesSet(
   home: string,
@@ -784,23 +866,6 @@ export function writeProjectRulesSet(
   rules: string[],
   opts: { dryRun?: boolean } = {},
 ): RulesEditPlan & { written: boolean } {
-  const plan = planProjectRulesSet(home, projectId, rules);
-  if (opts.dryRun || !plan.changed) {
-    return { ...plan, written: false };
-  }
-  mkdirSync(dirname(plan.path), { recursive: true });
-  let mode = 0o600;
-  try {
-    mode = statSync(plan.path).mode & 0o777;
-  } catch {}
-  const tmp = `${plan.path}.${process.pid}.tmp`;
-  writeFileSync(tmp, plan.after, { mode });
-  renameSync(tmp, plan.path);
-  const memo = currentRunMemo();
-  if (memo !== null) {
-    memo.projects.clear();
-    memo.projectsRaw.clear();
-  }
-  return { ...plan, written: true };
+  return setProjectRules(home, projectId, rules, opts);
 }
 
