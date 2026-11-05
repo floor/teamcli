@@ -4,8 +4,9 @@
 // scene never races the start, then holds its loop open.
 import { writeFileSync } from 'node:fs';
 
-const ready = process.env.CHORES_SCENE_READY;
-if (ready !== undefined) writeFileSync(ready, 'ready');
+// The handler is installed before the marker is written: the scene reads the marker as the
+// promise that a terminate signal sent now will find the handler, so the marker must never
+// precede it.
 process.on('SIGTERM', () => {
   process.stdout.write(
     `${JSON.stringify({
@@ -17,4 +18,6 @@ process.on('SIGTERM', () => {
     })}\n`,
   );
 });
+const ready = process.env.CHORES_SCENE_READY;
+if (ready !== undefined) writeFileSync(ready, 'ready');
 setInterval(() => {}, 60_000);
