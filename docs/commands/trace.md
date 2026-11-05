@@ -62,7 +62,7 @@ one summary line, `<n> step` or `<n> steps`. The table's columns are:
 | OUTCOME | the step's own outcome word (`delivered`, `sent`, `failed`, `posted`, `retried`, …), or `-` |
 | MS | the cost the step measured, in whole milliseconds, or `-` |
 | DELTA | the quiet time from the step above it, as `0 ms` or `+<n> ms`; `-` on the first step |
-| NOTE | the step's reason, when it carried one, or `-` |
+| NOTE | the step's reason, when it carried one, or `admitted by: <rule>` on `message.staged`, or `-` |
 
 The order is the log's own sequence, so it is chronology, not a chosen order: a watch's retry and
 the seat's receipt appear exactly where they were written. A negative DELTA is printed, not
@@ -142,7 +142,7 @@ and cost, and the last step's quiet time from the step above it:
 $ team trace 66666666-6666-4666-8666-666666666666 ; echo "exit $?"
 team beacon, session "beacon"
   TIME          STEP            VIA     OUTCOME      MS  DELTA  NOTE
-  09:00:00.000  message.staged  -       -            -   -      -
+  09:00:00.000  message.staged  -       -            -   -      admitted by: the owner
   09:00:00.000  leg.tried       native  unreachable  0   0 ms   no trusted runtime session is recorded for this seat (no agent record for this seat)
   09:00:00.000  leg.tried       typed   unreachable  0   0 ms   the send host binds no pane writer; nothing was typed
   09:00:00.000  leg.tried       drop    held         0   0 ms   the record is stored; no seat was woken
@@ -157,7 +157,7 @@ story:
 $ team trace 66666666-6666-4666-8666-666666666666:staged ; echo "exit $?"
 team beacon, session "beacon"
   TIME          STEP            VIA  OUTCOME  MS  DELTA  NOTE
-  09:00:00.000  message.staged  -    -        -   -      -
+  09:00:00.000  message.staged  -    -        -   -      admitted by: the owner
 1 step
 exit 0
 ```
@@ -194,6 +194,7 @@ $ team trace 66666666-6666-4666-8666-666666666666 --json ; echo "exit $?"
       "from": "owner",
       "to": "gpt-reviewer",
       "thread": "66666666-6666-4666-8666-666666666666",
+      "rule": "the owner",
       "delta_ms": null
     },
     {

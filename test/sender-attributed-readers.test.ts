@@ -146,7 +146,7 @@ describe('a forged orchestrator claim', () => {
     const result = await runDropsAs(['--read', '--seat', 'lead', '--session', 'acme']);
     expect(result.code).toBe(0);
     expect(result.out).toContain(
-      `from orchestrator@acme (attributed) — admitted by: ${RULE}`,
+      'from orchestrator@acme (team lead):',
     );
     expect(result.out).toContain(QUOTE);
   });
@@ -162,7 +162,7 @@ describe('a forged orchestrator claim', () => {
     expect(read.ok).toBe(true);
     if (!read.ok) return;
     expect(read.body).toContain(
-      `from orchestrator@acme (attributed) — admitted by: ${RULE}`,
+      'from orchestrator@acme (team lead):',
     );
     expect(read.body).toContain(QUOTE);
   });
@@ -173,7 +173,7 @@ describe('a forged orchestrator claim', () => {
     expect(text.code).toBe(0);
     expect(text.out).toContain('orchestrator (attributed)');
     expect(text.out).toContain(
-      `from orchestrator@acme (attributed) — admitted by: ${RULE}`,
+      'from orchestrator@acme (team lead):',
     );
     expect(text.out).toContain(QUOTE);
 
@@ -209,7 +209,7 @@ describe('a forged owner claim beside an unsigned marker', () => {
     expect(read.ok).toBe(true);
     if (!read.ok) return;
     expect(read.body).toContain(
-      'from the owner (attributed) — admitted by: the owner',
+      'from the owner (owner):',
     );
     expect(read.body).toContain(QUOTE);
   });
@@ -290,7 +290,7 @@ describe('the launch brief the seat currently holds', () => {
     if (!read.ok) return;
     expect(read.body).toBe(generalBriefBody().replace(
       `from the launch — admitted by: ${GENERAL_BRIEF_RULE}`,
-      `from the launch (attributed) — admitted by: ${GENERAL_BRIEF_RULE}`,
+      'from the launch (launch brief):',
     ));
   });
 });

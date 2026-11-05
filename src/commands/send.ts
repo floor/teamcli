@@ -42,7 +42,7 @@ import { appendHistory } from '../send/history.ts';
 import { markAnsweredBySend } from '../send/answered-by-send.ts';
 import { noteUnread } from '../send/unread-hint.ts';
 import { ensureRecord, readRecord, recordTextOf, signReceiptPayload, signRecord, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
-import { attributionBanner } from '../send/sender-claim.ts';
+import { attributedBody } from '../send/sender-claim.ts';
 import { legStep, stagedStep, webhookStep, type StepFields } from '../send/steps.ts';
 import { isPublicOnly, scanPublicBody, type PrivateListPaths } from '../send/public-only.ts';
 import { realRepoRead, type RepoRead } from '../send/repo-visibility.ts';
@@ -73,7 +73,7 @@ import { markTaken } from '../send/taken.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
 import { quotaOutDetail, quotaOutOf } from '../send/quota-out.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
-import { frameFor, readerLine } from '../send/frame.ts';
+import { existingRecordIdsIn, frameFor, readerLine } from '../send/frame.ts';
 import {
   declaredInboundOf, heldSocketPath, inboundStaleReason, preciseSocketSkipReason, readHeldSocket,
   socketEligible, socketHeldReason, socketIneligibleReason, socketSkipReason,
@@ -3308,6 +3308,7 @@ async function stageSendRecord(
     from: payload.from,
     to: payload.to,
     thread: payload.thread,
+    rule: payload.rule,
     ts,
   });
   if (staged.receipt.existing) {
@@ -4919,11 +4920,9 @@ export async function walkBriefDelivery(input: {
   return { via: null, walked: true, exit: 1, failures };
 }
 
-/** The frame's opening line for a client send: the person's client, named as the person. The
- *  identity header a seat frame builds renders the record's address (`client:grok-bot@…`), which
- *  a receiving seat would answer as a seat; a client grant's message names its sender in the same
- *  one-line shape seat frames use, with the owner origin. */
-const CLIENT_FRAME_HEADER = `Message from ${CLIENT_SLICE_DISPLAY_NAME} (owner)`;
+/** The sender display name for a client send's socket frame: the person's client, named as the
+ *  person (`Client Grok Bot (owner relay):`). */
+const CLIENT_FRAME_HEADER = CLIENT_SLICE_DISPLAY_NAME;
 
 /** The legs a client send walks. The drop its grant wrote is already the durable copy, so a
  *  declared order's drop, native and headless-resume legs add nothing here: the walk is the
@@ -5875,14 +5874,13 @@ export function labelNameOf(team: TeamFile, seat: string): string | null {
 }
 
 /**
- * The display line an accepted socket frame opens with: the sender as a person reads it — the
- * nickname the registry (or the seat's own setting) holds, the name its written label carries
- * before the middle dot, then the seat name — and the address it sits at in the team this run
- * sends from. Display only: the signed record below it is the message, and the record's body
- * keeps its own `from … — admitted by: …` line. A registry that cannot answer reads as no
- * nickname, so a frame always names its sender.
+ * The sender's display name for an accepted socket frame: the nickname the registry (or the
+ * seat's own setting) holds, the name its written label carries before the middle dot, then the
+ * seat name. Display only: the signed record below it is the message, and the record's body keeps
+ * its own `from … — admitted by: …` line. A registry that cannot answer reads as no nickname, so
+ * a frame always names its sender.
  */
-function frameIdentityHeader(record: RecordPayload, naming: SenderNaming, senderTeam: string, teamName: string, labelName: string | null): string {
+function frameIdentityHeader(record: RecordPayload, naming: SenderNaming, senderTeam: string, _teamName: string, labelName: string | null): string {
   let name = '';
   try {
     name = senderNickname(
@@ -5897,7 +5895,7 @@ function frameIdentityHeader(record: RecordPayload, naming: SenderNaming, sender
   // A nickname wins; then the name the seat's written label carries; then the seat name, so the
   // line always names its sender.
   if (name === '') name = labelName ?? '';
-  return `Message from ${name === '' ? record.from : name} (${record.from}@${teamName})`;
+  return name === '' ? record.from : name;
 }
 
 /**
@@ -5959,14 +5957,16 @@ async function deliverSocketFrame(
   // and both write its own signed read receipt (ADR D3). It addresses the record, never the
   // sender, so an owner-origin frame needs no reply target and no sending team. A person-pane
   // seat has no reader line at all: a person answers in their own client.
-  const reply = personPane ? null : readerLine(msgId);
-  // The frame opens with the sender's display line, then the signed record's own body: the
-  // header is display, and the body it precedes still carries the attribution line a reader
-  // judges. One blank line separates them, so no body line can pass for the header.
-  // Nothing attests the caller yet, so the frame opens with the attribution mark first: the
-  // receiving seat never reads the displayed name as proof of who sent it, and the mark is always
-  // present so its absence never reads as verification.
-  const content = `${attributionBanner(from)}\n\n${header === '' ? body : `${header}\n\n${body}`}`;
+  const dropDir = join(to.dir, 'send-drops', to.session, to.seat);
+  const reply = personPane ? null : readerLine(msgId, existingRecordIdsIn(dropDir));
+  const normalizedDisplay = header === '' ? null : header === 'owner' ? 'the owner' : header;
+  const content = attributedBody(body, from, {
+    record: payload,
+    home: host.home,
+    root: to.root,
+    displayName: normalizedDisplay,
+    rule: payload.rule,
+  });
   // The record's exact text is signed here for the two stores that do not write the copy first:
   // `signRecord` has no clock and no nonce, so these are the same bytes the walk's own staging
   // writes. Under `none` they ride inside the frame — the frame is the only copy — and under

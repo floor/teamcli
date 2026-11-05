@@ -20,7 +20,7 @@ import { version } from '../src/version.ts';
 const ID = '7e845e08-8fe7-49f0-8ae2-c01c59496110';
 const BODY = 'Synthetic message body for the independent schema matrix.';
 /** The body as the reader serves it: nothing attests the fixture's claim, so it opens marked. */
-const SERVED = `[attributed sender: worker]\n\n${BODY}`;
+const SERVED = `from worker (a synthetic worker to its declared lead):\n\n${BODY}`;
 const SESSION = 'acme';
 const EPOCH = 'run_123456abcdef';
 // The earlier signer accepts the first two arguments and ignores options. Keeping the same

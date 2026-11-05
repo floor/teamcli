@@ -79,8 +79,8 @@ describe('team trace reads one message story out of the receiving team log', () 
     expect(lines.at(-1)).toBe('2 steps');
     const rows = lines.slice(2, -1).map((row) => row.trim().split(/ {2,}/));
     expect(rows).toHaveLength(2);
-    // The staged step carries no route, no outcome, no cost, no note, and no step above it.
-    expect(rows[0]).toEqual(['04:00:00.000', 'message.staged', '-', '-', '-', '-', '-']);
+    // The staged step carries the admission rule note, and no route, outcome, cost, or step above it.
+    expect(rows[0]).toEqual(['04:00:00.000', 'message.staged', '-', '-', '-', '-', 'admitted by: the owner']);
     // Both stamps are the fixture's pinned instant, so the second step follows the first in 0 ms.
     const leg = rows[1]!;
     expect(leg.slice(0, 4)).toEqual(['04:00:00.000', 'leg.tried', 'socket', 'delivered']);

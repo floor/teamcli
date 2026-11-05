@@ -519,7 +519,7 @@ describe('team mcp serve', () => {
     try {
       signed(at, 'lead', LEAD_ID, 'the body');
       const { replies } = await preloaded(at.root, at.home, [call('1', 'inbox_read', { id: LEAD_ID }), call('2', 'inbox_check')]);
-      expect(replies[0]!.result).toEqual({ content: [{ type: 'text', text: '[attributed sender: worker]\n\nthe body' }] });
+      expect(replies[0]!.result).toEqual({ content: [{ type: 'text', text: 'Codex seat worker (owner):\n\nthe body' }] });
       const receipt = readReceipt(at, 'lead', LEAD_ID);
       expect(receipt.payload).toMatchObject({
         kind: 'receipt',
@@ -629,7 +629,7 @@ describe('an inbox read serves only a record it verified', () => {
       signed(at, 'lead', LEAD_ID, 'the draft is ready');
       const { replies } = await preloaded(at.root, at.home, [call('1', 'inbox_read', { id: LEAD_ID })]);
       expect(replies[0]!.result.isError).toBeUndefined();
-      expect(replies[0]!.result.content[0].text).toBe('[attributed sender: worker]\n\nthe draft is ready');
+      expect(replies[0]!.result.content[0].text).toBe('Codex seat worker (owner):\n\nthe draft is ready');
       const receipt = readReceipt(at, 'lead', LEAD_ID);
       expect(receipt.payload).toMatchObject({ kind: 'receipt', status: 'read', id: LEAD_ID, to: 'lead' });
     } finally {

@@ -271,10 +271,10 @@ describe('the turn-start folder read', () => {
   const ID2 = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
   const ID3 = '01234567-89ab-cdef-0123-456789abcdef';
   const HEADER = 'from the owner — admitted by: the owner\n\n';
-  /** The same attribution line as the reader serves it: the sender line keeps its claim, marked. */
-  const MARKED_HEADER = 'from the owner (attributed) — admitted by: the owner\n\n';
-  /** A body served with no attribution line of its own opens with the claim marked. */
-  const MARK = '[attributed sender: the owner]\n\n';
+  /** The same attribution line as the reader serves it: folded into one compact header. */
+  const MARKED_HEADER = 'from the owner (owner):\n\n';
+  /** A body served with no attribution line of its own opens with the compact header. */
+  const MARK = 'from the owner (owner):\n\n';
 
   let project: string;
   let home: string;

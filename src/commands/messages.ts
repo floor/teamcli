@@ -1030,7 +1030,10 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
       status: 'shown',
       body: result.body,
       sender_attribution: senderAttribution,
-      renderedBody: attributedBody(result.body, result.from ?? candidate.seat),
+      renderedBody: attributedBody(result.body, result.from ?? candidate.seat, {
+        record: recordPayload, home: sources.home, root,
+        ...(recordPayload?.rule === undefined ? {} : { rule: recordPayload.rule }),
+      }),
     };
     rows.push(row);
     shownCount += 1;

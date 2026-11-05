@@ -86,7 +86,7 @@ describe('the sender vocabulary in the docs', () => {
     const wanted: Array<[page: string, words: string[]]> = [
       ['commands/messages.md', ['(attributed)', 'sender_attribution']],
       ['commands/drops.md', ['(attributed)', '(unattributed)', 'sender_attribution']],
-      ['commands/send.md', ['[attributed sender:']],
+      ['commands/send.md', ['attribution, never a verification']],
       ['commands/settings.md', ['[unattributed author]']],
       ['internal/messages.md', ['sender_attribution']],
       ['internal/mcp-inbox.md', ['sender_attribution']],

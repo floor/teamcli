@@ -79,9 +79,9 @@ carries the exact ISO string as `sent`. The `FROM` cell reads the sender as the 
 [`sender_name`](../team-file.md#sender_name) word asks, followed by `(attributed)` — every
 displayed sender is attributed, never verified: the shared checkout key every seat can read
 proves a record was not changed after signing, not who wrote it — or `(unattributed)` when no key
-could vouch for the file. A printed body is marked the same way [`team drops --read`](drops.md)
-marks one: its `from … — admitted by: …` line gains `(attributed)` after the claimed name, and a
-body with no such line opens with `[attributed sender: <sender>]`, the message's own words
+could vouch for the file. A printed body is rendered the same way [`team drops --read`](drops.md)
+renders one: its `from … — admitted by: …` line is folded into the compact header (`from <name> (<short rule>):`, `Client <Display> (owner relay):`, or `<Kind> seat <name> (<short rule>):` for a non-Claude seat), and a
+body with no such line folds its record sender and rule into the same compact header (`from <sender> (<short rule>):` or `from <sender>:`), the message's own words
 untouched. `--json` carries the record's own `from` with `sender_attribution` beside it
 (`attributed`, `launch-brief`, or `none`), its `body` stays the signed bytes — only the text
 reading marks it — and the signed record keeps the sender's registry id apart from it.

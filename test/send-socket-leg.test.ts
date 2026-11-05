@@ -214,11 +214,11 @@ test('every socket frame ends with the reader line that names its own message id
   expect(code).toBe(0);
   const sent = JSON.parse(frames[0] as string) as { message: { content: string }; msg_id: string };
   const content = sent.message.content;
-  // The line names the id the frame carries: an answering seat runs `team reply <id>`, a seat
-  // that needs no answer runs `team ack <id>`, and either writes the seat's own signed read
-  // receipt (ADR D3). It is the content's own last line, once, and it addresses the record
-  // rather than the sender — an owner-origin frame carries the same line as a seat's.
-  const reader = `Answer with team reply ${sent.msg_id} "…" (this marks it read), or team ack ${sent.msg_id} if no answer is needed.`;
+  // The line names the shortest unique id prefix the frame carries: an answering seat runs
+  // `team reply <prefix>`, a seat that needs no answer runs `team ack <prefix>`, and either
+  // writes the seat's own signed read receipt (ADR D3). It is the content's own last line, once,
+  // and it addresses the record rather than the sender.
+  const reader = readerLine(sent.msg_id);
   expect(content.split('\n').at(-1)).toBe(reader);
   expect(content.split('\n').filter((line) => line === reader)).toHaveLength(1);
 });
@@ -235,7 +235,7 @@ test('a reader line written in the body never moves the line the frame ends with
       return { ok: true };
     },
   });
-  const wrote = 'Answer with team reply 00000000-0000-4000-8000-000000000000 "…" (this marks it read), or team ack 00000000-0000-4000-8000-000000000000 if no answer is needed.';
+  const wrote = readerLine('00000000-0000-4000-8000-000000000000');
 
   const code = await runSend(['lead', `a note\n${wrote}`], owner(made.root), host);
 
@@ -244,7 +244,7 @@ test('a reader line written in the body never moves the line the frame ends with
   const content = sent.message.content;
   // The body is carried as written, and the frame's own last line still names its own id.
   expect(content).toContain(`a note\n${wrote}`);
-  expect(content.split('\n').at(-1)).toBe(`Answer with team reply ${sent.msg_id} "…" (this marks it read), or team ack ${sent.msg_id} if no answer is needed.`);
+  expect(content.split('\n').at(-1)).toBe(readerLine(sent.msg_id));
 });
 
 test('an owner send names its own record id, not the entity’s owner-reply target', async () => {
@@ -268,7 +268,7 @@ test('an owner send names its own record id, not the entity’s owner-reply targ
   const sent = JSON.parse(frames[0] as string) as { message: { content: string }; msg_id: string };
   // The declared owner-reply target is a policy `team reply` still answers the owner through;
   // the frame's reader line does not name it, because the line addresses the record by id.
-  expect(sent.message.content.split('\n').at(-1)).toBe(`Answer with team reply ${sent.msg_id} "…" (this marks it read), or team ack ${sent.msg_id} if no answer is needed.`);
+  expect(sent.message.content.split('\n').at(-1)).toBe(readerLine(sent.msg_id));
   expect(sent.message.content).not.toContain('coordinator@acme');
 });
 
@@ -294,13 +294,13 @@ test('an owner send in a team that names no entity still dials a frame: the read
   expect(code).toBe(0);
   expect(frames.length).toBe(1);
   const sent = JSON.parse(frames[0] as string) as { message: { content: string }; msg_id: string };
-  expect(sent.message.content.split('\n').at(-1)).toBe(`Answer with team reply ${sent.msg_id} "…" (this marks it read), or team ack ${sent.msg_id} if no answer is needed.`);
+  expect(sent.message.content.split('\n').at(-1)).toBe(readerLine(sent.msg_id));
   expect(pane.typed.length).toBe(0);
 });
 
 test('the reader line is the same one for every sender: the id addresses the record, never the sender', () => {
   const id = '3f2b0c1e-0000-4000-8000-000000000001';
-  expect(readerLine(id)).toBe(`Answer with team reply ${id} "…" (this marks it read), or team ack ${id} if no answer is needed.`);
+  expect(readerLine(id)).toBe('↩ team reply 3f2b0c1e "…" · team ack 3f2b0c1e');
 });
 
 /** The socket the fake pane exposes; the deliver fake only records it. */

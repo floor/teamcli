@@ -805,7 +805,15 @@ export function readMessage(
   // The body is the sender's own words under the attribution mark. Every sender is attributed —
   // the launch's general seat brief rests on the seat's current claim, every other record on the
   // shared checkout key — and the mark is always present so its absence never reads as proof.
-  return { ok: true, body: attributedBody(payload.body, payload.from) };
+  return {
+    ok: true,
+    body: attributedBody(payload.body, payload.from, {
+      record: payload,
+      home,
+      root: target.root,
+      rule: payload.rule,
+    }),
+  };
 }
 
 /**

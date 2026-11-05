@@ -53,9 +53,9 @@ import { bindPane, deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE } from './deliv
 import { quotaOutDetail, quotaOutOf } from './quota-out.ts';
 import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
 import { openReplyListener, readReply } from './reply.ts';
-import { attributionBanner } from './sender-claim.ts';
+import { attributedBody } from './sender-claim.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from './uds.ts';
-import { frameFor, readerLine } from './frame.ts';
+import { existingRecordIdsIn, frameFor, readerLine } from './frame.ts';
 import {
   declaredInboundOf, heldSocketPath, inboundStaleReason, readHeldSocket, socketEligible, socketHeldReason,
   socketSkipReason,
@@ -1108,10 +1108,10 @@ async function executeQueuedSend(
         detail: `${seatName} runs ${configured.cli}: this build confirms that a native CLI submitted and does not carry its reply; nothing was sent`,
       };
     }
-    // The socket frame opens with the same display header the typed wake does, then the signed
-    // record's full body; a person-pane seat gets neither a reply line nor a read hint.
+    // The socket frame opens with the compact sender header, then the signed record's body; a
+    // person-pane seat gets neither a reply line nor a read hint.
     const display = displayOf(request, team, root, host, body);
-    return executeSocketSend(dir, root, who, from, team, seatName, body, msgId, request.timeout_s ?? 120, waitMs, pollMs, host, alive, sentAs, display.header, configured.human === true);
+    return executeSocketSend(dir, root, who, from, team, seatName, body, msgId, request.timeout_s ?? 120, waitMs, pollMs, host, alive, sentAs, display.name, configured.human === true);
   }
 
   const found = await findSeatAgent(host, team.session, seatName);
@@ -1562,8 +1562,8 @@ async function executeSocketSend(
   alive: (pid: number) => boolean,
   /** The address as written, when it was a form: every history line carries it beside the seat. */
   sentAs: Pick<HistoryEntry, 'spec' | 'resolved' | 'from_team'>,
-  /** The rendered `message-display` header the frame opens with; empty, the body alone. */
-  header = '',
+  /** The sender's display name for the compact header; empty uses the record's own claim. */
+  senderName = '',
   /** True for a person-pane seat: no reply line and no read hint. */
   personPane = false,
 ): Promise<DaemonSendResponse> {
@@ -1616,10 +1616,13 @@ async function executeSocketSend(
   // No caller attestation exists yet: the frame names the claim the daemon was asked to deliver
   // for and marks it attributed, so the receiving seat never reads the displayed name as proof.
   // The mark is its own line; the display header and the body follow in their usual order.
-  const content = header === ''
-    ? `${attributionBanner(from)}\n\n${body}`
-    : `${attributionBanner(from)}\n\n${header}\n\n${body}`;
-  const frame = frameFor(content, msgId, personPane ? null : readerLine(msgId));
+  const dropDir = join(dir, 'send-drops', team.session, seatName);
+  const content = attributedBody(body, from, {
+    home: host.home,
+    root,
+    displayName: senderName === '' ? null : senderName === 'owner' ? 'the owner' : senderName,
+  });
+  const frame = frameFor(content, msgId, personPane ? null : readerLine(msgId, existingRecordIdsIn(dropDir)));
   if (frame.length > FRAME_LIMIT) {
     return {
       v: 1,

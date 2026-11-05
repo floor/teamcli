@@ -500,7 +500,7 @@ describe('team drops in a folder that is not a git repository', () => {
     plainRoot();
     plantRecord(home, root, 'acme', 'lead', D_RECORD, 'hello from the root');
     const result = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
-    expect(result).toEqual({ code: 0, out: '[attributed sender: lead]\n\nhello from the root\n', err: '' });
+    expect(result).toEqual({ code: 0, out: 'from lead (team lead):\n\nhello from the root\n', err: '' });
     const at = receiptPath(dropDir, D_RECORD);
     const receipt = signedReceiptOf(JSON.parse(readFileSync(at, 'utf8')));
     const key = messageKeyState(home);
@@ -526,7 +526,7 @@ describe('team drops --read', () => {
   test('the launch read serves the seat with no placed caller, receipting each record before its body', async () => {
     plantRecord(home, root, 'acme', 'lead', D_RECORD, 'hello');
     const first = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
-    expect(first).toEqual({ code: 0, out: '[attributed sender: lead]\n\nhello\n', err: '' });
+    expect(first).toEqual({ code: 0, out: 'from lead (team lead):\n\nhello\n', err: '' });
     expectReceipt(D_RECORD);
     // The receipt is what says it was handed over: the next turn finds nothing waiting.
     const second = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
@@ -638,7 +638,7 @@ describe('team drops --read', () => {
     const result = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
 
     expect(result.code).toBe(0);
-    expect(result.out).toBe('[attributed sender: lead]\n\na signed body\n');
+    expect(result.out).toBe('from lead (team lead):\n\na signed body\n');
     expect(result.err).toBe('team drops: 1 drop(s) are not signed records and are not served\n');
     expect(result.out).not.toContain('an old raw drop');
     expect(result.err).not.toContain('an old raw drop');
@@ -716,7 +716,7 @@ describe('team drops --read', () => {
     const result = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
     expect(result).toEqual({
       code: 0,
-      out: '[attributed sender: runtime]\n\nwriter-01: a message from architect is queued, not woken - unread for 4 min\n',
+      out: "from runtime (the team's unread-message report):\n\nwriter-01: a message from architect is queued, not woken - unread for 4 min\n",
       err: '',
     });
     // Its receipt is the signed read receipt every record gets, at the name its id derives.
@@ -792,7 +792,7 @@ describe('team drops --read', () => {
     const result = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
 
     expect(result.code).toBe(0);
-    expect(result.out).toBe('[attributed sender: lead]\n\na signed body\n');
+    expect(result.out).toBe('from lead (team lead):\n\na signed body\n');
     expect(result.err).toBe('');
     // The record that verified is receipted; the one that did not never is.
     expectReceipt(D_RECORD_READ);

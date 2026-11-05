@@ -412,13 +412,14 @@ bounded at 20 seconds (`VERIFY_TOTAL_MS`, `src/send/deliver.ts`): the three wait
 window all fall inside it. The tag's measurements — about six seconds from send to a working
 seat, one millisecond to write the record — are measured, not promised.
 
-A socket frame carries the record's id in `msg_id` and in the reader line it ends with —
-`Answer with team reply <id> "…" (this marks it read), or team ack <id> if no answer is needed.`
+A socket frame carries the record's id in `msg_id` and in the one-line reader footer it ends with —
+`↩ team reply <prefix> "…" · team ack <prefix>`
+where `<prefix>` is the shortest unique prefix of `<id>` in that mailbox (at least 8 characters).
 The id is not a secret, the line is the same for every sender, the owner included, and it
 carries no address, so the frame resolves no entity or owner-reply target (ADR
-`zeus-message-path`, D3). The line names both acts that settle the record: `team reply <id>`
+`zeus-message-path`, D3). The line names both acts that settle the record: `team reply <prefix>`
 answers and writes the seat's signed read receipt beside its `replied` receipt, and
-`team ack <id>` writes the read receipt with no answer. A seat's own later `team send` to a
+`team ack <prefix>` writes the read receipt with no answer. A seat's own later `team send` to a
 sender settles the newest delivered-unread message that sender sent it before that send
 (`read_by: answered-by-send`); an older message from the same sender, a message from anyone
 else, and one delivered after the send stay unread. A socket delivery still without a receipt

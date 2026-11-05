@@ -144,6 +144,8 @@ function deltaText(delta: number | null): string {
 /** One row: the step's own fields, never a word the event does not carry. */
 function rowOf(step: TraceStep): string[] {
   const payload = step.payload;
+  const note =
+    payload.reason ?? (payload.rule === undefined ? '-' : `admitted by: ${payload.rule}`);
   return [
     timeOf(payload.ts),
     payload.kind,
@@ -151,7 +153,7 @@ function rowOf(step: TraceStep): string[] {
     payload.outcome ?? '-',
     payload.ms === undefined ? '-' : String(payload.ms),
     deltaText(step.delta),
-    payload.reason ?? '-',
+    note,
   ];
 }
 
@@ -180,6 +182,7 @@ function document(
         ...(payload.to === undefined ? {} : { to: payload.to }),
         ...(payload.seat === undefined ? {} : { seat: payload.seat }),
         ...(payload.thread === undefined ? {} : { thread: payload.thread }),
+        ...(payload.rule === undefined ? {} : { rule: payload.rule }),
         ...(payload.via === undefined ? {} : { via: payload.via }),
         ...(payload.outcome === undefined ? {} : { outcome: payload.outcome }),
         ...(payload.ms === undefined ? {} : { ms: payload.ms }),

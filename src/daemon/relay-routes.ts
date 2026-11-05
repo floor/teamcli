@@ -43,8 +43,8 @@ import { teamIdOf } from '../registry/teams.ts';
 import { deliveryChainOf, DeliveryChainUnreadable, type DeliveryChain } from '../send/delivery.ts';
 import type { FallbackNote } from '../send/fallback-events.ts';
 import { beginFallbackWalk, type FallbackWalk, type WalkAttempt } from '../send/fallback-walk.ts';
-import { frameFor, readerLine } from '../send/frame.ts';
-import { attributionBanner } from '../send/sender-claim.ts';
+import { existingRecordIdsIn, frameFor, readerLine } from '../send/frame.ts';
+import { attributedBody } from '../send/sender-claim.ts';
 import {
   declaredInboundOf,
   heldSocketPath,
@@ -885,15 +885,20 @@ function defaultVerifyReadReceiptFor(
 
 function resolveSocketFrameFor(
   input: DaemonRelaySendInput,
+  plan: DaemonRelayRoutePlan,
+  record: SignedRecord['payload'] | undefined,
   id: string,
   body: string | undefined,
   from: string,
 ): string | undefined {
   if (input.frame !== undefined) return input.frame;
   if (body === undefined) return undefined;
-  // Nothing attests the caller yet: a frame this daemon composes opens with the attribution mark,
-  // exactly as the CLI's own frames do.
-  return frameFor(`${attributionBanner(from)}\n\n${body}`, id, readerLine(id));
+  const content = attributedBody(body, from, {
+    ...(record === undefined ? {} : { record }),
+    home: plan.home,
+    root: plan.route.root,
+  });
+  return frameFor(content, id, readerLine(id, existingRecordIdsIn(plan.dropDir)));
 }
 
 /**
@@ -1137,7 +1142,7 @@ export async function handleDaemonRelaySend(
     },
   );
 
-  const frame = resolveSocketFrameFor(input, id, body, from);
+  const frame = resolveSocketFrameFor(input, plan, parsedRecord?.payload, id, body, from);
   const message: RuntimeRelayMessage = {
     id,
     record: recordText,
