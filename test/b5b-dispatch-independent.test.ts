@@ -178,13 +178,14 @@ afterEach(() => {
 });
 
 describe('the class a send reports for its target', () => {
-  test('a seat whose launch carries the event adapter is woken through it', async () => {
+  test('a seat whose launch carries the event adapter is not woken when only the drop leg runs', async () => {
     made = sendWorld();
     const host = sendHost(made);
     const io = testIo(made.root, { kind: 'owner' });
     const code = await runSend(['push-seat', 'hello'], io, host);
     expect(code).toBe(0);
-    expect(io.out).toContain('push-seat: sent (unconfirmed) (drop, 0 ms); woken through its event adapter');
+    expect(io.out).toContain('push-seat: queued, not woken (drop, 0 ms)');
+    expect(io.out).not.toContain('woken through');
     expect(host.frames).toEqual([]);
   });
 

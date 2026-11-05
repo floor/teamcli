@@ -20,7 +20,7 @@ import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneForegroundCwd, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
-import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, wakeableWhileIdle, WEBHOOK_QUEUED_WORDS, type DeliveryClass, type WakeOutcome } from '../launch/delivery-class.ts';
+import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, WEBHOOK_QUEUED_WORDS, type DeliveryClass, type WakeOutcome } from '../launch/delivery-class.ts';
 import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
 import { acquireSeatLock, holderText, seatLockHolder, seatLockPath, type LockHolder } from '../launch/seat-lock.ts';
 import { readState, type SeatState } from '../state.ts';
@@ -170,16 +170,13 @@ skipped with its reason; \`team check\` notes the word. A receipt the inbox's \`
 call leaves on a record the drop leg stored is still the read the watch promotes; the drop
 leg itself waits for no receipt and ends the walk.
 
-Every sent, sent (unconfirmed), sent (channel) and queued (receiver busy) line ends
-with the receiving seat's delivery class in plain words: \`woken through its event
-adapter\` for a seat an event adapter wakes, \`woken through its runtime queue\` for a
-runtime that holds the message between turns, \`queued; <seat> reads it at its next turn,
-and nothing here gives it one (pull-only)\` for a seat that reads its inbox when it takes a
-turn, and \`queued; nothing wakes <seat> while it is idle; a person or a restart must give
-it a turn\` for a launch with no route at all. A profile that declares a typed wake says so
-in the same sentence, and a wake this run tried says what it saw: a wake that ran and did not
-deliver names its reason, and one the run never reached says it did not run. A delivered line
-needs no class: the delivery itself is the answer.
+The summary line is the leg's recorded outcome, not the seat's delivery class. A class
+that names an event adapter is not a leg, so it is never printed as \`woken\`. A channel
+notification marker is not a receipt: that ending says \`notified, not yet read\`. A drop
+that no adapter leg took says \`queued, not woken\`. A profile that declares a typed wake
+says so in the same sentence when that wake ran, and a wake this run tried says what it
+saw: a wake that ran and did not deliver names its reason, and one the run never reached
+says it did not run. A delivered line needs no class: the delivery itself is the answer.
 
 The outcome is one of eight, and none of them is silent:
   delivered    the socket path (exit 0): the frame was taken, printed \`delivered (socket)\`
@@ -620,17 +617,13 @@ function deliveryWordsOf(input: {
  *  post has just made untrue (a claim left in `sent` makes the bus skip the record, so nothing
  *  will fire later), and a failed one says so beside them — the claim is released, and the record
  *  stays where the bus and the seat's pull read it. */
-/** Whether the drop leg's ending left the seat with nothing that wakes it: the class it read is
- *  `pull-on-turn` or `none` (or the seat is a person's, which reads `none`), so the record sits
- *  stored and the seat reads it only at a turn nothing gives it. That ending says `queued, not
- *  woken` — never `sent (unconfirmed)`, which reads like success while the drop waits — and the
- *  word is written the same way on the console line, the JSON status and the history line. Every
- *  other leg wakes the seat itself: a typed trigger starts the turn, native and headless-resume
- *  are the sender's own runtime action, and the channel and socket legs ended the walk before
- *  the drop. A class the run never read is no evidence either way, so the ending keeps the
- *  ordinary `sent (unconfirmed)` there. */
+/** Whether the drop leg's ending woke nobody. The drop stored the record. The class is not
+ *  a leg: a launch that names an event adapter, with no adapter leg recorded, is still
+ *  `queued, not woken` — never `sent (unconfirmed)`, and never `woken`. The word is written
+ *  the same way on the console line, the JSON status and the history line. A class the run
+ *  never read is no evidence either way, so that ending keeps `sent (unconfirmed)`. */
 function dropNotWoken(report: Report): boolean {
-  return report.deliveryClass !== undefined && !wakeableWhileIdle(report.deliveryClass);
+  return report.deliveryClass !== undefined;
 }
 
 /** The send's id on the end of its closing line, so the one thing a sender needs to `team trace`
@@ -655,7 +648,9 @@ function withDelivery(summary: string, report: Report): string {
   const post = report.webhookPost;
   const posted = post?.kind === 'posted' ? post : null;
   const settled = posted !== null || post?.kind === 'unknown';
-  if (report.deliveryWords !== undefined && !(settled && report.deliveryWords === WEBHOOK_QUEUED_WORDS)) {
+  // The class sentence `woken through its event adapter` is not a leg outcome. A leg that
+  // did not record a wake does not get that claim beside its own word.
+  if (report.deliveryWords !== undefined && report.deliveryWords !== 'woken through its event adapter' && !(settled && report.deliveryWords === WEBHOOK_QUEUED_WORDS)) {
     words.push(report.deliveryWords);
   }
   if (posted !== null) words.push(`webhook delivered (${String(posted.ms)} ms)`);
@@ -5097,7 +5092,7 @@ export async function walkReplyDelivery(input: {
         continue;
       }
       const ms = input.host.now().getTime() - startedAt;
-      return ended({ via: 'channel', walked: true, unconfirmed: false, summary: `${seatName}: sent (channel) (${String(ms)} ms)` });
+      return ended({ via: 'channel', walked: true, unconfirmed: false, summary: `${seatName}: notified, not yet read (channel, ${String(ms)} ms)` });
     }
     if (leg === 'webhook') {
       const hook = declared.webhook;
@@ -6431,11 +6426,11 @@ function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 
   return 0; // exit: send.sent-unconfirmed
 }
 
-/** The seat's own server pushed the record into its CLI: the notification was written, and the
- *  channel's own word says so. The push is not a read — the signed receipt that follows is — so
- *  a channel ending is never `delivered (read)`. Exit 0, always. */
+/** The seat's own server wrote the notification. That marker is not a receipt and not a
+ *  turn, so the summary says `notified, not yet read` and never `woken`. The signed receipt
+ *  that follows is what promotes the record. Exit 0, always. */
 function sentChannel(io: Io, seat: string, report: Report, ms: number): number {
-  const summary = withId(withDelivery(`${seat}: sent (channel) (${String(ms)} ms)`, report), report);
+  const summary = withId(withDelivery(`${seat}: notified, not yet read (channel, ${String(ms)} ms)`, report), report);
   if (report.json) {
     writeAction(io, report, { status: 'sent (channel)', summary, channel: 'channel' });
   } else {

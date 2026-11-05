@@ -2,7 +2,8 @@ import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 // The channel leg as the sender and the watch see it: a Claude Code seat whose launch carries the
 // development channel, whose own inbox server is listening with `channel` declared, takes the
 // written record as a push. The server's `<id>.channel-push.json` marker is what ends the walk
-// `sent (channel)`; nothing is typed and no pane is read. The push is not a read: the marker stays
+// `notified, not yet read`; nothing is typed and no pane is read. The marker is not a receipt
+// and the summary never says woken. The push is not a read: the marker stays
 // pending until a signed receipt follows, and a promotion settles it `delivered (read)` without a
 // keystroke. A push whose confirmation window ends with no receipt is redelivered exactly once —
 // the socket first, then the typed trigger — with `redelivered: channel unconfirmed` written
@@ -281,7 +282,8 @@ describe('the channel leg', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(withoutSendId(io.out)).toBe(`team acme, session "acme"\nlead: sent (channel) (0 ms); woken through its event adapter\n`);
+    expect(withoutSendId(io.out)).toBe(`team acme, session "acme"\nlead: notified, not yet read (channel, 0 ms)\n`);
+    expect(io.out).not.toContain('woken');
     // Nothing was typed and no pane was read: the push is the delivery.
     expect(one.typed).toEqual([]);
     expect(one.enters).toEqual([]);
@@ -362,7 +364,8 @@ describe('the channel leg', () => {
     const code = await runSend(['lead', TRIGGER], io, host);
 
     expect(code).toBe(0);
-    expect(withoutSendId(io.out)).toBe(`team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); woken through its event adapter\n`);
+    expect(withoutSendId(io.out)).toBe(`team acme, session "acme"\nlead: queued, not woken (drop, 0 ms)\n`);
+    expect(io.out).not.toContain('woken through');
     expect(io.out).not.toContain('sent (channel)');
     expect(existsSync(channelPushPath(dir, SEND_ID))).toBe(false);
     expect(one.typed).toEqual([]);
@@ -380,7 +383,7 @@ describe('the channel leg', () => {
       body: BODY,
       id: SEND_ID,
       thread: SEND_ID,
-      outcome: 'sent (unconfirmed)',
+      outcome: 'queued, not woken',
       ms: 0,
       via: 'drop',
       failed: [`typed: ${NO_PANE_MESSAGING}`, 'channel: no push receipt within 0 ms'],
