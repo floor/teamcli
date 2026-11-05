@@ -409,6 +409,7 @@ export function listUnread(
   context: StatusContext,
   home: string,
   records?: RecordReader,
+  listed?: (names: readonly string[]) => void,
 ): InboxMessage[] {
   let names: string[];
   try {
@@ -416,6 +417,10 @@ export function listUnread(
   } catch {
     return [];
   }
+  // The listing as read, before any message rule narrows it: a dot-named marker beside the mail
+  // is not a message, and a caller that shares one pass's reading takes its presence from here
+  // rather than opening the folder again. A folder that could not be listed is never reported.
+  listed?.(names);
   const key = messageKeyState(home);
   const readRecordAt: RecordReader | null = key.kind !== 'key'
     ? null
