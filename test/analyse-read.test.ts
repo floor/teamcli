@@ -10,6 +10,8 @@ import { signAnalyserSetting, type SignedAnalyserEntry } from '../src/analyse/ga
 import { readProjectFacts, resolveContainedFile } from '../src/analyse/read.ts';
 import { runAnalyse, type AnalyseJson } from '../src/commands/analyse.ts';
 import type { Io } from '../src/io.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { updateState } from '../src/state.ts';
 import type { YamlValue } from '../src/yaml.ts';
 
 let base = '';
@@ -66,6 +68,17 @@ function signedEntityYaml(
       ...extraFields,
       analyser: signed as unknown as YamlValue,
     },
+  });
+}
+
+/** Puts the seat's placement on record — the team registry names the team, and that session's
+ *  state names the seat and the pane it runs on. A caller a test hands in is judged against
+ *  these records, never against the pane it carries. */
+function recordSeat(home: string, root: string, session: string, seat: string, pane: string): void {
+  mkdirSync(root, { recursive: true });
+  upsertTeam(home, teamIdOf(root), { project: session, session, root });
+  updateState(join(root, '.agents'), (state) => {
+    state.sessions[session] = { seats: { [seat]: { stage: 'ready', pane } }, worktrees: {} };
   });
 }
 
@@ -335,6 +348,7 @@ describe('team analyse slice 1: analyser gate and static report', () => {
     const home = join(base, 'home-public-only');
     const neverReadPath = join(base, 'private-never-stat');
     mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    recordSeat(home, join(base, 'public-team-root'), 'team-x', 'seat-a', 'pane-lead');
 
     // 1. Signed `scope: public` analyser with no public visibility fact is refused before statting neverReadPath
     writeFileSync(
@@ -389,6 +403,7 @@ describe('team analyse slice 1: analyser gate and static report', () => {
     const home = join(base, 'home-valid');
     const repo = join(base, 'sample-repo');
     mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    recordSeat(home, join(base, 'valid-team-root'), 'team-x', 'seat-a', 'pane-lead');
     createSampleRepo(repo, '2026-11-05T18:00:00Z');
 
     writeFileSync(
@@ -505,8 +520,66 @@ describe('team analyse slice 1: analyser gate and static report', () => {
     }
   });
 
-  test('refuses git ls-files entries and paths that resolve outside rootAbs via parent symlink', () => {
-    const repo = join(base, 'escape-repo');
+  test('refuses a root at or under .agents in any case spelling, and through a parent symlink', () => {
+    const repo = join(base, 'case-root-repo');
+    mkdirSync(join(repo, '.Agents', 'screens'), { recursive: true });
+    writeFileSync(join(repo, '.Agents', 'screens', 'capture.txt'), 'analyse: PRIVATE_CASE_ROOT_SENTINEL\n');
+
+    // A case-insensitive volume has one runtime directory; the other spelling names it too.
+    const spelled = readProjectFacts(join(repo, '.AGENTS'));
+    expect(spelled.ok).toBe(false);
+    if (!spelled.ok) expect(spelled.why).toContain('runtime state under .agents is never analysed');
+    expect(JSON.stringify(spelled)).not.toContain('PRIVATE_CASE_ROOT_SENTINEL');
+
+    // The path as written names no runtime segment; its real path does.
+    const link = join(base, 'case-root-link');
+    symlinkSync(join(repo, '.Agents'), link);
+    const viaLink = readProjectFacts(join(link, 'screens'));
+    expect(viaLink.ok).toBe(false);
+    if (!viaLink.ok) expect(viaLink.why).toContain('runtime state under .agents is never analysed');
+    expect(JSON.stringify(viaLink)).not.toContain('PRIVATE_CASE_ROOT_SENTINEL');
+  });
+
+  test('never walks, counts or scans runtime state nested under any case spelling of .agents', () => {
+    const repo = join(base, 'case-nested-repo');
+    mkdirSync(join(repo, 'src', '.AGENTS', 'drops'), { recursive: true });
+    writeFileSync(join(repo, 'src', '.AGENTS', 'drops', 'message.txt'), 'analyse: PRIVATE_CASE_NESTED_SENTINEL\n');
+
+    const res = readProjectFacts(repo);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.report.size.files).toBe(0);
+    expect(JSON.stringify(res)).not.toContain('PRIVATE_CASE_NESTED_SENTINEL');
+  });
+
+  test('filters git ls-files names under any case spelling of .agents', () => {
+    const repo = join(base, 'case-git-repo');
+    mkdirSync(join(repo, '.Agents'), { recursive: true });
+    writeFileSync(join(repo, 'README.md'), '# Safe inside file\n');
+    writeFileSync(join(repo, '.Agents', 'note.txt'), 'analyse: PRIVATE_CASE_GIT_SENTINEL\n');
+
+    const gitEnv = {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'Test Author',
+      GIT_AUTHOR_EMAIL: 'author@example.com',
+      GIT_COMMITTER_NAME: 'Test Author',
+      GIT_COMMITTER_EMAIL: 'author@example.com',
+      GIT_AUTHOR_DATE: '2026-11-05T18:00:00Z',
+      GIT_COMMITTER_DATE: '2026-11-05T18:00:00Z',
+    };
+    execFileSync('git', ['-C', repo, 'init', '-q'], { env: gitEnv });
+    execFileSync('git', ['-C', repo, 'add', '.'], { env: gitEnv });
+    execFileSync('git', ['-C', repo, 'commit', '-q', '-m', 'Initial commit'], { env: gitEnv });
+
+    const res = readProjectFacts(repo);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.report.size.source).toBe('git ls-files');
+      expect(res.report.size.files).toBe(1);
+    }
+    expect(JSON.stringify(res)).not.toContain('PRIVATE_CASE_GIT_SENTINEL');
+  });
+
+  test('refuses git ls-files entries and paths that resolve outside rootAbs via parent symlink', () => {    const repo = join(base, 'escape-repo');
     const outsideDir = join(base, 'outside-secret');
     mkdirSync(join(repo, 'sub'), { recursive: true });
     mkdirSync(outsideDir, { recursive: true });

@@ -16,7 +16,7 @@ import { entitiesPath } from '../entities.ts';
 import type { Io } from '../io.ts';
 import { readAgents } from '../registry/agents.ts';
 import { projectsFile } from '../registry/projects.ts';
-import { findTeams, readTeams, teamIdOf } from '../registry/teams.ts';
+import { findTeams, teamIdOf } from '../registry/teams.ts';
 import { seatAgent } from '../send/resolve.ts';
 import { machineSettingsPath } from '../settings/declared.ts';
 import { keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
@@ -402,12 +402,7 @@ function extractLevelAnalyser(
   };
 }
 
-function callerMatchesPrincipal(
-  caller: Caller,
-  principal: string,
-  home: string,
-  allowUnrecordedTestCaller: boolean,
-): boolean {
+function callerMatchesPrincipal(caller: Caller, principal: string, home: string): boolean {
   if (isOwner(caller)) return true;
   if (caller.kind !== 'seat') return false;
   if (principal === 'owner') return false;
@@ -418,56 +413,39 @@ function callerMatchesPrincipal(
   if (seatName === '' || teamOrSession === '' || teamOrSession.includes('@')) return false;
 
   let recordedPane: string | undefined;
-  let hasStoreRecords = false;
   const teams = findTeams(home, teamOrSession);
-  if (teams.length > 0) hasStoreRecords = true;
-  for (const team of teams) {
-    const statePane =
-      standingOf(join(team.root, '.agents'), team.session, caller).recordedPane ??
-      standingOf(join(team.root, '.agents'), teamOrSession, caller).recordedPane;
-    if (statePane !== undefined) {
-      recordedPane = statePane;
-      break;
-    }
-    const agent = seatAgent(
-      home,
-      [team.id ?? teamIdOf(team.root), teamIdOf(team.root), team.project, team.session],
-      seatName,
-    );
-    if (agent !== null) {
-      if (agent.lifecycle === 'running' && agent.reach.pane !== null && agent.reach.pane !== '') {
+  // The principal's `@team` is the session the caller must stand in, and the state that may
+  // vouch its pane is that session's state in the root of the one team the key names. Two
+  // records named for one key (a project name two teams share) leave the root ambiguous, and a
+  // team whose own session carries another name is another session's record: in either case no
+  // state speaks for the named session, so a pane recorded in another session can never satisfy
+  // it.
+  const [team] = teams;
+  if (teams.length === 1 && team !== undefined && team.session === teamOrSession) {
+    recordedPane = standingOf(join(team.root, '.agents'), teamOrSession, caller).recordedPane;
+    if (recordedPane === undefined) {
+      const agent = seatAgent(
+        home,
+        [team.id ?? teamIdOf(team.root), teamIdOf(team.root), team.project, team.session],
+        seatName,
+      );
+      if (agent !== null && agent.lifecycle === 'running' && agent.reach.pane !== null && agent.reach.pane !== '') {
         recordedPane = agent.reach.pane;
       }
-      break;
     }
   }
   if (recordedPane === undefined) {
-    const agents = readAgents(home);
-    if (agents.length > 0) hasStoreRecords = true;
-    for (const agent of agents) {
+    for (const agent of readAgents(home)) {
       if (agent.lifecycle !== 'running') continue;
-      if (
-        (agent.reach.session === teamOrSession || agent.reach.team === teamOrSession) &&
-        agent.reach.seat === seatName
-      ) {
+      // Only a record of this seat in the named session lends a pane; a record whose team key
+      // matches while its session is another one is another session's seat placement.
+      if (agent.reach.session === teamOrSession && agent.reach.seat === seatName) {
         if (agent.reach.pane !== null && agent.reach.pane !== '') {
           recordedPane = agent.reach.pane;
         }
         break;
       }
     }
-  }
-  if (!hasStoreRecords && Object.keys(readTeams(home)).length > 0) {
-    hasStoreRecords = true;
-  }
-  if (
-    recordedPane === undefined &&
-    !hasStoreRecords &&
-    allowUnrecordedTestCaller &&
-    typeof caller.pane === 'string' &&
-    caller.pane.trim() !== ''
-  ) {
-    recordedPane = caller.pane;
   }
   return callerStanding(caller, seatName, { session: teamOrSession, recordedPane });
 }
@@ -608,7 +586,7 @@ export function mayAnalyseProject(
     caller = callerOf(io, sessionHint);
   }
 
-  if (!callerMatchesPrincipal(caller, analyser.principal, home, hasInjectedCaller)) {
+  if (!callerMatchesPrincipal(caller, analyser.principal, home)) {
     const who = caller.kind === 'seat' ? `seat "${caller.name}"` : caller.kind;
     return {
       ok: false,

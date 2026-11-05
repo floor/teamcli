@@ -32,6 +32,7 @@ import { recordText } from '../src/config/team-record.ts';
 import type { Io } from '../src/io.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { updateState } from '../src/state.ts';
 import type { YamlValue } from '../src/yaml.ts';
 
 let base = '';
@@ -97,6 +98,15 @@ describe('team analyse slice 1 independent security verification', () => {
     const neverRead = join(base, 'never-touched-path');
     const repo = join(base, 'allowed-repo');
     mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    // The analyst's placement is on record: the team registry names the team, and the state
+    // names the seat and the pane it runs on. The callers below are judged against these
+    // records, never against the pane they carry.
+    const teamRoot = join(base, 'team-root-baseline');
+    mkdirSync(join(teamRoot, '.agents'), { recursive: true });
+    upsertTeam(home, teamIdOf(teamRoot), { project: 'team-a', session: 'team-a', root: teamRoot });
+    updateState(join(teamRoot, '.agents'), (state) => {
+      state.sessions['team-a'] = { seats: { analyst: { stage: 'ready', pane: 'pane-analyst' } }, worktrees: {} };
+    });
     mkdirSync(join(repo, 'src'), { recursive: true });
     writeFileSync(
       join(repo, 'package.json'),

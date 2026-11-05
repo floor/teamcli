@@ -212,8 +212,21 @@ const SKIP_DIRS = new Set([
   '.cache',
 ]);
 
+/** The runtime state's directory name in any spelling. The volume a checkout sits on may be
+ *  case-insensitive, where `.Agents` and `.AGENTS` are the same directory as `.agents`; an exact
+ *  comparison would walk, count and scan the state through the other spelling. */
+function isAgentsSegment(segment: string): boolean {
+  return segment.toLowerCase() === '.agents';
+}
+
 function isUnderAgentsDir(relPath: string): boolean {
-  return relPath.split(/[\\/]+/).includes('.agents');
+  return relPath.split(/[\\/]+/).some((segment) => segment !== '' && isAgentsSegment(segment));
+}
+
+/** Whether a directory entry is one the walk never enters: a listed build or output directory,
+ *  or the runtime state under any case spelling. */
+function isSkippedDirName(name: string): boolean {
+  return SKIP_DIRS.has(name) || isAgentsSegment(name);
 }
 
 const KNOWN_SERIAL_FILES = new Set([
@@ -359,7 +372,9 @@ export function resolveContainedFile(
   let leafSize = 0;
   for (let i = 0; i < segments.length; i += 1) {
     const seg = segments[i];
-    if (!seg || seg === '.' || seg === '..' || seg === '.git' || seg === '.agents') return null;
+    if (!seg || seg === '.' || seg === '..') return null;
+    const lowered = seg.toLowerCase();
+    if (lowered === '.git' || lowered === '.agents') return null;
     current = join(current, seg);
     let st;
     try {
@@ -399,6 +414,17 @@ export function readProjectFacts(
   const now = options.now ?? new Date();
 
   const rootAbs = resolve(targetPath);
+  // The runtime state is never analysed, wherever the root enters it. A root at or under a
+  // `.agents` directory is refused before anything is listed or read: the walk's skip list only
+  // prunes entries below the root, and the root itself carries no such entry. Both the path as
+  // written and its real path are checked, so a parent symlink cannot slip a root into the state.
+  if (isUnderAgentsDir(rootAbs)) {
+    return {
+      ok: false,
+      code: 'analyse.unreadable',
+      why: `${targetPath}: runtime state under .agents is never analysed`,
+    };
+  }
   let rootStat;
   try {
     rootStat = lstatSync(rootAbs);
@@ -431,6 +457,13 @@ export function readProjectFacts(
       ok: false,
       code: 'analyse.unreadable',
       why: `${targetPath}: ${(error as Error).message}`,
+    };
+  }
+  if (isUnderAgentsDir(rootReal)) {
+    return {
+      ok: false,
+      code: 'analyse.unreadable',
+      why: `${targetPath}: runtime state under .agents is never analysed`,
     };
   }
 
@@ -527,7 +560,7 @@ export function readProjectFacts(
         if (entry.isSymbolicLink()) continue;
         const rel = dirRel ? `${dirRel}/${entry.name}` : entry.name;
         if (entry.isDirectory()) {
-          if (SKIP_DIRS.has(entry.name)) continue;
+          if (isSkippedDirName(entry.name)) continue;
           walk(rel);
         } else if (entry.isFile()) {
           walked.push(rel);
