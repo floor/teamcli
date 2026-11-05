@@ -76,10 +76,10 @@ test('project membership never bypasses the existing sender session and pane pro
   const fx = fixture();
   const read = fs.readFileSync;
   const paths: string[] = [];
-  const reads = spyOn(fs, 'readFileSync').mockImplementation((...args) => {
+  const reads = spyOn(fs, 'readFileSync').mockImplementation(((...args: Parameters<typeof read>) => {
     paths.push(String(args[0]));
     return Reflect.apply(read, fs, args);
-  });
+  }) as typeof read);
   try {
     for (const from of [
       { kind: 'seat', name: 'seat-a', pane: 'pane-lead' },
