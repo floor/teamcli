@@ -17,7 +17,7 @@ import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { HerdrAgent, PaneProcesses } from '../src/herdr.ts';
-import { registerAgent } from '../src/registry/agents.ts';
+import { findAgent, registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
@@ -156,6 +156,8 @@ type Scene = {
   process?: PaneProcesses;
   /** The recorded pane's screen; the idle capture unless a scene says otherwise. */
   screen?: string;
+  /** The seat's own launch line does not run in the pane: the run's launch attempt fails. */
+  failLaunch?: boolean;
 };
 
 /** The readings one run takes: the host's list with the seat's pane unnamed, and a pane whose
@@ -190,6 +192,8 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
     },
     paneRun(_session, pane, command) {
       trace.runs.push({ pane, command });
+      // A failed launch is the pane refusing the line: the exit stands and nothing ran there.
+      if (scene.failLaunch === true && command.includes('team-deepseek')) return false;
       made.set(pane, CLAUDE_IDLE);
       exited = false;
       return true;
@@ -309,6 +313,49 @@ test('a wrapper seat restored to its bare CLI is relaunched in place, with the r
   expect(seatState()?.stage).toBe('ready');
   expect(seatState()?.pane).toBe(PANE);
   expect(seatState()?.workspace).toBe(WORKSPACE);
+});
+
+test('an exit the pane never acknowledges leaves the record exactly as it was', async () => {
+  setup(WRAPPER);
+  record(WRAPPER, { ...RECORD, agent_session: SESSION_ID });
+  // /exit is typed, but the process reading never comes back as the shell alone: the wait runs
+  // out, nothing is launched in the pane, and the record the next run reads is the one it wrote.
+  const made = sources({ process: RESTORED });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources)).toBe(1);
+  expect(io.err).toContain('its pane was not back at its shell in 30 s; left as it is');
+  expect(made.trace.typed).toEqual(['/exit']);
+  expect(seatRuns(made.trace)).toEqual([]);
+  expect(made.trace.closed).toEqual([]);
+  expect(seatCreated(made.trace)).toEqual([]);
+  expect(seatState()?.stage).toBe('ready');
+  expect(seatState()?.pane).toBe(PANE);
+  expect(seatState()?.workspace).toBe(WORKSPACE);
+  expect(seatState()?.launched).toEqual(RECORD.launched);
+  expect(seatState()?.agent_session).toBe(SESSION_ID);
+});
+
+test('a launch that does not run after the exit keeps the seat on its pane, not a closed record', async () => {
+  setup(WRAPPER);
+  record(WRAPPER, { ...RECORD, agent_session: SESSION_ID });
+  // The bare CLI is exited in its recorded pane and the seat's own line is attempted there, but
+  // the pane refuses it. The pane is still open, so the record must say where the seat stands —
+  // no workspace closed, nothing dropped, and the registry still naming a running seat.
+  const made = sources({ failLaunch: true });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources)).toBe(1);
+  expect(made.trace.typed).toEqual(['/exit']);
+  expect(seatRuns(made.trace)).toHaveLength(1);
+  expect(seatRuns(made.trace)[0]?.pane).toBe(PANE);
+  expect(firstWord(seatRuns(made.trace)[0]?.command ?? '')).toBe('team-deepseek');
+  expect(made.trace.closed).toEqual([]);
+  expect(seatCreated(made.trace)).toEqual([]);
+  expect(seatState()?.stage).toBe('launched');
+  expect(seatState()?.pane).toBe(PANE);
+  expect(seatState()?.workspace).toBe(WORKSPACE);
+  expect(seatState()?.launched).toEqual(RECORD.launched);
+  expect(seatState()?.agent_session).toBe(SESSION_ID);
+  expect(findAgent(home, { team: teamIdOf(root), seat: SEAT })?.lifecycle).toBe('running');
 });
 
 test('a seat whose launch line is the CLI itself is still adopted in place', async () => {

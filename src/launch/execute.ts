@@ -2059,7 +2059,13 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: 'its pane did not come back to its shell in the recorded workspace; left as it is' });
           break;
         }
-        if (!dropRecord(op.seat)) break;
+        // The seat stands on its recorded pane with nothing but its shell in front, and the
+        // launch steps after this one run there. Its record is kept, never dropped — a drop is
+        // for a pane this run closed — and moves to launched on that same pane: a line that
+        // fails to run, or one stopped at a dialog, leaves a seat a later `up` reads as launched
+        // there, never as one that ended with its pane still open. The identity the record holds
+        // stays: a pane back at its shell alone gives no new process reading to record.
+        recordSeat(op.seat, { stage: 'launched', pane: op.pane, workspace: op.workspace });
         relaunched.set(op.seat, 'own-line');
         break;
       }
