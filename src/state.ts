@@ -1102,7 +1102,21 @@ export function withLock<T>(dir: string, work: () => T, options: { waitMs?: numb
   // under us, the same way a missing one is made on the first pass. The count bounds the loop
   // against a path that can never be created.
   let recreated = 0;
+  // The last holder this call proved alive, so a refusal made on a later pass names the holder
+  // it waited on rather than losing it to the pass boundary.
+  let liveHolder: number | null = null;
+  // Whether the next pass finishes an attempt the last pass cleared — a release it saw, a stale
+  // key it took over, a folder it remade, or the first pass itself. Every other pass waits on a
+  // lock this call does not hold, so the deadline bounds it.
+  let cleared = true;
   for (;;) {
+    // The deadline bounds every way the loop can wait, not only a live holder: a key that cannot
+    // be read, a takeover that keeps failing, or a holderless key whose mtime is ahead of the
+    // clock used to spin past it. A pass that finishes an attempt the last pass cleared is that
+    // attempt's own retry, as bounded as it was, and the first pass always runs, so `waitMs: 0`
+    // still takes a free lock once.
+    if (!cleared && (waitMs === 0 || Date.now() > deadline)) throw new LockBusyError(path, liveHolder);
+    cleared = false;
     // Before the first write, the lock folder is held to the same lstat rule as every folder
     // below the state store (`folderProblem`): a link, a FIFO, anything that is not a folder,
     // or another user's folder refuses and is never followed or written through.
@@ -1126,6 +1140,7 @@ export function withLock<T>(dir: string, work: () => T, options: { waitMs?: numb
         // The folder is there after all: fall through to the open, which takes the key or
         // reports who holds it.
       } else if ((code === 'ENOENT' || code === 'EEXIST') && recreated++ < 8) {
+        cleared = true;
         continue;
       } else {
         throw error;
@@ -1141,15 +1156,26 @@ export function withLock<T>(dir: string, work: () => T, options: { waitMs?: numb
       // A create can meet a folder removed under it as ENOENT; the platform also reported EINVAL
       // when the folder was recycled between the mkdir and the open (measured on macOS APFS). Both
       // mean "the folder is not there now": recreate it and try again, at most eight times.
-      if ((code === 'ENOENT' || code === 'EINVAL') && recreated++ < 8) continue;
+      if ((code === 'ENOENT' || code === 'EINVAL') && recreated++ < 8) {
+        cleared = true;
+        continue;
+      }
       if (code !== 'EEXIST') throw error;
       let holder = NaN;
       try {
         holder = Number(readFileSync(path, 'utf8').trim());
-      } catch {
-        continue; // released between the two calls
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          cleared = true;
+          continue; // released between the two calls
+        }
+        // The key is there but cannot be read: nothing proves who holds it, and no takeover can
+        // name what it cannot read. The deadline ends the wait; a pause keeps it off the CPU.
+        pause(50);
+        continue;
       }
       if (Number.isInteger(holder) && holder > 0 && pidAlive(holder)) {
+        liveHolder = holder;
         if (waitMs === 0 || Date.now() > deadline) throw new LockBusyError(path, holder);
         pause(50);
         continue;
@@ -1162,15 +1188,31 @@ export function withLock<T>(dir: string, work: () => T, options: { waitMs?: numb
       let fresh = false;
       try {
         fresh = Date.now() - statSync(path).mtimeMs < 1000;
-      } catch {
-        continue; // released, or the folder was reclaimed, between the read and the stat
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          cleared = true;
+          continue; // released, or the folder was reclaimed, between the read and the stat
+        }
+        // A stat that fails for any other reason proves neither a release nor a holder: the
+        // deadline ends the wait, and the pause keeps it off the CPU.
+        pause(50);
+        continue;
       }
       if (!(Number.isInteger(holder) && holder > 0) && fresh) {
         if (waitMs === 0) throw new LockBusyError(path, null);
         pause(20);
         continue;
       }
-      if (takeOver(path, holder)) options.onStale?.(holder);
+      if (takeOver(path, holder)) {
+        // The stale key is gone: the next pass takes the lock this attempt already earned.
+        options.onStale?.(holder);
+        cleared = true;
+      } else {
+        // Another command restored a different live holder, or the folder refuses the rename.
+        // Either way nothing was cleared, so the deadline bounds the next pass; the pause keeps
+        // a rename that keeps failing off the CPU.
+        pause(20);
+      }
     }
   }
   try {
