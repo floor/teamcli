@@ -288,14 +288,16 @@ or a usage print answers. A figure an undeclared account's own read names lands 
 account's lab the same way, and only a reading this caller may make can name it: under the
 restricted view a machine-wide reading lands only on a lab the caller's own seats pay. An
 unreadable seat pane or an unanswered usage command is one counted note, however many seats hit
-it; a team whose own file cannot be read is one note too, naming the team and its `~` root in
-every view (`the team "team" (~/Code/floor/team): its file could not be read.`). A team the
-machine reports as not running is a record, not a team: its problems are history, it is not named
-by a note, and one counted line says how many such teams there are (`note: 7 teams on this
-machine are not running`) — `--all` is the flag that prints their blocks, each by the name its
-store recorded. A file that cannot be read is asked about under the session its approved record
-names, so a broken file on a stopped team makes that same counted line, never a sentence of its
-own. In `--json` the
+it, and the pane note names the seats it is about (`2 seat panes could not be read: coda, lead`);
+a team whose own file cannot be read is one note too, naming the team, its `~` root and the file
+the read tried, in every view (`the team "team" (~/Code/floor/team): its file could not be read
+(~/Code/floor/team/.agents/team.yaml).`) — the registry's record when the definition lives there,
+the team file otherwise. A team the machine reports as not running is a record, not a team: its
+problems are history, it is not named by a note, and one counted line says how many such teams
+there are (`note: 7 teams on this machine are not running`) — `--all` is the flag that prints
+their blocks, each by the name its store recorded. A file that cannot be read is asked about
+under the session its approved record names, so a broken file on a stopped team makes that same
+counted line, never a sentence of its own. In `--json` the
 block is the `quota` key:
 `format`, `accountsFile`, one entry per lab with its accounts, seats, states and windows, and
 `advice`; each window carries its `margin` — the same pace as points, positive ahead of its

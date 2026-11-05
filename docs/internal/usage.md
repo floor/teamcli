@@ -227,9 +227,20 @@ The live readers are observable only, and none opens a credential, key or CLI se
   age as `wall`, so the tree's account line and the table agree.
 
 An unreadable pane or an unanswered usage command is one counted note (`1 seat pane could not be
-read`, `a CLI usage command did not answer`) however many seats hit it. The restricted view reads
-only the caller's own team's panes; the full view reads every team's. The machine reading cache is
+read`, `a CLI usage command did not answer`) however many seats hit it, and a pane note carries
+the seats it is about (`seats` on `QuotaLive.notes` and on `ReportNote`, printed after the
+sentence: `2 seat panes could not be read: coda, lead`). The restricted view reads only the
+caller's own team's panes; the full view reads every team's. The machine reading cache is
 machine-wide, as the report's own machine lines already are.
+
+A team whose definition cannot be read is one note too, and it names the file the read tried, not
+just the team: `projectUsage` puts that path on its block as `unreadableFile`, written to the
+note's text as a tilde path for the owner, and to the named-team sentence as a parenthetical
+(`the team "team" (~/Code/floor/team): its file could not be read (~/…/team-config/<id>.json).`).
+A restricted caller reads this project's own file relative to its root (`.agents/team.yaml`) or
+a `~/…` path, never another derived location. Which file that is comes from the failed
+`LoadResult`'s `source` mark: `registry` when the record was the definition being read (the
+record's own path), `team-file` when the team file was.
 
 ## Per-seat figures and spend
 
@@ -269,16 +280,18 @@ stamp, because within one project a seat name is one seat.
 Text and JSON use the same report. `--json` has format 1, a read timestamp, view, caller project,
 counts, account rows grouped by lab, the `quota` block, unknown reasons, notes, and `teams` with
 each seat's run, its windows (mark, source, reading time, age and staleness) and its cost (the
-registry's `source` word, `readFrom`, reading time and age; `why` when unknown). A lab no screen reads and no reading reached also carries its seat count (`seats`),
+registry's `source` word, `readFrom`, reading time and age; `why` when unknown). Notes carry
+their `count` and, for a pane note, the `seats` it is about. A lab no screen reads and no reading reached also carries its seat count (`seats`),
 which the text face prints as one line in place of its rows. Subscription rows carry the window,
 left/used percentages, reset countdown and reading age; Antigravity pool rows add `pool`, and a
 row whose account the machine file gives a plan also carries `plan` (the text leads with it). A
 machine account counts once even with multiple windows or pools. The `quota` block carries
 `format: 1`, the accounts file the declaration line points at, one lab per entry with its
 accounts, seats, states and windows (each with its source, age, staleness, wall flag and margin),
-and the one advice sentence. A team whose file cannot be read is one note naming the team and its
-`~` root in every view; a root outside the home is a derived location, so it stays the owner's
-sentence and other callers read the team's name only. A team the machine reports as not running
+and the one advice sentence. A team whose file cannot be read is one note naming the team, its
+`~` root and the file the read tried in every view; a root outside the home is a derived
+location, so it stays the owner's sentence and other callers read the team's name only, and the
+file is shown to its owner (or, for another caller, only as `.agents/team.yaml` or a `~/…` path). A team the machine reports as not running
 is the counted line instead: `n teams on this machine are not running`, one note whatever the
 count, naming no team in either view.
 
