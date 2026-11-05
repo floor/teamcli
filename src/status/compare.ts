@@ -5,6 +5,7 @@ import { defaultLabel } from '../file/validate.ts';
 import type { HerdrAgent, HerdrWorkspace, PaneProcesses } from '../herdr.ts';
 import { herdrCommand } from '../herdr.ts';
 import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
+import { restoreProof, type RestoreProof } from '../launch/restore-proof.ts';
 import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
 import { observedEffort } from '../labels/observe.ts';
 import { usesLauncher } from '../launch/line.ts';
@@ -368,7 +369,8 @@ export function compare(
       if (continuity !== 'restored' && (verdict === 'gone' || verdict === 'replaced')) {
         const found = verdict === 'gone'
           ? notLaunched(seat, agent.pane, verdict, live.screens[agent.pane])
-          : cannotTie(seat, agent.pane, live.screens[agent.pane], team, recorded?.pane === agent.pane);
+          : cannotTie(seat, agent.pane, live.screens[agent.pane], team, recorded?.pane === agent.pane,
+              restoreProofAt(seat, recorded, live, agent.pane, recordedSession));
         rows.push({ ...found.row, ...idField });
         if (found.difference) differences.push(found.difference);
         if (found.note) notes.push(found.note);
@@ -555,9 +557,10 @@ export function compare(
     }
     if (held && verdict === 'replaced') {
       claimed.add(held);
-      // Herdr lists no agent of this name: no pane it names is the recorded one, so no
-      // per-seat command takes this process — the repair is to look at it.
-      const found = cannotTie(seat, held, live.screens[held], team, false);
+      // Herdr lists no agent of this name: the pane is the seat only when the shared proof holds,
+      // and the proof is what `team up` will read before it re-ties anything.
+      const found = cannotTie(seat, held, live.screens[held], team, false,
+        restoreProofAt(seat, recorded, live, held, continuitySessionOf(continuityIds, declared.name, recorded?.agent_session)));
       rows.push({ ...found.row, ...idField });
       if (found.difference) differences.push(found.difference);
       if (found.note) notes.push(found.note);
@@ -617,13 +620,25 @@ export function compare(
       pane: '-',
       ...(recorded?.start_cwd ? { start_cwd: recorded?.start_cwd } : {}),
     });
+    // A record that says the seat was launched, with the session itself up and no pane of it in
+    // the host's list, is the restored session that came back without this seat: `up` relaunches
+    // it, never a per-seat restart that would put a new pane somewhere else. With nothing running
+    // no restore can be claimed, and a seat that was never launched keeps the line it always had.
+    const didNotComeBack = live.running
+      && recorded !== undefined
+      && recorded.pane !== undefined
+      && recorded.workspace !== undefined
+      && recorded.launched !== undefined
+      && (recorded.stage === 'ready' || recorded.stage === 'named');
     differences.push({
-      what: `${seat.name} is in the file and is not running`,
+      what: didNotComeBack
+        ? `${seat.name} was running and its CLI did not come back (the terminal host restored the session without it)`
+        : `${seat.name} is in the file and is not running`,
       // With the session up, `team restart <seat>` is the per-seat repair the map admits to the
       // owner and the team's leads alike; `team add` is the owner's alone, and a lead that reads
       // this line must be handed a command it can run. With nothing running the session itself is
       // down, a lead cannot prove its pane, and the owner's `team up` is what starts it.
-      repair: anyRunning ? `team restart ${seat.name}` : 'team up',
+      repair: didNotComeBack || !anyRunning ? 'team up' : `team restart ${seat.name}`,
       needs: 'approve',
       ...(anyRunning ? {} : { owner: true as const }),
     });
@@ -819,6 +834,29 @@ function watchNotes(
 // A pane that no longer holds the process team launched: no CLI at all, or a foreground CLI that
 // is not the recorded one. The row and the difference read the same wherever the pane is found —
 // a pane herdr still lists an agent in, and one the agent went with its CLI.
+/** The restore proof for the seat's own recorded pane: the shared function `team up` adopts with,
+ *  read here so the two commands cannot disagree about what "restored" means. Null when there is
+ *  no record, or when the pane being read is not the pane the record names — another pane is
+ *  another reading, and `up` adopts only the recorded one. */
+function restoreProofAt(
+  seat: Seat,
+  recorded: SeatState | undefined,
+  live: Live,
+  pane: string,
+  recordedSession: string | undefined,
+): RestoreProof | null {
+  if (!recorded || recorded.pane !== pane) return null;
+  return restoreProof({
+    seat,
+    recorded,
+    agents: live.agents,
+    process: live.processes?.[pane] ?? null,
+    foreground: live.foreground?.[pane] ?? null,
+    recordedSession,
+    screen: live.screens[pane] ?? null,
+  });
+}
+
 /** A program is in front and the stored session does not tie it to the launch. The repair is to
  *  look. `up` does not close this pane. */
 function cannotTie(
@@ -829,6 +867,8 @@ function cannotTie(
   /** Herdr still names this seat on the pane the state recorded: `--abandon` is the form that
    *  takes that process. The flag without it only leaves the pane as it is. */
   namedOnPane: boolean,
+  /** The shared proof, when it could be run on the pane this difference is about. */
+  proof: RestoreProof | null = null,
 ): { row: Row; difference?: Difference; note?: string } {
   const running = runningModel(seat.cli, screen ?? '');
   const launcher = usesLauncher(seat);
@@ -846,6 +886,20 @@ function cannotTie(
     model: '-',
     pane,
   };
+  // The shared proof holds: the pane is the seat's own conversation, or — with no session id on
+  // either side — the declared CLI alone in its workspace at an idle prompt. `team up` re-ties
+  // the seat where it stands; the row is kept and the difference is the repair. The model, if it
+  // differs, is reported once the seat is tied again.
+  if (proof !== null && proof.kind !== 'none') {
+    return {
+      row,
+      difference: {
+        what: `${seat.name} was restored by the terminal host; its pane holds the seat's ${proof.kind === 'session' ? 'conversation' : 'declared CLI'} — team up re-ties it`,
+        repair: 'team up',
+        needs: 'approve',
+      },
+    };
+  }
   // A model that is not the file's, or a launch line that names a launcher, is the report.
   // The row stays `-`: the declared model is not shown as the one running. Nothing starts the seat.
   if (differs || launcher) {
@@ -869,10 +923,14 @@ function cannotTie(
       },
     };
   }
+  // The proof's reason, where it names something a reader can act on (another conversation,
+  // another CLI, another pane); the generic tail only restates that the pane cannot be tied.
   return {
     row,
     difference: {
-      what: `${seat.name}: its pane holds a process this record cannot tie to the launch`,
+      what: proof !== null && proof.kind === 'none' && proof.specific === true
+        ? `${seat.name}: ${proof.why}`
+        : `${seat.name}: its pane holds a process this record cannot tie to the launch`,
       repair: 'look at the pane',
     },
     ...(shown ? { note: shown } : {}),
