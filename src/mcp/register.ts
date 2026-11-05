@@ -18,6 +18,7 @@
 // from the registry's roster instead. A launch that can name no team is refused loudly rather
 // than registered against whatever folder it started in.
 import { spawnSync } from 'node:child_process';
+import { syncChildTimeout } from '../child.ts';
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -76,9 +77,10 @@ function runIn(cwd: string): (command: string, args: readonly string[]) => Inbox
       cwd,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 30_000,
+      timeout: syncChildTimeout(30_000),
     });
-    return { code: result.status ?? null, stderr: typeof result.stderr === 'string' ? result.stderr : '' };
+    const stderr = typeof result.stderr === 'string' && result.stderr !== '' ? result.stderr : (result.error?.message ?? '');
+    return { code: result.status ?? null, stderr };
   };
 }
 
@@ -339,6 +341,7 @@ function runGit(folder: string, args: readonly string[]): { code: number; stdout
     cwd: folder,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: syncChildTimeout(10_000),
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
   });
   if (result.error || result.status === null) return null;

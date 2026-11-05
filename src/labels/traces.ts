@@ -11,6 +11,7 @@
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { stripSgr } from '../ansi.ts';
+import { syncChildTimeout } from '../child.ts';
 import { readHistory } from '../send/history.ts';
 import type { SessionState } from '../state.ts';
 
@@ -110,7 +111,7 @@ export function commitTrace(worktree: string): SeatTrace | null {
   const result = spawnSync(
     'git',
     ['-c', 'log.showSignature=false', 'log', '-1', '--format=%aI%x00%h%x00%s'],
-    { cwd: worktree, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    { cwd: worktree, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: syncChildTimeout(5_000) },
   );
   if (result.error || result.status !== 0) return null;
   const [at, ref, subject] = result.stdout.split('\0');

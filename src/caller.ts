@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
+import { syncChildTimeout } from './child.ts';
 import type { TeamFile } from './file/types.ts';
 import { agentList, paneRootPid } from './herdr.ts';
 import type { HerdrAgent } from './herdr.ts';
@@ -521,7 +522,11 @@ function processName(raw: string): string {
 
 export const readWithPs: ReadProcess = (pid) => {
   try {
-    const line = execFileSync('ps', ['-o', 'ppid=,comm=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const line = execFileSync('ps', ['-o', 'ppid=,comm=', '-p', String(pid)], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: syncChildTimeout(2_000),
+    }).trim();
     const match = /^(\d+)\s+(.+)$/.exec(line);
     return match ? { ppid: Number(match[1]), name: processName(match[2] as string) } : null;
   } catch {

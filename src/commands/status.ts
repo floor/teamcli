@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { relative, resolve } from 'node:path';
+import { syncChildTimeout } from '../child.ts';
 import { auditClientOp } from '../client/bundles.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { verifyClientUp } from '../client/up-grant.ts';
@@ -173,7 +174,11 @@ export const realSources: StatusSources = {
   },
   branch(path) {
     try {
-      return execFileSync('git', ['-C', path, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      return execFileSync('git', ['-C', path, 'rev-parse', '--abbrev-ref', 'HEAD'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: syncChildTimeout(5_000),
+      }).trim();
     } catch {
       return null;
     }

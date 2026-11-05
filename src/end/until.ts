@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { isAbsolute, relative, resolve, sep, win32 } from 'node:path';
+import { syncChildTimeout } from '../child.ts';
 
 // What `--until` may name, shared by the command that stores it and by `readMerge`.
 //
@@ -43,7 +44,8 @@ function git(cwd: string, args: string[]): { code: number; stdout: string } {
     cwd,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: syncChildTimeout(10_000),
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
   });
-  return { code: result.status ?? 1, stdout: result.stdout ?? '' };
+  return { code: result.error ? 1 : (result.status ?? 1), stdout: result.stdout ?? '' };
 }
