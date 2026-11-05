@@ -1,15 +1,14 @@
-// The channel leg: a message the seat's own inbox server pushes to its CLI, and the one signed
-// receipt that proves the seat read it.
+// The channel leg: a message the seat's own inbox server pushes to its CLI. A transport marker
+// records the reservation; only a separate signed consumer receipt proves a read.
 //
 // The channel is a development mode of the seat's launch, not a second transport an operator
 // turns on separately: the seat's launch line carries the development-channels flag and names
 // this team server, and the server then declares `experimental["claude/channel"]` and pushes one
 // `notifications/claude/channel` per message that arrives after it starts. The body and the
 // meta travel together; the signed record stays in the inbox for `inbox_read` and for every later
-// reader, untouched. The push is the show, so the server writes the seat-signed read receipt as
-// it hands the notification to its client (`read_by: channel-push`), and it leaves a
-// `<id>.channel-push.json` marker beside the record, which the sender reads to end its walk as
-// `sent (channel)`.
+// reader, untouched. The server leaves a `<id>.channel-push.json` reservation beside the record,
+// which the sender reads to end its walk as `sent (channel)`. Stdio handoff is not a read: the
+// signed receipt waits for explicit client acknowledgement, inbox read or reply.
 //
 // A pushed message with no signed `read` receipt after the confirmation window is the one case
 // the watch redelivers. It redelivers exactly once (`redelivered: channel unconfirmed`), and only
@@ -25,9 +24,8 @@ export const CHANNEL_SERVER = 'team-inbox';
 export const CHANNEL_CAPABILITY = 'claude/channel';
 export const CHANNEL_METHOD = 'notifications/claude/channel';
 
-/** The server's marker beside a pushed record. It is not a read receipt: only the signed
- *  `<id>.read.json` proves a read, and the push writes that receipt itself when it shows the
- *  message. */
+/** The server's reservation beside a pushed record. It is not a read receipt: only a signed
+ *  consumer receipt proves a read. */
 export const CHANNEL_PUSH_RECEIPT = 'channel-push';
 export const CHANNEL_PUSH_STATUS = 'sent (channel)';
 
@@ -63,10 +61,6 @@ export const CHANNEL_UNCONFIRMED_REASON = `redelivered: ${CHANNEL_UNCONFIRMED}`;
 
 /** The read receipt's `read_by` for an acknowledgement made through the channel tool. */
 export const CHANNEL_READ_BY = 'channel';
-
-/** The read receipt's `read_by` for the read the push itself records: the message was handed to
- *  the seat's client by its own inbox server, which runs as the seat. */
-export const CHANNEL_PUSH_READ_BY = 'channel-push';
 
 /** The one sentence the server gives its client when the channel is on. The model acknowledges
  *  the id from the notification's meta in the same turn, before it reads or acts on anything. */
@@ -150,8 +144,8 @@ export function recordChannelHeld(dropDir: string, receipt: ChannelHeldReceipt):
   }
 }
 
-/** The marker the server leaves after it writes one channel notification. The meta is kept as
- *  it travelled, so a reader can join the push to the message it named. */
+/** The marker the server reserves before one channel notification. The meta joins the
+ *  reservation to its intended message; the marker alone proves neither handoff nor read. */
 export type ChannelPushReceipt = {
   v: 1;
   kind: 'channel-push';
@@ -167,10 +161,9 @@ export type ChannelPushReceipt = {
 
 /**
  * Writes the push marker whole, mode 0600. `wx` is the reservation: a marker already at the name
- * belongs to an earlier push of the same id, and the second write is refused rather than
- * replacing it. False when the marker could not be written or was already there — the caller
- * has already written the notification, so a marker that cannot be recorded never stops the
- * server.
+ * belongs to an earlier reservation of the same id, and the second write is refused rather than
+ * replacing it. False when the marker could not be written or was already there: the caller
+ * must not write a notification without winning this reservation.
  */
 export function recordChannelPush(dropDir: string, receipt: ChannelPushReceipt): boolean {
   try {

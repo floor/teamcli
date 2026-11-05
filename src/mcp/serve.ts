@@ -9,12 +9,12 @@
 //
 // The one push is the development channel: when the launch carries the flag naming this server,
 // the server declares `claude/channel`, pushes each new record as one notification, writes a
-// `<id>.channel-push.json` marker beside it, and writes the seat-signed read receipt as it hands
-// the notification to its client (`read_by: channel-push`). It also serves the `ack` tool, which
-// writes the same receipt with `read_by: channel` for a message the push never carried. Without
+// `<id>.channel-push.json` reservation beside it. Handoff is not a consumer read: the `ack` tool
+// writes the signed read receipt with `read_by: channel` only when the client acknowledges the
+// message. `inbox_read` and reply also settle it through their ordinary read paths. Without
 // the flag, MCP is client-pull and the seat notices a message when it calls `inbox_check`, with
 // the drop-folder watch as the bounded fall-back.
-import { createHash, type KeyObject } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { realpathSync } from 'node:fs';
@@ -42,7 +42,6 @@ import {
   CHANNEL_CAPABILITY,
   CHANNEL_INSTRUCTIONS,
   CHANNEL_METHOD,
-  CHANNEL_PUSH_READ_BY,
   CHANNEL_PUSH_STATUS,
   CHANNEL_READ_BY,
   CHANNEL_SAFETY_MS,
@@ -308,9 +307,8 @@ function negotiate(params: unknown): string {
 
 /** One channel notification: the message-display header, then the signed body whole. The record's
  *  complete raw payload must carry this key's signature before any field is read: a tampered or
- *  unsupported record is shown nowhere, not even as a header. The key that verified the record is
- *  returned too, so the push signs its read with the same key it trusted. */
-function channelPushOf(serving: Serving, id: string): { content: string; meta: Record<string, string>; key: KeyObject } | null {
+ *  unsupported record is shown nowhere, not even as a header. */
+function channelPushOf(serving: Serving, id: string): { content: string; meta: Record<string, string> } | null {
   const looked = readSealedRecord(join(serving.dropDir, id));
   if (!looked.ok || looked.sealed === null) return null;
   const key = messageKeyState(serving.home);
@@ -330,7 +328,6 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
   return {
     content: `${header}\n\n${payload.body}`,
     meta: { id, from: payload.from, seat: serving.seat, team: serving.project },
-    key: key.key,
   };
 }
 
@@ -338,11 +335,10 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
  * Watches the inbox for signed records that arrive after this server starts, and writes one
  * channel notification per new record. Mail already waiting at startup is left to `inbox_check`,
  * so a fresh session starts quiet. Each push writes its `<id>.channel-push.json` marker before
- * the notification, as the id's exclusive reservation, and then writes the seat-signed read
- * receipt (`read_by: channel-push`) once the notification is handed to the client: the push is
- * where the message is shown, so the seat records the read there. The signed record itself is
- * never touched, and `ack` and `inbox_read` still write their own receipts for a message a push
- * never carried.
+ * the notification, as the id's exclusive reservation. A notification handed to stdio proves no
+ * consumer read, so only an explicit `ack`, `inbox_read` or reply writes a signed read receipt.
+ * An ignored notification stays unread and eligible for the watch's bounded recovery. The signed
+ * record itself is never touched.
  *
  * `notice`, when given, is read at the top of every tick: true means this process has been found
  * to run an install that is no longer on disk, so it stops pushing and never writes another
@@ -419,29 +415,11 @@ function watchChannel(
     // seat that lost its place during the marker write receives no notification.
     const beforeWrite = serving.alive?.();
     if (beforeWrite !== undefined && beforeWrite !== null) return;
-    // What the client shows is the content and its meta; the key that verified the record signs
-    // the read receipt below and never rides in the notification.
-    const { key: signingKey, ...notification } = push;
-    write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: notification }));
-    // The push is the show: the notification is with the client now, so the seat signs its read
-    // receipt here, with the key that verified the record — never the sender. A receipt that
-    // cannot be written leaves the record unread and the watch's ordinary confirmation window
-    // applies. The stream write acknowledges nothing, so a client that never rendered the
-    // notification is indistinguishable at this point; that is the same bound the push already
-    // has, and it is why the receipt is written after the handoff rather than before it.
-    publishRecordRead({
-      dropDir: serving.dropDir,
-      id,
-      to: serving.seat,
-      root: serving.root,
-      session: serving.session,
-      home: serving.home,
-      key: signingKey,
-      at: new Date().toISOString(),
-      readBy: CHANNEL_PUSH_READ_BY,
-      lead: serving.team.orchestrator,
-      ...(serving.brief?.epoch === undefined ? {} : { epoch: serving.brief.epoch }),
-    });
+    // What the client receives is content and meta alone. The reservation suppresses another
+    // channel wake; it cannot settle the message or suppress recovery without a consumer read.
+    // The seat's signed read stays on ack, inbox_read and reply, and that receipt still carries
+    // the launch epoch when the seat holds one.
+    write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: push }));
   };
   /** The whole inbox, read and verified: the startup prime, the fallback poll without a bus, and
    *  the slow safety pass beside a live one. */
