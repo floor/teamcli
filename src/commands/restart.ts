@@ -187,21 +187,15 @@ const LEFT: Record<Exclude<DownSeat['state'], 'free'>, string> = {
   exited: 'its CLI had exited; closed without typing',
 };
 
-/** The session this team's state records for the caller's own seat and pane: the proof that a
- *  registry candidate read without a session is this run's team and not a stranger's. */
-function sessionHoldingCaller(dir: string, caller: Caller): string | undefined {
-  if (caller.kind !== 'seat') return undefined;
-  let sessions: string[];
-  try {
-    sessions = Object.keys(readState(dir).sessions);
-  } catch {
-    return undefined;
-  }
-  for (const session of sessions) {
-    const at = standingOf(dir, session, caller);
-    if (at.recordedPane !== undefined && at.recordedPane === caller.pane) return session;
-  }
-  return undefined;
+/** Whether the caller, placed in `session`, stands on the pane that session's team state records
+ *  for its seat: the proof that a registry candidate read without a session is this run's team
+ *  and not a stranger's. The placement must be asked for the session — the sessionless walk
+ *  places nobody under the terminal host — so the caller reads as a seat only when a name and a
+ *  pane were found there together. */
+function recordsCallerAt(dir: string, session: string, caller: Caller): boolean {
+  if (caller.kind !== 'seat' || caller.session !== session) return false;
+  const at = standingOf(dir, session, caller);
+  return at.recordedPane !== undefined && at.recordedPane === caller.pane;
 }
 
 /** The team the registry records for this run's session, when its roster holds `name`.
@@ -209,13 +203,15 @@ function sessionHoldingCaller(dir: string, caller: Caller): string | undefined {
  *  `registeredRootOf` is not used: it falls back to every holder when the session matches none,
  *  and a team chosen by a shared seat name alone is not a declaration. A named session must be
  *  the record's own (`session`) or one of its recorded lobbies; with no session to name, the
- *  caller's own placement in that team's state is the proof, and the registry record alone never
- *  picks a foreign team. Several candidates stay unproven: the seat is then refused as today. */
+ *  caller is placed in each candidate's own session (`callerOf`, the same session-aware walk
+ *  every command uses) and only a candidate whose state records the caller's own pane survives
+ *  the narrowing. Only after that narrowing must exactly one candidate remain: two teams on
+ *  different sessions may share a seat name, and the placement is what tells them apart. */
 function registryDeclaredTeam(
+  io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
   home: string,
   name: string,
   session: string | undefined,
-  caller: Caller,
   readOptions: ReadTeamConfigOptions,
 ): { loaded: LoadResult & { ok: true }; session: string } | undefined {
   let records: Record<string, TeamRecord>;
@@ -225,16 +221,22 @@ function registryDeclaredTeam(
     return undefined;
   }
   const holders = Object.values(records).filter((record) => record.roster.some((line) => line.seat === name));
-  const candidates = session === undefined
-    ? holders
-    : holders.filter((record) => record.session === session || record.lobbies[session] !== undefined);
+  const candidates: { loaded: LoadResult & { ok: true }; session: string }[] = [];
+  for (const record of holders) {
+    if (session !== undefined && record.session !== session && record.lobbies[session] === undefined) continue;
+    const loaded = readTeamConfig(record.root, readOptions);
+    if (!loaded.ok || !loaded.team.seats.some((seat) => seat.name === name)) continue;
+    if (session !== undefined) {
+      candidates.push({ loaded, session });
+      continue;
+    }
+    const placed = callerOf(io, record.session);
+    if (recordsCallerAt(dirname(loaded.path), record.session, placed)) {
+      candidates.push({ loaded, session: record.session });
+    }
+  }
   if (candidates.length !== 1) return undefined;
-  const candidate = candidates[0]!;
-  const loaded = readTeamConfig(candidate.root, readOptions);
-  if (!loaded.ok || !loaded.team.seats.some((seat) => seat.name === name)) return undefined;
-  if (session !== undefined) return { loaded, session };
-  const placed = sessionHoldingCaller(dirname(loaded.path), caller);
-  return placed === undefined ? undefined : { loaded, session: placed };
+  return candidates[0];
 }
 
 export const restart: Command = (argv, io) => runRestart(argv, io, realSources);
@@ -327,7 +329,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       declaredBy = { where: 'folder' };
     } else {
       const walkedSession = walked.kind === 'seat' || walked.kind === 'pane' ? walked.session : undefined;
-      const registered = registryDeclaredTeam(home, name, args.values.session ?? walkedSession, walked, readOptions);
+      const registered = registryDeclaredTeam(io, home, name, args.values.session ?? walkedSession, readOptions);
       if (registered !== undefined) {
         loaded = registered.loaded;
         declaredBy = { where: 'registry', session: registered.session };
