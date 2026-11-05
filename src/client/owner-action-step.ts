@@ -198,7 +198,6 @@ export function ownerSeatRuleAdmits(
   try {
     const store = sources.ownerSeatStore ?? systemOwnerSeatKeyStore();
     const now = sources.now?.() ?? new Date();
-    const caller = callerOf(io);
     // The owner's own no-terminal run is the rule's first subject: `--request` was signed by
     // the owner seat, and an `always` answer is her standing consent for the same shape.
     // Everyone else must prove the lead of the team the covering rule names, or that team's
@@ -208,6 +207,8 @@ export function ownerSeatRuleAdmits(
     const folder = dirname(canonicalRoot(root));
     const covering = listOwnerActionRules(home, store, now).rules
       .filter((rule) => rule.actions.includes(action) && rule.scope === folder);
+    if (covering.length === 0) return false;
+    const caller = callerOf(io);
     const admits = caller.kind === 'owner-no-tty'
       ? covering[0]
       : covering.find((rule) => ruleSubjectAdmits(rule, home, io));
