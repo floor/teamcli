@@ -1467,8 +1467,12 @@ export function upPlan(input: UpInput): Step[] {
   // The workspaces seats vacated close last, after every step that makes a replacement ready —
   // and after a stopped seat's own (there is no replacement to wait for). Each close re-reads
   // the host immediately before it; this plan only says which workspace to read.
+  // A human's pane and a granted seat's are not this run's to close, whatever a plan built by
+  // hand attached to them: neither reaches the swept collection.
   const swept = [
-    ...input.seats.flatMap((seat) => (seat.sweep === undefined ? [] : [{ seat: seat.name, cli: seat.cli, ...seat.sweep }])),
+    ...input.seats.flatMap((seat) => (seat.sweep === undefined || seat.human || seat.grantKeep !== undefined
+      ? []
+      : [{ seat: seat.name, cli: seat.cli, ...seat.sweep }])),
     ...(input.vacated ?? []),
   ];
   for (const held of swept) {

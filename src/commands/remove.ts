@@ -332,6 +332,11 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // A client run is never the owner's, whatever terminal it stands in.
   const ownerRun = clientRun === null && caller.kind === 'owner';
   const whoText = clientRun === null ? describeCaller(caller) : `client:${clientRun.grant.clientId}`;
+  // The pane this command runs in, when the caller's placement names one, or the environment
+  // hint when it does not: the sweep must never close the terminal it runs in.
+  const callerPane = 'pane' in caller && caller.pane !== undefined && caller.pane !== ''
+    ? caller.pane
+    : (io.env.HERDR_PANE_ID !== undefined && io.env.HERDR_PANE_ID !== '' ? io.env.HERDR_PANE_ID : undefined);
   const session = judged.session;
   // Dev mode, from the file this run edits: a `dev-mode` value anywhere in the caller's chain
   // governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value the variable set to
@@ -791,6 +796,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
         sources,
         logCommand: 'remove',
         caller: whoText,
+        ...(callerPane === undefined ? {} : { callerPane }),
       });
     }
 
@@ -1087,6 +1093,8 @@ export async function sweepVacated(input: {
   sources: RemoveSources;
   logCommand: string;
   caller: string;
+  /** The pane this command runs in: a workspace holding it is never closed. */
+  callerPane?: string;
 }): Promise<void> {
   const launch = input.sources.launch;
   if (!launch) return;
@@ -1115,6 +1123,7 @@ export async function sweepVacated(input: {
     workspacePanes: sources.workspacePanes ? (name, workspace) => sources.workspacePanes!(name, workspace) : undefined,
     processInfo: sources.processes ? (name, pane) => sources.processes!(name, pane) : undefined,
     seatStates: (name) => readState(input.dir).sessions[name]?.seats ?? null,
+    ...(input.callerPane === undefined ? {} : { callerPane: input.callerPane }),
   };
   await executePlan(
     [

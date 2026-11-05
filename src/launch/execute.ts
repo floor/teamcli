@@ -165,6 +165,9 @@ export type Host = {
   /** The session's recorded seats, read fresh; null when unreadable. The waiting proof refuses a
    *  pane or workspace any other seat's record names. */
   seatStates?(session: string): Record<string, SeatState> | null;
+  /** The pane this command itself runs in, when the caller's placement or the environment names
+   *  one. A sweep or a close-leftover never closes a workspace holding it. */
+  callerPane?: string;
   classify(session: string, pane: string, cli: string): ScreenKind;
   /** The pane's visible text, ANSI styling and all, or null when the pane can't be read. */
   paneText?(session: string, pane: string): string | null;
@@ -2441,6 +2444,10 @@ export async function executePlan(
           said('could not be read; left as it is');
           break;
         }
+        if (host.callerPane !== undefined && panes.includes(host.callerPane)) {
+          said('holds the pane this command runs in; left as it is');
+          break;
+        }
         if (!panes.includes(op.pane)) {
           said('no longer lists its old pane; left as it is');
           break;
@@ -2513,8 +2520,14 @@ export async function executePlan(
           }
         }
         const panes = host.workspacePanes?.(session, op.workspace) ?? null;
-        if (panes === null) {
+        // An empty list is not a workspace with nothing in it: a workspace is closed with its
+        // last pane, so no panes means the reading proved nothing and the close is not made.
+        if (panes === null || panes.length === 0) {
           said('could not be read; left as it is');
+          break;
+        }
+        if (host.callerPane !== undefined && panes.includes(host.callerPane)) {
+          said('holds the pane this command runs in; left as it is');
           break;
         }
         if (op.pane !== undefined && !panes.includes(op.pane)) {

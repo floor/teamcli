@@ -9,6 +9,8 @@
 //   panes list leaves it exactly as it is, and the run says why;
 // - a record the file no longer declares is swept the same way, and so is the workspace a
 //   host-moved record leaves behind — after the seat is ready on its replacement;
+// - a human seat's record is never moved or swept, a workspace whose pane list reads empty is
+//   not closed, and no workspace holding the pane the command runs in is closed;
 // - `team remove` sweeps the workspace of a seat herdr no longer lists before its record goes.
 //
 // Every pane, workspace, process reading, screen and conversation here is a synthetic fixture:
@@ -24,6 +26,7 @@ import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { loadTeamFile } from '../src/file/load.ts';
+import { upPlan, type UpSeat } from '../src/launch/plan.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState, type SeatState } from '../src/state.ts';
@@ -44,6 +47,8 @@ const NEW_PANE = 'fixture-pane-new';
 const NEW_SPACE = 'fixture-space-new';
 const OTHER_PANE = 'fixture-pane-other';
 const OTHER_SPACE = 'fixture-space-other';
+// The pane the command itself runs in, when the scene places one.
+const CALLER_PANE = 'fixture-pane-caller';
 const WATCH_PANE = 'fixture-watch-pane';
 const RECORDED = { shell: 100, cli: [200] };
 const A = { model: 'Claude Sonnet', version: '5.5', launch: 'claude --model claude-sonnet-5-5' };
@@ -62,7 +67,7 @@ function git(cwd: string, ...args: string[]): string {
 
 /** A human lead, and the implementer these scenes sweep — stopped in the file, removed from it,
 /// or declared and moved by the host, per scene. */
-function teamText(input: { worker: 'declared' | 'stopped' | 'absent' }): string {
+function teamText(input: { worker: 'declared' | 'stopped' | 'absent' | 'human' }): string {
   const worker = input.worker === 'absent'
     ? ''
     : `  - role: implementer
@@ -73,7 +78,7 @@ function teamText(input: { worker: 'declared' | 'stopped' | 'absent' }): string 
     model: Claude Sonnet
     version: "5.5"
     launch: claude --model claude-sonnet-5-5
-${input.worker === 'stopped' ? '    stopped: true\n' : ''}`;
+${input.worker === 'stopped' ? '    stopped: true\n' : ''}${input.worker === 'human' ? '    human: true\n' : ''}`;
   return `format: 1
 project: acme
 coordinator: ${LEAD}
@@ -180,12 +185,14 @@ type RunTrace = {
 };
 
 // What this run can see, as the host lists it. `unreadable` seeds a workspace whose pane list
-// cannot be read; `processRead` overrides the fresh read of one pane (the plan's reading and the
-// close's reading can then differ, which is how a re-read is proven).
+// cannot be read; `empty` one the host lists with no panes; `processRead` overrides the fresh
+// read of one pane (the plan's reading and the close's reading can then differ, which is how a
+// re-read is proven).
 function makeWorld(input: {
   panes: Record<string, PaneSeed>;
   labels?: Record<string, string>;
   unreadable?: readonly string[];
+  empty?: readonly string[];
   processRead?: (pane: string, read: (pane: string) => PaneSeed['process']) => PaneSeed['process'];
   closeFails?: boolean;
 }): { sources: UpSources; trace: RunTrace } {
@@ -260,7 +267,11 @@ function makeWorld(input: {
     agentPanes: () => [...panes.keys()],
     agents,
     workspacePanes: (_session, workspace) =>
-      input.unreadable?.includes(workspace) ? null : list().filter(([, held]) => held.workspace === workspace).map(([id]) => id),
+      input.unreadable?.includes(workspace)
+        ? null
+        : input.empty?.includes(workspace)
+          ? []
+          : list().filter(([, held]) => held.workspace === workspace).map(([id]) => id),
     paneText: (_session, pane) => panes.get(pane)?.screen ?? null,
     typeText: () => true,
     pressEnter: () => true,
@@ -464,6 +475,107 @@ test('a vacated workspace whose panes cannot be read is left as it is', async ()
   expect(`${io.out}${io.err}`).toContain(`worker: its workspace ${SPACE} could not be read; left as it is`);
 });
 
+test('a workspace whose pane list reads empty is left as it is', async () => {
+  setup(teamText({ worker: 'stopped' }));
+  seedWatch();
+  recordReady();
+  // The host answers with an empty pane list: nothing in the workspace was read, so nothing
+  // proves it bare.
+  const made = makeWorld({
+    panes: { [PANE]: { process: { shell: RECORDED.shell, foreground: [RECORDED.shell] } } },
+    empty: [SPACE],
+  });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), `up said:\n${io.out}\n${io.err}`).toBe(0);
+
+  expect(made.trace.closed).toEqual([]);
+  expect(`${io.out}${io.err}`).toContain(`worker: its workspace ${SPACE} could not be read; left as it is`);
+});
+
+test('a human seat with a state record is never moved, swept or closed over', async () => {
+  setup(teamText({ worker: 'human' }));
+  seedWatch();
+  recordReady();
+  // The host moved the old pane's occupant: a pane named for the seat sits in another workspace,
+  // which for a launched seat would be an adoption with the old workspace swept behind it.
+  const made = makeWorld({
+    panes: {
+      [PANE]: { process: null },
+      [OTHER_PANE]: {
+        workspace: OTHER_SPACE,
+        name: WORKER,
+        session: SES,
+        status: 'idle',
+        screen: idleFor(A.launch),
+        process: { shell: 500, foreground: [900] },
+      },
+    },
+    labels: { [SPACE]: WORKER, [OTHER_SPACE]: WORKER },
+  });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), `up said:\n${io.out}\n${io.err}`).toBe(0);
+
+  // A human's pane is not ours to move, and its record stays where it was.
+  expect(made.trace.closed).toEqual([]);
+  expect(made.trace.created).toEqual([]);
+  expect(seatState()?.pane).toBe(PANE);
+  expect(seatState()?.workspace).toBe(SPACE);
+  expect(`${io.out}${io.err}`).toContain("the pane is a human's; nothing is launched into it or typed into it; left as it is");
+  // No sweep was even considered: the plan holds no close for a human's workspace, so the run
+  // never reaches the sweep's own refusal either.
+  expect(`${io.out}${io.err}`).not.toContain(`its workspace ${SPACE} was left as it is; the seat is not ready on a replacement`);
+});
+
+test('a human or granted seat carrying a sweep adds no sweep step', () => {
+  const seatOf = (name: string, extra: Partial<UpSeat>): UpSeat => ({
+    name,
+    cli: 'claude-code',
+    launch: 'claude',
+    cwd: '.',
+    label: name,
+    repairLine: '',
+    stopped: false,
+    rules: '',
+    ...extra,
+  });
+  const plan = upPlan({
+    root: '/r',
+    session: 'scratch',
+    sessionRunning: true,
+    watchAlive: true,
+    watchLabel: 'Watch · scratch',
+    seats: [
+      seatOf('lead', { human: true, sweep: { workspace: SPACE } }),
+      seatOf('kept', { grantKeep: 'left as it is', sweep: { workspace: OTHER_SPACE } }),
+      seatOf('worker', { stopped: true, sweep: { workspace: NEW_SPACE } }),
+    ],
+  });
+  // Only the stopped seat's workspace is swept: a human's is not ours to close, and a granted
+  // seat's panes are left as they are.
+  const swept = plan.flatMap((step) => (step.do?.do === 'sweep' ? [step.do] : []));
+  expect(swept).toEqual([{ do: 'sweep', seat: 'worker', workspace: NEW_SPACE, cli: 'claude-code' }]);
+});
+
+test('a workspace holding the pane this command runs in is left as it is', async () => {
+  setup(teamText({ worker: 'stopped' }));
+  seedWatch();
+  recordReady();
+  // Both panes are back at their own shells; one of them is the pane this run was started in.
+  const made = makeWorld({
+    panes: {
+      [PANE]: { process: { shell: RECORDED.shell, foreground: [RECORDED.shell] } },
+      [CALLER_PANE]: { process: { shell: 300, foreground: [300] } },
+    },
+  });
+  const io = testIo(root, { kind: 'owner' });
+  io.env.HERDR_PANE_ID = CALLER_PANE;
+  expect(await runUp([], io, made.sources), `up said:\n${io.out}\n${io.err}`).toBe(0);
+
+  // Closing it would close the terminal the command is running in.
+  expect(made.trace.closed).toEqual([]);
+  expect(`${io.out}${io.err}`).toContain(`worker: its workspace ${SPACE} holds the pane this command runs in; left as it is`);
+});
+
 test('team remove sweeps the workspace of a seat herdr no longer lists', async () => {
   setup(teamText({ worker: 'declared' }));
   seedWatch();
@@ -509,5 +621,56 @@ test('team remove sweeps the workspace of a seat herdr no longer lists', async (
 
   expect(closed).toEqual([SPACE]);
   expect(`${io.out}${io.err}`).toContain(`worker: its workspace ${SPACE} was closed`);
+  expect(seatState()).toBeUndefined();
+});
+
+test('team remove leaves a workspace holding the pane it runs in', async () => {
+  setup(teamText({ worker: 'declared' }));
+  seedWatch();
+  recordReady();
+  const closed: string[] = [];
+  const panes = new Map<string, PaneSeed>([
+    [PANE, { workspace: SPACE, name: null, session: null, status: 'idle', screen: '', process: { shell: RECORDED.shell, foreground: [RECORDED.shell] } }],
+    [CALLER_PANE, { workspace: SPACE, name: null, session: null, status: 'idle', screen: '', process: { shell: 300, foreground: [300] } }],
+  ]);
+  const launch = {
+    typeText: () => true,
+    sendKey: () => true,
+    pressEnter: () => true,
+    agentPanes: () => [...panes.keys()],
+    closeWorkspace: (_session: string, workspace: string) => {
+      closed.push(workspace);
+      return true;
+    },
+    stopSession: () => true,
+    deleteSession: () => true,
+    kill: () => true,
+    sleep: async () => {},
+    now: () => NOW,
+  };
+  const sources: RemoveSources = {
+    ...downSources,
+    home,
+    sessionRunning: () => true,
+    agents: () => [],
+    screen: () => ({ kind: 'idle' }),
+    screenText: () => undefined,
+    status: () => 'idle',
+    foreground: () => ['claude'],
+    foregroundCwd: () => null,
+    processes: (_session, pane) => panes.get(pane)?.process ?? null,
+    workspacePanes: (_session, workspace) =>
+      [...panes.entries()].filter(([, held]) => held.workspace === workspace).map(([id]) => id),
+    now: () => NOW,
+    sleep: async () => {},
+    launch,
+  };
+  const io = testIo(root, { kind: 'owner' });
+  io.env.HERDR_PANE_ID = CALLER_PANE;
+  expect(await runRemove(['worker'], io, sources), `remove said:\n${io.out}\n${io.err}`).toBe(0);
+
+  // The removal goes on, but the terminal it runs in is not closed under it.
+  expect(closed).toEqual([]);
+  expect(`${io.out}${io.err}`).toContain(`worker: its workspace ${SPACE} holds the pane this command runs in; left as it is`);
   expect(seatState()).toBeUndefined();
 });

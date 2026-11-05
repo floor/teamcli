@@ -8,7 +8,10 @@
 //   run makes no second workspace in its place;
 // - a stray extra Bus workspace is closed only after the live Bus is up, and a stray that holds
 //   a process is left as it is with the run saying why;
-// - a Bus already answering has its strays closed with no wait and no Bus step.
+// - a Bus already answering has its strays closed with no wait and no Bus step, and the
+//   workspace it runs in is found by reading the panes, never assumed from the record: a sole
+//   labelled workspace is kept even with no record, and a record naming a dead workspace keeps
+//   the live one and closes the dead one.
 //
 // Every pane, workspace, process reading and screen here is a synthetic fixture: no live
 // terminal host, registry, provider or pane is read.
@@ -107,7 +110,7 @@ type PaneSeed = {
 
 type RunTrace = { created: string[]; closed: string[]; runs: { pane: string; command: string }[]; events: string[] };
 
-function makeWorld(panes: Record<string, PaneSeed>): { sources: UpSources; trace: RunTrace } {
+function makeWorld(panes: Record<string, PaneSeed>, options: { busAlive?: boolean } = {}): { sources: UpSources; trace: RunTrace } {
   const trace: RunTrace = { created: [], closed: [], runs: [], events: [] };
   const held = new Map<string, PaneSeed>(Object.entries(panes));
   const labels = new Map<string, string>();
@@ -168,7 +171,7 @@ function makeWorld(panes: Record<string, PaneSeed>): { sources: UpSources; trace
       sessionState: () => 'running',
       agents: () => [],
       workspaces: () => [...labels.entries()].map(([id, label]) => ({ id, label })),
-      busAlive: async () => false,
+      busAlive: async () => options.busAlive === true,
       home,
       doctor,
       launch,
@@ -262,6 +265,39 @@ test('a stray Bus workspace holding a process is left as it is', async () => {
   expect(made.trace.runs[0]?.command).toContain('bus');
   expect(made.trace.closed).toEqual([]);
   expect(`${io.out}${io.err}`).toContain(`bus: its workspace ${BUS_TWO} holds a process beside its shell; left as it is`);
+});
+
+test('an answering Bus with no record keeps its only labelled workspace, never a stray', async () => {
+  seedWatch();
+  const made = makeWorld({ [BUS_PANE_ONE]: { workspace: BUS_ONE, process: bare(60) } }, { busAlive: true });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), `up said:\n${io.out}\n${io.err}`).toBe(0);
+
+  // The one workspace carrying the Bus's label is where the answering Bus runs: nothing is
+  // closed and nothing is started.
+  expect(made.trace.closed).toEqual([]);
+  expect(made.trace.runs).toEqual([]);
+});
+
+test('an answering Bus keeps the workspace it runs in and closes the one its record left', async () => {
+  seedWatch();
+  updateState(dir, (file) => {
+    const session = (file.sessions[SESSION] ??= emptySession());
+    session.bus = { pane: BUS_PANE_ONE, workspace: BUS_ONE, started: NOW.toISOString() };
+  });
+  const made = makeWorld({
+    // The record names this one, but it is back at its shell: the Bus left it.
+    [BUS_PANE_ONE]: { workspace: BUS_ONE, process: bare(60) },
+    // The answering Bus runs here.
+    [BUS_PANE_TWO]: { workspace: BUS_TWO, process: { shell: 70, foreground: [70, 71] } },
+  }, { busAlive: true });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), `up said:\n${io.out}\n${io.err}`).toBe(0);
+
+  // The dead workspace is the stray, not the live one.
+  expect(made.trace.closed).toEqual([BUS_ONE]);
+  expect(`${io.out}${io.err}`).toContain(`bus: its workspace ${BUS_ONE} was closed`);
+  expect(`${io.out}${io.err}`).not.toContain('holds a process beside its shell');
 });
 
 test('a Bus already answering has its strays closed with no Bus step', () => {

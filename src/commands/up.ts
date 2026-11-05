@@ -678,10 +678,11 @@ function seatPlan(
   };
   const known = agents ?? [];
   const asked = agents !== null;
-  if (!resume || !recorded || seat.stopped) {
+  if (!resume || !recorded || seat.stopped || seat.human) {
     // A stopped seat's record still names the workspace it left, and nothing this run starts
     // replaces it: the sweep closes that workspace from a fresh reading and leaves it otherwise.
-    // A human's declaration has no launch of ours to sweep, and a seat with no record names none.
+    // A human's declaration has no launch of ours to sweep — its record never moves and its
+    // workspace is not ours to close — and a seat with no record names none.
     return seat.stopped && !seat.human && recorded?.workspace !== undefined
       ? {
           ...planned,
@@ -2037,14 +2038,36 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   if (startBus && workspaces === null && !busAlive) {
     busHold = "bus: the terminal host's workspaces could not be read; no Bus workspace is started and no second one is made";
   } else if (startBus) {
+    const readPanes = (workspace: string) => sources.launch?.workspacePanes?.(session, workspace) ?? null;
+    const processIn = (pane: string) => sources.launch?.processInfo?.(session, pane) ?? null;
+    const recordedBus = recorded?.bus;
     if (busAlive) {
-      busStrays = busLabelled.filter((item) => item.id !== recorded?.bus?.workspace).map((item) => ({ workspace: item.id }));
+      // The workspace an answering Bus runs in is found by reading the host's panes, never
+      // assumed from the record: a workspace holding a process beside its own shell is where it
+      // runs and is never a stray. Only a workspace whose every pane reads as its own shell is a
+      // stray, and never the keeper — the recorded one when it holds a process, or when none
+      // shows one; otherwise the first live one.
+      const read = busLabelled.map((item) => {
+        const panes = readPanes(item.id);
+        const live = panes !== null && panes.some((pane) => {
+          const process = processIn(pane);
+          return process !== null && !paneHoldsOnlyShell(process);
+        });
+        const bare = panes !== null && panes.length > 0 && panes.every((pane) => paneHoldsOnlyShell(processIn(pane)));
+        return { workspace: item.id, live, bare };
+      });
+      const keeper = (recordedBus?.workspace === undefined
+        ? undefined
+        : read.find((item) => item.workspace === recordedBus.workspace && item.live))
+        ?? read.find((item) => item.live)
+        ?? (recordedBus?.workspace === undefined ? undefined : read.find((item) => item.workspace === recordedBus.workspace))
+        ?? read[0];
+      busStrays = read
+        .filter((item) => item.workspace !== keeper?.workspace && item.bare)
+        .map((item) => ({ workspace: item.workspace }));
     } else {
-      const readPanes = (workspace: string) => sources.launch?.workspacePanes?.(session, workspace) ?? null;
-      const processIn = (pane: string) => sources.launch?.processInfo?.(session, pane) ?? null;
       const listed = busLabelled.map((item) => ({ workspace: item.id, panes: readPanes(item.id) }));
       const withPanes = listed.filter((item): item is { workspace: string; panes: string[] } => item.panes !== null && item.panes.length > 0);
-      const recordedBus = recorded?.bus;
       // The workspace the Bus last recorded comes first: a pane there is the Bus's own, even if
       // it is busy — the execute then refuses rather than start a second one elsewhere.
       const picked = recordedBus?.workspace === undefined
@@ -2644,6 +2667,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         };
       });
     };
+    // The pane this run's own command stands in, when the caller's placement names one, or the
+    // environment hint when the placement does not: a sweep or close-leftover must never close
+    // the terminal this command runs in.
+    const callerPane = 'pane' in caller && caller.pane !== undefined && caller.pane !== ''
+      ? caller.pane
+      : (io.env.HERDR_PANE_ID !== undefined && io.env.HERDR_PANE_ID !== '' ? io.env.HERDR_PANE_ID : undefined);
     const host = endpointCleanupHost({
       startServer: launch.startServer,
       sessionUp: launch.sessionUp,
@@ -2735,6 +2764,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       alive: (pid) => sources.alive?.(pid) ?? pidAlive(pid),
       agentPanes: launch.agentPanes,
       agentList: launch.agents,
+      ...(callerPane === undefined ? {} : { callerPane }),
       // The session's workspaces with their labels now; the pause compares the label of the pane's
       // live workspace with the one this seat's launch gives (`pause.ts`, `waitingProblem`).
       workspaces: () => sources.workspaces?.(session) ?? null,
