@@ -1112,17 +1112,19 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     : `${targetSeat}: wrote to ${recordDir(toRoot, toSession, targetSeat)}, and could not confirm the recipient's reader will read it`);
   logLine(dir, 'reply', who, summary, host.now());
   const walkedVia = walk?.summary == null ? 'drop' : walk.via;
-  const walkedOutcome = walkedVia === 'socket'
-    ? 'delivered'
-    : walkedVia === 'channel'
-      ? 'sent (channel)'
-      : walkedVia === 'webhook'
-        ? (walk?.unconfirmed === true ? 'sent (unconfirmed)' : 'delivered')
-        : walkedVia === 'typed'
-          ? 'delivered (typed wake)'
-          : walkedVia === 'native' || walkedVia === 'headless-resume'
-            ? (walk?.unconfirmed === true ? 'sent (unconfirmed)' : 'delivered (read)')
-            : landed ? 'delivered' : 'sent (unconfirmed)';
+  const walkedOutcome = walk?.endpointBlocked !== undefined
+    ? 'queued, not woken'
+    : walkedVia === 'socket'
+      ? 'delivered'
+      : walkedVia === 'channel'
+        ? 'sent (channel)'
+        : walkedVia === 'webhook'
+          ? (walk?.unconfirmed === true ? 'sent (unconfirmed)' : 'delivered')
+          : walkedVia === 'typed'
+            ? 'delivered (typed wake)'
+            : walkedVia === 'native' || walkedVia === 'headless-resume'
+              ? (walk?.unconfirmed === true ? 'sent (unconfirmed)' : 'delivered (read)')
+              : landed ? 'delivered' : 'sent (unconfirmed)';
   appendHistory(toProject, toRoot, host.home, {
     ts: at,
     from: me,

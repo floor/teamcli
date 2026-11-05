@@ -1655,6 +1655,9 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // recorded first, so the history line the drop leg writes (or the refusal) names what the pane
   // was spared.
   const failures: string[] = [];
+  // The probe's own reason when the recorded socket is not listening. The drop ending prints
+  // it on the blocked line and writes that line to the lead; a later leg that lands clears it.
+  let endpointDown: string | undefined;
   // What this run's typed wake did, once the walk knows: the words a fallback prints must not
   // promise a wake that ran and did not deliver, nor leave out one the run never reached. Absent
   // until the typed leg is reached (or ruled out), which is the truth for a send that ended
@@ -2202,6 +2205,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         // the runtime queue this attempt just failed to reach.
         failures.push(`native: ${attempt.reason}`);
         walkLost.endpoint = true;
+        if (attempt.reason.includes('not listening')) endpointDown = attempt.reason;
         lowerDelivery();
         continue;
       }
@@ -2430,6 +2434,18 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // resort, under every other class (src/send/walk-cascade.ts).
       if (!human && !dry) {
         io.stderr(queuedLine(to.seat, noEventAdapter ? NO_PANE_MESSAGING : NO_EVENT_ADAPTER_TOOK_IT));
+      }
+      if (endpointDown !== undefined) {
+        report.endpointBlocked = endpointDown;
+        writeEndpointBlockedNotice({
+          home: host.home,
+          root: to.root,
+          session: to.session,
+          lead: team.orchestrator,
+          seat: to.seat,
+          reason: endpointDown,
+          at: host.now().toISOString(),
+        });
       }
       return deliverDropped(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, human, wait, timeoutS, callerRoot, note);
     }
@@ -4913,8 +4929,12 @@ export type ReplyWalkResult = {
   /** The reasons legs did not take the reply, and why a walk did not run. */
   failures: readonly string[];
   /** The line the reply prints for the leg that took it; null for the mailbox, whose own
-   *  sentence the reply writes. */
+   *  sentence the reply writes. A missing Codex socket sets this to the blocked line. */
   summary: string | null;
+  /** Set when the native route's recorded socket is not listening. The reply prints the
+   *  blocked line, the same line is written to the lead, and the history outcome stays
+   *  `queued, not woken`. The value is the probe's own reason. */
+  endpointBlocked?: string;
 };
 
 /**
@@ -4982,6 +5002,9 @@ export async function walkReplyDelivery(input: {
     from_team: input.sender.teamId,
   };
   const failures: string[] = [];
+  // The probe's own reason when the recorded socket is not listening. The drop ending prints
+  // the blocked line and writes that line to the lead; a later leg that lands never reaches it.
+  let endpointDown: string | undefined;
   const ended = (result: Omit<ReplyWalkResult, 'failures'>): ReplyWalkResult => ({ ...result, failures });
   // A settings record the store disowns is no declaration to route on: walking the fallback
   // behind it could type into a pane the seat keeps out. The reply's own record stands.
@@ -5027,6 +5050,25 @@ export async function walkReplyDelivery(input: {
     failures.push(error.message);
     return ended({ via: 'drop', walked: false, unconfirmed: false, summary: null });
   }
+  const closeOnDrop = (): ReplyWalkResult => {
+    if (endpointDown === undefined) return ended({ via: 'drop', walked: true, unconfirmed: false, summary: null });
+    writeEndpointBlockedNotice({
+      home: input.host.home,
+      root: input.root,
+      session: input.session,
+      lead: file?.orchestrator ?? '',
+      seat: seatName,
+      reason: endpointDown,
+      at: input.host.now().toISOString(),
+    });
+    return ended({
+      via: 'drop',
+      walked: true,
+      unconfirmed: false,
+      summary: endpointBlockedLine(seatName, endpointDown),
+      endpointBlocked: endpointDown,
+    });
+  };
   const plan = resolveWalkOrder({
     dir: input.dir,
     root: input.root,
@@ -5279,6 +5321,7 @@ export async function walkReplyDelivery(input: {
           });
         }
         failures.push(`native: ${attempt.reason}`);
+        if (attempt.reason.includes('not listening')) endpointDown = attempt.reason;
         continue;
       }
       // Any other CLI has no native route this walk can take. A Claude Code seat's native leg is
@@ -5360,10 +5403,11 @@ export async function walkReplyDelivery(input: {
       failures.push('session: a reply does not create a session; the record waits in the bus inbox');
       continue;
     }
-    // The drop leg closes the walk: the reply's record is already the mailbox's copy.
-    return ended({ via: 'drop', walked: true, unconfirmed: false, summary: null });
+    // The drop leg closes the walk: the reply's record is already the mailbox's copy. A recorded
+    // socket that is not listening reports the same blocked line a send does.
+    return closeOnDrop();
   }
-  return ended({ via: 'drop', walked: true, unconfirmed: false, summary: null });
+  return closeOnDrop();
 }
 
 /** The brief was typed into a compose seat's own box and the CLI never confirmed it. The
@@ -6416,10 +6460,54 @@ function deliveredSession(io: Io, seat: string, report: Report, session: string)
  *  while it is idle says `queued, not woken` instead — the same word the history line carries —
  *  because `sent (unconfirmed)` reads like success while the drop waits for a turn nothing gives.
  *  Exit 0, always. */
+/** The one line a missing Codex socket prints, to the sender and to the lead. The probe's
+ *  reason stays on the line. The history outcome stays `queued, not woken`. */
+function endpointBlockedLine(seat: string, reason: string): string {
+  return `${seat}: blocked, its Codex endpoint is not listening; the message is in its bus inbox; team up restores the endpoint (${reason})`;
+}
+
+/** The signed notice the lead's drop folder gets when a Codex seat's recorded socket is not
+ *  listening. The seat's own record stays the mailbox copy; a lead write that fails leaves
+ *  that copy where it is. */
+function writeEndpointBlockedNotice(input: {
+  home: string;
+  root: string;
+  session: string;
+  lead: string;
+  seat: string;
+  reason: string;
+  at: string;
+}): void {
+  if (input.lead === '' || input.lead === input.seat) return;
+  try {
+    const id = randomUUID();
+    const leadDir = join(input.root, '.agents', 'send-drops', input.session, input.lead);
+    const signed = signRecord({
+      kind: 'message',
+      id,
+      to: input.lead,
+      to_id: null,
+      root: realpathSync(input.root),
+      session: input.session,
+      at: input.at,
+      body: endpointBlockedLine(input.seat, input.reason),
+      from: 'runtime',
+      from_id: null,
+      rule: "the team's unread-message report",
+      thread: id,
+    }, input.home);
+    dropMessage(leadDir, id, `${JSON.stringify(signed, null, 2)}\n`);
+  } catch {
+    // The printed line is the notice. A lead drop that cannot be written does not
+    // unsend the seat's own record.
+  }
+}
+
 function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 'drop' | 'typed' | 'native' | 'headless-resume' | 'webhook', note?: string): number {
   const notWoken = leg === 'drop' && dropNotWoken(report);
   const status: 'sent (unconfirmed)' | 'queued, not woken' = notWoken ? 'queued, not woken' : 'sent (unconfirmed)';
-  const summary = withId(withDelivery(`${seat}: ${status} (${leg}, ${String(ms)} ms${note === undefined ? '' : `; ${note}`})`, report), report);
+  const blocked = leg === 'drop' && report.endpointBlocked !== undefined ? endpointBlockedLine(seat, report.endpointBlocked) : undefined;
+  const summary = withId(blocked ?? withDelivery(`${seat}: ${status} (${leg}, ${String(ms)} ms${note === undefined ? '' : `; ${note}`})`, report), report);
   if (report.json) {
     writeAction(io, report, { status, summary, channel: leg });
   } else {
