@@ -158,7 +158,9 @@ async function pollSubmitted(
  * never typed a second time. After an Enter, a working screen that still holds the line is
  * not a submission: the wake keeps polling for `verifyMs` until the box empties, and delivers
  * only then. The bound ending with the line still in the box is not delivered, and the line
- * is not typed again.
+ * is not typed again. A box that already holds exactly this line when the wake first looks —
+ * a wake child killed after typing, an Enter that did not submit — gets the same two spaced
+ * looks and the same guarded Enter, and the line is never typed a second time.
  */
 export async function deliverTypedWake(
   host: TypedWakeHost,
@@ -175,15 +177,44 @@ export async function deliverTypedWake(
   const pollMs = options.pollMs ?? POLL_MS;
   const ackSettleMs = options.ackSettleMs ?? pollMs;
   const verifyMs = options.verifyMs ?? WAKE_VERIFY_MS;
-  const opening = await host.read(pane);
-  const first = seenOf(cli, opening);
-  // The line is already the whole box. Press Enter into it; do not type it a second time.
-  const alreadyHeld = opening !== null && first === 'unsent' && boxHoldsText(cli, line, opening);
-  let typedLine = false;
+  const firstScreen = await host.read(pane);
+  const first = seenOf(cli, firstScreen);
+  // The line may already be in the box — a wake child killed after typing, a wake asked twice,
+  // an Enter that did not submit. That wake presses Enter into exactly this line and never types
+  // it again; the two-look guard below still stands between the look and the key.
+  const heldAtFirstLook = firstScreen !== null
+    && readScreen(cli, firstScreen).kind === 'unsent'
+    && boxHoldsText(cli, line, firstScreen);
+  let tries = 0;
+  let lineTyped = false;
   let keyedReturn = false;
   let screen: string | null;
-  if (alreadyHeld) {
-    screen = opening;
+  let previous: string | null = null;
+  let previousHeld = false;
+  let settleLooks = 0;
+  if (heldAtFirstLook) {
+    await host.wait(enterSettleMs);
+    const reread = await host.read(pane);
+    if (reread === null) {
+      return { delivered: false, typed: false, tries: 0, reason: 'the screen could not be read after the line was found in the box; no Enter was pressed' };
+    }
+    const kind = readScreen(cli, reread).kind;
+    if (kind === 'working') {
+      return { delivered: false, typed: false, tries: 0, reason: 'a working screen showed before any Enter, so the line was not submitted by this wake; no Enter was pressed' };
+    }
+    if (kind !== 'unsent' || !boxHoldsText(cli, line, reread)) {
+      const why = kind === 'idle'
+        ? 'the line left the box'
+        : kind === 'unsent'
+          ? 'the box held text other than the line'
+          : `the screen read ${kind}`;
+      return { delivered: false, typed: false, tries: 0, reason: `${why} between the two looks; no Enter was pressed` };
+    }
+    // Two looks, spaced by the settle, agree the box holds exactly the line: the same pair the
+    // typed path waits for before its first Enter.
+    screen = reread;
+    previous = reread;
+    previousHeld = true;
   } else {
     if (first === 'scroll back') {
       // The pane sits scrolled back over its transcript: the CLI's own bottom rows stand there,
@@ -238,42 +269,38 @@ export async function deliverTypedWake(
     if (!(await host.type(pane, line))) {
       return { delivered: false, typed: keyedReturn, tries: 0, reason: 'the pane did not take the line; nothing was typed' };
     }
-    typedLine = true;
+    lineTyped = true;
     await host.wait(enterSettleMs);
     screen = await host.read(pane);
   }
-  let tries = 0;
-  let previous: string | null = null;
-  let previousHeld = false;
-  let settleLooks = 0;
-  const keyed = (): boolean => keyedReturn || typedLine || tries > 0;
+  /** Whether this wake put a key into the pane: it typed the line, pressed the return key, or
+   *  pressed an Enter. */
+  const putKeys = (): boolean => keyedReturn || lineTyped || tries > 0;
+  const typedWord = lineTyped ? 'typed' : 'found in the box';
   const heldReason = (kind: string, pressed: boolean): string => {
     const why = kind === 'unsent' ? 'the box held text other than the line' : `the screen read ${kind}`;
-    if (pressed) return `${why} and no working screen showed`;
-    return typedLine
-      ? `${why} after the line was typed; no Enter was pressed`
-      : `${why}; no Enter was pressed`;
+    return pressed ? `${why} and no working screen showed` : `${why} after the line was ${typedWord}; no Enter was pressed`;
   };
   for (;;) {
     if (screen === null) {
       return {
         delivered: false,
-        typed: keyed(),
+        typed: putKeys(),
         tries,
         reason: tries === 0
-          ? 'the screen could not be read after the line was typed; no Enter was pressed'
+          ? `the screen could not be read after the line was ${typedWord}; no Enter was pressed`
           : 'the screen could not be read and no working screen showed; no further Enter was pressed',
       };
     }
     const kind = readScreen(cli, screen).kind;
     if (kind === 'working') {
       if (tries === 0) {
-        return { delivered: false, typed: keyed(), tries, reason: 'a working screen showed before any Enter, so the line was not submitted by this wake; no Enter was pressed' };
+        return { delivered: false, typed: putKeys(), tries, reason: 'a working screen showed before any Enter, so the line was not submitted by this wake; no Enter was pressed' };
       }
       if (boxHoldsText(cli, line, screen)) {
-        return { delivered: false, typed: keyed(), tries, reason: stillHeldReason(tries) };
+        return { delivered: false, typed: putKeys(), tries, reason: stillHeldReason(tries) };
       }
-      return { delivered: true, typed: keyed(), tries, reason: `the working screen showed after ${String(tries)} Enter${tries === 1 ? '' : 's'}` };
+      return { delivered: true, typed: putKeys(), tries, reason: `the working screen showed after ${String(tries)} Enter${tries === 1 ? '' : 's'}` };
     }
     const holds = boxHoldsText(cli, line, screen);
     // The first Enter waits for two looks at the drawn line. The pair agrees on the facts that
@@ -283,12 +310,12 @@ export async function deliverTypedWake(
     // something else, or holds the line without settling, is never pressed.
     if (tries === 0 && !(holds && previousHeld)) {
       if (!holds && previous === screen) {
-        return { delivered: false, typed: keyed(), tries, reason: heldReason(kind, false) };
+        return { delivered: false, typed: putKeys(), tries, reason: heldReason(kind, false) };
       }
       if (settleLooks >= LINE_SETTLE_LOOKS) {
         return {
           delivered: false,
-          typed: keyed(),
+          typed: putKeys(),
           tries,
           reason: holds
             ? 'the drawn line did not settle; no Enter was pressed'
@@ -303,14 +330,14 @@ export async function deliverTypedWake(
       continue;
     }
     if (!holds) {
-      return { delivered: false, typed: keyed(), tries, reason: heldReason(kind, tries > 0) };
+      return { delivered: false, typed: putKeys(), tries, reason: heldReason(kind, tries > 0) };
     }
     if (tries >= MAX_WAKE_ENTERS) {
-      return { delivered: false, typed: keyed(), tries, reason: `the line stayed in the box through ${String(tries)} Enters and no working screen showed` };
+      return { delivered: false, typed: putKeys(), tries, reason: `the line stayed in the box through ${String(tries)} Enters and no working screen showed` };
     }
     // Muse and Antigravity submit with Enter. The host's enter is that key, not Return.
     if (!(await host.enter(pane))) {
-      return { delivered: false, typed: keyed(), tries, reason: 'the pane did not take the Enter; no further Enter was pressed' };
+      return { delivered: false, typed: putKeys(), tries, reason: 'the pane did not take the Enter; no further Enter was pressed' };
     }
     tries += 1;
     // One bounded ack settle before the first look at what the Enter did: a read taken at zero
@@ -322,7 +349,7 @@ export async function deliverTypedWake(
       const working = readScreen(cli, after).kind === 'working';
       const holds = boxHoldsText(cli, line, after);
       if (working && !holds) {
-        return { delivered: true, typed: keyed(), tries, reason: `the working screen showed after ${String(tries)} Enter${tries === 1 ? '' : 's'}` };
+        return { delivered: true, typed: putKeys(), tries, reason: `the working screen showed after ${String(tries)} Enter${tries === 1 ? '' : 's'}` };
       }
       // The line still sitting, with no working screen, means the submit did not take. Press
       // again, still bounded by MAX_WAKE_ENTERS. Do not type the line a second time.
@@ -333,10 +360,10 @@ export async function deliverTypedWake(
     }
     const ack = await pollSubmitted(host, pane, cli, line, pollMs, verifyMs);
     if (ack === 'submitted') {
-      return { delivered: true, typed: keyed(), tries, reason: `the working screen showed after ${String(tries)} Enter${tries === 1 ? '' : 's'}` };
+      return { delivered: true, typed: putKeys(), tries, reason: `the working screen showed after ${String(tries)} Enter${tries === 1 ? '' : 's'}` };
     }
     if (ack === 'held') {
-      return { delivered: false, typed: keyed(), tries, reason: stillHeldReason(tries) };
+      return { delivered: false, typed: putKeys(), tries, reason: stillHeldReason(tries) };
     }
     screen = await host.read(pane);
   }
