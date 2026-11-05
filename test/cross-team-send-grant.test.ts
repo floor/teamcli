@@ -306,7 +306,7 @@ function dropBodies(dir: string, session: string, seat: string): string[] {
   const drops = join(dir, 'send-drops', session, seat);
   if (!existsSync(drops)) return [];
   return readdirSync(drops)
-    .filter((name) => !name.endsWith('.pending') && !name.endsWith('.fallback.json') && !name.endsWith('.meta.json'))
+    .filter((name) => !name.startsWith('.') && !name.endsWith('.pending') && !name.endsWith('.fallback.json') && !name.endsWith('.meta.json'))
     .map((name) => recordBody(join(drops, name)));
 }
 
