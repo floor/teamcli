@@ -1,11 +1,14 @@
 // Red-first tests for 0.5.13 compact delivery text (`feat/delivery-text-compact`):
 // 1. One-line footer `↩ team reply <prefix> "…" · team ack <prefix>` using the shortest unique id
 //    prefix in the mailbox (at least 8 characters, extended only when needed to disambiguate).
-// 2. `team reply` and `team ack` accept the short unique prefix and refuse an ambiguous prefix
-//    with a clear message naming the colliding record ids.
-// 3. Render-time compact header folding across socket frames, `team drops --read`, `inbox_read`,
-//    and `team messages`, with the profile's display kind first for non-Claude senders:
-//    - Client:      "Grok Bot, a client (owner relay):"
+// 2. `team reply` and `team ack` accept a unique prefix of 8 or more characters, refuse a prefix
+//    shorter than 8 characters, and refuse an ambiguous prefix with a clear message naming the
+//    colliding record ids.
+// 3. Render-time compact header folding across socket frames (including daemon waited frames),
+//    `team drops --read`, `inbox_read`, `team messages`, and plain-body fallback (with
+//    `[attributed sender: …]` removed completely), with the profile's display kind first for
+//    non-Claude senders and clients:
+//    - Client:      "Client Grok Bot (owner relay):"
 //    - Gemini seat: "Gemini seat Argon (to orchestrator):"
 //    - Codex seat:  "Codex seat Cora (to orchestrator):"
 //    - Grok seat:   "Grok seat Hyperion (to orchestrator):"
@@ -25,13 +28,16 @@ import { plantRecord, recordDir, runMessages } from '../src/commands/messages.ts
 import { runReply } from '../src/commands/reply.ts';
 import { runSend } from '../src/commands/send.ts';
 import { runTrace } from '../src/commands/trace.ts';
+import { loadTeamFile } from '../src/file/load.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
 import { readMessage } from '../src/mcp/inbox.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { requestDaemon, startSendDaemon, type DaemonHost } from '../src/send/daemon.ts';
 import { readerLine } from '../src/send/frame.ts';
 import { readRecord, signRecord, writeRecord, type RecordPayload } from '../src/send/record.ts';
+import { attributedBody } from '../src/send/sender-claim.ts';
 import { updateState } from '../src/state.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
 import { fixtureBase, gitEnv, testIo } from './helpers.ts';
@@ -268,8 +274,8 @@ describe('1. compact single-line footer and shortest unique id prefix', () => {
   });
 });
 
-describe('2. team reply and team ack by short prefix and ambiguous prefix refusal', () => {
-  test('team ack accepts an 8-character prefix and refuses an ambiguous prefix naming the colliding ids', async () => {
+describe('2. team reply and team ack by short prefix, <8-char prefix refusal, and ambiguous prefix refusal', () => {
+  test('team ack accepts an 8-character prefix, refuses a prefix shorter than 8 characters, and refuses an ambiguous prefix naming the colliding ids', async () => {
     const f = makeFixture();
     const id1 = '47c25f34-ab42-47d2-a54c-5597aeb305fa';
     plantRecord(
@@ -286,6 +292,12 @@ describe('2. team reply and team ack by short prefix and ambiguous prefix refusa
         at: NOW.toISOString(),
       },
     );
+
+    const shortAckIo = testIo(f.root, { kind: 'seat', name: 'orchestrator', pane: PANE_ORCH, session: 'acme' });
+    const shortAckCode = await runAck(['47c2'], shortAckIo, { home: f.home, now: () => NOW });
+    expect(shortAckCode).toBe(1);
+    expect(shortAckIo.err).toContain('8 characters');
+    expect(existsSync(join(f.dropDir, `${id1}.read.json`))).toBe(false);
 
     const ackIo = testIo(f.root, { kind: 'seat', name: 'orchestrator', pane: PANE_ORCH, session: 'acme' });
     const ackCode = await runAck(['47c25f34'], ackIo, { home: f.home, now: () => NOW });
@@ -321,7 +333,7 @@ describe('2. team reply and team ack by short prefix and ambiguous prefix refusa
     expect(ambigAckIo.err).toContain(collB);
   });
 
-  test('team reply accepts an 8-character prefix and refuses an ambiguous prefix naming the colliding ids', async () => {
+  test('team reply accepts an 8-character prefix, refuses a prefix shorter than 8 characters, and refuses an ambiguous prefix naming the colliding ids', async () => {
     const f = makeFixture();
     const id1 = '47c25f34-ab42-47d2-a54c-5597aeb305fa';
     plantRecord(
@@ -349,6 +361,12 @@ describe('2. team reply and team ack by short prefix and ambiguous prefix refusa
       processInfo: () => ({ shell: 100, foreground: [200] }),
       socketsDir: join(f.base, 'sockets'),
     };
+    const shortReplyIo = testIo(f.root, { kind: 'seat', name: 'orchestrator', pane: PANE_ORCH, session: 'acme' });
+    const shortReplyCode = await runReply(['47c2', 'Too short prefix.'], shortReplyIo, replyHost);
+    expect(shortReplyCode).toBe(1);
+    expect(shortReplyIo.err).toContain('8 characters');
+    expect(existsSync(join(f.dropDir, `${id1}.replied.json`))).toBe(false);
+
     const replyIo = testIo(f.root, { kind: 'seat', name: 'orchestrator', pane: PANE_ORCH, session: 'acme' });
     const replyCode = await runReply(['47c25f34', 'Proceed with the plan.'], replyIo, replyHost);
     expect(replyCode, replyIo.err).toBe(0);
@@ -416,7 +434,7 @@ describe('3. compact header folding and sender kind opening words across render 
         from_client: { client_id: 'grok-bot', grant_id: 'grant-01' },
         rule: CLIENT_RULE,
         rawBody: 'Owner relay ping.\n',
-        expectedHeader: 'Grok Bot, a client (owner relay):',
+        expectedHeader: 'Client Grok Bot (owner relay):',
         messageText: 'Owner relay ping.\n',
       },
       {
@@ -646,5 +664,140 @@ describe('3. compact header folding and sender kind opening words across render 
     const traceIo = owner(made.root);
     expect(await runTrace([parsed.msg_id], traceIo, { home: made.home })).toBe(0);
     expect(traceIo.out).toContain(`admitted by: ${TO_ORCH_RULE}`);
+  });
+
+  test('attributedBody folds a plain headerless body into the compact header and never emits [attributed sender: …]', () => {
+    const plainNoRule = attributedBody('Plain body text', 'orchestrator');
+    expect(plainNoRule).toBe('from orchestrator:\n\nPlain body text');
+    expect(plainNoRule).not.toContain('[attributed sender:');
+
+    const plainWithRule = attributedBody('Plain body text', 'orchestrator', {
+      rule: 'an orchestrator or operator to a seat of its own team',
+    });
+    expect(plainWithRule).toBe('from orchestrator (team lead):\n\nPlain body text');
+    expect(plainWithRule).not.toContain('[attributed sender:');
+  });
+
+  test('daemon waited socket frame with a summary names only the sender in the compact header and keeps the summary in the body', async () => {
+    const made: World = world(null, [
+      { name: 'argon', role: 'implementer', cli: 'antigravity', label: 'Argon · builder' },
+    ]);
+    extraCleanups.push(made.cleanup);
+
+    const teamPath = join(made.dir, 'team.yaml');
+    const lobby = resolveLobby(made.home, { entity: 'floor' });
+    mkdirSync(lobby, { recursive: true });
+    const teamText = readFileSync(teamPath, 'utf8').replace(lobbyDir(made.home), lobby);
+    writeFileSync(teamPath, `${teamText}entity: floor\n`);
+
+    const settingsPath = cliHookSettingsPath(made.dir, 'acme', 'lead');
+    if (settingsPath === null) throw new Error('missing settings path for lead');
+    mkdirSync(dirname(settingsPath), { recursive: true });
+    writeFileSync(settingsPath, JSON.stringify({ crossSessionInbound: 'accept' }));
+    writeFileSync(join(made.sockets, '222.sock'), '');
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(settingsPath, past, past);
+
+    const argonId = registerAgent(made.home, {
+      name: 'Argon',
+      signing: { model: 'Gemini 4 Argon', version: '1', role: 'implementer' },
+      lab: 'google',
+      cli: 'antigravity',
+      launcher: null,
+      launch: 'agy --model gemini-4-argon',
+      reach: { team: 'acme', seat: 'argon', session: 'acme', pane: 'pane-argon', address: null },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'team up',
+    }).id;
+    const leadId = registerAgent(made.home, {
+      name: 'Dora',
+      signing: { model: 'Claude Opus', version: '5.5', role: 'coordinator' },
+      lab: 'anthropic',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude --model claude-opus-5-5',
+      reach: { team: 'acme', seat: 'lead', session: 'acme', pane: 'pane-lead', address: null },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'team up',
+    }).id;
+
+    upsertTeam(made.home, teamIdOf(made.root), {
+      project: 'acme',
+      session: 'acme',
+      root: made.root,
+      lobby,
+      roster: [
+        { agent: leadId, seat: 'lead', role: 'coordinator', nickname: 'Dora' },
+        { agent: argonId, seat: 'argon', role: 'implementer', nickname: 'Argon' },
+      ],
+    });
+    updateState(made.dir, (state) => {
+      state.sessions.acme = {
+        seats: {
+          lead: { stage: 'ready' as const, pane: 'pane-lead' },
+          argon: { stage: 'ready' as const, pane: 'pane-argon' },
+        },
+      } as never;
+    });
+
+    const loaded = loadTeamFile(made.root, { home: made.home });
+    if (!loaded.ok) throw new Error('failed to load team file');
+
+    const frames: string[] = [];
+    const daemonHost: DaemonHost = {
+      agents: () => [
+        { name: 'lead', pane: 'pane-lead' },
+        { name: 'argon', pane: 'pane-argon' },
+      ],
+      processInfo: () => ({ shell: 111, foreground: [222] }),
+      socketsDir: made.sockets,
+      deliver: async (_socket: string, frame: string) => {
+        frames.push(frame);
+        return { ok: true };
+      },
+      native: {
+        typeText: () => true,
+        pressEnter: () => true,
+        status: () => 'idle',
+        wait: async () => {},
+      },
+      now: () => NOW,
+      home: made.home,
+      deliverWaitMs: 0,
+      pollReadyMs: 5,
+    };
+
+    const started = await startSendDaemon({
+      root: made.root,
+      dir: made.dir,
+      team: loaded.team,
+      host: daemonHost,
+    });
+    if (started.kind !== 'serving') throw new Error(`daemon failed to start: ${started.kind}`);
+    extraCleanups.push(() => {
+      void started.handle.close();
+    });
+
+    await requestDaemon(started.handle.socketPath, {
+      v: 1,
+      op: 'send',
+      from: 'argon',
+      to: 'lead',
+      body: `from Argon — admitted by: ${TO_ORCH_RULE}\n\nSummary headline\nDetails below.`,
+      wait: true,
+      timeout_s: 1,
+    });
+
+    expect(frames).toHaveLength(1);
+    const parsed = JSON.parse(frames[0]!) as { msg_id: string; message: { content: string } };
+    const prefix = parsed.msg_id.slice(0, 8);
+    expect(parsed.message.content).toBe(
+      `Gemini seat Argon (to orchestrator):\n\nSummary headline\nDetails below.\n\n↩ team reply ${prefix} "…" · team ack ${prefix}`,
+    );
+    expect(parsed.message.content).not.toContain('Message from');
   });
 });
