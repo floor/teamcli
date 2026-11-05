@@ -13,8 +13,9 @@ pane is read, no team file or state is written.
 Reads `herdr session list --json`, and for each session it keeps, that session's registry
 (`<session_dir>/session.json`, for each workspace's `identity_cwd`) and, when the registry does not
 name a team file, this machine's record stores. A team is the record (or, on the legacy `file` source, the `.agents/team.yaml`) whose `session`
-is the herdr session (an omitted `session` is `<entity>-<project>`, or the project name when the
-file names no entity). A link standing in for the file is not opened. For a running session it also
+is the herdr session (an omitted `session` is the derived default: `<entity>-<project>` for a
+team in a project it namesakes, `<entity>-<project>-<team>` for one it does not,
+`<entity>-<team>` for a team that is its own project). A link standing in for the file is not opened. For a running session it also
 reads `herdr agent list` — the roster — and the pane of a seat whose profile says herdr cannot
 report it, for that seat's state. A stopped session is not asked for a roster.
 

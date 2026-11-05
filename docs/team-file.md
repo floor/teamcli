@@ -138,13 +138,22 @@ budgets:                      # the owner's: reserve or floor per account, marks
       sources: [status_line]  # the figure comes off Codex's status line
 ```
 
-- `session` names the herdr session and defaults to `project`; `--session` overrides it.
+- `session` names the herdr session; `--session` overrides it. The default is
+  `<entity>-<project>` for a team that sits in a project (`in_project:`) and is its namesake,
+  `<entity>-<project>-<team>` for one that is not — two teams of one project never share a
+  default — and `<entity>-<team>` (the team's name alone with no entity) for a team that is its
+  own project. An explicit `session:` still wins, and one that differs from the default draws a
+  one-line warning, because a name that drifts from its entity and project is how a stale
+  session gets reused. A team the registry already lists keeps its recorded session over any
+  default, so no default's move renames a live team; `team check` names the move and the
+  `session:` line that keeps the old name.
 - `in_project` names the project this team sits in, by the project's display name (one path
   segment, 128 characters at most), while `project:` keeps meaning the team's own name;
   `project_lead: true` beside it marks the team that leads that project — one team per project,
   and `team check` refuses a second. The project's record then carries the lead: the agent of the
   seat this record's `leads: true` marks as the team's lead, re-resolved on every launch, so a
-  mark that moves in the record moves the record with it.
+  mark that moves in the record moves the record with it. Joining a project also moves the
+  default session, as the `session` bullet above states.
 - `entity` names the entity this team belongs to (one path segment, 128 characters at most): the
   level above its project that a setting, the lobby's `<entity>` folder and a lead pair's reach
   are read from, and the name that makes two teams one entity's when both records carry it.
@@ -811,8 +820,8 @@ grant:
     - reload
 ```
 
-- `session` is the team's own session: the `session` key, or `<entity>-<project>` when that key is
-  omitted and the record names an entity (the project name alone when it names none). Any other value
+- `session` is the team's own session: the `session` key, or the default the `session` bullet at
+  the top of this reference derives when that key is omitted. Any other value
   is `grant.session must be the file's session "<session>": "<written>"`.
 - `seat` is the orchestrator's name, the one `coordinator:` or `leads: true` resolves. The
   operator's name, and any other name, is `grant.seat must name the orchestrator "<seat>":

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { SECTIONS } from '../file/sections/index.ts';
+import { defaultSession } from '../file/sections/session.ts';
 
 /**
  * The sections only the owner changes. An edit to any of them needs a new
@@ -166,11 +167,29 @@ function seatDigest(seat: Record<string, unknown>, free: Set<string>): string {
  * old default, the project name alone. Null otherwise.
  */
 export function sessionDefaultMove(approvedDigest: string | undefined, team: Approvable): { from: string; to: string } | null {
-  const { project, entity, session } = team as { project?: unknown; entity?: unknown; session?: unknown };
-  if (typeof project !== 'string' || typeof entity !== 'string' || !entity) return null;
-  if (session !== `${entity}-${project}`) return null;
-  if (approvedDigest !== digest(sectionOf(team, 'session')) && approvedDigest === digest(project)) return { from: project, to: session };
-  return null;
+  const { project, entity, session, inProject } = team as {
+    project?: unknown;
+    entity?: unknown;
+    session?: unknown;
+    inProject?: unknown;
+  };
+  if (typeof project !== 'string' || !project) return null;
+  const entityName = typeof entity === 'string' && entity ? entity : null;
+  const inProjectName = typeof inProject === 'string' && inProject ? inProject : null;
+  let now: string;
+  try {
+    now = defaultSession(project, entityName, inProjectName);
+  } catch {
+    return null;
+  }
+  if (session !== now) return null;
+  if (approvedDigest === digest(sectionOf(team, 'session'))) return null;
+  // The defaults an approval could predate: the team name alone, from before the entity joined
+  // the default, and <entity>-<team>, from before the team's project did. The file works either
+  // way — this only names the move and the way to keep the old session.
+  const before = [entityName ? `${entityName}-${project}` : project, project];
+  const from = before.find((name) => name !== now && digest(name) === approvedDigest);
+  return from === undefined ? null : { from, to: now };
 }
 
 /** One difference a file has against its approval. `seat-missing` is the report's own line for a
@@ -217,7 +236,7 @@ export const WATCH_CHECKS_CHANGED = '`watch.checks` changed';
 export function describe(difference: Difference): string {
   if (difference.kind === 'section' && difference.moved) {
     const { from, to } = difference.moved;
-    return `\`session\` changed: "${from}" -> "${to}", the new default session (<entity>-<project>); set \`session: ${from}\` to keep the old one`;
+    return `\`session\` changed: "${from}" -> "${to}", the new default session (<entity>-<project>[-<team>]); set \`session: ${from}\` to keep the old one`;
   }
   if (difference.kind === 'section') return `\`${difference.name}\` changed`;
   if (difference.kind === 'seat-new') return `seat ${difference.name} is not in the last approval`;
