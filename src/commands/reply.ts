@@ -1005,10 +1005,15 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   };
 
   let landed = false;
+  // A held seat is a queue, not a refusal, exactly as a send's own drop and typed legs say it:
+  // the record is a file, not a keystroke — its id names the file, the seal is idempotent, and
+  // the hint's write is atomic and lock-optional on its own — so it is written without the lock,
+  // and the seat's watcher delivers the answer when the seat is free. Only a live holder reaches
+  // this arm: a dead pid, or a live process the token's start does not name, is stale and is
+  // taken over by `acquireSeatLock`. The unread hint is the one piece that can race the holder,
+  // and its own write is atomic: the worst a race costs is one hint, which the sweep settles by
+  // verifying the folder.
   const lock = acquireSeatLock(toDir, toSession, targetSeat);
-  if (!('release' in lock)) {
-    return refused(io, json, `${targetSeat}: another command holds it (${holderText(lock)}); nothing was written`);
-  }
   try {
     try {
       sealDropTree(toDir, toSession, targetSeat);
@@ -1024,9 +1029,10 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     const folder = recordDir(toRoot, toSession, targetSeat);
     const written = writeRecord(folder, signed);
     if (!written.ok) return refused(io, json, `${targetSeat}: the record could not be written (${written.reason}); nothing was written`);
-    // The recipient's unread index names this record as its sender's newest: the thread lock is
-    // already held here, so the hint is written inside it and never waits on it.
-    noteUnread(folder, me, replyId, at, { held: true });
+    // The recipient's unread index names this record as its sender's newest. A caller that holds
+    // the lock writes the hint inside it; a queued write hands the hint its own best-effort lock,
+    // which the holder refuses without costing the entry.
+    noteUnread(folder, me, replyId, at, 'release' in lock ? { held: true } : {});
     // The word the report will use is decided here, by the reader's own checks: the record at the
     // path `team messages` and the seat's inbox server scan, its name the id, bound to that tree's
     // root and session, addressed to that seat, its signature verifying. Only a record that passes
@@ -1054,7 +1060,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     const receipt = signReceiptPayload({ kind: 'receipt', status: 'replied', id: answered.id, to: me, root, session, at }, host.home);
     writeReceipt(recordDir(root, session, me), receipt, host.home);
   } finally {
-    lock.release();
+    if ('release' in lock) lock.release();
   }
   // The history line belongs to the team the record was written into: the answer's own team, which
   // is the owner endpoint's team when the owner asked.
