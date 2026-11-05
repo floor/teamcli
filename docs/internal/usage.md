@@ -77,6 +77,22 @@ and the bucket (`Google AI Ultra, Claude and GPT models`), the account and the b
 is set (`google-antigravity (Claude and GPT models)`), the account alone for a subscription that
 splits into no bucket. JSON keeps `account` and `pool` and adds `plan` where one is set.
 
+The same file may carry a top-level `credits:` map, one entry per account: `available` (a
+non-negative number) and `currency` (three letters) are required, `cap` (a positive number) and
+`autoReload` (a boolean) are optional. `machineCreditsOf` reads it once per run into
+`MachineUsage.credits`; `reportOf` copies the entries for the accounts this view prints a row
+for into `UsageReport.credits`, keyed by account and copied field by field, so the owner's map
+never rides the JSON by reference. `reportText` prints one `credits` line under the account's
+rows: the money available, the monthly cap and the reload state, then the overage answer for the
+account's quota state — `walled` or `near cap` prints `overage is expected before the reset`
+with the limit the credit is spent to (the whole cap when the credit reaches it, else how far
+short of the cap it stops), `ok` prints `no overage is expected before the reset`, and `unknown`
+prints that no fresh reading can say either way. The expected overage in money is nowhere in
+these figures — no CLI prints it and no plan price turns the window's overshoot into money — so
+the line never invents one. An entry that names no available amount or no currency is skipped,
+never guessed, and an optional field that is no figure is left out while the rest of the entry
+still reads.
+
 The paying account is not the lab. A seat's lab is the model its pane says it runs: herdr's
 `display_agent` line for the agent of that name, which the watch keeps from the pane itself. A
 Claude Code seat whose line names another lab (`DeepSeek V4.1 Flash default`, `GLM 5.3`) belongs

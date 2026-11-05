@@ -67,6 +67,38 @@ GPT models` are Antigravity's two buckets on one plan, and `Claude Max 20x` is a
 splits into none. An account with no entry keeps its own name, with its bucket in the CLI's words —
 `google-antigravity (Claude and GPT models)` — and never the tool's own word for the pool.
 
+The file can also carry the credit figures the owner wrote down — the money that pays usage past
+the plan's limit, from the billing page the owner reads and no CLI prints:
+
+```text
+accounts:
+  - anthropic
+
+credits:
+  anthropic:
+    available: 260.50
+    currency: EUR
+    cap: 300
+    autoReload: false
+```
+
+`available` and `currency` (three letters) are required; `cap` and `autoReload` are optional. The
+account's rows are followed by one line stating the figures and the one answer they allow about
+the overage:
+
+```text
+  anthropic  credits  €260.50 available  €300.00 monthly cap  auto-reload off  overage is expected before the reset; the credits cover it until they are spent, €39.50 short of the cap
+```
+
+Overage is expected when the account's own state is `walled` or `near cap` — the window has hit
+its limit or is on course to empty before it resets — and the line answers with the limit the
+credit is spent to: the whole cap when the credit reaches it, else how far short of the cap the
+credit stops. A window on pace prints `no overage is expected before the reset`, and an account
+with no fresh reading prints `no fresh reading, so overage cannot be expected or ruled out`,
+rather than claiming either. The expected overage in money is a figure no CLI prints and no plan
+price gives, so the line never invents one. A currency this tool has no sign for keeps its code
+(`260.50 CHF`).
+
 These accounts appear even outside a project, with no teams or budgets configured. The file is
 optional: a lab no entry here declares is one account named after the lab, read from the status
 rows and usage prints of the seats that draw on it, so a machine with no `accounts.yaml` still
