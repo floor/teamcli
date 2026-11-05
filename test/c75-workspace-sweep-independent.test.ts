@@ -36,6 +36,7 @@ const OTHER_PANE = 'fixture-pane-other';
 const OTHER_SPACE = 'fixture-space-other';
 const HUMAN_PANE = 'fixture-pane-human';
 const HUMAN_SPACE = 'fixture-space-human';
+const CALLER_PANE = 'fixture-pane-caller';
 const WATCH_PANE = 'fixture-watch-pane';
 const RECORDED = { shell: 100, cli: [200] };
 const LAUNCH = 'claude --model claude-sonnet-5-5';
@@ -59,7 +60,7 @@ function git(cwd: string, ...args: string[]): string {
   });
 }
 
-function teamText(worker: 'declared' | 'stopped' | 'absent'): string {
+function teamText(worker: 'declared' | 'stopped' | 'absent' | 'human'): string {
   const seat = worker === 'absent'
     ? ''
     : `  - role: implementer
@@ -70,7 +71,7 @@ function teamText(worker: 'declared' | 'stopped' | 'absent'): string {
     model: Claude Sonnet
     version: "5.5"
     launch: ${LAUNCH}
-${worker === 'stopped' ? '    stopped: true\n' : ''}`;
+${worker === 'stopped' ? '    stopped: true\n' : ''}${worker === 'human' ? '    human: true\n' : ''}`;
   return `format: 1
 project: acme
 coordinator: ${LEAD}
@@ -94,7 +95,7 @@ seats:
 ${seat}`;
 }
 
-function setup(worker: 'declared' | 'stopped' | 'absent'): void {
+function setup(worker: 'declared' | 'stopped' | 'absent' | 'human'): void {
   const text = teamText(worker);
   writeFileSync(join(dir, 'team.yaml'), text);
   const loaded = loadTeamFile(root, { file: join(dir, 'team.yaml'), home });
@@ -652,4 +653,82 @@ test('team remove leaves a human owner pane unswept', async () => {
   await runRemove([LEAD], io, sources);
   expect(closed).toEqual([]);
   expect(said(io)).not.toContain('was closed');
+});
+
+test('an answering Bus keeps the workspace it runs in and closes the one its record left', async () => {
+  setup('absent');
+  seedWatch();
+  updateState(dir, (file) => {
+    const session = (file.sessions[SESSION] ??= emptySession());
+    session.bus = { pane: BUS_PANE_ONE, workspace: BUS_ONE, started: NOW.toISOString() };
+  });
+  const made = makeWorld({
+    panes: {},
+    busAlive: true,
+    bus: {
+      [BUS_PANE_ONE]: { workspace: BUS_ONE, process: bare(60) },
+      [BUS_PANE_TWO]: { workspace: BUS_TWO, process: { shell: 70, foreground: [70, 71] } },
+    },
+  });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), said(io)).toBe(0);
+  expect(made.trace.created).toEqual([]);
+  expect(made.trace.runs).toEqual([]);
+  expect(made.trace.closed).toEqual([BUS_ONE]);
+  expect(said(io)).toContain(`bus: its workspace ${BUS_ONE} was closed`);
+});
+
+test('a workspace whose pane list reads empty is left as it is', async () => {
+  setup('stopped');
+  seedWatch();
+  recordReady();
+  const made = makeWorld({
+    panes: { [PANE]: { workspace: OTHER_SPACE, process: bare(RECORDED.shell) } },
+  });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), said(io)).toBe(0);
+  expect(made.trace.closed).toEqual([]);
+  expect(said(io)).toContain(`${WORKER}: its workspace ${SPACE} could not be read; left as it is`);
+});
+
+test('a human seat the host moved keeps its record and its workspace', async () => {
+  setup('human');
+  seedWatch();
+  recordReady();
+  const made = makeWorld({
+    panes: {
+      [PANE]: { process: null },
+      [OTHER_PANE]: {
+        workspace: OTHER_SPACE,
+        name: WORKER,
+        session: SES,
+        screen: idleScreen,
+        process: { shell: 500, foreground: [900] },
+      },
+    },
+    labels: { [SPACE]: WORKER, [OTHER_SPACE]: WORKER },
+  });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), said(io)).toBe(0);
+  expect(made.trace.closed).toEqual([]);
+  expect(made.trace.created).toEqual([]);
+  expect(seatState()).toMatchObject({ pane: PANE, workspace: SPACE });
+  expect(said(io)).toContain(`${WORKER}: the pane is a human's; nothing is launched into it or typed into it; left as it is`);
+});
+
+test('a workspace holding the pane this command runs in is left as it is', async () => {
+  setup('stopped');
+  seedWatch();
+  recordReady();
+  const made = makeWorld({
+    panes: {
+      [PANE]: { process: bare(RECORDED.shell) },
+      [CALLER_PANE]: { process: bare(300) },
+    },
+  });
+  const io = testIo(root, { kind: 'owner' });
+  io.env.HERDR_PANE_ID = CALLER_PANE;
+  expect(await runUp([], io, made.sources), said(io)).toBe(0);
+  expect(made.trace.closed).toEqual([]);
+  expect(said(io)).toContain(`${WORKER}: its workspace ${SPACE} holds the pane this command runs in; left as it is`);
 });
