@@ -349,6 +349,8 @@ function definedOnly<T extends object>(fields: T): Partial<T> {
 }
 
 // --- the lock and the write ------------------------------------------------------------------
+// Fixed lock order with `entities.yaml`: if a caller ever holds both locks, `entities.yaml.lock`
+// (`lockedEntities` in `src/entities.ts`) is acquired before `projects.yaml.lock` (`locked`).
 
 const LOCK_WAIT_MS = 5000;
 const LOCK_STALE_MS = 15000;
@@ -782,8 +784,19 @@ export function planProjectRulesSet(
             ([, raw]) => isMap(raw) && raw.name === projectId,
           )
         : undefined;
-    if (byDisplay) resolvedId = byDisplay[0];
-    else {
+    if (byDisplay) {
+      resolvedId = byDisplay[0];
+    } else if (opts.allowDisplayName !== false) {
+      let derivedId: string | null = null;
+      try {
+        derivedId = projectIdOf(projectId);
+      } catch {}
+      if (derivedId !== null && Object.hasOwn(parsed.projects, derivedId)) {
+        resolvedId = derivedId;
+      } else {
+        throw new ProjectsError(`${path}: no entry for project "${projectId}"; nothing was written`);
+      }
+    } else {
       throw new ProjectsError(`${path}: no entry for project "${projectId}"; nothing was written`);
     }
   }
