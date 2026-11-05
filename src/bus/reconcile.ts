@@ -35,7 +35,7 @@ import {
 } from '../config/sources.ts';
 import { getTeam, teamIdOf } from '../registry/teams.ts';
 import { markOrphanedSeats } from '../registry/sync.ts';
-import { HISTORY_KEPT, readHistory, type HistoryEntry } from '../send/history.ts';
+import { HISTORY_KEPT, readHistorySteps, type HistoryEntry } from '../send/history.ts';
 import type { PendingDrop } from '../send/pending.ts';
 import { readState } from '../state.ts';
 import { messageKeyState } from '../store/keys.ts';
@@ -202,6 +202,9 @@ export type ReconcileState = {
    *  before seals. One attempt per process: a segment that cannot be sealed keeps the ordinary
    *  verified read, and a retry would re-verify it on every pass. */
   sealAttempted: boolean;
+  /** Combined stat stamp of the registry and team files `markOrphanedSeats` consults, so a quiet
+   *  pass with unchanged declarations skips the team-file reload and git-root lookup. */
+  orphanStamp: string | null;
   stats: ReconcileStats;
 };
 
@@ -216,12 +219,15 @@ export function createReconcileState(): ReconcileState {
     refused: new Set(),
     refusedNow: new Set(),
     sealAttempted: false,
+    orphanStamp: null,
     stats: { passes: 0, filesRead: 0, filesReused: 0, verifies: 0, verifiesReused: 0, yields: 0 },
   };
 }
 
 /** The share of the event loop one async pass takes between turns. */
-export const DEFAULT_RECONCILE_SLICE_MS = 8;
+export const DEFAULT_RECONCILE_SLICE_MS = 2;
+/** The number of entries a directory listing, cache prune, or skipped-file run scans per step. */
+const RECONCILE_SCAN_CHUNK = 64;
 /** How long the async driver keeps retrying a deferred append while the event lock is held: the
  *  same budget the synchronous lock wait would spend. Past it the next pass tries again. */
 export const DEFAULT_APPEND_RETRY_MS = 5_000;
@@ -331,6 +337,28 @@ function oneStamp(path: string): string {
   }
 }
 
+function fileStampOnly(path: string): string | null {
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile()) return null;
+    return `${String(stat.ino)}:${String(stat.size)}:${String(stat.mtimeMs)}:${String(stat.ctimeMs)}`;
+  } catch {
+    return null;
+  }
+}
+
+function orphanInputsStamp(home: string, root: string): string {
+  const teamId = teamIdOf(root);
+  const configDir = join(home, '.config', 'team');
+  return [
+    oneStamp(join(configDir, 'agents')),
+    oneStamp(join(configDir, 'teams')),
+    oneStamp(join(configDir, 'team-configs', `${teamId}.json`)),
+    oneStamp(join(root, '.agents', 'team.yaml')),
+    oneStamp(join(configDir, 'settings.yaml')),
+  ].join('|');
+}
+
 /** The stat signature of a retained log or history: the live file plus every rotated segment. A
  *  rotation moves the live file and rewrites a segment, so any change to the set changes this. */
 function retainedStamp(path: string, kept: number): string {
@@ -343,7 +371,11 @@ function retainedStamp(path: string, kept: number): string {
 /** The directory's listing, reused whole while its own stat stamp is unchanged: a directory's
  *  mtime moves when an entry is added or removed. Each file's stamp is still checked below, so a
  *  record rewritten under the same name is read again. */
-function listDir(state: ReconcileState, dir: string, visited: Set<string>): string[] | null {
+function* listDirSteps(
+  state: ReconcileState,
+  dir: string,
+  visited: Set<string>,
+): Generator<void, string[] | null, void> {
   let signature: string;
   try {
     const stat = lstatSync(dir);
@@ -361,17 +393,23 @@ function listDir(state: ReconcileState, dir: string, visited: Set<string>): stri
   visited.add(dir);
   const cached = state.dirs.get(dir);
   if (cached !== undefined && cached.stamp === signature) return cached.names;
-  let names: string[];
+  let rawNames: string[];
   try {
-    names = readdirSync(dir).sort();
+    rawNames = readdirSync(dir);
   } catch {
     return null;
   }
+  yield;
+  const names = rawNames.sort();
+  yield;
   const files = new Map<string, FileCache>();
   if (cached !== undefined) {
+    let seen = 0;
     for (const name of names) {
       const hit = cached.files.get(name);
       if (hit !== undefined) files.set(name, hit);
+      seen += 1;
+      if (seen % RECONCILE_SCAN_CHUNK === 0) yield;
     }
   }
   state.dirs.set(dir, { stamp: signature, names, files });
@@ -421,21 +459,34 @@ function parsePendingDropFile(seatDir: string, name: string): PendingDrop | null
 
 /** Reads `.pending` markers from the already-listed `files` in `seatDir`, reusing cached parsed
  *  markers when their stat stamp is unchanged so unchanged markers are not re-read on every pass. */
-function readPendingCached(state: ReconcileState, seatDir: string, files: readonly string[]): PendingDrop[] {
+function* readPendingCachedSteps(
+  state: ReconcileState,
+  seatDir: string,
+  files: readonly string[],
+): Generator<void, PendingDrop[], void> {
   const drops: PendingDrop[] = [];
+  let scanned = 0;
   for (const name of files) {
-    if (!name.endsWith('.pending')) continue;
+    scanned += 1;
+    if (!name.endsWith('.pending')) {
+      if (scanned % RECONCILE_SCAN_CHUNK === 0) yield;
+      continue;
+    }
     const fullPath = join(seatDir, name);
-    const fresh = fileStampOf(fullPath);
-    if (fresh === null) continue;
-    let entry = cachedEntry(state, seatDir, name, fresh.stamp);
+    const stamp = fileStampOnly(fullPath);
+    if (stamp === null) {
+      yield;
+      continue;
+    }
+    let entry = cachedEntry(state, seatDir, name, stamp);
     if (entry === null || entry.kind !== 'pending') {
       entry = { kind: 'pending', drop: parsePendingDropFile(seatDir, name) };
-      storeEntry(state, seatDir, name, fresh.stamp, entry);
+      storeEntry(state, seatDir, name, stamp, entry);
     } else {
       state.stats.filesReused += 1;
     }
     if (entry.drop !== null) drops.push(entry.drop);
+    yield;
   }
   return drops.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
 }
@@ -529,7 +580,10 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       lastSeatEventTs: new Map<string, string>(),
       arrivedFrom: new Map<string, string>(),
     };
+    let seenEntries = 0;
     for (const entry of existing.entries) {
+      seenEntries += 1;
+      if (seenEntries % RECONCILE_SCAN_CHUNK === 0) yield;
       if (entry.kind === 'config.changed') cachedLog.configSeen.add(entry.record_id);
       if (entry.session !== session) continue;
       cachedLog.seen.add(`${entry.kind}\0${entry.record_id}`);
@@ -557,7 +611,12 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   // ruling asks for an observable mark instead of a delete, and this pass is where the removal
   // is first seen. A team file that does not load marks nothing.
   try {
-    markOrphanedSeats(home, root, nowDate);
+    const nextOrphanStamp = orphanInputsStamp(home, root);
+    if (state.orphanStamp !== nextOrphanStamp) {
+      markOrphanedSeats(home, root, nowDate);
+      state.orphanStamp = orphanInputsStamp(home, root);
+      yield;
+    }
   } catch {
     // The next pass retries; a registry this pass cannot write does not fail the reconcile.
   }
@@ -609,7 +668,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
 
   // 1. Scan `.agents/send-drops/<session>/<seat>` for drop files, `.pending` markers, and receipts.
   const sessionDropsDir = join(root, '.agents', 'send-drops', session);
-  const dropSeatNames = listDir(state, sessionDropsDir, visited);
+  const dropSeatNames = yield* listDirSteps(state, sessionDropsDir, visited);
   if (dropSeatNames !== null) {
     const seats = [...dropSeatNames].sort(compareSeatNames);
     for (const seat of seats) {
@@ -624,19 +683,27 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       }
       visited.add(seatDir);
 
-      const files = listDir(state, seatDir, visited) ?? [];
+      const files = (yield* listDirSteps(state, seatDir, visited)) ?? [];
 
       const sendersById = new Map<string, string>();
       const previousSenders = state.senders.get(seatDir);
 
+      let skippedDrops = 0;
       for (const file of files) {
-        if (file.startsWith('.')) continue;
-        if (isSideFile(file)) continue;
+        if (file.startsWith('.') || isSideFile(file)) {
+          skippedDrops += 1;
+          if (skippedDrops % RECONCILE_SCAN_CHUNK === 0) yield;
+          continue;
+        }
         const fullPath = join(seatDir, file);
         const id = file.endsWith('.json') ? file.slice(0, -'.json'.length) : file;
-        if (!RECORD_NAME.test(id)) continue;
-        const fresh = fileStampOf(fullPath);
-        if (fresh === null) {
+        if (!RECORD_NAME.test(id)) {
+          skippedDrops += 1;
+          if (skippedDrops % RECONCILE_SCAN_CHUNK === 0) yield;
+          continue;
+        }
+        const stamp = fileStampOnly(fullPath);
+        if (stamp === null) {
           // A linked leaf is not a record: its bytes could be anywhere, and the pass never
           // follows a link. It is named once; nothing is read.
           if (isLinkAt(fullPath)) {
@@ -647,7 +714,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
           // signature covers the fields the arrival carries, and it must be addressed to this
           // seat, session and checkout. Without the key nothing signed can verify, and the
           // record is left for a pass that has one.
-          let entry = cachedEntry(state, seatDir, file, fresh.stamp);
+          let entry = cachedEntry(state, seatDir, file, stamp);
           if (entry === null || entry.kind !== 'drop') {
             const checked = checkedDropRelative(root, session, seat, file, { session, seat, record_id: id }, scope, keyState.key);
             stats.filesRead += 1;
@@ -659,7 +726,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
                 refuseRecord(options, state, `record\0${fullPath}`, `${seat}/${id}`, checked.reason);
               }
             }
-            storeEntry(state, seatDir, file, fresh.stamp, entry);
+            storeEntry(state, seatDir, file, stamp, entry);
           } else {
             stats.filesReused += 1;
             // Still here, still refused: the path stays in the cache and is not said again.
@@ -677,14 +744,15 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       // never the message: the arrival it asks for names a record, and is raised only once that
       // record is on disk and verifies. A marker whose record is gone, or refused, raises
       // nothing — a held event included, since its sender would come from the same marker.
-      for (const pending of readPendingCached(state, seatDir, files)) {
+      const pendingDrops = yield* readPendingCachedSteps(state, seatDir, files);
+      for (const pending of pendingDrops) {
         let arrival: EventAppendInput | null = null;
         let refusal: string | null = null;
         if (RECORD_NAME.test(pending.id) && keyState.kind === 'key') {
           for (const name of [pending.id, `${pending.id}.json`]) {
             const fullPath = join(seatDir, name);
-            const fresh = fileStampOf(fullPath);
-            if (fresh === null) {
+            const stamp = fileStampOnly(fullPath);
+            if (stamp === null) {
               if (isLinkAt(fullPath)) {
                 // No stamp to reuse. The reader's own sentence is the marker's reason.
                 const checked = checkedDropRelative(
@@ -704,7 +772,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
             }
             // The drop scan cached this record under its stamp. An unchanged marker reuses that
             // entry instead of verifying the file again.
-            let entry = cachedEntry(state, seatDir, name, fresh.stamp);
+            let entry = cachedEntry(state, seatDir, name, stamp);
             if (entry === null || entry.kind !== 'drop') {
               const checked = checkedDropRelative(
                 root,
@@ -722,7 +790,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
                 entry = { kind: 'drop', verified: false };
                 if (!checked.missing) refusal = checked.reason;
               }
-              storeEntry(state, seatDir, name, fresh.stamp, entry);
+              storeEntry(state, seatDir, name, stamp, entry);
             } else {
               stats.verifiesReused += 1;
             }
@@ -759,15 +827,32 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       // is enough to raise it; only a new or touched file is stamped again. The sender comes from
       // this listing, from the map the preceding pass left, or — after any number of quiet passes,
       // or a restart — from the arrival event the log still holds for that record.
+      let skippedReceipts = 0;
       for (const file of files) {
-        if (file.startsWith('.')) continue;
-        const fullPath = join(seatDir, file);
+        if (file.startsWith('.')) {
+          skippedReceipts += 1;
+          if (skippedReceipts % RECONCILE_SCAN_CHUNK === 0) yield;
+          continue;
+        }
         const receipt = receiptOf(file);
-        if (receipt === null || !RECORD_NAME.test(receipt.id)) continue;
-        const fresh = fileStampOf(fullPath);
-        if (fresh === null) continue;
-        let entry = cachedEntry(state, seatDir, file, fresh.stamp);
+        if (receipt === null || !RECORD_NAME.test(receipt.id)) {
+          skippedReceipts += 1;
+          if (skippedReceipts % RECONCILE_SCAN_CHUNK === 0) yield;
+          continue;
+        }
+        const fullPath = join(seatDir, file);
+        const stamp = fileStampOnly(fullPath);
+        if (stamp === null) {
+          yield;
+          continue;
+        }
+        let entry = cachedEntry(state, seatDir, file, stamp);
         if (entry === null || entry.kind !== 'receipt') {
+          const fresh = fileStampOf(fullPath);
+          if (fresh === null) {
+            yield;
+            continue;
+          }
           entry = { kind: 'receipt', receipt: receipt.receipt, id: receipt.id, at: fresh.mtimeIso };
           storeEntry(state, seatDir, file, fresh.stamp, entry);
         } else {
@@ -791,7 +876,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
 
   // 2. Scan signed `.agents/messages/<seat>` records and `.read.json` receipts.
   const messagesDir = join(root, '.agents', 'messages');
-  const signedSeatNames = listDir(state, messagesDir, visited);
+  const signedSeatNames = yield* listDirSteps(state, messagesDir, visited);
   if (signedSeatNames !== null && keyState.kind === 'key') {
     const keyPrint = keyPrintOf(keyState);
     const seats = [...signedSeatNames].sort(compareSeatNames);
@@ -806,17 +891,29 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
         continue;
       }
       visited.add(seatDir);
-      const files = listDir(state, seatDir, visited) ?? [];
+      const files = (yield* listDirSteps(state, seatDir, visited)) ?? [];
       const messageSenders = new Map<string, string>();
       const previousSenders = state.signedSenders.get(seatDir);
+      let skippedMailboxMessages = 0;
       for (const file of files) {
-        if (!file.endsWith('.json') || file.endsWith('.read.json')) continue;
+        if (!file.endsWith('.json') || file.endsWith('.read.json')) {
+          skippedMailboxMessages += 1;
+          if (skippedMailboxMessages % RECONCILE_SCAN_CHUNK === 0) yield;
+          continue;
+        }
         const id = file.slice(0, -'.json'.length);
-        if (!RECORD_NAME.test(id)) continue;
+        if (!RECORD_NAME.test(id)) {
+          skippedMailboxMessages += 1;
+          if (skippedMailboxMessages % RECONCILE_SCAN_CHUNK === 0) yield;
+          continue;
+        }
         const fullPath = join(seatDir, file);
-        const fresh = fileStampOf(fullPath);
-        if (fresh === null) continue;
-        let entry = cachedEntry(state, seatDir, file, fresh.stamp);
+        const stamp = fileStampOnly(fullPath);
+        if (stamp === null) {
+          yield;
+          continue;
+        }
+        let entry = cachedEntry(state, seatDir, file, stamp);
         if (entry === null || entry.kind !== 'message' || entry.keyPrint !== keyPrint) {
           // A mailbox record from a previous build carries the older minimal payload; the
           // checked read keeps the envelope, signature and addressing rule those records answer
@@ -839,19 +936,25 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
           }
           entry = next;
           stats.filesRead += 1;
-          storeEntry(state, seatDir, file, fresh.stamp, entry);
+          storeEntry(state, seatDir, file, stamp, entry);
         } else {
           stats.filesReused += 1;
           stats.verifiesReused += 1;
           if (!entry.verified) state.refusedNow.add(`mailbox-record\0${fullPath}`);
         }
-        if (!entry.verified) continue;
+        if (!entry.verified) {
+          yield;
+          continue;
+        }
         const from = entry.from;
         if (from !== undefined) messageSenders.set(id, from);
         // The Runtime writes its own owner delivery summaries into the same mailbox. A digest is
         // a summary of events already in the log, not a message: raising `message.arrived` for it
         // would deliver it again, and the next pass would summarize that summary, forever.
-        if (entry.ownerDigest) continue;
+        if (entry.ownerDigest) {
+          yield;
+          continue;
+        }
         raise({
           ts: entry.at,
           kind: 'message.arrived',
@@ -862,14 +965,26 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
         });
         yield;
       }
+      let skippedMailboxReceipts = 0;
       for (const file of files) {
-        if (!file.endsWith('.read.json')) continue;
+        if (!file.endsWith('.read.json')) {
+          skippedMailboxReceipts += 1;
+          if (skippedMailboxReceipts % RECONCILE_SCAN_CHUNK === 0) yield;
+          continue;
+        }
         const id = file.slice(0, -'.read.json'.length);
-        if (!RECORD_NAME.test(id)) continue;
+        if (!RECORD_NAME.test(id)) {
+          skippedMailboxReceipts += 1;
+          if (skippedMailboxReceipts % RECONCILE_SCAN_CHUNK === 0) yield;
+          continue;
+        }
         const fullPath = join(seatDir, file);
-        const fresh = fileStampOf(fullPath);
-        if (fresh === null) continue;
-        let entry = cachedEntry(state, seatDir, file, fresh.stamp);
+        const stamp = fileStampOnly(fullPath);
+        if (stamp === null) {
+          yield;
+          continue;
+        }
+        let entry = cachedEntry(state, seatDir, file, stamp);
         if (entry === null || entry.kind !== 'signed-receipt' || entry.keyPrint !== keyPrint) {
           let next: SignedReceiptEntry = { kind: 'signed-receipt', keyPrint, verified: false, id, at: nowIso };
           const checked = checkedMailboxReceiptRelative(root, seat, file, { session, seat, record_id: id }, scope, keyState.key);
@@ -881,13 +996,16 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
           }
           entry = next;
           stats.filesRead += 1;
-          storeEntry(state, seatDir, file, fresh.stamp, entry);
+          storeEntry(state, seatDir, file, stamp, entry);
         } else {
           stats.filesReused += 1;
           stats.verifiesReused += 1;
           if (!entry.verified) state.refusedNow.add(`mailbox-receipt\0${fullPath}`);
         }
-        if (!entry.verified) continue;
+        if (!entry.verified) {
+          yield;
+          continue;
+        }
         const from = messageSenders.get(id) ?? previousSenders?.get(id) ?? arrivedFrom.get(`${seat}\0${id}`);
         raise({
           ts: entry.at,
@@ -914,7 +1032,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
     if (stamp !== state.history.stamp) state.history = null;
   }
   if (state.history === null) {
-    const read = readHistory(project, root, home);
+    const read = yield* readHistorySteps(project, root, home, RECONCILE_SCAN_CHUNK);
     if (read.ok) {
       state.history = { path: read.path, stamp: retainedStamp(read.path, HISTORY_KEPT), entries: read.entries };
     }
@@ -1055,6 +1173,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
 
   // 4. Scan `.agents/team.state.json` for seat state transitions newer than their last event.
   const stateFile = readState(join(root, '.agents'));
+  yield;
   const sessionState = stateFile.sessions[session];
   if (sessionState !== undefined) {
     const seatNames = Object.keys(sessionState.seats).sort(compareSeatNames);
@@ -1093,13 +1212,22 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
     } catch {
       teamRecord = null;
     }
+    yield;
     if (teamRecord !== null) {
       const sources: { read: ConfigSourceRead; seat?: string }[] = [];
-      if (teamRecord.entity) sources.push({ read: readEntityConfigSource(home, teamRecord.entity) });
-      if (teamRecord.projectId) sources.push({ read: readProjectConfigSource(home, teamRecord.projectId) });
+      if (teamRecord.entity) {
+        sources.push({ read: readEntityConfigSource(home, teamRecord.entity) });
+        yield;
+      }
+      if (teamRecord.projectId) {
+        sources.push({ read: readProjectConfigSource(home, teamRecord.projectId) });
+        yield;
+      }
       sources.push({ read: readTeamConfigSource(home, teamId) });
+      yield;
       for (const line of teamRecord.roster) {
         sources.push({ read: readSeatConfigSource(home, line.agent, line.seat), seat: line.seat });
+        yield;
       }
       for (const source of sources) {
         // A record that does not verify raises nothing: a pass that cannot read a signed value
@@ -1148,17 +1276,26 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
 
   // A folder that disappeared takes its caches with it; a sender map for a folder this pass did
   // not list is no longer a fact about the current records.
+  let pruned = 0;
   for (const key of state.dirs.keys()) {
     if (!visited.has(key)) state.dirs.delete(key);
+    pruned += 1;
+    if (pruned % RECONCILE_SCAN_CHUNK === 0) yield;
   }
   for (const key of state.senders.keys()) {
     if (!visited.has(key)) state.senders.delete(key);
+    pruned += 1;
+    if (pruned % RECONCILE_SCAN_CHUNK === 0) yield;
   }
   for (const key of state.signedSenders.keys()) {
     if (!visited.has(key)) state.signedSenders.delete(key);
+    pruned += 1;
+    if (pruned % RECONCILE_SCAN_CHUNK === 0) yield;
   }
   for (const key of state.refused) {
     if (!state.refusedNow.has(key)) state.refused.delete(key);
+    pruned += 1;
+    if (pruned % RECONCILE_SCAN_CHUNK === 0) yield;
   }
   state.refusedNow.clear();
 
@@ -1178,6 +1315,16 @@ export function reconcilePass(options: ReconcileOptions): ReconcileResult {
  *  to run before the next slice of the pass. */
 function yieldTurn(): Promise<void> {
   return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+/** Active `reconcilePassAsync` drivers in this process. When several bus servers reconcile on
+ *  the same event loop at once, they divide the per-turn slice budget fairly instead of stacking
+ *  `N * sliceMs` in a single turn. */
+let activeAsyncPasses = 0;
+
+function sharedSliceBudget(sliceMs: number): number {
+  if (sliceMs <= 0) return sliceMs;
+  return sliceMs / Math.max(1, activeAsyncPasses);
 }
 
 type DeferredOutcome =
@@ -1238,7 +1385,8 @@ async function retryDeferredAppends(
         state.deferred = [];
         return;
       }
-      if (sliceMs >= 0 && performance.now() - since >= sliceMs) {
+      const budgetMs = sharedSliceBudget(sliceMs);
+      if (budgetMs >= 0 && performance.now() - since >= budgetMs) {
         state.stats.yields += 1;
         await yieldTurn();
         since = performance.now();
@@ -1284,22 +1432,28 @@ export async function reconcilePassAsync(options: ReconcileOptions): Promise<Rec
   const resolved = withLogSettings(options);
   const sliceMs = options.sliceMs ?? DEFAULT_RECONCILE_SLICE_MS;
   const steps = reconcileSteps({ ...resolved, state, appendWaitMs: 0 });
-  let since = performance.now();
-  for (;;) {
-    // The slice boundary is also the cancellation point: the caller's abort (a closing bus)
-    // stops the pass before it reads or appends anything else.
-    if (options.signal?.aborted === true) return cancelledResult();
-    const next = steps.next();
-    if (next.done) {
-      const result = next.value;
-      if (result.ok) {
-        await retryDeferredAppends(resolved, state, result.raised);
+  activeAsyncPasses += 1;
+  try {
+    let since = performance.now();
+    for (;;) {
+      // The slice boundary is also the cancellation point: the caller's abort (a closing bus)
+      // stops the pass before it reads or appends anything else.
+      if (options.signal?.aborted === true) return cancelledResult();
+      const next = steps.next();
+      if (next.done) {
+        const result = next.value;
+        if (result.ok) {
+          await retryDeferredAppends(resolved, state, result.raised);
+        }
+        return result;
       }
-      return result;
+      const budgetMs = sharedSliceBudget(sliceMs);
+      if (budgetMs < 0 || performance.now() - since < budgetMs) continue;
+      state.stats.yields += 1;
+      await yieldTurn();
+      since = performance.now();
     }
-    if (sliceMs < 0 || performance.now() - since < sliceMs) continue;
-    state.stats.yields += 1;
-    await yieldTurn();
-    since = performance.now();
+  } finally {
+    activeAsyncPasses = Math.max(0, activeAsyncPasses - 1);
   }
 }

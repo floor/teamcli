@@ -321,6 +321,14 @@ export function ensureSeatLine(input: RegistryTeam, seat: Pick<Seat, 'name'>): {
  */
 export function markOrphanedSeats(home: string, root: string, now: Date): string[] {
   const marked: string[] = [];
+  const teamId = teamIdOf(root);
+  let candidates: ReturnType<typeof readAgents>;
+  try {
+    candidates = readAgents(home).filter((agent) => agent.reach.team === teamId && agent.orphaned_at == null);
+  } catch {
+    return marked;
+  }
+  if (candidates.length === 0) return marked;
   let declared: Set<string>;
   try {
     const loaded = readTeamConfig(root, { home });
@@ -329,9 +337,8 @@ export function markOrphanedSeats(home: string, root: string, now: Date): string
   } catch {
     return marked;
   }
-  const teamId = teamIdOf(root);
-  for (const agent of readAgents(home)) {
-    if (agent.reach.team !== teamId || declared.has(agent.reach.seat) || agent.orphaned_at != null) continue;
+  for (const agent of candidates) {
+    if (declared.has(agent.reach.seat)) continue;
     try {
       updateAgent(home, agent.id, { orphaned_at: now.toISOString() });
       marked.push(agent.id);
