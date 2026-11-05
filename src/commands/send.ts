@@ -73,7 +73,7 @@ import { markTaken } from '../send/taken.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
 import { quotaOutDetail, quotaOutOf } from '../send/quota-out.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
-import { existingRecordIdsIn, frameFor, readerLine } from '../send/frame.ts';
+import { compactReaderLine, existingRecordIdsIn, frameFor, readerLine } from '../send/frame.ts';
 import {
   declaredInboundOf, heldSocketPath, inboundStaleReason, preciseSocketSkipReason, readHeldSocket,
   socketEligible, socketHeldReason, socketIneligibleReason, socketSkipReason,
@@ -5995,7 +5995,13 @@ async function deliverSocketFrame(
   // sender, so an owner-origin frame needs no reply target and no sending team. A person-pane
   // seat has no reader line at all: a person answers in their own client.
   const dropDir = join(to.dir, 'send-drops', to.session, to.seat);
-  const reply = personPane ? null : readerLine(msgId, existingRecordIdsIn(dropDir));
+  const existingIds = existingRecordIdsIn(dropDir);
+  const compact = declaredCompactDeliveryAt(to, host.home);
+  const reply = personPane
+    ? null
+    : compact
+      ? compactReaderLine(msgId, existingIds)
+      : readerLine(msgId, existingIds);
   const normalizedDisplay = header === '' ? null : header === 'owner' ? 'the owner' : header;
   const content = attributedBody(body, from, {
     record: payload,
@@ -6003,6 +6009,7 @@ async function deliverSocketFrame(
     root: to.root,
     displayName: normalizedDisplay,
     rule: payload.rule,
+    compact,
   });
   // The record's exact text is signed here for the two stores that do not write the copy first:
   // `signRecord` has no clock and no nonce, so these are the same bytes the walk's own staging
@@ -6207,6 +6214,17 @@ function declaredWebhookAt(to: Aim, home: string | undefined): Seat['webhook'] |
     return loaded.team.seats.find((seat) => seat.name === to.seat)?.webhook;
   } catch {
     return undefined;
+  }
+}
+
+/** Whether the receiving seat's team file declares `compact_delivery: true`. */
+function declaredCompactDeliveryAt(to: Aim, home: string | undefined): boolean {
+  try {
+    const loaded = readTeamConfig(to.root, home === undefined ? {} : { home });
+    if (!loaded.ok) return false;
+    return loaded.team.seats.find((seat) => seat.name === to.seat)?.compactDelivery === true;
+  } catch {
+    return false;
   }
 }
 

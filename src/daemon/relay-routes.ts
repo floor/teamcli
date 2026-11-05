@@ -43,7 +43,7 @@ import { teamIdOf } from '../registry/teams.ts';
 import { deliveryChainOf, DeliveryChainUnreadable, type DeliveryChain } from '../send/delivery.ts';
 import type { FallbackNote } from '../send/fallback-events.ts';
 import { beginFallbackWalk, type FallbackWalk, type WalkAttempt } from '../send/fallback-walk.ts';
-import { existingRecordIdsIn, frameFor, readerLine } from '../send/frame.ts';
+import { compactReaderLine, existingRecordIdsIn, frameFor, readerLine } from '../send/frame.ts';
 import { attributedBody } from '../send/sender-claim.ts';
 import {
   declaredInboundOf,
@@ -132,6 +132,7 @@ export type DaemonRelayRoutePlan = {
   version?: string;
   launch?: string;
   human: boolean;
+  compactDelivery?: boolean;
   directOnly: boolean;
   home: string;
   stateDir: string;
@@ -490,6 +491,7 @@ export function selectDaemonRelayRoutes(
       ...(declaredSeat.version === undefined ? {} : { version: declaredSeat.version }),
       ...(declaredSeat.launch === undefined ? {} : { launch: declaredSeat.launch }),
       human,
+      ...(declaredSeat.compactDelivery === true ? { compactDelivery: true } : {}),
       directOnly,
       home,
       stateDir,
@@ -893,12 +895,19 @@ function resolveSocketFrameFor(
 ): string | undefined {
   if (input.frame !== undefined) return input.frame;
   if (body === undefined) return undefined;
+  const compact = plan.compactDelivery === true;
   const content = attributedBody(body, from, {
     ...(record === undefined ? {} : { record }),
     home: plan.home,
     root: plan.route.root,
+    compact,
   });
-  return frameFor(content, id, readerLine(id, existingRecordIdsIn(plan.dropDir)));
+  const existingIds = existingRecordIdsIn(plan.dropDir);
+  return frameFor(
+    content,
+    id,
+    compact ? compactReaderLine(id, existingIds) : readerLine(id, existingIds),
+  );
 }
 
 /**

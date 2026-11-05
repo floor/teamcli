@@ -1347,6 +1347,22 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           ],
         }),
       ],
+      'team.show': [
+        jsonEnvelope('team.show', {
+          format: 1 as const,
+          id: '47c25f34-ab42-47d2-a54c-5597aeb305fa',
+          prefix: '47c25f34',
+          project: 'beacon',
+          session: 'beacon',
+          seat: 'lead',
+          from: 'worker',
+          from_id: 'agt_000000000000',
+          rule: "a seat to its own team's orchestrator",
+          at: '2026-10-17T12:00:00.000Z',
+          written: true,
+          content: 'from worker (to orchestrator):\n\nReady for review.\n\n↩ team reply 47c25f34 "…" · team ack 47c25f34',
+        }),
+      ],
       'team.config-keys': [
         jsonEnvelope('team.config-keys', {
           format: 1 as const,

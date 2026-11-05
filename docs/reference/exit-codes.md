@@ -808,6 +808,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `setup.done` | `setup` | 0 | the owner signed the charter | `team setup --signer touch-id` |
 | `setup.refused` | `setup` | 1 | the owner did not sign the charter; nothing was written | `team setup --signer touch-id` |
 | `setup.invocation` | `setup` | 2 | the invocation is invalid, or --signer was omitted so this run does not sign | `team setup` |
+| `show.shown` | `show` | 0 | the message was printed and marked read, or was already read or answered and was printed again | `team show 3a3b3c4d` |
+| `show.refused` | `show` | 1 | the message can't be shown, or the call is not the record's addressee | `team show 3a3b3c4d` |
+| `show.configuration` | `show` | 2 | the team file can't be read | `team show 3a3b3c4d` |
+| `show.usage` | `show` | 2 | the invocation can't be read | `team show` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |
 | `status.project-listed` | `status` | 0 | the project's teams are listed | `team status --project TeamCLI` |
 | `status.client-refused` | `status` | 1 | the owner-signed bundle grant, or the client read it admits, did not verify | `team status --client grant.json --key client.key` |

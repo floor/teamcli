@@ -401,6 +401,11 @@ function buildGates(): Record<string, Gate> {
       kind: 'team-read',
       why: 'one seat\'s settings and where each value comes from: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `--file` is the owner\'s alone, and set and unset are the owner\'s outright (their rows below)',
     },
+    show: {
+      kind: 'owner-or-own-team',
+      why: 'showing a message record is the record\'s addressee on its own pane, or the owner: it reads only the caller\'s own mailbox and writes the same signed read receipt team messages and team ack write',
+      terminal: { who: 'the owner or a seat of this team', where: 'a terminal outside herdr or its own pane' },
+    },
     swap: {
       kind: 'team-read',
       why: 'the view and `--rule` read is the team\'s: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `queue`, `now` and `cancel` have their own rows, and `--run` changes the team through the same verdict they call',

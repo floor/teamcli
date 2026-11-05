@@ -7566,6 +7566,61 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--general",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--key",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "show",
+      "positionals": [
+        {
+          "name": "id",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team show <id> [--json]"
+      ],
+      "who": {
+        "gate": "owner-or-own-team",
+        "terminal": {
+          "where": "a terminal outside herdr or its own pane",
+          "who": "the owner or a seat of this team"
+        },
+        "why": "showing a message record is the record's addressee on its own pane, or the owner: it reads only the caller's own mailbox and writes the same signed read receipt team messages and team ack write"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--all",
           "repeatable": false,
           "takesValue": false

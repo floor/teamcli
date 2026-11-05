@@ -22,7 +22,7 @@ export const GENERAL_OPS = [
   'commits', 'daemon', 'delegate', 'development-mode', 'doctor', 'drops', 'fallback', 'feed', 'forget', 'grant', 'hold', 'import',
   'issues', 'list', 'lock', 'mcp', 'migrate', 'next', 'order', 'owner-seat', 'pause', 'peek', 'plan', 'policy', 'pr', 'proc', 'projects',
   'queue', 'raise', 'register', 'release', 'reload', 'remove', 'rename', 'resume', 'revoke', 'route', 'seat', 'seats',
-  'sessions', 'settings', 'setup', 'status', 'swap', 'tempo', 'trace', 'unlock', 'usage', 'waits', 'watch', 'workflow', 'worktree',
+  'sessions', 'settings', 'setup', 'show', 'status', 'swap', 'tempo', 'trace', 'unlock', 'usage', 'waits', 'watch', 'workflow', 'worktree',
 ] as const;
 export type GeneralOp = (typeof GENERAL_OPS)[number];
 /** Every op, now and later: signed as the literal `*`, so one owner signature covers ops added after it. */

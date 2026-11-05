@@ -196,6 +196,13 @@ export type Seat = {
    */
   publicOnly?: true;
   /**
+   * The seat receives compact socket frames (`compact_delivery: true`): only the compact sender
+   * header, the first content line of the message body, and `↩ team show <id> · team reply <id> ·
+   * team ack <id>` are sent over the socket, while the full message remains on disk for `team show
+   * <id>`. Omitted when unset or `false`, so a file that marks no seat keeps its digest.
+   */
+  compactDelivery?: true;
+  /**
    * The seat's webhook delivery adapter, when the file writes one: the routine every accepted
    * signed message for the seat is POSTed to, with the drop file kept as the backup. Its two
    * paths are fields of the built seat like every other, so writing one is a change the owner

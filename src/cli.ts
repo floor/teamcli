@@ -57,6 +57,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   send: () => import('./commands/send.ts'),
   reply: () => import('./commands/reply.ts'),
   ack: () => import('./commands/ack.ts'),
+  show: () => import('./commands/show.ts'),
   route: () => import('./commands/route.ts'),
   feed: () => import('./commands/feed.ts'),
   release: () => import('./commands/release.ts'),

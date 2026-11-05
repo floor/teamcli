@@ -3586,6 +3586,36 @@ Usage:
 
 None.
 
+## `show`
+
+Hidden: no
+
+Usage:
+
+    team show <id> [--json]
+
+### Who may run it
+
+`owner-or-own-team` — showing a message record is the record's addressee on its own pane, or the owner: it reads only the caller's own mailbox and writes the same signed read receipt team messages and team ack write
+
+A run with no terminal is refused: only the owner or a seat of this team runs this, from a terminal outside herdr or its own pane
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `id` | no | no |
+
 ## `status`
 
 Hidden: no
