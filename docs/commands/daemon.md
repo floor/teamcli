@@ -18,9 +18,9 @@ machine with no broker handler never falls back to a per-clone broker.
 
     team daemon status [--json]
     team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
-    team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
+    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
     team daemon restart [--dry-run] [--json]
-    team daemon uninstall [--json]
+    team daemon uninstall [--home <folder>] [--json]
     team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
 
 A subcommand is required. `--root` is repeatable and names the checkouts this one daemon hosts;
@@ -135,6 +135,19 @@ steps and stops or starts nothing.
 `uninstall` removes the unit. A machine that never carried one is not an error:
 `team daemon: not installed; nothing to remove`, exit 0; a removed unit prints
 `team daemon: uninstalled; the system's service manager no longer starts it`.
+
+`--home <folder>` on `install` or `uninstall` serves a home other than the account home: a
+throwaway home, for a trial or a test, whose unit, state, socket and log are that folder's own.
+Its unit goes to the service manager under a label derived from that folder, so the manager
+holds it apart from the machine daemon, which keeps its own label; `uninstall --home` removes
+only the throwaway home's unit and leaves the machine daemon's unit and label untouched. The
+account home here is the login account's home, read from the account record, never from the
+shell's home setting. The flag is refused, exit 2 with the usage, when the folder is empty or
+not a folder, names the account home itself, ends in a trailing slash, cannot be resolved, or
+is a symbolic link or is reached through one: name the folder itself. When the account home
+itself cannot be read, `install` and `uninstall` fail closed, exit 1, with or without
+`--home`, rather than guess which label belongs to which home. Every other subcommand refuses
+the flag: it belongs to `install` and `uninstall` only.
 
 `fault-watch` asks the one running daemon to end exactly one hosted watch's in-flight run, as a
 diagnostic of the recovery path. It names one checkout with `--root` and that checkout's route id
@@ -254,6 +267,7 @@ restart off and leaves the telling ([`team policy`](policy.md) carries the three
 
 | Flag | Value | Effect |
 | --- | --- | --- |
+| `--home` | a folder | serve a throwaway home other than the account home, under a label derived from that folder; belongs to `install` and `uninstall`, and is refused for the account home, a trailing slash, an unresolvable folder, or a symbolic link |
 | `--root` | a checkout folder | host that checkout; repeatable, and validated when the unit is written; belongs to `run` and `install` |
 | `--started-by` | `service-manager`, `manual` or `team-up` | the launcher recorded in the state; belongs to `run`, and defaults to `manual` |
 | `--presence` | — | host each checkout's presence pipeline; belongs to `run` and `install`, is written into the unit by `install`, and is off by default |
