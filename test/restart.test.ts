@@ -25,7 +25,9 @@ import { findAgent, readAgents, recordAgentSession, registerAgent, updateAgent }
 import { recordedSeatSession } from '../src/registry/resume.ts';
 import { setRoster, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { registerLaunch } from '../src/registry/sync.ts';
-import { approvalStanding } from '../src/store/store.ts';
+import { approvalOf } from '../src/approve/approval.ts';
+import { recordedGeneration } from '../src/store/keys.ts';
+import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import { gateVerdict } from '../src/permissions/who.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, shortSocketBase, testIo } from './helpers.ts';
@@ -3668,6 +3670,90 @@ describe('independent checks: restart clears unsent /exit on refused or swallowe
       );
       expect(io.err).toBe('team restart: worker could not be stopped; left as it is\n');
     }
+  });
+});
+
+/** The sentence a stored approval that does not verify is named by. The product helper prints
+ *  this same wording; the scene below is the contract for it. */
+function unverifiedRecordSentence(record: string, file: string): string {
+  const lines = file.split('\n').map((line) => line.trimEnd()).filter((line) => line.trim() !== '');
+  const preview = lines.length === 0 ? '' : ` (${lines.slice(0, 3).map((line) => JSON.stringify(line)).join('; ')})`;
+  const noun = lines.length === 1 ? 'line' : 'lines';
+  const scalar = lines.map((line) => /^([A-Za-z0-9_.-]+):\s+(\S.*)$/.exec(line.trim())).find((match) => match !== null);
+  const path = scalar?.[1] ?? '<path>';
+  const value = scalar?.[2] ?? '<value>';
+  const set = `team config set ${path} ${value}`;
+  return `${record} does not verify: ${lines.length} unverified ${noun}${preview}; re-sign with ${set} --request, then ${set} --approval <id>`;
+}
+
+const SIGNATURE_WHY = 'the record does not carry a valid signature: it was changed after approval, or written without the key';
+
+/** A signed approval in the fixture home, then one flipped signature byte. The stored file is
+ *  what the sentence names. The bytes returned are the record after that flip. */
+function plantUnverifiedApproval(fixture: Fixture): { approval: string; bytes: string; file: string; root: string; generation: number } {
+  const loaded = loadTeamFile(fixture.root, { home: fixture.home });
+  if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+  const store = storePath(loaded.team.project, loaded.root, fixture.home);
+  writeApproval(
+    store,
+    { approval: approvalOf(loaded.team, loaded.root, NOW), file: fixture.yaml },
+    loaded.team.seats,
+    fixture.home,
+    NOW,
+  );
+  const approval = join(store, 'approval.json');
+  const parsed = JSON.parse(readFileSync(approval, 'utf8')) as { signature?: string; file?: string };
+  if (typeof parsed.signature !== 'string' || parsed.signature.length === 0 || typeof parsed.file !== 'string') {
+    throw new Error('the planted approval has no signature');
+  }
+  const at = parsed.signature.length - 1;
+  const last = parsed.signature[at] === 'a' ? 'b' : 'a';
+  parsed.signature = `${parsed.signature.slice(0, at)}${last}`;
+  const bytes = `${JSON.stringify(parsed, null, 2)}\n`;
+  writeFileSync(approval, bytes);
+  const standing = approvalStanding(loaded.root, fixture.home);
+  if (standing.kind !== 'refused' || standing.why !== SIGNATURE_WHY) {
+    throw new Error(`planted standing ${JSON.stringify(standing)}`);
+  }
+  const generation = recordedGeneration(loaded.root, fixture.home)?.generation;
+  if (generation === undefined) throw new Error('the planted approval has no generation');
+  return { approval, bytes, file: parsed.file, root: loaded.root, generation };
+}
+
+describe('a stored approval that does not verify', () => {
+  function ready(fixture: Fixture): RestartSources {
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
+    });
+    return makeHarness(fixture).sources;
+  }
+
+  test('dev mode says the record and the re-sign command, and continues without signing', async () => {
+    const fixture = makeFixture();
+    const planted = plantUnverifiedApproval(fixture);
+    const sources = ready(fixture);
+    const io = testIo(fixture.root, { kind: 'owner' });
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    const sentence = unverifiedRecordSentence(`${fixture.yaml.match(/^project: (\S+)/m)?.[1] ?? 'acme'}'s approval record`, planted.file);
+    expect(await runRestart(['worker'], io, sources), io.err).toBe(0);
+    expect(io.err).toBe(`team restart: ${sentence}\n`);
+    expect(io.out).toContain('restarted worker');
+    expect(readFileSync(planted.approval, 'utf8')).toBe(planted.bytes);
+    expect(recordedGeneration(planted.root, fixture.home)?.generation).toBe(planted.generation);
+  });
+
+  test('outside dev mode the refusal stays the signature sentence and nothing restarts', async () => {
+    const fixture = makeFixture();
+    const planted = plantUnverifiedApproval(fixture);
+    const sources = ready(fixture);
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], io, sources), io.err).toBe(1);
+    expect(io.err).toBe(`team restart: ${SIGNATURE_WHY}\n`);
+    expect(io.out).toBe('');
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.pane).toBe('pane-old');
+    expect(readFileSync(planted.approval, 'utf8')).toBe(planted.bytes);
+    expect(recordedGeneration(planted.root, fixture.home)?.generation).toBe(planted.generation);
   });
 });
 
