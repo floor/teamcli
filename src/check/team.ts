@@ -93,7 +93,7 @@ import {
 import { codexDaemonForSeat } from '../policy/codex-daemon.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { findAgent, updateAgent, type Agent } from '../registry/agents.ts';
-import { continuityIdsOf, continuitySessionOf } from '../registry/resume.ts';
+import { continuityIdsOf, continuitySessionOf, recordedSeatContinuity } from '../registry/resume.ts';
 import { byName, ofTeam, projectIdOf, ProjectsError } from '../registry/projects.ts';
 import { nicknameTakenNotes } from '../registry/names.ts';
 import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
@@ -2031,7 +2031,14 @@ function deliveryOrderInboxNotes(team: TeamFile): string[] {
  *     re-confirms it;
  *   - a live seat wakeable only through the socket its pane's processes carry, whose agent
  *     record holds no address: `team up` records the address from the pane the check read, and
- *     a record that names no launch identity is `team register`'s;
+ *     a record that names no launch identity is `team register`'s. A record whose pane runs a
+ *     process its launch did not start is neither's to re-point — `team register` refuses that
+ *     pane, and `team up` records no address over it — so the line names the restart that puts
+ *     the recorded launch back in front, then the `team up` that records the address, and the
+ *     load that can refuse the restart (`machine.load_start`, per core). A restart treats such
+ *     a pane as restored only when the registry binds the conversation herdr reports for it;
+ *     without that binding the restart abandons the process in front and starts the seat
+ *     fresh, and the line says so;
  *   - the socket predates the settings that declare accept: a restart writes one that does not,
  *     and the line names the load that can refuse it (`machine.load_start`, per core).
  * Otherwise a socket that is nowhere is its class's ordinary state, not a broken promise:
@@ -2114,15 +2121,44 @@ function socketSkippedDeliveries(
     // does, so its word and the leg's cannot split.
     if (wakeableWhileIdle(delivery.class)) {
       if (!wakeableWhileIdle(withoutPane.class) && record !== null) {
-        differences.push({
-          what: `${seat.name}: a reader without its pane sees ${withoutPane.class}, not ${delivery.class}: only the socket its pane's processes carry proves it, and its agent record holds no address this session can dial`,
-          // `team up` records an address on the record it finds; a record that names another
-          // session, or no process, is `team register`'s to re-point from the pane.
-          repair: record.reach.session === session
-            && seatProcessVerdict(recorded.launched, live.processes?.[listed.pane] ?? null) === 'same'
-            ? 'team up'
-            : `team register ${seat.name}`,
+        const processes = live.processes?.[listed.pane] ?? null;
+        const verdict = seatProcessVerdict(recorded.launched, processes);
+        // The address is written only over a process a command can prove: `team up` records one
+        // on the record it finds, and `team register` refreshes a record whose launch it still
+        // finds in front — it refuses a pane holding another process, so it is never the repair
+        // for one (src/commands/register.ts). A replaced process is put back by a restart, and
+        // the `team up` after it records the address a restart does not: a restart keeps the
+        // record's address as it was. The pane's session proves the seat across the replacement
+        // when the registry binds it, the same proof the restart itself compares; without that
+        // binding the restart has to abandon the process in front and start the seat fresh.
+        const bound = recordedSeatContinuity({
+          home, root, herdrSession: session, seat: { name: seat.name, cli: seat.cli }, state: recorded,
         });
+        const restored = bound.kind === 'bound'
+          && bound.recorded.launch !== ''
+          && listed.session !== undefined && listed.session !== ''
+          && listed.session === bound.recorded.sessionId;
+        const what = `${seat.name}: a reader without its pane sees ${withoutPane.class}, not ${delivery.class}: only the socket its pane's processes carry proves it, and its agent record holds no address this session can dial`;
+        if (verdict === 'replaced') {
+          differences.push({
+            what: `${what}; the process in its pane is not the one its record's launch started, and a restart is refused while the load is above ${team.machine.loadStart} per core (machine.load_start)${restored ? '' : '; the restart abandons that process and starts the seat fresh, leaving the recorded conversation behind'}`,
+            repair: restored
+              ? `team restart ${seat.name}, then team up`
+              : `team restart ${seat.name} --abandon, then team up`,
+            // `team restart` refuses while the file's approval is not in force
+            // (src/commands/restart.ts).
+            needs: 'approve',
+          });
+        } else {
+          differences.push({
+            what,
+            // `team up` records an address on the record it finds; a record that names another
+            // session, or no process, is `team register`'s to re-point from the pane.
+            repair: record.reach.session === session && verdict === 'same'
+              ? 'team up'
+              : `team register ${seat.name}`,
+          });
+        }
       }
       continue;
     }

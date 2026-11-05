@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { Caller, CallerSources } from '../src/caller.ts';
 import { standingOf } from '../src/caller.ts';
 import { runTeamCheck } from '../src/check/team.ts';
@@ -12,6 +12,7 @@ import type { Launch } from '../src/commands/up.ts';
 import { noteLaunchedPane } from '../src/file/launched-file.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
+import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { acquireRunLock } from '../src/launch/run-lock.ts';
 import { codexEndpointSocket } from '../src/launch/codex-endpoint.ts';
 import { seatDeliveryClass } from '../src/launch/delivery-class.ts';
@@ -2288,6 +2289,71 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     // The relaunch's herdr reading carried no id here: the registry keeps the one it held rather
     // than clearing it, so the next restart can still bind the conversation.
     expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.reach.agent_session).toBe('ses_keep');
+  });
+
+  // The check and the command it prints, on one fixture: herdr still names the seat on its
+  // recorded pane, in this session, and the process there is not the one the record's launch
+  // started. The registry binds the conversation herdr reports for the seat, so the pane is
+  // provably the seat's and the launch is what is out of front. Neither `team up` (it records an
+  // address only over the process the record names) nor `team register` (it refuses a pane
+  // holding another process) can re-point that record, so the check must print neither: the
+  // repair is the restart, then the `team up` a restart never writes itself.
+  test('check names the restart for a replaced process it can prove restored, and that restart runs', async () => {
+    const { fixture, run } = seeded({ registry: 'ses_keep', state: 'ses_keep', workerSession: 'ses_keep', launched: true });
+    // The registry record a plain-name send resolves: the check reads the seat's agent record
+    // through it, and the restart's own binding reads the same one.
+    upsertTeam(fixture.home, teamIdOf(fixture.root), {
+      project: 'acme',
+      session: 'acme',
+      root: fixture.root,
+      at: NOW.toISOString(),
+    });
+    // The pane's own reading: a process whose shell and CLI pids are not the recorded ones, and
+    // the socket that process carries — the one every reader without a pane skips.
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    const sockets = join(fixture.base, 'sockets');
+    mkdirSync(sockets, { recursive: true });
+    writeFileSync(join(sockets, '201.sock'), '');
+    // The launch's generated settings declare accept, backdated so the socket stands newer; the
+    // team file names no word of its own, and a generated declaration admits the socket alone.
+    const settings = cliHookSettingsPath(fixture.dir, 'acme', 'worker');
+    if (settings === null) throw new Error('the fixture declares no settings path for worker');
+    mkdirSync(dirname(settings), { recursive: true });
+    writeFileSync(settings, JSON.stringify({ crossSessionInbound: 'accept' }));
+    const past = new Date(NOW.getTime() - 60_000);
+    utimesSync(settings, past, past);
+
+    const checkIo = testIo(fixture.root, { kind: 'owner' });
+    const code = runTeamCheck({ file: '.agents/team.yaml' }, checkIo, {
+      live: () => ({
+        running: true,
+        agents: [{ name: 'worker', agent: 'claude-code', pane: 'pane-old', workspace: 'ws-old', status: 'idle', cwd: fixture.root, session: 'ses_keep' }],
+        workspaces: [{ id: 'ws-old', label: 'old' }],
+        screens: { 'pane-old': CLAUDE_IDLE },
+        processes: { 'pane-old': { shell: 101, foreground: [201] } },
+      }),
+      branch: () => 'main',
+      standing: () => approvalStanding(fixture.root, fixture.home),
+      now: () => NOW,
+      home: fixture.home,
+      sockets,
+    });
+    expect(code).toBe(1);
+    // The line itself, whole: the honest reason, and the repair that can run — never the
+    // `team register` this record's background refuses, and never the bare `team up` that
+    // records nothing over a process its record does not name.
+    expect(checkIo.out).toContain(
+      "difference: worker: a reader without its pane sees pull-on-turn, not push: only the socket its pane's processes carry proves it, and its agent record holds no address this session can dial; the process in its pane is not the one its record's launch started, and a restart is refused while the load is above 3 per core (machine.load_start)\n  repair: team restart worker, then team up\n",
+    );
+
+    // The command as printed, on the same fixture: the registry-bound session proves the pane,
+    // so no `--abandon` is needed, and the relaunch resumes the recorded conversation.
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(run.did.runs.join('\n')).toContain('claude --model claude-opus-5-5 --resume ses_keep');
+    // A restart keeps the record's address as it was — the `team up` the line names is the write
+    // that records one.
+    expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.reach.address).toBeNull();
   });
 
   // The incident's shape, on the CLI whose native route binds through the registry: the record
