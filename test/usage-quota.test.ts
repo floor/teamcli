@@ -123,8 +123,8 @@ describe('the quota model', () => {
               account: 'anthropic',
               state: 'ok',
               windows: [
-                { window: 'session', used: 40, left: 60, resetsAt: '2026-10-17T12:00:00.000Z', resetsIn: '3h', margin: 0, source: 'status line', seat: 'lead', age: '1m', stale: false, wall: false, expired: false },
-                { window: 'weekly', used: 12, left: 88, resetsAt: '2026-10-22T14:26:00.000Z', resetsIn: '125h26m', margin: 13.3, source: 'status line', seat: 'lead', age: '1m', stale: false, wall: false, expired: false },
+                { window: 'session', used: 40, left: 60, resetsAt: '2026-10-17T12:00:00.000Z', resetsIn: '3h', margin: 0, runsOutIn: null, source: 'status line', seat: 'lead', age: '1m', stale: false, wall: false, expired: false },
+                { window: 'weekly', used: 12, left: 88, resetsAt: '2026-10-22T14:26:00.000Z', resetsIn: '125h26m', margin: 13.3, runsOutIn: null, source: 'status line', seat: 'lead', age: '1m', stale: false, wall: false, expired: false },
               ],
               seats: ['lead'],
               wallResets: null,
@@ -133,7 +133,7 @@ describe('the quota model', () => {
               account: 'openai',
               state: 'walled',
               windows: [
-                { window: 'weekly', used: 95, left: 5, resetsAt: null, resetsIn: null, margin: null, source: 'machine reading', seat: null, age: '2m', stale: false, wall: false, expired: false },
+                { window: 'weekly', used: 95, left: 5, resetsAt: null, resetsIn: null, margin: null, runsOutIn: null, source: 'machine reading', seat: null, age: '2m', stale: false, wall: false, expired: false },
               ],
               seats: ['scout'],
               seatsOther: 2,
@@ -207,16 +207,17 @@ describe('the quota model', () => {
     });
     expect(quota.labs[0]?.accounts[0]?.state).toBe('near cap');
     expect(quota.advice).toBe('near cap on google (weekly used 89%, margin -71.6%)');
-    // The threshold is the margin's own: a window exactly at the cap is near it, one a tenth
-    // short of it is ok — the used figure alone decides nothing below NEAR_CAP.
+    // The threshold is the headroom band's mirror: a window a headroom band ahead of its clock
+    // is near the cap, one a tenth short of it is ok — the used figure alone decides nothing
+    // when the window's clock gives a margin.
     const state = (margin: number): string => quotaOf({
       labs: [{ lab: 'google', accounts: [{ account: 'google', seats: [] }] }],
       observations: [observed({ account: 'google', used: 89, left: 11, margin })],
       accountsFile: 'accounts.yaml',
       now: NOW,
     }).labs[0]?.accounts[0]?.state as string;
-    expect(state(-50)).toBe('near cap');
-    expect(state(-49.9)).toBe('ok');
+    expect(state(-10)).toBe('near cap');
+    expect(state(-9.9)).toBe('ok');
   });
 
   test('the advice is one line: headroom, the best target first; the walled seats; or what is missing', () => {

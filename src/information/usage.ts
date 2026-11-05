@@ -22,7 +22,7 @@ import { readMachineReadings, type MachineReading } from './machine-readings.ts'
 import { overridesInForceOf, quotaWith, type ProfileOverride } from '../profiles/overrides.ts';
 import { shippedQuotaAccounts } from '../profiles/profile.ts';
 import type { WindowName } from '../profiles/quota.ts';
-import { expiredLabel, marginOf, marginWord, NEAR_CAP, QUOTA_STALE_MS, quotaOf, quotaText, PANE_UNREAD, USAGE_ACCOUNTS, USAGE_UNANSWERED, windowState, type CostObservation, type QuotaLabInput, type QuotaObservation, type QuotaState, type ReportQuota } from './quota.ts';
+import { expiredLabel, marginOf, marginWord, NEAR_CAP, QUOTA_STALE_MS, quotaOf, quotaText, PANE_UNREAD, USAGE_ACCOUNTS, USAGE_UNANSWERED, windowState, type CostObservation, type QuotaLabInput, type QuotaObservation, type QuotaState, type ReportQuota, type ReportQuotaWindow } from './quota.ts';
 import { readState, type State } from '../state.ts';
 import { approvalStanding, readApproval, storesFolder, type ApprovalRecord, type Standing } from '../store/store.ts';
 
@@ -2110,16 +2110,20 @@ function accountCells(entry: ReportAccount, report: UsageReport): string[] {
   }
   const reset = m.resetsIn === null ? 'unknown' : `in ${m.resetsIn}`;
   const reserve = m.inside && m.reserve !== null ? `inside reserve ${m.reserve}%` : '-';
-  // The pace where one is known; where it is not, the margin the tree reads for the same row —
-  // one report, two faces, and the table never says `pace not known` beside a margin the other
-  // view prints (owner, 2026-10-17). With neither, the tool's own words stand.
-  const margin = m.pace === null ? marginOnRow(report.quota, entry.account, entry.kind === 'subscription' ? entry.pool : undefined, m.window) : null;
-  const pace = m.other && report.view === 'restricted' ? '' : m.pace === null && margin !== null ? marginWord(margin) : paceWord(m.pace);
+  // The block's own window for this row: its state, its margin and its clock, one lookup so the
+  // two faces cannot disagree. The pace where one is known; where it is not, the margin the tree
+  // reads for the same row — one report, two faces, and the table never says `pace not known`
+  // beside a margin the other view prints (owner, 2026-10-17). A window running ahead of its own
+  // clock by the headroom band says when it runs out instead, in both hours. With neither, the
+  // tool's own words stand.
+  const window = windowOnRow(report.quota, entry.account, entry.kind === 'subscription' ? entry.pool : undefined, m.window);
+  const margin = m.pace === null ? window?.margin ?? null : null;
+  const runsOut = window?.runsOutIn == null ? null : `runs out in about ${window.runsOutIn}, before the reset in ${window.resetsIn}`;
+  const pace = m.other && report.view === 'restricted' ? '' : runsOut ?? (m.pace === null && margin !== null ? marginWord(margin) : paceWord(m.pace));
   // The STATE cell is the block's four words — ok, near cap, walled, unknown — with freshness as
-  // the marker after them: an account at 89% used and half a window
-  // ahead said `fresh` and nothing else, which is where it was read, not where it stands.
-  const state = quotaStateOnRow(report.quota, entry.account, entry.kind === 'subscription' ? entry.pool : undefined, m.window)
-    ?? figureState(m);
+  // the marker after them: an account at 89% used and half a window ahead said `fresh` and
+  // nothing else, which is where it was read, not where it stands.
+  const state = (window === null ? null : windowState(window)) ?? figureState(m);
   const stale = m.state === 'stale' ? '  stale' : '';
   const cell = `${state}  ${pace}${stale}${watchOf(m, report)}`.trimEnd();
   return [account, m.window ?? '-', `${m.left}%`, `${m.used}%`, reset, reserve, provenanceOf(m, report), source, cell];
@@ -2136,30 +2140,28 @@ function sourceWordOf(m: ReportMachine): string {
 }
 
 /** The state a row's own figure reads, when the quota block carries no window for it: fresh at
- *  `NEAR_CAP` or above is near cap, at 100 walled, anything else ok; not fresh is unknown. The
- *  margin's half-window-ahead reading is the block's (it needs the window's clock), and a block
- *  window that exists always wins through `quotaStateOnRow`. */
+ *  `NEAR_CAP` or above is near cap, at 100 walled, anything else ok; not fresh is unknown. This
+ *  is the fallback for a row the block has no clock for (a state reading the block never saw):
+ *  the margin decides the state where one exists, and a block window always wins through
+ *  `windowOnRow`. */
 function figureState(m: ReportMachine): QuotaState {
   if (m.state !== 'fresh' || m.used === null) return 'unknown';
   if (m.used >= 100) return 'walled';
   return m.used >= NEAR_CAP ? 'near cap' : 'ok';
 }
 
-/** The quota state the block reads for one machine row: the same account, pool and window, and
- *  that window's own state — so a row at 89% used but half a window ahead says `near cap`, the
- *  same word the tree prints. Null when the block carries no window of that name, so the row's
- *  own figure decides (`figureState`). */
-function quotaStateOnRow(
+/** The quota block's window for one machine row: the same account, pool and window. Null when
+ *  the block carries no window of that name, so the row's own figure decides. */
+function windowOnRow(
   quota: ReportQuota,
   account: string,
   pool: 'gemini' | 'claude-gpt' | undefined,
   window: string | null,
-): QuotaState | null {
+): ReportQuotaWindow | null {
   for (const lab of quota.labs) {
     for (const entry of lab.accounts) {
       if (entry.account !== account || entry.pool !== pool) continue;
-      const one = entry.windows.find((w) => w.window === window);
-      return one === undefined ? null : windowState(one);
+      return entry.windows.find((w) => w.window === window) ?? null;
     }
   }
   return null;
@@ -2178,25 +2180,6 @@ function quotaAccountState(
     }
   }
   return 'unknown';
-}
-
-/** The margin the quota block reads for one machine row: the same account, pool and window, and
- *  a fresh figure only — the block's own staleness rule decides, so the table and the tree can
- *  never disagree about a margin. Null when the block carries none. */
-function marginOnRow(
-  quota: ReportQuota,
-  account: string,
-  pool: 'gemini' | 'claude-gpt' | undefined,
-  window: string | null,
-): number | null {
-  for (const lab of quota.labs) {
-    for (const entry of lab.accounts) {
-      if (entry.account !== account || entry.pool !== pool) continue;
-      const one = entry.windows.find((w) => w.window === window && !w.stale);
-      if (one !== undefined) return one.margin;
-    }
-  }
-  return null;
 }
 
 /** How a machine line says where its figure came from: the caller's own reading prints as its own

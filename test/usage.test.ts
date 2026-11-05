@@ -2303,6 +2303,48 @@ describe('team usage', () => {
     expect(io.out).not.toContain('\nquota\n');
   });
 
+  test('the state follows the pace: a small negative margin is ok, and a large one says when the window runs out', async () => {
+    // The owner's two readings (2026-11-05): anthropic weekly at 96% used with a -1.4% margin read
+    // `near cap` on the used figure alone, while google (gemini) at 47.1% used with a -36.4% margin
+    // read `ok`. The margin is the pace: a window a headroom band ahead of its clock runs out
+    // before it resets, and one a point ahead of it does not. Both figures follow from the reset:
+    // 9h to reset leaves 159h of 168h gone, 94.6 - 96 = -1.4; 150h leaves 18h gone, 10.7 - 47.1.
+    const withWeekly = (used: number, left: number, resetsAt: string): void => {
+      updateState(join(root, '.agents'), (state) => {
+        state.budgets = {
+          ...READINGS,
+          'anthropic/weekly/lead': { account: 'anthropic', window: 'weekly', left, used, changedAt: '2026-10-04T08:59:00Z', resetsAt, seat: 'lead', source: 'status_line', confirmed: true },
+        } as never;
+        state.sessions['acme-web'] = { ...emptySession() } as never;
+      });
+    };
+    const read = (used: number, left: number, resetsAt: number) => ({
+      account: 'anthropic', window: 'weekly' as const, left, used, resetsAt, resetText: null,
+      observedAt: NOW.getTime() - 60_000, source: 'status line' as const, seat: 'lead', margin: null, wall: false,
+    });
+    const row = (out: string): string => out.split('\n').find((text) => /^anthropic\s+weekly/.test(text)) ?? '';
+
+    // High, but on pace: STATE says ok, and the advice does not warn about it.
+    withWeekly(96, 4, '2026-10-04T18:00:00Z');
+    const onPace = testIo(root, SEAT);
+    expect(await runUsage([], onPace, { home, now: () => NOW, observe: () => ({ observations: [read(96, 4, NOW.getTime() + 9 * 3_600_000)], costs: [], notes: [] }) })).toBe(0);
+    expect(row(onPace.out)).toContain('ok  margin -1.4%');
+    expect(row(onPace.out)).not.toContain('near cap');
+    expect(onPace.out).not.toContain('near cap on anthropic');
+
+    // Far ahead of its clock: near the cap, with the hours it runs out against the hours to reset.
+    withWeekly(47.1, 52.9, '2026-10-10T15:00:00Z');
+    const ahead = testIo(root, SEAT);
+    expect(await runUsage(['--tree'], ahead, { home, now: () => NOW, observe: () => ({ observations: [read(47.1, 52.9, NOW.getTime() + 150 * 3_600_000)], costs: [], notes: [] }) })).toBe(0);
+    expect(row(ahead.out)).toContain('near cap  runs out in about 20h12m, before the reset in 150h');
+    expect(ahead.out).toContain('weekly  used 47.1%  left 52.9%  runs out in about 20h12m, before the reset in 150h');
+    const json = testIo(root, SEAT);
+    expect(await runUsage(['--json'], json, { home, now: () => NOW, observe: () => ({ observations: [read(47.1, 52.9, NOW.getTime() + 150 * 3_600_000)], costs: [], notes: [] }) })).toBe(0);
+    const doc = JSON.parse(json.out) as { quota: { labs: { accounts: { account: string; windows: { window: string; margin: number | null; runsOutIn: string | null }[] }[] }[] } };
+    const window = doc.quota.labs.flatMap((lab) => lab.accounts).find((one) => one.account === 'anthropic')?.windows.find((one) => one.window === 'weekly');
+    expect(window).toMatchObject({ margin: -36.4, runsOutIn: '20h12m' });
+  });
+
   test('a spend a seat’s own row printed is measured for that seat and its run, and never for another run', async () => {
     // The live case the owner asked for: the seat's row prints `S: $5.8`, and the report records
     // it per seat and per run — measured, with the screen it came from — while a seat the screen

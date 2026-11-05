@@ -81,15 +81,15 @@ export type CostObservation = {
 /** A lab's or an account's state: plenty, close to the cap, out, or nothing fresh to say. */
 export type QuotaState = 'ok' | 'near cap' | 'walled' | 'unknown';
 
-/** The percentage at or above which an account reads `near cap`. */
+/** The used percentage at or above which an account whose window offers no margin to read (its
+ *  reset moment is unknown) reads `near cap`: the fallback figure. When a margin exists the pace
+ *  decides, never the used figure alone — a window at 96% used and on pace is not near its cap. */
 export const NEAR_CAP = 90;
-/** The margin at or above which an account counts as having headroom, in points. */
+/** The margin at or above which an account counts as having headroom, in points. Its mirror is
+ *  the band a window reads `near cap` from: at `-HEADROOM` or below the spend has run ahead of
+ *  the window's own clock by more than the headroom the advice looks for, so at that pace the
+ *  window is empty before it resets — whatever its used percentage says today. */
 export const HEADROOM = 10;
-/** How many points spend may run ahead of the window's own clock before the account reads
- *  `near cap` however low its used percentage: half a window. The cap has two readings — the
- *  used figure (`NEAR_CAP`) and the margin — because an account at 89% with a sixth of its
- *  window gone is nearer the cap than one at 91% with the window almost over. */
-export const AHEAD_CAP = 50;
 
 export type ReportQuotaWindow = {
   window: QuotaWindow;
@@ -101,6 +101,10 @@ export type ReportQuotaWindow = {
   resetsIn: string | null;
   /** Expected minus used, one decimal, signed, when the window's clock allows one. */
   margin: number | null;
+  /** The hours left before the window is empty at the pace its own clock reads, when the spend
+   *  runs ahead of that clock by `HEADROOM` or more: the figure the `runs out in about Xh, before
+   *  the reset in Yh` sentence carries. Null when the margin does not name a run-out. */
+  runsOutIn: string | null;
   source: QuotaSource;
   seat: string | null;
   age: string;
@@ -186,6 +190,18 @@ function isStale(one: { observedAt: number; resetsAt: number | null }, now: numb
   return now - one.observedAt > QUOTA_STALE_MS || (one.resetsAt !== null && one.resetsAt <= now);
 }
 
+/** The hours left before a window is empty at the pace its own clock reads: the left figure over
+ *  the share spent per hour of window time gone. Null when the reading lacks a figure or a reset
+ *  moment the clock can use. */
+function hoursToEmpty(one: QuotaObservation, length: number, now: number): string | null {
+  if (one.used === null || one.left === null || one.resetsAt === null) return null;
+  const elapsed = length - (one.resetsAt - now);
+  if (elapsed <= 0) return span(0);
+  const pace = one.used / (elapsed / 3_600_000);
+  if (pace <= 0) return null;
+  return span((one.left / pace) * 3_600_000);
+}
+
 /** The windows a set of observations gives one account: the newest observation per window, in
  *  the quota block's own order. A window only the stale set has still prints, marked stale. */
 function windowsOf(list: readonly QuotaObservation[], now: number): ReportQuotaWindow[] {
@@ -201,13 +217,18 @@ function windowsOf(list: readonly QuotaObservation[], now: number): ReportQuotaW
     // Older than the window itself: the window has reset since, so the figure and its reset
     // belong to a passed instance. The age and source still say what was read and when.
     const expired = now - one.observedAt >= WINDOW_MS[window];
+    const margin = expired || stale ? null : marginOf(one, now);
     return {
       window,
       used: expired ? null : one.used,
       left: expired ? null : one.left,
       resetsAt: expired || one.resetsAt === null ? null : new Date(one.resetsAt).toISOString(),
       resetsIn: expired ? null : one.resetsAt === null ? one.resetText : span(one.resetsAt - now),
-      margin: expired || stale ? null : marginOf(one, now),
+      margin,
+      // The spend runs ahead of the clock by the headroom band: at that pace the window is empty
+      // before it resets, so the line says when. Only a margin names the run-out; a window whose
+      // reset moment is unknown has no clock to read either hours from.
+      runsOutIn: margin === null || margin > -HEADROOM ? null : hoursToEmpty(one, QUOTA_WINDOW_MS[window], now),
       source: one.source,
       seat: one.seat,
       age: span(now - one.observedAt),
@@ -219,31 +240,39 @@ function windowsOf(list: readonly QuotaObservation[], now: number): ReportQuotaW
 }
 
 /** The account's state from the newest fresh figures and any live wall: a wall (or a figure at
- *  100) is walled; near the cap is the used percentage at `NEAR_CAP` or above, OR a fresh margin
- *  at `-AHEAD_CAP` or below — the spend is half a window ahead of its own clock, so the account
- *  walls long before the window resets even at a low percentage today. Anything else is ok.
- *  Nothing fresh is unknown — a stale percentage describes a window that may have reset, and is
- *  never grounds for advice. */
+ *  100) is walled; near the cap is a fresh margin at `-HEADROOM` or below — the spend runs ahead
+ *  of the window's own clock by more than the headroom the advice looks for, so at that pace the
+ *  window is empty before it resets. The used percentage alone decides nothing when a margin
+ *  exists (96% on pace is ok); a window whose clock gives no margin falls back to `NEAR_CAP`.
+ *  Anything else is ok. Nothing fresh is unknown — a stale percentage describes a window that may
+ *  have reset, and is never grounds for advice. */
 function stateOf(windows: readonly ReportQuotaWindow[], walled: boolean): QuotaState {
   if (walled) return 'walled';
   const fresh = windows.filter((one) => !one.stale && one.used !== null);
   if (fresh.length === 0) return 'unknown';
   const used = Math.max(...fresh.map((one) => one.used as number));
   if (used >= 100) return 'walled';
-  if (used >= NEAR_CAP || fresh.some((one) => one.margin !== null && one.margin <= -AHEAD_CAP)) return 'near cap';
+  if (fresh.some(nearCap)) return 'near cap';
   return 'ok';
 }
 
+/** Whether one fresh window reads near its cap: the margin's pace decides when the window's
+ *  clock gives one — at `-HEADROOM` or below the window is empty before it resets — and a window
+ *  with no clock to read falls back to its used figure at `NEAR_CAP`. */
+function nearCap(one: ReportQuotaWindow): boolean {
+  return one.margin === null ? (one.used as number) >= NEAR_CAP : one.margin <= -HEADROOM;
+}
+
 /** One window's state, the account rule on that window alone: a wall is a wall, nothing fresh is
- *  unknown, a figure at the cap or half a window ahead is near cap, anything else ok. The table's
- *  STATE cell reads this, so a row and the quota block's account can never disagree about a
- *  figure they show. */
+ *  unknown, a window empty of figure is walled, a margin at `-HEADROOM` or below is near cap, and
+ *  a window with no margin falls back to its used figure at `NEAR_CAP`. The table's STATE cell
+ *  reads this, so a row and the quota block's account can never disagree about a figure they
+ *  show. */
 export function windowState(one: ReportQuotaWindow): QuotaState {
   if (one.wall) return 'walled';
   if (one.stale || one.used === null) return 'unknown';
   if (one.used >= 100) return 'walled';
-  if (one.used >= NEAR_CAP || (one.margin !== null && one.margin <= -AHEAD_CAP)) return 'near cap';
-  return 'ok';
+  return nearCap(one) ? 'near cap' : 'ok';
 }
 
 const ORDER: QuotaState[] = ['walled', 'near cap', 'ok', 'unknown'];
@@ -396,7 +425,9 @@ export function marginWord(margin: number | null): string {
 }
 
 /** One window's line, under the account's own line: the two percentages, the reset, the margin,
- *  and where the figure came from. A wall prints as a wall — no percentage is invented for it. */
+ *  and where the figure came from. A wall prints as a wall — no percentage is invented for it.
+ *  A window running ahead of its clock by the headroom band prints the run-out sentence in place
+ *  of the reset countdown and the margin, which it already carries both hours of. */
 function windowText(one: ReportQuotaWindow): string {
   const reset = one.resetsIn === null ? 'resets unknown' : `resets in ${one.resetsIn}`;
   const from = `(${one.source}, read ${one.age} ago)`;
@@ -405,7 +436,10 @@ function windowText(one: ReportQuotaWindow): string {
   // source are the line; the figure and its reset are not the current window's.
   if (one.expired) return `${one.window}  no fresh reading  ${from}`;
   const stale = one.stale ? '  stale' : '';
-  return `${one.window}  used ${one.used}%  left ${one.left}%  ${reset}  ${marginWord(one.margin)}  ${from}${stale}`;
+  const clock = one.runsOutIn === null
+    ? `${reset}  ${marginWord(one.margin)}`
+    : `runs out in about ${one.runsOutIn}, before the reset in ${one.resetsIn}`;
+  return `${one.window}  used ${one.used}%  left ${one.left}%  ${clock}  ${from}${stale}`;
 }
 
 function seatsClause(one: ReportQuotaAccount): string {
