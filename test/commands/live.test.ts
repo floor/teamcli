@@ -3633,8 +3633,10 @@ describe('team up, the pause', () => {
     const sessionProof = (pane: string | undefined) => [`process:${pane}`, 'agents', 'agent-panes'];
     expect(calls).toEqual([
       // The fresh reading that stopped the seat, the identity read when the dialog was found
-      // (nothing is recorded for the seat yet), and the entry write's identity read.
-      'create:claude-coordinator-acme · project coordinator', `rename:${firstPane}:claude-coordinator-acme`, `run:${firstPane}`, `read:${firstPane}`, `process:${firstPane}`, `process:${firstPane}`,
+      // (nothing is recorded for the seat yet), and the entry write's identity read. The create
+      // names the pane, so it reads the agent list first to prove the pane is not another
+      // seat's — this fixture's list is derived from the pane list.
+      'create:claude-coordinator-acme · project coordinator', 'agents', 'agent-panes', `rename:${firstPane}:claude-coordinator-acme`, `run:${firstPane}`, `read:${firstPane}`, `process:${firstPane}`, `process:${firstPane}`,
       // o: the key, then the lock's own reads (the pane is still the seat's — herdr's list,
       // then the process), the manual write with its identity read, and the focus. No key,
       // no text.
@@ -3644,9 +3646,9 @@ describe('team up, the pause', () => {
       // The model and identity/session read, the naming list, then both later session proofs.
       `read:${firstPane}`, ...sessionProof(firstPane), 'agent-panes', ...sessionProof(firstPane), ...sessionProof(firstPane),
       // Then the later seats, the same way.
-      'create:deepseek-acme · implementer', `rename:${secondPane}:deepseek-acme`, `run:${secondPane}`, `read:${secondPane}`, `read:${secondPane}`,
+      'create:deepseek-acme · implementer', 'agents', 'agent-panes', `rename:${secondPane}:deepseek-acme`, `run:${secondPane}`, `read:${secondPane}`, `read:${secondPane}`,
       ...sessionProof(secondPane), 'agent-panes', ...sessionProof(secondPane), ...sessionProof(secondPane),
-      'create:deepseek-acme-2 · implementer', `rename:${thirdPane}:deepseek-acme-2`, `run:${thirdPane}`, `read:${thirdPane}`, `read:${thirdPane}`,
+      'create:deepseek-acme-2 · implementer', 'agents', 'agent-panes', `rename:${thirdPane}:deepseek-acme-2`, `run:${thirdPane}`, `read:${thirdPane}`, `read:${thirdPane}`,
       ...sessionProof(thirdPane), 'agent-panes', ...sessionProof(thirdPane), ...sessionProof(thirdPane),
       // Then the watch's workspace and its command line, the plan's last step.
       'create:Watch · acme-web', `run:${watchPane}`,
@@ -3886,6 +3888,10 @@ describe('team up, the pause', () => {
       pane === 'w3:p1' ? { shell: 510, foreground: [510, 511] } : null;
     const read = made.launch.paneText.bind(made.launch);
     made.launch.paneText = (session, pane) => (pane === 'w1:p1' ? (flipped ? IDLE : trust) : read(session, pane));
+    // The coordinator as this fixture lists it, so the expected trace below can name its pane
+    // and seat through these fields rather than repeating a pane literal of its own.
+    const recorded = listed()[0];
+    if (recorded === undefined) throw new Error('the fixture lists no coordinator seat');
     const nap = made.launch.sleep.bind(made.launch);
     made.launch.sleep = async (ms) => { flipped = true; return nap(ms); };
     const { calls, typed } = trace(made);
@@ -3910,7 +3916,7 @@ describe('team up, the pause', () => {
       'agents', 'process:w1:p1', 'read:w1:p1', 'key:o',
       'agents', 'process:w1:p1', 'process:w1:p1', 'focus:w1:p1',
       'sleep:2000', 'agents', 'process:w1:p1', 'read:w1:p1',
-      'read:w1:p1', 'process:w1:p1', 'agents', 'agent-panes', 'rename:w1:p1:claude-coordinator-acme',
+      `read:${recorded.pane}`, `process:${recorded.pane}`, 'agents', 'agent-panes', 'agents', `rename:${recorded.pane}:${recorded.name}`,
     ]);
     expect(made.creates).toEqual([]);
     expect(made.runs).toEqual([]);
