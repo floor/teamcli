@@ -16,7 +16,7 @@ import type { DoctorSources } from '../src/commands/doctor.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { HerdrAgent, PaneProcesses } from '../src/herdr.ts';
-import { registerAgent } from '../src/registry/agents.ts';
+import { findAgent, registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
@@ -143,6 +143,8 @@ type Scene = {
   screen?: string;
   /** The exit is offered and the CLI stays: the pane never returns to its shell. */
   stays?: boolean;
+  /** The seat's own launch line is refused by the pane after the exit. */
+  failLaunch?: boolean;
 };
 
 function world(scene: Scene = {}): { sources: UpSources; trace: Trace } {
@@ -178,6 +180,7 @@ function world(scene: Scene = {}): { sources: UpSources; trace: Trace } {
     paneRun(_session, pane, command) {
       trace.runs.push({ pane, command });
       trace.events.push(`run:${pane}`);
+      if (scene.failLaunch === true && command.includes('team-deepseek')) return false;
       made.set(pane, CLAUDE_IDLE);
       if (pane === PANE) atShell = false;
       return true;
@@ -309,12 +312,42 @@ test('a pane that does not return to its shell is left untouched', async () => {
   const io = testIo(root, { kind: 'owner' });
   expect(await runUp([], io, made.sources), `${io.out}\n${io.err}`).toBe(1);
 
+  expect(made.trace.typed).toEqual([EXIT_TEXT]);
   expect(made.trace.closed).toEqual([]);
   expect(seatCreated(made.trace)).toEqual([]);
   expect(seatRuns(made.trace)).toEqual([]);
   expect(made.trace.events.some((event) => event.startsWith(`run:${PANE}`))).toBe(false);
-  expect(seatState()).toMatchObject({ stage: 'ready', pane: PANE, workspace: WORKSPACE, launched: RECORDED });
+  expect(seatState()).toMatchObject({
+    stage: 'ready',
+    pane: PANE,
+    workspace: WORKSPACE,
+    launched: RECORDED,
+    agent_session: SESSION_ID,
+  });
   expect(`${io.out}${io.err}`).toContain('its pane was not back at its shell in 30 s; left as it is');
+});
+
+test('a launch that does not run after the exit keeps the seat record on its pane', async () => {
+  setup(WRAPPER);
+  recordSeat(WRAPPER, { ...readyRecord, agent_session: SESSION_ID });
+  const made = world({ failLaunch: true });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), `${io.out}\n${io.err}`).toBe(1);
+
+  expect(made.trace.typed).toEqual([EXIT_TEXT]);
+  expect(seatRuns(made.trace)).toHaveLength(1);
+  expect(seatRuns(made.trace)[0]?.pane).toBe(PANE);
+  expect(firstWord(seatRuns(made.trace)[0]?.command ?? '')).toBe('team-deepseek');
+  expect(made.trace.closed).toEqual([]);
+  expect(seatCreated(made.trace)).toEqual([]);
+  expect(seatState()).toMatchObject({
+    stage: 'launched',
+    pane: PANE,
+    workspace: WORKSPACE,
+    launched: RECORDED,
+    agent_session: SESSION_ID,
+  });
+  expect(findAgent(home, { team: teamIdOf(root), seat: SEAT })?.lifecycle).toBe('running');
 });
 
 test('a plain seat with a proven session is still adopted in place', async () => {
