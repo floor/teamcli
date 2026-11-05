@@ -145,9 +145,9 @@ function world(helperExtra = ''): { made: World; team: ReturnType<typeof validat
   return { made: { root, dir: join(root, '.agents'), home }, team: validated };
 }
 
-type Pane = { screen: string | null; status: string; typed: string[]; enters: number; keys: string[] };
+type Pane = { screen: string | null; status: string | null; typed: string[]; enters: number; keys: string[] };
 
-function pane(screen: string, status: string): Pane {
+function pane(screen: string, status: string | null): Pane {
   return { screen, status, typed: [], enters: 0, keys: [] };
 }
 
@@ -391,6 +391,23 @@ describe('an unrecognised screen for a due message tells the lead', () => {
     const { made, team } = world();
     const dropDir = seed(made, 11);
     const one = pane(SCROLL_BACK, 'unknown');
+    const calls: { pane: string; line: string }[] = [];
+    const said: string[] = [];
+    await wakeUnreadDrops(scene(made, team, said, typedSources(one, calls), NOW, 'unknown'), { unreadAfter: N });
+    expect(calls).toHaveLength(1);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('typed wake');
+    expect(leadDrops(made.dir)).toEqual([]);
+    expect(existsSync(wakePath(dropDir, UNREAD))).toBe(true);
+  });
+
+  test('a scrolled-back seat whose host word is null is woken, not dropped', async () => {
+    // The status source answers null when it cannot name the pane's state at all, even though
+    // the pane was listed a moment earlier. Null is neither working nor blocked, so the
+    // scrolled-back reading reaches the typed retry and the retry's own reads decide.
+    const { made, team } = world();
+    const dropDir = seed(made, 11);
+    const one = pane(SCROLL_BACK, null);
     const calls: { pane: string; line: string }[] = [];
     const said: string[] = [];
     await wakeUnreadDrops(scene(made, team, said, typedSources(one, calls), NOW, 'unknown'), { unreadAfter: N });
