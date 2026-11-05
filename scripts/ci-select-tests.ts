@@ -54,7 +54,7 @@ const ALL_LIGHT_TRIGGERS: RegExp[] = [
 /** Stress tests too slow for a PR unless their own files changed. */
 const HEAVY: Record<string, RegExp[]> = {
   'test/exit-codes.test.ts': [/^test\/exit-codes\.test\.ts$/, /^scripts\/exit-codes\.ts$/, /^src\/exit-codes?\b/],
-  'test/broker.test.ts': [/^test\/broker\.test\.ts$/, /^test\/broker-run\.ts$/, /^src\/broker\//],
+  'test/broker.test.ts': [/^test\/broker\.test\.ts$/, /^test\/broker-run\.ts$/, /^src\/broker\//, /^src\/commands\/broker\.ts$/],
   'test/exit-filter.test.ts': [/^test\/exit-filter(\.test)?\.ts$/, /^src\/.*exit-filter/],
 };
 
