@@ -656,7 +656,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       ...(seat.effort ? { effort: seat.effort } : {}),
       repairLine: relaunchRepair(team, seat.name, 'markdown'),
       stopped: false,
-      rules: rulesOf(team, seat, root, undefined, rulesOriginOf(loaded.source)),
+      rules: rulesOf(team, seat, root, undefined, rulesOriginOf(loaded.source), home),
       // The same session display name a fresh `up` gives the seat: a relaunched claude session
       // reads its sender like every other surface, and a reload is how most seats get relaunched.
       sessionName: seatSessionName(seat, {

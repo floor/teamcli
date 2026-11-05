@@ -2809,6 +2809,26 @@ scene('seats.not-yours', async (place) => {
     entities(place);
     return show(await entityRun(place, ['set', 'floor.names.unique', 'team']), 'set floor.names.unique');
   });
+  /** The owner's projects file in the place's home: `beacon` is the one project on record. */
+  function projects(place: Place): string {
+    const file = join(place.home, '.config', 'team', 'projects.yaml');
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `projects:\n  beacon:\n    name: Beacon\n`);
+    return file;
+  }
+  scene('config.entity.composed-value', async (place) => {
+    write(place, TEAM);
+    return show(await entityRun(place, ['get', 'composed.rules']), 'No entity, project, or team rules declared');
+  });
+  scene('config.project.rules-written', async (place) => {
+    projects(place);
+    return show(await entityRun(place, ['set', 'project.beacon.rules', '[ "one" ]']), 'set project.beacon.rules');
+  });
+  scene('config.project.rules-unchanged', async (place) => {
+    projects(place);
+    await entityRun(place, ['set', 'project.beacon.rules', '[ "one" ]']);
+    return show(await entityRun(place, ['set', 'project.beacon.rules', '[ "one" ]']), 'nothing changed');
+  });
   scene('config.entity.detached', async (place) => {
     entities(place);
     return show(await entityRun(place, ['set', 'floor.names.unique', 'off'], detachedCaller), 'terminal');

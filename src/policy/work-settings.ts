@@ -11,10 +11,12 @@
 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { entityRules } from '../entities.ts';
 import type { Mode, TeamFile } from '../file/types.ts';
+import { projectRules } from '../registry/projects.ts';
 import { parseYaml, type YamlNode } from '../yaml.ts';
 import { resolvePolicyChain, type PolicyChainResult, type ResolvePolicyOptions } from './resolve.ts';
-import type { PolicyChainSources } from './resolve.ts';
+import type { PolicyChainSources, PolicySourceRead } from './resolve.ts';
 import { OWNER_RESERVED_SCOPE_DEFAULT, type PolicyLevel } from './types.ts';
 
 export type LandingMode = 'pr-per-change' | 'batch' | 'direct';
@@ -31,6 +33,12 @@ export type WorkSettings = {
   paneActions: { value: OnOff; from: SettingFrom };
   leadSelfService: { value: OnOff; from: SettingFrom };
   ownerReservedScope: { value: readonly string[]; from: SettingFrom };
+  /** Entity name and standing rules from `<entity>.rules` in `entities.yaml`. */
+  entityName?: string | null;
+  entityRules?: readonly string[];
+  /** Home project ID and standing rules from `projects.<id>.rules` in `projects.yaml`. */
+  projectName?: string | null;
+  projectRules?: readonly string[];
   /** Why the chain could not be used, when it could not: the values are then the defaults. */
   unreadable?: string;
 };
@@ -63,6 +71,11 @@ function withReservedFloor(scope: readonly string[]): readonly string[] {
   return missing.length === 0 ? scope : [...scope, ...missing];
 }
 
+function sourceTarget(source: PolicySourceRead | readonly unknown[] | undefined): string | null {
+  if (!source || Array.isArray(source)) return null;
+  return (source as PolicySourceRead).target ?? null;
+}
+
 export function resolveWorkSettings(
   sources: PolicyChainSources,
   declared: { teamMode?: Mode | null; seatMode?: Mode | null } = {},
@@ -77,6 +90,8 @@ export function resolveWorkSettings(
       : fromChain;
   const vault = effective<string>(chain, 'vault-root', '');
   const reserved = effective<readonly string[]>(chain, 'owner.reserved-scope', OWNER_RESERVED_SCOPE_DEFAULT);
+  const entityName = sourceTarget(sources.entity);
+  const projectName = sourceTarget(sources.project);
   return {
     workspaceMode,
     landingMode: effective<LandingMode>(chain, 'landing-mode', 'batch'),
@@ -86,6 +101,10 @@ export function resolveWorkSettings(
     paneActions: effective<OnOff>(chain, 'leads.pane-actions', 'on'),
     leadSelfService: effective<OnOff>(chain, 'leads.self-service', 'on'),
     ownerReservedScope: { value: withReservedFloor(reserved.value), from: reserved.from },
+    entityName,
+    entityRules: entityRules(options.home, entityName),
+    projectName,
+    projectRules: projectRules(options.home, projectName),
     ...(chain.ok ? {} : { unreadable: chain.refusals.map((r) => r.message).join('; ') }),
   };
 }

@@ -61,6 +61,12 @@ key and a seat's sit nearer in the chain than this word; a seat's reading resolv
 first, then its file's, then the project's. Any word outside the four is refused when the registry
 is read, naming the four the record may carry.
 
+A record may also carry `rules` — a list of project-wide standing rules (`projects.<id>.rules`),
+inherited by every seat of a team whose **home** project (`in_project` / `project_id`) is this
+project. A served project's rules do not apply. Project rules are rendered after the entity's rules
+(`<entity>.rules`) and before the team file's `rules` list under their own short heading in the
+seat's rules text.
+
 A missing file is no projects — every team is its own project — and prints the table header and
 `0 projects`. A
 file that does not read as a project registry (not a map with a `projects` key, a project without

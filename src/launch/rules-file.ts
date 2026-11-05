@@ -358,7 +358,7 @@ export function rulesDeliveryOf(
   if (path === null || !typeablePath(path)) {
     return { refusal: "its rules file's path can't be typed safely: the read-back can't prove a path outside letters, digits and . _ / @ + -" };
   }
-  const text = rulesOf(team, seat, root, undefined, origin);
+  const text = rulesOf(team, seat, root, undefined, origin, home);
   return { text, path, line: rulesLine(path, rulesFileHash(text)) };
 }
 
