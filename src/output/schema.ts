@@ -1766,9 +1766,52 @@ export const UP_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   required: ['seats'],
   properties: {
     seats: { type: 'array', items: { type: 'string', minLength: 1 } },
+    /** Present and true when `--all` swept across registered teams. */
+    all: { type: 'boolean', const: true },
     /** Present and true when `--no-launch` left the general seat brief out. */
     no_launch: { type: 'boolean', const: true },
     notes: { type: 'array', items: { type: 'string' } },
+    teams: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['project', 'session', 'root', 'status', 'failed', 'summary'],
+        properties: {
+          project: { type: 'string', minLength: 1 },
+          session: { type: 'string', minLength: 1 },
+          root: { type: 'string', minLength: 1 },
+          status: { type: 'string', enum: ['ready', 'dry-run', 'pending', 'lock-held', 'unreadable', 'refused'] },
+          failed: { type: 'boolean' },
+          summary: { type: 'string', minLength: 1 },
+          restore_summary: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['repaired', 'skipped_working', 'refused', 'repaired_seats', 'skipped_working_seats', 'refused_seats', 'line'],
+            properties: {
+              repaired: { type: 'integer', minimum: 0 },
+              skipped_working: { type: 'integer', minimum: 0 },
+              refused: { type: 'integer', minimum: 0 },
+              repaired_seats: { type: 'array', items: { type: 'string', minLength: 1 } },
+              skipped_working_seats: { type: 'array', items: { type: 'string', minLength: 1 } },
+              refused_seats: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['seat', 'reason'],
+                  properties: {
+                    seat: { type: 'string', minLength: 1 },
+                    reason: { type: 'string', minLength: 1 },
+                  },
+                },
+              },
+              line: { type: 'string', minLength: 1 },
+            },
+          },
+        },
+      },
+    },
     restore_summary: {
       type: 'object',
       additionalProperties: false,

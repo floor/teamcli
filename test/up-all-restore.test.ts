@@ -61,7 +61,6 @@ function git(cwd: string, ...args: string[]): string {
 function teamYaml(fixture: TeamFixture): string {
   return `format: 1
 project: ${fixture.project}
-entity: acme-org
 coordinator: ${fixture.lead}
 operator: ${fixture.operator}
 session: ${fixture.session}
@@ -110,7 +109,7 @@ function createTeamFixture(spec: {
   sessionId: string;
 }): TeamFixture {
   const dir = join(spec.root, '.agents');
-  const lobby = join(home, '.config', 'team', 'lobbies', 'acme-org');
+  const lobby = join(home, '.config', 'team', 'lobby');
   mkdirSync(dir, { recursive: true });
   mkdirSync(lobby, { recursive: true, mode: 0o700 });
   git(spec.root, 'init', '-q', '-b', 'main');
@@ -178,7 +177,7 @@ function createTeamFixture(spec: {
   });
   upsertTeam(home, teamIdOf(fixture.root), {
     project: fixture.project,
-    entity: 'acme-org',
+    entity: null,
     session: fixture.session,
     root: fixture.root,
     lobby: fixture.lobby,
@@ -402,21 +401,15 @@ describe('team up --all single-command multi-team restore', () => {
   test('admits a placed dev-mode lead from a lobby or checkout, and refuses seats, operators, and dev-mode-off leads', async () => {
     // 1. Ordinary seat in dev mode is refused before touching any team.
     const workerSources = buildMultiSources();
-    const workerIo = testIo(
-      neutralCwd,
-      { kind: 'seat', name: 'worker-1', pane: 'w-main:p9', session: 'main-team' },
-      { TEAMCLI_DEV_MODE: '1' },
-    );
+    const workerIo = testIo(neutralCwd, { kind: 'seat', name: 'worker-1', pane: 'w-main:p9', session: 'main-team' });
+    workerIo.env = { TEAMCLI_DEV_MODE: '1' };
     expect(await runUp(['--all'], workerIo, workerSources.sources)).toBe(1);
     expect(workerSources.trace.renamedBySession).toEqual([]);
 
     // 2. Placed operator in dev mode is refused before touching any team.
     const opSources = buildMultiSources();
-    const opIo = testIo(
-      neutralCwd,
-      { kind: 'seat', name: 'op-1', pane: 'w-main:p2', session: 'main-team' },
-      { TEAMCLI_DEV_MODE: '1' },
-    );
+    const opIo = testIo(neutralCwd, { kind: 'seat', name: 'op-1', pane: 'w-main:p2', session: 'main-team' });
+    opIo.env = { TEAMCLI_DEV_MODE: '1' };
     expect(await runUp(['--all'], opIo, opSources.sources)).toBe(1);
     expect(opSources.trace.renamedBySession).toEqual([]);
 
@@ -425,23 +418,18 @@ describe('team up --all single-command multi-team restore', () => {
     const leadOffIo = testIo(
       neutralCwd,
       { kind: 'seat', name: 'lead-1', pane: 'w-main:p1', session: 'main-team' },
-      {},
     );
     expect(await runUp(['--all'], leadOffIo, leadOffSources.sources)).toBe(1);
     expect(leadOffSources.trace.renamedBySession).toEqual([]);
 
     // 4. Placed lead with dev mode on, running from a lobby outside any checkout, is admitted.
-    const leadOnSources = buildMultiSources({
-      namedOnPane: { 'main-team': 'lead-1' },
-    });
-    const leadOnIo = testIo(
-      neutralCwd,
-      { kind: 'seat', name: 'lead-1', pane: 'w-main:p1', session: 'main-team' },
-      { TEAMCLI_DEV_MODE: '1' },
-    );
+    const leadOnSources = buildMultiSources();
+    const leadOnIo = testIo(neutralCwd, { kind: 'seat', name: 'lead-1', pane: 'w-main:p1', session: 'main-team' });
+    leadOnIo.env = { TEAMCLI_DEV_MODE: '1' };
     expect(await runUp(['--all'], leadOnIo, leadOnSources.sources)).toBe(0);
     expect(leadOnIo.err).toContain('dev mode continues');
     expect(leadOnSources.trace.renamedBySession).toEqual([
+      { session: 'main-team', pane: 'w-main:p1', name: 'lead-1' },
       { session: 'alpha', pane: 'w-alpha:p1', name: 'lead-1' },
       { session: 'beta', pane: 'w-beta:p1', name: 'lead-1' },
     ]);
@@ -490,13 +478,13 @@ describe('team up --all single-command multi-team restore', () => {
     const jsonIo = testIo(neutralCwd, { kind: 'owner' });
     expect(await runUp(['--all', '--json'], jsonIo, sources)).toBe(0);
     const parsed = JSON.parse(jsonIo.out);
-    expect(parsed.ok).toBe(true);
-    expect(parsed.command).toBe('team.up');
+    expect(parsed.schema).toEqual({ name: 'team.up', version: 1 });
+    expect(parsed.status).toBe('ready');
     expect(parsed.all).toBe(true);
     expect(parsed.teams.map((t: { session: string }) => t.session)).toEqual(['main-team', 'alpha', 'beta']);
   });
 
-  test('daemon startup sweep retries not-running routes within a bound and logs nothing restored yet when none comes up', async () => {
+  test('daemon startup sweep retries not-running routes with a growing gap, logs each wait, and reports pending when still restoring at the bound', async () => {
     let attempts = 0;
     const started = await startMachineDaemon({
       home,
@@ -504,7 +492,9 @@ describe('team up --all single-command multi-team restore', () => {
       startedBy: 'test',
       version: '0.5.12-test',
       heartbeatMs: 10_000,
-      restoreRetryDelayMs: 10,
+      restoreRetryInitialDelayMs: 5,
+      restoreRetryMaxDelayMs: 20,
+      restoreRetryBudgetMs: 35,
       restoreSweep: async () => {
         attempts += 1;
         return { kind: 'not-running', state: 'absent' };
@@ -516,12 +506,64 @@ describe('team up --all single-command multi-team restore', () => {
       const deadline = Date.now() + 2000;
       while (Date.now() < deadline) {
         const log = existsSync(daemonLogPath(home)) ? readFileSync(daemonLogPath(home), 'utf8') : '';
-        if (log.includes('nothing restored yet')) break;
+        if (log.includes('restore: pending')) break;
         await new Promise((r) => setTimeout(r, 10));
       }
-      expect(attempts).toBeGreaterThan(1);
+      // Initial pass + 3 growing-gap retries (5ms + 10ms + 20ms = 35ms budget) = 4 attempts
+      expect(attempts).toBe(4);
       const log = readFileSync(daemonLogPath(home), 'utf8');
-      expect(log).toContain('nothing restored yet');
+      expect(log).toContain('restore: waiting');
+      expect(log).toContain('restore: pending');
+      expect(log).not.toContain('nothing restored');
+    } finally {
+      await started.daemon.close();
+    }
+  });
+
+  test('daemon startup sweep restores a route that becomes running on a retry and stops waiting', async () => {
+    let attempts = 0;
+    const started = await startMachineDaemon({
+      home,
+      roots: [alphaTeam.root],
+      startedBy: 'test',
+      version: '0.5.12-test',
+      heartbeatMs: 10_000,
+      restoreRetryInitialDelayMs: 5,
+      restoreRetryMaxDelayMs: 20,
+      restoreRetryBudgetMs: 100,
+      restoreSweep: async () => {
+        attempts += 1;
+        if (attempts < 3) return { kind: 'not-running', state: 'absent' };
+        return {
+          kind: 'ran',
+          summary: {
+            repaired: 1,
+            skipped_working: 0,
+            refused: 0,
+            repaired_seats: ['lead-1'],
+            skipped_working_seats: [],
+            refused_seats: [],
+            line: '1 seat repaired, 0 skipped (working), 0 refused',
+          },
+          failed: false,
+        };
+      },
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      const deadline = Date.now() + 2000;
+      while (Date.now() < deadline) {
+        const log = existsSync(daemonLogPath(home)) ? readFileSync(daemonLogPath(home), 'utf8') : '';
+        if (log.includes('1 seat repaired')) break;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(attempts).toBe(3);
+      const log = readFileSync(daemonLogPath(home), 'utf8');
+      expect(log).toContain('restore: waiting 5ms');
+      expect(log).toContain('restore: waiting 10ms');
+      expect(log).toContain(`restore ${alphaTeam.root}: 1 seat repaired, 0 skipped (working), 0 refused`);
+      expect(log).not.toContain('restore: pending');
     } finally {
       await started.daemon.close();
     }
