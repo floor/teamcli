@@ -3,7 +3,7 @@
 Shows what this machine holds: every team it keeps a store for, read as one report — each
 team's accounts and windows, with what is left and used, when each figure was last read and from
 which source — then one `SEAT  CLI  ACCOUNT` table per team. `--tree` adds a quota view per lab
-and per account with the pace margin and the seats drawing on it, and under each team table the
+and per account with each window’s pace in plain words and the seats drawing on it, and under each team table the
 seats' own figures, each marked `measured` when this run read the seat's screen and `estimated`
 when it comes from the watch's per-seat record, with one spend line per seat: the amount the
 seat's own status row printed, or `unknown` with its reason. The one advice line prints either
@@ -23,7 +23,7 @@ timeout; it opens no credential, key or CLI session file.
 | --- | --- | --- |
 | `--all` | — | include every team’s seat-to-account breakdown for the owner, a team that is not running among them; other callers see only their own team |
 | `--json` | — | the same report as one document, format 1, for a script to read; every key is printed in both views |
-| `--tree` | — | add the quota view — one block per lab and per account, with each window’s margin — between the account lines and the team tables, its own `advice:` line inside it, and under each team table each seat’s own window and spend lines; without the flag the same advice line follows the account lines |
+| `--tree` | — | add the quota view — one block per lab and per account, with each window’s pace in words — between the account lines and the team tables, its own `advice:` line inside it, and under each team table each seat’s own window and spend lines; without the flag the same advice line follows the account lines |
 
 The owner can list shared subscriptions in `~/.config/team/accounts.yaml`:
 
@@ -167,7 +167,7 @@ lines and the team table, its own `advice:` line inside it. Both of its blocks r
 in the team's own state while the block reads the watch's machine-wide observations and the live
 sources, neither of which is present in an example run. On a machine where the watch has recorded a
 status row — or a seat's own screen has an `L:`/`W:` row, or a CLI's usage print answers — the same
-accounts print their windows, margin and state there.
+accounts print their windows, pace and state there.
 
 ## The quota view
 
@@ -177,45 +177,47 @@ block per lab and per account, and one advice line.
     quota
       anthropic  ok
         anthropic  ok  seats: lead, coda
-          session  used 20%  left 80%  resets in 2h6m  margin +38%  (status line, read 1m ago)
-          weekly  used 12%  left 88%  resets in 125h26m  margin +13.3%  (status line, read 1m ago)
+          session  used 20%  left 80%  resets in 2h6m  ahead of pace by 38%  (status line, read 1m ago)
+          weekly  used 12%  left 88%  resets in 125h26m  ahead of pace by 13.3%  (status line, read 1m ago)
       xai  walled
         xai  walled  resets at 3pm  seats: scout
-          weekly  used 100%  left 0%  resets not printed  margin not known  (machine reading, read 1m ago)
-    advice: swap scout off xai (walled) to anthropic (weekly used 12%, margin +13.3%)
+          weekly  used 100%  left 0%  resets not printed  pace not known  (machine reading, read 1m ago)
+    advice: swap scout off xai (walled) to anthropic (weekly used 12%, ahead of pace by 13.3%)
 
-Each window line carries the percentage used and left, when it resets, the margin, and where the
-figure came from. The reset is a countdown, `resets not printed` when the source gave no reset
-moment, or the words a wall screen printed. The margin is the window's own clock minus the spend:
- 125h26m to reset leaves
-42h34m of a seven-day window gone, 25.3%, so 12% used reads `margin +13.3%`. A status row that
-prints its own margin (`W: 12% (+13.3%)`) is believed as printed; a row that prints none is read
+Each window line carries the percentage used and left, when it resets, the pace in plain words, and
+where the figure came from. The reset is a countdown, `resets not printed` when the source gave no
+reset moment, or the words a wall screen printed. The pace compares the spend with the window's own
+clock — the share of the window already gone minus the share used: 125h26m to reset leaves 42h34m
+of a seven-day window gone, 25.3%, so 12% used leaves 13.3 points of room ahead of the clock and
+reads `ahead of pace by 13.3%`. Within a band of ten points either way the line says `on pace`; a band or more
+ahead prints the figure; a band or more behind prints `runs out in about Xh, before the reset in
+Yh` in place of the countdown and the pace, both hours read from the window's own clock — or,
+when the source printed the pace but no reset, `runs out before the reset`. A status row that
+prints its own pace (`W: 12% (+13.3%)`) is believed as printed; a row that prints none is read
 against the window's length (five hours for the session window, seven days for the weekly one). A
 figure older than five minutes, or one whose reset has passed, prints marked `stale`, carries no
-margin, and reads `unknown` as its state. A reading older than its own window (five hours for the
-session window, a day for daily, seven days for weekly) describes a window instance that has
-passed: the line prints `no fresh reading` with the reading's age and source, the window carries
-no figure, reset or margin, and the state is `unknown`; the one advice line names each such window
-and says that a running seat's status line or the CLI's own usage command reads a fresh one on the
-next run. The account table prints the same words in its `STATE` cell, and `--json` carries
-`expired: true` with the figures nulled. A window whose fresh margin is at or below −10% — the
-headroom band's mirror — is spending faster than its clock will last: in place of the reset
-countdown and the margin the line prints `runs out in about Xh, before the reset in Yh`, both
-hours read from the window's own clock. A wall screen — `quota reached`, `out of usage`, `usage
+pace word and reads `unknown` as its state; a source that gave no reset at all prints `pace not
+known`, because there is no clock to compare with. A reading older than its own window (five hours
+for the session window, a day for daily, seven days for weekly) describes a window instance that
+has passed: the line prints `no fresh reading` with the reading's age and source, the window
+carries no figure, reset or pace, and the state is `unknown`; the one advice line names each such
+window and says that a running seat's status line or the CLI's own usage command reads a fresh one
+on the next run. The account table prints the same words in its `STATE` cell, and `--json` carries
+`expired: true` with the figures nulled. A wall screen — `quota reached`, `out of usage`, `usage
 limit reached`, or the CLI's own rate-limit rejection — prints the account as `walled` with the
 reset words the screen showed.
 
-An account's state is `walled` at 100% used or on a live wall, `near cap` when a fresh margin is
-at or below −10% — the window is on course to empty before it resets — `ok` otherwise, whatever
-the used percentage: a window at 96% used and on pace is ok. A window with no reset moment to
-read — its source printed none — gives no margin, so it falls back to the used figure, 90% or
-above reading `near cap`. Nothing fresh reads `unknown`. The same words print in the default account table's
+An account's state is `walled` at 100% used or on a live wall, `near cap` when its fresh pace is a
+band of ten points or more behind its clock — the window is on course to empty before it resets —
+`ok` otherwise, whatever the used percentage: a window at 96% used and on pace is ok. A window
+with no reset moment to read — its source printed none — has no pace word, so it falls back to the
+used figure, 90% or above reading `near cap`. Nothing fresh reads `unknown`. The same words print in the default account table's
 `STATE` column, so `near cap` is never hidden behind `--tree`; the table marks a stale reading
 `stale` beside its state, and `fresh`/`stale` stay the team rows' own pace words. The one `advice:`
-line — printed with or without `--tree` — names the accounts with headroom (a fresh margin of at
-least +10%), or the walled seats and the healthiest account to move them to, or the near-cap
-accounts, worst margin first, with the account that still has headroom beside them, or says that
-no readings have answered. A fresh figure whose source printed no reset has no margin to read: the
+line — printed with or without `--tree` — names the accounts with headroom (a fresh reading a band
+or more ahead of its clock), or the walled seats and the healthiest account to move them to, or
+the near-cap accounts, worst first, with the account that still has headroom beside them, or says
+that no readings have answered. A fresh figure whose source printed no reset has no pace word: the
 line also names that window and says the reset is in the CLI's own status view, so `not printed`
 in a cell always comes with the route to the clock it says is off-screen.
 
@@ -241,8 +243,9 @@ names, so a broken file on a stopped team makes that same counted line, never a 
 own. In `--json` the
 block is the `quota` key:
 `format`, `accountsFile`, one entry per lab with its accounts, seats, states and windows, and
-`advice`; each window carries its `margin`, its `expired` mark and, when it names one, the
-`runsOutIn` figure.
+`advice`; each window carries its `margin` — the same pace as points, positive ahead of its
+clock — its `expired` mark and, when it names one, the `runsOutIn` figure. The text prints the
+pace in words; the JSON key keeps its model name for scripts.
 
 ## Each seat’s own figures
 
@@ -251,12 +254,12 @@ Under each team’s `SEAT  CLI  ACCOUNT` table, `--tree` prints that team’s se
     beacon
       SEAT           CLI          ACCOUNT
       claude-keeper  claude-code  anthropic
-      claude-keeper  claude-code  anthropic  session  left 80%  used 20%  resets in 2h6m  margin +38%  measured  status line  read 1m ago
-      claude-keeper  claude-code  anthropic  weekly  left 88%  used 12%  resets in 125h26m  margin +13.3%  measured  status line  read 1m ago
+      claude-keeper  claude-code  anthropic  session  left 80%  used 20%  resets in 2h6m  ahead of pace by 38%  measured  status line  read 1m ago
+      claude-keeper  claude-code  anthropic  weekly  left 88%  used 12%  resets in 125h26m  ahead of pace by 13.3%  measured  status line  read 1m ago
       claude-keeper  claude-code  anthropic  cost  $5.8  measured  status line  read 1m ago
 
 A window line carries the account the figure measures, the window, the same percentages, reset
-and margin the quota block prints, and the source with the reading’s age and its mark. `measured`
+and pace words the quota block prints, and the source with the reading’s age and its mark. `measured`
 is a figure this run read from the seat’s own screen; `estimated` is the watch’s per-seat record
 in the project state (source `state record`), which fills only the windows the live read did not
 answer. A seat with neither prints `unknown  no reading for this seat`.

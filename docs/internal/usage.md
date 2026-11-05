@@ -140,28 +140,33 @@ table and that line, never the table alone; the flag changes no JSON key. The mo
 block from the labs it already shows, so a lab or account this view hides can never reach it.
 
 A window line prints the used and left percentages, the reset (a countdown, `resets not printed`
-when the source gave no reset moment, or the words a wall screen showed), the margin, and the
-source with the reading's age. Observations are stamped when
+when the source gave no reset moment, or the words a wall screen showed), the pace in plain words,
+and the source with the reading's age. Observations are stamped when
 read, and the newest observation per account, pool and window wins. Two sources print no
 percentage: the watch's machine cache (`source: machine reading`) and the live readers.
 
 The margin is `expected minus used`, in percentage points: the share of the window that has
 already elapsed minus the share spent. The session window is five hours (the length the
-Antigravity usage print names as `Five Hour Limit`); the weekly window is seven days. A status row
-that prints its own margin — Claude Code's `W: 12% (+13.3%)` — is believed as printed; otherwise
-the figure is computed from the reset when it is known and still ahead. A reading older than five
-minutes, or one whose reset has passed, prints marked `stale`, carries no margin, and its state
-is `unknown`. States are `walled` (a live wall screen, or 100% used), `near cap` (a fresh margin
-at or below −10% — the window is on course to empty before it resets — or, when the source printed
-no reset moment so no margin can be read, 90% used or above), `ok` below both, and `unknown` when
-nothing fresh is observed. A figure whose source printed no reset says `resets not printed` in
-place of a countdown: the source answered the percentage and gave no clock — the Codex status
-cell is one, and the reset there lives in the CLI's own status view, which this tool does not
-press keys to read. A wall keeps `resets unknown` when its rejection named no lift time, because
-that word is about a limit whose end nothing on the screen states. The account table's `STATE`
-column prints the same words — the quota view is where the figures come from, not where the state
-first appears — and marks a stale reading `stale`. The margin test matters as much as the used figure: an account
-89% used with a −71.6% margin is spending far ahead of its window and prints `near cap`, not `ok`.
+Antigravity usage print names as `Five Hour Limit`); the weekly window is seven days. The line
+never prints the word: within a band of ten points either way — the same band the advice uses for
+headroom and `near cap` — it says `on pace`; a band or more ahead of its clock prints `ahead of
+pace by 13.3%`; a band or more behind prints the run-out in hours (below), or `runs out before the
+reset` when the source printed the pace but no clock; no clock at all prints `pace not known`. A
+status row that prints its own margin — Claude Code's `W: 12% (+13.3%)` — is believed as printed;
+otherwise the figure is computed from the reset when it is known and still ahead. A reading older
+than five minutes, or one whose reset has passed, prints marked `stale`, carries no pace word, and
+its state is `unknown`. States are `walled` (a live wall screen, or 100% used), `near cap` (a
+fresh margin at or below −10% — the window is on course to empty before it resets — or, when the
+source printed no reset moment so no margin can be read, 90% used or above), `ok` below both, and
+`unknown` when nothing fresh is observed. A figure whose source printed no reset says `resets not
+printed` in place of a countdown: the source answered the percentage and gave no clock — the Codex
+status cell is one, and the reset there lives in the CLI's own status view, which this tool does
+not press keys to read. A wall keeps `resets unknown` when its rejection named no lift time,
+because that word is about a limit whose end nothing on the screen states. The account table's
+`STATE` column prints the same words — the quota view is where the figures come from, not where
+the state first appears — and marks a stale reading `stale`. The margin test matters as much as
+the used figure: an account 89% used with a −71.6% margin is spending far ahead of its window and
+prints `near cap`, not `ok`.
 
 The advice line is built only from what the block already shows. With walls, it names the seats
 on each walled account (up to two) and the account with the best fresh margin at or above +10% as
