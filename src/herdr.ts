@@ -34,11 +34,42 @@ export type HerdrAgent = {
 
 export type HerdrRun = (args: string[], session?: string) => unknown;
 let customRun: HerdrRun | null = null;
+let runGeneration = 0;
+
+type HerdrSnapshot = {
+  agents: Map<string, HerdrAgent[] | null>;
+  processInfo: Map<string, unknown | null>;
+};
+let activeSnapshot: HerdrSnapshot | null = null;
+
 export function setHerdrRun(exec: HerdrRun | null): void {
   customRun = exec;
+  runGeneration += 1;
+  activeSnapshot = null;
 }
 export function hasCustomHerdrRun(): boolean {
   return customRun !== null;
+}
+export function herdrRunGeneration(): number {
+  return runGeneration;
+}
+
+/**
+ * Runs one command scope while reusing a single in-memory snapshot of the terminal host's
+ * agent list and pane process tables. Lives only for `fn` inside this process.
+ */
+export async function withHerdrSnapshot<T>(fn: () => Promise<T>): Promise<T> {
+  if (activeSnapshot !== null) return fn();
+  activeSnapshot = { agents: new Map(), processInfo: new Map() };
+  try {
+    return await fn();
+  } finally {
+    activeSnapshot = null;
+  }
+}
+
+export function evictHerdrPaneProcessInfo(pane: string, session?: string): void {
+  activeSnapshot?.processInfo.delete(`${session ?? ''}\0${pane}`);
 }
 
 function run(args: string[], session?: string): unknown {
@@ -92,11 +123,18 @@ function agentsOf(result: unknown): HerdrAgent[] {
 
 // The agents herdr lists, or null when herdr can't be reached.
 export function agentList(session?: string): HerdrAgent[] | null {
-  try {
-    return agentsOf(run(['agent', 'list'], session));
-  } catch {
-    return null;
+  const key = session ?? '';
+  if (activeSnapshot !== null && activeSnapshot.agents.has(key)) {
+    return activeSnapshot.agents.get(key) ?? null;
   }
+  let agents: HerdrAgent[] | null;
+  try {
+    agents = agentsOf(run(['agent', 'list'], session));
+  } catch {
+    agents = null;
+  }
+  activeSnapshot?.agents.set(key, agents);
+  return agents;
 }
 
 /** The same read, awaited: the child is killed at `timeoutMs` or at the loop's stop. */
@@ -111,13 +149,9 @@ export async function agentListAsync(session: string | undefined, options: Herdr
 // The pid of a pane's root process, or null. Always by `--pane`: herdr 0.7.1's `--current`
 // answered for another pane than the caller's.
 export function paneRootPid(pane: string, session?: string): number | null {
-  try {
-    const result = run(['pane', 'process-info', '--pane', pane], session) as { process_info?: { shell_pid?: unknown } };
-    const pid = result.process_info?.shell_pid;
-    return typeof pid === 'number' ? pid : null;
-  } catch {
-    return null;
-  }
+  const result = paneProcessInfo(pane, session) as { process_info?: { shell_pid?: unknown } } | null;
+  const pid = result?.process_info?.shell_pid;
+  return typeof pid === 'number' ? pid : null;
 }
 
 // argv0 of each foreground process, in herdr's order, or null when the pane can't be
@@ -198,11 +232,7 @@ export function paneProcessesOf(result: unknown): PaneProcesses | null {
 }
 
 export function paneProcesses(pane: string, session?: string): PaneProcesses | null {
-  try {
-    return paneProcessesOf(run(['pane', 'process-info', '--pane', pane], session));
-  } catch {
-    return null;
-  }
+  return paneProcessesOf(paneProcessInfo(pane, session));
 }
 
 /**
@@ -210,11 +240,18 @@ export function paneProcesses(pane: string, session?: string): PaneProcesses | n
  * foreground names are read from, so a pass asks the terminal host once for the pane.
  */
 export function paneProcessInfo(pane: string, session?: string): unknown | null {
-  try {
-    return run(['pane', 'process-info', '--pane', pane], session);
-  } catch {
-    return null;
+  const key = `${session ?? ''}\0${pane}`;
+  if (activeSnapshot !== null && activeSnapshot.processInfo.has(key)) {
+    return activeSnapshot.processInfo.get(key) ?? null;
   }
+  let info: unknown | null;
+  try {
+    info = run(['pane', 'process-info', '--pane', pane], session);
+  } catch {
+    info = null;
+  }
+  activeSnapshot?.processInfo.set(key, info);
+  return info;
 }
 
 /** The same read, awaited: the child is killed at `timeoutMs` or at the loop's stop. */

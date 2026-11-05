@@ -13,6 +13,7 @@ import {
   mayChangeTeam,
   mayLaunchSeats,
   noPaneRefusal,
+  parsePsSnapshot,
   parseStat,
   placeCaller,
   processReader,
@@ -679,5 +680,79 @@ seats:
     const shellCode = await runSend(['lead', 'impostor shell claiming lead pane'], ioShell, sendHost(home));
     expect(shellCode).toBe(1);
     expect(ioShell.err).toMatch(/pane without an agent/);
+  });
+
+  test('parsePsSnapshot reads pid, ppid, and command name from one process snapshot', () => {
+    const raw = [
+      '    1     0 /sbin/launchd',
+      '   10     1 /opt/homebrew/bin/herdr',
+      '  200    10 -zsh',
+      '  210   200 /Applications/Claude.app/Contents/MacOS/claude',
+      'nonsense line',
+      '',
+    ].join('\n');
+    const snapshot = parsePsSnapshot(raw);
+    expect(snapshot.get(1)).toEqual({ ppid: 0, name: 'launchd' });
+    expect(snapshot.get(10)).toEqual({ ppid: 1, name: 'herdr' });
+    expect(snapshot.get(200)).toEqual({ ppid: 10, name: 'zsh' });
+    expect(snapshot.get(210)).toEqual({ ppid: 200, name: 'claude' });
+  });
+
+  test('runSend computes caller ancestry and terminal-host snapshots once across gate, prologue, and preflights', async () => {
+    const { root, home } = setupTeam({
+      lead: { stage: 'ready', pane: 'pane1' },
+      worker: { stage: 'ready', pane: 'pane2' },
+    });
+    const workerChain: Process[] = [{ pid: 210, name: 'zsh' }, { pid: 200, name: 'codex' }, { pid: 10, name: 'herdr' }];
+
+    let ancestorsCalls = 0;
+    let callerAgentsCalls = 0;
+    const callerPaneRootCalls = new Map<string, number>();
+
+    const io = testIo(root);
+    delete io.caller;
+    io.callerSources = () => ({
+      ancestors: () => {
+        ancestorsCalls += 1;
+        return workerChain;
+      },
+      agents: () => {
+        callerAgentsCalls += 1;
+        return [agent('lead', 'pane1'), agent('worker', 'pane2')];
+      },
+      paneRootPid: (pane) => {
+        callerPaneRootCalls.set(pane, (callerPaneRootCalls.get(pane) ?? 0) + 1);
+        return ({ pane1: 100, pane2: 200 })[pane] ?? null;
+      },
+      env: {},
+      stdinIsTTY: true,
+    });
+
+    let hostAgentsCalls = 0;
+    let paneTextCalls = 0;
+    const baseHost = sendHost(home);
+    const countingHost: SendHost = {
+      ...baseHost,
+      agents: (session) => {
+        hostAgentsCalls += 1;
+        return baseHost.agents(session);
+      },
+      native: {
+        ...baseHost.native,
+        paneText: (session, pane) => {
+          paneTextCalls += 1;
+          return baseHost.native.paneText?.(session, pane) ?? '';
+        },
+      },
+    };
+
+    const code = await runSend(['lead', 'single-snapshot check'], io, countingHost);
+    expect(code).toBe(0);
+    expect(ancestorsCalls).toBe(1);
+    expect(callerAgentsCalls).toBe(1);
+    expect(callerPaneRootCalls.get('pane1') ?? 0).toBeLessThanOrEqual(1);
+    expect(callerPaneRootCalls.get('pane2') ?? 0).toBeLessThanOrEqual(1);
+    expect(hostAgentsCalls).toBeLessThanOrEqual(1);
+    expect(paneTextCalls).toBeLessThanOrEqual(1);
   });
 });

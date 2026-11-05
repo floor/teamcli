@@ -10,7 +10,7 @@ import { nudgeBus } from '../bus/server.ts';
 import { postArrivalWebhook, type SenderPostOutcome } from '../bus/webhook.ts';
 import { runClientSend, type ClientSendDelivery, type ResolvedClientTarget } from '../client/send.ts';
 import { CLIENT_SLICE_DISPLAY_NAME, KEY_ISOLATION_LINE } from '../client/records.ts';
-import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, isOwner, judgeCallerIn, logTag, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
+import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, isOwner, judgeCallerIn, logTag, noPaneRefusal, standingOf, walkCaller, type Caller, type CallerSources, type SeatStanding } from '../caller.ts';
 import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { resolveSeatOverrides, seatOverridesOf, seatSettingsOf, type SeatOverrides } from '../config/apply.ts';
@@ -18,7 +18,7 @@ import { NOT_A_REPO } from '../file/load.ts';
 import { labelPersona } from '../file/sections/seats.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
-import { agentList, agentStatus, paneForegroundCwd, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
+import { agentList, agentStatus, evictHerdrPaneProcessInfo, paneForegroundCwd, paneProcesses, paneRead, withHerdrSnapshot, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, wakeableWhileIdle, WEBHOOK_QUEUED_WORDS, type DeliveryClass, type WakeOutcome } from '../launch/delivery-class.ts';
 import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
@@ -1145,7 +1145,89 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   };
 }
 
-export async function runSend(argv: string[], io: Io, host: SendHost): Promise<number> {
+type SnapshotSendHost = SendHost & {
+  evictProcessInfo?: (session: string, pane: string) => void;
+};
+
+function snapshotSendHost(host: SendHost): SnapshotSendHost {
+  const agentsCache = new Map<string, ReturnType<SendHost['agents']>>();
+  const processInfoCache = new Map<string, ReturnType<SendHost['processInfo']>>();
+  return {
+    ...host,
+    agents(session: string) {
+      if (agentsCache.has(session)) return agentsCache.get(session) ?? null;
+      const res = host.agents(session);
+      agentsCache.set(session, res);
+      return res;
+    },
+    processInfo(session: string, pane: string) {
+      const key = `${session}\0${pane}`;
+      if (processInfoCache.has(key)) return processInfoCache.get(key) ?? null;
+      const res = host.processInfo(session, pane);
+      processInfoCache.set(key, res);
+      return res;
+    },
+    evictProcessInfo(session: string, pane: string) {
+      processInfoCache.delete(`${session}\0${pane}`);
+      evictHerdrPaneProcessInfo(pane, session);
+    },
+  };
+}
+
+function snapshotSendIo(io: Io): Io {
+  if (io.caller !== undefined || io.callerSources === undefined) return io;
+  const original = io.callerSources;
+  let hasAncestors = false;
+  let cachedAncestors: ReturnType<CallerSources['ancestors']> = null;
+  const sessionSources = new Map<string, CallerSources>();
+  return {
+    ...io,
+    callerSources(session: string | undefined): CallerSources {
+      const key = session ?? '';
+      const existing = sessionSources.get(key);
+      if (existing !== undefined) return existing;
+      const raw = original(session);
+      let hasAgents = false;
+      let cachedAgents: ReturnType<CallerSources['agents']> = null;
+      const paneRoots = new Map<string, number | null>();
+      const wrapped: CallerSources = {
+        ...raw,
+        ancestors() {
+          if (!hasAncestors) {
+            cachedAncestors = raw.ancestors();
+            hasAncestors = true;
+          }
+          return cachedAncestors;
+        },
+        agents() {
+          if (!hasAgents) {
+            cachedAgents = raw.agents();
+            hasAgents = true;
+          }
+          return cachedAgents;
+        },
+        paneRootPid(pane: string) {
+          if (paneRoots.has(pane)) return paneRoots.get(pane) ?? null;
+          const pid = raw.paneRootPid(pane);
+          paneRoots.set(pane, pid);
+          return pid;
+        },
+      };
+      sessionSources.set(key, wrapped);
+      return wrapped;
+    },
+  };
+}
+
+export async function runSend(argv: string[], rawIo: Io, rawHost: SendHost): Promise<number> {
+  return withHerdrSnapshot(async () => {
+    const io = snapshotSendIo(rawIo);
+    const host = snapshotSendHost(rawHost);
+    return runSendWithSnapshot(argv, io, host);
+  });
+}
+
+async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Promise<number> {
   const args = readArgs(argv, ['file', 'brief', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id', 'subject', 'approval', 'reason'], ['wait', 'json', 'list', 'dry-run', 'request']);
   const seatName = args.rest[0];
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
@@ -1191,8 +1273,9 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     }
     seatApproved = step.kind === 'admitted';
   }
+  const preCaller = internalCallerOf(host) ?? (seatApproved ? undefined : walkCaller(io));
   if (
-    internalCallerOf(host) === null && !seatApproved && !isOwner(callerOf(io))
+    internalCallerOf(host) === null && !seatApproved && preCaller !== undefined && !isOwner(preCaller)
     && !args.flags.has('list') && args.values.confirm === undefined && args.values.record === undefined
   ) {
     seatApproved = ownerSeatRuleAdmits('team-send', io.cwd, args.flags.has('dry-run'), io, seatSources);
@@ -1201,7 +1284,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // the principal its internal entry established and verified, which may run with no terminal; it
   // is judged at admission by its own branch, never by the process's placement. An owner-seat
   // answer has already admitted this run, so the terminal is not asked again.
-  const detached = seatApproved ? undefined : detachedRefusal(internalCallerOf(host) ?? callerOf(io), { who: 'the owner or a seat the send admission admits', where: 'a terminal outside herdr or its own pane' });
+  const detached = seatApproved || preCaller === undefined ? undefined : detachedRefusal(preCaller, { who: 'the owner or a seat the send admission admits', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) {
     if (report.json) writeJsonError(io, 'send.detached', detached, 'run team send from a terminal outside herdr');
     else io.stderr(`team send: ${detached}\n`);
@@ -1385,24 +1468,23 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     agent.reach.team === teamIdOf(to.root) && agent.reach.seat === to.seat &&
     agent.reach.session === to.session && agent.lifecycle !== 'retired'
   );
-  if (registeredTarget !== undefined) {
-    const live = findAgent(host, to.session, to.seat);
-    if (live.ok) {
-      const screen = host.native.paneText?.(to.session, live.pane) ?? null;
-      // The target's own model, read as its launch makes it readable: for a provider wrapper the
-      // screen shows the wrapper CLI's default family whatever the launcher selected, so the
-      // reading is the record's signed declaration — the same like-for-like the drift test needs.
-      const running = screen === null ? null : signedSeatModel({
-        cli: registeredTarget.cli,
-        model: registeredTarget.signing.model,
-        version: registeredTarget.signing.version,
-        launch: registeredTarget.launch,
-      }, screen);
-      if (modelDiffers(running, registeredTarget.signing)) {
-        const declaredModel = `${registeredTarget.signing.model} ${registeredTarget.signing.version}`;
-        const runningLabel = `${running.model} ${running.version}`;
-        return held(io, dir, who, to.seat, `model drift: ${declaredModel} vs ${runningLabel}`, host, report);
-      }
+  const preflightLive = findAgent(host, to.session, to.seat);
+  const preflightScreen = preflightLive.ok ? host.native.paneText?.(to.session, preflightLive.pane) : undefined;
+  if (registeredTarget !== undefined && preflightLive.ok) {
+    const screen = preflightScreen ?? null;
+    // The target's own model, read as its launch makes it readable: for a provider wrapper the
+    // screen shows the wrapper CLI's default family whatever the launcher selected, so the
+    // reading is the record's signed declaration — the same like-for-like the drift test needs.
+    const running = screen === null ? null : signedSeatModel({
+      cli: registeredTarget.cli,
+      model: registeredTarget.signing.model,
+      version: registeredTarget.signing.version,
+      launch: registeredTarget.launch,
+    }, screen);
+    if (modelDiffers(running, registeredTarget.signing)) {
+      const declaredModel = `${registeredTarget.signing.model} ${registeredTarget.signing.version}`;
+      const runningLabel = `${running.model} ${running.version}`;
+      return held(io, dir, who, to.seat, `model drift: ${declaredModel} vs ${runningLabel}`, host, report);
     }
   }
   // The quota preflight: a walled seat is refused before the body is read into a send, before
@@ -1411,13 +1493,9 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // cautions, and that gap is the named limitation, not a safe outcome. The host's status is
   // not consulted: a wall the screen proves holds even while the terminal host still calls the
   // seat working, so no socket or drop effect can start ahead of the old caution.
-  {
-    const live = findAgent(host, to.session, to.seat);
-    if (live.ok) {
-      const text = host.native.paneText?.(to.session, live.pane);
-      const quota = quotaOutOf(to.cli, text);
-      if (quota !== null) return refuse(io, dir, who, `${to.seat}: ${quotaOutDetail(declared, quota)}`, host, report);
-    }
+  if (preflightLive.ok) {
+    const quota = quotaOutOf(to.cli, preflightScreen);
+    if (quota !== null) return refuse(io, dir, who, `${to.seat}: ${quotaOutDetail(declared, quota)}`, host, report);
   }
   // A `--brief` send reads the receiving team's `brief-transport` before it reads the draft or
   // writes anything durable. `message` and `file` both deliver the whole body as an ordinary
@@ -5949,6 +6027,7 @@ async function deliverSocketFrame(
     { now: host.now, dial: host.deliver },
   );
   if (taken.outcome !== 'delivered' && first.recorded) {
+    (host as SnapshotSendHost).evictProcessInfo?.(to.session, found.pane);
     const processes = host.processInfo(to.session, found.pane);
     const live = processes === null ? null : socketOf(host, processes);
     if (live !== null && live !== first.path) {
