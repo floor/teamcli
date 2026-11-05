@@ -115,7 +115,7 @@ describe('muse faint placeholder vs non-faint draft (independent verification)',
     }
   });
 
-  test('plain unstyled text and grey non-faint SGR text (90, 38;5;n, 38;2;r;g;b) never read empty and preserve the draft', () => {
+  test('plain unstyled text and undeclared grey SGR text (90, 38;5;n, 38;2;r;g;b) never read empty and preserve the draft', () => {
     const prose = 'Ask to monitor a running build or log and get pinged on changes';
     const shortDraft = 'fix the race in router delivery';
 
@@ -141,8 +141,8 @@ describe('muse faint placeholder vs non-faint draft (independent verification)',
         expectedFirst: shortDraft,
       },
       {
-        label: 'truecolor RGB grey SGR 38;2;103;108;116',
-        frame: museFrame(`\x1b[38;2;103;108;116m❯ ${prose}\x1b[0m`),
+        label: 'truecolor RGB grey SGR 38;2;120;125;130 is not the declared hint colour',
+        frame: museFrame(`\x1b[38;2;120;125;130m❯ ${prose}\x1b[0m`),
         expectedFirst: prose,
       },
       {
@@ -165,6 +165,14 @@ describe('muse faint placeholder vs non-faint draft (independent verification)',
       expect(box?.first).toBe(item.expectedFirst);
       expect(boxHoldsText('muse', item.expectedFirst, item.frame)).toBe(true);
     }
+
+    // The one grey the profile declares as Muse 1.4.14's rotating hint foreground is the empty
+    // box even though it is not faint: the declared colour is the reading, and its own scene
+    // (muse-hint-colour.test.ts) covers the captured 1.4.14 frame.
+    const declared = museFrame(`\x1b[38;2;103;108;116m❯ ${prose}\x1b[0m`);
+    expect(readScreen('muse', declared).kind).toBe('idle');
+    expect(readBox('muse', declared)).toBeNull();
+    expect(boxHoldsText('muse', prose, declared)).toBe(false);
   });
 
   test('partially faint rows or faint input with non-faint continuation row read as unsent (never empty)', () => {
@@ -247,12 +255,12 @@ describe('muse faint placeholder vs non-faint draft (independent verification)',
     expect(wakeRotated.typed).toEqual([TRIGGER_LINE]);
     expect(wakeRotated.enters).toBe(1);
 
-    // 3. Grey non-faint text (SGR 90, 38;5;244, 38;2;103;108;116) or plain draft on first read -> refuses before typing anything
+    // 3. Grey non-faint text (SGR 90, 38;5;244, an undeclared 38;2;r;g;b) or plain draft on first read -> refuses before typing anything
     const draftFrames = [
       museFrame(`❯ ${prose}`),
       museFrame(`\x1b[90m❯ ${prose}\x1b[0m`),
       museFrame(`❯ \x1b[38;5;244m${prose}\x1b[0m`),
-      museFrame(`\x1b[38;2;103;108;116m❯ ${prose}\x1b[0m`),
+      museFrame(`\x1b[38;2;120;125;130m❯ ${prose}\x1b[0m`),
       museFrame('❯ \x1b[2m/goal \x1b[22mkeep this draft safe'),
     ];
 
@@ -269,9 +277,9 @@ describe('muse faint placeholder vs non-faint draft (independent verification)',
       expect(refusedHost.enters).toBe(0);
     }
 
-    // 4. Faint hint on read 0, then user starts typing a grey/plain draft on read 1 -> refuses on second read without typing
+    // 4. Faint hint on read 0, then user starts typing an undeclared grey/plain draft on read 1 -> refuses on second read without typing
     const secondReadDraft = makeWakeHost((read) =>
-      read === 0 ? faintProse : museFrame(`\x1b[38;2;103;108;116m❯ ${prose}\x1b[0m`),
+      read === 0 ? faintProse : museFrame(`\x1b[38;2;120;125;130m❯ ${prose}\x1b[0m`),
     );
     const outSecond = await deliverTypedWake(secondReadDraft.host, 'pane-1', TRIGGER_LINE, 'muse', FAST);
     expect(outSecond).toEqual({

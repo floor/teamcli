@@ -95,11 +95,11 @@ export function allDimAfter(styled: string, skip: number): boolean {
   return read(styled.slice(cursor));
 }
 
-/** Whether the visible characters after the first `skip` ones are one non-bold colour.
- *  Whitespace is not read. Every one of them shares a foreground, none is bold, and none is
- *  inverse: a second colour, a bold word, or a cursor cell inside the text is not this row.
- *  An empty remainder is not one colour. */
-export function oneColourAfter(styled: string, skip: number): boolean {
+/** The one foreground the visible characters after the first `skip` ones share, as the pen
+ *  carries it (`90`, `38:5:244`, `38:2:103:108:116`). Whitespace is not read. Null when they
+ *  share no foreground, when any of them is bold or inverse, or when nothing visible follows
+ *  the prompt: a second colour, a bold word or a cursor cell inside the text is not one colour. */
+export function colourAfter(styled: string, skip: number): string | null {
   let passed = 0;
   let pen: Pen = { faint: false, inverse: false, bold: false, fg: 'default' };
   let cursor = 0;
@@ -116,10 +116,18 @@ export function oneColourAfter(styled: string, skip: number): boolean {
     return true;
   };
   for (const match of styled.matchAll(ESCAPES)) {
-    if (!read(styled.slice(cursor, match.index))) return false;
+    if (!read(styled.slice(cursor, match.index))) return null;
     if (match[0].endsWith('m')) pen = sgrPen(match[0], pen);
     cursor = match.index + match[0].length;
   }
-  if (!read(styled.slice(cursor))) return false;
-  return seen !== null;
+  if (!read(styled.slice(cursor))) return null;
+  return seen;
+}
+
+/** Whether the visible characters after the first `skip` ones are one non-bold colour.
+ *  Whitespace is not read. Every one of them shares a foreground, none is bold, and none is
+ *  inverse: a second colour, a bold word, or a cursor cell inside the text is not this row.
+ *  An empty remainder is not one colour. */
+export function oneColourAfter(styled: string, skip: number): boolean {
+  return colourAfter(styled, skip) !== null;
 }

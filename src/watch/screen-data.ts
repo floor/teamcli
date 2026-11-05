@@ -127,6 +127,11 @@ type Box = {
   status: StatusLine;
   placeholders: Placeholder[];
   placeholderStyle?: PlaceholderStyle;
+  /** The foregrounds a CLI draws its rotating hints in, in the pen's own tokens (`90`,
+   *  `38:5:244`, `38:2:103:108:116`). An input row matching no listed placeholder whose visible
+   *  text past the prompt is one declared colour is the empty box. Only a measured colour is
+   *  declared: an undeclared one keeps the row text. */
+  placeholderFg?: string[];
   wrap?: Wrap;
   frameRows: number;
   /** Rows the pane draws of its own inside the box — Muse 1.4.14's completion row for the text
@@ -151,7 +156,7 @@ export type StatusLine = RegExp[];
  *  the box is refused. A composer without this field reads only the blank frame. */
 export type Border = { top: RegExp; bottom: RegExp };
 
-type StatusLast = { mode: 'status-last'; statusLine: StatusLine; statusBelow?: StatusBelow; prompt: RegExp; placeholders: Placeholder[]; placeholderStyle?: PlaceholderStyle; wrap?: Wrap; frameRows: number; border?: Border };
+type StatusLast = { mode: 'status-last'; statusLine: StatusLine; statusBelow?: StatusBelow; prompt: RegExp; placeholders: Placeholder[]; placeholderStyle?: PlaceholderStyle; placeholderFg?: string[]; wrap?: Wrap; frameRows: number; border?: Border };
 type StatusThenOne = {
   mode: 'status-then-one';
   statusLine: StatusLine;
@@ -159,6 +164,7 @@ type StatusThenOne = {
   prompt: RegExp;
   placeholders: Placeholder[];
   placeholderStyle?: PlaceholderStyle;
+  placeholderFg?: string[];
   stripSuffix: RegExp | null;
   fallback: FallbackRule[];
   wrap?: Wrap;
@@ -182,6 +188,7 @@ type TwoRules = {
   /** A row that stands for hidden rows of a folded paste; capture 1 is the hidden count. */
   fold: RegExp | null;
   placeholderStyle?: PlaceholderStyle;
+  placeholderFg?: string[];
   wrap?: Wrap;
   frameRows: number;
 };

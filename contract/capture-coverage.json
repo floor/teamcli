@@ -534,7 +534,7 @@
     "muse": {
       "idle": {
         "real": 10,
-        "constructed": 6,
+        "constructed": 8,
         "undocumented": 0
       },
       "working": {
@@ -544,7 +544,7 @@
       },
       "unsent": {
         "real": 8,
-        "constructed": 4,
+        "constructed": 3,
         "undocumented": 0
       },
       "scroll back": {
@@ -2398,7 +2398,7 @@
         "1.4.11": {
           "idle": {
             "real": 3,
-            "constructed": 4,
+            "constructed": 5,
             "undocumented": 0
           },
           "working": {
@@ -2408,7 +2408,7 @@
           },
           "unsent": {
             "real": 2,
-            "constructed": 4,
+            "constructed": 3,
             "undocumented": 0
           },
           "scroll back": {
@@ -2470,7 +2470,7 @@
         "1.4.14": {
           "idle": {
             "real": 1,
-            "constructed": 0,
+            "constructed": 1,
             "undocumented": 0
           },
           "working": {
@@ -4490,7 +4490,7 @@
     {
       "file": "muse/1.4.11/prose-hint-color.txt",
       "cli": "muse",
-      "kind": "unsent",
+      "kind": "idle",
       "provenance": "constructed"
     },
     {
@@ -4539,6 +4539,12 @@
       "file": "muse/1.4.11/working-synthetic.txt",
       "cli": "muse",
       "kind": "working",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.14/hint-grey-synthetic.txt",
+      "cli": "muse",
+      "kind": "idle",
       "provenance": "constructed"
     },
     {
