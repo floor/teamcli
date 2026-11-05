@@ -22,7 +22,7 @@ import { listenerPath, receiptPath } from '../src/mcp/inbox.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
 import { registerAgent, type Agent } from '../src/registry/agents.ts';
 import { upsertProject } from '../src/registry/projects.ts';
-import { teamIdOf, teamsFile, upsertTeam } from '../src/registry/teams.ts';
+import { readTeams, teamIdOf, teamsFile, upsertTeam } from '../src/registry/teams.ts';
 import { signRecord, type RecordPayload } from '../src/send/record.ts';
 import { testIo } from './helpers.ts';
 
@@ -160,19 +160,34 @@ describe('scoped registry readability (R1)', () => {
     const foreign = createTeam(base, home, 'beta', 'org');
     const disjoint = createTeam(base, home, 'gamma', null);
 
-    // Give the disjoint registered team `roster: null` in teams.yaml.
-    const rawTeams = readFileSync(teamsFile(home), 'utf8');
-    const disjointBlock = new RegExp(`(${disjoint.teamId}:[\\s\\S]*?)roster:\\n(?:      - [\\s\\S]*?)(?=\\n  team_|$)`);
-    const patchedTeams = rawTeams.replace(disjointBlock, '$1roster: null\n');
-    expect(patchedTeams).toContain('roster: null');
-    writeFileSync(teamsFile(home), patchedTeams);
+    // Give the disjoint registered team `roster: null` in teams.yaml while keeping local/foreign rosters intact.
+    upsertTeam(home, disjoint.teamId, {
+      root: disjoint.root,
+      project: 'gamma',
+      entity: null,
+      session: disjoint.session,
+      lobby: join(home, 'lobby'),
+      lifecycle: 'running',
+      roster: [],
+    });
+    writeFileSync(
+      teamsFile(home),
+      readFileSync(teamsFile(home), 'utf8').replace('    roster: []\n', '    roster: null\n'),
+    );
+    expect(() => readTeams(home, { strictRoster: true })).toThrow(`${disjoint.teamId}: "roster" must be a list`);
+    expect(readTeams(home)[disjoint.teamId]?.roster).toEqual([]);
 
-    // Add an unrelated non-record file and a corrupt record belonging to the disjoint team/seat.
+    // Add an unrelated non-record file and schema-invalid records whose decoded reach.team/reach.seat
+    // establish disjoint endpoints (a disjoint team, and a disjoint seat on the local team).
     mkdirSync(join(home, '.config', 'team', 'agents'), { recursive: true });
     writeFileSync(join(home, '.config', 'team', 'agents', 'README.md'), '# unrelated documentation\n');
     writeFileSync(
       agentFilePath(home, 'agt_000000000099'),
-      `id: agt_000000000099\nreach:\n  team: ${disjoint.teamId}\n  seat: helper\n  broken: [\n`,
+      `id: "agt_000000000099"\nreach:\n  team: "${disjoint.teamId}"\n  seat: "\\u0077orker"\nprovenance: null\n`,
+    );
+    writeFileSync(
+      agentFilePath(home, 'agt_000000000097'),
+      `id: "agt_000000000097"\nreach:\n  team: "${local.teamId}"\n  seat: "\\u0068elper"\nprovenance: null\n`,
     );
 
     expect(
@@ -236,56 +251,61 @@ describe('scoped registry readability (R1)', () => {
     ).toEqual({ ok: true, rule: 'the launch delivers it to every seat of its team' });
   });
 
-  test('a corrupt record that could belong to a participating seat fails closed while owner/launch null-id bootstrap still works', () => {
+  test('a schema-invalid or syntax-corrupt record that decodes to or could belong to a participating seat fails closed (including escaped YAML scalars) while owner/launch null-id bootstrap still works', () => {
     const { base, home } = createHome();
-    const local = createTeam(base, home, 'alpha', null);
-
-    // Write a corrupt same-seat competitor record for `(local.teamId, 'worker')`.
+    const local = createTeam(base, home, 'alpha', 'org');
+    const foreign = createTeam(base, home, 'beta', 'org');
     const corruptCompetitor = agentFilePath(home, 'agt_000000000098');
+
+    // 1. Escaped double-quoted scalar `"\u0077orker"` decodes to `"worker"` on `(local.teamId, 'worker')`
+    //    even though raw text does not contain the literal substring `worker`.
     writeFileSync(
       corruptCompetitor,
-      `id: agt_000000000098\nreach:\n  team: ${local.teamId}\n  seat: worker\nprovenance:\n  updated_at: [\n`,
+      `id: "agt_000000000098"\nreach:\n  team: "${local.teamId}"\n  seat: "\\u0077orker"\nprovenance: null\n`,
     );
+    expect(
+      admitChannelDelivery({
+        payload: {
+          from: 'worker',
+          from_id: local.worker.id,
+          to: 'lead',
+          to_id: local.lead.id,
+          rule: "a seat to its own team's orchestrator",
+        },
+        home,
+        root: local.root,
+        session: local.session,
+        seat: 'lead',
+        team: local.team,
+      }),
+    ).toEqual({ ok: false, why: 'the sender registry cannot be read' });
 
-    const senderBlocked = admitChannelDelivery({
-      payload: {
-        from: 'worker',
-        from_id: local.worker.id,
-        to: 'lead',
-        to_id: local.lead.id,
-        rule: "a seat to its own team's orchestrator",
-      },
-      home,
-      root: local.root,
-      session: local.session,
-      seat: 'lead',
-      team: local.team,
-    });
-    expect(senderBlocked).toEqual({ ok: false, why: 'the sender registry cannot be read' });
-
-    // Corrupting a possible competitor for the recipient seat blocks ordinary delivery to that seat.
-    rmSync(corruptCompetitor, { force: true });
+    // 2. Escaped double-quoted scalars for both `reach.team` (`\x..`) and `reach.seat` (`\U0000006cead`)
+    //    on the recipient seat `(local.teamId, 'lead')` block ordinary delivery.
+    const firstHex = local.teamId.charCodeAt(0).toString(16).padStart(2, '0');
+    const escapedLocalTeam = `\\x${firstHex}${local.teamId.slice(1)}`;
     writeFileSync(
       corruptCompetitor,
-      `id: agt_000000000098\nreach:\n  team: ${local.teamId}\n  seat: lead\nprovenance:\n  updated_at: [\n`,
+      `id: "agt_000000000098"\nreach:\n  team: "${escapedLocalTeam}"\n  seat: "\\U0000006cead"\nprovenance: null\n`,
     );
-    const recipientBlocked = admitChannelDelivery({
-      payload: {
-        from: 'worker',
-        from_id: local.worker.id,
-        to: 'lead',
-        to_id: local.lead.id,
-        rule: "a seat to its own team's orchestrator",
-      },
-      home,
-      root: local.root,
-      session: local.session,
-      seat: 'lead',
-      team: local.team,
-    });
-    expect(recipientBlocked).toEqual({ ok: false, why: 'the recipient registry cannot be read' });
+    expect(
+      admitChannelDelivery({
+        payload: {
+          from: 'worker',
+          from_id: local.worker.id,
+          to: 'lead',
+          to_id: local.lead.id,
+          rule: "a seat to its own team's orchestrator",
+        },
+        home,
+        root: local.root,
+        session: local.session,
+        seat: 'lead',
+        team: local.team,
+      }),
+    ).toEqual({ ok: false, why: 'the recipient registry cannot be read' });
 
-    // Reserved null-to_id owner delivery to the declared seat remains available.
+    // Reserved null-to_id owner and launch deliveries to the declared seat remain available.
     expect(
       admitChannelDelivery({
         payload: { from: 'owner', from_id: null, rule: 'the owner' },
@@ -296,6 +316,64 @@ describe('scoped registry readability (R1)', () => {
         team: local.team,
       }),
     ).toEqual({ ok: true, rule: 'the owner' });
+    expect(
+      admitChannelDelivery({
+        payload: {
+          from: 'the launch',
+          from_id: null,
+          rule: 'the launch delivers it to every seat of its team',
+        },
+        home,
+        root: local.root,
+        session: local.session,
+        seat: 'lead',
+        team: local.team,
+      }),
+    ).toEqual({ ok: true, rule: 'the launch delivers it to every seat of its team' });
+
+    // 3. Escaped scalar on foreign sender seat `(foreign.teamId, 'lead')` blocks foreign sender admission.
+    writeFileSync(
+      corruptCompetitor,
+      `id: agt_000000000098\nreach: { team: "${foreign.teamId}", seat: "\\u006cead" }\nprovenance: null\n`,
+    );
+    expect(
+      admitChannelDelivery({
+        payload: {
+          from: 'lead',
+          from_id: foreign.lead.id,
+          to: 'lead',
+          to_id: local.lead.id,
+          rule: 'an orchestrator to another orchestrator',
+        },
+        home,
+        root: local.root,
+        session: local.session,
+        seat: 'lead',
+        team: local.team,
+      }),
+    ).toEqual({ ok: false, why: 'the foreign sender registry cannot be read' });
+
+    // 4. Syntax-corrupt record whose structural reach cannot be decoded fails closed.
+    writeFileSync(
+      corruptCompetitor,
+      `id: agt_000000000098\nreach:\n  team: ${foreign.teamId}\n  seat: helper\n  broken: [\n`,
+    );
+    expect(
+      admitChannelDelivery({
+        payload: {
+          from: 'worker',
+          from_id: local.worker.id,
+          to: 'lead',
+          to_id: local.lead.id,
+          rule: "a seat to its own team's orchestrator",
+        },
+        home,
+        root: local.root,
+        session: local.session,
+        seat: 'lead',
+        team: local.team,
+      }),
+    ).toEqual({ ok: false, why: 'the recipient registry cannot be read' });
   });
 });
 

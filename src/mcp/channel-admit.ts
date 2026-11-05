@@ -20,6 +20,7 @@ import { eventThresholdsInForce } from '../policy/thresholds.ts';
 import { readSendGrantReads } from '../send/grants.ts';
 import { closeFile, readClose, readSealedRecord, recordAuthOfSealed, recordNameOk, sameFolder, verifyClose, type RecordPayload } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
+import { parseYaml, toValue } from '../yaml.ts';
 
 export type ChannelAdmission = { ok: true; rule: string } | { ok: false; why: string };
 
@@ -343,9 +344,10 @@ type HolderLookup =
   | { kind: 'unreadable' };
 
 /** Resolves the current non-retired holder of `(team, seat)`. Non-record directory artifacts and
- *  corrupt records belonging to other teams or seats are ignored. A corrupt or unreadable record
- *  that could belong to `(team, seat)` returns `unreadable`; tied maximum `updated_at` timestamps
- *  return `ambiguous` without consulting filesystem modification times. */
+ *  schema-invalid records whose decoded `reach.team` and `reach.seat` establish a disjoint endpoint
+ *  are ignored. Any invalid or unreadable record that matches `(team, seat)` or whose endpoint
+ *  identity cannot be decoded returns `unreadable`; tied maximum `updated_at` timestamps return
+ *  `ambiguous` without consulting filesystem modification times. */
 function currentHolderOf(home: string, team: string, seat: string): HolderLookup {
   const dir = join(home, '.config', 'team', 'agents');
   let names: string[];
@@ -367,17 +369,7 @@ function currentHolderOf(home: string, team: string, seat: string): HolderLookup
       return { kind: 'unreadable' };
     }
     if (agent === null) {
-      let text: string;
-      try {
-        text = readFileSync(join(dir, name), 'utf8');
-      } catch {
-        return { kind: 'unreadable' };
-      }
-      const hasTeam = /^\s*team:\s*\S+/m.test(text);
-      const hasSeat = /^\s*seat:\s*\S+/m.test(text);
-      const couldMatchTeam = !hasTeam || text.includes(team);
-      const couldMatchSeat = !hasSeat || text.includes(seat);
-      if (couldMatchTeam && couldMatchSeat) {
+      if (!isDisjointInvalidRecord(join(dir, name), team, seat)) {
         return { kind: 'unreadable' };
       }
       continue;
@@ -402,6 +394,29 @@ function currentHolderOf(home: string, team: string, seat: string): HolderLookup
   }
   if (tied) return { kind: 'ambiguous' };
   return { kind: 'holder', agent: best.agent };
+}
+
+function isDisjointInvalidRecord(path: string, team: string, seat: string): boolean {
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    return false;
+  }
+  let parsed: unknown;
+  try {
+    parsed = toValue(parseYaml(text));
+  } catch {
+    return false;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false;
+  const reach = (parsed as Record<string, unknown>).reach;
+  if (typeof reach !== 'object' || reach === null || Array.isArray(reach)) return false;
+  const recordTeam = (reach as Record<string, unknown>).team;
+  const recordSeat = (reach as Record<string, unknown>).seat;
+  if (typeof recordTeam !== 'string' || recordTeam === '') return false;
+  if (typeof recordSeat !== 'string' || recordSeat === '') return false;
+  return recordTeam !== team || recordSeat !== seat;
 }
 
 function agentIdsOf(home: string, teamId: string, session: string): Map<string, string> {
