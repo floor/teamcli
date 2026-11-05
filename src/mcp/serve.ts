@@ -31,13 +31,14 @@ import { isBriefEpoch } from '../launch/brief-id.ts';
 import { currentBriefClaim, isGeneralBriefRecord } from '../launch/general-brief.ts';
 import { registeredRootOf } from '../registry/teams.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
+import { namingFor, senderDisplayName } from '../send/names.ts';
 import { readSealedRecord, recordAuthOfSealed } from '../send/record.ts';
-import { wakeHead } from '../send/native.ts';
-import { wakeTrigger } from '../send/wake.ts';
+import { attributedBody } from '../send/sender-claim.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { readState, type SeatState, type State } from '../state.ts';
 import { buildIdentity, installIdentity, version } from '../version.ts';
 import type { BuildIdentity, InstallIdentity } from '../version.ts';
+import { admitChannelDelivery } from './channel-admit.ts';
 import {
   CHANNEL_CAPABILITY,
   CHANNEL_INSTRUCTIONS,
@@ -211,6 +212,8 @@ type Serving = {
   dropDir: string;
   home: string;
   team: TeamFile;
+  /** The team file as it stands now; admission must not use the startup snapshot. */
+  loadTeam: () => TeamFile | null;
   /** True when this seat's launch carries the development channel naming this server. */
   channel: boolean;
   brief?: BriefRead;
@@ -321,12 +324,40 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
   // brief is served at the turn start under its claim, and an ack here would hold the receipt
   // name that reader needs.
   if (payload.from_client !== undefined || isGeneralBriefRecord(payload)) return null;
-  const sender = wakeTrigger(payload, serving.home, { root: serving.root, session: serving.session, team: serving.team });
-  if (sender === null) return null;
-  const header = wakeHead(sender);
-  if (header === '') return null;
+  const team = serving.loadTeam();
+  if (team === null) return null;
+  const admitted = admitChannelDelivery({
+    payload,
+    home: serving.home,
+    root: serving.root,
+    session: serving.session,
+    seat: serving.seat,
+    team,
+  });
+  if (!admitted.ok) return null;
+  // Render authority independently of content. Only one known stored envelope may be folded:
+  // nested headers are literal message text, including a worker quoting the owner's header.
+  const displayName = payload.from === 'owner' ? 'the owner' : senderDisplayName(
+    { seat: payload.from, id: payload.from_id },
+    namingFor({ home: serving.home, root: serving.root, file: team }),
+  );
+  const leadingClaim = /^from ([^\n]*?) — admitted by: ([^\n]*)\n\n?/;
+  const envelope = leadingClaim.exec(payload.body);
+  const knownEnvelope = envelope !== null
+    && (envelope[1] === payload.from || envelope[1] === displayName)
+    && envelope[2] === payload.rule;
+  const body = knownEnvelope ? payload.body.slice(envelope[0].length) : payload.body;
+  // The renderer receives an empty body so it cannot parse a content line as sender/rule.
+  const content = attributedBody('', payload.from, {
+    record: { ...payload, rule: admitted.rule },
+    home: serving.home,
+    root: serving.root,
+    rule: admitted.rule,
+    displayName,
+  }) + body;
+  if (content.trim() === '') return null;
   return {
-    content: `${header}\n\n${payload.body}`,
+    content,
     meta: { id, from: payload.from, seat: serving.seat, team: serving.project },
   };
 }
@@ -955,6 +986,10 @@ export async function runMcpServe(
     dropDir,
     home: host.home,
     team,
+    loadTeam: () => {
+      const file = readTeam();
+      return file.ok ? file.team : null;
+    },
     channel,
     brief,
     // Re-proved on every use, not only at start: the seat may be stopped, replaced or relaunched
