@@ -19,7 +19,8 @@ import { withoutGrokSandbox, writeGrokSandbox } from './grok-sandbox.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
 import { restoreProof } from './restore-proof.ts';
 import type { CliWatcher } from './cli-hook.ts';
-import { codexEndpointConfig, IDLE_POLL_MS, remoteCodexCommand, type Op, type Step, type UpSeat } from './plan.ts';
+import { appendOnLaunchLine } from './cli-scope.ts';
+import { codexCommandHasFlag, codexEndpointConfig, IDLE_POLL_MS, remoteCodexCommand, type Op, type Step, type UpSeat } from './plan.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from './codex-endpoint.ts';
 import {
   closeTarget,
@@ -1236,18 +1237,23 @@ export async function executePlan(
           }
         }
         let startedEndpoint = false;
+        let attachedEndpoint = false;
         if (op.codexEndpoint !== undefined) {
           const read = host.managedCodexEndpoint === undefined
             ? { kind: 'unmanaged' as const, why: 'this launch starts no managed Codex endpoint' }
             : await host.managedCodexEndpoint({ dir: op.codexEndpoint.dir, session, seat: op.seat, config: codexEndpointConfig(op.command), ...(here ? { pane: here.pane } : {}), ...(op.cwd === undefined ? {} : { cwd: op.cwd }) });
           if (read.kind === 'up') {
             const attached = remoteCodexCommand(command);
-            command = `${attached} --remote ${shellQuote(read.url)}`;
+            command = appendOnLaunchLine(attached, `--remote ${shellQuote(read.url)}`, 'codex').line;
             startedEndpoint = read.started;
+            attachedEndpoint = true;
             for (const note of read.notes ?? []) hold(op.seat, `${op.seat}: ${note}\n`);
           } else {
             hold(op.seat, `${op.seat}: the managed Codex endpoint was not started: ${read.why}\n`);
           }
+        }
+        if (op.cli === 'codex' && !attachedEndpoint && !codexCommandHasFlag(command, '--no-daemon')) {
+          command = appendOnLaunchLine(command, '--no-daemon', 'codex').line;
         }
         // A resume of a conversation its CLI never wrote stops at the CLI's own error and leaves
         // the pane at its shell: the seat is launched fresh instead, and says so.

@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { profileFor } from '../profiles/index.ts';
 import { lobbyPath } from '../worktree/place.ts';
+import { shellScriptWordOf } from './cli-scope.ts';
 import { shellWordsReason, shellWordSources } from './shell-words.ts';
 
 // A launch line is not shell-parsed: `team` splits it the way it always has, on whitespace, and
@@ -42,8 +43,17 @@ function wordsOf(launch: string): string[] {
  *  script execs, so the CLI is the first word after the script. A wrapper that names no further
  *  word is its own program, and the script is returned. */
 export function launchedCliBinary(launch: string): string | null {
-  const words = wordsOf(launch).filter((word) => word !== '' && !ASSIGNMENT.test(word));
+  let current = launch;
+  for (let depth = 0; depth < 4; depth += 1) {
+    const found = shellScriptWordOf(current);
+    if (found === null) break;
+    current = found.word.text;
+  }
+  const words = wordsOf(current).filter((word) => word !== '' && !ASSIGNMENT.test(word));
   let at = 0;
+  while (at < words.length && (words[at] === 'exec' || words[at] === 'command')) {
+    at += 1;
+  }
   while (at + 2 < words.length && /^(?:\S*\/)?(?:zsh|bash|sh)$/.test(words[at]!) && /\.(?:z|ba)?sh$/.test(words[at + 1]!)) {
     at += 2;
   }
