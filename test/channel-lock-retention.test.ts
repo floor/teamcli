@@ -139,7 +139,7 @@ describe('channel handoff sidecars retire with the record', () => {
     });
 
     expect(report.refused).toBeNull();
-    expect(report.archived.map((item) => item.id).sort()).toEqual([ABORT_ID, EMITTED_ID]);
+    expect(report.archived.map((item) => item.id).sort()).toEqual([EMITTED_ID, ABORT_ID]);
     expect(existsSync(live(EMITTED_ID))).toBe(false);
     expect(existsSync(live(`${EMITTED_ID}.channel-emitted`))).toBe(false);
     expect(existsSync(live(ABORT_ID))).toBe(false);
