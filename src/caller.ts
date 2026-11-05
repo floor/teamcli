@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import type { TeamFile } from './file/types.ts';
-import { agentList, herdrRunGeneration, paneRootPid } from './herdr.ts';
+import { activeHerdrSnapshotId, agentList, paneRootPid } from './herdr.ts';
 import type { HerdrAgent } from './herdr.ts';
 import type { Io } from './io.ts';
 import { readState, type SeatState } from './state.ts';
@@ -578,6 +578,7 @@ export function processReader(platform: string = process.platform): ReadProcess 
   return platform === 'linux' ? readWithProc : readWithPs;
 }
 
+let cachedAncestorsSnapshotId: number | null = null;
 let cachedDefaultAncestors: Process[] | null | undefined;
 
 function walkAncestors(pid: number, read: ReadProcess): Process[] | null {
@@ -604,8 +605,10 @@ function walkAncestors(pid: number, read: ReadProcess): Process[] | null {
 // process on the way can't be read, or the chain is longer than any real one: a partial list
 // could hide the herdr server above it.
 export function readAncestors(pid: number = process.ppid, read: ReadProcess = processReader()): Process[] | null {
-  if (pid === process.ppid && read === processReader()) {
-    if (cachedDefaultAncestors === undefined) {
+  const snapId = activeHerdrSnapshotId();
+  if (snapId !== null && pid === process.ppid && read === processReader()) {
+    if (cachedAncestorsSnapshotId !== snapId || cachedDefaultAncestors === undefined) {
+      cachedAncestorsSnapshotId = snapId;
       cachedDefaultAncestors = walkAncestors(pid, read);
     }
     return cachedDefaultAncestors;
@@ -622,18 +625,20 @@ export function callerOf(io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerS
   return currentCaller(io, session);
 }
 
-let cachedCallerGen = -1;
+let cachedCallerSnapshotId: number | null = null;
 const cachedCurrentCallers = new Map<string, Caller>();
 
 export function currentCaller(io: { env: Record<string, string | undefined>; stdinIsTTY: boolean }, session?: string): Caller {
-  const gen = herdrRunGeneration();
-  if (gen !== cachedCallerGen) {
-    cachedCallerGen = gen;
+  const snapId = activeHerdrSnapshotId();
+  if (snapId !== cachedCallerSnapshotId) {
+    cachedCallerSnapshotId = snapId;
     cachedCurrentCallers.clear();
   }
   const key = `${session ?? ''}\0${io.stdinIsTTY ? '1' : '0'}\0${io.env.HERDR_PANE_ID ?? ''}\0${io.env.AGENT_UNATTENDED ?? ''}`;
-  const hit = cachedCurrentCallers.get(key);
-  if (hit !== undefined) return hit;
+  if (snapId !== null) {
+    const hit = cachedCurrentCallers.get(key);
+    if (hit !== undefined) return hit;
+  }
   const placed = placeCaller({
     ancestors: () => readAncestors(),
     agents: () => agentList(session),
@@ -642,6 +647,6 @@ export function currentCaller(io: { env: Record<string, string | undefined>; std
     stdinIsTTY: io.stdinIsTTY,
     managedEndpointSeat: (pid) => seatOfManagedEndpoint(pid),
   }, session);
-  cachedCurrentCallers.set(key, placed);
+  if (snapId !== null) cachedCurrentCallers.set(key, placed);
   return placed;
 }

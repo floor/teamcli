@@ -37,10 +37,12 @@ let customRun: HerdrRun | null = null;
 let runGeneration = 0;
 
 type HerdrSnapshot = {
+  id: number;
   agents: Map<string, HerdrAgent[] | null>;
   processInfo: Map<string, unknown | null>;
 };
 let activeSnapshot: HerdrSnapshot | null = null;
+let nextSnapshotId = 1;
 
 export function setHerdrRun(exec: HerdrRun | null): void {
   customRun = exec;
@@ -53,6 +55,9 @@ export function hasCustomHerdrRun(): boolean {
 export function herdrRunGeneration(): number {
   return runGeneration;
 }
+export function activeHerdrSnapshotId(): number | null {
+  return activeSnapshot?.id ?? null;
+}
 
 /**
  * Runs one command scope while reusing a single in-memory snapshot of the terminal host's
@@ -60,7 +65,7 @@ export function herdrRunGeneration(): number {
  */
 export async function withHerdrSnapshot<T>(fn: () => Promise<T>): Promise<T> {
   if (activeSnapshot !== null) return fn();
-  activeSnapshot = { agents: new Map(), processInfo: new Map() };
+  activeSnapshot = { id: nextSnapshotId++, agents: new Map(), processInfo: new Map() };
   try {
     return await fn();
   } finally {
