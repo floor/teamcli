@@ -27,6 +27,16 @@ import {
   type ReconcileResult,
 } from '../src/bus/reconcile.ts';
 import { plantMessage, receiptFile } from '../src/commands/messages.ts';
+import { TEAM_FILE } from '../src/file/load.ts';
+import { readTeamConfig, TEAM_CONFIG_SOURCE_ENV } from '../src/file/team-config.ts';
+import { writeTeamText } from '../src/file/team-text.ts';
+import { agentsDir, readAgents } from '../src/registry/agents.ts';
+import { entitiesPath } from '../src/entities.ts';
+import { grantsDir } from '../src/grant.ts';
+import { projectsFile } from '../src/registry/projects.ts';
+import { registerDeclaredSeat } from '../src/registry/sync.ts';
+import { noteTeam, teamIdOf, teamsFile } from '../src/registry/teams.ts';
+import { machineSettingsPath } from '../src/settings/declared.ts';
 import { appendHistory } from '../src/send/history.ts';
 import { signRecord, type RecordPayload } from '../src/send/record.ts';
 import { emptySession, updateState } from '../src/state.ts';
@@ -433,6 +443,335 @@ describe('LL4 bus reconcile bounded slices', () => {
       expect(asyncEvents.events.map((e) => `${e.payload.kind}:${e.payload.record_id}`)).toEqual(
         syncEvents.events.map((e) => `${e.payload.kind}:${e.payload.record_id}`),
       );
+    }
+  });
+
+  test('markOrphanedSeats re-runs when the registry team-config record removes a seat between two passes', () => {
+    const { home, root } = makeWorld('acme');
+    const prevEnv = process.env[TEAM_CONFIG_SOURCE_ENV];
+    delete process.env[TEAM_CONFIG_SOURCE_ENV];
+
+    try {
+      const teamFile = join(root, TEAM_FILE);
+      const wrote1 = writeTeamText(teamFile, TEAM_YAML, {
+        home,
+        source: 'registry',
+        command: 'init',
+        create: true,
+      });
+      expect(wrote1).toEqual({ ok: true, target: 'registry' });
+      const loaded1 = readTeamConfig(root, { home });
+      expect(loaded1.ok).toBe(true);
+      if (!loaded1.ok) return;
+
+      for (const seat of loaded1.team.seats) {
+        registerDeclaredSeat({ home, team: loaded1.team, root, by: 'owner' }, seat);
+      }
+
+      const state = createReconcileState();
+      const res1 = reconcilePass({
+        project: 'acme',
+        root,
+        session: 'acme',
+        home,
+        now: new Date('2026-11-05T12:00:00.000Z'),
+        state,
+      });
+      expect(res1.ok).toBe(true);
+      expect(readAgents(home).find((a) => a.reach.seat === 'op-1')?.orphaned_at ?? null).toBeNull();
+
+      // Remove op-1 from the registry declaration (writes only team-config/<id>.json).
+      const clerkOnlyYaml = `format: 1
+project: acme
+coordinator: clerk
+operator: clerk
+session: acme
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: clerk
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "4.6"
+    launch: claude
+    leads: true
+`;
+      const wrote2 = writeTeamText(teamFile, clerkOnlyYaml, { home, source: 'registry', command: 'edit' });
+      expect(wrote2).toEqual({ ok: true, target: 'registry' });
+
+      const res2 = reconcilePass({
+        project: 'acme',
+        root,
+        session: 'acme',
+        home,
+        now: new Date('2026-11-05T12:02:00.000Z'),
+        state,
+      });
+      expect(res2.ok).toBe(true);
+      const agentsAfter = readAgents(home);
+      expect(agentsAfter.find((a) => a.reach.seat === 'clerk')?.orphaned_at ?? null).toBeNull();
+      expect(agentsAfter.find((a) => a.reach.seat === 'op-1')?.orphaned_at).toBe('2026-11-05T12:02:00.000Z');
+    } finally {
+      if (prevEnv === undefined) delete process.env[TEAM_CONFIG_SOURCE_ENV];
+      else process.env[TEAM_CONFIG_SOURCE_ENV] = prevEnv;
+    }
+  });
+
+  test('markOrphanedSeats re-runs across team.yaml, agentsDir, teams.yaml, settings.yaml, TEAM_CONFIG_SOURCE, and policy inputs between passes', () => {
+    const { home, root } = makeWorld('acme');
+    const prevEnv = process.env[TEAM_CONFIG_SOURCE_ENV];
+
+    try {
+      process.env[TEAM_CONFIG_SOURCE_ENV] = 'file';
+      const teamFile = join(root, TEAM_FILE);
+      const loaded1 = readTeamConfig(root, { home });
+      expect(loaded1.ok).toBe(true);
+      if (!loaded1.ok) return;
+
+      for (const seat of loaded1.team.seats) {
+        registerDeclaredSeat({ home, team: loaded1.team, root, by: 'owner' }, seat);
+      }
+
+      const state = createReconcileState();
+      reconcilePass({
+        project: 'acme',
+        root,
+        session: 'acme',
+        home,
+        now: new Date('2026-11-05T12:00:00.000Z'),
+        state,
+      });
+      expect(readAgents(home).find((a) => a.reach.seat === 'op-1')?.orphaned_at ?? null).toBeNull();
+
+      // 1. Registering a new undeclared seat in agentsDir(home) while team.yaml is unchanged marks it on the next pass.
+      registerDeclaredSeat(
+        { home, team: loaded1.team, root, by: 'owner' },
+        { ...loaded1.team.seats[1]!, name: 'ghost-seat' },
+      );
+      reconcilePass({
+        project: 'acme',
+        root,
+        session: 'acme',
+        home,
+        now: new Date('2026-11-05T12:01:00.000Z'),
+        state,
+      });
+      expect(readAgents(home).find((a) => a.reach.seat === 'ghost-seat')?.orphaned_at).toBe(
+        '2026-11-05T12:01:00.000Z',
+      );
+
+      // 2. Editing an agent record in-place inside agentsDir(home) (clearing orphaned_at without adding/removing a file) re-runs orphan marking.
+      const ghostAgent = readAgents(home).find((a) => a.reach.seat === 'ghost-seat')!;
+      const ghostFile = join(agentsDir(home), `${ghostAgent.id}.yaml`);
+      const rawGhost = require('node:fs').readFileSync(ghostFile, 'utf8') as string;
+      writeFileSync(ghostFile, rawGhost.replace(/orphaned_at: .*\n/, ''));
+      expect(readAgents(home).find((a) => a.reach.seat === 'ghost-seat')?.orphaned_at ?? null).toBeNull();
+      reconcilePass({
+        project: 'acme',
+        root,
+        session: 'acme',
+        home,
+        now: new Date('2026-11-05T12:01:30.000Z'),
+        state,
+      });
+      expect(readAgents(home).find((a) => a.reach.seat === 'ghost-seat')?.orphaned_at).toBe(
+        '2026-11-05T12:01:30.000Z',
+      );
+
+      // 3. Editing .agents/team.yaml to drop op-1 marks op-1 orphaned on the next pass.
+      const clerkOnlyYaml = `format: 1
+project: acme
+coordinator: clerk
+operator: clerk
+session: acme
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: clerk
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "4.6"
+    launch: claude
+    leads: true
+`;
+      writeFileSync(teamFile, clerkOnlyYaml);
+      reconcilePass({
+        project: 'acme',
+        root,
+        session: 'acme',
+        home,
+        now: new Date('2026-11-05T12:02:00.000Z'),
+        state,
+      });
+      expect(readAgents(home).find((a) => a.reach.seat === 'op-1')?.orphaned_at).toBe(
+        '2026-11-05T12:02:00.000Z',
+      );
+
+      // 4. Switching machineSettingsPath(home) (team-config.source) between registry and file re-runs orphan marking.
+      delete process.env[TEAM_CONFIG_SOURCE_ENV];
+      const withOp2AndOp3Yaml = `${TEAM_YAML}  - role: worker
+    name: op-2
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Sonnet
+    version: "4.6"
+    launch: claude
+  - role: worker
+    name: op-3
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Sonnet
+    version: "4.6"
+    launch: claude
+`;
+      const wroteRegistry = writeTeamText(teamFile, withOp2AndOp3Yaml, {
+        home,
+        source: 'registry',
+        command: 'init',
+        create: true,
+      });
+      expect(wroteRegistry).toEqual({ ok: true, target: 'registry' });
+      registerDeclaredSeat(
+        { home, team: loaded1.team, root, by: 'owner' },
+        { ...loaded1.team.seats[1]!, name: 'op-2' },
+      );
+      const settingsFile = machineSettingsPath(home);
+      mkdirSync(dirname(settingsFile), { recursive: true });
+      writeFileSync(settingsFile, 'team-config:\n  source: registry\n');
+      reconcilePass({
+        project: 'acme',
+        root,
+        session: 'acme',
+        home,
+        now: new Date('2026-11-05T12:03:00.000Z'),
+        state,
+      });
+      expect(readAgents(home).find((a) => a.reach.seat === 'op-2')?.orphaned_at ?? null).toBeNull();
+
+      // Switch settings.yaml to file source (where teamFile only has clerk).
+      writeFileSync(settingsFile, 'team-config:\n  source: file\n');
+      reconcilePass({
+        project: 'acme',
+        root,
+        session: 'acme',
+        home,
+        now: new Date('2026-11-05T12:04:00.000Z'),
+        state,
+      });
+      expect(readAgents(home).find((a) => a.reach.seat === 'op-2')?.orphaned_at).toBe(
+        '2026-11-05T12:04:00.000Z',
+      );
+
+      // 5. Switching TEAM_CONFIG_SOURCE environment variable re-runs orphan marking.
+      writeFileSync(settingsFile, 'team-config:\n  source: registry\n');
+      registerDeclaredSeat(
+        { home, team: loaded1.team, root, by: 'owner' },
+        { ...loaded1.team.seats[1]!, name: 'op-3' },
+      );
+      reconcilePass({
+        project: 'acme',
+        root,
+        session: 'acme',
+        home,
+        now: new Date('2026-11-05T12:05:00.000Z'),
+        state,
+      });
+      expect(readAgents(home).find((a) => a.reach.seat === 'op-3')?.orphaned_at ?? null).toBeNull();
+
+      process.env[TEAM_CONFIG_SOURCE_ENV] = 'file';
+      reconcilePass({
+        project: 'acme',
+        root,
+        session: 'acme',
+        home,
+        now: new Date('2026-11-05T12:06:00.000Z'),
+        state,
+      });
+      expect(readAgents(home).find((a) => a.reach.seat === 'op-3')?.orphaned_at).toBe(
+        '2026-11-05T12:06:00.000Z',
+      );
+
+      // 6. Changing teamsFile(home) (teams.yaml) re-runs markOrphanedSeats when recorded lobby resolution depends on teams.yaml.
+      delete process.env[TEAM_CONFIG_SOURCE_ENV];
+      const migratedTrustClerkYaml = `${clerkOnlyYaml}trust:
+  - ${root}
+`;
+      const wroteMigratedTrust = writeTeamText(teamFile, migratedTrustClerkYaml, {
+        home,
+        source: 'registry',
+        command: 'edit',
+      });
+      expect(wroteMigratedTrust).toEqual({ ok: true, target: 'registry' });
+      registerDeclaredSeat(
+        { home, team: loaded1.team, root, by: 'owner' },
+        { ...loaded1.team.seats[1]!, name: 'op-4' },
+      );
+      reconcilePass({
+        project: 'acme',
+        root,
+        session: 'acme',
+        home,
+        now: new Date('2026-11-05T12:06:30.000Z'),
+        state,
+      });
+      // Without teams.yaml recording lobby=root, lobbyOf defaults to ~/.config/team/lobbies (absent/untrusted), so readTeamConfig fails and op-4 stays un-orphaned.
+      expect(readAgents(home).find((a) => a.reach.seat === 'op-4')?.orphaned_at ?? null).toBeNull();
+
+      // Recording the team's lobby in teams.yaml (changing only teamsFile(home)) invalidates orphanStamp and orphans op-4 on the next pass.
+      noteTeam(
+        home,
+        root,
+        { project: 'acme', entity: null, session: 'acme', lobby: root, inProject: null },
+        'running',
+        'owner',
+      );
+      reconcilePass({
+        project: 'acme',
+        root,
+        session: 'acme',
+        home,
+        now: new Date('2026-11-05T12:07:00.000Z'),
+        state,
+      });
+      expect(readAgents(home).find((a) => a.reach.seat === 'op-4')?.orphaned_at).toBe(
+        '2026-11-05T12:07:00.000Z',
+      );
+
+      // 7. Changing projectsFile(home), entitiesPath(home), and grantsDir(home) invalidates the stamp.
+      for (const mutate of [
+        () => {
+          mkdirSync(dirname(projectsFile(home)), { recursive: true });
+          writeFileSync(projectsFile(home), 'format: 1\nprojects: {}\n');
+        },
+        () => {
+          mkdirSync(dirname(entitiesPath(home)), { recursive: true });
+          writeFileSync(entitiesPath(home), 'format: 1\nentities: {}\n');
+        },
+        () => {
+          mkdirSync(grantsDir(home), { recursive: true });
+          writeFileSync(join(grantsDir(home), 'grt_000000000001.yaml'), 'id: grt_000000000001\n');
+        },
+      ]) {
+        const before = state.orphanStamp;
+        mutate();
+        reconcilePass({
+          project: 'acme',
+          root,
+          session: 'acme',
+          home,
+          now: new Date('2026-11-05T12:07:30.000Z'),
+          state,
+        });
+        expect(state.orphanStamp).not.toBe(before);
+      }
+      expect(teamIdOf(root)).toHaveLength(12);
+    } finally {
+      if (prevEnv === undefined) delete process.env[TEAM_CONFIG_SOURCE_ENV];
+      else process.env[TEAM_CONFIG_SOURCE_ENV] = prevEnv;
     }
   });
 });

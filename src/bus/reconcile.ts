@@ -33,8 +33,16 @@ import {
   readTeamConfigSource,
   type ConfigSourceRead,
 } from '../config/sources.ts';
-import { getTeam, teamIdOf } from '../registry/teams.ts';
+import { entitiesPath } from '../entities.ts';
+import { TEAM_FILE } from '../file/load.ts';
+import { TEAM_CONFIG_SOURCE_ENV } from '../file/team-config.ts';
+import { grantsDir } from '../grant.ts';
+import { agentsDir } from '../registry/agents.ts';
+import { projectsFile } from '../registry/projects.ts';
+import { teamConfigRecordPath } from '../registry/team-config-store.ts';
+import { getTeam, teamIdOf, teamsFile } from '../registry/teams.ts';
 import { markOrphanedSeats } from '../registry/sync.ts';
+import { machineSettingsPath } from '../settings/declared.ts';
 import { HISTORY_KEPT, readHistorySteps, type HistoryEntry } from '../send/history.ts';
 import type { PendingDrop } from '../send/pending.ts';
 import { readState } from '../state.ts';
@@ -347,15 +355,39 @@ function fileStampOnly(path: string): string | null {
   }
 }
 
+function dirFilesStamp(dir: string): string {
+  const dirStamp = oneStamp(dir);
+  if (dirStamp === 'missing') return 'missing';
+  try {
+    const names = readdirSync(dir).sort();
+    const parts = [dirStamp];
+    for (const name of names) {
+      parts.push(`${name}:${oneStamp(join(dir, name))}`);
+    }
+    return parts.join(',');
+  } catch {
+    return dirStamp;
+  }
+}
+
 function orphanInputsStamp(home: string, root: string): string {
   const teamId = teamIdOf(root);
-  const configDir = join(home, '.config', 'team');
+  let recordStamp = 'missing';
+  try {
+    recordStamp = oneStamp(teamConfigRecordPath(home, teamId));
+  } catch {
+    recordStamp = 'missing';
+  }
   return [
-    oneStamp(join(configDir, 'agents')),
-    oneStamp(join(configDir, 'teams')),
-    oneStamp(join(configDir, 'team-configs', `${teamId}.json`)),
-    oneStamp(join(root, '.agents', 'team.yaml')),
-    oneStamp(join(configDir, 'settings.yaml')),
+    dirFilesStamp(agentsDir(home)),
+    oneStamp(teamsFile(home)),
+    recordStamp,
+    oneStamp(join(root, TEAM_FILE)),
+    oneStamp(machineSettingsPath(home)),
+    process.env[TEAM_CONFIG_SOURCE_ENV] ?? '',
+    oneStamp(projectsFile(home)),
+    oneStamp(entitiesPath(home)),
+    dirFilesStamp(grantsDir(home)),
   ].join('|');
 }
 
@@ -613,9 +645,8 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   try {
     const nextOrphanStamp = orphanInputsStamp(home, root);
     if (state.orphanStamp !== nextOrphanStamp) {
-      markOrphanedSeats(home, root, nowDate);
-      state.orphanStamp = orphanInputsStamp(home, root);
-      yield;
+      const marked = markOrphanedSeats(home, root, nowDate);
+      state.orphanStamp = marked.length > 0 ? orphanInputsStamp(home, root) : nextOrphanStamp;
     }
   } catch {
     // The next pass retries; a registry this pass cannot write does not fail the reconcile.
