@@ -117,6 +117,16 @@ neither closed nor replaced. A pane that is working, holds unsent text, cannot b
 not come back to its shell in time is left exactly as it is; a launch line that cannot carry the
 conversation stops the run before any key is typed.
 
+A restored Codex seat whose managed endpoint died with the restart is the other exception: the
+pane still runs the CLI, but the endpoint `team up` started for it is gone, and adopting the pane
+would leave every turn on an endpoint that cannot answer. Whether it is gone is judged by the same
+three readings `team check` uses — the record for the seat's current binding, the endpoint
+socket's liveness, and the recorded process's start time; a live endpoint, an absent or invalid
+record, or an unreadable start time leaves the pane adopted as it is. Only a proven loss relaunches
+the seat: the same exit and holds as above apply, and the seat's own launch line runs in that same
+pane with a fresh endpoint started and the CLI attached to it with `--remote`, or, when the
+endpoint will not start, with the CLI's own background server off (`--no-daemon`).
+
 A seat whose recorded pane no longer holds the process team launched is launched again. When the
 pane is back at its shell, the seat is launched in the same pane — `its recorded pane <pane> was
 at its shell; launched in the same pane`. When the pane is gone or was replaced, the seat is
