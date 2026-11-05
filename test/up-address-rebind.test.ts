@@ -120,8 +120,9 @@ function recordWorker(over: { stage: 'ready' | 'launched'; launched?: { shell: n
   });
 }
 
-/** The agent record the system keeps, with the address the scene starts from. */
-function registerWorker(address: string | null): void {
+/** The agent record the system keeps, with the address the scene starts from. `reach` moves the
+ *  record off this session's pane, the reading a record written by another session has. */
+function registerWorker(address: string | null, reach: { session?: string; pane?: string } = {}): void {
   registerAgent(home, {
     name: WORKER,
     signing: { model: MODEL, version: VERSION, role: 'implementer' },
@@ -129,7 +130,9 @@ function registerWorker(address: string | null): void {
     cli: 'claude-code',
     launcher: null,
     launch: LAUNCH,
-    reach: { team: teamIdOf(root), seat: WORKER, session: SESSION, pane: PANE, address, agent_session: SES },
+    reach: {
+      team: teamIdOf(root), seat: WORKER, session: reach.session ?? SESSION, pane: reach.pane ?? PANE, address, agent_session: SES,
+    },
     seat_handle: HANDLE,
     mcp: [],
     skills: [],
@@ -275,6 +278,46 @@ describe("up's address rebind", () => {
     // the pane's own CLI pid listens on.
     expect(made.reads).toContain(PANE);
     expect(address()).toBe(live);
+  });
+
+  test('a record standing in another session is not refreshed from this one', async () => {
+    recordWorker({ stage: 'launched', launched: RECORDED });
+    // The record a send resolves was written by a run in another session, on that session's
+    // pane: this session's state happens to name the same seat, and the pane here holds the
+    // process the state records.
+    registerWorker(null, { session: 'other-session', pane: 'fixture-pane-other' });
+    sock(200);
+    const made = makeWorld({
+      process: { shell: 100, foreground: [200] },
+      name: WORKER,
+      screen: 'a screen this version has no prompt for',
+    });
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUp([], io, made.sources, { nonInteractive: true }), `up said:\n${said(io)}`).toBe(1);
+
+    // Neither the socket this run found nor the silence of a dead pane is this session's write
+    // over a record another session still holds.
+    const held = findAgent(home, { team: teamIdOf(root), seat: WORKER });
+    expect(held?.reach.session).toBe('other-session');
+    expect(held?.reach.pane).toBe('fixture-pane-other');
+    expect(address()).toBeNull();
+  });
+
+  test('a pane herdr names for another seat is not given this seat\'s address', async () => {
+    recordWorker({ stage: 'launched', launched: RECORDED });
+    registerWorker(null);
+    sock(200);
+    // The state still points at the pane, and the pane runs a process the record names — but
+    // herdr names that pane after another seat: it is that seat's pane, whatever this record
+    // says, and a send that dialed its socket would wake a process this seat does not own.
+    const made = makeWorld({
+      process: { shell: 100, foreground: [200] },
+      name: 'fixture-other-seat',
+      screen: 'a screen this version has no prompt for',
+    });
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUp([], io, made.sources, { nonInteractive: true }), `up said:\n${said(io)}`).toBe(1);
+    expect(address()).toBeNull();
   });
 
   test('a ready seat records its address through the run\'s one pane reading', async () => {

@@ -2033,12 +2033,16 @@ function deliveryOrderInboxNotes(team: TeamFile): string[] {
  *     record holds no address: `team up` records the address from the pane the check read, and
  *     a record that names no launch identity is `team register`'s. A record whose pane runs a
  *     process its launch did not start is neither's to re-point — `team register` refuses that
- *     pane, and `team up` records no address over it — so the line names the restart that puts
- *     the recorded launch back in front, then the `team up` that records the address, and the
- *     load that can refuse the restart (`machine.load_start`, per core). A restart treats such
- *     a pane as restored only when the registry binds the conversation herdr reports for it;
- *     without that binding the restart abandons the process in front and starts the seat
- *     fresh, and the line says so;
+ *     pane, and `team up` records no address over it. When the registry binds the conversation
+ *     herdr reports for that pane, the seat is restored and `team up` is still the whole
+ *     repair: its own plan adopts the process in place and records the address in one run, so
+ *     no restart is named and the load never enters. Without that binding the pane holds a
+ *     process no command can tie to the record, and the line names the `--abandon` restart —
+ *     it starts the seat fresh, leaving the recorded conversation behind, records the address
+ *     itself, and is refused while the load is above the file's limit (`machine.load_start`,
+ *     per core), which the line names. Two state records naming one pane are named once, for
+ *     the pane — every seat in that dispute would otherwise get a binding repair pointing at
+ *     another seat's process; `team down`, then `team up` rewrites the recorded panes;
  *   - the socket predates the settings that declare accept: a restart writes one that does not,
  *     and the line names the load that can refuse it (`machine.load_start`, per core).
  * Otherwise a socket that is nowhere is its class's ordinary state, not a broken promise:
@@ -2069,6 +2073,21 @@ function socketSkippedDeliveries(
     // leans on it names nothing more.
     return { differences, notes };
   }
+  // Every pane a declared, non-human seat's record claims, once per pane: a pane is one seat's,
+  // and two records naming it cannot both be written from what the pane proves — a send that
+  // dialed its socket would wake whatever process the pane holds, not necessarily the seat the
+  // record names. The file is the truth here as it is everywhere in this check: only a seat the
+  // team still declares claims a pane.
+  const claims = new Map<string, string[]>();
+  for (const seat of team.seats) {
+    if (seat.human === true) continue;
+    const pane = state.seats[seat.name]?.pane;
+    if (pane === undefined || pane === '') continue;
+    const claim = claims.get(pane);
+    if (claim === undefined) claims.set(pane, [seat.name]);
+    else claim.push(seat.name);
+  }
+  const disputed = new Set<string>();
   for (const seat of team.seats) {
     if (seat.human === true) continue;
     const recorded = state.seats[seat.name];
@@ -2079,6 +2098,24 @@ function socketSkippedDeliveries(
     // held-prompt reading both apply: a CLI that ended in a retained pane is named once, in the
     // comparison's own line, and a process team did not launch is not read for a skipped socket.
     if (!paneShowsSeat(recorded, listed, live, continuitySessionOf(continuityIds, seat.name, recorded.agent_session))) continue;
+    // Two seats claiming one pane is no missing address a command can write: every seat in the
+    // dispute would get the same binding repair, each pointing at the other's process, and
+    // `team register` refuses both (the pane is taken, or the record names another pane —
+    // src/commands/register.ts). The dispute is named once, for the pane, and none of its seats
+    // gets an address line: a stop and a start rewrite the recorded panes from the file, the
+    // one route that clears a record holding the wrong pane.
+    const claim = claims.get(recorded.pane);
+    if (claim !== undefined && claim.length > 1) {
+      if (!disputed.has(recorded.pane)) {
+        disputed.add(recorded.pane);
+        differences.push({
+          what: `${claim.join(', ')}: one pane is recorded for more than one seat: their state records all name ${recorded.pane}, and a pane is one seat's — a send that dialed its socket would wake whichever process the pane holds, not the seat it names`,
+          repair: 'team down, then team up',
+          needs: 'approve',
+        });
+      }
+      continue;
+    }
     let record: Agent | null;
     try {
       record = agentOf(seat.name);
@@ -2126,11 +2163,15 @@ function socketSkippedDeliveries(
         // The address is written only over a process a command can prove: `team up` records one
         // on the record it finds, and `team register` refreshes a record whose launch it still
         // finds in front — it refuses a pane holding another process, so it is never the repair
-        // for one (src/commands/register.ts). A replaced process is put back by a restart, and
-        // the `team up` after it records the address a restart does not: a restart keeps the
-        // record's address as it was. The pane's session proves the seat across the replacement
-        // when the registry binds it, the same proof the restart itself compares; without that
-        // binding the restart has to abandon the process in front and start the seat fresh.
+        // for one (src/commands/register.ts). A replaced process whose pane herdr reports under
+        // the conversation the registry binds is the restored seat: `team up`'s own plan adopts
+        // that process in place — its restored step writes the new launch identity before its
+        // address pass reads the pane — and records the address in the same run, so the line
+        // names `team up` and nothing else: no restart, and the load never enters. Without that
+        // binding the pane holds a process no command can tie to the record, and the restart
+        // that abandons it and starts the seat fresh is the repair; it records the address
+        // itself (`refreshAgentAddress`, src/commands/restart.ts), so no `team up` follows it,
+        // and it refuses while the load is above the file's limit, which the line names.
         const bound = recordedSeatContinuity({
           home, root, herdrSession: session, seat: { name: seat.name, cli: seat.cli }, state: recorded,
         });
@@ -2140,15 +2181,15 @@ function socketSkippedDeliveries(
           && listed.session === bound.recorded.sessionId;
         const what = `${seat.name}: a reader without its pane sees ${withoutPane.class}, not ${delivery.class}: only the socket its pane's processes carry proves it, and its agent record holds no address this session can dial`;
         if (verdict === 'replaced') {
-          differences.push({
-            what: `${what}; the process in its pane is not the one its record's launch started, and a restart is refused while the load is above ${team.machine.loadStart} per core (machine.load_start)${restored ? '' : '; the restart abandons that process and starts the seat fresh, leaving the recorded conversation behind'}`,
-            repair: restored
-              ? `team restart ${seat.name}, then team up`
-              : `team restart ${seat.name} --abandon, then team up`,
-            // `team restart` refuses while the file's approval is not in force
-            // (src/commands/restart.ts).
-            needs: 'approve',
-          });
+          differences.push(restored
+            ? { what, repair: 'team up' }
+            : {
+                what: `${what}; the process in its pane is not the one its record's launch started, and the record's conversation is not the one herdr reports there, so the repair starts the seat fresh: it abandons that process, leaving the recorded conversation behind, and is refused while the load is above ${team.machine.loadStart} per core (machine.load_start)`,
+                repair: `team restart ${seat.name} --abandon`,
+                // `team restart` refuses while the file's approval is not in force
+                // (src/commands/restart.ts).
+                needs: 'approve',
+              });
         } else {
           differences.push({
             what,

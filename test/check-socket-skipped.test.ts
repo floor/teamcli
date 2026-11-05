@@ -571,7 +571,7 @@ describe('team check names a live seat whose socket a send would skip', () => {
     expect(code).toBe(1);
   });
 
-  test('a restored pane the record’s launch does not name: the repair is a restart, never register', () => {
+  test('a restored pane the record’s launch does not name: team up adopts it in place, so it is the whole repair', () => {
     const w = world([{ name: 'restored', role: 'orchestrator', launch: 'claude', inbound: 'accept', leads: true }]);
     const seat = { name: 'restored', pane: PANE_ONE, launch: 'claude --model claude-opus-5-5', pid: OTHER_PID };
     declare(w, 'restored');
@@ -587,14 +587,14 @@ describe('team check names a live seat whose socket a send would skip', () => {
     });
     const { code, out } = check(w, liveOn([seat], { sessions: { restored: 'ses_keep' } }));
     expect(out).toContain('difference: restored: a reader without its pane sees pull-on-turn, not push');
-    expect(out).toContain("the process in its pane is not the one its record's launch started");
-    // Neither command can re-point this record from the pane: `team up` records an address only
-    // over the process its record names, and `team register` refuses the refresh
-    // (test/register-refresh.test.ts pins that refusal). The repair the line names is the
-    // restart the registry-bound session proves, and the address write that follows it.
+    // The registry binds the conversation herdr reports for the pane, so `team up`'s own plan
+    // adopts that process in place — its restored step writes the new launch identity before
+    // its address pass reads the pane — and records the address in one run. No restart is
+    // named, and `team register` still refuses the refresh (test/register-refresh.test.ts
+    // pins that refusal).
     expect(out).not.toContain('  repair: team register restored');
-    expect(out).not.toContain('  repair: team up\n');
-    expect(out).toContain('  repair: team restart restored, then team up');
+    expect(out).not.toContain('  repair: team restart restored');
+    expect(out).toContain('  repair: team up');
     expect(code).toBe(1);
   });
 
@@ -614,10 +614,45 @@ describe('team check names a live seat whose socket a send would skip', () => {
     });
     const { code, out } = check(w, liveOn([seat], { sessions: { doubt: 'ses_keep' } }));
     expect(out).toContain("the process in its pane is not the one its record's launch started");
-    expect(out).toContain(', and a restart is refused while the load is above ');
-    expect(out).toContain('; the restart abandons that process and starts the seat fresh, leaving the recorded conversation behind');
+    expect(out).toContain('the repair starts the seat fresh: it abandons that process, leaving the recorded conversation behind, and is refused while the load is above ');
     expect(out).not.toContain('  repair: team register doubt');
-    expect(out).toContain('  repair: team restart doubt --abandon, then team up');
+    // The restart records the address itself, so no `team up` follows it.
+    expect(out).toContain('  repair: team restart doubt --abandon');
+    expect(out).not.toContain('  repair: team restart doubt --abandon, then team up');
+    expect(code).toBe(1);
+  });
+
+  test('two seats whose records name one pane: the duplicate claim is named once, and neither gets an address repair', () => {
+    const w = world([
+      { name: 'worker', role: 'orchestrator', launch: 'claude', inbound: 'accept', leads: true },
+      { name: 'peer', role: 'implementer', launch: 'claude', inbound: 'accept' },
+    ]);
+    // Both records were left naming the same pane, and herdr lists both seats there: whichever
+    // socket the pane's processes carry, following it from either record would wake one seat for
+    // a send that named the other. Each seat's own binding line would point at the same process.
+    const seat = { name: 'worker', pane: PANE_ONE, launch: 'claude --model claude-opus-5-5', pid: SESSION_PID };
+    const twin = { name: 'peer', pane: PANE_ONE, launch: 'claude --model claude-opus-5-5', pid: SESSION_PID };
+    declare(w, 'worker');
+    declare(w, 'peer');
+    register(w, seat, null);
+    register(w, twin, null);
+    writeSocket(w, seat);
+    ready(w, [seat, twin]);
+    updateState(w.dir, (state) => {
+      state.sessions.acme!.seats.worker!.launched = { shell: SHELL_PID, cli: [SESSION_PID] };
+      state.sessions.acme!.seats.peer!.launched = { shell: SHELL_PID, cli: [SESSION_PID] };
+    });
+    const { code, out } = check(w, liveOn([seat, twin]));
+    expect(out).toContain(
+      `worker, peer: one pane is recorded for more than one seat: their state records all name ${PANE_ONE}`,
+    );
+    // Not one binding repair per seat: `team up` would record the same socket on both records,
+    // and `team register` refuses a pane another declared seat's record holds.
+    expect(out).not.toContain('  repair: team up\n');
+    expect(out).not.toContain('  repair: team register worker');
+    expect(out).not.toContain('  repair: team register peer');
+    // A stop and a start rewrite the recorded panes from the file.
+    expect(out).toContain('  repair: team down, then team up');
     expect(code).toBe(1);
   });
 

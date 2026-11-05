@@ -1098,6 +1098,19 @@ function seatPlan(
   // created or closed. The live run re-reads the pane and its workspace immediately before the
   // launch (`execute.ts`), and a changed reading leaves the seat out with nothing launched.
   if (verdict === 'gone' && recorded.workspace && recorded.pane && recorded.launched) {
+    // A seat with no live process here is not this session's to relaunch when its agent record
+    // stands in another session's pane: the registry's reach names the pane a send resolves, so
+    // a launch here would write this session's pane over a seat another session still holds —
+    // the same record the address pass refuses to refresh. Nothing is closed, typed into or
+    // recorded; the run names the conflict and leaves the seat to that session.
+    const elsewhere = findAgent(home, { team: teamIdOf(root), seat: seat.name });
+    if (elsewhere !== null && elsewhere.reach.session !== session) {
+      return {
+        ...planned,
+        stage: recorded.stage,
+        sessionDoubt: `its agent record names ${elsewhere.reach.pane === null ? 'no pane' : `pane ${elsewhere.reach.pane}`} in session ${elsewhere.reach.session}, not this one; this run leaves the seat to that session`,
+      };
+    }
     return {
       ...planned,
       repair: { pane: recorded.pane, workspace: recorded.workspace, launched: recorded.launched, cli: seat.cli, reuse: true },
@@ -3785,11 +3798,27 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     // that dialed one would wake a process this record cannot name (`team register` is that
     // seat's repair). `unknown` covers a pane herdr cannot read, which writes nothing. The
     // note, if any, is a log line like the registry's own.
+    //
+    // Two records are never refreshed from here. A record whose reach names another session's
+    // pane describes a launch standing where this run is not: the address found here, or the
+    // silence of a dead pane there, is another session's to write, and writing it from this one
+    // would clear or re-point a live seat this run never read. A pane is one seat's as well: a
+    // pane herdr names for another seat belongs to that seat, and an unnamed pane another
+    // declared seat's own record already claims is no seat's to dial — `team register` refuses
+    // both the same way (`paneNamedRefused`, `paneTakenRefused`), and a send that followed
+    // either address would wake a process this seat does not own.
+    const listedAgents = launch.agents(session);
     for (const seat of team.seats) {
       const held = afterwards[seat.name];
       if (seat.cli !== 'claude-code' || !held?.pane) continue;
       const agent = findAgent(sources.home, { team: teamIdOf(root), seat: seat.name });
       if (!agent) continue;
+      if (agent.reach.session !== session || agent.reach.pane !== held.pane) continue;
+      const named = listedAgents?.find((entry) => entry.pane === held.pane);
+      if (named !== undefined && named.name !== null && named.name !== seat.name) continue;
+      const claimedByOther = named?.name !== seat.name
+        && team.seats.some((other) => other.name !== seat.name && other.human !== true && afterwards[other.name]?.pane === held.pane);
+      if (claimedByOther) continue;
       const processes = launch.processInfo?.(session, held.pane) ?? null;
       const verdict = seatProcessVerdict(held.launched, processes);
       if (verdict !== 'same' && verdict !== 'gone') continue;
