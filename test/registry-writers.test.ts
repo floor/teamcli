@@ -350,6 +350,7 @@ describe('the project a team leads, read through the launch', () => {
     }).id;
     upsertTeam(fixture.home, teamId, {
       project: 'other',
+      projectId: projectIdOf('TeamCLI'),
       session: 'other',
       root,
       roster: [{ agent: leadId, seat: 'lead', role: 'coordinator', leads: true }],
@@ -359,7 +360,6 @@ describe('the project a team leads, read through the launch', () => {
     const projectId = projectIdOf('TeamCLI');
     const held = getProject(fixture.home, projectId);
     if (held === null) throw new Error('the second team joins a project the scene must already have written');
-    upsertProject(fixture.home, projectId, { teams: [...held.teams, teamId] });
     return { teamId, leadId };
   }
 
