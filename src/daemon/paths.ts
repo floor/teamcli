@@ -2,11 +2,35 @@
 // the owner's newer `~/.config/teamcli` location moves later with its own migration, and this
 // module is the only place that has to change. The daemon serves every team and clone on the
 // machine, so nothing here depends on a checkout root or a team file.
+import { createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 /** The daemon unit's label. The service adapter turns it into a file name; no command prints it. */
 export const DAEMON_LABEL = 'io.floor.teamcli.daemon';
+
+function settledPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+/**
+ * The daemon label derived for `home`. When the realpath of `home` equals the realpath of the
+ * account home (`accountHome`), it keeps `DAEMON_LABEL`; for any other home it derives
+ * `<DAEMON_LABEL>.<first 16 hex digits of sha256(realpath(home))>`.
+ */
+export function daemonLabel(home: string, accountHome: string | null): string {
+  const realHome = settledPath(home);
+  if (accountHome !== null && accountHome !== '' && realHome === settledPath(accountHome)) {
+    return DAEMON_LABEL;
+  }
+  const digest = createHash('sha256').update(realHome).digest('hex').slice(0, 16);
+  return `${DAEMON_LABEL}.${digest}`;
+}
 
 /** The machine folder every path below lives in. */
 export function machineConfigDir(home: string = homedir()): string {

@@ -49,7 +49,7 @@ function world(refuseLoad = false) {
   const entry = join(programDir, 'entry.js'); writeFileSync(entry, 'export const independentFixture = true;\n');
   const calls: { command: string; args: string[] }[] = [], waits: number[] = [];
   let running = false, loads = 0;
-  const manager = darwinServiceManager({ now, sleep: ms => waits.push(ms), runner: (command, args) => {
+  const manager = darwinServiceManager({ accountHome: home, now, sleep: ms => waits.push(ms), runner: (command, args) => {
     calls.push({ command, args: [...args] });
     if (args[0] === 'bootstrap') { loads++; running = !refuseLoad; return { status: refuseLoad ? 5 : 0, stdout: '', stderr: refuseLoad ? 'synthetic load refused' : '' }; }
     if (args[0] === 'bootout') { running = false; return { status: 0, stdout: '', stderr: '' }; }
@@ -63,7 +63,7 @@ function world(refuseLoad = false) {
     heartbeatAt: now().toISOString(), features: null, stuck: [], roots: [], why: null,
     heartbeatSeconds: null,
     probe: answered ? { state: 'answered', at: now().toISOString() } : { state: 'unanswered', at: now().toISOString(), reason: 'timeout' } });
-  const sources = { home, service: manager, now, program: { execPath: '/synthetic/runtime/node', entry },
+  const sources = { home, accountHome: home, service: manager, now, program: { execPath: '/synthetic/runtime/node', entry },
     sleep: async (ms: number) => { waits.push(ms); }, health: async () => reading(true),
     start: async () => { forbidden.push('daemon start'); throw Error('a command scene must never start a daemon'); } };
   function io(caller: Caller, general?: { grant: string; key: string; grantId: string; clientId: string }, dev = false) {

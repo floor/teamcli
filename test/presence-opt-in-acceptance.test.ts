@@ -240,6 +240,7 @@ describe('the presence opt-in default and the service unit', () => {
         return { status: 0, stdout: '', stderr: '' };
       },
       uid: 501,
+      accountHome: home,
     });
 
     const entry = programAt(home);

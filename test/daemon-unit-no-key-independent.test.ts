@@ -84,7 +84,7 @@ function world() {
     session.seats.operator = { stage: 'ready', pane: 'synthetic-operator', workspace: 'synthetic-workspace' };
     state.sessions['unit-scene'] = session; });
   const calls: { command: string; args: string[] }[] = [];
-  const manager = systemServiceManager({ platform: 'darwin', uid: 98765, now: () => NOW, sleep: () => {}, runner: (command, args) => {
+  const manager = systemServiceManager({ platform: 'darwin', uid: 98765, accountHome: home, now: () => NOW, sleep: () => {}, runner: (command, args) => {
     calls.push({ command, args }); return { status: 0, stdout: 'synthetic manager answer', stderr: '' };
   } }); assert.ok(manager);
   const pair = newClientKeyPair(); const keys = must(writeClientKeyFiles(clientKeyDir(home, 'unit-fixture'), pair));
@@ -93,7 +93,7 @@ function world() {
 }
 type World = ReturnType<typeof world>;
 function sources(w: World) {
-  return { home: w.home, service: w.manager, program: { execPath: process.execPath, entry: w.entry }, now: () => NOW,
+  return { home: w.home, accountHome: w.home, service: w.manager, program: { execPath: process.execPath, entry: w.entry }, now: () => NOW,
     // The install confirms the daemon it wrote answers; this stands for that answer, and no
     // scene touches a socket or starts a process.
     health: async () => ANSWERING,

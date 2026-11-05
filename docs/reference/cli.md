@@ -964,9 +964,9 @@ Usage:
 
     team daemon status [--json]
     team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
-    team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
+    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
     team daemon restart [--dry-run] [--json]
-    team daemon uninstall [--json]
+    team daemon uninstall [--home <folder>] [--json]
     team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
 
 ### Who may run it
@@ -1045,7 +1045,7 @@ Hidden: no
 
 Usage:
 
-    team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
+    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
 
 #### Who may run it
 
@@ -1058,6 +1058,7 @@ Usage:
 | `--dry-run` | no | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--home` | yes | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
 | `--presence` | no | no | no |
@@ -1157,7 +1158,7 @@ Hidden: no
 
 Usage:
 
-    team daemon uninstall [--json]
+    team daemon uninstall [--home <folder>] [--json]
 
 #### Who may run it
 
@@ -1169,6 +1170,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--home` | yes | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
 | `-h` | no | no | yes |

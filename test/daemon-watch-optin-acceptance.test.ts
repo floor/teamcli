@@ -509,10 +509,11 @@ describe('the install contract writes only the opt-in that was asked for', () =>
 
   test('the written unit carries --watch exactly once and presence only when asked', async () => {
     const world = scratch();
-    const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
+    const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501, accountHome: world.home });
     const install = async (argv: string[]) => {
       const io = testIo(world.root, owner);
       expect(await runDaemon(argv, io, sourcesOf(world.home, {
+        accountHome: world.home,
         service: manager,
         program: { execPath: '/runtime/bin/node', entry: programAt(world.home) },
         health: async () => ANSWERING,

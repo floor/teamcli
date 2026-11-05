@@ -45,7 +45,7 @@ function scripted(answers: ServiceRunResult[]): ServiceRunner {
 describe('a refused registration rolls its unit back', () => {
   test('a registration the service manager refuses leaves no unit behind', () => {
     const home = scratchHome();
-    const manager = darwinServiceManager({ runner: scripted([FAILED]), uid: 501, sleep: () => {} });
+    const manager = darwinServiceManager({ runner: scripted([FAILED]), uid: 501, accountHome: home, sleep: () => {} });
 
     const result = manager.install(home, programAt(home));
 
@@ -58,7 +58,7 @@ describe('a refused registration rolls its unit back', () => {
   test('a refusal after the unload retry leaves no unit behind either', () => {
     const home = scratchHome();
     // The first registration is refused, the unload succeeds, the retry is refused again.
-    const manager = darwinServiceManager({ runner: scripted([FAILED, OK, FAILED]), uid: 501, sleep: () => {} });
+    const manager = darwinServiceManager({ runner: scripted([FAILED, OK, FAILED]), uid: 501, accountHome: home, sleep: () => {} });
 
     const result = manager.install(home, programAt(home));
 
@@ -70,11 +70,11 @@ describe('a refused registration rolls its unit back', () => {
 describe('a stop that fails is never reported as a removal', () => {
   test('a failed stop is refused, and the unit stays for the retry', () => {
     const home = scratchHome();
-    const manager = darwinServiceManager({ runner: scripted([OK]), uid: 501 });
+    const manager = darwinServiceManager({ runner: scripted([OK]), uid: 501, accountHome: home });
     expect(manager.install(home, programAt(home)).ok).toBe(true);
     expect(existsSync(manager.unitPath(home))).toBe(true);
 
-    const stopping = darwinServiceManager({ runner: scripted([FAILED]), uid: 501 });
+    const stopping = darwinServiceManager({ runner: scripted([FAILED]), uid: 501, accountHome: home });
     const result = stopping.uninstall(home);
 
     expect(result.ok).toBe(false);
@@ -85,7 +85,7 @@ describe('a stop that fails is never reported as a removal', () => {
 
   test('nothing installed is not a failed stop: the uninstall says so and writes nothing', () => {
     const home = scratchHome();
-    const manager = darwinServiceManager({ runner: scripted([FAILED]), uid: 501 });
+    const manager = darwinServiceManager({ runner: scripted([FAILED]), uid: 501, accountHome: home });
 
     const result = manager.uninstall(home);
 

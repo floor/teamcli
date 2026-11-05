@@ -14,12 +14,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
-import type { DaemonHealth } from '../src/daemon/machine.ts';
-import * as daemonPaths from '../src/daemon/paths.ts';
-import { DAEMON_LABEL, daemonSocketPath } from '../src/daemon/paths.ts';
+import type { DaemonHealth } from '../src/daemon/health.ts';
+import { DAEMON_LABEL, daemonLabel, daemonSocketPath } from '../src/daemon/paths.ts';
 import { darwinServiceManager } from '../src/daemon/service-darwin.ts';
 import type { ServiceProgram, ServiceRunResult, ServiceRunner } from '../src/daemon/service.ts';
 import { writeDaemonState } from '../src/daemon/state.ts';
+import { writeDevelopmentMode } from '../src/development_mode.ts';
+import { keyOf } from '../src/store/keys.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { testIo } from './helpers.ts';
 
@@ -215,15 +216,17 @@ describe('home-derived daemon label and --home install/uninstall', () => {
   test('derived label, unit path, unit environment, and launchctl calls isolate a non-account home from the machine label', () => {
     const accountHome = makeDir('iso-acct-');
     const scratchHome = makeDir('iso-scratch-');
+    const { root, entry } = makeProject(scratchHome);
     const derived = expectedDerivedLabel(scratchHome);
-    const derive = (daemonPaths as { daemonLabel?: (home: string, accountHome: string | null) => string }).daemonLabel;
-    expect(derive?.(accountHome, accountHome)).toBe(DAEMON_LABEL);
-    expect(derive?.(scratchHome, accountHome)).toBe(derived);
+    expect(daemonLabel(accountHome, accountHome)).toBe(DAEMON_LABEL);
+    expect(daemonLabel(scratchHome, accountHome)).toBe(derived);
     expect(derived).toMatch(/^io\.floor\.teamcli\.daemon\.[0-9a-f]{16}$/);
 
     const calls: string[] = [];
     const program: ServiceProgram = {
-      words: ['/opt/bun/bin/bun', '/opt/team/daemon-entry.js', 'daemon', 'run', '--started-by', 'service-manager'],
+      execPath: process.execPath,
+      entry,
+      roots: [root],
       path: '/opt/bun/bin:/usr/bin:/bin',
     };
     const runner: ServiceRunner = (command, args): ServiceRunResult => {
@@ -234,7 +237,7 @@ describe('home-derived daemon label and --home install/uninstall', () => {
       if (args[0] === 'print') {
         return {
           status: 0,
-          stdout: `\tstate = running\n\tpid = 9191\n\tprogram = ${program.words[0]}\n`,
+          stdout: `\tstate = running\n\tpid = 9191\n\tprogram = ${program.execPath}\n`,
           stderr: '',
         };
       }
@@ -244,8 +247,9 @@ describe('home-derived daemon label and --home install/uninstall', () => {
     const manager = darwinServiceManager({ uid: UID, runner, sleep: () => {} });
     const installed = manager.install(scratchHome, program);
     expect(installed.ok).toBe(true);
+    if (!installed.ok) return;
     const expectedPath = join(scratchHome, 'Library', 'LaunchAgents', `${derived}.plist`);
-    expect(installed.path).toBe(expectedPath);
+    expect(installed.unitPath).toBe(expectedPath);
 
     const plist = readFileSync(expectedPath, 'utf8');
     expect(plist).toContain(`<string>${derived}</string>`);
@@ -404,8 +408,28 @@ describe('home-derived daemon label and --home install/uninstall', () => {
     const scratchHome = makeDir('keep-scratch-');
     const { root, entry } = makeProject(scratchHome);
     const derived = expectedDerivedLabel(scratchHome);
+    const now = new Date('2026-11-04T12:00:00Z');
 
-    let devLiftHome: string | null = null;
+    writeFileSync(
+      join(root, '.agents', 'team.state.json'),
+      `${JSON.stringify(
+        {
+          format: 1,
+          sessions: {
+            acme: {
+              seats: {
+                clerk: { stage: 'ready', pane: 'pane1' },
+                'op-1': { stage: 'ready', pane: 'pane2' },
+              },
+              worktrees: {},
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
     const calls: string[] = [];
     const manager = darwinServiceManager({
       uid: UID,
@@ -431,26 +455,38 @@ describe('home-derived daemon label and --home install/uninstall', () => {
       program: { execPath: process.execPath, entry },
       health: async () => ANSWERING,
       sleep: async () => {},
-      devLift: (_cwd, home) => {
-        devLiftHome = home;
-        return { allowed: true, session: 'demo', seat: 'lead' };
-      },
+      now: () => now,
     };
 
-    const installIo = testIo(root, { kind: 'seat', session: 'demo', seat: 'lead' });
+    const leadCaller = { kind: 'seat' as const, name: 'clerk', pane: 'pane1', session: 'acme' };
+
+    // Development mode enabled ONLY in scratchHome does not admit the placed lead because admission reads accountHome.
+    keyOf(scratchHome);
+    const scratchDev = writeDevelopmentMode({ home: scratchHome, mode: 'local-fast', now, caller: 'test' });
+    if (!scratchDev.ok) throw new Error(scratchDev.why);
+    const deniedIo = testIo(root, leadCaller);
+    const deniedCode = await runDaemon(['install', '--home', scratchHome, '--root', root, '--json'], deniedIo, sources);
+    expect(deniedCode).toBe(1);
+    expect(JSON.parse(deniedIo.out || deniedIo.err).error?.id).toBe('daemon.not-owner');
+
+    // Development mode enabled in accountHome admits the placed lead while writing the unit under scratchHome.
+    keyOf(accountHome);
+    const acctDev = writeDevelopmentMode({ home: accountHome, mode: 'local-fast', now, caller: 'test' });
+    if (!acctDev.ok) throw new Error(acctDev.why);
+
+    const installIo = testIo(root, leadCaller);
     const installCode = await runDaemon(['install', '--home', scratchHome, '--root', root, '--json'], installIo, sources);
-    expect(installIo.err).toBe('');
     expect(installCode).toBe(0);
-    expect(devLiftHome).toBe(accountHome);
+    expect(installIo.err).toContain('dev mode continues');
 
     const expectedUnit = join(scratchHome, 'Library', 'LaunchAgents', `${derived}.plist`);
     expect(existsSync(expectedUnit)).toBe(true);
     expect(existsSync(join(accountHome, 'Library', 'LaunchAgents', `${DAEMON_LABEL}.plist`))).toBe(false);
 
-    const uninstallIo = testIo(root, { kind: 'seat', session: 'demo', seat: 'lead' });
+    const uninstallIo = testIo(root, leadCaller);
     const uninstallCode = await runDaemon(['uninstall', '--home', scratchHome, '--json'], uninstallIo, sources);
-    expect(uninstallIo.err).toBe('');
     expect(uninstallCode).toBe(0);
+    expect(uninstallIo.err).toContain('dev mode continues');
     expect(existsSync(expectedUnit)).toBe(false);
   });
 });
