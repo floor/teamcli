@@ -333,6 +333,26 @@ function sharedFleetSources(options: { headPane: string; headRoot: string; targe
   });
 }
 
+/** The process sources one lead seat's terminal passes down: the walk places `lead` on its pane
+ *  only when asked about that seat's session, so a candidate on any other session places nobody.
+ *  A scene writes these onto its own io — never a spread copy — because `testIo`'s writers close
+ *  over the object they were built on, and a copy would never see the output the command wrote. */
+function leadCallerSources(sessionName: string, cwd: string): (session?: string) => CallerSources {
+  return (session) => ({
+    ancestors: () => [
+      { pid: 200, name: 'claude' },
+      { pid: 100, name: 'herdr' },
+    ],
+    agents: () =>
+      session === undefined || session === sessionName
+        ? [{ name: 'lead', agent: 'claude-code', pane: 'pane-lead', workspace: 'ws-lead', status: 'idle', cwd }]
+        : [],
+    paneRootPid: (pane) => (pane === 'pane-lead' ? 200 : null),
+    env: { HERDR_PANE_ID: 'pane-lead' },
+    stdinIsTTY: false,
+  });
+}
+
 /** A registry record torn by a write that did not finish: JSON a reader cannot parse. */
 const CORRUPT_RECORD = '{"format": 1, "text": ';
 
@@ -819,6 +839,168 @@ describe('team restart <seat>', () => {
     expect(io.out).toContain('team restart: restarted worker; pane none -> pane-new\n');
     expect(did.created).toBe(1);
     expect(io.err).toContain('reading the team registered for session acme');
+  });
+
+  test('real process sources place the caller in the registry team\'s own session', async () => {
+    // No `io.caller` is handed in: the placement is the walk every command makes. Under the
+    // terminal host the sessionless walk names no session, so the registry authority is asked
+    // with none, and each candidate is then judged by placing the caller in that candidate's own
+    // session — the session-aware walk, not the sessionless one that places nobody.
+    const fixture = makeFixture();
+    const lobby = join(fixture.home, '.config', 'team', 'lobby');
+    mkdirSync(join(fixture.home, '.config', 'team'), { recursive: true });
+    mkdirSync(lobby, { mode: 0o700 });
+    const olderFile = join(fixture.dir, 'team-old.yaml');
+    writeFileSync(olderFile, olderTeamYaml(fixture.yaml));
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.launched_file = olderFile;
+      session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+      session.seats.ops = { stage: 'ready', pane: 'pane-ops', workspace: 'ws-ops' };
+    });
+    noteLaunchedPane(fixture.home, olderFile, 'pane-lead', 'acme');
+    const id = teamIdOf(fixture.root);
+    upsertTeam(fixture.home, id, { project: 'acme', session: 'acme', root: fixture.root, at: NOW.toISOString() });
+    setRoster(fixture.home, id, [
+      { agent: 'agt_000000000000', seat: 'lead', role: 'coordinator', leads: true },
+      { agent: 'agt_111111111111', seat: 'ops', role: 'coordinator' },
+      { agent: 'agt_222222222222', seat: 'worker', role: 'implementer' },
+    ]);
+
+    const { sources, did } = makeHarness(fixture, { initialRunning: false });
+    const io = testIo(lobby);
+    io.callerSources = leadCallerSources('acme', lobby);
+
+    const code = await runRestart(['worker'], io, sources);
+    expect(code).toBe(0);
+    expect(did.created).toBe(1);
+    expect(io.out).toContain('team restart: restarted worker; pane none -> pane-new\n');
+    expect(io.err).toContain(`reading the team registered for session acme (${fixture.root})`);
+  });
+
+  test('a seat name on two sessions\' teams resolves by placement, not by the shared name', async () => {
+    // Two registry records roster `worker`, on different sessions. The caller's own state places
+    // it only on acme's team, so the other session's record is dropped by placement before the
+    // one-candidate rule reads anything: a shared seat name never resolves a team by itself.
+    const fixture = makeFixture();
+    const lobby = join(fixture.home, '.config', 'team', 'lobby');
+    mkdirSync(join(fixture.home, '.config', 'team'), { recursive: true });
+    mkdirSync(lobby, { mode: 0o700 });
+    const olderFile = join(fixture.dir, 'team-old.yaml');
+    writeFileSync(olderFile, olderTeamYaml(fixture.yaml));
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.launched_file = olderFile;
+      session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+      session.seats.ops = { stage: 'ready', pane: 'pane-ops', workspace: 'ws-ops' };
+    });
+    noteLaunchedPane(fixture.home, olderFile, 'pane-lead', 'acme');
+    const id = teamIdOf(fixture.root);
+    upsertTeam(fixture.home, id, { project: 'acme', session: 'acme', root: fixture.root, at: NOW.toISOString() });
+    setRoster(fixture.home, id, [
+      { agent: 'agt_000000000000', seat: 'lead', role: 'coordinator', leads: true },
+      { agent: 'agt_111111111111', seat: 'ops', role: 'coordinator' },
+      { agent: 'agt_222222222222', seat: 'worker', role: 'implementer' },
+    ]);
+    // The second session's team: a checkout of its own holding a valid file that declares the
+    // same seat name, recorded against a session the caller does not stand in.
+    const beta = makeFixture();
+    writeFileSync(beta.file, beta.yaml.replace(/^project: acme$/m, 'project: beta'));
+    const betaId = teamIdOf(beta.root);
+    upsertTeam(fixture.home, betaId, { project: 'beta', session: 'beta-sess', root: beta.root, at: NOW.toISOString() });
+    setRoster(fixture.home, betaId, [
+      { agent: 'agt_444444444444', seat: 'lead', role: 'coordinator', leads: true },
+      { agent: 'agt_555555555555', seat: 'worker', role: 'implementer' },
+    ]);
+
+    const { sources, did } = makeHarness(fixture, { initialRunning: false });
+    const io = testIo(lobby);
+    io.callerSources = leadCallerSources('acme', lobby);
+
+    const code = await runRestart(['worker'], io, sources);
+    expect(code).toBe(0);
+    expect(did.created).toBe(1);
+    expect(io.out).toContain('team restart: restarted worker; pane none -> pane-new\n');
+    expect(io.err).toContain(`reading the team registered for session acme (${fixture.root})`);
+    expect(io.err).not.toContain(beta.root);
+  });
+
+  test('two registry teams on the run\'s session keep the seat refused rather than guessing', async () => {
+    // Both records carry the session the run names, so neither is narrowed away: the seat is
+    // refused before either file is read. A second record whose file cannot be read is still a
+    // candidate — it can neither collapse the ambiguity nor be skipped in favour of the first.
+    const fixture = makeFixture();
+    const lobby = join(fixture.home, '.config', 'team', 'lobby');
+    mkdirSync(join(fixture.home, '.config', 'team'), { recursive: true });
+    mkdirSync(lobby, { mode: 0o700 });
+    const olderFile = join(fixture.dir, 'team-old.yaml');
+    writeFileSync(olderFile, olderTeamYaml(fixture.yaml));
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.launched_file = olderFile;
+      session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+      session.seats.ops = { stage: 'ready', pane: 'pane-ops', workspace: 'ws-ops' };
+    });
+    noteLaunchedPane(fixture.home, olderFile, 'pane-lead', 'acme');
+    const id = teamIdOf(fixture.root);
+    upsertTeam(fixture.home, id, { project: 'acme', session: 'acme', root: fixture.root, at: NOW.toISOString() });
+    setRoster(fixture.home, id, [
+      { agent: 'agt_000000000000', seat: 'lead', role: 'coordinator', leads: true },
+      { agent: 'agt_111111111111', seat: 'ops', role: 'coordinator' },
+      { agent: 'agt_222222222222', seat: 'worker', role: 'implementer' },
+    ]);
+    // The second record carries the same session; its file is not even readable as a team.
+    const otherRoot = join(fixture.base, 'beta');
+    mkdirSync(join(otherRoot, '.agents'), { recursive: true });
+    writeFileSync(join(otherRoot, '.agents', 'team.yaml'), 'format: 99\nproject: beta\n');
+    const otherId = teamIdOf(otherRoot);
+    upsertTeam(fixture.home, otherId, { project: 'beta', session: 'acme', root: otherRoot, at: NOW.toISOString() });
+    setRoster(fixture.home, otherId, [{ agent: 'agt_444444444444', seat: 'worker', role: 'implementer' }]);
+
+    const { sources, did } = makeHarness(fixture, { initialRunning: false });
+    const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
+    const io = testIo(lobby, leadCaller);
+
+    const code = await runRestart(['worker'], io, sources);
+    expect(code).toBe(1);
+    expect(did.created).toBe(0);
+    expect(io.err).toBe('team restart: worker is not a signed declared seat\n');
+  });
+
+  test('a registry team that names the session but cannot be read keeps the configuration refusal', async () => {
+    // Exactly one record carries the session and its own team file does not load. The read is
+    // not skipped back to the pointer: the run reports that configuration failure, the same
+    // refusal the pointer's own file would get, and starts nothing.
+    const fixture = makeFixture();
+    const lobby = join(fixture.home, '.config', 'team', 'lobby');
+    mkdirSync(join(fixture.home, '.config', 'team'), { recursive: true });
+    mkdirSync(lobby, { mode: 0o700 });
+    const olderFile = join(fixture.dir, 'team-old.yaml');
+    writeFileSync(olderFile, olderTeamYaml(fixture.yaml));
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.launched_file = olderFile;
+      session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+      session.seats.ops = { stage: 'ready', pane: 'pane-ops', workspace: 'ws-ops' };
+    });
+    noteLaunchedPane(fixture.home, olderFile, 'pane-lead', 'acme');
+    const id = teamIdOf(fixture.root);
+    upsertTeam(fixture.home, id, { project: 'acme', session: 'acme', root: fixture.root, at: NOW.toISOString() });
+    setRoster(fixture.home, id, [
+      { agent: 'agt_000000000000', seat: 'lead', role: 'coordinator', leads: true },
+      { agent: 'agt_111111111111', seat: 'ops', role: 'coordinator' },
+      { agent: 'agt_222222222222', seat: 'worker', role: 'implementer' },
+    ]);
+    // The record's own team file no longer validates.
+    writeFileSync(fixture.file, 'format: 99\nproject: acme\n');
+
+    const { sources, did } = makeHarness(fixture, { initialRunning: false });
+    const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
+    const io = testIo(lobby, leadCaller);
+
+    const code = await runRestart(['worker'], io, sources);
+    expect(code).toBe(2);
+    expect(did.created).toBe(0);
   });
 
   test('a launched pointer to an older team file falls back to the team the folder holds', async () => {
