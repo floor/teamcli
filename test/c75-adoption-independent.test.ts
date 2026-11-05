@@ -462,6 +462,7 @@ describe('1. direct restoreProof and relaunchWithOwnLine rules', () => {
     ).toEqual({
       kind: 'none',
       why: `its pane reports no conversation; the record's launch ran ${SESSION_ALPHA}`,
+      specific: true,
     });
 
     // Recorded session absent, live session present.
@@ -477,6 +478,7 @@ describe('1. direct restoreProof and relaunchWithOwnLine rules', () => {
     ).toEqual({
       kind: 'none',
       why: "its pane holds a conversation (ses_unexpected) the record's launch never named",
+      specific: true,
     });
 
     // Both sides have sessions, but unequal.
@@ -492,12 +494,14 @@ describe('1. direct restoreProof and relaunchWithOwnLine rules', () => {
     ).toEqual({
       kind: 'none',
       why: `its pane holds another conversation (ses_different; the record's launch ran ${SESSION_ALPHA})`,
+      specific: true,
     });
 
     // Wrong foreground CLI.
     expect(restoreProof(baseProofInput({ foreground: ['claude'] }))).toEqual({
       kind: 'none',
       why: "its pane runs claude; the seat's launch line runs codex",
+      specific: true,
     });
 
     // Unreadable foreground.
@@ -518,6 +522,7 @@ describe('1. direct restoreProof and relaunchWithOwnLine rules', () => {
     ).toEqual({
       kind: 'none',
       why: "its pane's agent says claude; the seat's launch line runs codex",
+      specific: true,
     });
 
     // Pane in another workspace.
@@ -532,6 +537,7 @@ describe('1. direct restoreProof and relaunchWithOwnLine rules', () => {
     ).toEqual({
       kind: 'none',
       why: `its pane is in workspace ws-moved; the record puts it in ${WS_ALPHA}`,
+      specific: true,
     });
 
     // Pane named for another seat.
@@ -546,6 +552,7 @@ describe('1. direct restoreProof and relaunchWithOwnLine rules', () => {
     ).toEqual({
       kind: 'none',
       why: `its pane is named ${SEAT_BETA}; team never adopts a pane another seat owns`,
+      specific: true,
     });
 
     // Weak proof: another pane in the same workspace.
@@ -562,6 +569,7 @@ describe('1. direct restoreProof and relaunchWithOwnLine rules', () => {
     ).toEqual({
       kind: 'none',
       why: 'its workspace holds another pane; team cannot tell which one is the seat',
+      specific: true,
     });
 
     // Weak proof: working status or unsent text on screen.
@@ -575,6 +583,7 @@ describe('1. direct restoreProof and relaunchWithOwnLine rules', () => {
     ).toEqual({
       kind: 'none',
       why: `the process in its pane is working; nothing closed (stop it there, or run team remove ${SEAT_ALPHA})`,
+      specific: true,
     });
 
     expect(
@@ -588,6 +597,7 @@ describe('1. direct restoreProof and relaunchWithOwnLine rules', () => {
     ).toEqual({
       kind: 'none',
       why: `the process in its pane holds unsent text; nothing closed (send or clear it there, or run team remove ${SEAT_ALPHA})`,
+      specific: true,
     });
   });
 });
