@@ -188,20 +188,30 @@ figure came from. The margin is the window's own clock minus the spend: 125h26m 
 prints its own margin (`W: 12% (+13.3%)`) is believed as printed; a row that prints none is read
 against the window's length (five hours for the session window, seven days for the weekly one). A
 figure older than five minutes, or one whose reset has passed, prints marked `stale`, carries no
-margin, and reads `unknown` as its state. A wall screen — `quota reached`, `out of usage`, `usage
+margin, and reads `unknown` as its state. A reading older than its own window (five hours for the
+session window, a day for daily, seven days for weekly) describes a window instance that has
+passed: the line prints `no fresh reading` with the reading's age and source, the window carries
+no figure, reset or margin, and the state is `unknown`; the one advice line names each such window
+and says that a running seat's status line or the CLI's own usage command reads a fresh one on the
+next run. The account table prints the same words in its `STATE` cell, and `--json` carries
+`expired: true` with the figures nulled. A window whose fresh margin is at or below −10% — the
+headroom band's mirror — is spending faster than its clock will last: in place of the reset
+countdown and the margin the line prints `runs out in about Xh, before the reset in Yh`, both
+hours read from the window's own clock. A wall screen — `quota reached`, `out of usage`, `usage
 limit reached`, or the CLI's own rate-limit rejection — prints the account as `walled` with the
 reset words the screen showed.
 
-An account's state is `walled` at 100% used or on a live wall, `near cap` at 90% used or above — or
-with a fresh margin at or below −50%, so an account spending well ahead of its window's clock is
-named even under the used figure — `ok` below both, and `unknown` when nothing fresh has been
-observed. The same words print in the default account table's `STATE` column, so `near cap` is
-never hidden behind `--tree`; the table marks a stale reading `stale` beside its state, and
-`fresh`/`stale` stay the team rows' own pace words. The one `advice:` line — printed with or
-without `--tree` — names the accounts with headroom (a fresh margin of at least +10%), or the
-walled seats and the healthiest account to move them to, or the near-cap accounts, worst margin
-first, with the account that still has headroom beside them, or says that no readings have
-answered.
+An account's state is `walled` at 100% used or on a live wall, `near cap` when a fresh margin is
+at or below −10% — the window is on course to empty before it resets — `ok` otherwise, whatever
+the used percentage: a window at 96% used and on pace is ok. A window whose reset moment is
+unknown gives no margin to read, so it falls back to the used figure, 90% or above reading
+`near cap`. Nothing fresh reads `unknown`. The same words print in the default account table's
+`STATE` column, so `near cap` is never hidden behind `--tree`; the table marks a stale reading
+`stale` beside its state, and `fresh`/`stale` stay the team rows' own pace words. The one `advice:`
+line — printed with or without `--tree` — names the accounts with headroom (a fresh margin of at
+least +10%), or the walled seats and the healthiest account to move them to, or the near-cap
+accounts, worst margin first, with the account that still has headroom beside them, or says that
+no readings have answered.
 
 The sources are all observable, and the block reads none of them from a credential, a key or a
 CLI session file: the watch's machine-wide readings
@@ -219,7 +229,8 @@ it; a team whose own file cannot be read is one note too, naming the team and it
 every view (`the team "team" (~/Code/floor/team): its file could not be read.`). In `--json` the
 block is the `quota` key:
 `format`, `accountsFile`, one entry per lab with its accounts, seats, states and windows, and
-`advice`.
+`advice`; each window carries its `margin`, its `expired` mark and, when it names one, the
+`runsOutIn` figure.
 
 ## Each seat’s own figures
 
