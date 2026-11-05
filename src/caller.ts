@@ -117,8 +117,8 @@ export function placeCaller(sources: CallerSources, session?: string): Caller {
 /** A caller whose nearest Codex ancestor is a seat's own managed app-server is that seat: the
  *  seat's tools run there once its TUI is attached by `--remote`. When a session is asked about,
  *  the endpoint must serve that session and herdr must still hold its recorded pane (either
- *  listed for the seat or not yet named during startup/restore, or with a live pane root before
- *  herdr's agent scan catches up). */
+ *  named for the seat, or unnamed/not-yet-listed while its reported agent is codex or unknown and
+ *  the seat does not already stand on another pane in that session). */
 function endpointSeat(
   ancestors: Process[],
   sources: Pick<CallerSources, 'managedEndpointSeat' | 'agents' | 'paneRootPid'>,
@@ -134,10 +134,14 @@ function endpointSeat(
     const agents = sources.agents();
     if (agents === null) return null;
     const listed = agents.find((agent) => agent.pane === served.pane);
-    if (listed !== undefined) {
-      if (listed.name !== null && listed.name !== served.seat) return null;
-    } else if (sources.paneRootPid(served.pane) === null) {
-      return null;
+    if (listed?.name !== served.seat) {
+      if (agents.some((agent) => agent.name === served.seat && agent.pane !== served.pane)) return null;
+      if (listed !== undefined) {
+        if (listed.name !== null) return null;
+        if (listed.agent !== null && listed.agent !== '' && basename(listed.agent) !== 'codex') return null;
+      } else if (sources.paneRootPid(served.pane) === null) {
+        return null;
+      }
     }
     return { kind: 'seat', name: served.seat, pane: served.pane, session };
   }

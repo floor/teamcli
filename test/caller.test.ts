@@ -47,9 +47,14 @@ describe('the caller is placed by its parent processes', () => {
     const env = { HERDR_PANE_ID: 'pane2' };
     expect(placeCaller(sources(underEndpoint, { env, managedEndpointSeat: served }), 'main'))
       .toEqual({ kind: 'seat', name: 'codex-acme', pane: 'pane2', session: 'main' });
-    // At launch (before `rename` runs) or right after a restore, herdr lists the pane with `name: null`,
-    // or has not listed the agent yet while `paneRootPid` vouches that the pane exists in the session.
+    // At launch (before `rename` runs) or right after a restore, herdr lists the pane with `name: null`
+    // and agent `codex` (or unknown), or has not listed the agent yet while `paneRootPid` vouches that
+    // the pane exists in the session.
     expect(placeCaller(sources(underEndpoint, {
+      agents: () => [
+        agent('claude-coordinator', 'pane1'),
+        { name: null, agent: 'codex', pane: 'pane3', workspace: 'pane3', status: 'idle', cwd: null },
+      ],
       env: { HERDR_PANE_ID: 'pane3' },
       managedEndpointSeat: (pid) => (pid === 900 ? { session: 'main', seat: 'codex-acme', pane: 'pane3' } : null),
     }), 'main')).toEqual({ kind: 'seat', name: 'codex-acme', pane: 'pane3', session: 'main' });
@@ -59,6 +64,20 @@ describe('the caller is placed by its parent processes', () => {
       env,
       managedEndpointSeat: served,
     }), 'main')).toEqual({ kind: 'seat', name: 'codex-acme', pane: 'pane2', session: 'main' });
+    // An unnamed pane running another CLI, or a pane left behind after the seat moved to another pane, places nobody.
+    expect(placeCaller(sources(underEndpoint, {
+      agents: () => [agent('claude-coordinator', 'pane1'), agent(null, 'pane3')],
+      env: { HERDR_PANE_ID: 'pane3' },
+      managedEndpointSeat: (pid) => (pid === 900 ? { session: 'main', seat: 'codex-acme', pane: 'pane3' } : null),
+    }), 'main')).toMatchObject({ kind: 'unplaced' });
+    expect(placeCaller(sources(underEndpoint, {
+      agents: () => [
+        agent('codex-acme', 'pane2'),
+        { name: null, agent: 'codex', pane: 'pane3', workspace: 'pane3', status: 'idle', cwd: null },
+      ],
+      env: { HERDR_PANE_ID: 'pane3' },
+      managedEndpointSeat: (pid) => (pid === 900 ? { session: 'main', seat: 'codex-acme', pane: 'pane3' } : null),
+    }), 'main')).toMatchObject({ kind: 'unplaced' });
     // Another session, a pane herdr lists under another name, a pane herdr does not know, or a silent herdr places nobody.
     expect(placeCaller(sources(underEndpoint, { env, managedEndpointSeat: served }), 'other'))
       .toMatchObject({ kind: 'unplaced' });
