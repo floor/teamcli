@@ -36,7 +36,7 @@ import {
   agentListAsync, agentStatus, agentStatusAsync, paneProcessesAsync, paneRead, paneReadAsync,
   type PaneProcesses,
 } from '../herdr.ts';
-import { paneHoldsShell, seatProcessVerdict } from '../launch/identity.ts';
+import { findSeatAgent as findSeatAgentOf, isBareShellPane } from '../daemon/seat-live.ts';
 import { acquireSeatLock, holderText } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { claimBindingIn, receiptHeld } from '../mcp/inbox.ts';
@@ -56,6 +56,7 @@ import { openReplyListener, readReply } from './reply.ts';
 import { attributedBody } from './sender-claim.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from './uds.ts';
 import { compactReaderLine, existingRecordIdsIn, frameFor, readerLine } from './frame.ts';
+import { releaseWake, reserveWake, wakePath } from './wake-marker.ts';
 import {
   declaredInboundOf, heldSocketPath, inboundStaleReason, readHeldSocket, socketEligible, socketHeldReason,
   socketSkipReason,
@@ -520,7 +521,8 @@ export type StartSendDaemonInput = {
 
 /** One typed wake this daemon admitted: the validated line and the daemon's own staged copy.
  *  The child re-reads the pane live and locks the seat itself (src/send/typed-wake.ts); these
- *  values are what the daemon checked, not a promise about a screen. */
+ *  values are what the daemon checked, not a promise about a screen. The shape is the child's
+ *  token request minus its version word (`src/daemon/wake/token.ts`). */
 export type WakeHandoff = {
   /** The message id the staged copy is held under; the child's history line keeps it. */
   id: string;
@@ -532,6 +534,24 @@ export type WakeHandoff = {
   line: string;
   /** The daemon's staged copy in `<storeDir>/drops/<session>/<seat>/<id>` (0600). */
   dropPath: string;
+  /** The folder the seat's locks, records and log live in (the presence folder, today
+   *  `.agents`): the same folder the caller's own walk would lock and log into. */
+  dir: string;
+  /** The receiving checkout's canonical root: where the child's history and trace are filed. */
+  root: string;
+  /** The receiving team's project store key. */
+  project: string;
+  /** The home the child's store and log resolve under. */
+  home: string;
+  /** The sender and the message the staged copy holds: what the child's history line keeps. */
+  from: string;
+  body: string;
+  spec?: string;
+  resolved?: string;
+  from_team?: string;
+  failed?: string[];
+  /** When the copy was staged (epoch ms): the child's trace counts its two times from it. */
+  stagedAt: number;
 };
 
 /** The daemon's wake child seam. It returns as soon as it has started (or immediately, for a
@@ -808,6 +828,15 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
           true,
         ));
       }
+      // The child locks, reads and logs in the presence folder the caller's own walk uses; the
+      // store's drop folder is not that folder. A daemon that cannot name it hands the walk back
+      // before staging anything, so the caller runs it with the right folder.
+      if ('why' in presenceState) {
+        return Promise.resolve(refuseTyped(
+          `${seatName}: this daemon cannot name the presence folder (${presenceState.why}), so the caller keeps the walk; nothing was staged or typed`,
+          true,
+        ));
+      }
       const typedSession = input.team.session;
       const handoffId = request.id ?? randomUUID();
       const dropLadder = ensureLadder(host.home, store, ['drops', typedSession, seatName]);
@@ -823,11 +852,50 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
           return refuseTyped(`${seatName}: the drop file could not be written; nothing was typed`);
         }
         const dropPath = join(dropLadder.leaf, handoffId);
+        const marker = wakePath(dropLadder.leaf, handoffId);
+        // The marker is the reservation: linked into place before the child exists, so a second
+        // request for the same id is coalesced rather than typed twice. A marker already there
+        // belongs to an earlier attempt whose effect is unknown (a child killed mid-walk leaves
+        // `reserved`) and is never typed over; the watch's own retry in the project's drop
+        // folder is still there to wake the seat.
+        if (!reserveWake(marker, { id: handoffId, at: host.now().toISOString(), state: 'reserved' })) {
+          logLine(input.dir, 'send', request.from, `${seatName}: a typed wake for this id is already under way; nothing new was typed (id ${handoffId})`, host.now());
+          return {
+            v: 1,
+            ok: true,
+            id: handoffId,
+            seat: seatName,
+            outcome: 'handed',
+            status: 'typed wake',
+            drop_path: dropPath,
+          };
+        }
+        const handoff: WakeHandoff = {
+          id: handoffId,
+          seat: seatName,
+          session: typedSession,
+          cli: configured.cli,
+          line: trigger,
+          dropPath,
+          dir: presenceState.dir,
+          root: input.root,
+          project: input.team.project,
+          home: host.home,
+          from: request.from,
+          body: request.body,
+          ...(request.spec === undefined ? {} : { spec: request.spec }),
+          ...(request.resolved === undefined ? {} : { resolved: request.resolved }),
+          from_team: teamIdOf(input.root),
+          ...(request.failed === undefined || request.failed.length === 0 ? {} : { failed: [...request.failed] }),
+          stagedAt: host.now().getTime(),
+        };
         try {
-          wakeChild({ id: handoffId, seat: seatName, session: typedSession, cli: configured.cli, line: trigger, dropPath });
+          wakeChild(handoff);
         } catch {
-          // The copy is stored and no child is running: the caller does not type either (its
-          // request was answered), so the message waits for the drop leg behind the typed one.
+          // The copy is stored and no child is running: the reservation goes back so the
+          // message keeps its one wake, and the caller does not type either (its request was
+          // answered), so the message waits for the drop leg behind the typed one.
+          releaseWake(marker);
           return refuseTyped(`${seatName}: the typed wake child could not be asked; nothing was typed here`);
         }
         logLine(input.dir, 'send', request.from, `${seatName}: handed to the daemon for a typed wake (id ${handoffId})`, host.now());
@@ -1039,19 +1107,16 @@ async function hostPaneText(host: DaemonHost, session: string, pane: string): Pr
   return host.native.paneText?.(session, pane) ?? null;
 }
 
+/** The seat's one pane through this daemon's host. The guard itself lives in
+ *  `src/daemon/seat-live.ts`, shared with the wake child so both read the same words; the host
+ *  may answer asynchronously, so its read is awaited once and the shared guard judges it. */
 async function findSeatAgent(
   host: DaemonHost,
   session: string,
   seatName: string,
 ): Promise<{ ok: true; pane: string } | { ok: false; kind: 'unreachable' | 'refused'; reason: string }> {
   const agents = await host.agents(session);
-  if (agents === null) return { ok: false, kind: 'unreachable', reason: `the session "${session}" could not be read` };
-  const named = agents.filter((agent) => agent.name === seatName);
-  if (named.length === 0) return { ok: false, kind: 'unreachable', reason: 'no live agent carries that name in the session' };
-  if (named.length > 1) {
-    return { ok: false, kind: 'refused', reason: `${seatName}: herdr lists more than one agent of this name; nothing was sent` };
-  }
-  return { ok: true, pane: (named[0] as { pane: string }).pane };
+  return findSeatAgentOf(() => agents, session, seatName);
 }
 
 function socketOf(host: DaemonHost, processes: PaneProcesses): string | null {
@@ -1063,20 +1128,9 @@ function socketOf(host: DaemonHost, processes: PaneProcesses): string | null {
   return null;
 }
 
-/**
- * Checks whether the target pane is at a bare shell (`paneHoldsShell`) or its recorded process
- * exited (`seatProcessVerdict === 'gone'`).
- */
-export function isBareShellPane(dir: string, session: string, seatName: string, procs: PaneProcesses | null): boolean {
-  if (!procs) return false;
-  if (paneHoldsShell(procs)) return true;
-  try {
-    const state = readState(dir);
-    const recorded = state.sessions[session]?.seats[seatName]?.launched;
-    if (recorded && seatProcessVerdict(recorded, procs) === 'gone') return true;
-  } catch {}
-  return false;
-}
+/** The bare-shell guard lives in `src/daemon/seat-live.ts`, shared with the wake child. It is
+ *  re-exported here because every existing caller imports it from the send daemon. */
+export { isBareShellPane };
 
 async function acquireSeatLockWithRetry(
   dir: string,

@@ -866,6 +866,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `team.no-command` | `team` | 2 | no command was given | `team` |
 | `team.restore-entry-refused` | `team` | 2 | the machine daemon's restore child was started without a readable one-use token, so it restored nothing | `the daemon starts its restore child entry` |
 | `team.unknown` | `team` | 2 | the command is unknown | `team nosuch` |
+| `team.wake-entry-refused` | `team` | 2 | the send daemon's typed-wake child was started without a readable one-use token, so it typed nothing | `the daemon starts its typed-wake child entry` |
 | `tempo.set` | `tempo` | 0 | the tempo was written | `team tempo urgent` |
 | `tempo.unchanged` | `tempo` | 0 | the tempo was already that word | `team tempo urgent` |
 | `tempo.detached` | `tempo` | 1 | a run with no terminal | `team tempo urgent` |

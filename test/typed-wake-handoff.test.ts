@@ -40,6 +40,7 @@ import {
 } from '../src/send/daemon.ts';
 import { readHistory } from '../src/send/history.ts';
 import type { TypedWakeHost } from '../src/send/typed-wake.ts';
+import { wakeMarkAt, wakePath } from '../src/send/wake-marker.ts';
 import { testIo } from './helpers.ts';
 import { withoutSendId } from './helpers/output.ts';
 
@@ -464,5 +465,78 @@ describe('the daemon’s typed-wake admission', () => {
     expect(res && 'detail' in res ? res.detail : '').toBe('native: the drop file could not be written; nothing was typed');
     expect(wakes).toEqual([]);
     expect(readFileSync(held, 'utf8')).toBe('an earlier holder\n');
+  });
+
+  test('a second request for the same id is coalesced on the marker: one child asked, nothing typed twice', async () => {
+    const world = setupWorld();
+    const host = makeHost(world);
+    const wakes: WakeHandoff[] = [];
+    const started = await startSendDaemon({
+      root: world.root,
+      dir: world.dir,
+      team: world.team,
+      host,
+      wake: (wake) => wakes.push(wake),
+    });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    handles.push(started.handle);
+    const drops = daemonDropDir('acme', world.root, world.home, 'acme', 'native');
+    const request: DaemonSendRequest = {
+      v: 1, op: 'send', id: 'same-id', from: 'owner', to: 'native', body: 'the body', typedWake: { trigger: 'one line' },
+    };
+
+    const first = await requestDaemon(started.handle.socketPath, request);
+    expect(first && 'outcome' in first ? first.outcome : null).toBe('handed');
+    expect(wakes).toHaveLength(1);
+    // The daemon took the reservation beside its staged copy before asking the child.
+    expect(wakeMarkAt(wakePath(drops, 'same-id'))).toEqual({ at: NOW.toISOString(), state: 'reserved' });
+
+    const second = await requestDaemon(started.handle.socketPath, request);
+    // The answer still says the message was handed: the same wake is already under way.
+    expect(second && 'outcome' in second ? second.outcome : null).toBe('handed');
+    expect(second && 'drop_path' in second ? second.drop_path : '').toBe(join(drops, 'same-id'));
+    expect(wakes).toHaveLength(1);
+    expect(recordsIn(drops)).toEqual(['same-id']);
+    expect(readFileSync(wakePath(drops, 'same-id'), 'utf8')).toContain('"state":"reserved"');
+    const log = readFileSync(join(world.dir, 'team.log'), 'utf8');
+    expect(log).toContain('native: handed to the daemon for a typed wake (id same-id)');
+    expect(log).toContain('native: a typed wake for this id is already under way; nothing new was typed (id same-id)');
+  });
+
+  test('a wake child that cannot be started refuses the handoff, gives the reservation back, and the next request wakes', async () => {
+    const world = setupWorld();
+    const host = makeHost(world);
+    const wakes: WakeHandoff[] = [];
+    let attempts = 0;
+    const started = await startSendDaemon({
+      root: world.root,
+      dir: world.dir,
+      team: world.team,
+      host,
+      wake: (wake) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('fixture: no child process');
+        wakes.push(wake);
+      },
+    });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    handles.push(started.handle);
+    const drops = daemonDropDir('acme', world.root, world.home, 'acme', 'native');
+    const request: DaemonSendRequest = {
+      v: 1, op: 'send', id: 'spawn-failed', from: 'owner', to: 'native', body: 'the body', typedWake: { trigger: 'one line' },
+    };
+
+    const refused = await requestDaemon(started.handle.socketPath, request);
+    expect(refused && 'outcome' in refused ? refused.outcome : null).toBe('refused');
+    expect(refused && 'detail' in refused ? refused.detail : '').toBe('native: the typed wake child could not be asked; nothing was typed here');
+    // The staged copy stays for the drop leg; the reservation does not, so the message keeps its
+    // one wake and the next request asks a child again.
+    expect(recordsIn(drops)).toEqual(['spawn-failed']);
+    expect(existsSync(wakePath(drops, 'spawn-failed'))).toBe(false);
+
+    const handed = await requestDaemon(started.handle.socketPath, request);
+    expect(handed && 'outcome' in handed ? handed.outcome : null).toBe('handed');
+    expect(wakes).toHaveLength(1);
+    expect(wakeMarkAt(wakePath(drops, 'spawn-failed'))?.state).toBe('reserved');
   });
 });

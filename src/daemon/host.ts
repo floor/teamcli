@@ -33,6 +33,7 @@ import { eventThresholdsInForce, DAEMON_HEARTBEAT_SECONDS } from '../policy/inde
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { RestoreSweepResult } from '../launch/restore-sweep.ts';
 import { runRestoreSweepInChild } from './restore/spawn.ts';
+import { spawnWakeChild } from './wake/spawn.ts';
 import { pidAlive } from '../state.ts';
 import { probeDaemonSocket, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
 import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot, type DaemonRequest, type DaemonResponse, type DaemonRootHealthSnapshot } from './protocol.ts';
@@ -1257,6 +1258,12 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     const startSend = (): Promise<Awaited<ReturnType<typeof startSendDaemon>>> =>
       (input.sendStart ?? startSendDaemon)({
         root: canonical, dir: canonical, team: loaded.team, host: sendHost,
+        // The machine daemon's typed wake runs in a wake child of its own: the send server
+        // answers `handed` at acceptance and the walk never touches the daemon's loop. A test
+        // that injects its own send host still names its own seam (or none) through `sendStart`.
+        wake: (wake) => {
+          spawnWakeChild({ request: { version: 1, ...wake } });
+        },
         ...(presence === undefined ? {} : {
           presenceStateDir: presence.stateDir,
           presenceChannelHealthy: (seat: string) => seatReady && seatQualified(presence, seat, now()),

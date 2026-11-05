@@ -6023,6 +6023,13 @@
       "trigger": "team nosuch"
     },
     {
+      "code": 2,
+      "command": "team",
+      "id": "team.wake-entry-refused",
+      "meaning": "the send daemon's typed-wake child was started without a readable one-use token, so it typed nothing",
+      "trigger": "the daemon starts its typed-wake child entry"
+    },
+    {
       "code": 0,
       "command": "tempo",
       "id": "tempo.set",
