@@ -180,6 +180,7 @@ describe('the quota model', () => {
               seats: ['scout'],
               seatsOther: 2,
               wallResets: '2h',
+              wall: { resets: '2h', age: '1m' },
             },
           ],
         },
@@ -370,6 +371,26 @@ describe('the live sources', () => {
       '  xai  walled',
       '    xai  walled  resets unknown  seats: scout',
       'advice: swap scout off xai (walled): no other account has headroom',
+    ]);
+  });
+
+  test('a weekly limit message is a wall, and its own reset words reach the row', () => {
+    // Item 8 (the owner's run, 2026-11-05): a GLM seat printed
+    //   Weekly limit reached until 2026-11-08 16:33
+    // in its pane, and `team usage` showed the account as a bare unknown — "weekly limit
+    // reached" is not "usage limit reached", so the owner's wall phrases missed it and a known
+    // limit was thrown away. The phrase is the wall, and the reset it printed rides the row.
+    const target = { seat: 'glm-builder', account: 'zai', cli: 'claude-code' };
+    const wall = statusQuota('claude-code', 'working\n\nWeekly limit reached until 2026-11-08 16:33\n', target, NOW, []);
+    expect(wall).toHaveLength(1);
+    expect(wall[0]).toMatchObject({ wall: true, account: 'zai', resetText: 'at 2026-11-08 16:33', source: 'quota screen' });
+    const quota = quotaOf({ labs: [{ lab: 'zai', accounts: [{ account: 'zai', seats: ['glm-builder'] }] }], observations: wall, accountsFile: '~/.config/team/accounts.yaml', now: NOW });
+    expect(quota.labs[0]?.accounts[0]).toMatchObject({ state: 'walled', wallResets: 'at 2026-11-08 16:33' });
+    expect(quotaText(quota)).toEqual([
+      'quota',
+      '  zai  walled',
+      '    zai  walled  resets at 2026-11-08 16:33  seats: glm-builder',
+      'advice: swap glm-builder off zai (walled): no other account has headroom',
     ]);
   });
 

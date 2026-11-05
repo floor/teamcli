@@ -2689,4 +2689,58 @@ describe('team usage', () => {
     const readable = (await usageAt(root, OWNER)).out.split('\n').find((line) => /^xai\s/.test(line)) ?? '';
     expect(readable).toMatch(/^xai\s+(?:-\s+){6}unknown$/);
   });
+
+  test('a limit a seat’s own screen printed is shown with its reset and the reading time', async () => {
+    // Item 8 (the owner's run, 2026-11-05): a GLM seat's pane said
+    //   Weekly limit reached until 2026-11-08 16:33
+    // and `team usage` printed the account as a bare `unknown` with no reason — a limit the
+    // machine already knew, thrown away. The wall is a reading of that account: the row says
+    // `limit reached` with the reset words the screen printed, and how long ago it read them.
+    const text = teamText().replace(
+      '    anthropic:',
+      '    zai:\n      kind: subscription\n      reserve: 10%\n    anthropic:',
+    ) + `  - role: member
+    name: glm-builder
+    label: glm-builder
+    cli: claude-code
+    vendor: zai
+    model: GLM 5.3
+    version: "5.3"
+    launch: claude-glm.sh
+`;
+    writeFileSync(file, text);
+    approve(text);
+    withoutReadings();
+    const io = testIo(root, OWNER);
+    expect(await runUsage([], io, {
+      home,
+      now: () => NOW,
+      observe: () => ({
+        observations: [{
+          account: 'zai', window: null, left: null, used: null, resetsAt: null, resetText: 'at 2026-11-08 16:33',
+          observedAt: NOW.getTime() - 4 * 60_000, source: 'quota screen' as const, seat: 'glm-builder', margin: null, wall: true,
+        }],
+        costs: [],
+        notes: [],
+      }),
+    })).toBe(0);
+    const row = io.out.split('\n').find((line) => /^zai\s/.test(line)) ?? '';
+    expect(row).toMatch(/\swalled\s+limit reached, resets at 2026-11-08 16:33\s+read 4m ago$/);
+    expect(row).not.toContain('not readable from a CLI screen');
+    // The tree keeps the whole fact: the account's reset beside its state.
+    const tree = testIo(root, OWNER);
+    expect(await runUsage(['--tree'], tree, {
+      home,
+      now: () => NOW,
+      observe: () => ({
+        observations: [{
+          account: 'zai', window: null, left: null, used: null, resetsAt: null, resetText: 'at 2026-11-08 16:33',
+          observedAt: NOW.getTime() - 4 * 60_000, source: 'quota screen' as const, seat: 'glm-builder', margin: null, wall: true,
+        }],
+        costs: [],
+        notes: [],
+      }),
+    })).toBe(0);
+    expect(tree.out).toContain('zai  walled  resets at 2026-11-08 16:33');
+  });
 });

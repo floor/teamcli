@@ -130,6 +130,10 @@ export type ReportQuotaAccount = {
   seatsOther?: number;
   /** A wall screen's reset words, when the wall has no readable figure to carry them. */
   wallResets: string | null;
+  /** The live wall a seat's own screen printed, when this run read one: the reset words it gave
+   *  (null when it named none) and how long ago the screen was read. A wall is a reading of this
+   *  account, so a row with no figure still says when the limit lifts and when it was seen. */
+  wall?: { resets: string | null; age: string };
 };
 
 export type ReportQuotaLab = { lab: string; state: QuotaState; accounts: ReportQuotaAccount[] };
@@ -338,6 +342,7 @@ export function quotaOf(options: QuotaOptions): ReportQuota {
     const accounts: ReportQuotaAccount[] = lab.accounts.map((input) => {
       const key = keyOf(input);
       const wall = walls.get(key) ?? null;
+      const wallResets = wall === null ? null : wall.resetText ?? (wall.resetsAt === null ? null : span(wall.resetsAt - now));
       const windows = windowsOf(byAccount.get(key) ?? [], now);
       return {
         account: input.account,
@@ -347,7 +352,8 @@ export function quotaOf(options: QuotaOptions): ReportQuota {
         windows,
         seats: [...input.seats],
         ...(input.seatsOther !== undefined ? { seatsOther: input.seatsOther } : {}),
-        wallResets: wall === null ? null : wall.resetText ?? (wall.resetsAt === null ? null : span(wall.resetsAt - now)),
+        wallResets,
+        ...(wall === null ? {} : { wall: { resets: wallResets, age: span(now - wall.observedAt) } }),
       };
     });
     return { lab: lab.lab, state: worst(accounts.map((one) => one.state)), accounts };

@@ -176,11 +176,20 @@ export function labeledFigures(row: string | null, target: SeatTarget, now: numb
 }
 
 /** The wall phrases the owner named, for a screen the profiles' rate-limit grammar does not
- *  claim: only the last three visible lines are read, where a wall replaces the prompt. */
+ *  claim: only the last three visible lines are read, where a wall replaces the prompt. A limit
+ *  a seat's own screen prints is the wall — `Weekly limit reached …` (a GLM seat, 2026-11-05) is
+ *  the same fact as `usage limit reached`, and the earlier list missed it because the sentence
+ *  names its window instead of the word `usage`. */
 const WALLS: RegExp[] = [
   /\bquota reached\b/i,
   /\bout of usage\b/i,
   /\busage limit reached\b/i,
+  // A limit sentence that names its own window (`Weekly limit reached until …`, a GLM seat,
+  // 2026-11-05) or spells `reached the … limit` is a wall too; the bare words `limit reached`
+  // alone stay out, since a working screen's prose can carry them.
+  /\b(?:weekly|monthly|daily|session|five[- ]hour)\s+limit\s+reached\b/i,
+  /\blimit\s+reached\s+(?:until|resets?|try again)\b/i,
+  /\b(?:have|has|’ve|ve)\s+reached\s+(?:the|your)\s+(?:(?:weekly|monthly|usage|plan)\s+)?limit\b/i,
   /API Error: Request rejected \((?:429|403)\)/,
 ];
 
@@ -188,8 +197,10 @@ function wallOf(screen: string): { wall: boolean; reset: string | null } {
   const lines = stripSgr(screen).split('\n').filter((line) => line.trim() !== '').slice(-3);
   for (const line of lines) {
     if (!WALLS.some((one) => one.test(line))) continue;
-    // The phrase is the wall, whether or not the line also says when it lifts.
-    const reset = /(?:resets?|resetting|try again)\s+(?:at\s+)?([^\n·]+?)\s*$/i.exec(line);
+    // The phrase is the wall, whether or not the line also says when it lifts. A limit sentence
+    // says when in any of the forms the sources print: `resets at 3pm`, `resets 16:33`,
+    // `try again at 3:05 PM`, or `until 2026-11-08 16:33`.
+    const reset = /(?:resets?|resetting|try again|until)\s+(?:at\s+)?([^\n·]+?)\s*$/i.exec(line);
     return { wall: true, reset: reset?.[1] ?? null };
   }
   return { wall: false, reset: null };

@@ -23,7 +23,7 @@ import { readMachineReadings, type MachineReading } from './machine-readings.ts'
 import { overridesInForceOf, quotaWith, type ProfileOverride } from '../profiles/overrides.ts';
 import { shippedQuotaAccounts } from '../profiles/profile.ts';
 import type { WindowName } from '../profiles/quota.ts';
-import { accountLabel, expiredLabel, marginOf, marginWord, NEAR_CAP, QUOTA_STALE_MS, quotaOf, quotaText, PANE_UNREAD, USAGE_ACCOUNTS, USAGE_UNANSWERED, windowState, type CostObservation, type QuotaLabInput, type QuotaObservation, type QuotaState, type ReportQuota, type ReportQuotaWindow } from './quota.ts';
+import { accountLabel, expiredLabel, marginOf, marginWord, NEAR_CAP, QUOTA_STALE_MS, quotaOf, quotaText, PANE_UNREAD, USAGE_ACCOUNTS, USAGE_UNANSWERED, windowState, type CostObservation, type QuotaLabInput, type QuotaObservation, type QuotaState, type ReportQuota, type ReportQuotaAccount, type ReportQuotaWindow } from './quota.ts';
 import { readState, type State } from '../state.ts';
 import { approvalStanding, readApproval, storesFolder, type ApprovalRecord, type Standing } from '../store/store.ts';
 
@@ -1492,6 +1492,17 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
       if (seat.cli === 'antigravity' || seat.cli === 'agy') for (const account of USAGE_ACCOUNTS) screenReadable.add(account);
     }
   }
+  // The accounts a seat's own screen printed a live limit for: a wall is a reading of the
+  // account however little figure it carries, so the one line that stands for a lab nothing else
+  // answered on must not swallow the rows that would say when the limit lifts (item 8).
+  const liveWalls = new Set<string>();
+  if (live !== null) {
+    for (const one of live.observations) {
+      if (!one.wall || one.account === '') continue;
+      if (one.resetsAt !== null && one.resetsAt <= now) continue;
+      liveWalls.add(`${one.account}\0${one.pool ?? ''}`);
+    }
+  }
 
   const labs: ReportLab[] = [];
   /** The accounts some line of this report carries a figure for: the why-lines print only under
@@ -1533,7 +1544,10 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
     // on: count them, so the one line that stands for the lab says how many instead of the lab
     // printing an `unknown` row that reads as a figure not yet seen.
     const noFigure = accounts.length === 0 || accounts.every((entry) =>
-      entry.machine.state === 'unknown' && entry.kind === 'subscription' && !entry.readable);
+      entry.kind === 'subscription'
+      && entry.machine.state === 'unknown'
+      && !entry.readable
+      && !liveWalls.has(`${entry.account}\0${entry.pool ?? ''}`));
     let seats = 0;
     if (noFigure && others === 0) {
       for (const team of machine.teams) {
@@ -2214,11 +2228,19 @@ function accountCells(entry: ReportAccount, report: UsageReport): string[] {
     return [account, m.window ?? '-', '-', '-', '-', '-', provenanceOf(m, report), source, 'no fresh reading'];
   }
   if (m.state === 'unknown' || m.left === null || m.used === null) {
+    const known = quotaAccountOn(report.quota, entry.account, entry.kind === 'subscription' ? entry.pool : undefined);
+    // A live wall a seat's own screen printed is a reading of this account: the row says when the
+    // limit lifts and when it was seen, in place of dashes with no reason. The account is read,
+    // so the not-readable marker is not this row's fact.
+    if (known?.wall !== undefined) {
+      const resets = known.wall.resets === null ? 'unknown' : known.wall.resets;
+      return [account, m.window ?? '-', '-', '-', '-', '-', '-', '-', `walled  limit reached, resets ${resets}  read ${known.wall.age} ago`];
+    }
     // An account no CLI screen can expose a figure for says so, machine-wide: `unknown` reads as
     // a figure not yet seen, and this account cannot be seen at all. The state word stays one of
     // the block's four — a wall with no figure is `walled` here — and the readability is the
     // marker after it, never the word itself.
-    const state = quotaAccountState(report.quota, entry.account, entry.kind === 'subscription' ? entry.pool : undefined);
+    const state = known?.state ?? 'unknown';
     return [account, m.window ?? '-', '-', '-', '-', '-', '-', '-', `${state}${entry.readable ? '' : '  not readable from a CLI screen'}`];
   }
   // The figure's source is the fact: a surface that printed a percentage and no reset printed
@@ -2283,6 +2305,21 @@ function windowOnRow(
   return null;
 }
 
+/** The quota block's account for one machine row: the same account and pool. Null when the
+ *  block carries no account of that name, so the row's own figure decides. */
+function quotaAccountOn(
+  quota: ReportQuota,
+  account: string,
+  pool: 'gemini' | 'claude-gpt' | undefined,
+): ReportQuotaAccount | null {
+  for (const lab of quota.labs) {
+    for (const entry of lab.accounts) {
+      if (entry.account === account && entry.pool === pool) return entry;
+    }
+  }
+  return null;
+}
+
 /** The account's own state, for a row with no figure at all: a live wall reads `walled` even
  *  with nothing to show beside it, and an account the block does not build reads `unknown`. */
 function quotaAccountState(
@@ -2290,12 +2327,7 @@ function quotaAccountState(
   account: string,
   pool: 'gemini' | 'claude-gpt' | undefined,
 ): QuotaState {
-  for (const lab of quota.labs) {
-    for (const entry of lab.accounts) {
-      if (entry.account === account && entry.pool === pool) return entry.state;
-    }
-  }
-  return 'unknown';
+  return quotaAccountOn(quota, account, pool)?.state ?? 'unknown';
 }
 
 /** How a machine line says where its figure came from: the caller's own reading prints as its own
