@@ -126,7 +126,7 @@ test('no supplied home: the herdr route still reads the machine local-fast recor
   const io = await ioAt(root);
   expect(await runGrant(['lead', '--scope', 'up,down', '--dry-run'], io)).toBe(0);
   expect(io.err).toContain(`this call is ${UNPLACED}; dev mode continues (dev-mode on at machine level)`);
-  expect(logOf(root)).toContain('admitted as orchestrator');
+  expect(logOf(root)).toContain('admitted as lead');
 });
 
 test('no supplied home: the herdr route reads the machine record for delegate and revoke too', async () => {
@@ -152,7 +152,7 @@ test('no supplied home: the herdr route reads a governing team policy', async ()
   const io = await ioAt(root);
   expect(await runGrant(['lead', '--scope', 'up,down', '--dry-run'], io)).toBe(0);
   expect(io.err).toContain('dev mode continues (dev-mode on at team level)');
-  expect(logOf(root)).toContain('admitted as orchestrator');
+  expect(logOf(root)).toContain('admitted as lead');
 });
 
 test('no supplied home: the machine off record keeps the refusal, and the variable cannot revive it', async () => {

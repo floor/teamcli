@@ -657,7 +657,7 @@ describe('the CLI proves the route, the daemon and the watch before one request'
     expect(io.out).toContain('faulted the hosted watch');
     const audit = readFileSync(join(world.root, '.agents', 'team.log'), 'utf8');
     expect(audit).toContain('daemon [orchestrator]');
-    expect(audit).toContain('admitted as orchestrator');
+    expect(audit).toContain('admitted as lead');
     expect(scene.requests).toHaveLength(1);
     expect(scene.targetCount()).toBe(1);
   });

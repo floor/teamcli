@@ -1169,7 +1169,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       const log = readFileSync(join(fx.root, '.agents', 'team.log'), 'utf8');
       expect(log).toContain('policy [lead] level entity (floor) vault-root: unset -> /synthetic/vault (setter: lead, dev mode)');
       expect(log).toContain('policy [lead] level entity (floor) vault-root: /synthetic/vault -> unset (setter: lead, dev mode)');
-      expect(log).toContain('admitted as orchestrator');
+      expect(log).toContain('admitted as lead');
     } finally {
       fx.cleanup();
     }

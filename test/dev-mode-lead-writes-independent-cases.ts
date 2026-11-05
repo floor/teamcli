@@ -156,8 +156,8 @@ for (const op of OPS) for (const mode of ['off', 'legacy', 'machine-on', 'machin
       if (json) expect(JSON.parse(run.io.out).error).toBeUndefined();
       changed(w, op);
       const appended = log(w).slice(previousLog.length);
-      expect(appended).toContain(`${run.command} [captain] ${warning(run.command, w).trim()}; admitted as orchestrator\n`);
-      expect(appended.match(/admitted as orchestrator/g) ?? []).toHaveLength(1);
+      expect(appended).toContain(`${run.command} [captain] ${warning(run.command, w).trim()}; admitted as lead\n`);
+      expect(appended.match(/admitted as lead/g) ?? []).toHaveLength(1);
     }
   });
 }

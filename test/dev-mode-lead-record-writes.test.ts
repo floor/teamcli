@@ -163,7 +163,7 @@ test('config set: the legacy variable admits the placed lead, with the warning a
   expect(ran.code).toBe(0);
   expect(ran.err).toBe(`warning: ${CONFIG_LINE}; dev mode continues\n`);
   expect(teamFile(root)).toContain('inbound: accept');
-  expect(logOf(root)).toContain(`config [lead] warning: ${CONFIG_LINE}; dev mode continues; admitted as orchestrator\n`);
+  expect(logOf(root)).toContain(`config [lead] warning: ${CONFIG_LINE}; dev mode continues; admitted as lead\n`);
 });
 
 test('config set: the machine setting local-fast admits with no variable set', async () => {
@@ -289,7 +289,7 @@ test('settings set: the legacy variable admits the placed lead, with the warning
   expect(ran.code).toBe(0);
   expect(ran.err).toBe(`warning: ${SETTINGS_LINE}; dev mode continues\n`);
   expect(ran.out).toBe('settings: set nickname=Hera at seat (worker)\n');
-  expect(logOf(root)).toContain(`settings [lead] warning: ${SETTINGS_LINE}; dev mode continues; admitted as orchestrator\n`);
+  expect(logOf(root)).toContain(`settings [lead] warning: ${SETTINGS_LINE}; dev mode continues; admitted as lead\n`);
 });
 
 test('settings set: the machine setting local-fast admits with no variable set', async () => {
@@ -376,7 +376,7 @@ test('grant, delegate and revoke: the placed lead is admitted under the variable
     on.env = { TEAMCLI_DEV_MODE: '1' };
     expect(await one.run(on)).toBe(0);
     expect(on.err).toBe(`warning: ${AUTHORITY_LINE}; dev mode continues\n`);
-    expect(logOf(root)).toContain(`${one.command} [lead] warning: ${AUTHORITY_LINE}; dev mode continues; admitted as orchestrator\n`);
+    expect(logOf(root)).toContain(`${one.command} [lead] warning: ${AUTHORITY_LINE}; dev mode continues; admitted as lead\n`);
   }
   expect(teamFile(root)).toContain('grant:');
   expect(teamFile(root)).toContain('delegates:');

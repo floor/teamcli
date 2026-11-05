@@ -6,7 +6,7 @@
 // admission, grant and rules line still keys on the resolved lead seat `leads: true` names
 // (`src/file/sections/lead.ts`).
 //
-// The code term is `lead`. "orchestrator" is display only and no path in this module or
+// The code term is `lead`; `orchestrator` is display only and no path in this module or
 // `src/lead-chain.ts` reads it.
 
 /** The levels that may declare a default lead, widest first: the order the widest word is
