@@ -202,8 +202,13 @@ The live readers are observable only, and none opens a credential, key or CLI se
   and stderr discarded — parsed only in the tab-separated shape a real run produced
   ("Remaining" is the left percentage);
 - quota screens: the profile's own rate-limit classifier first, then the phrases `quota reached`,
-  `out of usage`, `usage limit reached`, and the CLI's 429/403 rejection. A wall is never given an
-  invented percentage; the reset words it printed ride the account's table row.
+  `out of usage`, `usage limit reached`, a limit sentence naming its own window or spelling out
+  reaching the limit (`Weekly limit reached until …`, `you have reached your weekly limit`), and
+  the CLI's 429/403 rejection. The reset may follow `until` as well as `resets`/`try again`. A
+  wall is never given an invented percentage; the reset words it printed ride the account's table
+  row. A live wall keeps the account's rows (`reportOf`), and the row prints
+  `walled  limit reached, resets <time>  read <age> ago`; `quotaOf` carries the same reset and
+  age as `wall`, so the tree's account line and the table agree.
 
 An unreadable pane or an unanswered usage command is one counted note (`1 seat pane could not be
 read`, `a CLI usage command did not answer`) however many seats hit it. The restricted view reads

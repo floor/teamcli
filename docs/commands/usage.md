@@ -223,8 +223,12 @@ carries no figure, reset or pace, and the state is `unknown`; the one advice lin
 window and says that a running seat's status line or the CLI's own usage command reads a fresh one
 on the next run. The account table prints the same words in its `STATE` cell, and `--json` carries
 `expired: true` with the figures nulled. A wall screen — `quota reached`, `out of usage`, `usage
-limit reached`, or the CLI's own rate-limit rejection — prints the account as `walled` with the
-reset words the screen showed.
+limit reached`, a limit sentence that names its own window (`Weekly limit reached until …`), or
+the CLI's own rate-limit rejection — prints the account as `walled` with the reset words the
+screen showed. A wall an account has no figure to carry — the screen that printed the limit is
+the account's only reading — keeps its row instead of the one-line seat summary a lab nothing
+answers on prints, and the `STATE` cell says `walled  limit reached, resets <time>  read <age>
+ago`: the screen's own reset words and when this run read them.
 
 An account's state is `walled` at 100% used or on a live wall, `near cap` when its fresh pace is a
 band of ten points or more behind its clock — the window is on course to empty before it resets —
