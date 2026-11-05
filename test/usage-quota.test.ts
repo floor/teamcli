@@ -123,8 +123,8 @@ describe('the quota model', () => {
               account: 'anthropic',
               state: 'ok',
               windows: [
-                { window: 'session', used: 40, left: 60, resetsAt: '2026-10-17T12:00:00.000Z', resetsIn: '3h', margin: 0, source: 'status line', seat: 'lead', age: '1m', stale: false, wall: false },
-                { window: 'weekly', used: 12, left: 88, resetsAt: '2026-10-22T14:26:00.000Z', resetsIn: '125h26m', margin: 13.3, source: 'status line', seat: 'lead', age: '1m', stale: false, wall: false },
+                { window: 'session', used: 40, left: 60, resetsAt: '2026-10-17T12:00:00.000Z', resetsIn: '3h', margin: 0, source: 'status line', seat: 'lead', age: '1m', stale: false, wall: false, expired: false },
+                { window: 'weekly', used: 12, left: 88, resetsAt: '2026-10-22T14:26:00.000Z', resetsIn: '125h26m', margin: 13.3, source: 'status line', seat: 'lead', age: '1m', stale: false, wall: false, expired: false },
               ],
               seats: ['lead'],
               wallResets: null,
@@ -133,7 +133,7 @@ describe('the quota model', () => {
               account: 'openai',
               state: 'walled',
               windows: [
-                { window: 'weekly', used: 95, left: 5, resetsAt: null, resetsIn: null, margin: null, source: 'machine reading', seat: null, age: '2m', stale: false, wall: false },
+                { window: 'weekly', used: 95, left: 5, resetsAt: null, resetsIn: null, margin: null, source: 'machine reading', seat: null, age: '2m', stale: false, wall: false, expired: false },
               ],
               seats: ['scout'],
               seatsOther: 2,

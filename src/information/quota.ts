@@ -10,15 +10,16 @@
 // A line that prints its margin is believed as printed; one that does not is read the same way,
 // against the window's length. The session window is five hours, the length the sibling CLI's own
 // usage report names (`Five Hour Limit`).
-import { span } from '../budgets/table.ts';
+import { span, WINDOW_MS } from '../budgets/table.ts';
 
 export const QUOTA_WINDOWS = ['session', 'weekly'] as const;
 export type QuotaWindow = (typeof QUOTA_WINDOWS)[number];
 
-/** The window lengths the margin is read against. A status line's own margin wins when printed. */
+/** The window lengths the margin is read against. A status line's own margin wins when printed.
+ *  One source with the budget table's own lengths (`table.ts:WINDOW_MS`), so the two never drift. */
 export const QUOTA_WINDOW_MS: Record<QuotaWindow, number> = {
-  session: 5 * 60 * 60 * 1000,
-  weekly: 7 * 24 * 60 * 60 * 1000,
+  session: WINDOW_MS.session,
+  weekly: WINDOW_MS.weekly,
 };
 
 /** A figure older than this describes a window that may have moved on, like a machine reading. */
@@ -105,6 +106,9 @@ export type ReportQuotaWindow = {
   age: string;
   /** The reading is older than five minutes or names a reset that has passed. */
   stale: boolean;
+  /** The reading is older than its own window: it describes a passed window instance, so the
+   *  figure is not shown (`used`/`left`/`resetsIn`/`margin` are null) and the line says so. */
+  expired: boolean;
   wall: boolean;
 };
 
@@ -146,6 +150,9 @@ export type QuotaOptions = {
   observations: readonly QuotaObservation[];
   accountsFile: string;
   now: number;
+  /** Windows the report already knows are past their own window (`account (window)`), read from
+   *  the budget rows: the advice names them even when no observation reached this block. */
+  expired?: readonly string[];
 };
 
 function keyOf(one: { account: string; pool?: 'gemini' | 'claude-gpt' }): string {
@@ -191,17 +198,21 @@ function windowsOf(list: readonly QuotaObservation[], now: number): ReportQuotaW
   return QUOTA_WINDOWS.filter((window) => newest.has(window)).map((window) => {
     const one = newest.get(window) as QuotaObservation;
     const stale = isStale(one, now);
+    // Older than the window itself: the window has reset since, so the figure and its reset
+    // belong to a passed instance. The age and source still say what was read and when.
+    const expired = now - one.observedAt >= WINDOW_MS[window];
     return {
       window,
-      used: one.used,
-      left: one.left,
-      resetsAt: one.resetsAt === null ? null : new Date(one.resetsAt).toISOString(),
-      resetsIn: one.resetsAt === null ? one.resetText : span(one.resetsAt - now),
-      margin: stale ? null : marginOf(one, now),
+      used: expired ? null : one.used,
+      left: expired ? null : one.left,
+      resetsAt: expired || one.resetsAt === null ? null : new Date(one.resetsAt).toISOString(),
+      resetsIn: expired ? null : one.resetsAt === null ? one.resetText : span(one.resetsAt - now),
+      margin: expired || stale ? null : marginOf(one, now),
       source: one.source,
       seat: one.seat,
       age: span(now - one.observedAt),
       stale,
+      expired,
       wall: false,
     };
   });
@@ -285,7 +296,22 @@ export function quotaOf(options: QuotaOptions): ReportQuota {
     return { lab: lab.lab, state: worst(accounts.map((one) => one.state)), accounts };
   });
 
-  return { format: 1, accountsFile, labs: built, advice: adviceOf(built) };
+  // The windows whose reading is older than its own window, by the two paths that know one: the
+  // budget rows the report carries (`options.expired`, named by `reportOf`) and this block's own
+  // observations. One label per window, the block's spelling.
+  const expired = [...new Set([
+    ...(options.expired ?? []),
+    ...built.flatMap((lab) => lab.accounts.flatMap((account) =>
+      account.windows.filter((one) => one.expired).map((one) => expiredLabel(account, lab.lab, one.window)))),
+  ])];
+  return { format: 1, accountsFile, labs: built, advice: adviceOf(built, expired) };
+}
+
+/** One expired window's label for the advice line: the block's own spelling of an account under
+ *  its lab (`named`), with the window. Exported so the report names a budget row's expired window
+ *  exactly as the block names its own, and one window never reads as two. */
+export function expiredLabel(one: { account: string; pool?: 'gemini' | 'claude-gpt' }, lab: string, window: string): string {
+  return `${named(one, lab)} (${window})`;
 }
 
 /** Every account the advice may speak about, with the lab it sits under. */
@@ -301,14 +327,19 @@ function accountsOf(labs: readonly ReportQuotaLab[]): Array<{ lab: string; accou
  * The one advice line the owner asked for: the labs (really their accounts) with headroom, or the
  * walled seats and where to move them. One line always, in both views, built only from what the
  * block already shows. A walled account with seats is offered the best-ordered healthy target; a
- * machine with walls and no headroom says so instead of inventing a destination.
+ * machine with walls and no headroom says so instead of inventing a destination. A window whose
+ * reading is older than its own window is named with how to read a fresh one — the figure it
+ * carried is not advice about the present.
  */
-export function adviceOf(labs: readonly ReportQuotaLab[]): string {
+export function adviceOf(labs: readonly ReportQuotaLab[], expired: readonly string[] = []): string {
   const all = accountsOf(labs);
   // Any window at all, stale ones included: "no readings yet" is for a machine nothing answered
   // on, and a stale figure is an answer whose clock has moved on — the headroom sentence is the
   // true one there.
   const withFigures = all.filter((one) => one.account.windows.length > 0);
+  const noFresh = expired.length === 0
+    ? null
+    : `no fresh reading on ${expired.slice(0, 2).join(', ')}${expired.length > 2 ? ` and ${expired.length - 2} more` : ''}: a running seat's status line or the CLI's own usage command reads one on the next run`;
   if (all.length === 0) return 'no lab is declared on this machine: declare an account first';
   const targets = all
     .filter((one) => one.account.state === 'ok' && one.margin !== null && one.margin >= HEADROOM)
@@ -326,6 +357,7 @@ export function adviceOf(labs: readonly ReportQuotaLab[]): string {
     if (one.margin !== null) parts.push(`margin ${signed(one.margin)}%`);
     return `${named(one.account, one.lab)} (${figure?.window ?? 'weekly'} ${parts.join(', ')})`;
   };
+  const withNote = (line: string): string => (noFresh === null ? line : `${line}; ${noFresh}`);
   if (walled.length > 0) {
     const moves: string[] = [];
     for (const one of walled.slice(0, 2)) {
@@ -335,17 +367,18 @@ export function adviceOf(labs: readonly ReportQuotaLab[]): string {
         ? `swap ${who} off ${named(one.account, one.lab)} (walled): no other account has headroom`
         : `swap ${who} off ${named(one.account, one.lab)} (walled) to ${describe(target)}`);
     }
-    return moves.join('; ');
+    return withNote(moves.join('; '));
   }
   // An account near its cap is named before any headroom: the owner's one line must say what is
   // about to run out, and where the spare capacity is when there is one.
   if (near.length > 0) {
     const warn = `near cap on ${near.slice(0, 2).map((one) => describe(one)).join('; ')}`;
-    return targets.length > 0 ? `${warn}; headroom on ${targets.slice(0, 2).map((one) => describe(one)).join('; ')}` : warn;
+    return withNote(targets.length > 0 ? `${warn}; headroom on ${targets.slice(0, 2).map((one) => describe(one)).join('; ')}` : warn);
   }
   if (targets.length > 0) {
-    return `headroom on ${targets.slice(0, 2).map((one) => describe(one)).join('; ')}`;
+    return withNote(`headroom on ${targets.slice(0, 2).map((one) => describe(one)).join('; ')}`);
   }
+  if (noFresh !== null) return noFresh;
   if (withFigures.length > 0) return `no account has headroom yet (no fresh margin at or above ${signed(HEADROOM)}%)`;
   return 'no readings yet: no seat status line and no CLI usage command has answered';
 }
@@ -368,6 +401,9 @@ function windowText(one: ReportQuotaWindow): string {
   const reset = one.resetsIn === null ? 'resets unknown' : `resets in ${one.resetsIn}`;
   const from = `(${one.source}, read ${one.age} ago)`;
   if (one.wall) return `${one.window}  walled  ${reset}  ${from}`;
+  // A reading older than its own window is of a passed instance: the words, the age and the
+  // source are the line; the figure and its reset are not the current window's.
+  if (one.expired) return `${one.window}  no fresh reading  ${from}`;
   const stale = one.stale ? '  stale' : '';
   return `${one.window}  used ${one.used}%  left ${one.left}%  ${reset}  ${marginWord(one.margin)}  ${from}${stale}`;
 }

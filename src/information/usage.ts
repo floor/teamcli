@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { budgetsInForceOf, notInForce, watchInForceOf } from '../approve/approval.ts';
 import { describe } from '../approve/fingerprint.ts';
 import { checkOf, countedFor, paceFrom, recall, recallSpend, screenOf, type ReadingSource, type Seen, type SpendReading } from '../budgets/readings.ts';
-import { budgetTable, budgetLine, reserveOf, sourcesOf, span, whenWord, WINDOWS, type BudgetRow, type BudgetState } from '../budgets/table.ts';
+import { budgetTable, budgetLine, reserveOf, sourcesOf, span, whenWord, WINDOWS, WINDOW_MS, type BudgetRow, type BudgetState } from '../budgets/table.ts';
 import { money } from '../budgets/gate.ts';
 import { walkCaller } from '../caller.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -22,7 +22,7 @@ import { readMachineReadings, type MachineReading } from './machine-readings.ts'
 import { overridesInForceOf, quotaWith, type ProfileOverride } from '../profiles/overrides.ts';
 import { shippedQuotaAccounts } from '../profiles/profile.ts';
 import type { WindowName } from '../profiles/quota.ts';
-import { marginOf, marginWord, NEAR_CAP, QUOTA_STALE_MS, quotaOf, quotaText, PANE_UNREAD, USAGE_ACCOUNTS, USAGE_UNANSWERED, windowState, type CostObservation, type QuotaLabInput, type QuotaObservation, type QuotaState, type ReportQuota } from './quota.ts';
+import { expiredLabel, marginOf, marginWord, NEAR_CAP, QUOTA_STALE_MS, quotaOf, quotaText, PANE_UNREAD, USAGE_ACCOUNTS, USAGE_UNANSWERED, windowState, type CostObservation, type QuotaLabInput, type QuotaObservation, type QuotaState, type ReportQuota } from './quota.ts';
 import { readState, type State } from '../state.ts';
 import { approvalStanding, readApproval, storesFolder, type ApprovalRecord, type Standing } from '../store/store.ts';
 
@@ -913,6 +913,9 @@ export type ReportMachine = {
   state: BudgetState;
   inside: boolean;
   reserve: number | null;
+  /** The newest counted reading is older than its own window: the line shows no figure, its age
+   *  and source still print, and the state cell says `no fresh reading`. */
+  expired: boolean;
   /** The pace the newest reading's figure is being used at (§ 3-S3): null when there is none to
    *  read, and null in the restricted view when the newest reading is another team's — that pace
    *  is that team's figure, withheld. The renderer omits the element on that line rather than
@@ -957,6 +960,9 @@ export type ReportRow = {
   state: BudgetState;
   inside: boolean;
   reserve: number | null;
+  /** The counted reading is older than its own window: its figures belong to a passed window
+   *  instance, so `left`/`used`/`resetsIn` are null and the line says `no fresh reading`. */
+  expired: boolean;
   /** The pace the row's figure is being used at (§ 3-S3): null when there is none to read. */
   pace: number | null;
 };
@@ -1020,6 +1026,9 @@ export type ReportSeatWindow = {
   readAt: string | null;
   age: string;
   stale: boolean;
+  /** The record is older than its own window: no figure and no reset prints, only the age and
+   *  the source, with the words `no fresh reading`. */
+  expired: boolean;
 };
 
 /** A seat's spend in money, per run. `source` carries the session registry's own two words
@@ -1293,10 +1302,16 @@ function synthesizeAccounts(
       if (known === undefined || one.observedAt > known.observedAt) newest.set(one.window, one);
     }
     for (const one of newest.values()) {
+      // The map holds only observations whose window is known: the loop above skipped the rest.
+      const window = one.window;
+      if (window === null) continue;
       const source = one.source === 'status line' ? 'status_line' as const
         : one.source === 'cli usage' ? 'cli_usage' as const
           : one.source === 'machine reading' ? 'machine_reading' as const : null;
       const fresh = now - one.observedAt < QUOTA_STALE_MS && (one.resetsAt === null || one.resetsAt > now);
+      // A row synthesized from a reading is bound by the same rule as a budget row: an observation
+      // older than its own window is of a passed instance and carries no figure.
+      const expired = now - one.observedAt >= WINDOW_MS[window];
       lab.accounts.push({
         account: info.lab,
         kind: 'subscription',
@@ -1305,9 +1320,9 @@ function synthesizeAccounts(
         teams: [],
         machine: {
           window: one.window,
-          left: one.left,
-          used: one.used,
-          resetsIn: one.resetsAt === null ? one.resetText : span(Math.max(0, one.resetsAt - now)),
+          left: expired ? null : one.left,
+          used: expired ? null : one.used,
+          resetsIn: expired || one.resetsAt === null ? null : span(Math.max(0, one.resetsAt - now)),
           changedAt: new Date(one.observedAt).toISOString(),
           observedAt: new Date(one.observedAt).toISOString(),
           age: span(Math.max(0, now - one.observedAt)),
@@ -1316,6 +1331,7 @@ function synthesizeAccounts(
           state: fresh ? 'fresh' : 'stale',
           inside: false,
           reserve: null,
+          expired,
           pace: null,
           other: false,
           seat: one.seat,
@@ -1359,6 +1375,7 @@ function synthesizeAccounts(
         state: 'unknown',
         inside: false,
         reserve: null,
+        expired: false,
         pace: null,
         other: false,
         seat: null,
@@ -1472,15 +1489,20 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
       && Date.parse(previous.machine.changedAt) > reading.observedAt) continue;
     lab.accounts = lab.accounts.filter((entry) => entry.account !== reading.account || entry.kind !== 'subscription'
       || (entry.machine.window !== null && (entry.machine.window !== reading.window || entry.pool !== reading.pool)));
+    // A stored figure older than its own window describes a window instance that passed: the row
+    // keeps the age and the source, withholds the percentage and the reset, and says so.
+    const expired = now - reading.observedAt >= WINDOW_MS[reading.window];
     lab.accounts.push({ account: reading.account, kind: 'subscription', readable: true,
       ...(reading.pool ? { pool: reading.pool } : {}), teams: previous?.kind === 'subscription' ? previous.teams : [],
-      machine: { window: reading.window, left: reading.left, used: reading.used,
-        resetsIn: reading.resetsAt === null ? null : span(Math.max(0, reading.resetsAt - now)),
+      machine: { window: reading.window,
+        left: expired ? null : reading.left,
+        used: expired ? null : reading.used,
+        resetsIn: expired || reading.resetsAt === null ? null : span(Math.max(0, reading.resetsAt - now)),
         changedAt: new Date(reading.observedAt).toISOString(), observedAt: new Date(reading.observedAt).toISOString(),
         age: span(Math.max(0, now - reading.observedAt)),
         source: 'status_line', fallback: false, state: now - reading.observedAt < 300000
           && (reading.resetsAt === null || reading.resetsAt > now) ? 'fresh' : 'stale',
-        inside: false, reserve: null, pace: null, other: false, seat: null } });
+        inside: false, reserve: null, expired, pace: null, other: false, seat: null } });
     lab.accounts.sort(byLine);
     withFigure.add(reading.account);
   }
@@ -1544,7 +1566,14 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
     }
     return { lab: lab.lab, accounts };
   });
-  const quota = quotaOf({ labs: quotaLabs, observations: synthesized.observations, accountsFile: ACCOUNTS_FILE, now });
+  // The windows whose budget row is older than its own window, in the block's spelling: a team's
+  // stored reading may never reach the block (the block reads the machine's own store and this
+  // run's live sources), and the advice must still name it with how to read a fresh one.
+  const expired = [...new Set(labs.flatMap((lab) => lab.accounts.flatMap((entry) =>
+    entry.kind === 'subscription' && entry.machine.expired && entry.machine.window !== null
+      ? [expiredLabel(entry, lab.lab, entry.machine.window)]
+      : [])))];
+  const quota = quotaOf({ labs: quotaLabs, observations: synthesized.observations, accountsFile: ACCOUNTS_FILE, now, ...(expired.length > 0 ? { expired } : {}) });
 
   // Every why-line, the caller's own first, then by the words and the account: the order holds
   // in both views, so hiding a name cannot reshuffle the lines around it.
@@ -1728,20 +1757,23 @@ function seatWindowsOf(seat: string, measured: readonly QuotaObservation[], stor
     if (one.window === null) continue;
     const window = one.window;
     const stale = now - one.observedAt > QUOTA_STALE_MS || (one.resetsAt !== null && one.resetsAt <= now);
+    // Older than the window itself: the figure and its reset describe an instance that passed.
+    const expired = now - one.observedAt >= WINDOW_MS[window];
     const key = `${one.account}\0${window}`;
     const candidate: ReportSeatWindow = {
       window,
       account: one.account,
-      left: one.left,
-      used: one.used,
-      resetsAt: one.resetsAt === null ? null : new Date(one.resetsAt).toISOString(),
-      resetsIn: one.resetsAt === null ? one.resetText : span(one.resetsAt - now),
-      margin: stale ? null : marginOf(one, now),
+      left: expired ? null : one.left,
+      used: expired ? null : one.used,
+      resetsAt: expired || one.resetsAt === null ? null : new Date(one.resetsAt).toISOString(),
+      resetsIn: expired || one.resetsAt === null ? null : span(one.resetsAt - now),
+      margin: expired || stale ? null : marginOf(one, now),
       mark: 'measured',
       source: one.source,
       readAt: new Date(one.observedAt).toISOString(),
       age: span(now - one.observedAt),
       stale,
+      expired,
     };
     const known = windows.get(key);
     if (known === undefined || (known.readAt ?? '') < (candidate.readAt ?? '')) windows.set(key, candidate);
@@ -1753,14 +1785,15 @@ function seatWindowsOf(seat: string, measured: readonly QuotaObservation[], stor
     if (windows.has(key)) continue;
     const resetsAt = one.resetsAt;
     const stale = now - one.changedAt > QUOTA_STALE_MS || (resetsAt !== null && resetsAt <= now);
+    const expired = now - one.changedAt >= WINDOW_MS[one.window];
     windows.set(key, {
       window: one.window,
       account: one.account,
-      left: one.left,
-      used: one.used,
-      resetsAt: resetsAt === null ? null : new Date(resetsAt).toISOString(),
-      resetsIn: resetsAt === null ? null : span(resetsAt - now),
-      margin: stale || (one.window !== 'session' && one.window !== 'weekly') ? null : marginOf({ used: one.used, window: one.window, resetsAt, margin: null }, now),
+      left: expired ? null : one.left,
+      used: expired ? null : one.used,
+      resetsAt: expired || resetsAt === null ? null : new Date(resetsAt).toISOString(),
+      resetsIn: expired || resetsAt === null ? null : span(resetsAt - now),
+      margin: expired || stale || (one.window !== 'session' && one.window !== 'weekly') ? null : marginOf({ used: one.used, window: one.window, resetsAt, margin: null }, now),
       mark: 'estimated',
       // Not the word `watch`: the watch clause is the machine line's own, and a seat figure
       // read from the project state must not read as one.
@@ -1768,6 +1801,7 @@ function seatWindowsOf(seat: string, measured: readonly QuotaObservation[], stor
       readAt: new Date(one.changedAt).toISOString(),
       age: span(now - one.changedAt),
       stale,
+      expired,
     });
   }
   // The account first, the table's window order inside it: the same order the machine lines
@@ -1803,11 +1837,12 @@ function subscriptionEntryOf(
 ): ReportAccount {
   const newest = line.newest;
   const other = newest !== null && newest.team !== mineEntry;
+  const expired = newest?.row.expired ?? false;
   const machine: ReportMachine = {
     window: line.window,
-    left: newest?.row.left ?? null,
-    used: newest?.row.used ?? null,
-    resetsIn: newest?.row.resetsIn ?? null,
+    left: expired ? null : newest?.row.left ?? null,
+    used: expired ? null : newest?.row.used ?? null,
+    resetsIn: expired ? null : newest?.row.resetsIn ?? null,
     changedAt: newest === null ? null : new Date(newest.changedAt).toISOString(),
     age: newest?.row.age ?? null,
     source: newest?.row.source ?? null,
@@ -1815,6 +1850,7 @@ function subscriptionEntryOf(
     state: newest?.row.state ?? 'unknown',
     inside: newest?.row.inside ?? false,
     reserve: newest?.row.reserve ?? null,
+    expired,
     pace: other && !view.full ? null : newest?.pace ?? null,
     other,
     ...(newest !== null && newest.team.usage.watch !== 'recording' ? { watch: newest.team.usage.watch } : {}),
@@ -1844,9 +1880,11 @@ function reportRowOf(row: BudgetRow, pace: number | null): ReportRow {
   return {
     account: row.account,
     window: row.window,
-    left: row.left,
-    used: row.used,
-    resetsIn: row.resetsIn,
+    // A figure older than its own window is not the current window's: both faces withhold it,
+    // and `expired` says why the cells are empty.
+    left: row.expired ? null : row.left,
+    used: row.expired ? null : row.used,
+    resetsIn: row.expired ? null : row.resetsIn,
     seat: row.seat,
     age: row.age,
     source: row.source,
@@ -1854,6 +1892,7 @@ function reportRowOf(row: BudgetRow, pace: number | null): ReportRow {
     state: row.state,
     inside: row.inside,
     reserve: row.reserve,
+    expired: row.expired,
     pace,
   };
 }
@@ -2006,6 +2045,10 @@ function seatFiguresText(block: ReportTeamBlock): string[] {
   for (const seat of block.seats) {
     if (seat.windows.length === 0) lines.push(`  ${seat.seat}  ${seat.cli}  ${seat.account}  unknown  no reading for this seat`);
     for (const one of seat.windows) {
+      if (one.expired) {
+        lines.push(`  ${seat.seat}  ${seat.cli}  ${one.account}  ${one.window}  no fresh reading  ${one.mark}  ${one.source}  read ${one.age} ago`);
+        continue;
+      }
       const left = one.left === null ? 'left unknown' : `left ${one.left}%`;
       const used = one.used === null ? 'used unknown' : `used ${one.used}%`;
       const reset = one.resetsIn === null ? 'resets unknown' : `resets in ${one.resetsIn}`;
@@ -2050,6 +2093,13 @@ function accountCells(entry: ReportAccount, report: UsageReport): string[] {
     return [account, 'spend', `${money(m.amount)} ${m.currency}`, '-', '-', '-', read, 'check', m.state];
   }
   const m = entry.machine;
+  const source = sourceWordOf(m);
+  if (m.expired) {
+    // The figure belongs to a window instance that passed: the cells carry no percentage or
+    // reset, the provenance and the source still say what was read and when, and the state cell
+    // says why nothing else is there.
+    return [account, m.window ?? '-', '-', '-', '-', '-', provenanceOf(m, report), source, 'no fresh reading'];
+  }
   if (m.state === 'unknown' || m.left === null || m.used === null) {
     // An account no CLI screen can expose a figure for says so, machine-wide: `unknown` reads as
     // a figure not yet seen, and this account cannot be seen at all. The state word stays one of
@@ -2059,11 +2109,6 @@ function accountCells(entry: ReportAccount, report: UsageReport): string[] {
     return [account, m.window ?? '-', '-', '-', '-', '-', '-', '-', `${state}${entry.readable ? '' : '  not readable from a CLI screen'}`];
   }
   const reset = m.resetsIn === null ? 'unknown' : `in ${m.resetsIn}`;
-  const from = m.source === 'status_line' ? 'status line'
-    : m.source === 'check' ? 'check'
-      : m.source === 'cli_usage' ? 'cli usage'
-        : m.source === 'machine_reading' ? 'machine reading' : 'unknown source';
-  const source = m.fallback ? `${from} (fallback)` : from;
   const reserve = m.inside && m.reserve !== null ? `inside reserve ${m.reserve}%` : '-';
   // The pace where one is known; where it is not, the margin the tree reads for the same row —
   // one report, two faces, and the table never says `pace not known` beside a margin the other
@@ -2078,6 +2123,16 @@ function accountCells(entry: ReportAccount, report: UsageReport): string[] {
   const stale = m.state === 'stale' ? '  stale' : '';
   const cell = `${state}  ${pace}${stale}${watchOf(m, report)}`.trimEnd();
   return [account, m.window ?? '-', `${m.left}%`, `${m.used}%`, reset, reserve, provenanceOf(m, report), source, cell];
+}
+
+/** The SOURCE cell: where the machine line's figure was read, with the fallback clause the
+ *  budget rows carry. One spelling for the fresh and the expired line alike. */
+function sourceWordOf(m: ReportMachine): string {
+  const from = m.source === 'status_line' ? 'status line'
+    : m.source === 'check' ? 'check'
+      : m.source === 'cli_usage' ? 'cli usage'
+        : m.source === 'machine_reading' ? 'machine reading' : 'unknown source';
+  return m.fallback ? `${from} (fallback)` : from;
 }
 
 /** The state a row's own figure reads, when the quota block carries no window for it: fresh at

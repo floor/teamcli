@@ -21,6 +21,7 @@ import { runStatus } from '../src/commands/status.ts';
 import { NO_PROJECT, runUsage, USAGE } from '../src/commands/usage.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { machineAccountsPath } from '../src/information/machine-accounts.ts';
+import { machineReadingsPath } from '../src/information/machine-readings.ts';
 import {
   machineUsage,
   NOT_VERIFIED,
@@ -144,7 +145,7 @@ function synthesized(lab: string, readable: boolean): Record<string, unknown> {
     machine: {
       window: null, left: null, used: null, resetsIn: null, changedAt: null, age: null,
       source: null, fallback: false, state: 'unknown', inside: false, reserve: null,
-      pace: null, other: false, seat: null,
+      expired: false, pace: null, other: false, seat: null,
     },
   };
 }
@@ -485,8 +486,8 @@ describe('team usage', () => {
               account: 'anthropic',
               kind: 'subscription',
               readable: true,
-              machine: { window: null, left: null, used: null, resetsIn: null, changedAt: null, age: null, source: null, fallback: false, state: 'unknown', inside: false, reserve: null, pace: null, other: false },
-              teams: [{ team: 'acme', row: { account: 'anthropic', window: null, left: null, used: null, resetsIn: null, seat: null, age: null, source: null, fallback: false, state: 'unknown', inside: false, reserve: 10, pace: null } }],
+              machine: { window: null, left: null, used: null, resetsIn: null, changedAt: null, age: null, source: null, fallback: false, state: 'unknown', inside: false, reserve: null, expired: false, pace: null, other: false },
+              teams: [{ team: 'acme', row: { account: 'anthropic', window: null, left: null, used: null, resetsIn: null, seat: null, age: null, source: null, fallback: false, state: 'unknown', inside: false, reserve: 10, expired: false, pace: null } }],
             },
           ],
         },
@@ -497,22 +498,22 @@ describe('team usage', () => {
               account: 'openai',
               kind: 'subscription',
               readable: true,
-              machine: { window: 'session', left: 40, used: 60, resetsIn: '44m', changedAt: '2026-10-04T08:58:00.000Z', age: '2m', source: 'check', fallback: false, state: 'fresh', inside: false, reserve: 20, pace: null, other: false, watch: 'not-recording', seat: null },
-              teams: [{ team: 'acme', row: { account: 'openai', window: 'session', left: 40, used: 60, resetsIn: '44m', seat: null, age: '2m', source: 'check', fallback: false, state: 'fresh', inside: false, reserve: 20, pace: null } }],
+              machine: { window: 'session', left: 40, used: 60, resetsIn: '44m', changedAt: '2026-10-04T08:58:00.000Z', age: '2m', source: 'check', fallback: false, state: 'fresh', inside: false, reserve: 20, expired: false, pace: null, other: false, watch: 'not-recording', seat: null },
+              teams: [{ team: 'acme', row: { account: 'openai', window: 'session', left: 40, used: 60, resetsIn: '44m', seat: null, age: '2m', source: 'check', fallback: false, state: 'fresh', inside: false, reserve: 20, expired: false, pace: null } }],
             },
             {
               account: 'openai',
               kind: 'subscription',
               readable: true,
-              machine: { window: 'daily', left: 70, used: 30, resetsIn: null, changedAt: '2026-10-04T08:20:00.000Z', age: '40m', source: 'status_line', fallback: true, state: 'stale', inside: false, reserve: 20, pace: null, other: false, watch: 'not-recording', seat: 'lead' },
-              teams: [{ team: 'acme', row: { account: 'openai', window: 'daily', left: 70, used: 30, resetsIn: null, seat: 'lead', age: '40m', source: 'status_line', fallback: true, state: 'stale', inside: false, reserve: 20, pace: null } }],
+              machine: { window: 'daily', left: 70, used: 30, resetsIn: null, changedAt: '2026-10-04T08:20:00.000Z', age: '40m', source: 'status_line', fallback: true, state: 'stale', inside: false, reserve: 20, expired: false, pace: null, other: false, watch: 'not-recording', seat: 'lead' },
+              teams: [{ team: 'acme', row: { account: 'openai', window: 'daily', left: 70, used: 30, resetsIn: null, seat: 'lead', age: '40m', source: 'status_line', fallback: true, state: 'stale', inside: false, reserve: 20, expired: false, pace: null } }],
             },
             {
               account: 'openai',
               kind: 'subscription',
               readable: true,
-              machine: { window: 'weekly', left: 5, used: 95, resetsIn: '44m', changedAt: '2026-10-04T08:58:00.000Z', age: '2m', source: 'status_line', fallback: true, state: 'fresh', inside: true, reserve: 20, pace: 5.3, other: false, watch: 'not-recording', seat: 'lead' },
-              teams: [{ team: 'acme', row: { account: 'openai', window: 'weekly', left: 5, used: 95, resetsIn: '44m', seat: 'lead', age: '2m', source: 'status_line', fallback: true, state: 'fresh', inside: true, reserve: 20, pace: 5.3 } }],
+              machine: { window: 'weekly', left: 5, used: 95, resetsIn: '44m', changedAt: '2026-10-04T08:58:00.000Z', age: '2m', source: 'status_line', fallback: true, state: 'fresh', inside: true, reserve: 20, expired: false, pace: 5.3, other: false, watch: 'not-recording', seat: 'lead' },
+              teams: [{ team: 'acme', row: { account: 'openai', window: 'weekly', left: 5, used: 95, resetsIn: '44m', seat: 'lead', age: '2m', source: 'status_line', fallback: true, state: 'fresh', inside: true, reserve: 20, expired: false, pace: 5.3 } }],
             },
           ],
         },
@@ -552,12 +553,12 @@ describe('team usage', () => {
             {
               window: 'daily', account: 'openai', left: 70, used: 30, resetsAt: null, resetsIn: null,
               margin: null, mark: 'estimated', source: 'state record', readAt: '2026-10-04T08:20:00.000Z',
-              age: '40m', stale: true,
+              age: '40m', stale: true, expired: false,
             },
             {
               window: 'weekly', account: 'openai', left: 5, used: 95, resetsAt: '2026-10-04T09:44:00.000Z',
               resetsIn: '44m', margin: 4.6, mark: 'estimated', source: 'state record',
-              readAt: '2026-10-04T08:58:00.000Z', age: '2m', stale: false,
+              readAt: '2026-10-04T08:58:00.000Z', age: '2m', stale: false, expired: false,
             },
           ],
           cost: { amount: null, currency: 'USD', source: 'unknown', why: "no money cost was read from this seat's screen this run" },
@@ -632,14 +633,14 @@ describe('team usage', () => {
     const accountEntries = report.labs.flatMap((lab) => lab.accounts);
     for (const entry of accountEntries) {
       if (entry.kind !== 'subscription') continue;
-      expect(Object.keys(entry.machine).slice(0, 13)).toEqual(['window', 'left', 'used', 'resetsIn', 'changedAt', 'age', 'source', 'fallback', 'state', 'inside', 'reserve', 'pace', 'other']);
+      expect(Object.keys(entry.machine).slice(0, 14)).toEqual(['window', 'left', 'used', 'resetsIn', 'changedAt', 'age', 'source', 'fallback', 'state', 'inside', 'reserve', 'expired', 'pace', 'other']);
     }
     const teamRows = report.labs.flatMap((lab) => lab.accounts.flatMap((entry) => (entry.kind === 'subscription' ? entry.teams : [])));
     const spendRows = report.labs.flatMap((lab) => lab.accounts.flatMap((entry) => (entry.kind === 'spend' ? entry.teams : [])));
     expect(teamRows.length).toBeGreaterThan(0);
     expect(spendRows.length).toBeGreaterThan(0);
     for (const row of teamRows) {
-      expect(Object.keys(row.row)).toEqual(['account', 'window', 'left', 'used', 'resetsIn', 'seat', 'age', 'source', 'fallback', 'state', 'inside', 'reserve', 'pace']);
+      expect(Object.keys(row.row)).toEqual(['account', 'window', 'left', 'used', 'resetsIn', 'seat', 'age', 'source', 'fallback', 'state', 'inside', 'reserve', 'expired', 'pace']);
     }
     for (const row of spendRows) {
       expect(Object.keys(row.reading)).toEqual(['amount', 'currency', 'at', 'age', 'source', 'state']);
@@ -2414,6 +2415,40 @@ describe('team usage', () => {
     expect(out.out).not.toContain('no figures (the file could not be read)');
     expect(out.out).toContain('  openai  acme  weekly  left 5%');
     expect(out.out).toContain('usage on this machine, 1 team, 2 labs, 2 accounts');
+  });
+
+  test('a reading older than its own window shows no figure: the age and source print, and the advice says how to read a fresh one', async () => {
+    // Item 3: the owner's own row carried `100%` left and `in 0m`, read a day and more ago — a
+    // window instance that passed long before the report ran, printed as if it were the current
+    // one. The age and the source are the facts and print; the percentage and the reset belong to
+    // a window that has reset, so neither face shows them, and the advice says what would.
+    withoutReadings();
+    withState();
+    mkdirSync(join(home, '.config', 'team', 'usage'), { recursive: true });
+    writeFileSync(machineReadingsPath(home), `${JSON.stringify([{
+      account: 'anthropic', window: 'session', left: 100, used: 0,
+      observedAt: NOW.getTime() - (97 * 60 + 35) * 60_000, resetsAt: NOW.getTime() + 30_000,
+    }])}\n`);
+    const out = await usageAt(root, OWNER);
+    expect(out.code).toBe(0);
+    const line = out.out.split('\n').find((text) => /^anthropic\s+session/.test(text)) ?? '';
+    expect(line).toContain('no fresh reading');
+    expect(line).toContain('read 97h35m ago');
+    expect(line).not.toContain('100%');
+    expect(line).not.toContain('in 0m');
+    // The advice names the window and says how a fresh reading comes.
+    expect(out.out).toContain('no fresh reading on anthropic (session)');
+    expect(out.out).toContain('reads one on the next run');
+    // The JSON carries the same fact: the figure is null and `expired` says why.
+    const doc = JSON.parse((await usageAt(root, OWNER, '--json')).out) as {
+      labs: { lab: string; accounts: { account: string; machine: { window: string | null; left: number | null; used: number | null; resetsIn: string | null; expired: boolean } }[] }[];
+    };
+    const row = doc.labs.find((one) => one.lab === 'anthropic')?.accounts.find((one) => one.account === 'anthropic');
+    expect(row?.machine.expired).toBe(true);
+    expect(row?.machine.window).toBe('session');
+    expect(row?.machine.left).toBeNull();
+    expect(row?.machine.used).toBeNull();
+    expect(row?.machine.resetsIn).toBeNull();
   });
 
   test('the RESERVE column prints only when a row has something in it, headers and cells together', async () => {
