@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import type { Seen, StoredReading } from '../src/budgets/readings.ts';
@@ -45,6 +45,18 @@ export function recordAt(path: string): SignedRecord {
 /** The body the record at `path` carries. */
 export function recordBody(path: string): string {
   return recordAt(path).payload.body;
+}
+
+/** Names in a drop folder, without the unread hint. The hint is written beside a record on
+ *  purpose and is not a message. `.pending` and `.fallback.json` stay, so a listing can still
+ *  see those markers. */
+export function withoutUnreadHint(names: readonly string[]): string[] {
+  return names.filter((name) => name !== '.unread.json');
+}
+
+/** `readdir` of a drop folder with the unread hint removed. */
+export function dropNames(dir: string): string[] {
+  return withoutUnreadHint(readdirSync(dir));
 }
 
 /**
