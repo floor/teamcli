@@ -2763,13 +2763,19 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
     const daemonSock = host.daemonSocket ?? daemonSocketPath(to.project, to.root, host.home);
     // A daemon dial is a route attempt: the record is staged before it, so a daemon that took the
     // request and died before answering still leaves the walk a durable copy. No socket file at
-    // the path means no daemon to dial, so a send every leg will refuse stages nothing. A typed
-    // wake is never handed to the daemon: its type and Enter refuse there, and the screen walk and
-    // the seat lock belong to this process.
-    if (!to.cross && compose === null && typedWake === null && !wait && existsSync(daemonSock)) await ensureEpisode();
-    const viaDaemon = to.cross || compose !== null || typedWake !== null || wait
-      ? null
-      : await requestDaemon(daemonSock, { v: 1, op: 'send', id: msgId, from, to: to.seat, ...sentAs, body, rule: record.rule, ...(record.from_id === null ? {} : { from_id: record.from_id }), ...(record.subject === undefined ? {} : { subject: record.subject }), name: wakeName, template: wakeTemplate, ...(failures.length > 0 ? { failed: [...failures] } : {}), ...(at + 1 < walk.length ? { fallthrough: true as const } : {}) });
+    // the path means no daemon to dial, so a send every leg will refuse stages nothing. The
+    // profile-gated typed wake is the one leg the daemon may run for this process: its wake child
+    // owns the screen walk and the seat lock, and this run returns at acceptance. A compose seat,
+    // another team's record and a `--wait` run are reached directly as before, and so is a daemon
+    // that answers `direct: true` (it runs no wake child, and staged and typed nothing): the walk
+    // below is then this process's, exactly once.
+    const handoff = !to.cross && compose === null && typedWake !== null && !wait && trigger !== null;
+    const dialled = existsSync(daemonSock)
+      && (handoff || (!to.cross && compose === null && typedWake === null && !wait));
+    if (dialled) await ensureEpisode();
+    const viaDaemon = dialled
+      ? await requestDaemon(daemonSock, { v: 1, op: 'send', id: msgId, from, to: to.seat, ...sentAs, body, rule: record.rule, ...(record.from_id === null ? {} : { from_id: record.from_id }), ...(record.subject === undefined ? {} : { subject: record.subject }), name: wakeName, template: wakeTemplate, ...(failures.length > 0 ? { failed: [...failures] } : {}), ...(handoff ? { typedWake: { trigger } } : {}), ...(at + 1 < walk.length ? { fallthrough: true as const } : {}) })
+      : null;
     if (viaDaemon && !('pong' in viaDaemon) && !('shutdown' in viaDaemon)) {
       // A daemon that found no live agent typed nothing: when a leg still stands behind the
       // typed one, the failure joins the walk and the send goes on to it. The daemon wrote no
@@ -2780,9 +2786,27 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
         note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: viaDaemon.detail }));
         continue;
       }
-      noteDaemonOutcome(note, viaDaemon, host.now(), startedAt);
-      markLeg('typed', 'attempted');
-      return finishDaemonSend(io, dir, who, to.seat, timeoutS, host, report, viaDaemon, startedAt, socketNote ?? undefined);
+      // A childless daemon's answer to this run's own typed request is the only thing that
+      // sends the walk back into this process; a refusal without that marker ends the send as
+      // every other daemon refusal does, and never types here.
+      if (!(handoff && viaDaemon.outcome === 'refused' && viaDaemon.direct === true)) {
+        noteDaemonOutcome(note, viaDaemon, host.now(), startedAt);
+        markLeg('typed', 'attempted');
+        if (viaDaemon.outcome === 'handed') {
+          logLine(dir, 'send', who, `${to.seat}: handed to the daemon for a typed wake (id ${viaDaemon.id})`, host.now());
+        }
+        return finishDaemonSend(io, dir, who, to.seat, timeoutS, host, report, viaDaemon, startedAt, socketNote ?? undefined);
+      }
+    } else if (handoff && dialled) {
+      // The socket file existed, but the daemon did not answer the typed request. It may have
+      // taken the request and be running a child, so this process never types: the staged record
+      // carries the message to the leg behind the typed one.
+      const why = 'the daemon did not answer the typed wake request; nothing was typed here';
+      failures.push(`typed: ${why}`);
+      wakeOutcome = { attempted: true, reason: why };
+      markLeg('typed', 'attempted', why);
+      note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
+      continue;
     }
     // The pane is read live, by the seat's name: a record's recorded pane may have been closed or
     // reused since it was written, and a trigger typed into a pane another seat now holds would
@@ -3880,6 +3904,12 @@ function noteDaemonOutcome(note: WalkNote | null, res: DaemonSendResponse, at: D
     note(walkAttempt('typed', 'delivered', false, at, startedAt));
     return;
   }
+  // The typed wake was handed to the daemon's child: the typed route carried the send, and the
+  // child's walk is its delivery. The episode records the route taken, never a delivery.
+  if (res.outcome === 'handed') {
+    note(walkAttempt('typed', 'delivered', false, at, startedAt, { reason: 'handed to the daemon for a typed wake' }));
+    return;
+  }
   const outcome: AttemptOutcome =
     res.outcome === 'held' || res.outcome === 'timeout' || res.outcome === 'unreachable' || res.outcome === 'refused'
       ? res.outcome
@@ -3910,6 +3940,7 @@ function finishDaemonSend(
     return sentUnconfirmed(io, seatName, report, ms, 'typed', notes.length === 0 ? undefined : notes.join('; '));
   }
   if (res.outcome === 'answered') return answered(io, seatName, { reply: res.reply, msg_id: res.reply_id }, report);
+  if (res.outcome === 'handed') return handedTypedWake(io, seatName, res.id, host, report, startedAt);
   if (res.outcome === 'queued') {
     // The receiver was busy when the send reached the daemon: the signed copy is stored and the
     // message holds one place in that seat's FIFO, so the sender is answered now instead of
@@ -3967,6 +3998,32 @@ function queuedBusy(
     io.stdout(`${summary}\n`);
   }
   return 0; // exit: send.queued
+}
+
+/** The send daemon took the typed wake: the staged message is in its store, its wake child owns
+ *  the screen walk, and the delivery's own history line and the trace are the child's. The line
+ *  names the handoff, never a delivery, and the id on it is the one the child's history keeps.
+ *  The class words a leg's own ending appends are left off: they say what wakes an idle seat when
+ *  nothing here does, and the child's walk is exactly the wake this run handed over. Exit 0, the
+ *  same acceptance a queued send reports. */
+function handedTypedWake(
+  io: Io,
+  seatName: string,
+  msgId: string,
+  host: SendHost,
+  report: Report,
+  startedAt: number,
+): number {
+  report.sent = msgId;
+  const ms = host.now().getTime() - startedAt;
+  const summary = `${seatName}: handed to the daemon for a typed wake (typed, ${String(ms)} ms; id ${msgId})`;
+  if (report.json) {
+    writeAction(io, report, { status: 'handed to the daemon for a typed wake', summary, channel: 'typed' });
+  } else {
+    openText(io, report);
+    io.stdout(`${summary}\n`);
+  }
+  return 0; // exit: send.handed
 }
 
 type ThreadReply = { reply: string; msg_id: string };
@@ -7194,6 +7251,7 @@ type ActionFields = {
     | 'queued, not woken'
     | 'sent (channel)'
     | 'queued (receiver busy)'
+    | 'handed to the daemon for a typed wake'
     | 'answered'
     | 'recorded'
     | 'native'

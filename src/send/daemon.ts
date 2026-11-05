@@ -165,6 +165,12 @@ export type DaemonSendRequest = {
   /** The receiving team's `message-display` template as the caller read it; absent, the daemon
    *  resolves it from the chain, and a chain that cannot be read leaves the shipped template. */
   template?: string;
+  /** The caller's typed-wake handoff: the one trigger line the caller would have typed into the
+   *  receiving seat's composer. The daemon validates it against the receiving profile and the
+   *  measured bound, stages its own durable copy, and hands the walk to its wake child. A daemon
+   *  that runs no wake child refuses before staging anything and says `direct: true`: the caller
+   *  then runs the typed walk in its own process. */
+  typedWake?: { trigger: string };
 };
 
 export type DaemonRequest =
@@ -195,6 +201,18 @@ export type DaemonSendResponse =
       ok: true;
       id: string;
       seat: string;
+      /** The typed wake was handed to this daemon's wake child. The message body is staged in
+       *  the daemon's store (`drop_path`), the child owns the screen walk and the seat lock, and
+       *  this answer is an acceptance: the walk's own history line is the child's. */
+      outcome: 'handed';
+      status: 'typed wake';
+      drop_path: string;
+    }
+  | {
+      v: 1;
+      ok: true;
+      id: string;
+      seat: string;
       /** The receiver was busy when the send reached the daemon: the signed copy is stored, the
        *  message holds one place in the seat's FIFO queue, and the daemon delivers it once the
        *  seat's lock clears. The sender is answered at once and does not wait for the turn. */
@@ -214,6 +232,10 @@ export type DaemonSendResponse =
        *  behind it, which carries the send. No history line was written here: the leg that
        *  takes the send writes the one line. */
       fall_through?: true;
+      /** This daemon runs no typed wake child, so a typed request was refused before anything
+       *  was staged or typed. The caller keeps the walk in its own process. Present only on a
+       *  refusal to a request that carried `typedWake`. */
+      direct?: true;
     }
   | {
       v: 1;
@@ -489,7 +511,32 @@ export type StartSendDaemonInput = {
   /** The host's fresh per-seat native channel health. Unset leaves every native projection
    *  unproven, so this build never believes the store's last word on its own. */
   presenceChannelHealthy?: (seat: string) => boolean;
+  /** This daemon's typed-wake child. Given one handoff, the child owns the screen walk and its
+   *  outcome (its own history line and trace); the daemon answers `handed` at acceptance and
+   *  never waits for the walk. Unset — a bare test daemon, an old build — a typed request is
+   *  refused with `direct: true` before anything is staged, and the caller keeps the walk. */
+  wake?: WakeSpawner;
 };
+
+/** One typed wake this daemon admitted: the validated line and the daemon's own staged copy.
+ *  The child re-reads the pane live and locks the seat itself (src/send/typed-wake.ts); these
+ *  values are what the daemon checked, not a promise about a screen. */
+export type WakeHandoff = {
+  /** The message id the staged copy is held under; the child's history line keeps it. */
+  id: string;
+  seat: string;
+  session: string;
+  /** The receiving seat's CLI, whose profile declared the typed wake. */
+  cli: string;
+  /** The one trigger line: no control character, within `TRIGGER_MAX`. */
+  line: string;
+  /** The daemon's staged copy in `<storeDir>/drops/<session>/<seat>/<id>` (0600). */
+  dropPath: string;
+};
+
+/** The daemon's wake child seam. It returns as soon as it has started (or immediately, for a
+ *  test's recorder); the walk's outcome is written by the child, never answered here. */
+export type WakeSpawner = (wake: WakeHandoff) => void;
 
 /** Where the presence store actually lives, or why it could not be named. Unknown is a hold:
  *  it must never read as an absent projection licensed for the screen fallback. */
@@ -718,6 +765,81 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
         seat: seatName,
         outcome: 'refused',
         detail: `${seatName}: the pane is a human's, and nothing is typed into it`,
+      });
+    }
+    // The typed wake is the one leg a daemon may run on a sender's behalf: its wake child owns
+    // the screen walk and the seat lock. The line is validated here against the receiving
+    // profile and the measured bound, and the daemon's own durable copy is staged BEFORE the
+    // answer, so `handed` means a copy is in the store. A daemon that runs no wake child
+    // refuses before staging anything and says `direct: true`: the caller then runs the walk in
+    // its own process, exactly as it did before the handoff existed. This branch stands before
+    // the queue and the busy check, so a typed request is never preempted by a queued send.
+    if (request.typedWake !== undefined) {
+      const typedId = request.id ?? null;
+      const refuseTyped = (detail: string, direct?: true): DaemonSendResponse => ({
+        v: 1,
+        ok: false,
+        id: typedId,
+        seat: seatName,
+        outcome: 'refused',
+        detail,
+        ...(direct === true ? { direct: true as const } : {}),
+      });
+      if (request.wait === true) {
+        return Promise.resolve(refuseTyped(`${seatName}: a typed wake cannot wait for a reply; nothing was typed here`));
+      }
+      const trigger = typeof request.typedWake.trigger === 'string' ? request.typedWake.trigger : null;
+      if (trigger === null || trigger.trim().length === 0) {
+        return Promise.resolve(refuseTyped(`${seatName}: the typed wake line is empty; nothing was typed`));
+      }
+      if (/[\u0000-\u001f\u007f]/.test(trigger)) {
+        return Promise.resolve(refuseTyped(`${seatName}: the typed wake line carries a control character; one line is typed, nothing else`));
+      }
+      if (trigger.length > TRIGGER_MAX) {
+        return Promise.resolve(refuseTyped(`${seatName}: the typed wake line is past the measured ${String(TRIGGER_MAX)} characters; nothing was typed`));
+      }
+      if ((profileFor(configured.cli)?.typedWake ?? null) === null) {
+        return Promise.resolve(refuseTyped(`${seatName} runs ${configured.cli}: its profile declares no typed wake; nothing was typed`));
+      }
+      const wakeChild = input.wake;
+      if (wakeChild === undefined) {
+        return Promise.resolve(refuseTyped(
+          `${seatName}: this daemon runs no typed wake child, so the caller keeps the walk; nothing was staged or typed`,
+          true,
+        ));
+      }
+      const typedSession = input.team.session;
+      const handoffId = request.id ?? randomUUID();
+      const dropLadder = ensureLadder(host.home, store, ['drops', typedSession, seatName]);
+      if (!dropLadder.ok) {
+        return Promise.resolve(refuseTyped(`${seatName}: the drop file could not be written (${dropLadder.reason}); nothing was typed`));
+      }
+      return relayStage(
+        { dir: dropLadder.leaf, name: handoffId },
+        { id: handoffId, record: request.body },
+        { now: host.now },
+      ).then((staged): DaemonSendResponse => {
+        if (staged.outcome === 'refused') {
+          return refuseTyped(`${seatName}: the drop file could not be written; nothing was typed`);
+        }
+        const dropPath = join(dropLadder.leaf, handoffId);
+        try {
+          wakeChild({ id: handoffId, seat: seatName, session: typedSession, cli: configured.cli, line: trigger, dropPath });
+        } catch {
+          // The copy is stored and no child is running: the caller does not type either (its
+          // request was answered), so the message waits for the drop leg behind the typed one.
+          return refuseTyped(`${seatName}: the typed wake child could not be asked; nothing was typed here`);
+        }
+        logLine(input.dir, 'send', request.from, `${seatName}: handed to the daemon for a typed wake (id ${handoffId})`, host.now());
+        return {
+          v: 1,
+          ok: true,
+          id: handoffId,
+          seat: seatName,
+          outcome: 'handed',
+          status: 'typed wake',
+          drop_path: dropPath,
+        };
       });
     }
     // A compose seat (such as Jules) has no queued daemon leg and is driven through its CLI's

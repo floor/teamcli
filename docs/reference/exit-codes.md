@@ -761,6 +761,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.delivered` | `send` | 0 | the record is written and the seat's channel took the message | `team send worker hello` |
 | `send.delivered-webhook` | `send` | 0 | the record is written and the seat's webhook adapter took the message | `team send worker hello` |
 | `send.dry-run` | `send` | 0 | the seat and channel were resolved and nothing was written | `team send worker hello --dry-run` |
+| `send.handed` | `send` | 0 | the typed wake was handed to the send daemon, which staged its own durable copy and asked its wake child to run the screen walk; the delivery's history line is the child's, and the id printed is the one it keeps | `team send lead hello` |
 | `send.listed` | `send` | 0 | the addressable seats were printed, nothing was sent | `team send --list` |
 | `send.native` | `send` | 0 | a native handoff was printed for the sender's own SendMessage, and nothing was delivered | `team send worker hello` |
 | `send.queued` | `send` | 0 | the receiver was busy, so the signed copy is stored and nothing was typed; the message is delivered when the seat's lock clears, and the id on the line is the one the delivery keeps | `team send lead hello` |

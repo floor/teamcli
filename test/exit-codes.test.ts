@@ -8250,6 +8250,9 @@ const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepa
   // No pane messaging: these were the typed leg's own outcomes; with nothing typed, an unreached
   // seat's message waits in its bus inbox (exit 0), so no scene can take them any more.
   'send.queued', 'send.held', 'send.not-submitted', 'send.unreachable',
+  // The typed-wake handoff needs a live send daemon with a wake child and a scripted pane; the
+  // handoff's single scene is test/typed-wake-handoff.test.ts's.
+  'send.handed',
   // The chores child's normal exit is reached only by the child itself, after its host ended its
   // input; a scene in this process cannot end its own standard input.
   'daemon.chores-ended']);
