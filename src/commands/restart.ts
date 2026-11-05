@@ -61,7 +61,7 @@ import {
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { boxHoldsText, deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
-import { executePlan, type Host } from '../launch/execute.ts';
+import { executePlan, launchKind, type Host } from '../launch/execute.ts';
 import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { bindCodexSeatThread } from '../launch/codex-thread-binding.ts';
 import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../daemon/presence/codex-source.ts';
@@ -1858,7 +1858,7 @@ function hostOf(input: {
     agentPanes: launch.agentPanes,
     agentList: launch.agents,
     workspacePanes: launch.workspacePanes ? (s, workspace) => launch.workspacePanes!(s, workspace) : undefined,
-    classify: (_name, pane, cli) => readScreen(cli, launch.paneText(session, pane) ?? undefined).kind,
+    classify: (_name, pane, cli) => launchKind(readScreen(cli, launch.paneText(session, pane) ?? undefined).kind),
     paneText: (_name, pane) => launch.paneText(session, pane),
     foreground: (_name, pane) => launch.foreground(session, pane),
     shellBack: (_name, pane) => launch.shellBack?.(session, pane) ?? null,

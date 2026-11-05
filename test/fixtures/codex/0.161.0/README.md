@@ -103,6 +103,11 @@ rows changed, as a seat's own screen draws them.
   and the status row `GPT-6.1-Sol high · Context 64% left · weekly 5% left` with
   `⚠ 3 warnings · f2 to view` on that same row. The transcript above the banner is not
   in the file. The banner sits above the blank frame, so the box stays the empty prompt.
+- `scroll-back.txt`: a pane scrolled back over its transcript, with the composer hidden and
+  the footer `New activity · ↓ Back to bottom · esc` on the last row. The footer row was
+  reported from a live seat that sat in this view with the prompt out of sight; no pane of
+  that view was captured, so the transcript rows above it are this file's own. Read `unknown`
+  before the profile declared the footer, and `scroll back` after.
 
 The used variant is Codex's own: `strings` on the installed `codex-cli 0.161.0` prints
 `Context `, `% left`, `Context `, `% used` beside the status-surface ids

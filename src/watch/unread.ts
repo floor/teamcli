@@ -607,18 +607,33 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     // A box that cannot be read is not typed into. The delivery below reads it again; this is
     // only the pass's own look, so a dialog is never entered and a busy seat is not nudged.
     if (screen === null) continue;
-    // A profile the terminal host cannot report faithfully names its own screen as the seat's
-    // state, so the typed retry trusts that reading rather than the host's word; the drop-file
-    // leg keeps its own status rule. The typed wake reads the box twice itself, and only an empty
-    // idle prompt at both reads lets it type. A box that already holds exactly this wake's line
-    // is submitted below; any other draft is left, so a draft is still never typed over.
-    if ((retry === null || !herdrUnreliable(seat.cli)) && status !== 'idle' && status !== 'done') continue;
+    // The screen is classified before the host's status word is consulted. An unrecognised
+    // screen is the one reading the lead is owed once the message is due, and a host word that
+    // is not idle or done must never keep it from being said: a seat behind an unrecognised
+    // prompt whose host word was `unknown` was never reported, and its messages were lost in
+    // silence. A recognised screen still meets the status rule below.
     const kind = readScreen(seat.cli, screen).kind;
     if (kind === 'unknown') {
       reportBlockedScreenToLead(scene, seat, pane, dropDir, context, typedDue, unreadAfter, kind, failedLeg, home);
       continue;
     }
-    if (kind !== 'idle' && kind !== 'unsent') continue;
+    // A profile the terminal host cannot report faithfully names its own screen as the seat's
+    // state, so the typed retry trusts that reading rather than the host's word; the drop-file
+    // leg keeps its own status rule. The typed wake reads the box twice itself, and only an empty
+    // idle prompt at both reads lets it type. A box that already holds exactly this wake's line
+    // is submitted below; any other draft is left, so a draft is still never typed over.
+    //
+    // A scrolled-back pane is the same trust one step narrower: herdr does not read the CLI's
+    // scroll-back footer as an idle prompt, so its word can be `unknown` for a pane sitting at
+    // its own prompt behind the scroll. Only the typed retry may act on that reading (it sends
+    // the return key and reads the box again); a word of working or blocked still refuses it,
+    // and every other screen keeps the plain status rule.
+    const scrolledWake = retry !== null && kind === 'scroll back' && status !== 'working' && status !== 'blocked';
+    if ((retry === null || !herdrUnreliable(seat.cli)) && status !== 'idle' && status !== 'done' && !scrolledWake) continue;
+    // A pane scrolled back over its transcript is at its prompt behind the scroll, but only the
+    // typed retry may act on it: that wake sends the profile's return key and reads the box
+    // again. The drop-file leg types into no screen but the visible composer.
+    if (kind !== 'idle' && kind !== 'unsent' && !(retry !== null && kind === 'scroll back')) continue;
     const lock = acquireSeatLock(scene.dir, scene.session, seat.name);
     if (!('release' in lock)) continue;
     try {
@@ -971,10 +986,16 @@ function catchUpBlockedSeatEvents(scene: RetryScene, home: string): void {
 }
 
 /**
- * When a seat with due unread messages is covered by a dialog or an unrecognised screen (`kind`
- * is neither `idle`, `unsent`, nor `working`) within the `2N` window, never types into or answers
- * the screen. Instead, tells the team's lead once naming the seat and the screen kind, and marks
- * the message `delivered-but-blocked` — but only if the lead is told in time (within `2N`).
+ * When a seat with due unread messages is covered by an unrecognised screen, never types into or
+ * answers the screen. Instead, tells the team's lead once naming the seat and the screen kind,
+ * and marks the message `delivered-but-blocked`.
+ *
+ * The notice is owed once the message is due, not only inside the `2N` window: a pass that
+ * arrives late (a slow sweep, a host word that kept the wake path away, a message that landed
+ * under a screen nobody has read yet) still names the stall, so the lead hears what the screen
+ * is rather than only the generic `2N` report's queued-not-woken line. The 2N threshold below
+ * is what keeps the notice single: a blocked report already standing for this seat and screen
+ * kind is the one later messages join, and it does not make a second report of its own.
  */
 function reportBlockedScreenToLead(
   scene: RetryScene,
@@ -1003,8 +1024,9 @@ function reportBlockedScreenToLead(
       if (!unreadNow.has(message.id)) continue;
       if (existsSync(wakePath(dropDir, message.id))) continue;
       if (existsSync(reportedPath(dropDir, message.id))) continue;
+      // No age gate: a message first seen behind the screen after the 2N window has passed is
+      // still a stall the lead is owed the reason for, not only the generic report's word.
       const age = nowMs - Date.parse(message.ts);
-      if (!(age < reportThreshold)) continue;
       const payload = payloadOf(dropDir, message.id, home);
       if (payload === null || payload.rule === LEAD_REPORT_RULE) continue;
       eligible.push({ message, payload, age });

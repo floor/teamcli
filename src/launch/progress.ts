@@ -54,9 +54,13 @@ export function cleanClassification(value: unknown): Classification {
 /** A screen kind as the classification a record keeps, for the kinds a classification can hold.
  *  The record's closed list has no exit question — the stop's own line and the seat's report
  *  carry that reading — so a screen read as one is recorded as the question it is, the word it
- *  would have had before the kind existed. */
+ *  would have had before the kind existed. A scrolled-back pane is not a typed-ready prompt the
+ *  record can name either: it is recorded as `unknown`, the word a launch saw before the kind
+ *  existed, and a launch never types its rules into it. */
 export function classificationOf(kind: Exclude<Screen['kind'], 'idle' | 'working'>): Classification {
-  return kind === 'exit question' ? 'question' : kind;
+  if (kind === 'exit question') return 'question';
+  if (kind === 'scroll back') return 'unknown';
+  return kind;
 }
 
 /** The provisional states a line is drawn in, in the order a seat can pass them. The words a

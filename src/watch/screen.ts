@@ -20,6 +20,11 @@ export type Screen =
   | { kind: 'idle' }                 // the idle prompt, with an empty input box
   | { kind: 'working' }              // a turn is running: herdr's status would already be stale
   | { kind: 'unsent' }               // text left in the input box
+  | { kind: 'scroll back' }          // the pane scrolled back over its transcript: the composer
+                                     // is hidden and the CLI's own footer stands in its place.
+                                     // Read only where the composer cannot be read; the seat is
+                                     // at its prompt behind the scroll, so it reads idle, and
+                                     // only a wake that may press the profile's return key acts
   | { kind: 'permission' }           // a permission dialog: its owner's to answer
   | { kind: 'plan approval' }        // a plan the agent wrote, waiting to execute: read before
                                      // `permission`, whose generic numbered choice it draws too;
@@ -55,7 +60,7 @@ export type Screen =
  *  one no profile reads is `unknown`. The four words are the ones a herdr status can carry, so a
  *  profile herdr cannot report can be read with them in place of its word. */
 export function screenWord(screen: Screen): 'idle' | 'working' | 'blocked' | 'unknown' {
-  if (screen.kind === 'idle' || screen.kind === 'unsent') return 'idle';
+  if (screen.kind === 'idle' || screen.kind === 'unsent' || screen.kind === 'scroll back') return 'idle';
   if (screen.kind === 'working') return 'working';
   if (screen.kind === 'unknown') return 'unknown';
   return 'blocked';

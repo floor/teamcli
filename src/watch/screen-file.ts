@@ -116,7 +116,7 @@ function loadScreenModule(specifier: string, baseDir: string | undefined, line: 
 
 function screenOf(node: YamlNode, topScreenModule?: YamlEntry, baseDir?: string, profileFile?: string): ScreenData {
   const entries = mapping(node, 'screen');
-  only(entries, ['chrome', 'turn_end', 'composer', 'screen_module', 'question_text', ...STAGES]);
+  only(entries, ['chrome', 'turn_end', 'composer', 'screen_module', 'question_text', 'scroll_back', ...STAGES]);
   const chrome = optional(entries, 'chrome');
   const screenScreenModule = optional(entries, 'screen_module');
   const moduleEntry = screenScreenModule ?? topScreenModule;
@@ -160,7 +160,33 @@ function screenOf(node: YamlNode, topScreenModule?: YamlEntry, baseDir?: string,
   }
   const questionText = optional(entries, 'question_text');
   if (questionText) data.questionText = questionTextOf(questionText);
+  const scrollBack = optional(entries, 'scroll_back');
+  if (scrollBack) data.scrollBack = scrollBackOf(scrollBack);
   return data;
+}
+
+/** The keys a `scroll_back` return may name: only a key a run established at that screen — an
+ *  Escape that returned the pane to its composer with the transcript still above it. Never a
+ *  guess: the wake presses this key into a pane whose composer it cannot see. */
+const SCROLL_BACK_KEYS = ['escape'] as const;
+
+/** A pane scrolled back over its transcript draws the CLI's own footer on its last non-blank
+ *  row, in the composer's place. The footer is the whole row, as the pane draws it; the return
+ *  key is the one its own footer names, from the list above. */
+function scrollBackOf(entry: YamlEntry): { footer: RegExp; returnKey: string } {
+  const entries = mapping(entry.value, 'scroll_back');
+  only(entries, ['footer', 'return_key']);
+  const footer = required(entries, 'footer', entry.line);
+  const footerText = stringOf(footer.value);
+  if (footerText === null) fail(footer.line, '"scroll_back.footer" must be a string');
+  if (!anchored(footerText)) fail(footer.line, 'a scroll_back footer must match the whole line: "^…$"');
+  const key = required(entries, 'return_key', entry.line);
+  const keyText = stringOf(key.value);
+  if (keyText === null) fail(key.line, '"scroll_back.return_key" must be a string');
+  if (!(SCROLL_BACK_KEYS as readonly string[]).includes(keyText)) {
+    fail(key.line, `"scroll_back.return_key" must be one of ${SCROLL_BACK_KEYS.join(', ')}: only a key a run established`);
+  }
+  return { footer: patternOf(footerText, false, footer.line), returnKey: keyText };
 }
 
 /**

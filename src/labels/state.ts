@@ -163,7 +163,7 @@ export function seatState(
   // turn's end. They are also the terminal-host fallback: they answer only when no presence
   // projection exists at all.
   if (screen !== undefined && screen.kind !== 'working' && screen.kind !== 'idle'
-    && screen.kind !== 'unknown') {
+    && screen.kind !== 'unknown' && screen.kind !== 'scroll back') {
     return { state: 'blocked', source: 'cli', blind: false };
   }
   // The CLI's own hook: a fresh `working` is working while its turn is young; a fresh `idle`
@@ -193,7 +193,10 @@ export function seatState(
   }
   if (screen !== undefined) {
     if (screen.kind === 'working') return { state: 'working', source: 'cli', blind: false };
-    if (screen.kind === 'idle') {
+    // A pane scrolled back over its transcript is at its prompt behind the scroll, so it reads
+    // with the idle screen — and the trace rule that can make an idle screen working applies to
+    // it the same way.
+    if (screen.kind === 'idle' || screen.kind === 'scroll back') {
       if (withinWindow) return { state: 'working', source: 'trace', blind: false };
       return { state: 'idle', source: 'cli', blind: false };
     }

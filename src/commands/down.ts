@@ -270,7 +270,10 @@ export function stateOf(status: string, screen: Screen, cli?: string): DownSeat[
   // A screen showing a running turn is working even when herdr's status has not caught up:
   // `--wait` waits for it, and it is never typed into.
   if (screen.kind === 'working') return 'working';
-  if (screen.kind === 'unknown') return 'unknown';
+  // A pane scrolled back over its transcript hides the composer this typing goes into, so it is
+  // as unreadable to a key as an unrecognised screen: a scrolled pane is never typed into from
+  // here, and no status word makes it free.
+  if (screen.kind === 'unknown' || screen.kind === 'scroll back') return 'unknown';
   // A profile herdr cannot report faithfully is read from its screen: the profile's own module
   // read the seat as idle, which is its prompt. Every other screen kind above keeps its word —
   // a working turn or a dialog is never made less cautious by this reading.

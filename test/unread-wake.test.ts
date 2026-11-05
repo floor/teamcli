@@ -2817,10 +2817,12 @@ describe('an unrecognised screen tells the lead once within 2N', () => {
     }
   });
 
-  test('a message only counts as delivered-but-blocked if the lead is told in time (within 2N)', async () => {
+  test('a message first seen behind an unrecognised screen after 2N still tells the lead and counts as delivered-but-blocked', async () => {
     const made = world();
     const team = teamOf(typedTeamText(made.root, lobbyDir(made.home), 'antigravity'));
-    // Already past 2N (21 min >= 20 min) before any wake pass tells the lead.
+    // Already past 2N (21 min >= 20 min) when the first pass reads it: a pass that first sees the
+    // message late — a slow sweep, a seat sighted after its window — is no reason for a recognisable
+    // stall to become a silent loss. The lead is owed the notice however old the message is.
     const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\ntoo late', new Date(NOW.getTime() - 21 * MIN));
     const one = pane(ANTIGRAVITY_SURVEY_FRAME, 'done');
     const calls: { pane: string; line: string; cli: string; session: string }[] = [];
@@ -2829,16 +2831,33 @@ describe('an unrecognised screen tells the lead once within 2N', () => {
     const said: string[] = [];
 
     await wakeUnreadDrops(sceneOf(made, team, one, said, { sources, live, now: NOW }), { unreadAfter: N });
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
-    const eventsBefore = readEvents('acme', made.root, made.home);
-    expect(eventsBefore.ok && eventsBefore.events.filter((e) => e.payload.kind === 'seat.blocked')).toHaveLength(0);
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(one.keys).toEqual([]);
+    expect(calls).toEqual([]);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('delivered-but-blocked');
 
-    // At 2N, because the lead was not told in time, the message is reported as lost (`queued, not woken`).
+    const mark = JSON.parse(readFileSync(wakePath(dropDir, UNREAD_A), 'utf8')) as Record<string, unknown>;
+    expect(mark).toMatchObject({
+      id: UNREAD_A,
+      state: 'blocked',
+      outcome: 'delivered-but-blocked',
+      screen: 'unknown',
+      to: 'lead',
+    });
+    const events = readEvents('acme', made.root, made.home);
+    expect(events.ok && events.events.filter((e) => e.payload.kind === 'seat.blocked')).toHaveLength(1);
+    const toLead = leadReportBody(made.dir, UNREAD_A);
+    expect(toLead).toContain('delivered-but-blocked');
+    expect(toLead).not.toContain('queued, not woken');
+
+    // The report pass adds nothing: the lead was told, and the message is not reported as lost.
     reportUnreadDrops(sceneOf(made, team, one, said, { sources, live, now: NOW }), { unreadAfter: N });
-    expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(true);
+    expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(false);
     const toOwner = mailboxBody(made.root, 'owner', `unread-${UNREAD_A}`);
-    expect(toOwner.body).toContain('queued, not woken - unread for 21 min');
-    expect(toOwner.body).not.toContain('delivered-but-blocked');
+    expect(toOwner.body).toContain('delivered-but-blocked');
+    expect(toOwner.body).not.toContain('queued, not woken');
   });
 
   test('a refused lead write within 2N does not mark the message delivered-but-blocked; a retry within 2N after restoring the lead folder succeeds once', async () => {

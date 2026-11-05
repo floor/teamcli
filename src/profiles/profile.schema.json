@@ -423,9 +423,19 @@
         "provider_error": { "$ref": "#/$defs/stage" },
         "rate_limit": { "$ref": "#/$defs/rateLimitStage" },
         "working": { "$ref": "#/$defs/stage" },
+        "scroll_back": { "$ref": "#/$defs/scrollBack" },
         "question_text": { "$ref": "#/$defs/questionText" },
         "composer": { "$ref": "#/$defs/composer" },
         "screen_module": { "$ref": "#/$defs/screenModule" }
+      }
+    },
+    "scrollBack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["footer", "return_key"],
+      "properties": {
+        "footer": { "type": "string", "minLength": 1, "description": "The CLI's scroll-back footer as the whole row it draws, \"^…$\": the pane's last non-blank row when it is scrolled back, where the composer would be. Read only where the composer cannot be read, after every caution stage." },
+        "return_key": { "enum": ["escape"], "description": "The key the footer itself names for returning to the prompt. Only a key a run established at this screen." }
       }
     },
     "questionText": {

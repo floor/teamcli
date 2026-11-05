@@ -455,14 +455,20 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
     const composerFn = getProfileFn(data.profile, 'composer');
     if (composerFn !== undefined) {
       const composed = callComposer(composerFn, plain);
-      if (composed.kind === 'stop' || composed.kind === 'unknown') return failedComposer(data, plain, tick);
+      if (composed.kind === 'stop' || composed.kind === 'unknown') {
+        if (composed.kind === 'unknown' && scrolledBack(data, plain, tick)) return { kind: 'scroll back' };
+        return failedComposer(data, plain, tick);
+      }
       const marked = floorHits(plain, 0, -1, data.chrome, tick);
       if (marked) return floorScreen(marked);
       return asScreen(composed.kind, plain);
     }
 
     const composed = compose(data, plain, lines, tick, expectedCwd, home);
-    if (composed.kind === 'stop' || composed.kind === 'unknown') return failedComposer(data, plain, tick);
+    if (composed.kind === 'stop' || composed.kind === 'unknown') {
+      if (composed.kind === 'unknown' && scrolledBack(data, plain, tick)) return { kind: 'scroll back' };
+      return failedComposer(data, plain, tick);
+    }
     if (composed.kind !== 'idle' && composed.kind !== 'unsent') return asScreen(composed.kind, plain);
     const marked = floorHits(plain, composed.from, composed.input, data.chrome, tick);
     if (marked) return floorScreen(marked);
@@ -1603,6 +1609,24 @@ function floorScreen(marked: false | 'stop' | string): Screen {
  *  into. */
 function failedComposer(data: ScreenData, plain: string[], tick: () => boolean): Screen {
   return floorScreen(floorLast(plain, data.chrome, tick));
+}
+
+/** The pane is scrolled back over its transcript: the composer cannot be read, and the profile's
+ *  declared footer is the pane's last non-blank row. Asked only when a composer read came back
+ *  unknown, after every caution stage, so a turn still running, a draft, or a dialog that draws
+ *  itself keeps its own reading and the footer never hides one. False when the profile declares
+ *  no footer, when that row is anything else, or when the budget runs out — a row read out of
+ *  time grounds nothing. */
+function scrolledBack(data: ScreenData, plain: string[], tick: () => boolean): boolean {
+  const footer = data.scrollBack?.footer;
+  if (footer === undefined) return false;
+  for (let i = plain.length - 1; i >= 0; i--) {
+    if (tick()) return false;
+    const line = plain[i] ?? '';
+    if (line.trim() === '') continue;
+    return footer.test(line);
+  }
+  return false;
 }
 
 function choiceLine(line: string): boolean {
