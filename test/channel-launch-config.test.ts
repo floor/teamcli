@@ -1,5 +1,6 @@
 // Synthetic teams, claims, folders and a fake pane host. No CLI-home reads or live launches.
 import { afterEach, describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -192,6 +193,34 @@ describe('launch-scoped channel config', () => {
     lease.release();
     expect(existsSync(lock)).toBe(true);
     expect(existsSync(`${lock}-old`)).toBe(true);
+  });
+
+  test('another process cannot publish while the first config lease is held', () => {
+    const w = world();
+    const lease = prepare(w);
+    const saved = readFileSync(w.config(), 'utf8');
+    const script = `import { prepareChannelConfig } from ${JSON.stringify(join(import.meta.dir, '../src/mcp/launch-config.ts'))};
+      const read = prepareChannelConfig(${JSON.stringify(w.input())});
+      if (read.ok) read.lease.release();
+      process.exit(read.ok ? 0 : 3);`;
+    const other = spawnSync(process.execPath, ['--eval', script], { encoding: 'utf8' });
+    expect(other.status).toBe(3);
+    expect(readFileSync(w.config(), 'utf8')).toBe(saved);
+    lease.check();
+    lease.release();
+  });
+
+  test('a dead config writer leaves a closed claim that a later launch never reclaims', () => {
+    const w = world();
+    const script = `import { prepareChannelConfig } from ${JSON.stringify(join(import.meta.dir, '../src/mcp/launch-config.ts'))};
+      const read = prepareChannelConfig(${JSON.stringify(w.input())});
+      process.exit(read.ok ? 0 : 3);`;
+    const dead = spawnSync(process.execPath, ['--eval', script], { encoding: 'utf8' });
+    expect(dead.status).toBe(0);
+    const saved = readFileSync(w.config(), 'utf8');
+    expect(prepareChannelConfig(w.input()).ok).toBe(false);
+    expect(readFileSync(w.config(), 'utf8')).toBe(saved);
+    expect(existsSync(join(w.lobby, 'alpha/.team-channel.lock'))).toBe(true);
   });
 
   for (const shape of ['foreign-server', 'edited-owned-server', 'array', 'invalid-json', 'invalid-servers', 'hardlink', 'config-link', 'folder-link']) {
