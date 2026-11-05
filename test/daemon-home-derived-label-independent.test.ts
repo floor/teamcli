@@ -192,7 +192,7 @@ describe('home-derived daemon label and --home (independent scenes)', () => {
     }
   });
 
-  test('every home other than the account home derives its own label from that home realpath', () => {
+  test('every home other than the account home derives its own label, and no label is derived without a readable account home', () => {
     const accountHome = makeDir('ind-derive-account-');
     const other = makeDir('ind-derive-other-');
     const third = makeDir('ind-derive-third-');
@@ -204,12 +204,66 @@ describe('home-derived daemon label and --home (independent scenes)', () => {
     expect(daemonLabel(other, accountHome)).toMatch(/^io\.floor\.teamcli\.daemon\.[0-9a-f]{16}$/);
     expect(daemonLabel(other, accountHome)).not.toBe(daemonLabel(third, accountHome));
     expect(daemonLabel(alias, accountHome)).toBe(derivedLabel(other));
-    expect(daemonLabel(other, null)).toBe(derivedLabel(other));
-    expect(daemonLabel(other, '')).toBe(derivedLabel(other));
 
-    // With no readable account home, even the account home derives.
-    expect(daemonLabel(accountHome, null)).toBe(derivedLabel(accountHome));
+    // With no readable account home, no label is derived at all: fail closed.
+    expect(daemonLabel(other, null)).toBeNull();
+    expect(daemonLabel(other, '')).toBeNull();
+    expect(daemonLabel(other, 'relative/home')).toBeNull();
+    expect(daemonLabel(accountHome, null)).toBeNull();
     expect(daemonLabel(accountHome, null)).not.toBe(DAEMON_LABEL);
+  });
+
+  test('install and uninstall fail closed when the account home cannot be read, with or without --home', async () => {
+    const accountHome = makeDir('ind-closed-account-');
+    const scratchHome = makeDir('ind-closed-scratch-');
+    const { root, entry } = makeProject(scratchHome);
+
+    // Plant a throwaway Home's unit with a readable account home, so a later removal would be visible.
+    const { manager: readable } = syntheticManager(accountHome);
+    const program: ServiceProgram = { execPath: process.execPath, entry, roots: [] };
+    const planted = readable.install(scratchHome, program);
+    expect(planted.ok).toBe(true);
+    if (!planted.ok) return;
+    const scratchUnit = join(scratchHome, 'Library', 'LaunchAgents', `${derivedLabel(scratchHome)}.plist`);
+    expect(existsSync(scratchUnit)).toBe(true);
+
+    // A runner whose passwd read fails: the account home cannot be read.
+    const refusedCalls: string[] = [];
+    const failingRunner: ServiceRunner = (command, args) => {
+      refusedCalls.push([command, ...args].join(' '));
+      if (command === '/usr/bin/id') return { status: 1, stdout: '', stderr: 'no such user' };
+      return { status: 0, stdout: '', stderr: '' };
+    };
+    const unreadable = darwinServiceManager({ uid: UID, runner: failingRunner, sleep: () => {} });
+    expect(unreadable.accountHome?.()).toBeNull();
+
+    const cases = [
+      { verb: 'install', argv: ['install', '--root', root, '--json'] },
+      { verb: 'install', argv: ['install', '--home', scratchHome, '--root', root, '--json'] },
+      { verb: 'uninstall', argv: ['uninstall', '--json'] },
+      { verb: 'uninstall', argv: ['uninstall', '--home', scratchHome, '--json'] },
+    ];
+    for (const one of cases) {
+      refusedCalls.splice(0);
+      const io = testIo(scratchHome, { kind: 'owner' });
+      const code = await runDaemon(one.argv, io, {
+        home: scratchHome,
+        service: unreadable,
+        program: { execPath: process.execPath, entry },
+        health: async () => ANSWERING,
+        sleep: async () => {},
+      });
+      expect(code).not.toBe(0);
+      const said = io.out + io.err;
+      expect(said).toContain('the account home could not be read');
+      expect(io.out).toContain(one.verb === 'install' ? 'daemon.install-failed' : 'daemon.uninstall-failed');
+      // Only the passwd read may have run: no unit or job call.
+      expect(refusedCalls.every((line) => line.startsWith('/usr/bin/id'))).toBe(true);
+    }
+
+    // Nothing new was written anywhere, and the planted unit was not removed.
+    expect(existsSync(scratchUnit)).toBe(true);
+    expect(existsSync(join(accountHome, 'Library', 'LaunchAgents'))).toBe(false);
   });
 
   test('install and uninstall refuse every --home that is empty, trailing-slashed, missing, a symlink, or reached through a symlink', async () => {
