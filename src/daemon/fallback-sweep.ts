@@ -18,8 +18,9 @@ import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { DAEMON_BACKLOG_DEFAULTS, loadAndResolvePolicyChain } from '../policy/index.ts';
 import {
-  drainDeferredNotes,
+  drainDeferredNotesSteps,
   escalationSteps,
+  FALLBACK_STEP_CHUNK_MS,
   reclaimSteps,
   retirementSteps,
   type DeferredNoteDrainReport,
@@ -35,6 +36,10 @@ export const FALLBACK_STORE_PASS_MS = 30_000;
 /** Episodes retired and lock folders judged by one retirement pass. A store with a long history
  *  drains over several passes instead of one tick holding the event loop. */
 export const FALLBACK_STORE_PASS_LIMIT = 256;
+
+/** The wall-clock turn cap inside a sliced pass: even when the caller's slice budget is wider, a
+ *  real-clock pass yields at least this often so a child's heartbeat timer is never starved. */
+export const FALLBACK_SLICE_STEP_MS = FALLBACK_STEP_CHUNK_MS;
 
 /** A hosted checkout and the team file the daemon validated when it started. */
 export type SweepRoot = { root: string; team: TeamFile };
@@ -184,6 +189,10 @@ export async function sweepFallbackEscalationsSliced(
   input: FallbackSweepInput & { slices: SweepSlices; sliceClock?: () => number },
 ): Promise<FallbackSweepResult> {
   const clock = input.sliceClock ?? Date.now;
+  const budgetMs =
+    input.sliceClock !== undefined
+      ? input.slices.sliceMs
+      : Math.min(input.slices.sliceMs, FALLBACK_SLICE_STEP_MS);
   const at = input.now();
   const roots: SweepRootResult[] = [];
   for (const given of input.roots) {
@@ -192,7 +201,7 @@ export async function sweepFallbackEscalationsSliced(
     let sliceStart = clock();
     let step = steps.next();
     while (!step.done) {
-      if (clock() - sliceStart >= input.slices.sliceMs) {
+      if (clock() - sliceStart >= budgetMs) {
         const more = await input.slices.yield();
         if (!more || input.slices.stopping()) {
           steps.return(null);
@@ -240,7 +249,7 @@ function* sweepRootSteps(
     // Notes first: a fact a send deferred is recorded before this pass judges the episode, so an
     // exhaustion it carries schedules its escalation in the same tick rather than the next. The
     // drain is bounded and takes every lock with `waitMs: 0`, so it defers rather than waits.
-    const notes = drainDeferredNotes(ctx, { at, lockWaitMs: 0 });
+    const notes = yield* drainDeferredNotesSteps(ctx, { at, lockWaitMs: 0 });
     const report = yield* escalationSteps(ctx, { at, lockWaitMs: 0 });
     // Escalation first: a pending intent is flushed before retirement may archive its episode,
     // and an intent written during the pass keeps the marker out of the retired set.
