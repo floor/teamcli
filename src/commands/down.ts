@@ -730,9 +730,12 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // reader to the owner. An owner-seat answer has already admitted this run.
   const detached = clientDown !== null || seatApproved ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) {
-    refuse(io, json, 'down', { id: 'down.detached', message: detached, repair: null });
-    // exit: down.detached
-    return 1;
+    seatApproved = ownerSeatRuleAdmits('team-down', io.cwd, dry, io, seatSources);
+    if (!seatApproved) {
+      refuse(io, json, 'down', { id: 'down.detached', message: detached, repair: null });
+      // exit: down.detached
+      return 1;
+    }
   }
   // Dev mode is resolved from the run's file below, once its chain is known.
   const refusals: DownRefusal[] = [];
