@@ -2310,7 +2310,9 @@ describe('team usage', () => {
     const line = io.out.split('\n').find((text) => /^openai\s+session/.test(text)) ?? '';
     expect(line).toContain('near cap  runs out before the reset');
     expect(line).not.toContain('fresh');
-    expect(io.out).toContain('advice: near cap on openai (session used 60%, runs out before the reset)');
+    // Item 11: the advice states the figure and its clock; no seat is recorded on openai here, so
+    // it names no seat to move.
+    expect(io.out).toContain('advice: openai session 60% used, runs out before the reset');
     expect(io.out).not.toContain('\nquota\n');
   });
 
@@ -2341,7 +2343,7 @@ describe('team usage', () => {
     expect(await runUsage([], onPace, { home, now: () => NOW, observe: () => ({ observations: [read(96, 4, NOW.getTime() + 9 * 3_600_000)], costs: [], notes: [] }) })).toBe(0);
     expect(row(onPace.out)).toContain('ok  on pace');
     expect(row(onPace.out)).not.toContain('near cap');
-    expect(onPace.out).not.toContain('near cap on anthropic');
+    expect(onPace.out).not.toContain('anthropic weekly 96% used');
 
     // Far ahead of its clock: near the cap, with the hours it runs out against the hours to reset.
     withWeekly(47.1, 52.9, '2026-10-10T15:00:00Z');
@@ -2441,6 +2443,30 @@ describe('team usage', () => {
     const plainJson = testIo(root, OWNER);
     expect(await runUsage(['--json'], plainJson, { home, now: () => NOW })).toBe(0);
     expect(JSON.parse(plainJson.out) as Record<string, unknown>).not.toHaveProperty('credits');
+  });
+
+  test('a near-cap account’s advice names its figure, its credits answer and the seats to move', async () => {
+    // Item 11 (the owner's run, 2026-11-05): `near cap on anthropic` said what was happening and
+    // nothing about what to do. The advice now carries the figure and its clock, the answer the
+    // owner's credit figures allow about the overage, and the move — the seats drawing on the
+    // account by name, and an account with headroom when one has it.
+    withoutReadings();
+    writeFileSync(machineAccountsPath(home), 'accounts:\n  - anthropic\ncredits:\n  anthropic:\n    available: 260.50\n    currency: EUR\n    cap: 300\n    autoReload: false\n');
+    const io = testIo(root, OWNER);
+    const code = await runUsage([], io, {
+      home,
+      now: () => NOW,
+      observe: () => ({
+        observations: [
+          { account: 'anthropic', window: 'weekly', left: 52.9, used: 47.1, resetsAt: NOW.getTime() + 150 * 3_600_000, resetText: null, observedAt: NOW.getTime() - 60_000, source: 'status line', seat: 'lead', margin: null, wall: false },
+          { account: 'openai', window: 'session', left: 90, used: 10, resetsAt: NOW.getTime() + 9 * 3_600_000, resetText: null, observedAt: NOW.getTime() - 60_000, source: 'status line', seat: 'lead', margin: 30, wall: false },
+        ],
+        costs: [],
+        notes: [],
+      }),
+    });
+    expect(code).toBe(0);
+    expect(io.out).toContain('advice: anthropic weekly 47.1% used, runs out in about 20h12m, before the reset in 150h; credits €260.50 cover the overage until they are spent, €39.50 short of the monthly cap; or move lead off anthropic to openai (session used 10%, ahead of pace by 30%)\n');
   });
 
   test('a spend a seat’s own row printed is measured for that seat and its run, and never for another run', async () => {

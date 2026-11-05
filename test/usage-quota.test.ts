@@ -128,7 +128,7 @@ describe('the quota model', () => {
     const text = quotaText(quota).join('\n');
     expect(text).toContain('    Google AI Ultra, Gemini models  near cap  seats: gem');
     expect(text).not.toContain('(gemini)');
-    expect(quota.advice).toContain('Google AI Ultra, Gemini models (weekly');
+    expect(quota.advice).toContain('Google AI Ultra, Gemini models weekly 89% used');
   });
 
   const labs: QuotaLabInput[] = [
@@ -249,7 +249,9 @@ describe('the quota model', () => {
       now: NOW,
     });
     expect(quota.labs[0]?.accounts[0]?.state).toBe('near cap');
-    expect(quota.advice).toBe('near cap on google (weekly used 89%, runs out before the reset)');
+    // Item 11: the advice states the figure and its clock in the owner's words, never the label
+    // `near cap on google` alone.
+    expect(quota.advice).toBe('google weekly 89% used, runs out before the reset');
     // The threshold is the headroom band's mirror: a window a headroom band ahead of its clock
     // is near the cap, one a tenth short of it is ok — the used figure alone decides nothing
     // when the window's clock gives a margin.
@@ -293,6 +295,54 @@ describe('the quota model', () => {
       [{ account: 'anthropic', seats: ['lead'] }, { account: 'openai', seats: [] }],
       [fresh('anthropic', 100, null), fresh('openai', 70, 5)],
     )).toBe('swap lead off anthropic (walled): no other account has headroom');
+  });
+
+  test('a near-cap account is advice to act: its figure, its credits, and the seats to move', () => {
+    // Item 11 (the owner's run, 2026-11-05): `near cap on anthropic` named a state and nothing to
+    // do about it. The advice states the figure and its clock, answers whether the owner's credit
+    // figures cover the overage the pace is heading for, and names the seats drawing on the
+    // account together with an account that has headroom. A seat nobody is recorded on and a
+    // destination no account offers are never invented.
+    const scene = (options: {
+      seats?: string[];
+      credits?: Record<string, { available: number; currency: string; cap?: number }>;
+      target?: boolean;
+    }): string => {
+      const labs = [{ lab: 'anthropic', accounts: [{ account: 'anthropic', seats: options.seats ?? ['lead', 'coda'] }] }];
+      // Weekly at 47.1% with 150h to reset: 18h of the window gone against 47.1% spent, so the
+      // pace empties it in about 20h12m — the case item 4 says reads near cap.
+      const observations = [observed({ account: 'anthropic', used: 47.1, left: 52.9, resetsAt: NOW + 150 * HOUR })];
+      if (options.target !== false) {
+        labs.push({ lab: 'openai', accounts: [{ account: 'openai', seats: [] }] });
+        observations.push(observed({ account: 'openai', used: 10, left: 90, margin: 30, resetsAt: NOW + 9 * HOUR }));
+      }
+      return quotaOf({
+        labs,
+        observations,
+        ...(options.credits === undefined ? {} : { credits: options.credits }),
+        accountsFile: 'accounts.yaml',
+        now: NOW,
+      }).advice;
+    };
+    expect(scene({ credits: { anthropic: { available: 260.5, currency: 'EUR', cap: 300 } } })).toBe(
+      'anthropic weekly 47.1% used, runs out in about 20h12m, before the reset in 150h; credits €260.50 cover the overage until they are spent, €39.50 short of the monthly cap; or move lead, coda off anthropic to openai (weekly used 10%, ahead of pace by 30%)',
+    );
+    // No credits entry: the advice does not pretend to know the overage is covered.
+    expect(scene({})).toBe('anthropic weekly 47.1% used, runs out in about 20h12m, before the reset in 150h; or move lead, coda off anthropic to openai (weekly used 10%, ahead of pace by 30%)');
+    // No account offers headroom: the move is still named, with no invented destination.
+    expect(scene({ target: false })).toBe('anthropic weekly 47.1% used, runs out in about 20h12m, before the reset in 150h; or move lead, coda off anthropic: no other account has headroom');
+    // No seat is recorded on it: the advice names no seat, and names the headroom instead.
+    expect(scene({ seats: [] })).toBe('anthropic weekly 47.1% used, runs out in about 20h12m, before the reset in 150h; headroom on openai (weekly used 10%, ahead of pace by 30%)');
+    // With no clock printed, the used figure alone says near cap, and the line says the reset is
+    // not printed rather than inventing one.
+    const noClock = quotaOf({
+      labs: [{ lab: 'anthropic', accounts: [{ account: 'anthropic', seats: [] }] }],
+      observations: [observed({ account: 'anthropic', used: 96, left: 4 })],
+      accountsFile: 'accounts.yaml',
+      now: NOW,
+    });
+    expect(noClock.labs[0]?.accounts[0]?.state).toBe('near cap');
+    expect(noClock.advice).toBe("anthropic weekly 96% used; no reset printed on anthropic (weekly): the CLI's own status view shows it");
   });
 
   test('a lab with no account declared is spoken for once: the report line, not the block', () => {

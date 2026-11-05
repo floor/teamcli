@@ -10,7 +10,9 @@
 // A line that prints its margin is believed as printed; one that does not is read the same way,
 // against the window's length. The session window is five hours, the length the sibling CLI's own
 // usage report names (`Five Hour Limit`).
+import { money } from '../budgets/gate.ts';
 import { span, WINDOW_MS } from '../budgets/table.ts';
+import type { MachineCredit } from './machine-accounts.ts';
 
 export const QUOTA_WINDOWS = ['session', 'weekly'] as const;
 export type QuotaWindow = (typeof QUOTA_WINDOWS)[number];
@@ -166,6 +168,10 @@ export type QuotaOptions = {
   /** Windows the report already knows are past their own window (`account (window)`), read from
    *  the budget rows: the advice names them even when no observation reached this block. */
   expired?: readonly string[];
+  /** The owner's credit figures, keyed by account, for the accounts this view prints: the one
+   *  source that can say whether the overage a near-cap account is heading for is covered. An
+   *  account with no entry gets no credit clause — never a guessed amount. */
+  credits?: Readonly<Record<string, MachineCredit>>;
 };
 
 function keyOf(one: { account: string; pool?: 'gemini' | 'claude-gpt' }): string {
@@ -367,7 +373,7 @@ export function quotaOf(options: QuotaOptions): ReportQuota {
     ...built.flatMap((lab) => lab.accounts.flatMap((account) =>
       account.windows.filter((one) => one.expired).map((one) => expiredLabel(account, lab.lab, one.window)))),
   ])];
-  return { format: 1, accountsFile, labs: built, advice: adviceOf(built, expired) };
+  return { format: 1, accountsFile, labs: built, advice: adviceOf(built, expired, options.credits ?? {}) };
 }
 
 /** One expired window's label for the advice line: the block's own spelling of an account under
@@ -377,8 +383,12 @@ export function expiredLabel(one: { account: string; pool?: 'gemini' | 'claude-g
   return `${named(one, lab)} (${window})`;
 }
 
+/** One account as the advice reads it: the lab it sits under and the margin its freshest window
+ *  gives (the weekly one first), so every clause speaks about the same account and pace. */
+type AccountView = { lab: string; account: ReportQuotaAccount; margin: number | null };
+
 /** Every account the advice may speak about, with the lab it sits under. */
-function accountsOf(labs: readonly ReportQuotaLab[]): Array<{ lab: string; account: ReportQuotaAccount; margin: number | null }> {
+function accountsOf(labs: readonly ReportQuotaLab[]): AccountView[] {
   return labs.flatMap((lab) => lab.accounts.map((account) => {
     const weekly = account.windows.find((one) => one.window === 'weekly' && !one.stale && one.margin !== null);
     const any = account.windows.find((one) => !one.stale && one.margin !== null);
@@ -392,9 +402,15 @@ function accountsOf(labs: readonly ReportQuotaLab[]): Array<{ lab: string; accou
  * block already shows. A walled account with seats is offered the best-ordered healthy target; a
  * machine with walls and no headroom says so instead of inventing a destination. A window whose
  * reading is older than its own window is named with how to read a fresh one — the figure it
- * carried is not advice about the present.
+ * carried is not advice about the present. A near-cap account is an action, not a label: its
+ * figure and clock in words, the credits' answer when the machine file writes them down, and the
+ * move — the seats the block already names, to an account with headroom when one has it.
  */
-export function adviceOf(labs: readonly ReportQuotaLab[], expired: readonly string[] = []): string {
+export function adviceOf(
+  labs: readonly ReportQuotaLab[],
+  expired: readonly string[] = [],
+  credits: Readonly<Record<string, MachineCredit>> = {},
+): string {
   const all = accountsOf(labs);
   // Any window at all, stale ones included: "no readings yet" is for a machine nothing answered
   // on, and a stale figure is an answer whose clock has moved on — the headroom sentence is the
@@ -428,13 +444,6 @@ export function adviceOf(labs: readonly ReportQuotaLab[], expired: readonly stri
   const near = all
     .filter((one) => one.account.state === 'near cap')
     .sort((a, b) => (a.margin ?? 0) - (b.margin ?? 0) || a.account.account.localeCompare(b.account.account));
-  const describe = (one: { lab: string; account: ReportQuotaAccount; margin: number | null }): string => {
-    const figure = one.account.windows.find((w) => w.window === 'weekly' && !w.stale && w.margin !== null)
-      ?? one.account.windows.find((w) => !w.stale && w.margin !== null);
-    const parts = [`used ${figure?.used ?? '?'}%`];
-    if (one.margin !== null) parts.push(marginWord(one.margin));
-    return `${named(one.account, one.lab)} (${figure?.window ?? 'weekly'} ${parts.join(', ')})`;
-  };
   const withNote = (line: string): string => (notes.length === 0 ? line : `${line}; ${notes.join('; ')}`);
   if (walled.length > 0) {
     const moves: string[] = [];
@@ -443,22 +452,102 @@ export function adviceOf(labs: readonly ReportQuotaLab[], expired: readonly stri
       const target = targets.find((other) => other.account !== one.account);
       moves.push(target === undefined
         ? `swap ${who} off ${named(one.account, one.lab)} (walled): no other account has headroom`
-        : `swap ${who} off ${named(one.account, one.lab)} (walled) to ${describe(target)}`);
+        : `swap ${who} off ${named(one.account, one.lab)} (walled) to ${describeAccount(target)}`);
     }
     return withNote(moves.join('; '));
   }
-  // An account near its cap is named before any headroom: the owner's one line must say what is
-  // about to run out, and where the spare capacity is when there is one.
+  // An account near its cap is named before any headroom, as the action the owner asked for: the
+  // figure about to run out, whether the credits cover the overage, and the seats to move.
   if (near.length > 0) {
-    const warn = `near cap on ${near.slice(0, 2).map((one) => describe(one)).join('; ')}`;
-    return withNote(targets.length > 0 ? `${warn}; headroom on ${targets.slice(0, 2).map((one) => describe(one)).join('; ')}` : warn);
+    return withNote(near.slice(0, 2).map((one) => nearAdvice(one, targets, credits)).join('; '));
   }
   if (targets.length > 0) {
-    return withNote(`headroom on ${targets.slice(0, 2).map((one) => describe(one)).join('; ')}`);
+    return withNote(`headroom on ${targets.slice(0, 2).map((one) => describeAccount(one)).join('; ')}`);
   }
   if (notes.length > 0) return notes.join('; ');
   if (withFigures.length > 0) return `no account has headroom yet (no fresh reading is ahead of pace by ${HEADROOM}% or more)`;
   return 'no readings yet: no seat status line and no CLI usage command has answered';
+}
+
+/** One account as the advice names it on a target or a headroom clause: its label, and the
+ *  freshest window's figure with the pace in words. */
+function describeAccount(one: AccountView): string {
+  const figure = one.account.windows.find((w) => w.window === 'weekly' && !w.stale && w.margin !== null)
+    ?? one.account.windows.find((w) => !w.stale && w.margin !== null);
+  const parts = [`used ${figure?.used ?? '?'}%`];
+  if (one.margin !== null) parts.push(marginWord(one.margin));
+  return `${named(one.account, one.lab)} (${figure?.window ?? 'weekly'} ${parts.join(', ')})`;
+}
+
+/** The fresh window that made an account near its cap: the worst-margin one (a weekly window
+ *  first when two windows both run ahead of their clock), and failing any margin, the fullest
+ *  fresh window — the used figure is what the state falls back to when no clock was printed. */
+function nearFigureOf(account: ReportQuotaAccount): ReportQuotaWindow | undefined {
+  const fresh = account.windows.filter((one) => !one.stale && one.used !== null);
+  const ahead = fresh.filter((one) => one.margin !== null && one.margin <= -HEADROOM);
+  return ahead.find((one) => one.window === 'weekly') ?? ahead[0]
+    ?? fresh.find((one) => one.window === 'weekly') ?? fresh[0];
+}
+
+/** The clock a near-cap figure carries, in the window line's own words: the run-out and the reset
+ *  when the window's clock names both, the run-out alone when its pace is known without a reset,
+ *  and the reset alone when the used figure is what made the account near. Null for a figure that
+ *  printed no reset: the advice's own `no reset printed` note names that window and where to read
+ *  one, so the fact does not repeat it. */
+function nearClock(figure: ReportQuotaWindow): string | null {
+  if (figure.runsOutIn !== null) return `runs out in about ${figure.runsOutIn}, before the reset in ${figure.resetsIn}`;
+  if (figure.margin !== null && figure.margin <= -HEADROOM) return 'runs out before the reset';
+  return figure.resetsIn === null ? null : `resets in ${figure.resetsIn}`;
+}
+
+/** The answer the owner's credit figures give about a near-cap account's overage, in the advice's
+ *  words: the money covers it, or covers it until the monthly cap the credits may be spent to.
+ *  The expected overage in money is a figure no CLI prints, so no amount is invented — the cap is
+ *  the limit the figures themselves name. */
+function creditCoverText(credit: MachineCredit): string {
+  const available = amountText(credit.available, credit.currency);
+  if (credit.cap !== undefined && credit.available < credit.cap) {
+    return `credits ${available} cover the overage until they are spent, ${amountText(credit.cap - credit.available, credit.currency)} short of the monthly cap`;
+  }
+  return `credits ${available} cover the overage`;
+}
+
+/** One near-cap account's advice: the figure and its clock, the credits' answer when the machine
+ *  file writes them down, and the move — the seats the block already names on the account, and an
+ *  account with headroom when one exists. A seat this view does not know and a destination no
+ *  account offers are never invented. */
+function nearAdvice(one: AccountView, targets: readonly AccountView[], credits: Readonly<Record<string, MachineCredit>>): string {
+  const figure = nearFigureOf(one.account);
+  const label = named(one.account, one.lab);
+  const clock = figure === undefined ? null : nearClock(figure);
+  const parts: string[] = [figure === undefined
+    ? `${label} is near its cap`
+    : `${label} ${figure.window} ${figure.used ?? '?'}% used${clock === null ? '' : `, ${clock}`}`];
+  const credit = credits[one.account.account];
+  if (credit !== undefined) parts.push(creditCoverText(credit));
+  // The move names the seats the report already shows on the account; a restricted view that
+  // cannot name them gets the headroom sentence instead, never a guessed seat.
+  if (one.account.seats.length > 0) {
+    const who = one.account.seats.join(', ');
+    const target = targets.find((other) => other.account !== one.account && other.lab !== one.lab)
+      ?? targets.find((other) => other.account !== one.account);
+    parts.push(target === undefined
+      ? `or move ${who} off ${label}: no other account has headroom`
+      : `or move ${who} off ${label} to ${describeAccount(target)}`);
+  } else if (targets.length > 0) {
+    parts.push(`headroom on ${targets.slice(0, 2).map((other) => describeAccount(other)).join('; ')}`);
+  }
+  return parts.join('; ');
+}
+
+/** The sign a currency prints with where this tool knows one: the owner's credit figures are
+ *  read from a console that writes `€`, and a currency this table does not know keeps the figure
+ *  and its code (`260.50 CHF`), never a guessed sign. */
+const CURRENCY_SIGNS: Record<string, string> = { EUR: '€', USD: '$', GBP: '£', JPY: '¥' };
+
+export function amountText(amount: number, currency: string): string {
+  const sign = CURRENCY_SIGNS[currency];
+  return sign === undefined ? `${money(amount)} ${currency}` : `${sign}${money(amount)}`;
 }
 
 /** A signed margin, one decimal when it has one: `+13.3`, `-10`, `0`. */

@@ -25,7 +25,7 @@ import { readMachineReadings, type MachineReading } from './machine-readings.ts'
 import { overridesInForceOf, quotaWith, type ProfileOverride } from '../profiles/overrides.ts';
 import { shippedQuotaAccounts } from '../profiles/profile.ts';
 import type { WindowName } from '../profiles/quota.ts';
-import { accountLabel, expiredLabel, marginOf, marginWord, NEAR_CAP, QUOTA_STALE_MS, quotaOf, quotaText, PANE_UNREAD, USAGE_ACCOUNTS, USAGE_UNANSWERED, windowState, type CostObservation, type QuotaLabInput, type QuotaObservation, type QuotaState, type ReportQuota, type ReportQuotaAccount, type ReportQuotaWindow } from './quota.ts';
+import { accountLabel, amountText, expiredLabel, marginOf, marginWord, NEAR_CAP, QUOTA_STALE_MS, quotaOf, quotaText, PANE_UNREAD, USAGE_ACCOUNTS, USAGE_UNANSWERED, windowState, type CostObservation, type QuotaLabInput, type QuotaObservation, type QuotaState, type ReportQuota, type ReportQuotaAccount, type ReportQuotaWindow } from './quota.ts';
 import { readState, type State } from '../state.ts';
 import { approvalStanding, readApproval, storesFolder, type ApprovalRecord, type Standing } from '../store/store.ts';
 
@@ -1719,12 +1719,11 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
     entry.kind === 'subscription' && entry.machine.expired && entry.machine.window !== null
       ? [expiredLabel(entry, lab.lab, entry.machine.window)]
       : [])))];
-  const quota = quotaOf({ labs: quotaLabs, observations: synthesized.observations, accountsFile: ACCOUNTS_FILE, now, ...(expired.length > 0 ? { expired } : {}) });
-
   // The owner's credit figures, for the accounts whose rows this view prints: a subscription's
   // credits pay usage past the plan's limit, and an account this view hides gets no entry here,
   // exactly like its rows. Copied field by field, so the owner's map never rides the JSON by
-  // reference.
+  // reference. The advice reads the same map, so a near-cap account's overage answer is the
+  // credits line's own figures, never a second reading.
   const credits: Record<string, MachineCredit> = {};
   for (const lab of labs) {
     for (const entry of lab.accounts) {
@@ -1739,6 +1738,14 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
       };
     }
   }
+  const quota = quotaOf({
+    labs: quotaLabs,
+    observations: synthesized.observations,
+    accountsFile: ACCOUNTS_FILE,
+    now,
+    ...(expired.length > 0 ? { expired } : {}),
+    ...(Object.keys(credits).length === 0 ? {} : { credits }),
+  });
 
   // Every why-line, the caller's own first, then by the words and the account: the order holds
   // in both views, so hiding a name cannot reshuffle the lines around it. A team that is not
@@ -2234,16 +2241,6 @@ export function reportText(report: UsageReport, tree = false): string {
   lines.push('');
   lines.push(`usage on this machine, ${count(report.counts.teams, 'team')}, ${count(report.counts.labs, 'lab')}, ${count(report.counts.accounts, 'account')}`);
   return `${lines.join('\n')}\n`;
-}
-
-/** The sign a currency prints with where this tool knows one: the owner's credit figures are
- *  read from a console that writes `€`, and a currency this table does not know keeps the figure
- *  and its code (`260.50 CHF`), never a guessed sign. */
-const CURRENCY_SIGNS: Record<string, string> = { EUR: '€', USD: '$', GBP: '£', JPY: '¥' };
-
-function amountText(amount: number, currency: string): string {
-  const sign = CURRENCY_SIGNS[currency];
-  return sign === undefined ? `${money(amount)} ${currency}` : `${sign}${money(amount)}`;
 }
 
 /** The credits line under an account's rows: the money the owner wrote down, its monthly cap and
