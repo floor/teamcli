@@ -323,3 +323,52 @@ function sideProblem(value: string, field: 'from' | 'to', bareSeat: boolean): st
 function shellWord(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
+
+function rewriteSendGrantEndpoint(
+  endpoint: string,
+  oldProject: string,
+  newProject: string,
+  oldSession: string,
+  newSession: string,
+): string {
+  const at = endpoint.indexOf('@');
+  if (at > 0 && endpoint.slice(at + 1) === oldProject && newProject !== oldProject) {
+    return `${endpoint.slice(0, at)}@${newProject}`;
+  }
+  const slash = endpoint.indexOf('/');
+  if (slash > 0 && endpoint.slice(0, slash) === oldSession && newSession !== oldSession) {
+    return `${newSession}/${endpoint.slice(slash + 1)}`;
+  }
+  return endpoint;
+}
+
+/**
+ * Updates team-scoped send grants (`seat@<oldProject>` or `<oldSession>/seat`) across a team
+ * rename. When `reSign` is true (owner run), re-writes and re-signs matching grants in place;
+ * otherwise returns the exact `team grant` reissue lines for the owner.
+ */
+export function reissueTeamSendGrants(
+  home: string,
+  oldProject: string,
+  newProject: string,
+  oldSession: string,
+  newSession: string,
+  options: { now?: Date; reSign?: boolean } = {},
+): { reissued: string[]; reissueLines: string[] } {
+  const now = options.now ?? new Date();
+  const grants = readSendGrants(home);
+  const reissued: string[] = [];
+  const reissueLines: string[] = [];
+  for (const grant of grants) {
+    const nextFrom = rewriteSendGrantEndpoint(grant.from, oldProject, newProject, oldSession, newSession);
+    const nextTo = rewriteSendGrantEndpoint(grant.to, oldProject, newProject, oldSession, newSession);
+    if (nextFrom === grant.from && nextTo === grant.to) continue;
+    const updated: SendGrantRecord = { name: grant.name, from: nextFrom, to: nextTo, expires: grant.expires };
+    reissueLines.push(sendGrantReissueLine(updated));
+    if (options.reSign) {
+      const res = writeSendGrant(home, updated, { now });
+      if (res.ok) reissued.push(grant.name);
+    }
+  }
+  return { reissued, reissueLines };
+}

@@ -437,3 +437,69 @@ export function renameSeat(text: string, fromName: string, toName: string): stri
   }
   return lines.join('\n');
 }
+
+/**
+ * Rewrites top-level `project:`, optional `in_project:`, and optional `session:` (plus `grant.session`
+ * when `session` moves) in a team YAML text while preserving surrounding lines and comments.
+ */
+export function renameTeamIdentity(
+  text: string,
+  opts: { project: string; inProject?: string; session?: string; oldSession?: string },
+): string {
+  const lines = text.split('\n');
+  let projectIdx = -1;
+  let entityIdx = -1;
+  let inProjectIdx = -1;
+  let sessionIdx = -1;
+  let inGrant = false;
+  let grantIndent = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    if (line.trim() === '' || /^\s*#/.test(line)) continue;
+    const ind = indent(line);
+    if (inGrant && ind <= grantIndent) inGrant = false;
+    if (/^grant:\s*(#.*)?$/.test(line)) {
+      inGrant = true;
+      grantIndent = ind;
+      continue;
+    }
+    if (ind === 0) {
+      if (/^project:\s*(.*)$/.test(line)) {
+        projectIdx = i;
+        lines[i] = setValue(line, opts.project);
+      } else if (/^entity:\s*(.*)$/.test(line)) {
+        entityIdx = i;
+      } else if (/^in_project:\s*(.*)$/.test(line)) {
+        inProjectIdx = i;
+        if (opts.inProject !== undefined) {
+          lines[i] = setValue(line, opts.inProject);
+        }
+      } else if (/^session:\s*(.*)$/.test(line)) {
+        sessionIdx = i;
+        if (opts.session !== undefined) {
+          lines[i] = setValue(line, opts.session);
+        }
+      }
+    } else if (inGrant && opts.session !== undefined) {
+      const m = /^\s+session:\s*(.*)$/.exec(line);
+      if (m && (opts.oldSession === undefined || scalar(m[1] ?? '') === opts.oldSession)) {
+        lines[i] = setValue(line, opts.session);
+      }
+    }
+  }
+
+  if (opts.inProject !== undefined && inProjectIdx < 0) {
+    const after = entityIdx >= 0 ? entityIdx : projectIdx >= 0 ? projectIdx : 0;
+    lines.splice(after + 1, 0, `in_project: ${opts.inProject}`);
+    if (sessionIdx > after) sessionIdx++;
+    inProjectIdx = after + 1;
+  }
+
+  if (opts.session !== undefined && sessionIdx < 0) {
+    const after = inProjectIdx >= 0 ? inProjectIdx : entityIdx >= 0 ? entityIdx : projectIdx >= 0 ? projectIdx : 0;
+    lines.splice(after + 1, 0, `session: ${opts.session}`);
+  }
+
+  return lines.join('\n');
+}

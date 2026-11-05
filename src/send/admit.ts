@@ -41,6 +41,8 @@ export type AdmitTeam = {
   operator?: string | null;
   /** The session the team runs in, when the record carries it; a grant may spell a team by it. */
   session?: string | null;
+  /** Previous team names carried across a rename during the grace window. */
+  previousNames?: { name: string; until: string }[];
   /** The roster lines, and, where the record holds them, the capabilities that make a seat's
    *  place in the chain what it is: `leads`, the only thing that makes a seat its team's lead to
    *  admission, and `assistant`, which puts a seat at the entity's assistant position. */
@@ -374,8 +376,8 @@ export function sendGrantFor(
   for (const grant of grants) {
     const expMs = Date.parse(grant.expires);
     if (!Number.isFinite(expMs) || nowMs >= expMs) continue;
-    if (!grantFromNames(grant.from, caller, teams)) continue;
-    if (!grantToNames(grant.to, target, caller, teams)) continue;
+    if (!grantFromNames(grant.from, caller, teams, nowMs)) continue;
+    if (!grantToNames(grant.to, target, caller, teams, nowMs)) continue;
     return { name: grant.name };
   }
   return undefined;
@@ -401,19 +403,19 @@ export function unverifiedGrantFor(
     if (grant.state === 'verified') continue;
     const expMs = Date.parse(grant.expires);
     if (!Number.isFinite(expMs) || nowMs >= expMs) continue;
-    if (!grantFromNames(grant.from, caller, teams)) continue;
-    if (!grantToNames(grant.to, target, caller, teams)) continue;
+    if (!grantFromNames(grant.from, caller, teams, nowMs)) continue;
+    if (!grantToNames(grant.to, target, caller, teams, nowMs)) continue;
     return grant;
   }
   return undefined;
 }
 
 /** Whether a grant's `from` names this caller: an agent id, `seat@team`, or `session/seat`. */
-function grantFromNames(from: string, caller: SendSide, teams: AdmitTeams): boolean {
+function grantFromNames(from: string, caller: SendSide, teams: AdmitTeams, nowMs: number): boolean {
   if (from.startsWith('agt_')) return 'reach' in caller && caller.id === from;
   const at = from.lastIndexOf('@');
   if (at > 0) {
-    return seatOf(caller) === from.slice(0, at) && teamSpelled(teamOf(caller), from.slice(at + 1), teams);
+    return seatOf(caller) === from.slice(0, at) && teamSpelled(teamOf(caller), from.slice(at + 1), teams, nowMs);
   }
   const slash = from.indexOf('/');
   if (slash > 0) {
@@ -425,7 +427,7 @@ function grantFromNames(from: string, caller: SendSide, teams: AdmitTeams): bool
 /** Whether a grant's `to` names this receiver: an agent id, `seat@team`, `session/seat`, a bare
  *  seat, which only the caller's own team makes unambiguous — or the reserved
  *  `orchestrator@<entity>`, the lead seat of a team of the sender's own entity. */
-function grantToNames(to: string, target: SendSide, caller: SendSide, teams: AdmitTeams): boolean {
+function grantToNames(to: string, target: SendSide, caller: SendSide, teams: AdmitTeams, nowMs: number): boolean {
   if (to.startsWith('agt_')) return 'reach' in target && target.id === to;
   const at = to.lastIndexOf('@');
   if (at > 0) {
@@ -444,7 +446,7 @@ function grantToNames(to: string, target: SendSide, caller: SendSide, teams: Adm
         && targetTeam?.entity === entity
         && seatOf(target) === leadSeat(targetTeam);
     }
-    return seatOf(target) === seat && teamSpelled(teamOf(target), spelled, teams);
+    return seatOf(target) === seat && teamSpelled(teamOf(target), spelled, teams, nowMs);
   }
   const slash = to.indexOf('/');
   if (slash > 0) {
@@ -453,11 +455,28 @@ function grantToNames(to: string, target: SendSide, caller: SendSide, teams: Adm
   return seatOf(target) === to && teamOf(target) === teamOf(caller);
 }
 
-/** Whether `spelled` names the team `id`: the record's own id, its project or its session. */
-function teamSpelled(id: string, spelled: string, teams: AdmitTeams): boolean {
+/**
+ * Whether `spelled` names the team `id`: the record's own id, its project, its session, or an
+ * unexpired `previousNames` entry while `TEAM_RENAME_GRACE` is not `'off'` and no registered team
+ * currently holds `spelled` by id, project or session.
+ */
+function teamSpelled(id: string, spelled: string, teams: AdmitTeams, nowMs: number): boolean {
   if (id === spelled) return true;
   const team = teams[id];
-  return team !== undefined && (team.project === spelled || team.session === spelled);
+  if (team === undefined) return false;
+  if (team.project === spelled || team.session === spelled) return true;
+  if (process.env.TEAM_RENAME_GRACE === 'off') return false;
+  if (teams[spelled] !== undefined) return false;
+  for (const other of Object.values(teams)) {
+    if (other.project === spelled || other.session === spelled) return false;
+  }
+  return Boolean(
+    team.previousNames?.some((entry) => {
+      if (entry.name !== spelled) return false;
+      const untilMs = Date.parse(entry.until);
+      return Number.isFinite(untilMs) && untilMs > nowMs;
+    }),
+  );
 }
 
 /**

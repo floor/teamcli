@@ -18,10 +18,12 @@
 // dropped or rewritten. A missing entry (a token count, a cost, a link, a CLI retention) is
 // absent, never zero: "unknown" is a reading the command prints, not a value the registry writes.
 import { randomBytes } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { supportsSessionResume } from '../profiles/profile.ts';
 import { appendStoreLine, listStoreDirs, readStoreLines } from '../send/history.ts';
-import { withLock } from '../state.ts';
+import { withLock, writeAtomic } from '../state.ts';
 import { storePath } from '../store/store.ts';
 
 /** The file inside `<project state folder>/` that holds the registry. */
@@ -550,4 +552,51 @@ function appendSessionEvent(
 ): { ok: true } | { ok: false; note: string } {
   const written = appendStoreLine(team.project, root, home, SESSIONS_FILE, event, { rotate: false, label: LABEL });
   return written.ok ? { ok: true } : { ok: false, note: written.reason };
+}
+
+/**
+ * Re-keys `team` and `herdr_session` in `<storeDir>/sessions.jsonl` across a team rename so
+ * `latestSessionOf` and session history continue to resolve under the team's new name and session.
+ */
+export function renameTeamSessions(
+  storeDir: string,
+  oldProject: string,
+  newProject: string,
+  oldSession: string,
+  newSession: string,
+): number {
+  const file = join(storeDir, SESSIONS_FILE);
+  if (!existsSync(file)) return 0;
+  try {
+    return withLock(storeDir, () => {
+      if (!existsSync(file)) return 0;
+      const text = readFileSync(file, 'utf8');
+      let updated = 0;
+      const nextLines = text.split('\n').map((raw) => {
+        const trimmed = raw.trim();
+        if (!trimmed) return raw;
+        const parsed = parseSessionLine(trimmed);
+        if (!parsed || parsed.event !== 'start') return raw;
+        let changed = false;
+        const next: SessionStartEvent = { ...parsed };
+        if (next.team === oldProject && newProject !== oldProject) {
+          next.team = newProject;
+          changed = true;
+        }
+        if (next.herdr_session === oldSession && newSession !== oldSession) {
+          next.herdr_session = newSession;
+          changed = true;
+        }
+        if (!changed) return raw;
+        updated += 1;
+        return JSON.stringify(next);
+      });
+      if (updated > 0) {
+        writeAtomic(file, nextLines.join('\n'));
+      }
+      return updated;
+    });
+  } catch {
+    return 0;
+  }
 }

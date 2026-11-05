@@ -2925,6 +2925,7 @@ Usage:
 
     team rename <seat> <new-seat> [--session <name>] [--file <path>] [--json]
     team rename --renumber [--dry-run] [--session <name>] [--file <path>] [--json]
+    team rename --team <new-name> [--from <old-name>] [--in-project <project>] [--session <name>] [--rekey] [--dry-run] [--file <path>] [--json]
 
 ### Who may run it
 
@@ -2936,12 +2937,16 @@ Usage:
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
+| `--from` | yes | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--in-project` | yes | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--rekey` | no | no | no |
 | `--renumber` | no | no | no |
 | `--session` | yes | no | no |
+| `--team` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals

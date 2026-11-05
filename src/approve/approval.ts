@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import type { ApprovedCheck } from '../budgets/checks.ts';
-import { renameSeat } from '../file/lines.ts';
+import { renameSeat, renameTeamIdentity } from '../file/lines.ts';
 import type { TeamFile } from '../file/types.ts';
 import { defaultBudgets, defaultWatch, validateTeamFile } from '../file/validate.ts';
 import {
@@ -256,6 +256,58 @@ export function recordSeatRenameOf(
         fingerprints: {
           sections: nextSections,
           seats: nextSeats,
+        },
+      },
+      file: renamedRecordFile,
+    },
+    [],
+    home,
+  );
+}
+
+/**
+ * Carries the approved record across `team rename --team` (and `--rekey`) by applying the team
+ * identity change to `record.file`, updating `approval.project` and `approval.root`, and moving
+ * `session` / `grant` section digests when the live file matches the renamed record.
+ */
+export function recordTeamRenameOf(
+  standing: Standing,
+  team: TeamFile,
+  root: string,
+  opts: { project: string; inProject?: string; session?: string; oldSession?: string },
+  home: string = homedir(),
+): void {
+  if (standing.kind !== 'verified') return;
+  const store = storePath(team.project, root, home);
+  const record = standing.record;
+  if (!validateTeamFile(record.file).ok) return;
+  const renamedRecordFile = renameTeamIdentity(record.file, opts);
+  const renamedRecord = validateTeamFile(renamedRecordFile);
+  if (!renamedRecord.ok) return;
+  const expectedAfter = fingerprints(renamedRecord.team);
+  const live = fingerprints(team);
+
+  const nextSections = { ...record.approval.fingerprints.sections };
+  for (const section of ['session', 'grant'] as const) {
+    const after = expectedAfter.sections[section];
+    if (
+      record.approval.fingerprints.sections[section] !== undefined &&
+      after !== undefined &&
+      live.sections[section] === after
+    ) {
+      nextSections[section] = after;
+    }
+  }
+
+  writeApproval(
+    store,
+    {
+      approval: {
+        ...record.approval,
+        root,
+        fingerprints: {
+          sections: nextSections,
+          seats: { ...record.approval.fingerprints.seats },
         },
       },
       file: renamedRecordFile,
