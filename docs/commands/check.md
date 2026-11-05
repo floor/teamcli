@@ -237,6 +237,28 @@ development-mode record itself: `owner card <id> asks for <actions> under dev mo
 repaired by answering the card or letting it expire. Under the lift a seat, CLI or label change
 needs no card, so one still waiting means the card and the policy in force disagree.
 
+## Seats the terminal host restored
+
+A session the terminal host restored comes back with its panes and conversations but without the
+names the launch gave them. Each seat is read against its own recorded pane with the same proof
+[`team up`](up.md#a-seat-the-terminal-host-restored) adopts with, so the check and the repair
+cannot disagree about what "restored" means. A pane that holds a process team did not launch
+reads `restored, not launched by team` with `-` in the model column; a pane back at its shell
+reads `missing`. Each finding is a difference like any other, repair and who included:
+
+| What the pane holds | The difference | `repair:` |
+| --- | --- | --- |
+| the seat's own conversation | `<seat> was restored by the terminal host; its pane holds the seat's conversation — team up re-ties it` | `team up` (`who:` the team's lead) |
+| no conversation on either side: the declared CLI alone in its workspace, at an idle prompt | the same line with `declared CLI` in place of `conversation` | `team up` (`who:` the team's lead) |
+| another conversation, another CLI, another seat's name on the pane, a working pane, unsent text, or a workspace holding another pane | `<seat>: <the proof's reason>` (for example `its pane is named <name>; team never adopts a pane another seat owns`) | `look at the pane` |
+| no CLI — the CLI ended, or the host restored the pane without it | `<seat>: its pane runs no CLI (the CLI ended or the session was restored)` | `team up` (`who:` the team's lead) |
+| a process the record cannot tie to the launch | `<seat>: its pane holds a process this record cannot tie to the launch` | `look at the pane` |
+| the session came back without the seat at all | `<seat> was running and its CLI did not come back (the terminal host restored the session without it)` | `team up` (`who:` the team's lead) |
+
+A lead seat whose process a launcher started draws a note instead — `started by a launcher; team
+cannot tell its process from the one it launched` — and no repair: a lead's seat is never restarted
+or closed alone.
+
 ## A leftover team file
 
 When the team is in the registry and a `.agents/team.yaml` is still in the project, the run

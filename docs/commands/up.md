@@ -40,6 +40,90 @@ expected id by another file, a link, a folder or a FIFO is refused, never replac
 only [`team brief rollout --apply`](brief.md) recovers that delivery at the claim's next attempt.
 [`team check`](check.md) names a seat the session launched without a verified delivery record.
 
+## After a power loss
+
+The service manager starts the machine daemon at login, often before the terminal host has
+finished restoring the sessions it had. The daemon's startup pass sweeps the checkouts its service
+unit names and retries the ones whose session has not come back yet: it waits five seconds, then
+twice as long each time up to a minute, for five minutes and a quarter in all, and stops waiting
+early when every session is back or the daemon closes. A session still restoring at that bound is
+logged as pending, never reported as nothing to do.
+
+One command runs the restore pass across every registered team, whatever the daemon's checkouts:
+
+    team up --all
+
+It reads the machine's registry, takes the teams in a fixed order — a team whose folder holds
+another team's first, then by session name — and runs the ordinary `team up` pass for each team
+whose session the terminal host is running and whose state records seats. Each pass re-ties the
+seats the host restored, launches again the seats whose process did not come back, and leaves
+working seats alone. A team whose session is not running is skipped, never started cold; a stopped
+or archived team is skipped too. The run reports one line per team, then the totals:
+
+    <project> (session <session>): <N> seats repaired, <M> skipped (working), <K> refused
+    all teams: <T> teams swept (<R> seats repaired, <W> skipped, <F> refused)[; <S> inactive skipped]
+
+A team whose file cannot be read, whose session lock is held, or whose pass is refused is named
+with its reason — `team up: <project> (session <session>): <reason>` — and does not stop the teams
+after it. A run with nothing to restore is its own refusal, never a false all-clear: `team up:
+nothing restored yet: no registered team has a running session in the terminal host`, or `team up:
+nothing restored yet: no teams are registered` when the registry is empty, exit 1 — a dry run
+refuses the same way. A terminal host that does not answer is `team up: the terminal host doesn't
+answer`, exit 1. A team that failed leaves the run at exit 1; a run in which every swept team came
+back is exit 0.
+
+`--dry-run` prints each team's plan under `=== <project> (session <session>) ===` and writes
+nothing. `--json` prints one `team.up` document with `all` `true`, the per-team entries as
+`teams`, every declared seat as `<project>/<seat>` in `seats`, and the closing line as
+`action_summary`; a run with a failed team is the `up.pending` `team.error` document naming them.
+`--serial` and `--no-launch` reach each team's pass. `--all` takes no single-team flag: `--file`,
+`--session`, `--client`, `--team`, `--request`, `--approval` and `--reason` are refused with
+`up.invocation`, exit 2, before any team is read.
+
+The owner runs it from a terminal outside the terminal host; a general grant that carries `up`
+admits it with no terminal; a team lead runs it only while development mode is on, from its own
+recorded pane. Any other caller is refused before a team is touched: with no terminal, `only the
+owner or a lead in development mode runs this, from a terminal outside the terminal host or the
+lead's own pane`; otherwise `team up: only the owner or a lead in development mode runs team up
+--all`, exit 1.
+
+## A seat the terminal host restored
+
+After a crash or a power loss the terminal host can restore the session: the panes and their
+conversations come back, but the names the launch gave them do not. `team up` never adopts a pane
+on trust. For a seat whose launch record reached ready and whose recorded pane still holds a
+process the record does not name, it proves the seat from what the restore kept — the pane, its
+workspace and the conversation:
+
+- the seat's conversation is the one the record names — the strongest proof; or, when neither
+  side names a conversation, the declared CLI is alone in its workspace, at an idle prompt, with
+  nothing unsent in its box;
+- it never re-ties a pane named for another seat, one holding another conversation or another CLI,
+  one that is working, or one holding unsent text; a pane that fails the proof is left as it is,
+  with the reason said.
+
+A seat the proof holds is re-tied where it stands: the pane is named back, its sidebar line is
+painted again from the file, and the record takes the process identity the pane holds now. Nothing
+is typed into the pane and nothing is closed. The run says `restored and re-tied: <what proved
+it>; left as it is`, and the seat counts nowhere in the restore summary: it was neither repaired
+nor refused.
+
+A restored pane that runs the bare CLI where the seat's own launch line starts a wrapper — an
+alternate endpoint — is the exception: adopting it would leave every turn without the wrapper's
+settings. `team up` lets the bare CLI exit cleanly in its own recorded pane — the CLI's own exit
+word and Enter, or its own exit keys, and nothing else — and launches the seat again in that same
+pane through its own launch line, resuming the proven conversation; the pane's workspace is
+neither closed nor replaced. A pane that is working, holds unsent text, cannot be exited, or does
+not come back to its shell in time is left exactly as it is; a launch line that cannot carry the
+conversation stops the run before any key is typed.
+
+A seat whose recorded pane no longer holds the process team launched is launched again. When the
+pane is back at its shell, the seat is launched in the same pane — `its recorded pane <pane> was
+at its shell; launched in the same pane`. When the pane is gone or was replaced, the seat is
+launched from the beginning in a workspace of its own, and the old workspace is closed without
+input once the seat is ready, only if it still holds only the old pane and is not named for
+another seat.
+
 ## A team still in its file
 
 Since 0.5.5 the team lives in the registry. When the owner runs `team up` in a project whose
@@ -61,6 +145,7 @@ whatever the source.
 ## Synopsis
 
     team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]
+    team up --all [--dry-run] [--serial] [--no-launch] [--json]
     team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--json]
     team up --request [--serial] [--json]
     team up --approval <request-id> [--dry-run] [--serial] [--json]
@@ -71,6 +156,7 @@ whatever the source.
 | --- | --- | --- |
 | `--dry-run` | — | prints the plan and runs nothing; prints the refusals the real run would stop on as `! up would refuse: …` above it, and, for a caller the run does not admit, `! to unblock: …` with the command that admits it |
 | `--serial` | — | launches and waits on one seat at a time instead of concurrently |
+| `--all` | — | the restore pass across every registered team whose session is running in the terminal host, in parent-first then session order; see [After a power loss](#after-a-power-loss) |
 | `--session` | `<name>` | the herdr session to start, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | deprecated: read the team from this file instead of the registry (tests, snapshots); the owner's alone |
 | `--client` | `<grant-file>` | the client form: an owner-signed up grant for one team, see [A client's up grant](#a-clients-up-grant) |
@@ -94,6 +180,7 @@ whatever the source.
 | a caller the run does not admit | a real run is answered with the one word `deny` on stderr and nothing on stdout — no reason, and no plan — and exit 1. A `--dry-run` is never denied: it prints `! up would refuse:` with that reason, `! to unblock:` with a `leads` seat's own run of this folder from its pane (or the owner's, from a terminal outside herdr), and — when no flag kept the file unread — the plan, and exits 1 |
 | the orchestrator's seat, where the row above does not admit it and the file's `grant` lists `up` | run it on this folder's own team file, and the run is audited as the grant's. A lead the map admits is not constrained by a grant, and the grant or delegate path applies only to seats the map does not admit: a grant that names another seat or pane, or leaves `up` out of its scope, refuses this fallback run, and a run the map admitted asks it nothing and is audited only as the row's. A file with no `grant` section grants nothing. The run does not relaunch or close that seat. `--session` and `--file` are refused before either is read, in the grant's words |
 | a seat of this team the record does not mark `leads`, or a pane of another session | run `--dry-run` only; a real run is refused, unless the live `grant` admits the orchestrator's seat or the live file's `delegates` section names that pane with `up` in its entry's `commands`, and a `--session` or `--file` it passes is refused before either is read |
+| any caller the rows above admit, running `--all` | only the owner, a caller a general grant covers, or a team lead while development mode is on and standing on its own recorded pane; any other caller is refused before a team is touched — with no terminal, `only the owner or a lead in development mode runs this, from a terminal outside the terminal host or the lead's own pane`; otherwise `team up: only the owner or a lead in development mode runs team up --all` |
 
 ## Owner-seat approval: no owner terminal
 
@@ -214,6 +301,9 @@ would not repair.
 | --- | --- | --- |
 | every seat ready, watch running | one `<seat>: ready` record per seat in file order, on stdout; `watch: started` and the restore summary line, on stderr | 0 |
 | `--dry-run` | the plan; `! up would refuse: …` per refusal above it | the refusal's own exit, else 0 |
+| `--all`, every swept team ready | one `<project> (session <session>): <summary line>` per team, then the aggregate `all teams: <T> teams swept (…)` line, on stderr; a team that failed adds `team up: <project> (session <session>): <reason>` | 0, or 1 when any swept team failed |
+| `--all` with nothing to restore | `team up: nothing restored yet: no registered team has a running session in the terminal host`, `team up: nothing restored yet: no teams are registered`, or `team up: the terminal host doesn't answer` | 1 |
+| `--all` with a single-team flag | the invocation refusal (`up.invocation`) | 2 |
 | a caller the run does not admit | a real run: `deny`, and nothing else: no `team up:` prefix, no reason, no plan. A `--dry-run`: `! up would refuse: <the reason>`, `! to unblock: <a leads seat's own run, or the owner's>`, then the plan where the run reached one | 1 |
 | the run is refused | one `team up: <reason>` per reason, on stderr, before the first step | 1 |
 | a seat was left out, the server did not start, the watch did not start | the seats' records and the run's own lines | 1 |
@@ -226,7 +316,11 @@ declares as `seats`, `notes` — the run's other lines in order — `action_summ
 summary line, and `restore_summary`, which carries that line's `repaired`, `skipped_working` and
 `refused` counts, its `repaired_seats` and `skipped_working_seats`, and its `refused_seats` with
 each seat's `seat` and `reason`, beside the same `line`, with `dry_run` `false` and `status`
-`ready`. A run that ends short of
+`ready`. With `--all` it carries `all` `true`, the per-team entries as `teams` — each with its
+`project`, `session`, `status`, `failed` and `summary`, and a real pass's `restore_summary` —
+every declared seat as `<project>/<seat>` in `seats`, and the aggregate line as
+`action_summary`; a failed team makes the run the `up.pending` `team.error` document naming it.
+A run that ends short of
 ready is the `team.error` document instead, named by what fell short: `up.pending` (the seats it
 names), `up.server` or `up.watch`. With `--dry-run` the document is `status` `dry-run`, `dry_run`
 `true`, `action_summary` `dry run: nothing was run`, and the plan as `plan` — the warning first
