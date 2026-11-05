@@ -296,6 +296,7 @@ export const LIVE_DECISION_KINDS = [
   'ack',
   'report',
   'redispatch',
+  'lead-override',
   'stop',
   'reconcile',
   'error-path',

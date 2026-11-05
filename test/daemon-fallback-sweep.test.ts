@@ -22,7 +22,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { readEvents } from '../src/bus/log.ts';
 import { messageFile } from '../src/commands/messages.ts';
-import { sweepFallbackEscalations } from '../src/daemon/fallback-sweep.ts';
+import { sweepFallbackEscalations, sweepFallbackEscalationsSliced } from '../src/daemon/fallback-sweep.ts';
 import { probeDaemonHealth } from '../src/daemon/health.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
 import { daemonLogPath } from '../src/daemon/paths.ts';
@@ -77,7 +77,7 @@ seats:
 
 const AT = '2026-10-20T10:00:00.000Z';
 const DIGEST = 'a'.repeat(64);
-const CALLER = { kind: 'seat', name: 'worker-1', pane: 'w1:p1', session: 'acme-dev' } as const;
+const CALLER = { kind: 'seat', name: 'worker-1', pane: 'fixture-pane-1', session: 'acme-dev' } as const;
 
 type World = {
   root: string;
@@ -160,6 +160,71 @@ function sweepAt(world: World, at: string, roots?: readonly (string | { root: st
 
 function mailboxDir(world: World): string {
   return join(world.entityRoot, '.agents', 'messages', 'entity-lead');
+}
+
+/** One more hosted checkout under the same home and base: one beat sweeps every inline root it
+ *  hosts, so a scene that measures that beat's own turn needs more than the first world. */
+function addRoot(world: World, name: string): { root: string; team: TeamFile } {
+  const base = dirname(world.root);
+  const root = join(base, name);
+  const entityRoot = join(base, `${name}-entity`);
+  mkdirSync(join(root, '.agents'), { recursive: true });
+  mkdirSync(join(entityRoot, '.agents'), { recursive: true });
+  execFileSync('git', ['init', '-q'], { cwd: root });
+  writeFileSync(join(root, '.agents', 'team.yaml'), TEAM_YAML);
+  upsertTeam(world.home, teamIdOf(root), {
+    project: 'acme',
+    entity: 'floor',
+    session: 'acme-dev',
+    root,
+    roster: [{ agent: 'agt_crewlead0000', seat: 'crew-lead', role: 'coordinator', leads: true }],
+    lifecycle: 'running',
+  });
+  upsertTeam(world.home, teamIdOf(entityRoot), {
+    project: 'floor',
+    entity: 'floor',
+    session: 'floor-hq',
+    root: entityRoot,
+    roster: [{ agent: 'agt_entitylead00', seat: 'entity-lead', role: 'coordinator', leads: true }],
+    lifecycle: 'running',
+  });
+  const validated = validateTeamFile(TEAM_YAML);
+  if (!validated.ok) throw new Error(JSON.stringify(validated.errors));
+  return { root, team: validated.team };
+}
+
+/** Plants `each` already-due transport facts on every checkout: the beat's pass has to walk them
+ *  all, and one marker's escalation is the pass's heaviest work item. */
+function plantDueBacklog(
+  world: World,
+  checkouts: ReadonlyArray<{ root: string; team: TeamFile }>,
+  each: number,
+): void {
+  const failedAt = new Date(Date.now() - 301_000).toISOString();
+  for (const one of checkouts) {
+    const ctx: FallbackContext = {
+      caller: CALLER,
+      team: one.team,
+      root: one.root,
+      home: world.home,
+      now: () => new Date(failedAt),
+    };
+    const recipient: CanonicalRecipient = { ...world.recipient, root: one.root };
+    for (let index = 0; index < each; index += 1) {
+      const noted = noteTransport(ctx, {
+        recipient,
+        messageId: `backlog-${String(index)}`,
+        recordDigest: DIGEST,
+        route: 'socket',
+        outcome: 'unreachable',
+        at: failedAt,
+        ms: 120,
+        reason: 'the socket did not answer',
+        liveRoutesRemain: false,
+      });
+      if (!noted.ok) throw new Error(noted.reason);
+    }
+  }
 }
 
 function mailboxCount(world: World): number {
@@ -411,6 +476,43 @@ describe('the daemon fallback sweep', () => {
     unlinkSync(join(lockDir, LOCK_FILE));
   });
 
+  test('a probe answers within the product budget while the beat sweeps a due backlog on several roots', async () => {
+    // A root a chores fleet does not host is swept on the daemon's own beat. A backlog of due
+    // episodes over several roots used to run as one synchronous turn: the health probe's own
+    // 500 ms timer could not even fire until the pass was over. The pass now walks a slice at a
+    // time, so probes land between slices and every one answers at the product's budget.
+    const world = makeWorld();
+    const checkouts = [
+      { root: world.root, team: world.team },
+      addRoot(world, 'repo-2'),
+      addRoot(world, 'repo-3'),
+      addRoot(world, 'repo-4'),
+    ];
+    plantDueBacklog(world, checkouts, 150);
+
+    const started = await startMachineDaemon({
+      home: world.home,
+      roots: checkouts.map((one) => one.root),
+      version: '0.5.12-beat-slice-test',
+      heartbeatMs: 25,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      // The product's own budget: probeDaemonHealth's default is 500 ms.
+      const until = Date.now() + 2_000;
+      const missed: string[] = [];
+      while (Date.now() < until) {
+        const probe = await probeDaemonHealth(started.daemon.socketPath);
+        if (probe.kind !== 'answered') missed.push(probe.kind === 'unanswered' ? probe.reason : probe.error.code);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(missed).toEqual([]);
+    } finally {
+      await started.daemon.close();
+    }
+  }, 20_000);
+
   test('a lock held by another process defers the escalation without stalling the heartbeat', async () => {
     const world = makeWorld();
     const failedAt = new Date(Date.now() - 301_000).toISOString();
@@ -458,5 +560,101 @@ describe('the daemon fallback sweep', () => {
       await holder.exit.catch(() => 0);
       await started.daemon.close();
     }
+  });
+
+  test('the sliced pass reads its budget and answers what the one-shot pass answers', async () => {
+    const world = makeWorld();
+    // Settled episodes: the two passes write nothing, so their reports are compared directly.
+    for (const id of ['m-101', 'm-102', 'm-103', 'm-104']) {
+      const noted = noteTransport(world.ctx, fact(world, { messageId: id, outcome: 'delivered', route: 'native' }));
+      if (!noted.ok) throw new Error(noted.reason);
+    }
+    const input = {
+      home: world.home,
+      roots: [{ root: world.root, team: world.team }],
+      now: () => new Date(AT),
+    };
+    const oneShot = sweepFallbackEscalations(input);
+    expect(oneShot.roots[0]!.report!.scanned).toBe(4);
+
+    // The injected clock moves 1000 ms per reading, so the budget passes once per work item and
+    // the child's yield lands at the boundary the budget names — the test chooses the instant,
+    // never the machine's load.
+    const clock = { at: 0 };
+    const sliceClock = (): number => {
+      const value = clock.at;
+      clock.at += 1000;
+      return value;
+    };
+    let yields = 0;
+    const sliced = await sweepFallbackEscalationsSliced({
+      ...input,
+      sliceClock,
+      slices: {
+        sliceMs: 10,
+        stopping: () => false,
+        yield: async () => {
+          yields += 1;
+          return true;
+        },
+      },
+    });
+    expect(yields).toBeGreaterThan(0);
+    expect(sliced).toEqual(oneShot);
+
+    // The same clock with a budget wider than the whole store: no boundary is reached, and the
+    // walk is the one-shot pass again. This is the reading that the budget word is what gates it.
+    clock.at = 0;
+    let wideYields = 0;
+    const wide = await sweepFallbackEscalationsSliced({
+      ...input,
+      sliceClock,
+      slices: {
+        sliceMs: 1_000_000_000,
+        stopping: () => false,
+        yield: async () => {
+          wideYields += 1;
+          return true;
+        },
+      },
+    });
+    expect(wideYields).toBe(0);
+    expect(wide).toEqual(oneShot);
+  });
+
+  test('a stop at a boundary closes the walk with no report for the root', async () => {
+    const world = makeWorld();
+    for (const id of ['m-201', 'm-202', 'm-203', 'm-204']) {
+      const noted = noteTransport(world.ctx, fact(world, { messageId: id, outcome: 'delivered', route: 'native' }));
+      if (!noted.ok) throw new Error(noted.reason);
+    }
+    const clock = { at: 0 };
+    const sliceClock = (): number => {
+      const value = clock.at;
+      clock.at += 1000;
+      return value;
+    };
+    let yields = 0;
+    let stopping = false;
+    const sliced = await sweepFallbackEscalationsSliced({
+      home: world.home,
+      roots: [{ root: world.root, team: world.team }],
+      now: () => new Date(AT),
+      sliceClock,
+      slices: {
+        sliceMs: 10,
+        stopping: () => stopping,
+        yield: async () => {
+          yields += 1;
+          stopping = true;
+          return false;
+        },
+      },
+    });
+    // The first boundary is the stop: the walk leaves there, and the root is reported not at all,
+    // because a stopping child writes no frame and the next child resumes from the markers.
+    expect(yields).toBe(1);
+    expect(sliced.roots).toEqual([]);
+    expect(sliced.at).toBe(AT);
   });
 });

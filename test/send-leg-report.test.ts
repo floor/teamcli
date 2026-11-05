@@ -10,6 +10,7 @@ import { dirname, join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { SEND_OUTPUT_SCHEMA } from '../src/output/schema.ts';
+import { MCP_INBOX_UNAVAILABLE } from '../src/send/walk-cascade.ts';
 import { LOG_FILE } from '../src/state.ts';
 import { assertMatchesOutputSchema } from './helpers/output.ts';
 import { dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
@@ -51,10 +52,10 @@ test('a real send reports the inbox it skipped and the drop that took it', async
 
   expect(code).toBe(0);
   const doc = assertMatchesOutputSchema<{ status: string; channel: string }>(io.out, SEND_OUTPUT_SCHEMA);
-  expect(doc.status).toBe('sent (unconfirmed)');
+  expect(doc.status).toBe('queued, not woken');
   expect(doc.channel).toBe('drop');
   expect(deliveryOf(io)).toEqual([
-    { leg: 'mcp-inbox', state: 'skipped', reason: 'no live inbox listener' },
+    { leg: 'mcp-inbox', state: 'skipped', reason: MCP_INBOX_UNAVAILABLE },
     { leg: 'drop', state: 'attempted' },
   ]);
   expect(existsSync(dropDir(made.dir, 'lead'))).toBe(true);
@@ -87,9 +88,10 @@ test('a dry run lists the implied socket leg as a candidate when the receiver ma
   const code = await runSend(['lead', 'hello', '--dry-run', '--json'], io, host);
 
   expect(code).toBe(0);
+  // The default order is typed, drop; this CLI declares no wake for the typed leg, so the dry
+  // run names the drop alone behind the implied socket candidate.
   expect(deliveryOf(io)).toEqual([
     { leg: 'socket', state: 'candidate', eligible: true },
-    { leg: 'mcp-inbox', state: 'candidate', eligible: true },
     { leg: 'drop', state: 'candidate', eligible: true },
   ]);
   // A dry run writes nothing: no frame, no record, no history or log line.
@@ -112,9 +114,8 @@ test('a dry run lists the socket the walk would not dial with its reason instead
       leg: 'socket',
       state: 'skipped',
       eligible: false,
-      reason: 'the receiving Claude session does not declare crossSessionInbound accept',
+      reason: 'the receiving Claude session does not declare crossSessionInbound accept (human-launched or launch without --settings; owner CLI settings are not read)',
     },
-    { leg: 'mcp-inbox', state: 'candidate', eligible: true },
     { leg: 'drop', state: 'candidate', eligible: true },
   ]);
   expect(host.frames).toEqual([]);
@@ -122,20 +123,24 @@ test('a dry run lists the socket the walk would not dial with its reason instead
   expect(existsSync(join(made.dir, LOG_FILE))).toBe(false);
 });
 
-test('a dry run reports the native leg it would walk for a Codex seat, and the one no sender here can walk', async () => {
+test('a dry run reports the native and typed legs a Codex seat walks, and the native leg a Claude seat cannot', async () => {
   const made = world(['native', 'typed', 'drop']);
   cleanup = made.cleanup;
   const host = fake(made);
 
   const codex = owner(made.root);
   expect(await runSend(['native', 'hello', '--dry-run', '--json'], codex, host)).toBe(0);
+  // Codex's profile declares `typed_wake: screen`, so the order's own `typed` word stays: the
+  // channel-class native leg first, the typed wake after it, and the drop leg closing the walk.
   expect(deliveryOf(codex)).toEqual([
     { leg: 'native', state: 'candidate', eligible: true },
+    { leg: 'typed', state: 'candidate', eligible: true },
     { leg: 'drop', state: 'candidate', eligible: true },
   ]);
 
   // The same order for a Claude receiver: the native leg is the sending session's own
   // SendMessage, and this run's sender is the owner, so the leg is skipped with that word.
+  // Claude's profile declares no typed wake, so the typed leg is not in its walk at all.
   const claude = owner(made.root);
   expect(await runSend(['lead', 'hello', '--dry-run', '--json'], claude, host)).toBe(0);
   expect(deliveryOf(claude)).toEqual([

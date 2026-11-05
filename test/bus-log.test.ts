@@ -20,6 +20,8 @@ import {
   createSequenceTracker,
   EVENT_DOMAIN,
   eventLogPath,
+  parseEventPayload,
+  parseSignedEventLine,
   pruneEventLog,
   readEvents,
   readEventsFromCursor,
@@ -74,7 +76,7 @@ afterEach(() => {
 
 describe('bus kinds, privileged self-subscription, and routing (RFC 002 Amendment 01 §4.3, §4.4)', () => {
   test('validates closed event kinds, privileged kinds, owner-at-once defaults, and threshold constants', () => {
-    expect(EVENT_KINDS.length).toBe(34);
+    expect(EVENT_KINDS.length).toBe(38);
     expect(isEventKind('config.changed')).toBe(true);
     expect(isEventKind('message.arrived')).toBe(true);
     expect(isEventKind('team.policy-refused')).toBe(true);
@@ -966,4 +968,68 @@ describe('event log appends are serialized across processes (RFC 002 Amendment 0
     if (!read.ok) return;
     expect(read.events.map((event) => event.payload.record_id)).toEqual(['seed']);
   }, 20_000);
+});
+
+describe('the record id a payload admits', () => {
+  function payloadWith(recordId: unknown): unknown {
+    return {
+      v: 1,
+      seq: 1,
+      ts: '2026-11-02T00:00:00.000Z',
+      kind: 'message.arrived',
+      session: 'acme',
+      record_id: recordId,
+    };
+  }
+
+  test('every generated shape the writers mint parses', () => {
+    const ids = [
+      '3f2b8c1e-9a44-4d5e-8f60-0a1b2c3d4e5f',
+      '0123456789abcdef0123456789abcdef',
+      'retention:12-34',
+      '9f8e7d6c-5b4a-4938-8271-6a5b4c3d2e1f:read',
+      'seat:lead:running:2026-11-02T06:40:36.000Z',
+      'status:at-prompt:lead:2026-11-02T06:40:36.000Z:7',
+      'watch:provider-error:lead:2026-11-02T06:40:36.000Z',
+      'config:seat:agt_0123456789ab:model:2',
+      'presence:lead:turn:4:evt_0001',
+      'raise-0123456789ab',
+      'policy-refused:owner:delivery-order:2026-11-02T06:40:36.000Z',
+      'a-10-0',
+    ];
+    const refused = ids.filter((id) => parseEventPayload(payloadWith(id)) === null);
+    expect(refused).toEqual([]);
+  });
+
+  test('an id JSON.stringify would escape is refused at parse, so the index literal search stays sound', () => {
+    const ids = ['a"b', 'a\\b', 'has space', 'two\nlines', 'emoji😀', '', 'x'.repeat(201)];
+    for (const id of ids) {
+      expect(parseEventPayload(payloadWith(id))).toBeNull();
+      const line = JSON.stringify({ payload: payloadWith(id), signature: 'signature' });
+      expect(parseSignedEventLine(line)).toBeNull();
+    }
+    // The lemma the refusal protects: the escaped id is not the line's literal substring, so a
+    // prefilter searching for it could miss a duplicate the full scan would find.
+    expect(JSON.stringify(payloadWith('a"b')).includes('a"b')).toBe(false);
+    expect(JSON.stringify(payloadWith('config:seat:agt_0123456789ab:model:2')).includes('config:seat:agt_0123456789ab:model:2')).toBe(true);
+  });
+
+  test('an append with such an id is refused with the reason and writes nothing', () => {
+    const { root, home } = makeScratch();
+    const refused = appendEvent('acme', root, home, {
+      ts: '2026-11-02T00:00:00.000Z',
+      kind: 'message.arrived',
+      session: 'acme',
+      record_id: 'a"b',
+    });
+    expect(refused).toEqual({
+      ok: false,
+      reason: 'the record id is not a generated token: letters, digits, ":", ".", "_" and "-", 200 at most',
+    });
+    expect(existsSync(eventLogPath('acme', root, home))).toBe(false);
+    const read = readEvents('acme', root, home);
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.events).toEqual([]);
+  });
 });

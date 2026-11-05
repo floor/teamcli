@@ -20,16 +20,16 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { appendEvent, eventLogPath, EVENT_DOMAIN, readEvents } from '../src/bus/log.ts';
+import { appendEvent, eventLogPath, EVENT_DOMAIN, readEvents, type SignedEventRecord } from '../src/bus/log.ts';
 import { createReconcileState, reconcilePass, reconcilePassAsync, type ReconcileResult } from '../src/bus/reconcile.ts';
-import { startBus } from '../src/bus/server.ts';
+import { nudgeBus, startBus } from '../src/bus/server.ts';
 import { plantMessage, receiptFile } from '../src/commands/messages.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { daemonDifferences, daemonNotes } from '../src/daemon/health_display.ts';
 import type { DaemonHealth } from '../src/daemon/health.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
 import { readDaemonState } from '../src/daemon/state.ts';
-import { dropMessage } from '../src/send/native.ts';
+import { signRecord, type RecordPayload } from '../src/send/record.ts';
 import type { SendDaemonHandle } from '../src/send/daemon.ts';
 import { emptySession, LOCK_FILE, updateState } from '../src/state.ts';
 import { messageKeyOf, RECEIPT_DOMAIN, signDomain, type Json } from '../src/store/keys.ts';
@@ -84,6 +84,33 @@ function dropsDir(root: string): string {
   return join(root, '.agents', 'send-drops', 'acme', 'worker-1');
 }
 
+/** One message record as a send writes it into worker-1's drop folder. */
+function signedDrop(
+  root: string,
+  home: string,
+  id: string,
+  options: { from?: string; at?: string; thread?: string } = {},
+): void {
+  const dir = dropsDir(root);
+  mkdirSync(dir, { recursive: true });
+  const from = options.from ?? 'clerk';
+  const payload: RecordPayload = {
+    kind: 'message',
+    id,
+    to: 'worker-1',
+    to_id: null,
+    root,
+    session: 'acme',
+    at: options.at ?? BULK_TS,
+    body: `${from} says hello to ${id}`,
+    from,
+    from_id: null,
+    rule: 'a synthetic admission',
+    thread: options.thread ?? id,
+  };
+  writeFileSync(join(dir, id), `${JSON.stringify(signRecord(payload, home), null, 2)}\n`);
+}
+
 function raisedKeys(pass: ReconcileResult): string[] {
   if (!pass.ok) throw new Error(pass.reason);
   return pass.raised.map((record) => `${record.payload.kind}:${record.payload.record_id}`);
@@ -109,13 +136,23 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Holds the event log's lock for this process, so a pass's append is deferred and retried. */
+function holdEventLock(root: string, home: string): string {
+  const dir = join(dirname(eventLogPath('acme', root, home)), 'locks', 'events');
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, LOCK_FILE);
+  writeFileSync(path, `${String(process.pid)}\n`);
+  return path;
+}
+
 const BULK_FILES = 10_000;
 const BULK_TS = '2026-11-01T00:00:00.000Z';
 
 /**
- * A store of 10,000 drop records whose events are already in the log. Every record is still
- * listed, stamped and examined, but a raise finds its key in the pass's own seen set, so the
- * scene measures the scan and its yields, not 10,000 event appends.
+ * A store of 10,000 drop files whose events are already in the log. Every file is still listed,
+ * stamped and examined — these fixtures are unsigned, so the verified read refuses each one,
+ * which is the read this scene measures — and no raise appends anything: the scene measures the
+ * scan and its yields, not 10,000 event appends.
  */
 function seedBulkStore(root: string, home: string): void {
   const dir = dropsDir(root);
@@ -180,8 +217,7 @@ describe('reconcile steps yield off the event loop', () => {
 
   test('the sync driver drains the same steps and raises the same events', () => {
     const { root, home } = scratch();
-    const dir = dropsDir(root);
-    dropMessage(dir, 'rec-sync', 'from clerk — admitted by: lead\n\nhello');
+    signedDrop(root, home, 'rec-sync');
     const sync = reconcilePass({ project: 'acme', root, session: 'acme', home });
     expect(raisedKeys(sync)).toContain('message.arrived:rec-sync');
   });
@@ -190,9 +226,8 @@ describe('reconcile steps yield off the event loop', () => {
 describe('a pass remembers what it read and verified', () => {
   test('the second pass reads no record file again and reuses every entry', () => {
     const { root, home } = scratch();
-    const dir = dropsDir(root);
     for (let index = 0; index < 100; index += 1) {
-      dropMessage(dir, `rec-${String(index).padStart(3, '0')}`, `from clerk — admitted by: lead\n\nbody ${String(index)}`);
+      signedDrop(root, home, `rec-${String(index).padStart(3, '0')}`);
     }
     const state = createReconcileState();
     const first = reconcilePass({ project: 'acme', root, session: 'acme', home, state });
@@ -245,7 +280,7 @@ describe('the archive findings are regression probes', () => {
   test('a read and a reply that arrive after the record was taken still raise, once, with the sender', () => {
     const { root, home } = scratch();
     const dir = dropsDir(root);
-    dropMessage(dir, 'rec-late', 'from clerk — admitted by: lead\n\nhello');
+    signedDrop(root, home, 'rec-late');
     const state = createReconcileState();
     const first = reconcilePass({ project: 'acme', root, session: 'acme', home, state });
     expect(raisedKeys(first)).toContain('message.arrived:rec-late');
@@ -279,7 +314,7 @@ describe('the archive findings are regression probes', () => {
   test('a receipt after an intervening quiet pass still names the sender', () => {
     const { root, home } = scratch();
     const dir = dropsDir(root);
-    dropMessage(dir, 'rec-gap', 'from clerk — admitted by: lead\n\nhello');
+    signedDrop(root, home, 'rec-gap');
     const state = createReconcileState();
     expect(raisedKeys(reconcilePass({ project: 'acme', root, session: 'acme', home, state })))
       .toContain('message.arrived:rec-gap');
@@ -305,12 +340,13 @@ describe('the archive findings are regression probes', () => {
   test('a record rewritten in place is read again, and a later receipt carries the new sender', () => {
     const { root, home } = scratch();
     const dir = dropsDir(root);
-    dropMessage(dir, 'rec-rewrite', 'from clerk — admitted by: lead\n\nhello');
+    signedDrop(root, home, 'rec-rewrite');
     const state = createReconcileState();
     expect(raisedKeys(reconcilePass({ project: 'acme', root, session: 'acme', home, state })))
       .toContain('message.arrived:rec-rewrite');
-    // Same byte length, different sender: only the file's own stamp can tell the two apart.
-    writeFileSync(join(dir, 'rec-rewrite'), 'from alice — admitted by: lead\n\nhello');
+    // A different sender and thread carry a different signed payload, so the record's own stamp
+    // moved: the pass reads it again rather than serving the verdict it cached for the old bytes.
+    signedDrop(root, home, 'rec-rewrite', { from: 'alice', thread: 'rewritten-thread' });
     writeFileSync(join(dir, 'rec-rewrite.read'), '{"ok":true}');
     const second = reconcilePass({ project: 'acme', root, session: 'acme', home, state });
     if (!second.ok) throw new Error(second.reason);
@@ -322,14 +358,6 @@ describe('the archive findings are regression probes', () => {
 });
 
 describe('a held event lock neither loses the event nor freezes the loop', () => {
-  function holdEventLock(root: string, home: string): string {
-    const dir = join(dirname(eventLogPath('acme', root, home)), 'locks', 'events');
-    mkdirSync(dir, { recursive: true });
-    const path = join(dir, LOCK_FILE);
-    writeFileSync(path, `${String(process.pid)}\n`);
-    return path;
-  }
-
   function seatReady(root: string, ts: string): void {
     updateState(join(root, '.agents'), (state) => {
       (state.sessions.acme ??= emptySession()).seats['worker-1'] = { stage: 'ready', last_active: ts };
@@ -412,10 +440,9 @@ describe('a held event lock neither loses the event nor freezes the loop', () =>
     const { root, home } = scratch();
     const input = { project: 'acme', root, session: 'acme', home };
     const state = createReconcileState();
-    const dir = dropsDir(root);
     const count = 200;
     for (let n = 0; n < count; n += 1) {
-      dropMessage(dir, `defer-${String(n).padStart(4, '0')}`, 'from clerk — admitted by: lead\n\nhello');
+      signedDrop(root, home, `defer-${String(n).padStart(4, '0')}`);
     }
     const seed = appendEvent('acme', root, home, {
       kind: 'message.arrived',
@@ -474,11 +501,10 @@ describe('a held event lock neither loses the event nor freezes the loop', () =>
     const { root, home } = scratch();
     const input = { project: 'acme', root, session: 'acme', home };
     const state = createReconcileState();
-    const dir = dropsDir(root);
     const count = 3;
     const stop = new AbortController();
     for (let n = 0; n < count; n += 1) {
-      dropMessage(dir, `defer-${String(n).padStart(4, '0')}`, 'from clerk — admitted by: lead\n\nhello');
+      signedDrop(root, home, `defer-${String(n).padStart(4, '0')}`);
     }
     const seed = appendEvent('acme', root, home, {
       kind: 'message.arrived',
@@ -544,11 +570,10 @@ describe('a held event lock neither loses the event nor freezes the loop', () =>
     const { root, home } = scratch();
     const input = { project: 'acme', root, session: 'acme', home };
     const state = createReconcileState();
-    const dir = dropsDir(root);
     const count = 3;
     const stop = new AbortController();
     for (let n = 0; n < count; n += 1) {
-      dropMessage(dir, `defer-${String(n).padStart(4, '0')}`, 'from clerk — admitted by: lead\n\nhello');
+      signedDrop(root, home, `defer-${String(n).padStart(4, '0')}`);
     }
     const seed = appendEvent('acme', root, home, {
       kind: 'message.arrived',
@@ -601,9 +626,8 @@ describe('closing the bus cancels the pass it started', () => {
     if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
     const started = await startBus({ root, team: parsed.team, home, stderr: () => {}, reconcileIntervalMs: 0 });
     if (started.kind !== 'serving') throw new Error(started.kind);
-    const dir = dropsDir(root);
     for (let n = 0; n < 200; n += 1) {
-      dropMessage(dir, `close-${String(n).padStart(4, '0')}`, 'from clerk — admitted by: lead\n\nhello');
+      signedDrop(root, home, `close-${String(n).padStart(4, '0')}`);
     }
     function appended(): number {
       const read = readEvents('acme', root, home);
@@ -628,6 +652,191 @@ describe('closing the bus cancels the pass it started', () => {
     expect(atClose).toBeGreaterThanOrEqual(0);
     expect(appended()).toBe(atClose);
     expect(raised).toBeLessThanOrEqual(atClose);
+  }, 15_000);
+});
+
+describe('a bus can host its first pass in the background', () => {
+  test('the start resolves before the pass raises; reconcileNow joins it; close drains a pass in flight', async () => {
+    const { root, home } = scratch();
+    const parsed = validateTeamFile(TEAM);
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+    signedDrop(root, home, 'background-0001');
+    // The held event lock keeps the first pass's append deferred, so the pass is provably still
+    // running — and its record provably not raised — when the background start resolves.
+    const lock = holdEventLock(root, home);
+    const started = await startBus({
+      root,
+      team: parsed.team,
+      home,
+      stderr: () => {},
+      reconcileIntervalMs: 0,
+      initialReconcile: 'background',
+    });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    const handle = started.handle;
+    function appended(): number {
+      const read = readEvents('acme', root, home);
+      if (!read.ok) throw new Error(read.reason);
+      return read.events.length;
+    }
+    try {
+      // Bound and answering, with the first pass still scanning: the start did not wait for it.
+      const running = handle.firstPass();
+      expect(running.running).toBe(true);
+      if (running.running) expect(running.scanned).toBeGreaterThanOrEqual(1);
+      expect(appended()).toBe(0);
+      // The same pass, joined rather than a second scan: releasing the lock lets its deferred
+      // append land, and the handle reports the pass settled with its total and instant.
+      unlinkSync(lock);
+      const raised = await handle.reconcileNow();
+      expect(raised.map((record) => `${record.payload.kind}:${record.payload.record_id}`))
+        .toContain('message.arrived:background-0001');
+      expect(appended()).toBe(1);
+      const done = handle.firstPass();
+      expect(done.running).toBe(false);
+      if (!done.running) {
+        expect(done.doneAt).not.toBeNull();
+        expect(done.scanned).toBeGreaterThanOrEqual(1);
+        // The walk finished, so it is not said to have stopped on a failure.
+        expect(done.errors).toBe(false);
+      }
+      // A pass in flight when close lands is drained, and nothing is appended after close.
+      for (let n = 0; n < 200; n += 1) signedDrop(root, home, `closing-${String(n).padStart(4, '0')}`);
+      const run = handle.reconcileNow();
+      await handle.close();
+      const atClose = appended();
+      await run;
+      expect(appended()).toBe(atClose);
+      // A later scan never rewrites the first pass's own record.
+      expect(handle.firstPass().running).toBe(false);
+    } finally {
+      try {
+        unlinkSync(lock);
+      } catch {}
+      await handle.close();
+    }
+  }, 30_000);
+
+  test('over a 10,050-file store, the bus serves while the first pass runs, delivers a send mid-pass, and close mid-pass leaves no dangling pass', async () => {
+    const { root, home } = scratch();
+    const parsed = validateTeamFile(TEAM);
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+    seedBulkStore(root, home);
+    const dir = dropsDir(root);
+    for (let extra = 0; extra < 50; extra += 1) {
+      writeFileSync(join(dir, `bulk-extra-${String(extra).padStart(4, '0')}`), `from clerk — admitted by: lead\n\nextra ${String(extra)}`);
+    }
+    // Hold the event lock only for the last signed drop so the 10k+ scan stays in flight until we
+    // test mid-pass send and mid-pass close.
+    signedDrop(root, home, 'zz-tail-0001');
+    const delivered: SignedEventRecord[] = [];
+    const started = await startBus({
+      root,
+      team: parsed.team,
+      home,
+      stderr: () => {},
+      reconcileIntervalMs: 0,
+      initialReconcile: 'background',
+      deliver: (record) => delivered.push(record),
+    });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    const handle = started.handle;
+    try {
+      // Immediately after startBus resolves, the 10,050-file scan is still running.
+      const midPass = handle.firstPass();
+      expect(midPass.running).toBe(true);
+      expect(midPass.doneAt).toBeNull();
+      expect(midPass.scanned).toBeLessThan(10_051);
+
+      // A send landing during the 10k+ pass is nudged and delivered over the serving bus socket
+      // while the first pass is still running.
+      signedDrop(root, home, 'aa-mid-pass-send');
+      const nudged = await nudgeBus(root, { session: 'acme', seat: 'worker-1', record_id: 'aa-mid-pass-send' });
+      expect(nudged.kind).toBe('nudged');
+      if (nudged.kind === 'nudged') {
+        expect(nudged.duplicate).toBe(false);
+        expect(nudged.event?.payload.record_id).toBe('aa-mid-pass-send');
+      }
+      expect(delivered.some((record) => record.payload.record_id === 'aa-mid-pass-send')).toBe(true);
+      expect(handle.firstPass().running).toBe(true);
+
+      // Closing mid-first-pass aborts and drains the in-flight 10k+ pass; nothing continues
+      // scanning or appending after close() resolves.
+      await handle.close();
+      const scannedAtClose = handle.firstPass().scanned;
+      const eventsAtClose = readEvents('acme', root, home);
+      if (!eventsAtClose.ok) throw new Error(eventsAtClose.reason);
+      const countAtClose = eventsAtClose.events.length;
+      await sleep(40);
+      expect(handle.firstPass().scanned).toBe(scannedAtClose);
+      const eventsAfterWait = readEvents('acme', root, home);
+      if (!eventsAfterWait.ok) throw new Error(eventsAfterWait.reason);
+      expect(eventsAfterWait.events.length).toBe(countAtClose);
+    } finally {
+      await handle.close();
+    }
+  }, 60_000);
+
+  test('the default startBus mode (await) finishes the first pass before resolving', async () => {
+    const { root, home } = scratch();
+    const parsed = validateTeamFile(TEAM);
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+    signedDrop(root, home, 'default-await-0001');
+    const started = await startBus({
+      root,
+      team: parsed.team,
+      home,
+      stderr: () => {},
+      reconcileIntervalMs: 0,
+    });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    try {
+      const pass = started.handle.firstPass();
+      expect(pass.running).toBe(false);
+      if (!pass.running) {
+        expect(typeof pass.doneAt).toBe('string');
+        expect(pass.scanned).toBe(1);
+      }
+      const events = readEvents('acme', root, home);
+      if (!events.ok) throw new Error(events.reason);
+      expect(events.events.map((e) => e.payload.record_id)).toContain('default-await-0001');
+    } finally {
+      await started.handle.close();
+    }
+  }, 15_000);
+
+  test('a first pass a closing bus aborts is never reported as done', async () => {
+    const { root, home } = scratch();
+    const parsed = validateTeamFile(TEAM);
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+    signedDrop(root, home, 'aborted-0001');
+    // The held event lock keeps the first pass's append deferred, so the pass is provably still
+    // in flight when close lands.
+    const lock = holdEventLock(root, home);
+    const started = await startBus({
+      root,
+      team: parsed.team,
+      home,
+      stderr: () => {},
+      reconcileIntervalMs: 0,
+      initialReconcile: 'background',
+    });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    const handle = started.handle;
+    try {
+      expect(handle.firstPass().running).toBe(true);
+      // close aborts the walk; the pass answers cancelled rather than failed, and nothing stamps
+      // it settled. A reader must never see this pass as a clean finish it never reached.
+      await handle.close();
+      const after = handle.firstPass();
+      expect(after.running).toBe(true);
+      if (after.running) expect(after.doneAt).toBeNull();
+    } finally {
+      try {
+        unlinkSync(lock);
+      } catch {}
+      await handle.close();
+    }
   }, 15_000);
 });
 
@@ -667,7 +876,7 @@ describe('the daemon heartbeat and endpoint supervision', () => {
     if (result.kind === 'serving') await result.daemon.close();
   }, 30_000);
 
-  test('a 10,000-file bus pass does not stop the heartbeat or the starting record', async () => {
+  test('a 10,000-file first pass runs behind a serving bus and never stops the heartbeat', async () => {
     const { root, home } = scratch();
     seedBulkStore(root, home);
     const started = startMachineDaemon({
@@ -677,16 +886,22 @@ describe('the daemon heartbeat and endpoint supervision', () => {
       heartbeatMs: 5,
       sendStart: async () => ({ kind: 'already-running', socketPath: join(home, 'absent-send.sock'), pid: null }),
     });
+    // The bus serves once its listener is bound; the first pass scans behind it and the row says
+    // how far it has got, so serving is not read as caught up while the heartbeat keeps beating.
     const first = await waitForValue(() => {
       const read = readDaemonState(home);
       if (read.kind !== 'ok') return null;
       const entry = read.state.roots[0];
-      return entry?.bus === 'starting' ? { heartbeatAt: read.state.heartbeatAt } : null;
+      return entry?.bus === 'serving' && entry.firstPass?.running === true
+        ? { heartbeatAt: read.state.heartbeatAt, scanned: entry.firstPass.scanned }
+        : null;
     }, 5_000);
     await sleep(40);
     const later = readStateOk(home);
     expect(later.heartbeatAt).not.toBe(first.heartbeatAt);
-    expect(later.roots[0]?.bus).toBe('starting');
+    expect(later.roots[0]?.bus).toBe('serving');
+    expect(later.roots[0]?.firstPass?.running).toBe(true);
+    // The start returned while the pass still ran; close aborts and drains it.
     const result = await started;
     expect(result.kind).toBe('serving');
     if (result.kind === 'serving') await result.daemon.close();
@@ -725,7 +940,7 @@ describe('the daemon heartbeat and endpoint supervision', () => {
       expect(fatal[0]).toContain('failed 2 restarts in a row');
       const written = readStateOk(home);
       expect(written.roots[0]?.send).toBe('failed');
-      expect(written.roots[0]?.why).toContain('another send server holds the project socket');
+      expect(written.roots[0]?.sendWhy).toContain('another send server holds the project socket');
       expect(typeof written.roots[0]?.sendFailedAt).toBe('string');
     } finally {
       await started.daemon.close();
@@ -747,6 +962,7 @@ describe('a failed endpoint is a difference a reader can act on', () => {
       version: 'test',
       gitHead: null,
       heartbeatAt: '2026-11-01T00:00:12.000Z',
+      heartbeatSeconds: null,
       features: { broker: 'absent' },
       stuck: [],
       roots: [

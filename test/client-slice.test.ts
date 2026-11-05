@@ -1058,7 +1058,7 @@ function walkHistory(w: WalkWorld): HistoryEntry[] {
 }
 
 describe('the client send walk', () => {
-  test('a live inbox channel takes the drop and nothing is typed', async () => {
+  test('a live inbox listener is no leg: the client drop waits in the bus inbox, and nothing is typed', async () => {
     const w = walkFixture('walk-inbox');
     liveInboxIn(w);
     const host = walkHost(w);
@@ -1071,9 +1071,11 @@ describe('the client send walk', () => {
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
     expect(existsSync(join(w.dropDir, 'drop-1'))).toBe(true);
-    expect(existsSync(join(w.dropDir, 'drop-1.pending'))).toBe(true);
+    // The listener beside the seat is the store's reader, not a delivery leg (ADR D1): no
+    // marker is written for it, and no receipt exists.
+    expect(existsSync(join(w.dropDir, 'drop-1.pending'))).toBe(false);
     expect(existsSync(join(w.dropDir, 'drop-1.read.json'))).toBe(false);
-    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'mcp-inbox', outcome: 'sent (unconfirmed)' });
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop', outcome: 'queued, not woken' });
   });
 
   test('a receiving session that declares accept takes the frame mid-turn, under the owner header', async () => {
@@ -1091,14 +1093,12 @@ describe('the client send walk', () => {
     expect(frame.type).toBe('user');
     expect(frame.msg_id).toBe('drop-1');
     expect(frame.message.content).toBe(
-      'Message from Grok Bot (owner)\n\nhello orchestrator\n\nReply with: team send orchestrator@floor "…"',
+      'Message from Grok Bot (owner)\n\nhello orchestrator\n\nAnswer with team reply drop-1 "…" (this marks it read), or team ack drop-1 if no answer is needed.',
     );
-    // One signed record and the one receipt the socket write leaves, never a second of either.
-    expect(readdirSync(w.dropDir).sort()).toEqual(['drop-1', 'drop-1.read.json']);
-    const receipt = JSON.parse(readFileSync(join(w.dropDir, 'drop-1.read.json'), 'utf8')) as {
-      payload: { id: string; status: string; to: string; read_by: string };
-    };
-    expect(receipt.payload).toMatchObject({ id: 'drop-1', status: 'read', to: 'orchestrator', read_by: 'socket delivery' });
+    // One signed record and no receipt: only the seat writes a read receipt, so the taken frame
+    // leaves the record unread and the watch re-wakes it like any other message.
+    expect(readdirSync(w.dropDir).sort()).toEqual(['drop-1']);
+    expect(existsSync(join(w.dropDir, 'drop-1.read.json'))).toBe(false);
     expect(walkHistory(w).at(-1)).toMatchObject({ via: 'socket', outcome: 'delivered' });
   });
 
@@ -1118,7 +1118,7 @@ describe('the client send walk', () => {
     // The frame was never taken, so no read receipt exists for it.
     expect(existsSync(join(w.dropDir, 'drop-1.read.json'))).toBe(false);
     const last = walkHistory(w).at(-1);
-    expect(last).toMatchObject({ via: 'drop', outcome: 'sent (unconfirmed)' });
+    expect(last).toMatchObject({ via: 'drop', outcome: 'queued, not woken' });
     expect(last?.failed).toContain('socket: the session closed the connection before it took the frame');
   });
 
@@ -1132,7 +1132,7 @@ describe('the client send walk', () => {
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
     expect(existsSync(join(w.dropDir, 'drop-1.read.json'))).toBe(false);
-    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop', outcome: 'sent (unconfirmed)' });
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop', outcome: 'queued, not woken' });
   });
 
   test('a declared order is walked as written, and a live channel is not reached ahead of it', async () => {
@@ -1142,26 +1142,27 @@ describe('the client send walk', () => {
     const io = capture(w, { caller: owner });
     expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
     // The typed leg is first in the receiver's own word and is refused (no pane messaging); the
-    // walk goes on in the declared order to the live inbox, which takes it.
+    // inbox word behind it is no leg (ADR D1), so the drop is where the walk ends.
     expect(host.typed).toEqual([]);
-    expect(existsSync(join(w.dropDir, 'drop-1.pending'))).toBe(true);
-    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'mcp-inbox' });
+    expect(existsSync(join(w.dropDir, 'drop-1.pending'))).toBe(false);
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop' });
   });
 
   test('a declared order naming a leg a client grant cannot walk keeps only the client legs', async () => {
     const w = walkFixture('walk-declared-drop');
     liveInboxIn(w);
-    // `drop` is the durable copy the grant already wrote; the walk skips it and takes the channel.
+    // `drop` is the durable copy the grant already wrote, and the inbox word beside it is no
+    // client leg of this build (ADR D1): the durable copy is the whole delivery.
     const host = walkHost(w, { delivery: { seat: ['drop', 'mcp-inbox'] } });
     const io = capture(w, { caller: owner });
     expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
     expect(host.typed).toEqual([]);
     expect(host.frames).toEqual([]);
-    expect(existsSync(join(w.dropDir, 'drop-1.pending'))).toBe(true);
-    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'mcp-inbox' });
+    expect(existsSync(join(w.dropDir, 'drop-1.pending'))).toBe(false);
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop' });
   });
 
-  test('the record the walk carries is the grant\'s own: one drop, one receipt, client principal intact', async () => {
+  test('the record the walk carries is the grant\'s own: one drop, no receipt, client principal intact', async () => {
     const w = walkFixture('walk-identity');
     acceptInbound(w);
     let atDial: { names: string[]; bytes: string } = { names: [], bytes: '' };
@@ -1178,7 +1179,9 @@ describe('the client send walk', () => {
     // The record was on disk, alone, before the frame was dialed; the walk did not rewrite it.
     expect(atDial.names).toEqual(['drop-1']);
     expect(readFileSync(join(w.dropDir, 'drop-1'), 'utf8')).toBe(atDial.bytes);
-    expect(readdirSync(w.dropDir).sort()).toEqual(['drop-1', 'drop-1.read.json']);
+    // The taken frame wrote no receipt: only the seat writes a read receipt, so the record stays
+    // unread for its own reader and the watch re-wakes it like any other message.
+    expect(readdirSync(w.dropDir).sort()).toEqual(['drop-1']);
     const parsed = signedRecordOf(JSON.parse(readFileSync(join(w.dropDir, 'drop-1'), 'utf8')));
     expect(parsed).not.toBeNull();
     if (parsed === null) return;

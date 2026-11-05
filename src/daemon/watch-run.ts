@@ -22,6 +22,9 @@ export type HostedWatchRunInput = {
   /** The owning daemon's fresh per-seat answer for this route's presence channels, when it
    *  hosts them: the argument is a declared seat name. */
   presenceChannelHealthy?: (seat: string) => boolean;
+  /** The owning daemon's measured reason for a seat channel it answered unhealthy, when it hosts
+   *  presence: display detail for the stuck report's notice. */
+  presenceChannelReason?: (seat: string) => string | null;
   /** The owning daemon's broker reader, when it hosts the broker: the watch counts a tracker
    *  team's takeable work from the snapshot it returns and never opens the socket itself. */
   brokerWork?: BrokerWorkSource;
@@ -40,6 +43,7 @@ export function hostedWatchSources(
   pushWork?: WorkPush,
   pid?: number,
   presenceChannelHealthy?: (seat: string) => boolean,
+  presenceChannelReason?: (seat: string) => string | null,
   brokerWork?: BrokerWorkSource,
 ): WatchSources {
   return {
@@ -50,6 +54,10 @@ export function hostedWatchSources(
     typeText: () => false,
     pressEnter: () => false,
     sendKey: () => false,
+    // The one write kept: the profile-gated typed wake, which the shared module bounds with two
+    // idle reads, a guarded Enter and its own working-screen acknowledgement. The raw writers
+    // above stay closed; a seat whose profile declares no wake never reaches this seam.
+    typedWake: base.typedWake,
     notify: () => {},
     createWorkspace: undefined,
     paneRun: undefined,
@@ -69,6 +77,7 @@ export function hostedWatchSources(
     wait: (seconds) => loop.wait(seconds * 1000),
     pushWork,
     ...(presenceChannelHealthy === undefined ? {} : { presenceChannelHealthy }),
+    ...(presenceChannelReason === undefined ? {} : { presenceChannelReason }),
     // A base source never brings a broker reader into a hosted loop: the daemon's own reader is
     // the only one, and it is absent unless this daemon hosts the broker.
     ...(brokerWork === undefined ? {} : { brokerWork }),
@@ -96,6 +105,7 @@ export function hostedWatchRun(input: HostedWatchRunInput): (loop: HostedLoop) =
     input.pushWork,
     input.pid,
     input.presenceChannelHealthy,
+    input.presenceChannelReason,
     input.brokerWork,
   ));
 }

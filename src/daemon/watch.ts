@@ -38,6 +38,12 @@ export type HostedWatchInput = {
    *  pulses ride the existing fixed interval; the host adds no timer and never shortens a wait.
    *  `false` closes effects: the host then settles every outstanding wait false at once. */
   onTick?: (at: Date) => boolean | void;
+  /** Runs when a hosted pass yields at a seat seam and a daemon beat is due: the daemon's
+   *  cross-route pulse, never this route's own. It must be synchronous and must not touch this
+   *  route's state: the yielding pass can hold that state's lock. */
+  onBeat?: () => void;
+  /** Runs when a hosted pass finishes one loop turn. */
+  onCycle?: (at: Date) => void;
   now?: () => Date;
 };
 
@@ -52,8 +58,12 @@ export type HostedWatch = HostedWatchHandle & {
    * pulse that failed terminally, or the gap between a fault and its restart). `left` is called
    * with the reason the record carries once that exit has been recorded; it never runs for a
    * deliberate stop, because stop owns that exit.
+   *
+   * `refused` is for a host that cannot answer synchronously — one whose run lives behind an
+   * IPC hop. Such a host accepts the fault and may report a later refusal through it; a host
+   * that can decide at once refuses by returning false and never calls it.
    */
-  fault(why: string, left?: (recorded: string) => void): boolean;
+  fault(why: string, left?: (recorded: string) => void, refused?: (why: string) => void): boolean;
 };
 
 /** What a hosted route may do outbound right now. */
@@ -134,6 +144,7 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
       // A completed pass answers the failure reason a restarted run was carrying.
       why = null;
       if (phase === 'starting') phase = 'running';
+      input.onCycle?.(at);
     },
     standby(reason) {
       if (stopped) return;
@@ -143,6 +154,16 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
       // through its own end instead of running another pass.
       settleWaiters(false);
     },
+    ...(input.onBeat === undefined
+      ? {}
+      : {
+          beat() {
+            // A stop owns the exit: nothing beats after it. Whether a beat is due, and which routes
+            // still need one, is the daemon's decision, not this host's.
+            if (stopped) return;
+            input.onBeat?.();
+          },
+        }),
   };
 
   /**
@@ -341,5 +362,64 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
     fault,
     stop,
     done,
+  };
+}
+
+/**
+ * The shared beat between hosted routes. The daemon's interval owns the beat; a hosted pass that
+ * is holding the only event loop displaces the interval beats it spans, so the pass carries each
+ * due beat to the routes it is starving. It never carries one to the route whose pass it is: that
+ * pass can hold its own state's lock, and a busy renewal judged against a captured proof drains.
+ * Nobody ticks after the daemon closed: every stopped watch refuses its own tick, and the pulse
+ * is only reachable through a running pass's host.
+ */
+export type HostedBeatInput = {
+  /** The daemon's heartbeat: a beat is due once this long has passed since the last one. A
+   *  number fixes it as before; a function is read on every comparison, so the daemon that
+   *  re-arms its timer on a policy word keeps the mid-pass pulse on the same beat. */
+  intervalMs: number | (() => number);
+  /** Every hosted watch this daemon runs. Read on every beat: routes are added while it runs. */
+  watches: () => readonly HostedWatch[];
+  /** The daemon's own log: one line per route whose tick threw. */
+  log(text: string): void;
+  now?: () => Date;
+};
+
+export type HostedBeat = {
+  /** The daemon's interval beat: ticks every hosted watch once and marks the beat, always. */
+  tick(): void;
+  /** A hosted pass yields between seats: when a beat is due, ticks every hosted watch except
+   *  `self`, whose own pass this is. Between beats this is a no-op, so an ordinary pass pays
+   *  only a clock comparison. */
+  midPass(self: HostedRoute): void;
+};
+
+export function createHostedBeat(input: HostedBeatInput): HostedBeat {
+  const now = input.now ?? (() => new Date());
+  const intervalMs = typeof input.intervalMs === 'function' ? input.intervalMs : () => input.intervalMs as number;
+  let last = now().getTime();
+  const pulse = (at: Date, except: HostedRoute | undefined): void => {
+    for (const watch of input.watches()) {
+      if (except !== undefined && watch.route.root === except.root) continue;
+      try {
+        watch.tick(at);
+      } catch (error) {
+        const why = error instanceof Error ? error.message : String(error);
+        input.log(`root ${watch.route.root}: the hosted watch tick failed: ${why}`);
+      }
+    }
+  };
+  return {
+    tick(): void {
+      const at = now();
+      last = at.getTime();
+      pulse(at, undefined);
+    },
+    midPass(self: HostedRoute): void {
+      const at = now();
+      if (at.getTime() - last < intervalMs()) return;
+      last = at.getTime();
+      pulse(at, self);
+    },
   };
 }

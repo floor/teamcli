@@ -33,6 +33,7 @@ import {
   noPaneRefusal,
   standingOf,
 } from '../caller.ts';
+import type { DelegateSources } from '../delegate.ts';
 import type { Current } from '../file/current.ts';
 import { isParseError, NOT_A_REPO, withoutFileOffer } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -122,6 +123,8 @@ export type BriefSources = {
   /** The build this process runs, compared against a live inbox listener's marker. Left out
    *  (a test's sources), the plan keeps the liveness-only answer. */
   build?: () => BuildIdentity;
+  /** The approved pane's read gate's own reads; the real ones when absent. */
+  gate?: DelegateSources;
 };
 
 export const realSources: BriefSources = { home: homedir(), now: () => new Date(), build: () => buildIdentity() };
@@ -466,7 +469,7 @@ export async function runBrief(argv: string[], io: Io, sources: BriefSources = r
     warnings: loaded.warnings,
   };
   if (!owner) {
-    if (!mayReadTeam(current, io, { home: sources.home })) return notYours(io, json);
+    if (!mayReadTeam(current, io, sources)) return notYours(io, json);
     if (args.values.file !== undefined) {
       const message = fileOwnerRefusal(io, args.values.file) ?? "--file is the owner's";
       if (json) writeJsonError(io, 'brief.file-owner', message, null);

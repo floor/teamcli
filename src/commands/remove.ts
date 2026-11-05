@@ -23,7 +23,7 @@ import { approvalStanding, type Standing } from '../store/store.ts';
 import { agentRename, paneForeground, paneForegroundCwd } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
-import { executePlan } from '../launch/execute.ts';
+import { executePlan, launchKind } from '../launch/execute.ts';
 import type { Host } from '../launch/execute.ts';
 import { downPlan, type DownSeat } from '../launch/plan.ts';
 import { logLine } from '../log.ts';
@@ -332,6 +332,11 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // A client run is never the owner's, whatever terminal it stands in.
   const ownerRun = clientRun === null && caller.kind === 'owner';
   const whoText = clientRun === null ? describeCaller(caller) : `client:${clientRun.grant.clientId}`;
+  // The pane this command runs in, when the caller's placement names one, or the environment
+  // hint when it does not: the sweep must never close the terminal it runs in.
+  const callerPane = 'pane' in caller && caller.pane !== undefined && caller.pane !== ''
+    ? caller.pane
+    : (io.env.HERDR_PANE_ID !== undefined && io.env.HERDR_PANE_ID !== '' ? io.env.HERDR_PANE_ID : undefined);
   const session = judged.session;
   // Dev mode, from the file this run edits: a `dev-mode` value anywhere in the caller's chain
   // governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value the variable set to
@@ -436,6 +441,8 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       root,
       dir,
       now: sources.now(),
+      // Ruling D5: the placed operator may abandon, under the lead-gates policy.
+      admitsOperator: true,
     });
     if (!lift.lifted) {
       refuse(io, json, 'remove', { id: 'remove.abandon', message: 'only the owner abandons a seat, from a terminal outside herdr', repair: null });
@@ -695,7 +702,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // got past the gate. The lock is released on every exit path (`launch/run-lock.ts`).
   const runLock = acquireRunLock(dir, session);
   if ('held' in runLock) {
-    refuse(io, json, 'remove', { id: 'remove.run-lock', message: runLockText(runLock.held, session, dir), repair: null });
+    refuse(io, json, 'remove', { id: 'remove.run-lock', message: runLockText(runLock.held, session, dir, runLock.startedAt), repair: null });
     // exit: remove.run-lock
     return 1;
   }
@@ -773,6 +780,26 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       }
     }
 
+    // A seat the host no longer lists has no CLI to stop, and the record that names its
+    // workspace is about to go: the sweep closes that workspace now, from a fresh reading of
+    // it, while the record still names the pane. A human's declaration leaves both alone, and
+    // a stopped seat's own close already closed what it made.
+    if (live && !agent && !human && recorded?.workspace !== undefined) {
+      await sweepVacated({
+        io: noteIo,
+        dir,
+        session,
+        seat: name,
+        workspace: recorded.workspace,
+        ...(recorded.pane === undefined ? {} : { pane: recorded.pane }),
+        cli: recorded.cli ?? cli,
+        sources,
+        logCommand: 'remove',
+        caller: whoText,
+        ...(callerPane === undefined ? {} : { callerPane }),
+      });
+    }
+
     let kept: string | null = null;
     let rewrote: string | null = null;
     if (!temporary && !swap) {
@@ -835,6 +862,14 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     // interrupted must not answer for a seat this run stopped or removed — a `--keep` entry is
     // stopped too, so it is no longer mid-turn.
     resetCliHookState(dir, session, [name]);
+    // The seat's own user-level inbox entry goes with its record, as `down` takes it: only the
+    // name its launch registered is removed, every other entry in the CLI's shared store is left
+    // as it is, and a removal that cannot be made is said while the removal proceeds.
+    const inboxCli = copySeat?.cli ?? recorded?.cli;
+    const removal = inboxCli === undefined ? null : sources.inboxRemove?.({ cli: inboxCli, seat: name, session }) ?? null;
+    if (removal !== null && !removal.ok) {
+      noteIo.stderr(`team remove: ${name}: its team inbox entry was not removed: ${removal.reason}\n`);
+    }
     // The swap's record: the gap is a replacement in progress, not a lost lead. Written after the
     // stop, so a refused or failed stop leaves no record; `add` clears it once the seat runs.
     if (swap) {
@@ -1038,4 +1073,73 @@ export async function stopRunning(input: {
   };
   await executePlan(steps, session, host);
   return stopped && !endpointRefused;
+}
+
+/**
+ * Closes the workspace a removed seat left, when the terminal host no longer lists its CLI. The
+ * record that names the workspace is about to go, so the close is made now — from a fresh
+ * reading of the workspace's panes, their processes and their names, never from the record. A
+ * reading that is not a pane bare at its own shell leaves the workspace exactly as it is and
+ * says why; the removal itself goes on.
+ */
+export async function sweepVacated(input: {
+  io: Io;
+  dir: string;
+  session: string;
+  seat: string;
+  workspace: string;
+  pane?: string;
+  cli: string;
+  sources: RemoveSources;
+  logCommand: string;
+  caller: string;
+  /** The pane this command runs in: a workspace holding it is never closed. */
+  callerPane?: string;
+}): Promise<void> {
+  const launch = input.sources.launch;
+  if (!launch) return;
+  const { sources, session } = input;
+  const host: Host = {
+    startServer: () => false,
+    sessionUp: () => true,
+    createWorkspace: () => null,
+    paneRun: () => false,
+    typeLine: async () => false,
+    renameAgent: () => false,
+    closeWorkspace: launch.closeWorkspace,
+    stopSession: () => false,
+    kill: () => false,
+    agentPanes: (name) => launch.agentPanes(name),
+    classify: (name, pane, cli) => launchKind(sources.screen(name, pane, cli).kind),
+    sleep: sources.sleep ?? launch.sleep,
+    now: () => sources.now().getTime(),
+    allow: () => null,
+    record() {},
+    running() {},
+    drop() {},
+    say: (line) => input.io.stdout(line),
+    log: (who, what) => logLine(input.dir, input.logCommand, input.caller, `${who}: ${what}`, sources.now()),
+    agentList: (name) => sources.agents(name),
+    workspacePanes: sources.workspacePanes ? (name, workspace) => sources.workspacePanes!(name, workspace) : undefined,
+    processInfo: sources.processes ? (name, pane) => sources.processes!(name, pane) : undefined,
+    seatStates: (name) => readState(input.dir).sessions[name]?.seats ?? null,
+    ...(input.callerPane === undefined ? {} : { callerPane: input.callerPane }),
+  };
+  await executePlan(
+    [
+      {
+        kind: 'run',
+        argv: ['herdr', 'workspace', 'close', input.workspace],
+        do: {
+          do: 'sweep',
+          seat: input.seat,
+          workspace: input.workspace,
+          ...(input.pane === undefined ? {} : { pane: input.pane }),
+          cli: input.cli,
+        },
+      },
+    ],
+    session,
+    host,
+  );
 }

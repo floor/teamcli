@@ -337,7 +337,7 @@ describe('A9 independent: a restart waits for the session lock another process h
       // product declares, in its own poll steps.
       expect(steps).toBe(WAIT_STEPS);
       expect(io.err).toBe(
-        `team restart: another session-mutating run is holding session acme (pid ${child.pid}); try again when it is done\n`,
+        `team restart: another session-mutating run is holding session acme (pid ${child.pid}, no start time recorded); try again when it is done\n`,
       );
       // Nothing was typed, closed or launched, and the state — the worker among it — is exactly
       // what it was: never a seat reported missing after a half stop.

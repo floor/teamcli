@@ -1,9 +1,10 @@
 import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messaging.ts';
-// `team send --wait` on the thread: across `drop`, `mcp-inbox` and `typed` legs, and for
-// `human: true` seats. A waited send writes the signed message record via the receiving seat's
-// delivery walk, then awaits the first verified reply record on the thread within the timeout
-// window. When the window closes with no reply on the thread, it exits 1 (`send.timeout`) and
-// leaves the thread open so a late `team reply` still arrives on the thread and moves status once.
+// `team send --wait` on the thread: whatever word the seat's order declares (the mailbox, the
+// unavailable inbox word, or the typed leg), and for `human: true` seats. A waited send writes
+// the signed message record via the receiving seat's delivery walk, then awaits the first
+// verified reply record on the thread within the timeout window. When the window closes with no
+// reply on the thread, it exits 1 (`send.timeout`) and leaves the thread open so a late
+// `team reply` still arrives on the thread and moves status once.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -20,7 +21,7 @@ import { readRecord, statusOf, verifyRecord } from '../src/send/record.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
 import { claudeBox, CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
-import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema, withoutSendId } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-18T12:00:00.000Z');
 const SENT_ID = '11111111-1111-4111-8111-111111111111';
@@ -143,7 +144,7 @@ function dropDir(root: string, seat: string): string {
 }
 
 describe('team send --wait on the thread across delivery legs', () => {
-  test('returns answered (exit 0) across drop, mcp-inbox and typed legs when a verified reply record arrives on the thread', async () => {
+  test('returns answered (exit 0) whatever the declared word, when a verified reply record arrives on the thread', async () => {
     for (const leg of ['drop', 'mcp-inbox', 'typed'] as const) {
       const w = makeWorld('', `delivery_order: [${leg}]\n`);
       if (leg === 'mcp-inbox') {
@@ -177,9 +178,11 @@ describe('team send --wait on the thread across delivery legs', () => {
       clearTimeout(replyTimer);
 
       expect(code).toBe(0);
-      // A declared `typed` word now walks the Codex seat's native runtime queue (no event leg is
-      // typing), so a send it does not take says no event adapter of this seat took it.
-      expect(sendIo.err).toBe(leg === 'mcp-inbox' ? '' : leg === 'typed' ? queuedLine('worker', NO_EVENT_ADAPTER_TOOK_IT) : queuedLine('worker'));
+      // A declared `typed` word walks the Codex seat's native runtime queue (no event leg is
+      // typing), so a send it does not take says no event adapter of this seat took it. The
+      // unavailable inbox word is no leg (ADR D1): that walk ends on the drop, and the line says
+      // the pane is never typed into.
+      expect(sendIo.err).toBe(leg === 'typed' ? queuedLine('worker', NO_EVENT_ADAPTER_TOOK_IT) : queuedLine('worker'));
       assertMatchesOutputSchema(sendIo.out, SEND_OUTPUT_SCHEMA);
       const doc = JSON.parse(sendIo.out) as Record<string, unknown>;
       expect(doc).toMatchObject({
@@ -187,12 +190,13 @@ describe('team send --wait on the thread across delivery legs', () => {
         format: 1,
         dry_run: false,
         status: 'answered',
-        action_summary: 'worker: answered',
+        action_summary: `worker: answered (id ${SENT_ID})`,
         project: 'acme',
         session: 'acme',
         seat: 'worker',
-        // No pane messaging: a typed word is never walked, so the walk ends at the bus drop.
-        channel: leg === 'typed' ? 'drop' : leg,
+        // No pane messaging: a typed word is never walked, and the unavailable inbox word is no
+        // leg, so the walk ends at the bus drop.
+        channel: leg === 'typed' || leg === 'mcp-inbox' ? 'drop' : leg,
         thread: SENT_ID,
         reply: expect.stringContaining(`ack via ${leg}`),
       });
@@ -227,7 +231,7 @@ describe('team send --wait on the thread across delivery legs', () => {
 
     expect(code).toBe(1);
     const errDoc = assertJsonErrorShape(sendIo.out, { id: 'send.timeout', repair: null });
-    expect(errDoc.error.message).toBe('worker: timeout: sent, no reply on the thread within 3s; the thread stays open');
+    expect(withoutSendId(errDoc.error.message)).toBe('worker: timeout: sent, no reply on the thread within 3s; the thread stays open');
 
     // The sent record is on disk, its status is still `sent`, and the thread is open.
     const workerDrops = dropDir(w.root, 'worker');
@@ -297,7 +301,7 @@ describe('team send --wait on the thread across delivery legs', () => {
 
     const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
     expect(code).toBe(1);
-    expect(io.err).toBe(queuedLine('lead') + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
+    expect(withoutSendId(io.err)).toBe(queuedLine('lead') + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
   });
 });
 
@@ -317,7 +321,7 @@ describe('team send --wait to a human: true seat (P3)', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toBe('team acme, session "acme"\nlead: answered\nhuman says go ahead\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: answered\nhuman says go ahead\n');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
@@ -350,7 +354,7 @@ describe('team send --wait to a human: true seat (P3)', () => {
 
     expect(code).toBe(1);
     expect(io.out).toBe('');
-    expect(io.err).toBe('team send: lead: timeout: sent, no reply on the thread within 2s; the thread stays open\n');
+    expect(withoutSendId(io.err)).toBe('team send: lead: timeout: sent, no reply on the thread within 2s; the thread stays open\n');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);

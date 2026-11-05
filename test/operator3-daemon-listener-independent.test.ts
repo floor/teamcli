@@ -56,6 +56,7 @@ function fixture(stale: boolean) {
   if (stale) writeFileSync(file, text.replace('listener-project', 'retired-project').replaceAll(session, 'retired-session'));
   else if (existsSync(file)) unlinkSync(file);
   updateState(dir, state => { state.sessions[session] = emptySession(); });
+  const paneReads: { pane: string; session: string }[] = [];
   let clock = Date.parse('2026-11-02T11:00:00Z'), delayed = false, refusedDuringGap = false;
   const now = () => new Date(clock);
   const never = (): never => { forbidden.push('pane mutation'); throw Error('no pane mutation'); };
@@ -72,7 +73,7 @@ function fixture(stale: boolean) {
     typeText: never, pressEnter: never, sendKey: never, notify: never, sleep: async () => {}, wait: async () => false };
   const sendHost: DaemonHost = { home, now, agents: () => [], processInfo: () => null, socketsDir: join(base, 'synthetic-sockets'),
     deliver: async () => never(), native: { typeText: never, pressEnter: never, sendKey: never, paneText: () => null, status: () => null, wait: async () => {} } };
-  return { base, home, root, dir, file, now, sources, sendHost, refusedDuringGap: () => refusedDuringGap, advance: (ms: number) => { clock += ms; } };
+  return { base, home, root, dir, file, now, sources, sendHost, paneReads, refusedDuringGap: () => refusedDuringGap, advance: (ms: number) => { clock += ms; } };
 }
 for (const stale of [false, true]) {
   test(`machine listener resolves registry ${stale ? 'despite a stale file' : 'without a file'} through routing, restore and a long-pass watch`, () => underRegistry(async () => {
@@ -82,6 +83,7 @@ for (const stale of [false, true]) {
       hostedWatch: (route, log) => hostedWatchAuthority({ route, teamFile: w.file, log, base: w.sources, now: w.now, alive: pid => pid === process.pid }),
       restoreSweep: async (root, file) => { restore.push({ root, ...(file === undefined ? {} : { file }) }); return { kind: 'no-recorded-session' }; },
       nextPrincipal: () => ({ kind: 'verified', seat: 'analyst', pane: 'fixture-pane' }),
+      paneProcesses: (pane, session) => { w.paneReads.push({ pane, session }); return null; },
       nextHandler: async input => { selected.push(input.team.session); return { ok: true, kind: 'none', why: 'nothing-takeable' }; },
     });
     expect(started.kind).toBe('serving'); if (started.kind !== 'serving') throw Error('own machine listener did not bind');
@@ -91,6 +93,7 @@ for (const stale of [false, true]) {
     expect(restore).toEqual([{ root: w.root }]);
     const response = await request(daemon.socketPath, { v: 2, id: 'independent-next', op: 'next', scope: { root: w.root, session, seat: 'analyst', pane: 'fixture-pane' } });
     expect(response.ok).toBe(true); expect(response.next).toEqual({ ok: true, kind: 'none', why: 'nothing-takeable' }); expect(selected).toEqual([session]);
+    expect(w.paneReads).toEqual([{ pane: 'fixture-pane', session }]);
     await until(() => (daemon.roots[0]?.watch?.cycles ?? 0) >= 1);
     expect(w.refusedDuringGap()).toBe(true);
     const epoch = readState(w.dir).sessions[session]!.watch!.epoch!;

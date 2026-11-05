@@ -18,11 +18,18 @@ const fixture = (name: string) => readFileSync(new URL(`../fixtures/grok/1.0.50/
 const grok = profileFor('grok');
 if (!grok) throw new Error('grok has no profile');
 
+// The measured unattended flags (Grok CLI 1.0.70), spelled as `launchCommand` renders them.
+const FLAGS = "--trust --permission-mode auto --allow 'Bash(bun *)' --allow 'Bash(team *)' --allow 'Bash(git *)'";
+
 describe('Grok launch and captured screens', () => {
   test('unattended flags and the rules ride the launch line, and the seat reads its own shape', () => {
-    expect(launchCommand(grok, 'grok', 'Rules.')).toBe('AGENT_UNATTENDED=1 grok --always-approve --rules Rules.');
+    expect(launchCommand(grok, 'grok', 'Rules.')).toBe(`AGENT_UNATTENDED=1 grok ${FLAGS} --rules Rules.`);
     expect(launchCommand(grok, 'grok --model grok-4.7-build-fast', "Don't stop.")).toBe(
-      "AGENT_UNATTENDED=1 grok --model grok-4.7-build-fast --always-approve --rules 'Don'\\''t stop.'",
+      `AGENT_UNATTENDED=1 grok --model grok-4.7-build-fast ${FLAGS} --rules 'Don'\\''t stop.'`,
+    );
+    // A line that names its own mode keeps it: the profile's pair is not appended twice.
+    expect(launchCommand(grok, 'grok --permission-mode plan', 'Rules.')).toBe(
+      `AGENT_UNATTENDED=1 grok --permission-mode plan --trust --allow 'Bash(bun *)' --allow 'Bash(team *)' --allow 'Bash(git *)' --rules Rules.`,
     );
     expect(grok.rulesOption).toBe('--rules');
     expect(grok.loginCheck).toEqual(['models']);
@@ -159,17 +166,20 @@ function boxed(text: string, base = fixture('idle')): string {
 describe('Grok exit typing', () => {
   /** A pane whose screen follows its two captures: the idle box until `/exit` has been typed
    *  and the pane has drawn it — herdr's send returns before the pane renders, so the drawing
-   *  is the sleep — and the exit-typed capture from then on. Every key is recorded with the
-   *  reading it went out on. */
+   *  is the sleep — and the exit-typed capture from then on. A delivered Enter sends the text
+   *  out of the box, and the pane past it is the idle capture again — a shape the two-frame
+   *  fake could not draw. Every key is recorded with the reading it went out on. */
   function exitPane() {
     let typed = false;
     let drawn = false;
+    let entered = false;
     let clock = 1_000_000;
     const sent: { key: string; holds: boolean }[] = [];
     const types: string[] = [];
-    const screen = () => (typed && drawn ? fixture('exit-typed') : fixture('idle'));
+    const screen = () => (entered ? fixture('idle') : typed && drawn ? fixture('exit-typed') : fixture('idle'));
     const send = (key: string) => {
       sent.push({ key, holds: boxHoldsText('grok', '/exit', screen()) });
+      if (key === 'enter') entered = true;
       return true;
     };
     const io: ExitIo = {
@@ -195,14 +205,16 @@ describe('Grok exit typing', () => {
   test('a box left holding /exit from an earlier stop is cleared with ctrl+u first, then typed and entered', async () => {
     // The pane starts on the exit-typed capture. The profile's clearing key empties it; the
     // cleared pane is taken to draw the idle box again (the ctrl+u probe's clearing is quoted
-    // in the fixtures README), and the text is typed fresh and entered.
+    // in the fixtures README), the text is typed fresh, and the fresh Enter sends it out of
+    // the box — the pane past it draws the idle box again.
     let cleared = false;
     let typed = false;
     let drawn = false;
+    let entered = false;
     let clock = 1_000_000;
     const sent: { key: string; holds: boolean }[] = [];
     const types: string[] = [];
-    const screen = () => (!cleared || !drawn ? fixture('exit-typed') : typed ? fixture('exit-typed') : fixture('idle'));
+    const screen = () => (entered ? fixture('idle') : !cleared || !drawn ? fixture('exit-typed') : typed ? fixture('exit-typed') : fixture('idle'));
     const io: ExitIo = {
       typeText: (line) => { types.push(line); typed = true; return true; },
       sendKey: (key) => {
@@ -212,6 +224,7 @@ describe('Grok exit typing', () => {
       },
       pressEnter: () => {
         sent.push({ key: 'enter', holds: boxHoldsText('grok', '/exit', screen()) });
+        entered = true;
         return true;
       },
       screen,
@@ -248,7 +261,7 @@ describe('the plan launches grok with its rules on the line', () => {
     expect(plan.find((step) => step.do?.do === 'launch')?.do).toMatchObject({
       do: 'launch',
       seat: 'grok',
-      command: 'AGENT_UNATTENDED=1 grok --always-approve --rules Rules.',
+      command: `AGENT_UNATTENDED=1 grok ${FLAGS} --rules Rules.`,
     });
     expect(plan.find((step) => step.do?.do === 'idle')?.do).toMatchObject({ do: 'idle', cli: 'grok', seconds: 90 });
     expect(plan.some((step) => step.do?.do === 'deliver')).toBe(false);
@@ -272,12 +285,12 @@ describe('the plan launches grok with its rules on the line', () => {
       return step?.do?.do === 'launch' ? step.do.command : '';
     };
     expect(commandOf('grok', { registry: { launch: 'grok', model: 'Grok', version: '4.7', sessionId: id } }))
-      .toBe(`AGENT_UNATTENDED=1 grok -r ${id} --always-approve --rules Rules.`);
+      .toBe(`AGENT_UNATTENDED=1 grok -r ${id} ${FLAGS} --rules Rules.`);
     expect(commandOf('grok --model grok-4.7', { resume: id }))
-      .toBe(`AGENT_UNATTENDED=1 grok --model grok-4.7 -r ${id} --always-approve --rules Rules.`);
+      .toBe(`AGENT_UNATTENDED=1 grok --model grok-4.7 -r ${id} ${FLAGS} --rules Rules.`);
     expect(commandOf('zsh /home/owner/as-floor.sh grok --model grok-4.7', { resume: id }))
-      .toBe(`AGENT_UNATTENDED=1 zsh /home/owner/as-floor.sh grok --model grok-4.7 -r ${id} --always-approve --rules Rules.`);
+      .toBe(`AGENT_UNATTENDED=1 zsh /home/owner/as-floor.sh grok --model grok-4.7 -r ${id} ${FLAGS} --rules Rules.`);
     expect(commandOf('zsh -lc "grok --model grok-4.7"', { resume: id }))
-      .toBe(`AGENT_UNATTENDED=1 zsh -lc "grok --model grok-4.7 -r ${id} --always-approve --rules Rules."`);
+      .toBe(`AGENT_UNATTENDED=1 zsh -lc "grok --model grok-4.7 -r ${id} ${FLAGS} --rules Rules."`);
   });
 });

@@ -1,4 +1,4 @@
-import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../../src/send/no-pane-messaging.ts';
+import { NO_EVENT_ADAPTER_TOOK_IT, NO_PANE_MESSAGING, queuedLine } from '../../src/send/no-pane-messaging.ts';
 // The bootstrap scenes: a sender herdr has placed as a seat the live file declares, before any
 // agent record exists for it. The own-team rules judge it as that seat, the drop file's header
 // says so in as many words, and a refusal for the same caller names the command that would write
@@ -14,6 +14,7 @@ import { updateState } from '../../src/state.ts';
 import { keyOf, signDomain } from '../../src/store/keys.ts';
 import { recordBody, testIo } from '../helpers.ts';
 import { dropDir, fake, scripted, world, type World } from '../send-native-fixtures.ts';
+import { withoutSendId } from '../helpers/output.ts';
 
 const made: World[] = [];
 
@@ -44,11 +45,11 @@ describe("team send: the file's seat, before its record", () => {
     const code = await runSend(['lead', 'a note'], io, fake(one, { native: scripted(['idle', 'working']) }));
 
     expect(code).toBe(0);
-    expect(io.err).toBe(queuedLine('lead', NO_EVENT_ADAPTER_TOOK_IT));
+    expect(io.err).toBe(queuedLine('lead', NO_PANE_MESSAGING));
     // The delivery path stays another suite's subject: the plain word is the outcome here.
     // What this file judges is the header the receiver reads.
-    expect(io.out, `outcome line: ${io.out}`).toBe(
-      'team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n',
+    expect(withoutSendId(io.out), `outcome line: ${io.out}`).toBe(
+      'team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n',
     );
     const drops = dropDir(one.dir, 'lead');
     expect(recordBody(join(drops, readdirSync(drops).find((name) => !name.includes('.')) as string))).toBe(
@@ -66,8 +67,8 @@ describe("team send: the file's seat, before its record", () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe(queuedLine('native', NO_EVENT_ADAPTER_TOOK_IT));
-    expect(io.out, `outcome line: ${io.out}`).toBe(
-      'team acme, session "acme"\nnative: sent (unconfirmed) (drop, 0 ms); queued; native reads it at its next turn (pull-only)\n',
+    expect(withoutSendId(io.out), `outcome line: ${io.out}`).toBe(
+      'team acme, session "acme"\nnative: queued, not woken (drop, 0 ms); queued; the typed wake failed (the send host binds no pane writer; nothing was typed); native reads it at its next turn, and nothing here gives it one (pull-only)\n',
     );
     const drops = dropDir(one.dir, 'native');
     expect(recordBody(join(drops, readdirSync(drops).find((name) => !name.includes('.')) as string))).toBe(

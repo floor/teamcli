@@ -25,6 +25,7 @@ import {
   messageSummaryOf,
   renderMessageDisplay,
 } from '../settings/message-display.ts';
+import { profileFor } from '../profiles/profile.ts';
 
 /** The longest trigger typed into a pane. Agy on a 13-column pane submitted 200 and collapsed at 400. */
 export const TRIGGER_MAX = 200;
@@ -66,7 +67,8 @@ export type NativePane = {
  *  seat's nickname, its seat name when the file writes none; `template` is the receiving team's
  *  `message-display` policy in force. `body` supplies the summary (its first content line, cut at
  *  80 and sanitised), `subject` the sender's own `--subject`, `ageMs` the message's age. The
- *  message id is never part of a typed header; it travels in the socket frame's `msg_id`.
+ *  message id is never part of the header: it travels in the socket frame's `msg_id`, and a
+ *  socket delivery's one re-wake names it in its hint (`ack <id> or reply`).
  *  `format` is the legacy `sender-line` format, read only when no `template` is given. */
 export type TriggerSender = {
   seat: string;
@@ -125,21 +127,42 @@ export function triggerLine(path: string, sender?: TriggerSender): string | null
 /**
  * The trigger a message's typed leg types: the message's header — the receiving team's
  * `message-display` template, the sender's nickname, the address and the body's first line — then
- * the one fixed read sentence, `Read it with: team drops --read.` The line is a hint, never a
- * command: the seat reads it and runs its read. The whole line stays inside a narrow composer
- * (`MESSAGE_LINE_MAX`, 80); the hint is kept whole and the header gives way. Null when no
- * line can carry both, and the caller keeps the drop and ends held with its reason. The nameless
- * form is used only by callers with no message sender (a work nudge).
+ * the read sentence, which names the seat's fastest read path: the receiving profile's own
+ * `read_hint` when it declares one (an MCP inbox seat names its inbox tool), the shipped
+ * `Read it with: team drops --read.` otherwise. The line is a hint, never the body: it carries
+ * the sender, the address and the summary, and the signed record holds the rest. The whole line
+ * stays inside a narrow composer (`MESSAGE_LINE_MAX`, 80); the hint is kept whole and the header
+ * gives way. Null when no line can carry both, and the caller keeps the drop and ends held with
+ * its reason. `cli` is the receiving seat's CLI, the profile the hint comes from; `hint` replaces
+ * the profile's sentence for a wake that settles one named message (a socket delivery's re-wake);
+ * the nameless form is used only by callers with no message sender (a work nudge).
  */
-export function readTriggerLine(seat: string, session: string, sender?: TriggerSender): string | null {
+export function readTriggerLine(seat: string, session: string, sender?: TriggerSender, cli?: string, hint?: string): string | null {
   if (sender !== undefined) {
     const header = wakeHead(sender);
     if (header === '') return null;
-    return composeMessageLine(header, MESSAGE_READ_HINT);
+    return composeMessageLine(header, hint ?? readHintFor(cli));
   }
   const line = `Run team drops --read --seat ${seat} --session ${session} and do that.`;
   if (line.includes('\n') || line.length > TRIGGER_MAX) return null;
   return line;
+}
+
+/**
+ * The hint a socket delivery's one re-wake carries (ADR `zeus-message-path`, D3): the seat
+ * answers the message the frame named with `team reply <id>`, or marks it read with
+ * `team ack <id>` when no answer is needed. Both write the seat's signed receipt; the id fits the
+ * hint, which the wake line keeps whole.
+ */
+export function socketWakeHint(id: string): string {
+  return `ack ${id} or reply`;
+}
+
+/** The words a typed wake appends for this CLI's seat: its profile's `read_hint` when it declares
+ *  one, the shipped sentence otherwise. A CLI with no profile reads the shipped sentence. */
+function readHintFor(cli: string | undefined): string {
+  if (cli === undefined) return MESSAGE_READ_HINT;
+  return profileFor(cli)?.readHint ?? MESSAGE_READ_HINT;
 }
 
 /**

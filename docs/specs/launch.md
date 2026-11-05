@@ -46,12 +46,14 @@ code's words.
 
 ### 3.1 The rules text
 
-The rules are one text, built in a fixed order. The first four are the tool's own, in these words:
+The rules are one text, built in a fixed order. The tool's own come first, in this order:
 
 1. `End every commit message and every pull request body with your signature, given below.`
 2. `Never stop at a question: tell the orchestrator (<name>) in one line and keep working.`
-3. ``Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.``
-4. `In a protected checkout, never switch the branch, reset or commit.`
+3. Only for a seat whose profile registers the team's MCP inbox: ``If your tools include `inbox_check`, call it at the start and the end of every turn and `inbox_read` for each message it lists, and act on what you read.``
+4. Only for every other seat — a turn can outlive the wake that started it, and a seat without the inbox tools sees what arrived during it only by reading again: ``At the end of every turn, run `team drops --read --seat <seat>` and act on what it prints.`` `<seat>` is the seat's own name, written in because the command needs it and nothing else in the rules tells the seat its name.
+5. ``Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.``
+6. `In a protected checkout, never switch the branch, reset or commit.`
 
 Then, in this order:
 
@@ -176,10 +178,12 @@ fields:
 | `rules` | `first-message` \| `prepend` \| `{ option: <flag> }` | the delivery: `first-message` reads as `message`, `{ option }` as `option` |
 | `delivery` | `push` \| `between-turns` \| `pull-on-turn` \| `none` | the measured way an idle seat of this CLI is reached: an event adapter that wakes it (the development channel, the cross-session socket), its runtime's own queue between turns, an MCP inbox read when it takes a turn, or nothing; the launch refines it (`src/launch/delivery-class.ts`) |
 | `standing_rules` | string[] | rules for every seat of this CLI, over the file's |
+| `public_only` | boolean | every seat of this CLI is public-only: no rules are prepended to its briefs, and a send reads the body against the machine's private lists before the CLI's session call; the session's target repository must also be proven public by one credential-free read of the forge's own record (`src/send/repo-visibility.ts`); absent reads as false (`src/send/public-only.ts`) |
 | `login.check`, `login.hint` | string[] / string | the arguments that exit 0 only when logged in, and the login command |
 | `exit` | string | the text typed at an idle prompt to exit; absent when the CLI exits by key |
 | `exit_keys` | string[] | the keys that exit an idle CLI; empty when `exit` is used |
-| `exit_clear`, `exit_confirm` | string | the one key that empties the box, and the one that confirms the CLI's exit question |
+| `exit_clear`, `exit_confirm` | string / string | the one key that empties the box, and the one that confirms the CLI's exit question |
+| `exit_completion` | boolean | the CLI draws its own completion row for the exit text inside the box, so the Enter waits the measured settle and an early Enter's typed-newline frame is retried once; the composer declares the row in `own_rows` |
 | `lobby_files` | string[] | the regular files the CLI may leave in its working folder |
 | `startup_reads` | string[] | relative paths the CLI reads at start; a trailing `/` names a directory |
 | `timeouts.idle`, `timeouts.exit` | duration | the waits for the idle prompt and for the pane's shell after exit |
@@ -204,7 +208,7 @@ The shipped profiles at the tag:
 | `antigravity` | `agy` | `message` | `none` | 1.2.16 to 1.4.1 |
 | `grok` | `grok` | `option` (`--rules`) | `pull-on-turn` | 1.0.50 to 1.0.52 |
 | `gemini` | `gemini` | `message` | `pull-on-turn` | 0.64.0 to 0.64.0 |
-| `muse` | `muse` | `message` | `none` | 1.4.9 to 1.4.9 |
+| `muse` | `muse` | `message` | `none` | 1.4.9 to 1.4.14 |
 | `jules` | `jules` | `prepend` | `none` | 0.1.42 to 0.1.42 |
 
 A version against a profile's range reads `tested`, `older`, `newer` or `unread`; `team doctor`

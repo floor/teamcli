@@ -35,7 +35,9 @@ import {
   writePolicyUnset,
   type Policy,
 } from '../src/policy/index.ts';
+import { resolveDevMode } from '../src/dev_mode.ts';
 import { registerAgent } from '../src/registry/agents.ts';
+import { teamConfigRecordPath } from '../src/registry/team-config-store.ts';
 import { projectsFile, upsertProject } from '../src/registry/projects.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
@@ -43,7 +45,7 @@ import type { Live } from '../src/status/compare.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { CLAUDE_IDLE, deliverBriefs, fixtureBase, testIo } from './helpers.ts';
 import { assertMatchesOutputSchema, validateAgainstJsonSchema } from './helpers/output.ts';
-import { intoRegistry, realRegistryTouched, storedTeam, underRegistry } from './helpers/registry-team.ts';
+import { intoRegistry, realRegistryTouched, storedTeam, underRegistry, unreadableRegistryFolder } from './helpers/registry-team.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
 
@@ -324,6 +326,67 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     if (!seatLevel.ok) expect(seatLevel.refusals[0]?.message).toContain('allowed: entity, project, team');
   });
 
+  test('the daemon backlog knobs carry their release defaults and refuse a count outside their range', () => {
+    const above = POLICY_CATALOGUE['daemon.fallback-backlog-above'];
+    expect(above.kind).toBe('enforced');
+    expect(above.levels).toEqual(['entity', 'project', 'team']);
+    expect(above.defaultValue).toBe(256);
+    expect(above.gateLifting).toBe(false);
+    expect(normalizePolicyName('daemon_fallback_backlog_above')).toBe('daemon.fallback-backlog-above');
+    expect(normalizePolicyName('fallback-backlog-above')).toBe('daemon.fallback-backlog-above');
+    for (const word of ['256', 256, 1, '1000000']) expect(above.parseValue(word)).not.toBeNull();
+    for (const word of [0, '0', -1, 1_000_001, '256.5', 2.5, 'nope', '', true]) expect(above.parseValue(word)).toBeNull();
+    expect(above.valueProblem?.(0)).toContain('from 1 to 1000000');
+
+    const limit = POLICY_CATALOGUE['daemon.fallback-backlog-limit'];
+    expect(limit.kind).toBe('enforced');
+    expect(limit.levels).toEqual(['entity', 'project', 'team']);
+    expect(limit.defaultValue).toBe(500);
+    expect(limit.gateLifting).toBe(false);
+    expect(normalizePolicyName('daemon_fallback_backlog_limit')).toBe('daemon.fallback-backlog-limit');
+    for (const word of ['500', 500, 1, '10000']) expect(limit.parseValue(word)).not.toBeNull();
+    for (const word of [0, 10_001, '10k', 'nope', '', false]) expect(limit.parseValue(word)).toBeNull();
+    expect(limit.valueProblem?.(10_001)).toContain('from 1 to 10000');
+
+    const absent = resolvePolicy('daemon.fallback-backlog-limit', []);
+    expect(absent.ok).toBe(true);
+    if (absent.ok) expect(absent.effective.value).toBe(500);
+
+    // A higher threshold and a smaller bulk limit are the tighter words, so the chain tightens
+    // one way only: the reverse at a lower level is a loosening.
+    const tighter = resolvePolicy('daemon.fallback-backlog-above', [
+      { name: 'daemon.fallback-backlog-above', value: 256, level: 'entity', setter: 'owner', date: '2026-11-02T10:00:00Z', kind: 'enforced' },
+      { name: 'daemon.fallback-backlog-above', value: 400, level: 'team', setter: 'owner', date: '2026-11-02T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(tighter.ok).toBe(true);
+    if (tighter.ok) expect(tighter.effective.value).toBe(400);
+    const aboveLoosened = resolvePolicy('daemon.fallback-backlog-above', [
+      { name: 'daemon.fallback-backlog-above', value: 400, level: 'entity', setter: 'owner', date: '2026-11-02T10:00:00Z', kind: 'enforced' },
+      { name: 'daemon.fallback-backlog-above', value: 256, level: 'team', setter: 'owner', date: '2026-11-02T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(aboveLoosened.ok).toBe(false);
+    if (!aboveLoosened.ok) expect(aboveLoosened.refusals[0]).toMatchObject({ kind: 'loosening', policy: 'daemon.fallback-backlog-above' });
+
+    const bulkTightened = resolvePolicy('daemon.fallback-backlog-limit', [
+      { name: 'daemon.fallback-backlog-limit', value: 700, level: 'entity', setter: 'owner', date: '2026-11-02T10:00:00Z', kind: 'enforced' },
+      { name: 'daemon.fallback-backlog-limit', value: 600, level: 'team', setter: 'owner', date: '2026-11-02T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(bulkTightened.ok).toBe(true);
+    if (bulkTightened.ok) expect(bulkTightened.effective.value).toBe(600);
+    const bulkLoosened = resolvePolicy('daemon.fallback-backlog-limit', [
+      { name: 'daemon.fallback-backlog-limit', value: 600, level: 'entity', setter: 'owner', date: '2026-11-02T10:00:00Z', kind: 'enforced' },
+      { name: 'daemon.fallback-backlog-limit', value: 700, level: 'team', setter: 'owner', date: '2026-11-02T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(bulkLoosened.ok).toBe(false);
+    if (!bulkLoosened.ok) expect(bulkLoosened.refusals[0]).toMatchObject({ kind: 'loosening', policy: 'daemon.fallback-backlog-limit' });
+
+    const seatLevel = resolvePolicy('daemon.fallback-backlog-limit', [
+      { name: 'daemon.fallback-backlog-limit', value: 400, level: 'seat', setter: 'owner', date: '2026-11-02T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(seatLevel.ok).toBe(false);
+    if (!seatLevel.ok) expect(seatLevel.refusals[0]?.message).toContain('allowed: entity, project, team');
+  });
+
   test('absent declarations resolve to the release default, and off for gate-lifting policies', () => {
     const devMode = resolvePolicy('dev-mode', []);
     expect(devMode.ok).toBe(true);
@@ -335,7 +398,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     const delivery = resolvePolicy('delivery-order', []);
     expect(delivery.ok).toBe(true);
     if (delivery.ok) {
-      expect(delivery.effective.value).toEqual(['mcp-inbox', 'typed', 'drop']);
+      expect(delivery.effective.value).toEqual(['typed', 'drop']);
       expect(delivery.effective.level).toBe('default');
     }
 
@@ -373,7 +436,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
   test('delivery-order accepts headless-resume, a leg a declared word may add and no default names', () => {
     // The headless-resume leg is opt-in: it is in the vocabulary, a word may name it, and the
     // fallback order still names neither it nor any implied default that would insert it.
-    expect(POLICY_CATALOGUE['delivery-order'].defaultValue).toEqual(['mcp-inbox', 'typed', 'drop']);
+    expect(POLICY_CATALOGUE['delivery-order'].defaultValue).toEqual(['typed', 'drop']);
     const narrowed = resolvePolicy('delivery-order', [
       { name: 'delivery-order', value: ['native', 'headless-resume', 'typed'], level: 'entity', setter: 'owner', date: '2026-10-19T10:00:00Z', kind: 'enforced' },
       { name: 'delivery-order', value: ['headless-resume', 'typed'], level: 'seat', setter: 'owner', date: '2026-10-19T11:00:00Z', kind: 'enforced' },
@@ -1352,9 +1415,11 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     expect(delivDropReorder.ok).toBe(true);
     if (delivDropReorder.ok) expect(delivDropReorder.effective.value).toEqual(['native', 'typed']);
 
+    // `typed` is in the fallback order and may not be added by a lower level; `mcp-inbox`, by
+    // contrast, is kept (the walk reports it unavailable), so it never reaches this refusal.
     const delivAdd = resolvePolicy('delivery-order', [
-      { name: 'delivery-order', value: ['native', 'typed'], level: 'project', setter: 'owner', date: '2026-10-17T10:00:00Z', kind: 'enforced' },
-      { name: 'delivery-order', value: ['native', 'mcp-inbox', 'typed'], level: 'team', setter: 'owner', date: '2026-10-17T11:00:00Z', kind: 'enforced' },
+      { name: 'delivery-order', value: ['native'], level: 'project', setter: 'owner', date: '2026-10-17T10:00:00Z', kind: 'enforced' },
+      { name: 'delivery-order', value: ['native', 'typed'], level: 'team', setter: 'owner', date: '2026-10-17T11:00:00Z', kind: 'enforced' },
     ]);
     expect(delivAdd.ok).toBe(false);
     if (!delivAdd.ok) {
@@ -1449,10 +1514,11 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       );
       expect(wroteProject.ok).toBe(true);
 
-      // Team file carries legacy delivery_order: [mcp-inbox, typed]
+      // Team file carries legacy delivery_order: [typed, drop], adding `drop` to the signed
+      // project word, which a team level may not do.
       const teamYamlPath = join(fx.root, '.agents', 'team.yaml');
       const baseYaml = readFileSync(teamYamlPath, 'utf8');
-      writeFileSync(teamYamlPath, `${baseYaml.trimEnd()}\ndelivery_order: [mcp-inbox, typed]\n`);
+      writeFileSync(teamYamlPath, `${baseYaml.trimEnd()}\ndelivery_order: [typed, drop]\n`);
 
       let out1 = '';
       let err1 = '';
@@ -1473,11 +1539,11 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       });
       expect(code1).toBe(1);
       expect(err1).toBe('');
-      // The word adds `mcp-inbox` to the project's typed-only order, which a team level may not
+      // The word adds `drop` to the project's typed-only order, which a team level may not
       // do: the policy chain refuses it, and that one difference stands in place of the legacy
       // line taking effect.
       expect(out1).toContain(
-        'difference: policy "delivery-order" at level team ("mcp-inbox, typed") loosens level project ("typed")\n' +
+        'difference: policy "delivery-order" at level team ("typed, drop") loosens level project ("typed")\n' +
           '  repair: remove or narrow delivery_order in team config\n' +
           "  who: the team's lead\n",
       );
@@ -1636,7 +1702,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       expect(await runPolicy(['--seat', 'worker', '--file', '.agents/team.yaml'], seatIo, { home: fx.home, now: () => NOW })).toBe(0);
       expect(seatIo.out).toContain('team beacon, session "beacon" · seat worker');
       expect(seatIo.out).toMatch(
-        /delivery-order\s+typed\s+seat\s+owner\s+-\s+enforced \(differs from team: mcp-inbox, typed, drop\)/,
+        /delivery-order\s+typed\s+seat\s+owner\s+-\s+enforced \(differs from team: typed, drop\)/,
       );
       expect(seatIo.out).not.toContain('same as the team');
     } finally {
@@ -1668,6 +1734,67 @@ describe('under the registry source', () => {
       expect(before).not.toContain('dev-mode');
       expect(realRegistryTouched()).toBe(false);
     } finally {
+      fx.cleanup();
+    }
+  });
+
+  // The team source asks the writers' seam where the team's text is; a record that cannot be
+  // read is this source's own refusal, naming the registry — never an exception out of the
+  // policy reader, and never a fallback to the file beside it.
+  test('a record that cannot be read is a team refusal naming the registry', async () => {
+    const fx = makeFixture();
+    try {
+      intoRegistry(fx.root, fx.home);
+      const record = join(fx.home, '.config', 'team', 'team-config', `${teamIdOf(fx.root)}.json`);
+      writeFileSync(record, '{"format": 1, "text": ');
+      await underRegistry(async () => {
+        const read = readTeamPolicySource(fx.home, fx.root, null);
+        expect(read.ok).toBe(false);
+        if (!read.ok) {
+          expect(read.level).toBe('team');
+          expect(read.why).toContain("the registry's record of this team cannot be read: ");
+          expect(read.why).toContain(record);
+          // The refusal names the fault in fixed words: the parser's own message quotes the
+          // record's text back, and a record may hold anything.
+          expect(read.why).toContain('the record is not valid JSON');
+        }
+      });
+      expect(realRegistryTouched()).toBe(false);
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  // A folder that cannot be read is not a registry that holds nothing. The team's control that
+  // lives only in its record (dev mode off) must not disappear into the stale file beside it:
+  // the source refuses, the chain refuses, and dev mode stays off even though the entity policy
+  // allows it and the compatibility variable is set.
+  test('an unreadable registry folder refuses the team source, and dev mode stays off', async () => {
+    const fx = makeFixture();
+    let registry: ReturnType<typeof unreadableRegistryFolder> | undefined;
+    try {
+      intoRegistry(fx.root, fx.home);
+      expect(writePolicySet(fx.home, { level: 'entity', target: 'floor', name: 'dev-mode', value: 'on' }, { now: NOW }).ok).toBe(true);
+      expect(writePolicySet(fx.home, { level: 'team', target: fx.teamId, teamRoot: fx.root, name: 'dev-mode', value: 'off' }, { now: NOW }).ok).toBe(true);
+      const fileBefore = readFileSync(join(fx.root, '.agents', 'team.yaml'), 'utf8');
+      await underRegistry(async () => {
+        registry = unreadableRegistryFolder(fx.home);
+        const read = readTeamPolicySource(fx.home, fx.root, null);
+        expect(read.ok).toBe(false);
+        if (!read.ok) {
+          expect(read.level).toBe('team');
+          expect(read.why).toContain("the registry's record of this team cannot be read: ");
+          expect(read.why).toContain(teamConfigRecordPath(fx.home, fx.teamId));
+        }
+        const chain = loadAndResolvePolicyChain({ home: fx.home, entity: 'floor', teamRoot: fx.root }, { now: NOW, upToLevel: 'team' });
+        expect(chain.ok).toBe(false);
+        const dev = resolveDevMode('restart', { env: { TEAMCLI_DEV_MODE: '1' } }, { home: fx.home, root: fx.root, entity: 'floor', now: NOW });
+        expect(dev.on).toBe(false);
+      });
+      // The file beside the registry was never read as the team while the folder was unreadable.
+      expect(readFileSync(join(fx.root, '.agents', 'team.yaml'), 'utf8')).toBe(fileBefore);
+    } finally {
+      registry?.restore();
       fx.cleanup();
     }
   });

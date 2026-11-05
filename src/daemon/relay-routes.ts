@@ -40,10 +40,10 @@ import type { DeliveryTimeoutRoute } from '../policy/types.ts';
 import { ofTeam as projectOfTeamInRegistry, type ProjectRecord } from '../registry/projects.ts';
 import type { RecordedSeatSessionRead } from '../registry/resume.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { deliveryChainOf, type DeliveryChain } from '../send/delivery.ts';
+import { deliveryChainOf, DeliveryChainUnreadable, type DeliveryChain } from '../send/delivery.ts';
 import type { FallbackNote } from '../send/fallback-events.ts';
 import { beginFallbackWalk, type FallbackWalk, type WalkAttempt } from '../send/fallback-walk.ts';
-import { frameFor, frameReplyFor } from '../send/frame.ts';
+import { frameFor, readerLine } from '../send/frame.ts';
 import {
   declaredInboundOf,
   heldSocketPath,
@@ -85,6 +85,7 @@ import {
   type SignedRecord,
 } from '../send/record.ts';
 import type { DeliveryLeg, SettingLevel } from '../settings/inherit.ts';
+import { MCP_INBOX_UNAVAILABLE } from '../send/walk-cascade.ts';
 import { deliveryOrder } from '../settings/resolve.ts';
 import { messageKeyState } from '../store/keys.ts';
 import type { Dial, RelayReceipt as PackageRelayReceipt, RelayStage } from '../../packages/relay/index.js';
@@ -239,9 +240,12 @@ function humanSkipReasonFor(leg: DeliveryLeg): string {
     case 'headless-resume':
       return "the pane is a human's, and no session is resumed";
     case 'mcp-inbox':
-      return "the pane is a human's, and the drop leg is the only one walked";
+      // No seat walks this name (ADR D1): the store's reader, never a spared pane leg.
+      return MCP_INBOX_UNAVAILABLE;
     case 'channel':
       return "the pane is a human's, and the drop leg is the only one walked";
+    case 'session':
+      return "the pane is a human's, and no session is created for it";
     case 'drop':
       return '';
   }
@@ -260,6 +264,9 @@ function relayRouteOfLeg(leg: DeliveryLeg): RuntimeRelayRoute | null {
     case 'mcp-inbox':
     case 'channel':
     case 'typed':
+      // The session leg runs the receiving CLI's own call, which only the sender's walk makes:
+      // a hosted relay route stores or wakes, it never creates a session.
+    case 'session':
       return null;
   }
 }
@@ -315,18 +322,28 @@ export function selectDaemonRelayRoutes(
 
   const capabilities = runtimeRelayCapabilities(declaredSeat.cli, declaredSeat.version);
 
-  const rawChain: DeliveryChain =
-    input.chain
-    ?? deliveryChainOf({
-      root: route.root,
-      seat,
-      home,
-      file: team,
-      projectOfTeam:
-        deps.projectOfTeam ?? ((id: string) => projectOfTeamInRegistry(home, id)),
-      overrides,
-      now,
-    });
+  // A project word this selection cannot read refuses the relay: it may keep legs out, and the
+  // fallback behind it could wake a seat the project does not let a send reach that way.
+  let rawChain: DeliveryChain;
+  if (input.chain !== undefined) {
+    rawChain = input.chain;
+  } else {
+    try {
+      rawChain = deliveryChainOf({
+        root: route.root,
+        seat,
+        home,
+        file: team,
+        projectOfTeam:
+          deps.projectOfTeam ?? ((id: string) => projectOfTeamInRegistry(home, id)),
+        overrides,
+        now,
+      });
+    } catch (error) {
+      if (!(error instanceof DeliveryChainUnreadable)) throw error;
+      return refuseSelection('daemon.route-settings', error.message);
+    }
+  }
 
   const baseOrder = deliveryOrder(
     rawChain as Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>,
@@ -440,9 +457,11 @@ export function selectDaemonRelayRoutes(
       skippedLegs.push({
         leg,
         reason:
-          selfSend && leg === 'typed'
-            ? `own-seat self-send (${seat} -> ${seat}): nothing is typed into the sender's own active pane`
-            : 'handled outside the relay runtime-adapter walk',
+          leg === 'mcp-inbox'
+            ? MCP_INBOX_UNAVAILABLE
+            : selfSend && leg === 'typed'
+              ? `own-seat self-send (${seat} -> ${seat}): nothing is typed into the sender's own active pane`
+              : 'handled outside the relay runtime-adapter walk',
       });
       continue;
     }
@@ -872,17 +891,12 @@ function defaultVerifyReadReceiptFor(
 
 function resolveSocketFrameFor(
   input: DaemonRelaySendInput,
-  plan: DaemonRelayRoutePlan,
   id: string,
-  from: string,
-  fromTeam: string,
   body: string | undefined,
 ): string | undefined {
   if (input.frame !== undefined) return input.frame;
   if (body === undefined) return undefined;
-  const reply = frameReplyFor(plan.home, plan.route.root, from, fromTeam);
-  const replyLine = 'line' in reply ? reply.line : `team send ${from}@${fromTeam} "<reply>"`;
-  return frameFor(body, id, replyLine);
+  return frameFor(body, id, readerLine(id));
 }
 
 /**
@@ -1126,7 +1140,7 @@ export async function handleDaemonRelaySend(
     },
   );
 
-  const frame = resolveSocketFrameFor(input, plan, id, from, fromTeam, body);
+  const frame = resolveSocketFrameFor(input, id, body);
   const message: RuntimeRelayMessage = {
     id,
     record: recordText,

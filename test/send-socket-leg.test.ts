@@ -9,16 +9,18 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { cliHookSettings, cliHookSettingsPath, installCliHooks } from '../src/launch/cli-hook.ts';
+import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
 import { writePolicySet } from '../src/policy/index.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { upsertProject } from '../src/registry/projects.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
-import { replyLine } from '../src/send/frame.ts';
+import { readerLine } from '../src/send/frame.ts';
 import { readHistory } from '../src/send/history.ts';
-import { declaredInboundOf } from '../src/send/inbound.ts';
+import { declaredInboundOf, heldSocketPath, recordHeldSocket } from '../src/send/inbound.ts';
 import { testIo } from './helpers.ts';
 import { NOW, dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
+import { withoutSendId } from './helpers/output.ts';
 
 let cleanup: () => void = () => {};
 afterEach(() => {
@@ -111,7 +113,40 @@ test('an accepting Claude seat with no declared order walks the socket first, af
   expect(readdirSync(drops).filter((name) => !name.includes('.')).length).toBe(1);
 });
 
-test('every socket frame ends with the reply address of the sender its signed record carries', async () => {
+// The socket fast path's gate is the seat's lock, not its file. A lock file a dead process left
+// behind holds nothing, so a frame that meets one still walks the socket. The lock is placed in
+// the window between the record's staging and the fast path's own look — the only window the old
+// `existsSync` gate covered, since staging's unread hint already clears an older stale lock.
+test('a stale lock that appears after staging does not keep a send off the socket', async () => {
+  const made = world(null);
+  cleanup = made.cleanup;
+  declareEntity(made, 'floor');
+  declare(made, 'accept');
+  mkdirSync(join(made.dir, 'seat-locks', 'acme'), { recursive: true });
+  const lockPath = seatLockPath(made.dir, 'acme', 'lead');
+  const frames: string[] = [];
+  const host = fake(made, {
+    agents: () => {
+      writeFileSync(lockPath, `${2147483646} deadbeef\n`);
+      return [{ name: 'lead', pane: 'fixture-pane-lead' }];
+    },
+    deliver: async (_path: string, frame: string) => {
+      frames.push(frame);
+      return { ok: true };
+    },
+  });
+
+  const code = await runSend(['lead', 'a note'], owner(made.root), host);
+
+  expect(code).toBe(0);
+  expect(frames).toHaveLength(1);
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok).toBe(true);
+  if (!history.ok) return;
+  expect(history.entries.at(-1)).toMatchObject({ to: 'lead', outcome: 'delivered', via: 'socket' });
+});
+
+test('every socket frame ends with the reader line that names its own message id', async () => {
   const made = world(null);
   cleanup = made.cleanup;
   declareEntity(made, 'floor');
@@ -127,16 +162,18 @@ test('every socket frame ends with the reply address of the sender its signed re
   const code = await runSend(['lead', 'a note'], owner(made.root), host);
 
   expect(code).toBe(0);
-  const sent = JSON.parse(frames[0] as string) as { message: { content: string } };
+  const sent = JSON.parse(frames[0] as string) as { message: { content: string }; msg_id: string };
   const content = sent.message.content;
-  // The owner is not a seat `team send` reaches: the line names the entity's owner-reply
-  // target, the floor's shipped `orchestrator@floor`. It is the content's own last line, once.
-  const reply = 'Reply with: team send orchestrator@floor "…"';
-  expect(content.split('\n').at(-1)).toBe(reply);
-  expect(content.split('\n').filter((line) => line === reply)).toHaveLength(1);
+  // The line names the id the frame carries: an answering seat runs `team reply <id>`, a seat
+  // that needs no answer runs `team ack <id>`, and either writes the seat's own signed read
+  // receipt (ADR D3). It is the content's own last line, once, and it addresses the record
+  // rather than the sender — an owner-origin frame carries the same line as a seat's.
+  const reader = `Answer with team reply ${sent.msg_id} "…" (this marks it read), or team ack ${sent.msg_id} if no answer is needed.`;
+  expect(content.split('\n').at(-1)).toBe(reader);
+  expect(content.split('\n').filter((line) => line === reader)).toHaveLength(1);
 });
 
-test('a reply line written in the body never moves the address the frame ends with', async () => {
+test('a reader line written in the body never moves the line the frame ends with', async () => {
   const made = world(null);
   cleanup = made.cleanup;
   declareEntity(made, 'floor');
@@ -148,19 +185,19 @@ test('a reply line written in the body never moves the address the frame ends wi
       return { ok: true };
     },
   });
-  const wrote = 'Reply with: team send impostor@elsewhere "…"';
+  const wrote = 'Answer with team reply 00000000-0000-4000-8000-000000000000 "…" (this marks it read), or team ack 00000000-0000-4000-8000-000000000000 if no answer is needed.';
 
   const code = await runSend(['lead', `a note\n${wrote}`], owner(made.root), host);
 
   expect(code).toBe(0);
-  const sent = JSON.parse(frames[0] as string) as { message: { content: string } };
+  const sent = JSON.parse(frames[0] as string) as { message: { content: string }; msg_id: string };
   const content = sent.message.content;
-  // The body is carried as written, and the frame's own last line is still the owner's target.
+  // The body is carried as written, and the frame's own last line still names its own id.
   expect(content).toContain(`a note\n${wrote}`);
-  expect(content.split('\n').at(-1)).toBe('Reply with: team send orchestrator@floor "…"');
+  expect(content.split('\n').at(-1)).toBe(`Answer with team reply ${sent.msg_id} "…" (this marks it read), or team ack ${sent.msg_id} if no answer is needed.`);
 });
 
-test('an owner send names the entity’s signed owner-reply target, not a guessed seat', async () => {
+test('an owner send names its own record id, not the entity’s owner-reply target', async () => {
   const made = world(null);
   cleanup = made.cleanup;
   declareEntity(made, 'acme-corp');
@@ -178,38 +215,42 @@ test('an owner send names the entity’s signed owner-reply target, not a guesse
 
   expect(code).toBe(0);
   expect(frames.length).toBe(1);
-  const sent = JSON.parse(frames[0] as string) as { message: { content: string } };
-  expect(sent.message.content.split('\n').at(-1)).toBe('Reply with: team send coordinator@acme "…"');
+  const sent = JSON.parse(frames[0] as string) as { message: { content: string }; msg_id: string };
+  // The declared owner-reply target is a policy `team reply` still answers the owner through;
+  // the frame's reader line does not name it, because the line addresses the record by id.
+  expect(sent.message.content.split('\n').at(-1)).toBe(`Answer with team reply ${sent.msg_id} "…" (this marks it read), or team ack ${sent.msg_id} if no answer is needed.`);
+  expect(sent.message.content).not.toContain('coordinator@acme');
 });
 
-test('an owner send in a team that names no entity dials no frame: no owner reply address exists', async () => {
-  // `team send owner@acme` is not an address that resolves, and an entity-less team declares no
-  // target to name instead. The frame is not dialed; the typed trigger behind it takes the send.
+test('an owner send in a team that names no entity still dials a frame: the reader line needs no address', async () => {
+  // The frame used to be withheld for an owner origin with no `owner-reply-to` target to name.
+  // The reader line names the record's own id, so nothing about the sender's address is needed
+  // and the socket leg runs like any other.
   const made = world(null);
   cleanup = made.cleanup;
   declare(made, 'accept');
   const pane = scripted(['idle', 'working']);
-  const host = fake(made, { native: pane });
+  const frames: string[] = [];
+  const host = fake(made, {
+    native: pane,
+    deliver: async (_path: string, frame: string) => {
+      frames.push(frame);
+      return { ok: true };
+    },
+  });
 
   const code = await runSend(['lead', 'hello'], owner(made.root), host);
 
   expect(code).toBe(0);
-  expect(host.frames).toEqual([]);
+  expect(frames.length).toBe(1);
+  const sent = JSON.parse(frames[0] as string) as { message: { content: string }; msg_id: string };
+  expect(sent.message.content.split('\n').at(-1)).toBe(`Answer with team reply ${sent.msg_id} "…" (this marks it read), or team ack ${sent.msg_id} if no answer is needed.`);
   expect(pane.typed.length).toBe(0);
 });
 
-test('the reply line names the sending team, never the team the frame is delivered into', () => {
-  const made = world(null);
-  cleanup = made.cleanup;
-  const sending = teamIdOf(made.root);
-  // Two records in one registry: the sending team under its own name, and a receiving team named
-  // for the fixture's own project. The line takes the sending id's record and nothing else.
-  upsertTeam(made.home, sending, { project: 'outpost', session: 'acme', root: made.root });
-  upsertTeam(made.home, 'aaaaaaaaaaaa', { project: 'acme', session: 'acme-web', root: join(made.root, 'other') });
-
-  expect(replyLine(made.home, 'lead', sending)).toBe('Reply with: team send lead@outpost "…"');
-  // A registry that cannot answer is no name: the team's id still addresses it.
-  expect(replyLine(join(made.root, 'no-registry'), 'lead', sending)).toBe(`Reply with: team send lead@${sending} "…"`);
+test('the reader line is the same one for every sender: the id addresses the record, never the sender', () => {
+  const id = '3f2b0c1e-0000-4000-8000-000000000001';
+  expect(readerLine(id)).toBe(`Answer with team reply ${id} "…" (this marks it read), or team ack ${id} if no answer is needed.`);
 });
 
 /** The socket the fake pane exposes; the deliver fake only records it. */
@@ -297,7 +338,10 @@ test('a session started before its accept declaration is skipped, and the trigge
   expect(pane.typed.length).toBe(0);
 });
 
-test('a declared order that omits socket never dials, even for an accepting receiver', async () => {
+test('a declared order’s typed word wakes through the seat’s accepted socket, and nothing is typed', async () => {
+  // The word asks for a wake. With typing retired, the seat's own event adapter stands where the
+  // word stood: the live channel, then the socket its launch accepts. The frame's reader line
+  // names the record's own id, so an owner-origin send needs no reply address to dial it.
   const made = world(['mcp-inbox', 'typed']);
   cleanup = made.cleanup;
   declare(made, 'accept');
@@ -307,7 +351,7 @@ test('a declared order that omits socket never dials, even for an accepting rece
   const code = await runSend(['lead', 'hello'], owner(made.root), host);
 
   expect(code).toBe(0);
-  expect(host.frames).toEqual([]);
+  expect(host.frames.length).toBe(1);
   expect(pane.typed.length).toBe(0);
 });
 
@@ -330,7 +374,9 @@ test('a declared order may place socket first, and it is walked there', async ()
   expect(frames.length).toBe(1);
 });
 
-test('a declared order that puts the typed leg first takes the send there, and the socket is not dialed', async () => {
+test('a declared order that puts the typed leg first wakes there, and its later socket word is never reached', async () => {
+  // The typed word's wake is the seat's own accepted socket, spliced where the word stood: the
+  // first frame is taken there, and the socket word written behind it is never walked.
   const made = world(['typed', 'socket']);
   cleanup = made.cleanup;
   declare(made, 'accept');
@@ -340,7 +386,7 @@ test('a declared order that puts the typed leg first takes the send there, and t
   const code = await runSend(['lead', 'hello'], owner(made.root), host);
 
   expect(code).toBe(0);
-  expect(host.frames).toEqual([]);
+  expect(host.frames.length).toBe(1);
   expect(pane.typed.length).toBe(0);
 });
 
@@ -476,9 +522,9 @@ test('a launch line with its own --settings keeps its word, and a stale generate
   expect(found.source).toBe(made.root);
 });
 
-test('a signed entity order that places typed before socket keeps the socket out', async () => {
-  // Without the entity's word the accepting receiver would take the implied socket prepend. The
-  // entity declares the order instead, and it is walked as written: typed first, no dial.
+test('a signed entity order that places typed before socket wakes through the seat’s socket', async () => {
+  // The entity's word is walked as written. Its typed word stands for the seat's accepted socket,
+  // spliced where the word stood, so the frame is taken there before the socket word behind it.
   const made = world(null);
   cleanup = made.cleanup;
   declareEntity(made);
@@ -490,11 +536,11 @@ test('a signed entity order that places typed before socket keeps the socket out
   const code = await runSend(['lead', 'hello'], owner(made.root), host);
 
   expect(code).toBe(0);
-  expect(host.frames).toEqual([]);
+  expect(host.frames.length).toBe(1);
   expect(pane.typed.length).toBe(0);
 });
 
-test('a signed project order that places typed before socket keeps the socket out', async () => {
+test('a signed project order that places typed before socket wakes through the seat’s socket', async () => {
   const made = world(null);
   cleanup = made.cleanup;
   upsertProject(made.home, 'acme-proj', { name: 'Acme', teams: [teamIdOf(made.root)], at: NOW.toISOString() });
@@ -506,7 +552,7 @@ test('a signed project order that places typed before socket keeps the socket ou
   const code = await runSend(['lead', 'hello'], owner(made.root), host);
 
   expect(code).toBe(0);
-  expect(host.frames).toEqual([]);
+  expect(host.frames.length).toBe(1);
   expect(pane.typed.length).toBe(0);
 });
 
@@ -650,7 +696,29 @@ test('a launch with no accept word is never dialed, whatever the team file omits
   if (!history.ok) return;
   expect(history.entries.at(-1)?.failed).toEqual([
     `typed: ${NO_PANE_MESSAGING}`,
-    'socket: the receiving Claude session does not declare crossSessionInbound accept',
+    'socket: the receiving Claude session does not declare crossSessionInbound accept (human-launched or launch without --settings; owner CLI settings are not read)',
+  ]);
+});
+
+test('a generated settings file with no accept word names the file in the send’s reason', async () => {
+  // The file is on the launch line, so it is the whole effective word: its silence is the reason
+  // the socket is skipped, and the send names the file a relaunch would rewrite.
+  const made = world(['socket', 'typed'], [{ name: 'plain', role: 'implementer', launch: 'claude' }]);
+  cleanup = made.cleanup;
+  const path = declareSeat(made, 'plain', null);
+  const pane = scripted(['idle', 'working']);
+  const host = fake(made, { native: pane });
+
+  const code = await runSend(['plain', 'hello'], owner(made.root), host);
+
+  expect(code).toBe(0);
+  expect(host.frames).toEqual([]);
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok).toBe(true);
+  if (!history.ok) return;
+  expect(history.entries.at(-1)?.failed).toEqual([
+    `typed: ${NO_PANE_MESSAGING}`,
+    `socket: the receiving Claude session does not declare crossSessionInbound accept in its launch-effective settings (${path}); owner CLI settings are not read`,
   ]);
 });
 
@@ -710,15 +778,15 @@ test('a socket recorded for a seat that no longer exists is reported under its r
   expect(existsSync(gone)).toBe(false);
   // The final line follows the class the walk proved, never the one cached before it: nothing
   // was woken, and the message waits for the seat's next turn.
-  expect(io.out).toBe(
-    'team acme, session "acme"\nplain: sent (unconfirmed) (drop, 0 ms); queued; plain reads it at its next turn (pull-only)\n',
+  expect(withoutSendId(io.out)).toBe(
+    'team acme, session "acme"\nplain: queued, not woken (drop, 0 ms); queued; plain reads it at its next turn, and nothing here gives it one (pull-only)\n',
   );
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok).toBe(true);
   if (!history.ok) return;
   expect(history.entries.at(-1)?.failed).toEqual([
     `typed: ${NO_PANE_MESSAGING}`,
-    `socket: the socket recorded for plain (${gone}) is gone; queued; plain reads it at its next turn (pull-only)`,
+    `socket: the socket recorded for plain (${gone}) is gone; queued; plain reads it at its next turn, and nothing here gives it one (pull-only)`,
   ]);
   // The message still waits where the seat's next turn reads it.
   expect(readdirSync(dropDir(made.dir, 'plain')).filter((name) => !name.includes('.')).length).toBe(1);
@@ -782,79 +850,85 @@ test('a recorded socket the pane does not own is no attempt, and the line follow
   expect(existsSync(standing)).toBe(true);
   expect(dials).toEqual([]);
   expect(host.frames).toEqual([]);
-  expect(io.out).toBe(
-    'team acme, session "acme"\nplain: sent (unconfirmed) (drop, 0 ms); queued; plain reads it at its next turn (pull-only)\n',
+  expect(withoutSendId(io.out)).toBe(
+    'team acme, session "acme"\nplain: queued, not woken (drop, 0 ms); queued; plain reads it at its next turn, and nothing here gives it one (pull-only)\n',
   );
 });
 
-test('a held frame is marked once, and the socket stays out until the declaration is re-confirmed', async () => {
-  // The receiver's box holds the frame at its dialog. The walk records `held (socket)` once, in
-  // the history and in a mark under the receiving team's state folder, and falls through to the
-  // typed route with the same record and message id. The next send does not dial again: the
-  // declaration the hold sat under has not moved. Rewriting it re-confirms the word, and the
-  // socket is dialed again.
+test('a taken socket frame is delivered at the frame: the sender reads no pane and leaves no mark', async () => {
+  // The receiver's box shows its held-message dialog, but the sender's work ends when the frame
+  // is taken: it reports `delivered (socket)` at once, reads no pane and writes no `held` line.
+  // Whether the frame sat at the dialog is the daemon's held step to see on its own beat, and a
+  // person's send waits on no other seat's screen. No mark is left for a hold this send did not
+  // see, so with no daemon pass nothing here blocks the next dial.
   const made = world(['socket', 'typed']);
   cleanup = made.cleanup;
   declareEntity(made, 'floor');
   const settings = declare(made, 'accept');
   const rule = '─'.repeat(30);
-  const emptyBox = `${rule}\n❯ \n${rule}`;
   const heldDialog = `Held message from another session\n${rule}\n❯ \n${rule}`;
-  let frameLanded = false;
-  let dialogShown = false;
-  const pane = scripted(['idle', 'working', 'idle', 'working', 'idle']);
+  let reads = 0;
+  const pane = scripted(['idle', 'working', 'idle']);
   pane.paneText = () => {
-    if (frameLanded && !dialogShown) {
-      dialogShown = true;
-      return heldDialog;
-    }
-    return emptyBox;
+    reads += 1;
+    return heldDialog;
   };
-  const dials: string[] = [];
-  const host = fake(made, {
-    native: pane,
-    deliver: async (_path: string, frame: string) => {
-      dials.push(frame);
-      frameLanded = true;
-      return { ok: true };
-    },
-  });
+  const host = fake(made, { native: pane });
 
-  // First send: one dial, held once, the typed route takes it.
-  expect(await runSend(['lead', 'hello'], owner(made.root), host)).toBe(0);
-  expect(dials).toHaveLength(1);
-  expect(pane.typed).toHaveLength(0);
-  const markPath = join(made.dir, 'send-held', 'acme', 'lead.json');
-  const mark = JSON.parse(readFileSync(markPath, 'utf8')) as { at: string; declaredAt: number | null; source: string | null };
-  expect(mark.source).toBe(settings);
-  expect(typeof mark.declaredAt).toBe('number');
-  expect(Number.isNaN(Date.parse(mark.at))).toBe(false);
+  const io = owner(made.root);
+  expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+  expect(io.out).toContain('lead: delivered (socket)');
+  expect(host.frames).toHaveLength(1);
+  expect(pane.typed).toEqual([]);
+  // One look, and it is the quota preflight every send makes before its legs; the held-dialog
+  // probe that used to poll this box for up to a second is gone.
+  expect(reads).toBe(1);
+  expect(existsSync(join(made.dir, 'send-held', 'acme', 'lead.json'))).toBe(false);
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok).toBe(true);
   if (!history.ok) return;
-  expect(history.entries.at(-1)?.outcome).toBe('sent (unconfirmed)');
-  expect(history.entries.at(-1)?.failed?.join('\n')).toContain('Held message from another session');
+  expect(history.entries.at(-1)).toMatchObject({ to: 'lead', id: expect.any(String), outcome: 'delivered', via: 'socket' });
+  expect(history.entries.some((entry) => entry.outcome === 'held')).toBe(false);
+  // The declaration is untouched: nothing moved it, and the socket stays eligible.
+  expect(readFileSync(settings, 'utf8')).toBe(JSON.stringify({ crossSessionInbound: 'accept' }));
+});
 
-  // Second send under the same declaration: the socket is not dialed, and the walk says why.
-  expect(await runSend(['lead', 'again'], owner(made.root), host)).toBe(0);
-  expect(dials).toHaveLength(1);
-  expect(pane.typed).toHaveLength(0);
-  const second = readHistory('acme', made.root, made.home);
-  expect(second.ok).toBe(true);
-  if (!second.ok) return;
-  expect(second.entries.at(-1)?.failed?.join('\n')).toContain('held at its box');
-
-  // The declaration is re-confirmed: the file is rewritten at a new time and the restarted host
-  // exposes a fresh socket. The socket is dialed again, and this frame is taken.
-  const reworded = new Date(Math.max(Date.now(), (mark.declaredAt ?? 0) + 1000));
-  writeFileSync(settings, JSON.stringify({ crossSessionInbound: 'accept' }));
-  utimesSync(settings, reworded, reworded);
+test('a held socket is no wake the send reports either: the class it appends is pull-only', async () => {
+  // The receiver accepts its socket and the registry names the address standing in its pane. The
+  // box held the last frame under the declaration now in force: the walk skips the socket, and
+  // the class a console line appends must agree with the walk rather than promise a wake. This
+  // class reads no pane processes, like next, plan and up: the conservative rule stands, and a
+  // recorded address that still stands is the only socket evidence it counts.
+  const made = world(null);
+  cleanup = made.cleanup;
+  declareEntity(made, 'floor');
+  declare(made, 'accept');
   const socket = join(made.sockets, '222.sock');
-  writeFileSync(socket, '');
-  utimesSync(socket, reworded, reworded);
-  expect(await runSend(['lead', 'third'], owner(made.root), host)).toBe(0);
-  expect(dials).toHaveLength(2);
-  expect(pane.typed).toHaveLength(0);
+  registerAgent(made.home, {
+    name: 'lead',
+    signing: { model: 'Test', version: '1', role: 'coordinator' },
+    lab: 'test-lab',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude',
+    reach: { team: teamIdOf(made.root), seat: 'lead', session: 'acme', pane: 'fixture-pane-lead', address: socket },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'up',
+  });
+  recordHeldSocket(
+    heldSocketPath(made.dir, 'acme', 'lead'),
+    declaredInboundOf({ dir: made.dir, root: made.root, session: 'acme', seat: 'lead', launch: 'claude' }),
+    new Date(NOW),
+  );
+  const host = fake(made);
+  const io = owner(made.root);
+  expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+  expect(host.frames).toEqual([]);
+  expect(withoutSendId(io.out)).toBe(
+    'team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n',
+  );
 });
 
 test('no pane messaging: a declared order whose wake word is typed reaches an accepting seat by its socket', async () => {

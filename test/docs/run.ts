@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { runAck } from '../../src/commands/ack.ts';
 import { runAdd } from '../../src/commands/add.ts';
 import { runAgents } from '../../src/commands/agents.ts';
+import { runFallback } from '../../src/commands/fallback.ts';
 import { runAnswer, type AnswerHost } from '../../src/commands/answer.ts';
 import { runArchive } from '../../src/commands/archive.ts';
 import { runAskShow } from '../../src/commands/ask-show.ts';
@@ -27,6 +28,7 @@ import { runDoctor } from '../../src/commands/doctor.ts';
 import { runDown } from '../../src/commands/down.ts';
 import { runDrops } from '../../src/commands/drops.ts';
 import { runFeed } from '../../src/commands/feed.ts';
+import { runTrace } from '../../src/commands/trace.ts';
 import { runHold } from '../../src/commands/hold.ts';
 import { runRaise } from '../../src/commands/raise.ts';
 import { runInit } from '../../src/commands/init.ts';
@@ -36,6 +38,7 @@ import { runReply } from '../../src/commands/reply.ts';
 import { runResume } from '../../src/commands/resume.ts';
 import { runRemove } from '../../src/commands/remove.ts';
 import { runRename } from '../../src/commands/rename.ts';
+import { runOrder } from '../../src/commands/order.ts';
 import { runRestart } from '../../src/commands/restart.ts';
 import { runRelease } from '../../src/commands/release.ts';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
@@ -127,6 +130,8 @@ function normalize(text: string, page: { fixture: Fixture }): string {
     .replace(/\b[0-9a-f]{40}\b/g, '<sha>')
     .replace(/\b[0-9a-f]{10}\b/g, '<sha>')
     .replace(/\(team [0-9a-f]{12}\)/g, '(team <id>)')
+    // A send's closing line names the generated message id its steps are filed under.
+    .replace(/\(id [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\)/g, '(id <id>)')
     .replace(/^(\s+)[0-9a-f]{7,40} /gm, '$1<sha> ');
 }
 
@@ -302,7 +307,7 @@ async function setup(page: Page): Promise<void> {
   page.ready = true;
 }
 
-async function command(page: Page, line: string, io: Io, answer?: string, waiting: Waiting = 'empty', reply?: string): Promise<number> {
+async function command(page: Page, line: string, io: Io, answer?: string, waiting: Waiting = 'empty', reply?: string, sendId?: string): Promise<number> {
   const [first, ...argv] = words(line);
   if (first !== 'team') throw new Error(`a console line runs \`team …\`, not "${first ?? ''}"`);
   const name = argv[0];
@@ -316,6 +321,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runAck(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'agents':
       return runAgents(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
+    case 'fallback':
+      return runFallback(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'add':
       return runAdd(rest, io, world.addSources());
     case 'answer':
@@ -332,7 +339,7 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
     case 'brief':
       // The page's clock is pinned, so a delivery's `at` is the page's instant, and a state the
       // page seeds with fixed lifetimes prints the ids those lifetimes derive.
-      return runBrief(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
+      return runBrief(rest, io, { home: fixture.home, now: () => new Date(spec.now), gate: world.checkSources().gate });
     case 'broker':
       return runBroker(rest, io, { home: fixture.home });
     case 'approvals':
@@ -372,6 +379,9 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runDrops(rest, io, { home: fixture.home, poll: async () => false });
     case 'feed':
       return runFeed(rest, io, { home: fixture.home, poll: async () => false });
+    case 'trace':
+      // The trace reads the same fixture home the page's own send wrote its steps into.
+      return runTrace(rest, io, { home: fixture.home });
     case 'hold':
       return runHold(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'pause':
@@ -401,7 +411,7 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
     case 'policy':
       // The owner's signed declarations live under the fixture's own home; the clock is the
       // page's, so a declaration's `date` is the page's instant.
-      return runPolicy(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
+      return runPolicy(rest, io, { home: fixture.home, now: () => new Date(spec.now), gate: world.checkSources().gate });
     case 'init':
       // No login is probed in a doc run: the skeleton's seat is claude-code's, deterministically.
       return runInit(rest, io, fixture.home, undefined, { loggedIn: () => false });
@@ -419,6 +429,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       });
     case 'restart':
       return runRestart(rest, io, world.restartSources());
+    case 'order':
+      return runOrder(rest, io, world.orderSources());
     case 'send': {
       // Every seat of the page's file is a live agent, so a native-CLI example resolves.
       // `reply="…"` on the fence is the fake seat's answer on the thread: with it, the wait
@@ -429,7 +441,7 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
         ? writeDocReply(fixture.root, fixture.home, page.session, seats[0] ?? 'claude-keeper', spec.now, reply)
         : null;
       try {
-        return await runSend(rest, io, sendHost(fixture, seats, spec.now, reply));
+        return await runSend(rest, io, sendHost(fixture, seats, spec.now, reply, sendId));
       } finally {
         if (replyPath !== null) {
           try { unlinkSync(replyPath); } catch {}
@@ -445,7 +457,7 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
     case 'seat':
       return runSeat(rest, io, { ...world.statusSources(), wait: async () => false });
     case 'settings':
-      return runSettings(rest, io, { home: fixture.home, now: new Date(spec.now) });
+      return runSettings(rest, io, { home: fixture.home, now: new Date(spec.now), gate: world.checkSources().gate });
     case 'config':
       return runConfig(rest, io);
     case 'sessions':
@@ -456,7 +468,7 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       // The queue's clock is the page's: a queued swap's `queuedAt` and `deadline` are the
       // page's instant and the wait that follows it. A run reads the world's own herdr, as the
       // restart example does, never the machine's.
-      return runSwap(rest, io, { home: fixture.home, now: () => new Date(spec.now), sources: world.restartSources() });
+      return runSwap(rest, io, { home: fixture.home, now: () => new Date(spec.now), sources: world.restartSources(), gate: world.checkSources().gate });
     case 'list':
       return runList(rest, io, world.listSources());
     case 'up':
@@ -477,6 +489,7 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
         // running, and every other number is one that is gone, so no example depends on a pid
         // the machine running the suite happens to have.
         alive: (pid) => pid === PROC_PID,
+        gate: world.checkSources().gate,
       });
     case 'projects':
       // The page's registry is its own fence, `~/.config/team/projects.yaml` under the
@@ -523,7 +536,9 @@ function answerHost(home: string): AnswerHost {
 
 /** The docs page's send: a fake seat whose pane reports one process with a file at the socket's
  *  measured name, and a deliver that accepts. With `reply`, a signed reply record on the thread
- *  is written before the run and `waitMs` is 0, so `--wait` examples never sleep. */
+ *  is written before the run and `waitMs` is 0, so `--wait` examples never sleep. With
+ *  `send-id="<uuid>"` on the fence, the run mints exactly that message id, so a `team trace
+ *  <id>` line after it reads a fixed story. */
 const SEND_PID = 4200;
 
 /** The id a page's native handoff prints, so its `--confirm` line is exact. */
@@ -556,7 +571,11 @@ function writeDocReply(root: string, home: string, session: string, fromSeat: st
   return path;
 }
 
-function sendHost(fixture: Fixture, seats: string[], now: string, reply?: string): SendHost {
+function sendHost(fixture: Fixture, seats: string[], now: string, reply?: string, sendId?: string): SendHost {
+  // A page that traces its own send's id pins it with `send-id="<uuid>"`: the steps are filed
+  // under that id, so the `team trace <id>` line that follows reads a fixed story. Without one,
+  // the wait example pins its own reply thread and every other send draws a fresh id.
+  const pinned = sendId ?? (reply !== undefined ? SEND_WAIT_ID : undefined);
   const sockets = join(fixture.home, 'cc-socks');
   mkdirSync(sockets, { recursive: true });
   writeFileSync(join(sockets, `${String(SEND_PID)}.sock`), '');
@@ -596,7 +615,7 @@ function sendHost(fixture: Fixture, seats: string[], now: string, reply?: string
     },
     now: () => new Date(now),
     newId: () => SEND_NATIVE_ID,
-    ...(reply !== undefined ? { sendId: () => SEND_WAIT_ID } : {}),
+    ...(pinned !== undefined ? { sendId: () => pinned } : {}),
     waitMs: 0,
     home: fixture.home,
     // The roster's project column reads the fixture's own registry: a page that seeds
@@ -691,7 +710,7 @@ async function consoleBlock(page: Page, block: Block, failures: Failure[]): Prom
       const waiting: Waiting =
         block.attrs.waiting === '1' ? 'waiting' : block.attrs.waiting === 'unreadable' ? 'unreadable' : 'empty';
       try {
-        code = await command(page, step.command, io, block.attrs.answer, waiting, block.attrs.reply);
+        code = await command(page, step.command, io, block.attrs.answer, waiting, block.attrs.reply, block.attrs['send-id']);
       } catch (error) {
         failures.push({ page: page.name, line: step.line, message: (error as Error).message });
         continue;

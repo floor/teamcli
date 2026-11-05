@@ -89,7 +89,7 @@ export type QuestionText = {
   confirmation: TextSpec | null;
 };
 
-export type Placeholder = { equals: string } | { prefix: string };
+export type Placeholder = { equals: string } | { prefix: string } | { shape: 'slash-hint' };
 
 /** How a composer continues a line onto its next row, from a capture that shows it: the
  *  continuation starts at the text column (the box's own indent), and the break folds the space
@@ -129,6 +129,10 @@ type Box = {
   placeholderStyle?: PlaceholderStyle;
   wrap?: Wrap;
   frameRows: number;
+  /** Rows the pane draws of its own inside the box — Muse 1.4.14's completion row for the text
+   *  being typed — declared only where a capture shows them. A matching row is not text in the
+   *  box: the box reads back as the text alone. */
+  ownRows?: RegExp[];
 };
 /** Where a status row must sit, from the composer section. `line` is the line directly under the
  *  row (the workspace line), which must be the pane's last non-empty one; a row matching `except`
@@ -218,6 +222,20 @@ export type ScreenData = {
    *  `provider_error`: the box under it is not a free prompt. */
   rate_limit?: Stage;
   working?: Stage;
+  /** The layouts a pane scrolled back over its transcript draws, and the key that returns to the
+   *  prompt. Read only where the composer cannot be read, after every caution stage, so a screen
+   *  that is working, unsent or a dialog never reads as one of these. Absent: a footer-shaped row
+   *  is no reading at all.
+   *
+   *  - `footer`: the composer is hidden and the CLI's footer stands on the pane's last non-blank
+   *    row, in the composer's place.
+   *  - `marker` with `statusFooter`: the composer stays drawn, the CLI's marker row is the nearest
+   *    non-blank row above it, and its status footer is the pane's last non-blank row. Read
+   *    because that footer leaves the row above the composer unread, so the composer alone is
+   *    `unknown` while the pane is still behind the scroll.
+   *
+   *  A profile declares one layout or both; the loader refuses half of the marker one. */
+  scrollBack?: { footer?: RegExp; marker?: RegExp; statusFooter?: RegExp; returnKey: string };
   /** Where the question text of a dialog sits, for the three kinds that carry one. Absent: the
    *  reader returns null and the report names the dialog without quoting it. */
   questionText?: QuestionText;

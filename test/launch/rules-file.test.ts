@@ -571,13 +571,15 @@ describe('one seat\'s delivery', () => {
   });
 });
 
-describe("the inbox sentence follows the seat's CLI", () => {
-  // The rules v0.5.0 wrote for this seat, byte for byte (that tag's rulesOf, on this fixture):
-  // a seat whose CLI registers no inbox must keep getting exactly this text.
-  const V050_ANTIGRAVITY = [
+describe("the read sentences follow the seat's CLI", () => {
+  // The full rules text for this seat, byte for byte: a seat whose CLI registers no inbox must
+  // keep getting exactly this text, with no inbox sentence, the end-of-turn drops read in the
+  // inbox sentence's place, and the owner's reserved scope last.
+  const NO_INBOX_RULES = [
     'Rules for this session, from the team file:',
     '- End every commit message and every pull request body with your signature, given below.',
     '- Never stop at a question: tell the orchestrator (claude-coordinator-acme) in one line and keep working.',
+    '- At the end of every turn, run `team drops --read --seat codex-acme` and act on what it prints.',
     '- Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.',
     '- In a protected checkout, never switch the branch, reset or commit.',
     '- Run the tests your change touches, not the whole suite.',
@@ -586,22 +588,50 @@ describe("the inbox sentence follows the seat's CLI", () => {
     '- Your signature in a pull request body, as its last line: **Agent:** GPT-6 Sol · implementer',
     '- Protected checkouts, relative to the project root: .',
     '- Work on the code in the worktree your brief names, never in the checkout you started in. Branches are named {kind}/{task}.',
+    "- The owner's reserved scope: public releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams.",
     'These are standing rules, not a task: reply ready and wait for your brief.',
   ].join('\n');
 
-  test("an antigravity seat's rules are byte-identical to 0.5.0's", () => {
+  test('a CLI with no inbox route gets the rules without the inbox sentence, byte for byte', () => {
     const { team, seat } = codexSeat();
-    const agy = { ...seat, cli: 'antigravity' };
-    expect(rulesOf(team, agy, '/nowhere')).toBe(V050_ANTIGRAVITY);
+    // muse has no measured `mcp_inbox` route, and its rules are a first message like the fixture
+    // seat's: the one profile difference rulesOf reads is the inbox flag.
+    expect(rulesOf(team, { ...seat, cli: 'muse' }, '/nowhere')).toBe(NO_INBOX_RULES);
   });
 
-  test("a codex seat's rules carry the inbox sentence, once, after the never-stop line", () => {
+  test("a muse seat's delivery carries the end-of-turn drops read, and the file holds it", () => {
     const { team, seat } = codexSeat();
-    const lines = rulesOf(team, seat, '/nowhere').split('\n');
+    const muse = { ...seat, cli: 'muse' };
+    const home = mkdtempSync(join(tmpdir(), 'team-rules-home-'));
+    try {
+      mkdirSync(join(home, '.config'), { recursive: true });
+      const standing = verifiedOf(team, EXAMPLE, '/nowhere');
+      const delivery = rulesDeliveryOf(standing, team, muse, '/nowhere', home);
+      if ('refusal' in delivery) throw new Error(delivery.refusal);
+      // The command names the seat's own name: nothing else in the rules tells the seat it.
+      expect(delivery.text).toContain(
+        '- At the end of every turn, run `team drops --read --seat codex-acme` and act on what it prints.',
+      );
+      // The launch's own round trip, at the delivery a launch runs: the file is written from
+      // the delivery, reads back as the text whose hash the typed line names, and the check
+      // the owner's tools run accepts it.
+      expect(writeRulesFile(standing, muse.name, '/nowhere', home, delivery.text, rulesFileHash(delivery.text)).ok).toBe(true);
+      expect(checkRulesFile(delivery.path, delivery.text)).toEqual({ ok: true });
+      expect(delivery.line).toBe(rulesLine(delivery.path, rulesFileHash(delivery.text)));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test.each(['codex', 'antigravity'])("a %s seat's rules carry the inbox sentence, once, after the never-stop line", (cli) => {
+    const { team, seat } = codexSeat();
+    const lines = rulesOf(team, { ...seat, cli }, '/nowhere').split('\n');
     const sentence =
       '- If your tools include `inbox_check`, call it at the start and the end of every turn and `inbox_read` for each message it lists, and act on what you read.';
     expect(lines.indexOf(sentence)).toBe(3);
     expect(lines.filter((line) => line.includes('inbox_check'))).toHaveLength(1);
     expect(lines[2]).toStartWith('- Never stop at a question:');
+    // The inbox seat's one sentence names both ends of a turn: no drops command is added for it.
+    expect(lines.some((line) => line.includes('drops --read'))).toBe(false);
   });
 });

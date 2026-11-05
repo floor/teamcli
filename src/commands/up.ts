@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { budgetsInForceOf, ceilingsOf, notInForce, watchInForceOf } from '../approve/approval.ts';
 import { KEY_ISOLATION_LINE, activeClientUpGrant, withClientGrantLock, type ClientUpGrantRecord } from '../client/records.ts';
@@ -14,7 +14,7 @@ import { readArgs, type Args } from '../args.ts';
 import { callerLabel, callerOf, describeCaller, detachedRefusal, judgeCallerIn, mayLaunchSeats, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { daemonHealth, type DaemonHealth } from '../daemon/health.ts';
 import { delegateGate, delegateNamedFor, logDelegated } from '../delegate.ts';
-import { devModeCallerGate, devModeExpiryLine, devModeExpiryNote, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { devModeCallerGate, devModeExpiryLine, devModeExpiryNote, devModeMark, devModeOwnerLift, devModeOwnerLiftAtCwd, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { gateVerdict } from '../permissions/who.ts';
@@ -61,19 +61,20 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import { endpointCleanupHost } from '../launch/endpoint-cleanup.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
-import { executePlan, restoreSummaryOf, type Report, type RestoreSweepSummary } from '../launch/execute.ts';
+import { executePlan, launchKind, restoreSummaryOf, type Report, type RestoreSweepSummary } from '../launch/execute.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
-import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
+import { isSocketFile, launchCodexEndpoint, processStartOf, recordedEndpointState, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { bindCodexSeatThread } from '../launch/codex-thread-binding.ts';
 import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../daemon/presence/codex-source.ts';
-import { inspectRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
+import { inspectRecordedCodexEndpoint, readRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
 import { currentBriefClaim, currentBriefEpochs, deliverBriefForAttribution, GENERAL_BRIEF_SHA256, walkBriefDeliveries } from '../launch/general-brief.ts';
-import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
-import { launchLineFinding } from '../launch/line.ts';
+import { launchedIdentity, paneHoldsOnlyShell, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
+import { restoreProof, relaunchWithOwnLine } from '../launch/restore-proof.ts';
+import { launchLineFinding, launchedCliBinary } from '../launch/line.ts';
 import { launchRefusal, readEntityModelRule, type EntityModelRule } from '../launch/model-guard.ts';
 import { charterGate } from '../charter/check.ts';
 import { charterFolderPretrust, grantedFolderPretrust, lobbyPretrustLine, projectRootPretrust } from '../launch/pretrust.ts';
-import { formatPlan, launchWillRun, upPlan, type Op, type UpSeat } from '../launch/plan.ts';
+import { formatPlan, launchWillRun, managedCodexLaunch, registryLaunches, upPlan, type Op, type UpSeat } from '../launch/plan.ts';
 import { runPause, type PauseHost, type PauseInput } from '../launch/pause.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { unreadIdle } from '../launch/unread.ts';
@@ -88,14 +89,15 @@ import { recheckLobby, verifyLobby, type FsReader, type LobbySeen } from '../lob
 import { lobbyOf } from '../lobby/recorded.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
+import { codexDaemonForSeat } from '../policy/codex-daemon.ts';
 import { conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
-import { registerRun } from '../registry/sync.ts';
+import { ensureSeatLine, registerRun } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { findAgent } from '../registry/agents.ts';
 import { continuityIdOf, continuityIdsOf, recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
-import { teamIdOf } from '../registry/teams.ts';
+import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { nativePushBindingFor } from '../send/push.ts';
 import { refreshAgentAddress } from '../send/address.ts';
@@ -168,6 +170,16 @@ export type UpSources = {
   // name no conversation to the one thread its endpoint proves. Absent in a world that binds
   // nothing: the launch's summary then names no pull-only reason.
   codexThreads?(endpoint: string): Promise<CodexLoadedThreadsRead>;
+  // The readings a restored Codex seat's recorded managed endpoint is judged by — the record for
+  // its current binding, the socket's liveness and the recorded pid's start, exactly as `team
+  // check` judges them. Absent in a world that does not judge endpoints: no restored seat is
+  // relaunched for one.
+  codexEndpoint?: {
+    alive(pid: number): boolean;
+    startOf(pid: number): number | null;
+    isSocket(path: string): boolean;
+    runtimeRoot?: string;
+  };
 };
 
 export type Launch = {
@@ -370,6 +382,8 @@ export const realSources: UpSources = {
   daemonHealth: (home) => daemonHealth(home),
   launch: realLaunch,
   codexThreads: (endpoint) => readLoadedCodexThreads({ endpoint }),
+  // The same three readings `team check` wires for the seat's managed server.
+  codexEndpoint: { alive: pidAlive, startOf: processStartOf, isSocket: isSocketFile },
   /** Present on the shipped command only: a dead bus is started in its own process before launch. */
   superviseBus: true,
 };
@@ -377,14 +391,23 @@ export const realSources: UpSources = {
 /** The reason the hold `up --no-launch` places carries. */
 export const QUIET_HOLD_REASON = 'quiet start (team up --no-launch): the watch wakes no seat; release with team hold --release';
 
-export const USAGE = 'Usage: team up [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--json]\n       team up --general <grant.json> --key <client-key> [--dry-run] [--serial] [--no-launch] [--json]\n       team up --request [--reason <text>] [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--json]\n\n--no-launch is a quiet start: the seats get their rules only, told to read their inbox and act on what is addressed to them, and not to continue earlier work unless a message asks for it; no general seat brief (the launch message) is dropped or typed, and a team hold stops the watch typing anything automatic until team hold --release.\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
+export const USAGE = 'Usage: team up [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]\n       team up --all [--dry-run] [--serial] [--no-launch] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--json]\n       team up --general <grant.json> --key <client-key> [--all] [--dry-run] [--serial] [--no-launch] [--json]\n       team up --request [--reason <text>] [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--json]\n\n--all runs the restore pass across every registered team whose session is running in the terminal host with recorded seats, in parent-first then session order, without cold-starting inactive teams.\n\n--no-launch is a quiet start: the seats get their rules only, told to read their inbox and act on what is addressed to them, and not to continue earlier work unless a message asks for it; no general seat brief (the launch message) is dropped or typed, and a team hold stops the watch typing anything automatic until team hold --release.\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
 
 export const up: Command = (argv, io) => runUp(argv, io, realSources);
 export default up;
 
-/** The invocation problems the client form owns, or null: it takes its grant and its key together,
- *  never the owner's `--file` or `--session`, and `--team` only names the team the grant is for. */
+/** The invocation problems the client form or `--all` owns, or null: `--client` takes its grant and
+ *  its key together, never the owner's `--file` or `--session`, `--team` only names the team the
+ *  grant is for, and `--all` takes no single-team flag. */
 function clientInvocationProblem(args: Args): string | null {
+  if (args.flags.has('all')) {
+    if (args.values.file !== undefined) return '--all and --file can\'t be used together: --all reads every registered team';
+    if (args.values.session !== undefined) return '--all and --session can\'t be used together: each registered team uses its own session';
+    if (args.values.client !== undefined || args.values.team !== undefined) return '--client runs the one team its grant names; it takes no --all';
+    if (args.flags.has('request') || args.values.approval !== undefined || args.values.reason !== undefined) {
+      return '--all takes no single-team owner-seat request flag';
+    }
+  }
   const client = args.values.client !== undefined;
   if (client && args.values.key === undefined) return '--client needs --key <client-key-file>';
   if (args.values.general !== undefined) return client || args.values.key === undefined ? '--general takes --key <client-key-file> and no --client' : null;
@@ -472,8 +495,10 @@ function modelDrift(
 ): { kind: 'skip' } | { kind: 'hold'; detail: string } | { kind: 'cycle'; way: string } | { kind: 'refuse'; detail: string } {
   if (!recorded.launched || !recorded.pane || !recorded.workspace || !seat.version) return { kind: 'skip' };
   if (!restored && seatProcessVerdict(recorded.launched, processes[seat.name] ?? null) !== 'same') return { kind: 'skip' };
+  // The entry is the seat's by its place: a restore clears the name it was given, and a cleared
+  // name is no other seat's. Only an entry named for another seat is not this seat's.
   const listed = agents.find((agent) => agent.pane === recorded.pane);
-  if (!listed || listed.name !== seat.name) return { kind: 'skip' };
+  if (!listed || (listed.name !== null && listed.name !== seat.name)) return { kind: 'skip' };
   const text = screenOf(recorded.pane);
   if (text == null || text === '') return { kind: 'skip' };
   // Registry signing governs even a model that the team file says a different CLI hosts (for
@@ -580,6 +605,20 @@ function effectiveSeatOf(seat: Seat, planned: UpSeat | undefined): Seat {
   };
 }
 
+/** The workspace a host-moved seat left, when the host still lists it and the seat now reads
+ *  somewhere else: the sweep that closes it is planned after the seat is ready, and the execute
+ *  re-reads every fact before the close. */
+function vacatedWorkspace(
+  workspaces: { id: string; label: string }[] | null,
+  left: string,
+  now: string,
+  pane: string,
+): { workspace: string; pane: string; replaced: true } | undefined {
+  if (left === now) return undefined;
+  if (!workspaces?.some((item) => item.id === left)) return undefined;
+  return { workspace: left, pane, replaced: true };
+}
+
 function seatPlan(
   standing: Standing,
   team: TeamFile,
@@ -606,6 +645,12 @@ function seatPlan(
   origin: RulesOrigin = 'file',
   /** What `team down` kept of a seat it stopped: its handle and the conversation it ran. */
   retained?: RetainedSeat,
+  /** The recorded pane's foreground argv0 names, read for the restore proof; null when unread. */
+  foregroundOf: (pane: string) => string[] | null = () => null,
+  /** Whether a restored seat's recorded managed Codex endpoint is provably gone and the seat's
+   *  own launch line would start one now: the pane must be relaunched in place for it, never
+   *  adopted on the endpoint it lost. */
+  endpointRelaunch: (seat: Seat, recorded: SeatState, launch: string) => boolean = () => false,
 ): UpSeat {
   // After `team down` the seat has no state record, only what down retained. That is still the
   // state's half of the resume binding: without it the registry's recorded conversation was
@@ -659,7 +704,18 @@ function seatPlan(
   };
   const known = agents ?? [];
   const asked = agents !== null;
-  if (!resume || !recorded || seat.stopped) return planned;
+  if (!resume || !recorded || seat.stopped || seat.human) {
+    // A stopped seat's record still names the workspace it left, and nothing this run starts
+    // replaces it: the sweep closes that workspace from a fresh reading and leaves it otherwise.
+    // A human's declaration has no launch of ours to sweep — its record never moves and its
+    // workspace is not ours to close — and a seat with no record names none.
+    return seat.stopped && !seat.human && recorded?.workspace !== undefined
+      ? {
+          ...planned,
+          sweep: { workspace: recorded.workspace, ...(recorded.pane === undefined ? {} : { pane: recorded.pane }) },
+        }
+      : planned;
+  }
   // §5: a seat recorded waiting takes precedence over everything below. Its recorded pane is
   // reused while the host still lists it and the process there is still the one this run
   // launched: the pause reads it fresh and verifies it before doing anything. A process that
@@ -741,8 +797,10 @@ function seatPlan(
       // pane when the launch line can carry it — never replaced by a blank one — and the
       // replaced pane is named only on that path: a record with no conversation to protect
       // takes the ordinary fresh launch, with no notice about a pane nothing was resumed from.
-      // A line that cannot carry the conversation stops before anything is launched, and the
-      // recorded workspace, when the host still lists it, is named and left.
+      // A line that cannot carry the conversation stops before anything is launched. The
+      // recorded workspace, when the host still lists it, is closed only after the seat is
+      // ready on its replacement (`plan.ts`'s close-leftover step), never before it: this
+      // reading only says the host listed it then, and the close re-reads everything itself.
       if (continuitySession === null) return planned;
       const resumeHold = uncarryableResume(planned, continuitySession);
       if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
@@ -751,7 +809,7 @@ function seatPlan(
         ...planned,
         replacedPane: movedPane,
         resume: continuitySession,
-        ...(leftWorkspace ? { leftWorkspace } : {}),
+        ...(leftWorkspace ? { closeLeftover: { pane: movedPane, workspace: leftWorkspace } } : {}),
       };
     }
     const candidate = named.length === 1 ? named[0] : undefined;
@@ -786,6 +844,9 @@ function seatPlan(
       if (drift.kind === 'cycle') {
         const resumeHold = uncarryableResume(planned, continuitySession);
         if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+        // The seat relaunches where the host moved it; the workspace it left closes after the
+        // replacement is ready, never before, and only from a fresh reading.
+        const vacated = vacatedWorkspace(workspaces, movedWorkspace, movedRecord.workspace, movedPane);
         return {
           ...planned,
           repair: {
@@ -796,9 +857,11 @@ function seatPlan(
             drift: { way: drift.way },
           },
           resume: continuitySession,
+          ...(vacated === undefined ? {} : { sweep: vacated }),
         };
       }
       if (drift.kind === 'hold') return { ...planned, stage: 'ready', driftHold: drift.detail };
+      const vacated = vacatedWorkspace(workspaces, movedWorkspace, movedRecord.workspace, movedPane);
       return {
         ...planned,
         stage: 'ready',
@@ -809,6 +872,7 @@ function seatPlan(
           pane: candidate.pane,
           workspace: movedRecord.workspace,
         },
+        ...(vacated === undefined ? {} : { sweep: vacated }),
       };
     }
   }
@@ -860,6 +924,38 @@ function seatPlan(
         };
       }
       if (drift.kind === 'hold') return { ...planned, stage: 'ready', driftHold: drift.detail };
+      // The recorded managed endpoint died with the host (or with the process): the pane's CLI
+      // is not the seat's running form any more. It is exited in place and the seat is launched
+      // again there through its own line — the launch starts a fresh endpoint and attaches to
+      // it — carrying the conversation this proof names where the line can. A live endpoint,
+      // an absent or invalid record, or a reading this build cannot take leaves the pane
+      // adopted as it is: the repair is never made on a guess.
+      if (endpointRelaunch(seat, recorded, planned.launch)) {
+        const held = replacedScreenRefusal(seat, recorded.pane, screenOf, onRecordedPane?.status);
+        if (held) {
+          return {
+            ...planned,
+            stage: 'ready',
+            sessionDoubt: held.why,
+            ...(held.working ? { doubtWorking: true } : {}),
+          };
+        }
+        const resumeHold = uncarryableResume(planned, restoredSession);
+        if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+        return {
+          ...planned,
+          pane: recorded.pane,
+          workspace: recorded.workspace,
+          repair: {
+            pane: recorded.pane,
+            workspace: recorded.workspace,
+            launched: recorded.launched,
+            cli: seat.cli,
+            ownLine: { session: restoredSession, endpoint: true },
+          },
+          resume: restoredSession,
+        };
+      }
       return {
         ...planned,
         stage: 'ready',
@@ -874,11 +970,119 @@ function seatPlan(
       };
     }
   }
+  // The host restored the pane and cleared the name: the record's place still holds a process,
+  // and the proof says whether the program there is the seat's own. Adoption renames the pane
+  // back and records the identity it holds now — no launch, no typing, no close, and no
+  // `team register` call, so the root gate keeps that command the owner's walk. It never closes,
+  // so the drift reading (which decides closes) is not consulted here; the next `up` reads the
+  // seat as the record's own and handles a drift the way it always does.
+  let restoreRefusal: string | undefined;
+  if (verdict === 'replaced' && recorded.pane && recorded.workspace && recorded.launched) {
+    const proof = restoreProof({
+      seat,
+      recorded,
+      agents,
+      process: processes[seat.name] ?? null,
+      foreground: foregroundOf(recorded.pane),
+      recordedSession: continuitySession ?? undefined,
+      screen: screenOf(recorded.pane),
+    });
+    if (proof.kind === 'none') {
+      restoreRefusal = proof.why;
+    } else if (proof.kind === 'session' && continuitySession !== null
+      && relaunchWithOwnLine(effectiveSeatOf(seat, planned), recorded, proof)) {
+      // A seat whose own launch line carries what the bare restored CLI does not (a wrapper's
+      // alternate endpoint) is never adopted in place: the bare CLI would fail every turn. The
+      // bare CLI is exited in its recorded pane and the seat is launched again there through
+      // its own line plus `--resume <the proven conversation>`. The plan reads the pane here,
+      // so a dry run and a live run hold a working or unsent pane the same way: nothing is
+      // typed into it. The line checked is the one the relaunch would run — the record's
+      // launch, not the file's — and a conversation that line cannot carry stops the relaunch
+      // before any key is typed.
+      const held = replacedScreenRefusal(seat, recorded.pane, screenOf, known.find((agent) => agent.pane === recorded.pane)?.status);
+      if (held) {
+        return {
+          ...planned,
+          stage: 'ready',
+          sessionDoubt: held.why,
+          ...(held.working ? { doubtWorking: true } : {}),
+        };
+      }
+      const resumeHold = uncarryableResume(planned, continuitySession);
+      if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+      return {
+        ...planned,
+        pane: recorded.pane,
+        workspace: recorded.workspace,
+        repair: {
+          pane: recorded.pane,
+          workspace: recorded.workspace,
+          launched: recorded.launched,
+          cli: seat.cli,
+          ownLine: { session: continuitySession },
+        },
+        resume: continuitySession,
+      };
+    } else if ((proof.kind === 'session' || proof.kind === 'cli') && endpointRelaunch(seat, recorded, planned.launch)) {
+      // A Codex seat whose recorded managed endpoint died with the host is not adopted on the
+      // endpoint it lost: the CLI is exited in place and the seat's own launch line runs there,
+      // starting a fresh endpoint and attaching to it. The weak (`cli`) proof is enough — the
+      // exit is for the endpoint, not for a conversation — and the strong one carries its
+      // conversation. The pane guards are item 7's own: a working or unsent pane is held before
+      // any key is typed, and a line that cannot carry a proven conversation stops here.
+      const held = replacedScreenRefusal(seat, recorded.pane, screenOf, known.find((agent) => agent.pane === recorded.pane)?.status);
+      if (held) {
+        return {
+          ...planned,
+          stage: 'ready',
+          sessionDoubt: held.why,
+          ...(held.working ? { doubtWorking: true } : {}),
+        };
+      }
+      const proven = proof.kind === 'session' && continuitySession !== null ? continuitySession : null;
+      const resumeHold = proven === null ? undefined : uncarryableResume(planned, proven);
+      if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+      return {
+        ...planned,
+        pane: recorded.pane,
+        workspace: recorded.workspace,
+        repair: {
+          pane: recorded.pane,
+          workspace: recorded.workspace,
+          launched: recorded.launched,
+          cli: seat.cli,
+          ownLine: { ...(proven === null ? {} : { session: proven }), endpoint: true },
+        },
+        ...(proven === null ? {} : { resume: proven }),
+      };
+    } else {
+      const next = launchedIdentity(processes[seat.name] ?? null);
+      if (next) {
+        return {
+          ...planned,
+          stage: 'ready',
+          adopted: {
+            pane: recorded.pane,
+            workspace: recorded.workspace,
+            // The launch's own identity, which the execute re-reads the world against — a proof
+            // run against the identity the pane holds now would read its own adoption as `same`.
+            recordedLaunched: recorded.launched,
+            launched: next,
+            via: proof.kind,
+            sentence: proof.sentence,
+            ...(proof.kind === 'session' && continuitySession !== null ? { session: continuitySession } : {}),
+          },
+        };
+      }
+    }
+  }
   // A program is in front and the session cannot be shown. Leave the record. Do not close.
   // A working or unsent screen keeps the refusal the close used to give.
   if (continuity === 'doubt' && recorded.workspace && recorded.pane && recorded.launched) {
     const held = replacedScreenRefusal(seat, recorded.pane, screenOf, onRecordedPane?.status);
-    const refusal = held?.why;
+    // The proof's own reason replaces the generic sentence when it says something specific; a
+    // working or unsent screen keeps the refusal the close used to give.
+    const refusal = held?.why ?? restoreRefusal;
     return {
       ...planned,
       stage: recorded.stage,
@@ -886,11 +1090,14 @@ function seatPlan(
       ...(held?.working ? { doubtWorking: true } : {}),
     };
   }
-  // The shell is in front. The seat's name surviving on the pane does not make it the CLI.
+  // The shell is in front. The seat's name surviving on the pane does not make it the CLI. The
+  // pane is still the seat's own, at its shell: the launch line runs there, and nothing is
+  // created or closed. The live run re-reads the pane and its workspace immediately before the
+  // launch (`execute.ts`), and a changed reading leaves the seat out with nothing launched.
   if (verdict === 'gone' && recorded.workspace && recorded.pane && recorded.launched) {
     return {
       ...planned,
-      repair: { pane: recorded.pane, workspace: recorded.workspace, launched: recorded.launched, cli: seat.cli },
+      repair: { pane: recorded.pane, workspace: recorded.workspace, launched: recorded.launched, cli: seat.cli, reuse: true },
     };
   }
   const named = known.find((agent) => agent.name === seat.name);
@@ -903,10 +1110,16 @@ function seatPlan(
       if (drift.kind === 'refuse') return { ...planned, stage: 'ready', driftRefused: drift.detail };
       // The pane's own agent names the conversation the records bind: a relaunch may resume it,
       // even where the state copy names no id. A pane naming another session proves nothing.
+      // The entry is the seat's by its place: a restore clears the name it was given, so an
+      // entry with no name on the recorded pane is still the seat's, and the conversation it
+      // reports is the record's. Only an entry named for another seat is not this seat's.
+      const paneEntry = recorded.pane
+        ? known.find((agent) => agent.pane === recorded.pane && (agent.name === null || agent.name === seat.name))
+        : undefined;
       const provenSession = continuitySession !== null
-        && onRecordedPane?.session !== undefined
-        && onRecordedPane.session !== ''
-        && onRecordedPane.session === continuitySession
+        && paneEntry?.session !== undefined
+        && paneEntry.session !== ''
+        && paneEntry.session === continuitySession
         ? continuitySession
         : undefined;
       if (drift.kind === 'cycle' && recorded.pane && recorded.workspace && recorded.launched) {
@@ -1104,6 +1317,423 @@ export type UpInternal = {
   nonInteractive?: boolean;
 };
 
+type UpAllTeamEntry = {
+  project: string;
+  session: string;
+  root: string;
+  status: 'ready' | 'dry-run' | 'pending' | 'lock-held' | 'unreadable' | 'refused';
+  failed: boolean;
+  summary: string;
+  restore_summary?: RestoreSweepSummary;
+};
+
+function canonicalTeamRoot(root: string): string {
+  try {
+    return realpathSync(root);
+  } catch {
+    return resolve(root);
+  }
+}
+
+function holdsTeamRoot(parent: string, child: string): boolean {
+  const rel = relative(canonicalTeamRoot(parent), canonicalTeamRoot(child));
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+function lastSaidFrom(err: string[], out: string[]): string | undefined {
+  const lines = `${err.join('')}\n${out.join('')}`
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '');
+  const said = lines.at(-1);
+  if (said === undefined) return undefined;
+  return said.length > 400 ? `${said.slice(0, 397)}...` : said;
+}
+
+async function runUpAll(
+  args: Args,
+  io: Io,
+  out: Io,
+  sources: UpSources,
+  json: boolean,
+  dry: boolean,
+  noLaunch: boolean,
+  jsonNotes: string[],
+  stderrLine: (text: string) => void,
+): Promise<0 | 1 | 2> {
+  const home = sources.home ?? homedir();
+  const now = sources.now?.() ?? new Date();
+  const refusal = 'only the owner or a lead in development mode runs team up --all';
+
+  if (args.values.general === undefined) {
+    const walked = walkCaller(io);
+    if (walked.kind === 'owner-no-tty') {
+      const detached = detachedRefusal(walked, {
+        who: 'the owner or a lead in development mode',
+        where: "a terminal outside the terminal host or the lead's own pane",
+      }) ?? "only the owner or a lead in development mode runs this, from a terminal outside the terminal host or the lead's own pane";
+      refuse(io, json, 'up', { id: 'up.detached', message: plainText(detached), repair: null });
+      return 1;
+    }
+    if (walked.kind !== 'owner') {
+      let lift = devModeOwnerLiftAtCwd(io, {
+        command: 'up',
+        refusal,
+        home,
+        now,
+        admitsOperator: false,
+        audit: 'later',
+      });
+      if ((lift === null || !lift.lifted) && (walked.kind === 'seat' || (walked.kind === 'unplaced' && walked.reason === 'it runs under herdr'))) {
+        try {
+          const registry = readTeams(home);
+          for (const record of Object.values(registry)) {
+            if (record.lifecycle === 'stopped' || record.lifecycle === 'archived') continue;
+            const placed = callerOf(io, record.session);
+            if (placed.kind !== 'seat' || placed.session !== record.session) continue;
+            let loaded: ReturnType<typeof readTeamConfig>;
+            try {
+              loaded = readTeamConfig(record.root, { home });
+            } catch {
+              continue;
+            }
+            if (!loaded.ok) continue;
+            const candidate = devModeOwnerLift(io, {
+              command: 'up',
+              refusal,
+              home,
+              team: loaded.team,
+              root: loaded.root,
+              dir: dirname(loaded.path),
+              now,
+              admitsOperator: false,
+              audit: 'later',
+            });
+            if (candidate.lifted) {
+              lift = candidate;
+              break;
+            }
+          }
+        } catch {
+          // A corrupt registry is reported at the registry read below once the caller gate passes.
+        }
+      }
+      if (lift === null || !lift.lifted) {
+        refuse(io, json, 'up', { id: 'up.not-owner', message: refusal, repair: null });
+        return 1;
+      }
+      if (lift.warning !== null) stderrLine(`${plainText(lift.warning)}\n`);
+      if (!dry) lift.audit();
+    }
+  }
+
+  let recordsById: Record<string, TeamRecord>;
+  try {
+    recordsById = readTeams(home);
+  } catch (error) {
+    refuse(io, json, 'up', {
+      id: 'up.file',
+      message: plainText(error instanceof Error ? error.message : String(error)),
+      repair: null,
+    });
+    return 2;
+  }
+
+  const seenRoots = new Set<string>();
+  const activeRecords: TeamRecord[] = [];
+  for (const record of Object.values(recordsById)) {
+    if (record.lifecycle === 'stopped' || record.lifecycle === 'archived') continue;
+    const canon = canonicalTeamRoot(record.root);
+    if (seenRoots.has(canon)) continue;
+    seenRoots.add(canon);
+    activeRecords.push(record);
+  }
+
+  if (activeRecords.length === 0) {
+    refuse(io, json, 'up', {
+      id: 'up.pending',
+      message: 'nothing restored yet: no teams are registered',
+      repair: null,
+    });
+    return 1;
+  }
+
+  const ancestorsOf = (record: TeamRecord): number =>
+    activeRecords.filter((other) => other !== record && holdsTeamRoot(other.root, record.root)).length;
+  activeRecords.sort(
+    (a, b) =>
+      ancestorsOf(a) - ancestorsOf(b) ||
+      a.session.localeCompare(b.session) ||
+      (a.id ?? '').localeCompare(b.id ?? ''),
+  );
+
+  let anyStateAnswered = false;
+  let nullStateCount = 0;
+  let inactiveSkipped = 0;
+  let swept = 0;
+  let totalRepaired = 0;
+  let totalSkipped = 0;
+  let totalRefused = 0;
+  const allSeats: string[] = [];
+  const teamEntries: UpAllTeamEntry[] = [];
+
+  for (const record of activeRecords) {
+    const state = resolveState(sources, record.session);
+    if (state === null) {
+      nullStateCount += 1;
+      continue;
+    }
+    anyStateAnswered = true;
+    if (state !== 'running') {
+      inactiveSkipped += 1;
+      continue;
+    }
+
+    let loaded: ReturnType<typeof readTeamConfig>;
+    try {
+      loaded = readTeamConfig(record.root, { home });
+    } catch (error) {
+      swept += 1;
+      const reason = plainText(error instanceof Error ? error.message : String(error));
+      teamEntries.push({
+        project: record.project,
+        session: record.session,
+        root: record.root,
+        status: 'unreadable',
+        failed: true,
+        summary: reason,
+      });
+      stderrLine(`team up: ${plainText(record.project)} (session ${plainText(record.session)}): ${reason}\n`);
+      continue;
+    }
+    if (!loaded.ok) {
+      swept += 1;
+      const said = plainText(loaded.errors.map((problem) => problem.message).join('; ') || 'the team file could not be read');
+      teamEntries.push({
+        project: record.project,
+        session: record.session,
+        root: record.root,
+        status: 'unreadable',
+        failed: true,
+        summary: said,
+      });
+      stderrLine(`team up: ${plainText(record.project)} (session ${plainText(record.session)}): ${said}\n`);
+      continue;
+    }
+
+    const dir = dirname(loaded.path);
+    const session = loaded.team.session;
+    let hasRecordedSeats = false;
+    try {
+      const recorded = readState(dir).sessions[session];
+      hasRecordedSeats = recorded !== undefined && Object.keys(recorded.seats).length > 0;
+    } catch (error) {
+      swept += 1;
+      const reason = plainText(error instanceof Error ? error.message : String(error));
+      teamEntries.push({
+        project: loaded.team.project,
+        session,
+        root: loaded.root,
+        status: 'unreadable',
+        failed: true,
+        summary: reason,
+      });
+      stderrLine(`team up: ${plainText(loaded.team.project)} (session ${plainText(session)}): ${reason}\n`);
+      continue;
+    }
+    if (!hasRecordedSeats) {
+      inactiveSkipped += 1;
+      continue;
+    }
+
+    swept += 1;
+    for (const seat of loaded.team.seats) {
+      allSeats.push(`${loaded.team.project}/${seat.name}`);
+    }
+
+    const lock = dry ? null : acquireRunLock(dir, session);
+    if (lock !== null && 'held' in lock) {
+      const reason = plainText(runLockText(lock.held, session, dir, lock.startedAt));
+      teamEntries.push({
+        project: loaded.team.project,
+        session,
+        root: loaded.root,
+        status: 'lock-held',
+        failed: true,
+        summary: reason,
+      });
+      stderrLine(`team up: ${plainText(loaded.team.project)} (session ${plainText(session)}): ${reason}\n`);
+      continue;
+    }
+
+    try {
+      const launchFile = launchTeamFile(loaded);
+      const subArgv: string[] = [];
+      if (launchFile !== undefined) subArgv.push('--file', launchFile);
+      if (dry) subArgv.push('--dry-run');
+      if (args.flags.has('serial')) subArgv.push('--serial');
+      if (noLaunch) subArgv.push('--no-launch');
+
+      const subOut: string[] = [];
+      const subErr: string[] = [];
+      const seen: { report: Report | null } = { report: null };
+      const subIo: Io = {
+        cwd: loaded.root,
+        env: { ...io.env },
+        stdinIsTTY: false,
+        stdoutIsTTY: false,
+        stderrIsTTY: false,
+        caller: { kind: 'owner' },
+        stdout: (text) => subOut.push(text),
+        stderr: (text) => subErr.push(text),
+      };
+      const exit = await runUp(subArgv, subIo, sources, {
+        caller: { kind: 'owner' },
+        lockHeld: !dry,
+        nonInteractive: true,
+        onReport: (next) => {
+          seen.report = next;
+        },
+      });
+
+      if (dry) {
+        if (exit !== 0) {
+          const detail = plainText(lastSaidFrom(subErr, subOut) ?? `exited ${exit}`);
+          teamEntries.push({
+            project: loaded.team.project,
+            session,
+            root: loaded.root,
+            status: 'refused',
+            failed: true,
+            summary: detail,
+          });
+          stderrLine(`team up: ${plainText(loaded.team.project)} (session ${plainText(session)}): ${detail}\n`);
+        } else {
+          teamEntries.push({
+            project: loaded.team.project,
+            session,
+            root: loaded.root,
+            status: 'dry-run',
+            failed: false,
+            summary: 'dry run: nothing was run',
+          });
+          if (!json) {
+            out.stdout(`=== ${plainText(loaded.team.project)} (session ${plainText(session)}) ===\n${subOut.join('')}`);
+          }
+        }
+        continue;
+      }
+
+      if (seen.report === null) {
+        const detail = plainText(lastSaidFrom(subErr, subOut) ?? `exited ${exit}`);
+        teamEntries.push({
+          project: loaded.team.project,
+          session,
+          root: loaded.root,
+          status: 'refused',
+          failed: true,
+          summary: detail,
+        });
+        stderrLine(`team up: ${plainText(loaded.team.project)} (session ${plainText(session)}): ${detail}\n`);
+        continue;
+      }
+
+      const summary = restoreSummaryOf(seen.report.restoreBuckets);
+      const line = plainText(lastSaidFrom(subErr, []) ?? summary.line);
+      totalRepaired += summary.repaired;
+      totalSkipped += summary.skipped_working;
+      totalRefused += summary.refused;
+      const cleanedSummary: RestoreSweepSummary = {
+        ...summary,
+        refused_seats: summary.refused_seats.map((entry) => ({
+          seat: entry.seat,
+          reason: plainText(entry.reason),
+        })),
+        line,
+      };
+      teamEntries.push({
+        project: loaded.team.project,
+        session,
+        root: loaded.root,
+        status: exit === 0 ? 'ready' : 'pending',
+        failed: exit !== 0,
+        summary: line,
+        restore_summary: cleanedSummary,
+      });
+      stderrLine(`${plainText(loaded.team.project)} (session ${plainText(session)}): ${line}\n`);
+    } catch (error) {
+      const reason = plainText(error instanceof Error ? error.message : String(error));
+      teamEntries.push({
+        project: loaded.team.project,
+        session,
+        root: loaded.root,
+        status: 'unreadable',
+        failed: true,
+        summary: reason,
+      });
+      stderrLine(`team up: ${plainText(loaded.team.project)} (session ${plainText(session)}): ${reason}\n`);
+    } finally {
+      if (lock !== null && 'release' in lock) lock.release();
+    }
+  }
+
+  if (!anyStateAnswered && nullStateCount > 0) {
+    refuse(io, json, 'up', {
+      id: 'up.herdr',
+      message: "the terminal host doesn't answer",
+      repair: null,
+    });
+    return 1;
+  }
+
+  if (swept === 0) {
+    refuse(io, json, 'up', {
+      id: 'up.pending',
+      message: 'nothing restored yet: no registered team has a running session in the terminal host',
+      repair: null,
+    });
+    return 1;
+  }
+
+  const anyFailed = teamEntries.some((entry) => entry.failed);
+  const inactiveClause = inactiveSkipped > 0 ? `; ${inactiveSkipped} inactive skipped` : '';
+  const aggregateLine = dry
+    ? `all teams: ${swept} team${swept === 1 ? '' : 's'} planned${inactiveClause}`
+    : `all teams: ${swept} team${swept === 1 ? '' : 's'} swept (${totalRepaired} seat${totalRepaired === 1 ? '' : 's'} repaired, ${totalSkipped} skipped, ${totalRefused} refused)${inactiveClause}`;
+
+  if (!dry) {
+    stderrLine(`${aggregateLine}\n`);
+  }
+
+  if (json) {
+    if (anyFailed) {
+      const failedSummary = teamEntries
+        .filter((entry) => entry.failed)
+        .map((entry) => `${entry.project} (${entry.session}): ${entry.summary}`)
+        .join('; ');
+      refuse(io, true, 'up', {
+        id: 'up.pending',
+        message: `${aggregateLine} — ${failedSummary}`,
+        repair: null,
+      });
+    } else {
+      writeJson(io, 'team.up', {
+        format: 1,
+        all: true,
+        dry_run: dry,
+        ...(noLaunch ? { no_launch: true } : {}),
+        status: dry ? 'dry-run' : 'ready',
+        action_summary: aggregateLine,
+        seats: [...new Set(allSeats)],
+        teams: teamEntries,
+        notes: jsonNotes,
+      });
+    }
+  }
+
+  return anyFailed ? 1 : 0;
+}
+
 export async function runUp(argv: string[], io: Io, sources: UpSources, internal?: UpInternal): Promise<number> {
   // Every line this run writes goes through the cleaned writers from here; the raw pair stays
   // reachable for the progress writer alone, which draws its own `\r\x1b[K` on a TTY.
@@ -1111,7 +1741,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval', 'general', 'reason'], ['dry-run', 'serial', 'json', 'request', 'no-launch']);
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval', 'general', 'reason'], ['dry-run', 'serial', 'json', 'request', 'no-launch', 'all']);
   // The lines plain output writes beside the records ride on the document as notes under
   // `--json`; stdout carries the one document and nothing else.
   const jsonNotes: string[] = [];
@@ -1123,16 +1753,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     else out.stderr(text);
   };
   const clientProblem = args.error === undefined && args.rest.length === 0 ? clientInvocationProblem(args) : null;
-  if (args.error || args.rest.length || clientProblem !== null) {
-    refuse(io, json, 'up', {
-      id: 'up.invocation',
-      message: plainText(args.error ?? (args.rest.length ? `unexpected "${args.rest[0]}"` : clientProblem!)),
-      repair: null,
-      usage: USAGE,
-    });
-    // exit: up.invocation
-    return 2;
-  }
+  const badInvocation = Boolean(args.error || args.rest.length || clientProblem !== null);
   const dry = args.flags.has('dry-run');
   // `--no-launch`: seats get their rules and nothing else — no general seat brief is dropped in
   // their folder and no launch-line inbox route names a brief epoch.
@@ -1142,7 +1763,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // folder alone — a no-terminal owner launch that never prompts, whose seats are the signed team
   // file's and no others. Every other caller goes through the ordinary gates below, unchanged.
   let clientUp: { grant: ClientUpGrantRecord; signature: string; requestId: string } | null = null;
-  if (args.values.client !== undefined) {
+  if (!badInvocation && args.values.client !== undefined) {
     stderrLine(`${KEY_ISOLATION_LINE}\n`);
     const clientNow = sources.now?.() ?? new Date();
     const verified = verifyClientUp({
@@ -1185,12 +1806,14 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // admitted run is a no-terminal owner launch: it never prompts and never types into a pane.
   // A general grant (src/client/general-grant.ts): the owner signed this principal once for this
   // entity, so the run is admitted as an owner-seat approval would admit it, with no request.
-  if (args.values.general !== undefined) {
+  if (!badInvocation && args.values.general !== undefined) {
     let entity: string | null = null;
-    try {
-      const here = readTeamConfig(io.cwd, { home: sources.home, checkOnly: true });
-      if (here.ok) entity = here.team.entity;
-    } catch {}
+    if (!args.flags.has('all')) {
+      try {
+        const here = readTeamConfig(io.cwd, { home: sources.home, checkOnly: true });
+        if (here.ok) entity = here.team.entity;
+      } catch {}
+    }
     const general = admitGeneral(sources.home ?? homedir(), resolve(io.cwd, args.values.general), resolve(io.cwd, args.values.key!), 'up', entity, sources.now?.() ?? new Date());
     if (!general.ok) {
       refuse(io, json, 'up', { id: 'up.general-refused', message: general.why, repair: null });
@@ -1199,16 +1822,33 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     }
     stderrLine(`team up: admitted by general grant ${general.grant.grant_id} (${general.grant.client_id})\n`);
   }
-  const seatStep = args.values.general !== undefined
+  const allCode = !badInvocation && args.flags.has('all')
+    ? await runUpAll(args, io, out, sources, json, dry, noLaunch, jsonNotes, stderrLine)
+    : null;
+  const seatStep = badInvocation || allCode !== null
+    ? { kind: 'pass' as const }
+    : args.values.general !== undefined
     ? { kind: 'admitted' as const }
     : clientUp !== null && (args.flags.has('request') || args.values.approval !== undefined)
     ? (refuse(io, json, 'up', { id: 'up.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
     : ownerSeatStep('up', 'team-up', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason }, io, sources);
-  if (seatStep.kind === 'requested') {
+  if (badInvocation || allCode === 2) {
+    if (badInvocation) {
+      refuse(io, json, 'up', {
+        id: 'up.invocation',
+        message: plainText(args.error ?? (args.rest.length ? `unexpected "${args.rest[0]}"` : clientProblem!)),
+        repair: null,
+        usage: USAGE,
+      });
+    }
+    // exit: up.invocation
+    return 2;
+  }
+  if (allCode === 0 || seatStep.kind === 'requested') {
     // exit: up.approval-requested
     return 0;
   }
-  if (seatStep.kind === 'refused') {
+  if (allCode === 1 || seatStep.kind === 'refused') {
     // exit: up.approval-refused
     return 1;
   }
@@ -1472,7 +2112,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // other door refused.
   const ownerSeat = seatApproved || (
     detached === undefined && clientUp === null && !ordinaryAdmitted && !ownerToken && verdict === null && grantedSeat === null &&
-    ownerSeatRuleAdmits('team-up', io.cwd, dry, sources));
+    ownerSeatRuleAdmits('team-up', io.cwd, dry, io, sources));
 
   const createGranted = entityGrantAdmits(root, io, { home: sources.home, now: sources.now?.(), cwd: io.cwd });
   // The map's admission, the trusted owner token, the granted seat, a passed delegation, a pane
@@ -1585,13 +2225,34 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       // its name" — is the run's own half-finished work, and herdr lists its agent with no name
       // (or another one) on the pane this state records. That pane is known the way the waiting
       // one is: the resume path verifies pane, process and rename before recording anything.
-      // Only `launched` qualifies — a seat at `named` or `ready` has its name, so a foreign
-      // agent on its pane is refused exactly as before, and so is any pane no record names.
+      // Only `launched` qualifies here — a seat at `named` or `ready` normally has its name, so
+      // a foreign agent on its pane is refused exactly as before. The exception is the host
+      // restore below: a launch record's pane comes back unnamed, and only the proof may decide
+      // it.
       const launchedPanes = new Set(
         Object.entries(recorded)
           .filter(([name, seat]) => seat.stage === 'launched' && seatOfFile(name, seat, declared))
           .map(([, seat]) => seat.pane)
           .filter((pane) => pane !== undefined),
+      );
+      // A host restore keeps the places and clears the names: a launch record's pane comes back
+      // with an entry the host does not name (or names with something else). That pane is still
+      // this state's own to read: `seatPlan` proves it — the recorded place, the process the
+      // launch did not leave, the declared CLI and the conversation — and adopts it only when
+      // the proof holds. A failed proof is that seat's `left out`, never a touch, so the run
+      // goes on instead of refusing the whole session for a record it can examine. A pane no
+      // launch record names still refuses exactly as before.
+      const launchRecords = Object.entries(recorded)
+        .filter(([name, seat]) => seat.stage === 'ready' && seat.pane !== undefined && seat.workspace !== undefined && seat.launched !== undefined && seat.waiting === undefined && seatOfFile(name, seat, declared));
+      const restorePanes = new Set(launchRecords.map(([, seat]) => seat.pane).filter((pane) => pane !== undefined));
+      // The workspace is part of the same reading: a restore can leave a second pane beside the
+      // seat's own in it, and the weak proof is the reading that refuses that seat when the
+      // second pane leaves no way to tell which is the seat. The pane itself is never touched.
+      const restoreWorkspaces = new Set(
+        launchRecords
+          .filter(([, seat]) => agents.some((agent) => agent.pane === seat.pane && agent.name === null))
+          .map(([, seat]) => seat.workspace)
+          .filter((workspace) => workspace !== undefined),
       );
       // A force-close — a non-owner's `remove` — leaves its seat's pane running and renames the
       // agent out of the seat's name (`<name>-left`, then `-left-2`, `-left-3`, …: remove.ts's
@@ -1604,7 +2265,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
           !(agent.name && Object.hasOwn(recorded, agent.name)) &&
           !(agent.name && leftoverName(agent.name)) &&
           !waitingPanes.has(agent.pane) &&
-          !launchedPanes.has(agent.pane),
+          !launchedPanes.has(agent.pane) &&
+          !restorePanes.has(agent.pane) &&
+          !restoreWorkspaces.has(agent.workspace),
       );
       if (unknown.length) {
         refusals.push({
@@ -1698,6 +2361,40 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   });
   const seats: UpSeat[] = [];
   const refused = new Set<string>();
+  // Whether a restored seat's managed Codex endpoint is provably gone. The record must be one a
+  // launch wrote for the seat's current binding, its socket must be missing, its pid dead or
+  // handed to another process since (the same chain `team check` reports), and the seat's own
+  // launch line must be one that would start a managed endpoint now. Only a proven loss
+  // relaunches the seat; an absent record, a policy that plans no endpoint, or a reading this
+  // build cannot take keeps the pane adopted.
+  const endpointRelaunch = (seat: Seat, held: SeatState, launch: string): boolean => {
+    const liveness = sources.codexEndpoint;
+    if (liveness === undefined || sources.launch?.codexEndpoint === undefined) return false;
+    const profile = profileFor(seat.cli);
+    if (profile === null) return false;
+    const record = readRecordedCodexEndpoint(held.codex_endpoint, held.presence_binding);
+    if (record === null) return false;
+    const daemon = codexDaemonForSeat({ home: sources.home, root, team, seat: seat.name, session });
+    if (!managedCodexLaunch({
+      cli: profile.cli,
+      binary: profile.binary,
+      codexDaemon: daemon,
+      stateDir: dir,
+      launch,
+      command: launch,
+    })) return false;
+    const read = recordedEndpointState({
+      dir,
+      session,
+      seat: seat.name,
+      record,
+      ...(liveness.runtimeRoot === undefined ? {} : { runtimeRoot: liveness.runtimeRoot }),
+      alive: liveness.alive,
+      startOf: liveness.startOf,
+      isSocket: liveness.isSocket,
+    });
+    return read.kind === 'dead';
+  };
   // The entity model rule, read at the first seat this run would launch and kept for the rest:
   // a run with nothing to start reads no policy.
   let launchRule: EntityModelRule | null = null;
@@ -1726,6 +2423,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       caller.kind === 'seat' ? caller.name : null,
       rulesOriginOf(loaded.source),
       recorded?.seats[seat.name] === undefined ? recorded?.retained_seats?.[seat.name] : undefined,
+      (pane) => sources.launch?.foreground(session, pane) ?? null,
+      endpointRelaunch,
     );
     // The granted seat's own pane is not relaunched and not closed. The skip is the whole of
     // that seat's plan, including a repair the owner's `up` would have performed.
@@ -1822,6 +2521,18 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       ...(budget.kind === 'clear' ? {} : { budget }),
     });
   }
+  // Records the file no longer declares: a removal that could not drop its state, or a file
+  // edited by hand. Their workspaces are vacated and nothing this run starts replaces them, so
+  // the plan sweeps them after its own steps — each close re-reads the host first.
+  const declaredNames = new Set(team.seats.map((seat) => seat.name));
+  const vacated = Object.entries(recorded?.seats ?? {})
+    .filter(([vacatedName, held]) => !declaredNames.has(vacatedName) && held.workspace !== undefined)
+    .map(([vacatedName, held]) => ({
+      seat: vacatedName,
+      workspace: held.workspace as string,
+      ...(held.pane === undefined ? {} : { pane: held.pane }),
+      ...(held.cli === undefined ? {} : { cli: held.cli }),
+    }));
   // The policy this run resolved per seat, cached before any writer runs: a later writer must
   // use what the launch actually ran, never re-read a record an earlier writer may have changed.
   const plannedByName = new Map(seats.map((planned) => [planned.name, planned]));
@@ -1867,6 +2578,74 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // and only when the bus does not already answer. A world that cannot probe it plans none.
   const startBus = team.bus?.autostart !== false && sources.busAlive !== undefined;
   const busAlive = startBus ? await sources.busAlive!(root) : false;
+  // One Bus per team. A workspace already carrying the Bus's label is reused rather than
+  // duplicated, and any extra labelled workspace is a stray that closes only after the live Bus
+  // is up. Every choice is made from this plan's reading; the execute re-reads the pane, its
+  // process and its name immediately before it types, and refuses one that is not bare.
+  const busWorkspaceLabel = busLabel(team.project);
+  const busLabelled = startBus && workspaces !== null ? workspaces.filter((item) => item.label === busWorkspaceLabel) : [];
+  let busReuse: { workspace: string; pane: string } | undefined;
+  let busHold: string | undefined;
+  let busStrays: { workspace: string }[] | undefined;
+  if (startBus && workspaces === null && !busAlive) {
+    busHold = "bus: the terminal host's workspaces could not be read; no Bus workspace is started and no second one is made";
+  } else if (startBus) {
+    const readPanes = (workspace: string) => sources.launch?.workspacePanes?.(session, workspace) ?? null;
+    const processIn = (pane: string) => sources.launch?.processInfo?.(session, pane) ?? null;
+    const recordedBus = recorded?.bus;
+    if (busAlive) {
+      // The workspace an answering Bus runs in is found by reading the host's panes, never
+      // assumed from the record: a workspace holding a process beside its own shell is where it
+      // runs and is never a stray. Only a workspace whose every pane reads as its own shell is a
+      // stray, and never the keeper — the recorded one when it holds a process, or when none
+      // shows one; otherwise the first live one.
+      const read = busLabelled.map((item) => {
+        const panes = readPanes(item.id);
+        const live = panes !== null && panes.some((pane) => {
+          const process = processIn(pane);
+          return process !== null && !paneHoldsOnlyShell(process);
+        });
+        const bare = panes !== null && panes.length > 0 && panes.every((pane) => paneHoldsOnlyShell(processIn(pane)));
+        return { workspace: item.id, live, bare };
+      });
+      const keeper = (recordedBus?.workspace === undefined
+        ? undefined
+        : read.find((item) => item.workspace === recordedBus.workspace && item.live))
+        ?? read.find((item) => item.live)
+        ?? (recordedBus?.workspace === undefined ? undefined : read.find((item) => item.workspace === recordedBus.workspace))
+        ?? read[0];
+      busStrays = read
+        .filter((item) => item.workspace !== keeper?.workspace && item.bare)
+        .map((item) => ({ workspace: item.workspace }));
+    } else {
+      const listed = busLabelled.map((item) => ({ workspace: item.id, panes: readPanes(item.id) }));
+      const withPanes = listed.filter((item): item is { workspace: string; panes: string[] } => item.panes !== null && item.panes.length > 0);
+      // The workspace the Bus last recorded comes first: a pane there is the Bus's own, even if
+      // it is busy — the execute then refuses rather than start a second one elsewhere.
+      const picked = recordedBus?.workspace === undefined
+        ? withPanes[0]
+        : (withPanes.find((item) => item.workspace === recordedBus.workspace) ?? withPanes[0]);
+      if (picked === undefined) {
+        // Every labelled workspace whose panes could be read holds none. With an unreadable one
+        // beside them, the Bus could be sitting in it: nothing is started and nothing is made.
+        if (listed.some((item) => item.panes === null)) {
+          busHold = 'bus: its workspace could not be read; not started there and no second one is made';
+        } else {
+          busStrays = busLabelled.map((item) => ({ workspace: item.id }));
+        }
+      } else {
+        const recordedPane = recordedBus?.workspace === picked.workspace && recordedBus.pane !== undefined && picked.panes.includes(recordedBus.pane)
+          ? recordedBus.pane
+          : undefined;
+        const bare = picked.panes.find((pane) => paneHoldsOnlyShell(processIn(pane)));
+        const first = picked.panes[0];
+        if (first !== undefined) {
+          busReuse = { workspace: picked.workspace, pane: recordedPane ?? bare ?? first };
+          busStrays = listed.filter((item) => item.workspace !== picked.workspace).map((item) => ({ workspace: item.workspace }));
+        }
+      }
+    }
+  }
   const watch = recorded?.watch;
   // Which watch owns this route now. A hosted watch the daemon carries — anything but standing
   // by — is doing the job, and this run starts no second one beside it. Otherwise the pane
@@ -1931,7 +2710,18 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     ...(watchUnknown ? { watchUnknown: true } : {}),
     watchLine: (sources.watchCommand ?? watchCommand)(session),
     ...(watchFile ? { watchFile } : {}),
-    ...(startBus ? { startBus, busAlive, busLabel: busLabel(team.project), busLine: (sources.busCommand ?? busCommand)() } : {}),
+    ...(startBus
+      ? {
+          startBus,
+          busAlive,
+          busLabel: busWorkspaceLabel,
+          busLine: (sources.busCommand ?? busCommand)(),
+          ...(busReuse === undefined ? {} : { busReuse }),
+          ...(busHold === undefined ? {} : { busHold }),
+          ...(busStrays === undefined || busStrays.length === 0 ? {} : { busStrays }),
+        }
+      : {}),
+    ...(vacated.length === 0 ? {} : { vacated }),
     teamFile: launchTeamFile(loaded),
     cliHooks,
     ...(noLaunch ? {} : { briefEpochs: currentBriefEpochs(dir, session) }),
@@ -2176,7 +2966,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   if (runLock !== null && 'held' in runLock) {
     refuse(io, json, 'up', {
       id: 'up.run-lock',
-      message: plainText(runLockText(runLock.held, session, dir)),
+      message: plainText(runLockText(runLock.held, session, dir, runLock.startedAt)),
       repair: null,
     });
     // exit: up.run-lock
@@ -2406,17 +3196,19 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       sleepAt.set(key, promise);
       return promise;
     };
-    /** Writes a seat's waiting record, with the process identity read in the same write. The
+    /** Writes a seat's waiting record, with the process identity read before the write. The
      *  pause's own `[s]` and a run with no terminal (the daemon's restore sweep, a `keep` dialog)
-     *  both leave a seat this way: the next `up` reads it as a waiting seat, not an idle pane. */
+     *  both leave a seat this way: the next `up` reads it as a waiting seat, not an idle pane.
+     *  The terminal host is read before the state lock: its 10 s timeout must not hold team.lock
+     *  while another command waits to write. */
     const writeWaiting = (name: string, waiting: WaitingRecord, pane: string, workspace?: string): void => {
+      const identity = launchedIdentity(launch.processInfo?.(session, pane) ?? null);
       updateState(dir, (file) => {
         const current = (file.sessions[session] ??= emptySession());
         const prior = current.seats[name] ?? { stage: 'launched' as const };
         const retained = current.retained_seats?.[name];
         if (current.retained_seats?.[name]) delete current.retained_seats[name];
         const id = prior.id ?? retained?.id ?? mintSeatId();
-        const identity = launchedIdentity(launch.processInfo?.(session, pane) ?? null);
         current.seats[name] = {
           ...prior,
           id,
@@ -2427,6 +3219,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         };
       });
     };
+    // The pane this run's own command stands in, when the caller's placement names one, or the
+    // environment hint when the placement does not: a sweep or close-leftover must never close
+    // the terminal this command runs in.
+    const callerPane = 'pane' in caller && caller.pane !== undefined && caller.pane !== ''
+      ? caller.pane
+      : (io.env.HERDR_PANE_ID !== undefined && io.env.HERDR_PANE_ID !== '' ? io.env.HERDR_PANE_ID : undefined);
     const host = endpointCleanupHost({
       startServer: launch.startServer,
       sessionUp: launch.sessionUp,
@@ -2456,6 +3254,14 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         ? { renameWorkspace: (session: string, workspace: string, label: string) => launch.renameWorkspace!(session, workspace, label) }
         : {}),
       typeLine: () => false,
+      // The bare restored CLI's exit, typed in place by a wrapper seat's relaunch: the same two
+      // raw calls `deliverRules` types with, with no read-back — the exit's own step reads the
+      // pane's process after it, not the screen before it.
+      typeText: (session, pane, text) => launch.typeText?.(session, pane, text) ?? false,
+      pressEnter: (session, pane) => launch.pressEnter?.(session, pane) ?? false,
+      ...(launch.sendKey
+        ? { sendKey: (session: string, pane: string, key: string) => launch.sendKey!(session, pane, key) }
+        : {}),
       deliverRules: async (session, pane, cli, planned, seconds) => {
         // A quiet start (`--no-launch`) adds its stop instruction to the rules file itself, so the
         // typed line keeps its ordinary length and shape — only the hash it names changes.
@@ -2510,6 +3316,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       alive: (pid) => sources.alive?.(pid) ?? pidAlive(pid),
       agentPanes: launch.agentPanes,
       agentList: launch.agents,
+      ...(callerPane === undefined ? {} : { callerPane }),
       // The session's workspaces with their labels now; the pause compares the label of the pane's
       // live workspace with the one this seat's launch gives (`pause.ts`, `waitingProblem`).
       workspaces: () => sources.workspaces?.(session) ?? null,
@@ -2523,7 +3330,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         return Object.fromEntries(Object.entries(seats).filter(([name, seat]) => seatOfFile(name, seat, declared)));
       },
       workspacePanes: launch.workspacePanes ? (session, workspace) => launch.workspacePanes!(session, workspace) : undefined,
-      classify: (name, pane, cli) => readScreen(cli, launch.paneText(name, pane) ?? undefined).kind,
+      classify: (name, pane, cli) => launchKind(readScreen(cli, launch.paneText(name, pane) ?? undefined).kind),
       paneText: (session, pane) => launch.paneText(session, pane),
       foreground: (session, pane) => launch.foreground(session, pane),
       shellBack: (session, pane) => launch.shellBack?.(session, pane) ?? null,
@@ -2566,7 +3373,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
           const model = effective?.model ?? prior.model;
           const version = effective?.version ?? prior.version;
           const effort = isSkipReady ? prior.effort : (declared?.effort ?? prior.effort);
-          const launch_line = effective?.launch ?? prior.launch_line;
+          // The line this run launched with, when it launched one; the record's own line
+          // otherwise, so a profile's pinned features written by an earlier launch are never
+          // erased by a keep; a record that holds none falls back to the effective base.
+          const launch_line = patch.launch_line ?? prior.launch_line ?? effective?.launch;
           const last_active = patch.stage === 'ready'
             ? now().toISOString()
             : (prior.last_active ?? retained?.last_active);
@@ -2754,6 +3564,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       lock: () => acquireSeatLock(dir, session, input.seat),
       state: () => readState(dir).sessions[session]?.seats[input.seat],
       write(change) {
+        // The terminal host is read before the state lock, so a slow read holds no writer; the
+        // `change` itself still runs under the lock, against the record the write replaces.
+        // `[o]`, `[s]`, a resumed `up` and `team answer` all refuse a pane whose process is gone
+        // or replaced.
+        const identity = launchedIdentity(launch.processInfo?.(session, input.pane) ?? null);
         updateState(dir, (file) => {
           const current = (file.sessions[session] ??= emptySession());
           const prior = current.seats[input.seat] ?? { stage: 'launched' as const };
@@ -2761,10 +3576,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
           if (current.retained_seats?.[input.seat]) delete current.retained_seats[input.seat];
           const id = prior.id ?? retained?.id ?? mintSeatId();
           const record = change(prior.waiting);
-          // The process identity is read here, at the moment the record is written, in the same
-          // write: `[o]`, `[s]`, a resumed `up` and `team answer` all refuse a pane whose
-          // process is gone or replaced.
-          const identity = launchedIdentity(launch.processInfo?.(session, input.pane) ?? null);
           current.seats[input.seat] = {
             ...prior,
             id,
@@ -2838,6 +3649,18 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         // The launch does not depend on the bus. A start that cannot be spawned is the daemon's
         // heartbeat to retry.
       }
+    }
+    // Before any launch line runs, the roster holds every seat this plan starts from the
+    // registry's record: the launch's inbox registration and the server it starts both resolve
+    // the seat by that line, and only a completed launch writes one otherwise. A launch that
+    // names a team file needs no line first — its registration reads the seat from that file.
+    // A registry that cannot take the line is a log note, never a refusal: the launch goes on,
+    // and the run's own registerRun writes it afterwards.
+    for (const name of registryLaunches(plan)) {
+      const seat = team.seats.find((candidate) => candidate.name === name);
+      if (seat === undefined) continue;
+      const lined = ensureSeatLine({ home: sources.home, team, root, by: callerLabel(caller), session }, seat);
+      if ('note' in lined) logLine(dir, 'up', callerLabel(caller), lined.note, sources.now?.() ?? new Date());
     }
     const report = await executePlan(plan, session, host, {
       concurrency,

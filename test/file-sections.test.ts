@@ -152,9 +152,9 @@ describe('delivery_order', () => {
 
   test('a written key with no legs, an unknown leg and a repeated one are refused', () => {
     const cases = [
-      { text: `${TEAM}delivery_order: []\n`, message: 'delivery_order needs at least one leg: socket, native, mcp-inbox, typed, drop, headless-resume' },
-      { text: `${TEAM}delivery_order:\n`, message: 'delivery_order needs at least one leg: socket, native, mcp-inbox, typed, drop, headless-resume' },
-      { text: `${TEAM}delivery_order: [telepathy]\n`, message: 'delivery_order "telepathy" must be one of: socket, native, mcp-inbox, typed, drop, headless-resume' },
+      { text: `${TEAM}delivery_order: []\n`, message: 'delivery_order needs at least one leg: socket, native, mcp-inbox, typed, drop, headless-resume, session' },
+      { text: `${TEAM}delivery_order:\n`, message: 'delivery_order needs at least one leg: socket, native, mcp-inbox, typed, drop, headless-resume, session' },
+      { text: `${TEAM}delivery_order: [telepathy]\n`, message: 'delivery_order "telepathy" must be one of: socket, native, mcp-inbox, typed, drop, headless-resume, session' },
       { text: `${TEAM}delivery_order: [typed, typed]\n`, message: 'delivery_order names "typed" twice' },
     ];
     for (const one of cases) {
@@ -222,6 +222,53 @@ describe('inbound', () => {
       if (!checked.ok) {
         expect(checked.errors.map((error) => error.message)).toEqual(['seat "lead": inbound must be one of: accept, hold, refuse']);
       }
+    }
+  });
+});
+
+// `watch_wake` is a seat's own word on the watch's typed wake retry: `on` lets the watch type the
+// same wake a send types, `off` keeps the seat on the drop-file leg alone. Omitted, the seat
+// carries no field and its CLI profile decides — the digests a file had.
+describe('watch_wake', () => {
+  const LEAD_LAUNCH = '    launch: claude --model claude-opus-5-5\n';
+  const CLAUDE_SEAT = `    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`;
+  const MUSE_SEAT = `    cli: muse
+    vendor: meta
+    model: Muse Wonder Full
+    version: "1"
+    launch: muse
+`;
+
+  test('an omitted word reads no field, off reads false, and on reads true where the CLI has a typed wake', () => {
+    const plain = validateTeamFile(TEAM);
+    if (!plain.ok) throw new Error('the fixture does not validate');
+    expect('watchWake' in (plain.team.seats[0] as object)).toBe(false);
+    const off = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    watch_wake: off\n`));
+    if (!off.ok) throw new Error('the watch_wake: off fixture does not validate');
+    expect(off.team.seats[0]?.watchWake).toBe(false);
+    const on = validateTeamFile(TEAM.replace(CLAUDE_SEAT, `${MUSE_SEAT}    watch_wake: on\n`));
+    if (!on.ok) throw new Error('the watch_wake: on fixture does not validate');
+    expect(on.team.seats[0]?.watchWake).toBe(true);
+  });
+
+  test('a word outside the two is refused under the seat', () => {
+    const checked = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    watch_wake: maybe\n`));
+    expect(checked.ok).toBe(false);
+    if (!checked.ok) expect(checked.errors.map((error) => error.message)).toEqual(['seat "lead": watch_wake must be one of: on, off']);
+  });
+
+  test('on needs a CLI profile that declares the typed wake it retries', () => {
+    const checked = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    watch_wake: on\n`));
+    expect(checked.ok).toBe(false);
+    if (!checked.ok) {
+      expect(checked.errors.map((error) => error.message)).toEqual([
+        'seat "lead": watch_wake "on" needs a CLI profile that declares typed_wake, and "claude-code" declares none',
+      ]);
     }
   });
 });

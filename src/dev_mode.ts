@@ -24,6 +24,19 @@
 // guards, the client pane guard, the public-action refusals and every other owner gate are
 // untouched; with dev mode `off` every one of these gates refuses exactly as before.
 //
+// The rules audit's second widening (ruling D5, owner answer A3) adds the operator place, as a
+// caller-set policy — `lead-gates`, in the catalogue below this comment's list, set at entity,
+// project or team and never at a seat. Its default `lead` keeps every gate the lead's; while the
+// effective value reads `lead+operator` on a chain that loads, and dev mode is on, the target
+// file's own `operator:` seat — placed on the pane the target state records for it, in the
+// target session, the same proof the lead shows — may run exactly five of those gates:
+// `check --repair`, `remove --abandon`, `down --abandon`, `policy set` and `policy unset`, and
+// `daemon restart` (never the daemon's install, uninstall or fault-watch). Each admitted run
+// prints the same `dev mode continues` warning and writes the same audit line, with the role it
+// was admitted as. Grants, delegation and the owner-only actions stay with the lead or the
+// owner, and the main-team route above stays the lead's alone: an operator of another team —
+// the main team's included — is no admission anywhere.
+//
 // The machine-scoped `development-mode` record stands above all
 // of this. While a record is present and verified, it governs both halves: `local-fast` lifts
 // the caller gate and the owner-gate admission exactly as the variable does, `pr-per-change`
@@ -261,18 +274,38 @@ export function devModeState(io: Pick<Io, 'env'>, context: DevModeContext = {}):
  *  file's `orchestrator`, whether it was spelled by `coordinator:` or by `leads: true`. The
  *  target team's own file is asked first; a lead the registry places in another team (the main
  *  orchestrator, above the project teams) is admitted too, because the command it runs may
- *  belong to any team. Any other seat, the operator included, is no admission: the file names
- *  exactly one lead, and the registry silently mirrors it, so the team file — not a possibly
- *  stale derived record — is what the gate reads. */
-export type DevModeOwnerRole = 'orchestrator';
+ *  belong to any team. The file's own `operator:` place is the second role, and only under the
+ *  `lead-gates` policy's `lead+operator` value, and only at the gates that pass
+ *  `admitsOperator`: the role is an admission the policy grants, not one the file alone gives.
+ *  Any other seat is no admission: the file names exactly one lead and one operator, and the
+ *  registry silently mirrors them, so the team file — not a possibly stale derived record — is
+ *  what the gate reads. */
+export type DevModeOwnerRole = 'orchestrator' | 'operator';
 
-/** The role `name` holds in this team, or null. */
+/** The role `name` holds in this team, or null. A seat that is both — `operator:` spelled the
+ *  same as the lead — is the lead: the wider role answers first, and no proof is downgraded. */
 export function devModeOwnerRoleOf(name: string, team: TeamFile): DevModeOwnerRole | null {
-  return name === team.orchestrator ? 'orchestrator' : null;
+  if (name === team.orchestrator) return 'orchestrator';
+  if (name === team.operator) return 'operator';
+  return null;
+}
+
+/**
+ * Whether the `lead-gates` policy admits the operator place beside the lead (ruling D5, owner
+ * answer A3): the effective value on the caller's own chain must read `lead+operator`. Fail
+ * closed in every other case — no chain to read, a chain that will not load, an unread value
+ * and the `lead` default all admit no operator. The policy never has a level of its own to
+ * turn dev mode on: dev mode itself is asked separately (`devModeState`), and this reading only
+ * says who dev mode may admit once on.
+ */
+export function leadGatesAdmitOperator(io: Pick<Io, 'env'>, context: DevModeContext & { home: string }): boolean {
+  const chain = chainFor(context);
+  if (!chain.ok) return false;
+  return chain.policies['lead-gates']?.value === 'lead+operator';
 }
 
 /** A proven role: the caller as the team's own session placed it, and the role its file gives it. */
-type DevModeOwnerProof = { role: DevModeOwnerRole; caller: Caller };
+export type DevModeOwnerProof = { role: DevModeOwnerRole; caller: Caller };
 
 /** The target team's own lead, placed in the target team's session. */
 function roleAtTarget(
@@ -295,7 +328,9 @@ function roleAtTarget(
  * team's session, above the project teams whose commands it may run. Every step is a proof the
  * registry alone cannot give: the placement comes from the walk in that session, the role from
  * the team's live file, and the pane from the team's own state. A registry or a file that cannot
- * be read admits nobody, and a name alone never does.
+ * be read admits nobody, and a name alone never does. The operator place has no share in this
+ * route: an operator of another team — the main team's included — is no admission anywhere, so
+ * only the `orchestrator` role returns from here.
  */
 function roleElsewhere(
   io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
@@ -321,7 +356,7 @@ function roleElsewhere(
     if (!loaded.ok) continue;
     if (loaded.team.entity === null || loaded.team.entity !== options.team.entity) continue;
     const role = devModeOwnerRoleOf(placed.name, loaded.team);
-    if (role === null) continue;
+    if (role !== 'orchestrator') continue;
     const at = standingOf(dirname(loaded.path), record.session, placed);
     if (callerVerdict(placed, placed.name, at).kind !== 'ok') continue;
     return { role, caller: placed };
@@ -334,6 +369,21 @@ function roleElsewhere(
 function holds(parent: string, child: string): boolean {
   const rel = relative(resolve(parent), resolve(child));
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+/**
+ * The caller's proven role in the team whose record a command changes: the target team's own
+ * lead, placed in its session, or the same entity's main orchestrator, placed above it. These
+ * are the only two subjects an owner's standing rule and dev mode's lift both admit; a plain
+ * seat, a lead of another team and another entity's orchestrator prove nothing here. Dev mode
+ * is not asked: this proves who the caller is, not whether the lift is on.
+ */
+export function ownerSubjectProof(
+  io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
+  options: { home?: string; team: TeamFile; root: string; dir: string },
+): DevModeOwnerProof | null {
+  const caller = callerOf(io, options.team.session);
+  return roleAtTarget(caller, options) ?? roleElsewhere(io, options);
 }
 
 /** The result of asking whether dev mode admits this caller to an owner-only gate. */
@@ -358,12 +408,16 @@ const NO_LIFT = (caller: Caller): DevModeOwnerLift => ({ lifted: false, warning:
  * the target team's orchestrator on the pane the target state records for it in the target
  * session, or — the main orchestrator's route — a lead of another team the registry holds, on
  * the pane that team's own state records, in that team's session; and dev mode must be `on` for
- * the caller's place. The owner is not this path's to admit — the command's own `isOwner`
- * answers first — and a no-terminal or unplaced caller never is. An admitted run logs the same
- * warning the folded caller gate logs, with the command and the caller, and the command prints
- * it to stderr. A record writer whose admission comes before its own validation asks for
- * `audit: 'later'`: the returned `audit` writes that one line after the record write succeeded,
- * so a refused or dry run never leaves an admission line for a write that did not happen.
+ * the caller's place. The file's own `operator:` seat holds a second, narrower admission
+ * (ruling D5, owner answer A3): only at a command that passes `admitsOperator` — `check
+ * --repair`, `remove --abandon`, `down --abandon`, `policy set`/`unset`, `daemon restart` — and
+ * only while the `lead-gates` policy reads `lead+operator` on the caller's chain. The owner is
+ * not this path's to admit — the command's own `isOwner` answers first — and a no-terminal or
+ * unplaced caller never is. An admitted run logs the same warning the folded caller gate logs,
+ * with the command and the caller, and the command prints it to stderr. A record writer whose
+ * admission comes before its own validation asks for `audit: 'later'`: the returned `audit`
+ * writes that one line after the record write succeeded, so a refused or dry run never leaves
+ * an admission line for a write that did not happen.
  */
 export function devModeOwnerLift(
   io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
@@ -376,6 +430,9 @@ export function devModeOwnerLift(
     root: string;
     dir: string;
     now?: Date;
+    /** Whether the `lead-gates` policy's `lead+operator` value may admit the target file's own
+     *  placed operator to exactly this gate. Absent or false keeps the gate the lead's. */
+    admitsOperator?: boolean;
     /** When the audit line is written: with the admission (the sibling writers' `now`), or by
      *  the caller through the returned `audit` once its own write succeeded (`later`). */
     audit?: 'now' | 'later';
@@ -389,8 +446,22 @@ export function devModeOwnerLift(
     ...(options.now !== undefined ? { now: options.now } : {}),
   });
   if (!state.on) return NO_LIFT(caller);
-  const proof = roleAtTarget(caller, options) ?? roleElsewhere(io, options);
+  const proof = ownerSubjectProof(io, options);
   if (proof === null) return NO_LIFT(caller);
+  // The operator's admission is the policy's to give, gate by gate: a site that did not ask,
+  // a chain that cannot be read, and the `lead` default all fail closed, and no other route
+  // returns this role.
+  if (proof.role === 'operator') {
+    const admitted = options.admitsOperator === true
+      && options.home !== undefined
+      && leadGatesAdmitOperator(io, {
+        home: options.home,
+        team: options.team,
+        root: options.root,
+        ...(options.now !== undefined ? { now: options.now } : {}),
+      });
+    if (!admitted) return NO_LIFT(caller);
+  }
   const warning = `warning: ${options.refusal}; dev mode continues${devModeLevelNote(state)}`;
   let written = false;
   const audit = (): void => {
@@ -410,7 +481,7 @@ export function devModeOwnerLift(
  */
 export function devModeOwnerLiftAtCwd(
   io: Io,
-  options: { command: string; refusal: string; home?: string; now?: Date; audit?: 'now' | 'later' },
+  options: { command: string; refusal: string; home?: string; now?: Date; admitsOperator?: boolean; audit?: 'now' | 'later' },
 ): DevModeOwnerLift | null {
   const walked = walkCaller(io);
   if (walked.kind !== 'seat' && !(walked.kind === 'unplaced' && walked.reason === 'it runs under herdr')) return null;
@@ -447,6 +518,7 @@ export function devModeOwnerLiftAtCwd(
     root: loaded.root,
     dir: dirname(loaded.path),
     ...(options.now !== undefined ? { now: options.now } : {}),
+    ...(options.admitsOperator !== undefined ? { admitsOperator: options.admitsOperator } : {}),
     ...(options.audit !== undefined ? { audit: options.audit } : {}),
   });
 }

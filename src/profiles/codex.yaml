@@ -14,12 +14,33 @@ unattended:
   - -s
   - danger-full-access
   - --no-alt-screen
+# The feature settings every Codex seat's launch pins, appended last as `-c features.<pair>`.
+# `codex --help` documents `-c, --config <key=value>` as "Override a configuration value ... dotted
+# path ... parsed as TOML", and a scratch CODEX_HOME run of `codex features list` printed the row
+# `mcp_oauth_refresh_coordination  under development  false` among its 160 rows. The same command
+# with a trailing `-c features.mcp_oauth_refresh_coordination=true` printed that row as `true` and
+# exited 0, so a config word after the subcommand is read. `codex resume --help -c
+# features.mcp_oauth_refresh_coordination=false` exited 0 and printed
+# `Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]`, so the pin rides a resumed seat's
+# `resume <id>` line too. A duplicated `-c` for one key took the last value in both orders, so a
+# pin appended after the line's own words is the effective set: every seat then presents the same
+# settings to the one background server they share, and no seat meets its
+# "background server has incompatible feature settings" dialog.
+features:
+  - mcp_oauth_refresh_coordination=false
 rules:
   launch_prompt: positional
 # The delivery class a run measured: a seat whose app-server endpoint the runtime hosts takes a
 # pointer through its own queue between turns (src/send/push-adapters/codex-relay.ts); a seat
 # without that endpoint reads its MCP inbox when it takes a turn.
 delivery: between-turns
+# The typed wake, read on the shipped 0.157.0 frames: a send may type one trigger line into a
+# composer two reads showed as the empty idle prompt (the grey suggestion reads as empty),
+# presses Enter only while the box still holds exactly that line, and calls itself delivered
+# only when the working screen shows. A running turn, a box that holds text, and a permission
+# dialog refuse before a key. Nothing else is typed, and a wake that cannot deliver leaves the
+# message in the bus inbox. See src/send/typed-wake.ts.
+typed_wake: screen
 login:
   check:
     - login
@@ -232,6 +253,23 @@ screen:
       at_composer: true
   working:
     - any: ['esc to interrupt']
+  # A pane scrolled back over its transcript draws its own rows in the composer's place: either
+  # the footer `New activity · ↓ Back to bottom · esc` on its last non-blank row, with the
+  # composer out of sight, or — the second reported layout — the marker `↓ Back to bottom · esc`
+  # directly above the composer, with the status footer `Earlier messages available.  enter/esc
+  # latest · ? shortcuts … ⚠ 1 warning · f2 to view` on the last non-blank row. The marker layout
+  # keeps the composer drawn, but the status footer under the status line is not this profile's
+  # chrome, so the composer alone reads unknown there; the bottom region is the reading, and its
+  # own `esc` is the return to the prompt. Each row is read as the whole row it draws, from that
+  # region only — never a transcript line that quotes it higher up. Read only where the composer
+  # cannot be read, after every caution stage, so a working turn or a draft that still draws them
+  # keeps its own reading; an unobserved footer variant stays unread — `unknown`, never typed
+  # into.
+  scroll_back:
+    footer: '^\s*New activity · ↓ Back to bottom · esc\s*$'
+    marker: '^\s*↓ Back to bottom · esc\s*$'
+    status_footer: '^\s*Earlier messages available\.\s+enter/esc latest · \? shortcuts(?:\s+⚠ \d+ warnings? · f2 to view)?\s*$'
+    return_key: escape
   # The question each answerable dialog carries, as the 0.161.0 captures draw it: the question
   # dialog's own text row under its `Question N/N (N unanswered)` header, and the plan approval's
   # one-line headline. Each reading is the dialog's words, not the transcript above it.
@@ -281,6 +319,23 @@ screen:
     chrome:
       - '^\s*(?:← for agents · )?\? for shortcuts\s*$'
       - '^\s*(?:← for agents · )?\? for shortcuts\s*…\s*⚠ \d+ warnings?\s*·\s*f2 to view\s*$'
+      # With a line in the box the shortcuts row is hidden, and codex draws the account's
+      # warning alone on the pane's last row, right-aligned under the status row
+      # (0.161.0/warning-row.txt, reported from a live seat with a message line in the box;
+      # the same bottom region over the empty prompt reads idle). The row is the pane's own and
+      # the one chrome row the mode allows under the status row: a draft above it still reads
+      # unsent on its own input row, so the wake's guarded Enter goes into its line, and a
+      # transcript row quoting the warning is never this row. It is drawn, not a dialog — no
+      # key is pressed into it; f2 opens the warning view and would take the pane off its prompt.
+      - '^\s*⚠ \d+ warnings?\s*·\s*f2 to view\s*$'
+      # After the scroll-back return key codex draws `esc again to edit previous message` where
+      # the shortcuts row stands, and the hint stays until the next keypress. The box over the
+      # status row is the empty prompt, so the screen is idle: a wake may type its line there
+      # (that keypress is what clears the hint), and it must never answer the hint with a second
+      # esc, which would open edit-previous-message. The row is read only as the one trailing
+      # row under the status row, exactly as drawn — a transcript line quoting it is never that
+      # row, and a box holding text still reads unsent on its own input row.
+      - '^\s*esc again to edit previous message\s*$'
     # The input row carries the prompt at the pane's first column — unsent.txt draws `› Rules.`
     # there, content on the rows below at the second, and exit-typed.txt keeps the old
     # transcript and menu rows above it — and a prompt glyph on a content row is never the
@@ -301,6 +356,11 @@ screen:
     placeholders:
       - equals: ''
       - equals: Ask Codex to do anything
+    # An interrupted turn returns to this same placeholder. The banner
+    # `■ Conversation interrupted - use /feedback if something went wrong`
+    # sits above a blank row, and the warning stays on the status row
+    # (0.161.0/interrupted-idle.txt). That banner is transcript above the
+    # frame, so the box is still the empty prompt.
     # unsent.txt and exit-typed.txt show one empty row under the text, between it and the
     # status line: the drop the pane draws of its own, inside the box's frame. The box read
     # strips up to one trailing empty row as that frame; a row beyond it is one the typed

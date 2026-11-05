@@ -6,7 +6,9 @@
 // decoded words are its words before, exactly, followed by exactly the inserted words in order.
 // A line whose shape this version cannot prove — unclosed quoting, a script file, a bare command
 // word, a nested shell deeper than one, an ANSI-C (`$'…'`) word — keeps exactly its 0.5.10
-// placement, the options after the line, with one plain warning, and is never refused. These
+// placement, the options after the line, with one plain warning, and is never refused. The one
+// refusal is a plain line that hands its CLI a word the shell computes — a substitution, a
+// backtick or a parameter expansion — because that word may be the CLI's `--` at run time. These
 // scenes run the built line against a stub CLI and read the argv the CLI was handed, so the words
 // are measured, not matched in the line's text.
 import { execFileSync } from 'node:child_process';
@@ -17,6 +19,7 @@ import { describe, expect, test } from 'bun:test';
 import { readBackOf } from '../src/commands/restart.ts';
 import type { Seat } from '../src/file/types.ts';
 import { shellWords } from '../src/launch/shell-words.ts';
+import { rulesLine } from '../src/launch/rules-file.ts';
 import { setsSettings } from '../src/launch/cli-hook.ts';
 import { launchModelOf } from '../src/launch/model-guard.ts';
 import { profileFor } from '../src/profiles/index.ts';
@@ -24,6 +27,7 @@ import {
   cliWordList,
   cliWordsOf,
   launchCommand,
+  launchCommandOrRefusal,
   launchSessionId,
   namedResumeTarget,
   resumeCarry,
@@ -65,21 +69,29 @@ type CliRun = {
   env?: Record<string, string>;
 };
 
+/** Runs a built launch line with a stub CLI on the PATH and returns the argv that CLI saw.
+ *  A scene that makes many calls passes its own directory to `cliArgvIn` and keeps it: measured
+ *  on this host, the first spawn in each fresh fixture directory costs ~160-200 ms, so a scene
+ *  that runs twenty lines in twenty fresh directories pays that twenty times. */
+function cliArgvIn(dir: string, command: string, run: CliRun = {}): string[] {
+  const binary = run.binary ?? 'claude';
+  if (run.wrapper !== undefined) writeFileSync(join(dir, 'wrapper.sh'), run.wrapper);
+  const bin = join(dir, 'bin');
+  mkdirSync(bin, { recursive: true });
+  const out = join(dir, 'argv');
+  writeFileSync(join(bin, binary), `#!/bin/sh\nprintf '%s\\0' "$@" > "$ARGV_OUT"\n`, { mode: 0o755 });
+  execFileSync(run.runner ?? '/bin/sh', ['-c', command], {
+    cwd: dir,
+    env: { PATH: `${bin}:/usr/bin:/bin`, HOME: dir, ARGV_OUT: out, ...run.env },
+  });
+  return readFileSync(out, 'utf8').split('\0').filter((word) => word !== '');
+}
+
 /** Runs a built launch line with a stub CLI on the PATH and returns the argv that CLI saw. */
 function cliArgv(command: string, run: CliRun = {}): string[] {
-  const binary = run.binary ?? 'claude';
   const dir = mkdtempSync(join(tmpdir(), 'quoted-launch-'));
   try {
-    if (run.wrapper !== undefined) writeFileSync(join(dir, 'wrapper.sh'), run.wrapper);
-    const bin = join(dir, 'bin');
-    mkdirSync(bin);
-    const out = join(dir, 'argv');
-    writeFileSync(join(bin, binary), `#!/bin/sh\nprintf '%s\\0' "$@" > "$ARGV_OUT"\n`, { mode: 0o755 });
-    execFileSync(run.runner ?? '/bin/sh', ['-c', command], {
-      cwd: dir,
-      env: { PATH: `${bin}:/usr/bin:/bin`, HOME: dir, ARGV_OUT: out, ...run.env },
-    });
-    return readFileSync(out, 'utf8').split('\0').filter((word) => word !== '');
+    return cliArgvIn(dir, command, run);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -161,7 +173,9 @@ describe('a wrapped CLI line that sets its own safety flags is never widened', (
     const argv = cliArgv(command, { binary: 'codex' });
     expect(argv).not.toContain('danger-full-access');
     expect(argv).not.toContain('never');
-    expect(argv).toEqual(['--sandbox', 'read-only', '--ask-for-approval', 'on-request', '--no-alt-screen']);
+    // The profile pins its feature set on every Codex launch: the line's own safety words and
+    // the pin are the words the CLI reads, inside the script where the launch puts them.
+    expect(argv).toEqual(['--sandbox', 'read-only', '--ask-for-approval', 'on-request', '--no-alt-screen', '-c', 'features.mcp_oauth_refresh_coordination=false']);
   });
 
   test('the short attached forms inside the script suppress the defaults just the same', () => {
@@ -169,8 +183,49 @@ describe('a wrapped CLI line that sets its own safety flags is never widened', (
     const argv = cliArgv(command, { binary: 'codex' });
     expect(argv).not.toContain('danger-full-access');
     expect(argv).not.toContain('never');
-    expect(argv).toEqual(['-s', 'read-only', '-aon-request', '--no-alt-screen']);
+    expect(argv).toEqual(['-s', 'read-only', '-aon-request', '--no-alt-screen', '-c', 'features.mcp_oauth_refresh_coordination=false']);
   });
+});
+
+// The CLI's own `--` sits inside the script, where the outer shell's word scan never sees it.
+// Every word the launch adds is for the CLI: the options belong before that delimiter and the
+// rules line — positional — after it, so no launch flag, pin or inbox word becomes prompt text.
+describe("a delimiter inside a quoted script is the CLI's, not the outer shell's", () => {
+  const RULES_LINE = rulesLine('/synthetic/rules/lead.md', '5e1d0a9c4b2f');
+  const QUOTE_FORMS = [
+    { kind: 'single', quote: "'" },
+    { kind: 'double', quote: '"' },
+  ] as const;
+
+  test('a rules line reaches a quoted script as the CLI’s last word', () => {
+    const command = launchCommand(codex, '/bin/sh -c "codex --sandbox read-only"', 'Rules.', undefined, undefined, undefined, undefined, RULES_LINE);
+    const argv = cliArgv(command, { binary: 'codex' });
+    // Not a word after the closing quote for the shell: the CLI itself received it, last.
+    expect(argv.at(-1)).toBe(RULES_LINE);
+    expect(argv).toContain('--sandbox');
+    expect(argv.indexOf(RULES_LINE)).toBe(argv.length - 1);
+  });
+
+  for (const { kind, quote } of QUOTE_FORMS) {
+    test(`a ${kind}-quoted script keeps its own --, with the options before it and the rules after`, () => {
+      const line = `/bin/sh -c ${quote}codex -- prompt${quote}`;
+      const command = launchCommand(codex, line, 'Rules.', undefined, undefined, undefined, undefined, RULES_LINE);
+      const argv = cliArgv(command, { binary: 'codex' });
+      const at = argv.indexOf('--');
+      expect(at).toBeGreaterThan(0);
+      // The line's own prompt keeps its place, and the rules line follows it as the last word.
+      expect(argv.slice(at)).toEqual(['--', 'prompt', RULES_LINE]);
+      const options = argv.slice(0, at);
+      expect(options).toContain('--no-alt-screen');
+      expect(options).toContain('-c');
+      expect(options).toContain('features.mcp_oauth_refresh_coordination=false');
+      expect(options).toContain('-a');
+      expect(options).toContain('never');
+      expect(options).toContain('-s');
+      expect(options).toContain('danger-full-access');
+      expect(options).not.toContain('prompt');
+    });
+  }
 });
 
 describe('a line whose shape this version cannot prove keeps 0.5.10 placement, with one warning', () => {
@@ -586,10 +641,11 @@ describe('one proof decides both: a reader is unknown exactly where the placemen
   });
 
   // The plain-line rows: no script word stands between the reader and the shell that runs the
-  // line, so the only question left is whether the line swallows a word written after it. A
-  // comment, an operator, a redirect, a newline, an unclosed quote and a trailing backslash do;
-  // an expansion or a glob changes its own word only, so the words written after it still reach
-  // the CLI and the line stays provable — refusing those would lose ids 0.5.10 recorded.
+  // line, so two questions remain. Whether the line swallows a word written after it: a comment,
+  // an operator, a redirect, a newline, an unclosed quote and a trailing backslash do. And
+  // whether a word's value is the shell's: a substitution, a backtick or a parameter expansion
+  // may be the CLI's `--` when the line runs, so the launch refuses the line and the reader names
+  // no word. A glob changes its own word only, so the line stays provable.
   const PLAIN_SWALLOWED = [
     { name: 'a plain comment', line: 'claude --model m # note' },
     { name: 'a plain semicolon', line: 'claude --model m; :' },
@@ -604,13 +660,19 @@ describe('one proof decides both: a reader is unknown exactly where the placemen
     { name: 'a plain trailing backslash', line: 'claude --model m \\' },
   ];
   const PLAIN_PROVED = [
+    { name: 'a plain star glob', line: 'claude --model m*' },
+    { name: 'a plain quoted word', line: 'claude --model "m"' },
+    { name: 'a plain single-quoted word', line: "claude --model 'm'" },
+    { name: 'a plain escaped dollar', line: 'claude --model \\$X' },
+  ];
+  // The words the shell computes: the line's own words may be the CLI's `--` at run time, so a
+  // launch refuses the line, a non-launching read keeps 0.5.10's placement with its notice, and
+  // no reader names a word.
+  const PLAIN_COMPUTED = [
     { name: 'a plain variable', line: 'claude --model $X' },
     { name: 'a plain braced variable', line: 'claude --model ${X}' },
     { name: 'a plain command substitution', line: 'claude --model $(printf x)' },
     { name: 'a plain backtick substitution', line: 'claude --model `printf x`' },
-    { name: 'a plain star glob', line: 'claude --model m*' },
-    { name: 'a plain quoted word', line: 'claude --model "m"' },
-    { name: 'a plain single-quoted word', line: "claude --model 'm'" },
   ];
 
   test('every plain shape that swallows its tail is refused by the placement and names no word', () => {
@@ -634,6 +696,25 @@ describe('one proof decides both: a reader is unknown exactly where the placemen
       expect(`${name}: placement refuses — ${placementRefused}`).toBe(`${name}: placement refuses — false`);
       expect(`${name}: reader unknown — ${readerUnknown}`).toBe(`${name}: reader unknown — false`);
       expect(`${name}: ${readerUnknown}`).toBe(`${name}: ${placementRefused}`);
+    }
+  });
+
+  test('a plain word the shell computes is refused by a launch and names no word', () => {
+    for (const { name, line } of PLAIN_COMPUTED) {
+      // A launch refuses the line: the computed word may be the CLI's delimiter, so no option
+      // written after it would be an option.
+      const built = launchCommandOrRefusal(claude, line, 'Rules.');
+      expect(`${name}: launch refused — ${built.command === '' && (built.refusal ?? '').includes('delimiter')}`)
+        .toBe(`${name}: launch refused — true`);
+      // A non-launching read keeps 0.5.10's placement and says so; it names no word either.
+      const warnings: string[] = [];
+      const command = launchCommand(claude, line, 'Rules.', undefined, undefined, undefined, undefined, undefined, (text) => warnings.push(text));
+      expect(`${name}: fallback warned — ${warnings.length === 1 && command === baseline(line)}`)
+        .toBe(`${name}: fallback warned — true`);
+      expect(`${name}: reader unknown — ${cliWordList('claude-code', line) === null}`)
+        .toBe(`${name}: reader unknown — true`);
+      expect(`${name}: session words unknown — ${cliWordsOf('claude-code', line) === ''}`)
+        .toBe(`${name}: session words unknown — true`);
     }
   });
 
@@ -683,15 +764,16 @@ describe('a plain line that swallows its tail takes no session id, and one that 
     expect(cliArgv(`${line} --session-id declared-1`)).toEqual(['--model', 'm']);
   });
 
-  test('a variable on a plain line does not swallow the id, and the CLI receives it', () => {
-    const launch = withLaunchSession('claude-code', 'claude --model $X');
-    expect(launch.sessionId).toBeDefined();
-    expect(cliArgv(launch.command, { env: { X: 'm' } })).toEqual([
-      '--model',
-      'm',
-      '--session-id',
-      launch.sessionId!,
-    ]);
+  test('a variable on a plain line cannot place an id the CLI is sure to read, so none is recorded', () => {
+    const line = 'claude --model $X';
+    const launch = withLaunchSession('claude-code', line);
+    expect(launch.command).toBe(line);
+    expect(launch.sessionId).toBeUndefined();
+    expect(launch.notice).toContain('cannot take a session id');
+    // And the launch itself refuses the line: the computed word may be the CLI's delimiter.
+    const built = launchCommandOrRefusal(claude, line, 'Rules.');
+    expect(built.command).toBe('');
+    expect(built.refusal).toContain('delimiter');
   });
 
   test('a glob on a plain line does not swallow the id either', () => {
@@ -1006,13 +1088,13 @@ describe('the words a launch line hides from a plain text scan are read as the C
   test("an escaped newline inside the script does not hide the line's own sandbox and approval", () => {
     const line = '/bin/sh -c "codex --sand\\\nbox read-only --ask-for-approval on-request"';
     const argv = cliArgv(launchCommand(codex, line, RULES), { binary: 'codex' });
-    expect(argv).toEqual(['--sandbox', 'read-only', '--ask-for-approval', 'on-request', '--no-alt-screen']);
+    expect(argv).toEqual(['--sandbox', 'read-only', '--ask-for-approval', 'on-request', '--no-alt-screen', '-c', 'features.mcp_oauth_refresh_coordination=false']);
   });
 
   test('a quoted flag name is still the flag the CLI reads', () => {
     const line = `/bin/sh -c 'codex "--sandbox" read-only "--ask-for-approval" on-request'`;
     const argv = cliArgv(launchCommand(codex, line, RULES), { binary: 'codex' });
-    expect(argv).toEqual(['--sandbox', 'read-only', '--ask-for-approval', 'on-request', '--no-alt-screen']);
+    expect(argv).toEqual(['--sandbox', 'read-only', '--ask-for-approval', 'on-request', '--no-alt-screen', '-c', 'features.mcp_oauth_refresh_coordination=false']);
   });
 });
 
@@ -1044,18 +1126,25 @@ describe("a script-file wrapper, an $'…' script and a nested shell all reach t
       String.raw`/bin/bash -c $'claude --model m\$'`,
     ];
     if (!BASH) return;
-    for (const line of LINES) {
-      const warnings: string[] = [];
-      const command = launchCommand(claude, line, RULES, undefined, undefined, undefined, undefined, undefined, (text) => warnings.push(text));
-      const before = cliArgv(line, { runner: '/bin/bash' });
-      expect(command).toBe(`AGENT_UNATTENDED=1 ${line} --dangerously-skip-permissions --append-system-prompt '${RULES}'`);
-      expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain('after the line, where the CLI may not read them');
-      // The fallback changes no word the CLI receives: the options are the script's positional
-      // words, never the CLI's.
-      expect(cliArgv(command, { runner: '/bin/bash' })).toEqual(before);
+    // One fixture directory for every line, removed once: alone, this scene measured
+    // 3.80-4.16 s in twenty fresh directories and 1.04 s in one.
+    const dir = mkdtempSync(join(tmpdir(), 'quoted-launch-'));
+    try {
+      for (const line of LINES) {
+        const warnings: string[] = [];
+        const command = launchCommand(claude, line, RULES, undefined, undefined, undefined, undefined, undefined, (text) => warnings.push(text));
+        const before = cliArgvIn(dir, line, { runner: '/bin/bash' });
+        expect(command).toBe(`AGENT_UNATTENDED=1 ${line} --dangerously-skip-permissions --append-system-prompt '${RULES}'`);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('after the line, where the CLI may not read them');
+        // The fallback changes no word the CLI receives: the options are the script's positional
+        // words, never the CLI's.
+        expect(cliArgvIn(dir, command, { runner: '/bin/bash' })).toEqual(before);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 20_000);
 
   test('a nested shell one level deep takes the rules, the id and a resume in its CLI script', () => {
     const line = `/bin/sh -c "sh -c 'exec claude --model m'"`;

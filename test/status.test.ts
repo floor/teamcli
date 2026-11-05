@@ -207,6 +207,31 @@ describe('team status', () => {
     });
   });
 
+  test('the note a stalled not-woken drop adds leads with the send\'s own outcome words', async () => {
+    // The same world as the scene above, with the one fact that changes its reading: the drop
+    // has waited eleven minutes, past this seat's own unread window. The file does not move
+    // the watch's word, so a pull-on-turn seat takes the class default, 60s. The compact
+    // table's note then names the stall with the same three words the send printed and the
+    // history line carries — `queued, not woken` — and the class's own sentence.
+    const inbox = join(dir, '.agents', 'send-drops', 'acme-web', 'codex-acme');
+    mkdirSync(inbox, { recursive: true });
+    const home = join(dir, 'home');
+    mkdirSync(home, { recursive: true });
+    expect(writeListener(inbox, {
+      v: 1, seat: 'codex-acme', session: 'acme-web', root: dir, cli: 'codex',
+      pid: process.pid, ts: NOW.toISOString(),
+    })).toBe(true);
+    const drop = '019a0000-4444-7555-8666-777788889aaa';
+    writeFileSync(join(inbox, drop), 'hello\n');
+    writeFileSync(
+      join(inbox, `${drop}.pending`),
+      `${JSON.stringify({ id: drop, from: 'lead', ts: new Date(NOW.getTime() - 11 * 60_000).toISOString() })}\n`,
+    );
+    const io = testIo(dir, { kind: 'owner' });
+    expect(await runStatus(['--file', file], io, { ...sources, home })).toBe(1);
+    expect(io.out).toContain('note: codex-acme: queued, not woken — its oldest unread drop has waited 11m, past the 60s unread window; the watch\'s typed retry has not delivered for it; codex-acme reads it at its next turn, and nothing here gives it one (pull-only)');
+  });
+
   test('a seat whose model can\'t be read is a note, not a difference', async () => {
     const { code, out } = await status();
     expect(out).toContain('note: codex-acme: its screen shows no model; the declared GPT-6 Sol stands, and the screen reading is unread');
@@ -1625,8 +1650,10 @@ describe('a pane that no longer holds the process team launched', () => {
     const { code, out } = await status();
     expect(code).toBe(1);
     expect(out).toMatch(/codex-acme\s+restored, not launched by team\s+-\s+w2:p1/);
+    // The proof names why it cannot adopt the pane: another agent owns it, and the repair is to
+    // look — never a rename into the seat and never `team up`.
     expect(out).toContain(
-      'difference: codex-acme: its pane holds a process this record cannot tie to the launch\n' +
+      'difference: codex-acme: its pane is named stranger; team never adopts a pane another seat owns\n' +
         '  repair: look at the pane\n',
     );
     expect(out).not.toContain('repair: team up\n');

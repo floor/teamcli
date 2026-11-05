@@ -44,6 +44,22 @@ export const CLOSE_KIND = 'thread-close';
 export const CLIENT_REPLY_RULE = 'a reply on a client thread, to the client that opened it';
 
 /**
+ * The kinds a message can carry (`team send --kind`), each in the sender's own words. A `task` or
+ * a `question` expects an answer, so a record of either kind with no verifying `replied` receipt
+ * is a wait (`team waits`). The rest name what they are and wait on nothing.
+ */
+export const MESSAGE_KINDS = ['task', 'question', 'answer', 'result', 'ready', 'blocked'] as const;
+export type MessageKind = (typeof MESSAGE_KINDS)[number];
+
+/** The kinds that wait on an answer: `team waits` lists a record of one of these, with no
+ *  verifying reply beside it, until the addressee answers. */
+export const WAITING_KINDS: readonly MessageKind[] = ['task', 'question'];
+
+export function isMessageKind(value: string): value is MessageKind {
+  return (MESSAGE_KINDS as readonly string[]).includes(value);
+}
+
+/**
  * One message record's signed payload. The two registry ids are `null` only where the registry
  * holds none — the owner, or a seat the store has no record for yet; the rule that admitted the
  * pair is always named.
@@ -72,6 +88,13 @@ export type RecordPayload = {
   /** The sender's own subject (`--subject`), when the send wrote one: a display field only, and
    *  never the summary — that is the body's first content line. */
   subject?: string;
+  /** What the message is for (`--kind`), when the send named one: a task or a question expects
+   *  an answer, and its record is what `team waits` lists until the addressee replies. Absent on
+   *  a record written before the field, which reads as no kind at all. */
+  message_kind?: MessageKind;
+  /** The work item the message is about (`--work`), in the sender's own words: an issue key, a
+   *  branch, a task id. Display only; shown beside a wait. */
+  work?: string;
   /** The id of the record this one answers, on a reply only. */
   in_reply_to?: string;
   /** A general seat brief's delivery: the delivered body's sha256 and the lifetime it belongs
@@ -132,10 +155,11 @@ export type ReceiptPayload = {
   /** Diagnostics the read copied from the seat's record, when it had them. */
   brief_seat_handle?: string;
   brief_pane_root_pid?: number;
-  /** What took the record when it was read without a reader: the socket delivery writes the read
-   *  receipt itself, and this names it. A receipt written by a reader carries none. Signed with
-   *  the rest of the payload, so a receipt that names another taker than the one written does
-   *  not verify. */
+  /** The reader that took the read, when the receipt was written through a client other than a
+   *  bare `team drops --read`: the channel tool names `channel`. A receipt an earlier build
+   *  wrote may name `socket delivery`; it still verifies and still counts. Signed with the rest
+   *  of the payload, so a receipt that names another reader than the one written does not
+   *  verify. */
   read_by?: string;
   /** Signed writer provenance: the build, process and runtime epoch that signed this receipt.
    *  Absent on a receipt a previous build wrote, which still verifies and counts. */
@@ -187,7 +211,8 @@ export type Sealed = { payload: RawPayload; signature: string };
  *  the field narrows or widens what the record means, so it never acts on the record. */
 const RECORD_FIELDS: readonly string[] = [
   'kind', 'id', 'to', 'to_id', 'root', 'session', 'at', 'body', 'from', 'from_id', 'rule',
-  'thread', 'subject', 'in_reply_to', 'brief_sha256', 'incarnation', 'from_client', 'to_client',
+  'thread', 'subject', 'message_kind', 'work', 'in_reply_to', 'brief_sha256', 'incarnation',
+  'from_client', 'to_client',
 ];
 
 /** The signed fields this version reads on a receipt. The last is the writer's signed
@@ -310,7 +335,9 @@ export type RecordProjection = { payload: RecordPayload; unknown: string[] };
  * is not the shape this version writes. `thread` and the admitting rule are required: every
  * record carries them. Unknown signed fields do not fail the projection: they are returned as
  * `unknown`, and the caller decides — after the signature over the raw payload has been checked
- * — that it cannot act on a record carrying them.
+ * — that it cannot act on a record carrying them. A known field with a value this version does
+ * not know is the one exception: a message kind from a newer writer is dropped, so the record
+ * reads as a plain message instead of freezing every older reader out of it.
  */
 export function projectRecord(value: unknown): RecordProjection | null {
   if (!isRecordValue(value)) return null;
@@ -326,6 +353,8 @@ export function projectRecord(value: unknown): RecordProjection | null {
   if (value.from_id === undefined || value.to_id === undefined) return null;
   if (value.in_reply_to !== undefined && !nonEmpty(value.in_reply_to)) return null;
   if (value.subject !== undefined && !nonEmpty(value.subject)) return null;
+  if (value.message_kind !== undefined && typeof value.message_kind !== 'string') return null;
+  if (value.work !== undefined && !nonEmpty(value.work)) return null;
   // A brief's record carries both binding fields or neither: a record with only one is not one
   // this version wrote, and an ordinary message carries neither.
   const brief = value.brief_sha256 !== undefined || value.incarnation !== undefined;
@@ -349,6 +378,11 @@ export function projectRecord(value: unknown): RecordProjection | null {
   };
   if (value.in_reply_to !== undefined) payload.in_reply_to = value.in_reply_to as string;
   if (value.subject !== undefined) payload.subject = value.subject as string;
+  // A known field carrying a value this version does not know is read as the plain message it
+  // is: the kind is dropped, never interpreted, so a newer writer's kind cannot make an older
+  // reader refuse the record. An unknown field NAME stays unsupported, as RECORD_FIELDS says.
+  if (value.message_kind !== undefined && isMessageKind(value.message_kind)) payload.message_kind = value.message_kind;
+  if (value.work !== undefined) payload.work = value.work as string;
   // A record is one side of a client exchange, never both: the writer and the addressee are
   // different principals, and a payload claiming both is not one this version writes. The two
   // maps have exactly the same strict shape.
@@ -452,9 +486,10 @@ export function projectReceipt(value: unknown): ReceiptProjection | null {
     && (typeof value.brief_pane_root_pid !== 'number' || !Number.isInteger(value.brief_pane_root_pid) || value.brief_pane_root_pid <= 0)) {
     return null;
   }
-  // The taker an unread record was read by, when no reader did: the socket delivery's own read.
-  // The field is signed with the payload, so it is carried into the reconstructed payload — a
-  // receipt whose `read_by` was dropped or rewritten stops verifying.
+  // The reader that took the read, when a client named itself (the channel tool's `channel`; an
+  // earlier build's socket delivery). The field is signed with the payload, so it is carried into
+  // the reconstructed payload — a receipt whose `read_by` was dropped or rewritten stops
+  // verifying.
   if (value.read_by !== undefined && !nonEmpty(value.read_by)) return null;
   const payload: ReceiptPayload = {
     kind: 'receipt',
@@ -776,7 +811,7 @@ export function recordHolds(path: string, expected: RecordPayload, home: string,
   const auth = recordAuthOfSealed(read.sealed, key.key);
   if (auth.kind !== 'ok') return false;
   const held = auth.value.payload;
-  const fields = ['kind', 'id', 'to', 'to_id', 'session', 'body', 'from', 'from_id', 'rule', 'thread', 'in_reply_to', 'brief_sha256', 'incarnation'] as const;
+  const fields = ['kind', 'id', 'to', 'to_id', 'session', 'body', 'from', 'from_id', 'rule', 'thread', 'message_kind', 'work', 'in_reply_to', 'brief_sha256', 'incarnation'] as const;
   for (const field of fields) {
     if (field === 'body' && options?.body === false) continue;
     if (field === 'to_id' && options?.to_id === false) continue;
@@ -825,6 +860,19 @@ export function readRecord(path: string, expectedId?: string): RecordRead {
 }
 
 export type StatusContext = { to: string; root: string; session: string };
+
+/** One record's verified payload by path and id, or null when the file is missing, is not a
+ *  record this version writes, or does not verify with the reading key. A caller that reads the
+ *  same folders more than once in one pass hands its own reader in, so a record is read once. */
+export type RecordReader = (path: string, id: string) => RecordPayload | null;
+
+/** The payload of a record this key signed, from one read: the file checks, the envelope, the
+ *  projection and the signature all happen here, and nothing is returned unless every one holds. */
+export function verifiedRecordAt(path: string, id: string, key: KeyObject): RecordPayload | null {
+  const looked = readRecord(path, id);
+  if (!looked.ok || looked.record === null || !verifyRecord(looked.record, key)) return null;
+  return looked.record.payload;
+}
 
 /** Whether two folder paths name one folder once links are resolved; a path that cannot be
  *  resolved is compared as written. A receipt and the message it belongs to are written by
@@ -926,11 +974,13 @@ export function statusOf(dropDir: string, id: string, context: StatusContext, ke
  * Whether a message has been read: a signed `read` or `replied` receipt verifies for it. Statuses
  * move forward only, so a reply counts as the read that came before it. This is the one answer the
  * inbox, `team drops` and the watch give — a file at a receipt's name that the message key did not
- * sign, or one that names another message, seat, checkout or session, proves nothing.
+ * sign, or one that names another message, seat, checkout or session, proves nothing. Only the
+ * two names that answer are looked at: the other receipts cannot make a message read, and a
+ * reader that asks only this question does not stat them.
  */
 export function isRead(dropDir: string, id: string, context: StatusContext, key: KeyObject, brief?: BriefBinding): boolean {
-  const status = statusOf(dropDir, id, context, key, brief);
-  return status === 'read' || status === 'replied';
+  if (receiptHolds(receiptFile(dropDir, id, 'read'), id, 'read', context, key, brief)) return true;
+  return receiptHolds(receiptFile(dropDir, id, 'replied'), id, 'replied', context, key, brief);
 }
 
 /**

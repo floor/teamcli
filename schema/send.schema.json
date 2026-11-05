@@ -51,6 +51,7 @@
             "delivered",
             "delivered (read)",
             "sent (unconfirmed)",
+            "queued, not woken",
             "sent (channel)",
             "queued (receiver busy)",
             "answered",
@@ -92,6 +93,8 @@
             "native",
             "headless-resume",
             "channel",
+            "session",
+            "webhook",
             null
           ]
         },
@@ -196,7 +199,9 @@
                   "mcp-inbox",
                   "typed",
                   "drop",
-                  "headless-resume"
+                  "headless-resume",
+                  "session",
+                  "webhook"
                 ]
               },
               "state": {

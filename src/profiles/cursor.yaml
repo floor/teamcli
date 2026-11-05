@@ -11,7 +11,7 @@ process_names:
 # captures.
 tested:
   from: '2026.10.01'
-  to: '2026.10.19'
+  to: '2026.10.22'
 unattended:
   - --force
   - --sandbox
@@ -21,6 +21,21 @@ rules:
 # The delivery class a run measured: the seat reads its registered MCP inbox when it takes a
 # turn; this CLI has no event adapter that reaches it while idle.
 delivery: pull-on-turn
+# The typed wake, granted 2026-11-02 on captures of this build: a send may type one trigger line
+# into a composer two reads showed as the empty idle prompt, presses Enter only while the box
+# still holds exactly that line, and calls itself delivered only when the `working` screen
+# appears. `test/fixtures/cursor/2026.10.22/` holds the three screens the wake reads back, taken
+# in a scratch session: `idle.txt` (the `→ Plan, search, build anything` box), `unsent.txt`
+# (a draft in the box, never typed over) and `working.txt` (the `Working` row under the prompt).
+# Nothing else is typed, and a wake that cannot deliver leaves the message in the bus inbox.
+# See src/send/typed-wake.ts.
+typed_wake: screen
+# The words the wake appends so the woken turn goes straight to the seat's fastest read path: the
+# inbox registered above in `.cursor/mcp.json`. `inbox_check` is the one direct call — it lists
+# the waiting messages with their ids — and `inbox_read`, whose argument is the id inbox_check
+# returned (src/mcp/serve.ts), reads one and marks it read. The typed line never carries the
+# message id, so naming inbox_read alone would earn a refused call.
+read_hint: 'Read it with: call inbox_check now.'
 login:
   check:
     - status
@@ -186,23 +201,23 @@ status_model:
     # The literal model the row names; `{1}` is the version the row carries.
     yields: [Grok]
     version_like: '^[0-9]+(?:\.[0-9]+)*$'
-  - match: '^  GPT-(\d+(?:\.\d+)*) Sol(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
+  - match: '^  GPT-(\d+(?:\.\d+)*) Sol(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
     model: 'GPT Sol'
     version: '{1}'
     yields: [GPT Sol]
     version_like: '^[0-9]+(?:\.[0-9]+)*$'
-  - match: '^  Gemini (\d+(?:\.\d+)*) Flash(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
+  - match: '^  Gemini (\d+(?:\.\d+)*) Flash(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
     model: 'Gemini Flash'
     version: '{1}'
     yields: [Gemini Flash]
     version_like: '^[0-9]+(?:\.[0-9]+)*$'
   # The 2026.10.19 ready row: `Gemini 4 Argon High` then padding and `Run Everything`.
-  - match: '^  Gemini (\d+(?:\.\d+)*) Argon(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
+  - match: '^  Gemini (\d+(?:\.\d+)*) Argon(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
     model: 'Gemini Argon'
     version: '{1}'
     yields: [Gemini Argon]
     version_like: '^[0-9]+(?:\.[0-9]+)*$'
-  - match: '^  Composer (\d+(?:\.\d+)*)(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
+  - match: '^  Composer (\d+(?:\.\d+)*)(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
     model: Composer
     version: '{1}'
     yields: [Composer]
@@ -223,11 +238,11 @@ screen:
           # The composer's own status row, character for character — the same expressions in all
           # three places that must recognise it.
           - '^  Grok\s+\d.*'
-          - '^  Grok \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
-          - '^  GPT-\d+(?:\.\d+)* Sol(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
-          - '^  Gemini \d+(?:\.\d+)* Flash(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
-          - '^  Gemini \d+(?:\.\d+)* Argon(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
-          - '^  Composer \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
+          - '^  Grok \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
+          - '^  GPT-\d+(?:\.\d+)* Sol(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
+          - '^  Gemini \d+(?:\.\d+)* Flash(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
+          - '^  Gemini \d+(?:\.\d+)* Argon(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
+          - '^  Composer \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
   # A plan-mode switch, from the 2026.10.01 capture (`cursor/2026.10.01/permission-plan.txt`):
   # the CLI asks a person to confirm a mode change before it acts, and takes `y` or `n`. The bar
   # is the dialog's own rule; the title, the selected row, the reject row and the footer sit
@@ -298,11 +313,11 @@ screen:
               - '^\s*Tip:'
               - '^\s*→\s*(?:Add a follow-up|Plan, search, build anything)?\s*$'
               - '^  Grok\s+\d.*'
-              - '^  Grok \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
-              - '^  GPT-\d+(?:\.\d+)* Sol(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
-              - '^  Gemini \d+(?:\.\d+)* Flash(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
-              - '^  Gemini \d+(?:\.\d+)* Argon(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
-              - '^  Composer \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
+              - '^  Grok \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
+              - '^  GPT-\d+(?:\.\d+)* Sol(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
+              - '^  Gemini \d+(?:\.\d+)* Flash(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
+              - '^  Gemini \d+(?:\.\d+)* Argon(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
+              - '^  Composer \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
               - '^\s*<workspace>'
               - '^\s*~/'
               - '^\s*❯'
@@ -331,7 +346,9 @@ screen:
     # The status row is its shape, and its tokens are closed: exactly two spaces, then a known
     # family and its version — Grok N, GPT-N Sol, Gemini N Flash, Gemini N Argon, Composer N —
     # then only tokens the captures show: a context size (256K, 272K), an effort word (the ones
-    # --list-models prints and the captures paint), the `· N%` quota, `· N files edited`, then
+    # --list-models prints and the captures paint), the `· N%` quota, the edited-file count —
+    # `· 1 file edited` after a single change, `· N files edited` otherwise; the pane's own
+    # grammar is singular for one — then
     # padding and, for the new families, `Run Everything`, which every captured idle, unsent and
     # working row carries. Every number is digits in closed runs — version \d+(?:\.\d+)*, quota
     # \d+(?:\.\d+)?%, files \d+ — and nothing else may appear on the line; a row the grammar
@@ -356,11 +373,11 @@ screen:
     # three places that decide whether a line is the status row cannot disagree.
     status_line:
       - '^  Grok\s+\d.*'
-      - '^  Grok \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
-      - '^  GPT-\d+(?:\.\d+)* Sol(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
-      - '^  Gemini \d+(?:\.\d+)* Flash(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
-      - '^  Gemini \d+(?:\.\d+)* Argon(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
-      - '^  Composer \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
+      - '^  Grok \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
+      - '^  GPT-\d+(?:\.\d+)* Sol(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
+      - '^  Gemini \d+(?:\.\d+)* Flash(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
+      - '^  Gemini \d+(?:\.\d+)* Argon(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
+      - '^  Composer \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
     status_below:
       line: '^  (?:<workspace>|~?/)'
       except: '^  Grok\s+\d'

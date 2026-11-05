@@ -13,12 +13,12 @@ async function run(argv: string[]): Promise<{ code: number; out: string; err: st
 }
 
 const TABLE = [
-  "  KEY             LEVELS  ALLOWED                                                          DEFAULT                 GOVERNED BY     APPLIES",
-  "  model           seat    a model the seat's profile and the allowed-models policy accept  -                       allowed-models  restart that resumes",
-  "  effort          seat    one of the CLI profile's effort levels                           -                       -               restart that resumes",
-  "  nickname        seat    unique in the team, never lead                                   -                       -               at once",
-  "  delivery_order  seat    delivery legs, tighten only                                      mcp-inbox, typed, drop  delivery-order  at once",
-  "  human           seat    true or false                                                    false                   -               at once",
+  "  KEY             LEVELS  ALLOWED                                                          DEFAULT      GOVERNED BY     APPLIES",
+  "  model           seat    a model the seat's profile and the allowed-models policy accept  -            allowed-models  restart that resumes",
+  "  effort          seat    one of the CLI profile's effort levels                           -            -               restart that resumes",
+  "  nickname        seat    unique in the team, never lead                                   -            -               at once",
+  "  delivery_order  seat    delivery legs, tighten only                                      typed, drop  delivery-order  at once",
+  "  human           seat    true or false                                                    false        -               at once",
 ].join('\n') + '\n';
 
 describe('team config keys', () => {
@@ -74,7 +74,7 @@ describe('team config keys', () => {
       governed_by: 'allowed-models',
       applies: 'restart-resume',
     });
-    expect(doc.keys[3]!.default).toEqual(['mcp-inbox', 'typed', 'drop']);
+    expect(doc.keys[3]!.default).toEqual(['typed', 'drop']);
     expect(doc.keys[4]!.default).toBe(false);
   });
 

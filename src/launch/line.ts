@@ -3,7 +3,8 @@ import { join, resolve } from 'node:path';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { profileFor } from '../profiles/index.ts';
 import { lobbyPath } from '../worktree/place.ts';
-import { shellWordsReason } from './shell-words.ts';
+import { shellScriptWordOf } from './cli-scope.ts';
+import { shellWordsReason, shellWordSources } from './shell-words.ts';
 
 // A launch line is not shell-parsed: `team` splits it the way it always has, on whitespace, and
 // examines the program — its first word that is not a variable assignment — and the arguments
@@ -20,14 +21,21 @@ import { shellWordsReason } from './shell-words.ts';
 // `if [ ~ = "$HOME" ]; then echo "tilde-equals-home probe=tilde-expanded-ok"; fi` into a pane
 // printed `tilde-equals-home probe=tilde-expanded-ok`, and `ls -d ~` ran.
 
-/** The command a launch line starts, or null when it names none. */
+/** The command a launch line starts, or null when it names none. The line is read as a shell
+ *  reads it, so a word holding a substitution stays one word; a line whose words cannot be read
+ *  is split as it always was, and the caller's own finding says so. */
 export function launchBinary(launch: string): string | null {
-  return (
-    launch
-      .trim()
-      .split(/\s+/)
-      .find((word) => word !== '' && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) ?? null
-  );
+  return wordsOf(launch).find((word) => word !== '' && !ASSIGNMENT.test(word)) ?? null;
+}
+
+/** A launch line's words: the shell's reading when it is knowable, the whitespace split when the
+ *  line holds an ANSI-C word or a NUL byte and this version cannot decode it. The spelling is the
+ *  line's — a quoted word keeps its quotes, as the messages this reader feeds show the caller
+ *  what they wrote. */
+function wordsOf(launch: string): string[] {
+  const read = shellWordSources(launch);
+  if (read !== null) return read;
+  return launch.trim().split(/\s+/).filter((word) => word !== '');
 }
 
 /** The CLI binary a launch line ends up running. A line that runs a wrapper script with a shell
@@ -35,8 +43,17 @@ export function launchBinary(launch: string): string | null {
  *  script execs, so the CLI is the first word after the script. A wrapper that names no further
  *  word is its own program, and the script is returned. */
 export function launchedCliBinary(launch: string): string | null {
-  const words = launch.trim().split(/\s+/).filter((word) => word !== '' && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word));
+  let current = launch;
+  for (let depth = 0; depth < 4; depth += 1) {
+    const found = shellScriptWordOf(current);
+    if (found === null) break;
+    current = found.word.text;
+  }
+  const words = wordsOf(current).filter((word) => word !== '' && !ASSIGNMENT.test(word));
   let at = 0;
+  while (at < words.length && (words[at] === 'exec' || words[at] === 'command')) {
+    at += 1;
+  }
   while (at + 2 < words.length && /^(?:\S*\/)?(?:zsh|bash|sh)$/.test(words[at]!) && /\.(?:z|ba)?sh$/.test(words[at + 1]!)) {
     at += 2;
   }

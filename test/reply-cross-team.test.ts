@@ -149,9 +149,12 @@ async function answer(id: string, text: string, newId: string): Promise<{ code: 
   return { code, out: io.out, err: io.err };
 }
 
-/** One `team messages` as web's own checkout runs it: its root, its session. */
-async function readAtWeb(): Promise<{ code: number; out: string; err: string }> {
-  const io = testIo(world.roots.web as string);
+/** One `team messages` as web's own checkout runs it: its root, its session, and the seat whose
+ *  mailbox the reply landed in — the reply serves only the mailbox it is addressed to. */
+async function readAtWeb(
+  caller: Caller = { kind: 'seat', name: 'orchestrator', pane: paneOf('web'), session: 'web' },
+): Promise<{ code: number; out: string; err: string }> {
+  const io = testIo(world.roots.web as string, caller);
   const code = await runMessages([], io, { home: world.home, now: () => NOW });
   return { code, out: io.out, err: io.err };
 }
@@ -293,7 +296,7 @@ describe('a same-team reply', () => {
     expect(existsSync(at)).toBe(true);
     expect(recordAt(at).payload).toMatchObject({ to: 'scribe', root: world.roots.web as string, session: 'web', thread: SENT_TWO });
 
-    const read = await readAtWeb();
+    const read = await readAtWeb({ kind: 'seat', name: 'scribe', pane: 'pane-web-scribe', session: 'web' });
     expect(read.code).toBe(0);
     expect(read.out).toContain('local answer');
   });

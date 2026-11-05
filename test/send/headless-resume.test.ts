@@ -48,6 +48,7 @@ import { pushPointer } from '../../src/send/push.ts';
 import { RUNTIME_PUSH_ADAPTERS } from '../../src/send/push-adapters.ts';
 import { signReceiptPayload, writeReceipt } from '../../src/send/record.ts';
 import { recordBody, testIo } from '../helpers.ts';
+import { withoutSendId } from '../helpers/output.ts';
 
 const NOW = new Date('2026-10-20T09:00:00.000Z');
 const MESSAGE_ID = '22222222-3333-4444-8555-666666666666';
@@ -617,8 +618,8 @@ describe('runSend and sendDirect integration for Gemini and Cursor headless-resu
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toBe(
-      `team acme, session "${SESSION}"\n${scene.seat}: sent (unconfirmed) (headless-resume, 0 ms); queued; ${scene.seat} reads it at its next turn (pull-only)\n`,
+    expect(withoutSendId(io.out)).toBe(
+      `team acme, session "${SESSION}"\n${scene.seat}: sent (unconfirmed) (headless-resume, 0 ms); queued; ${scene.seat} reads it at its next turn, and nothing here gives it one (pull-only)\n`,
     );
     expect(calls).toEqual([
       {
@@ -721,8 +722,8 @@ describe('runSend and sendDirect integration for Gemini and Cursor headless-resu
 
     expect(code).toBe(0);
     expect(spawns).toBe(0);
-    expect(io.out).toBe(
-      `team acme, session "${SESSION}"\n${scene.seat}: sent (unconfirmed) (drop, 0 ms); queued; ${scene.seat} reads it at its next turn (pull-only)\n`,
+    expect(withoutSendId(io.out)).toBe(
+      `team acme, session "${SESSION}"\n${scene.seat}: queued, not woken (drop, 0 ms); queued; the typed wake did not run (the delivery order leaves the typed leg out); ${scene.seat} reads it at its next turn, and nothing here gives it one (pull-only)\n`,
     );
     const history = readHistory('acme', scene.root, scene.home);
     expect(history.ok).toBe(true);
@@ -731,7 +732,7 @@ describe('runSend and sendDirect integration for Gemini and Cursor headless-resu
     expect(history.entries[0]).toMatchObject({
       to: scene.seat,
       id: MESSAGE_ID,
-      outcome: 'sent (unconfirmed)',
+      outcome: 'queued, not woken',
       via: 'drop',
       failed: [
         'headless-resume: no trusted runtime session is recorded for this seat (the seat state names no agent session)',

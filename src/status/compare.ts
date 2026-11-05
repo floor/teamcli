@@ -5,6 +5,7 @@ import { defaultLabel } from '../file/validate.ts';
 import type { HerdrAgent, HerdrWorkspace, PaneProcesses } from '../herdr.ts';
 import { herdrCommand } from '../herdr.ts';
 import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
+import { restoreProof, type RestoreProof } from '../launch/restore-proof.ts';
 import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
 import { observedEffort } from '../labels/observe.ts';
 import { usesLauncher } from '../launch/line.ts';
@@ -27,12 +28,15 @@ import { launchModelWhenUnread, modelDiffers, recordSignedModel, runningModel, s
 // What herdr shows of a session. `screens` holds a pane's visible text, where it could be read;
 // `processes` each seat pane's process identity, where it was read, and null where herdr can't
 // tell. A pane the map doesn't hold is not compared: exactly as a seat with no record.
+// `foreground` is the same pane reading's argv0 names, where they could be read: one
+// `pane process-info` answers both maps, so a pass asks once for a pane.
 export type Live = {
   running: boolean;
   agents: HerdrAgent[];
   workspaces: HerdrWorkspace[];
   screens: Record<string, string>;
   processes?: Record<string, PaneProcesses | null>;
+  foreground?: Record<string, string[] | null>;
 };
 
 export type Row = {
@@ -56,6 +60,21 @@ export type Row = {
  *  its other registry reads use; the reader also resolves the default itself when a caller leaves
  *  it out, so an omission reads the default store and never an empty one. */
 export type ReachRoute = { dir: string; root: string; home: string };
+
+/** What a caller's daemon reading proves about this session's watch record, so the note never
+ *  presents a process the record names as the current watch once that process is gone. Absent
+ *  when the caller read no daemon: the note is then the record's own words. */
+export type WatchDaemonReading = {
+  /** The live daemon's process, or null when no daemon is running (or the reading cannot tell). */
+  pid: number | null;
+  /** Whether that daemon records hosting this session's root — a row for it in its own record. */
+  hostsRoot: boolean;
+  /** Whether any checkout's bus first reconcile pass is still running, so a root the daemon has
+   *  not recorded yet is still on its way through the serial start. */
+  firstPassRunning: boolean;
+  /** Whether the process the watch record names still exists. */
+  recordedPidAlive: boolean;
+};
 
 /** The repair of the one precondition `status` knows: the file's approval is not in force. The
  *  approval differences carry it, and a repair that waits on it is marked with it. */
@@ -289,6 +308,8 @@ export function socketLegOf(input: {
 // verified standing, the defaults under none — so the verdict reads one object. `trust` is
 // whether the owner's live grant turns trust answering on for this team: the caller passes
 // `dialogsTrustInForce`, so the repair line offers `team answer` only while the setting is on.
+// `daemon` is the caller's daemon reading, when it made one: the watch note uses it so a record
+// left behind by a daemon that has since stopped is never printed as the current watch.
 export function compare(
   team: TeamFile,
   session: string,
@@ -301,6 +322,7 @@ export function compare(
   signing?: ReadonlyMap<string, { model: string; version: string; cli?: string; launch?: string }>,
   continuityIds?: ReadonlyMap<string, string | null>,
   route?: ReachRoute,
+  daemon?: WatchDaemonReading,
 ): Comparison {
   const rows: Row[] = [];
   const differences: Difference[] = [];
@@ -347,7 +369,8 @@ export function compare(
       if (continuity !== 'restored' && (verdict === 'gone' || verdict === 'replaced')) {
         const found = verdict === 'gone'
           ? notLaunched(seat, agent.pane, verdict, live.screens[agent.pane])
-          : cannotTie(seat, agent.pane, live.screens[agent.pane], team, recorded?.pane === agent.pane);
+          : cannotTie(seat, agent.pane, live.screens[agent.pane], team, recorded?.pane === agent.pane,
+              restoreProofAt(seat, recorded, live, agent.pane, recordedSession));
         rows.push({ ...found.row, ...idField });
         if (found.difference) differences.push(found.difference);
         if (found.note) notes.push(found.note);
@@ -534,9 +557,10 @@ export function compare(
     }
     if (held && verdict === 'replaced') {
       claimed.add(held);
-      // Herdr lists no agent of this name: no pane it names is the recorded one, so no
-      // per-seat command takes this process — the repair is to look at it.
-      const found = cannotTie(seat, held, live.screens[held], team, false);
+      // Herdr lists no agent of this name: the pane is the seat only when the shared proof holds,
+      // and the proof is what `team up` will read before it re-ties anything.
+      const found = cannotTie(seat, held, live.screens[held], team, false,
+        restoreProofAt(seat, recorded, live, held, continuitySessionOf(continuityIds, declared.name, recorded?.agent_session)));
       rows.push({ ...found.row, ...idField });
       if (found.difference) differences.push(found.difference);
       if (found.note) notes.push(found.note);
@@ -596,15 +620,29 @@ export function compare(
       pane: '-',
       ...(recorded?.start_cwd ? { start_cwd: recorded?.start_cwd } : {}),
     });
+    // A record that says the seat was launched, with the session itself up and no pane of it in
+    // the host's list, is the restored session that came back without this seat: `up` relaunches
+    // it, never a per-seat restart that would put a new pane somewhere else. With nothing running
+    // no restore can be claimed, and a seat that was never launched keeps the line it always had.
+    const didNotComeBack = live.running
+      && recorded !== undefined
+      && recorded.pane !== undefined
+      && recorded.workspace !== undefined
+      && recorded.launched !== undefined
+      && (recorded.stage === 'ready' || recorded.stage === 'named');
     differences.push({
-      what: `${seat.name} is in the file and is not running`,
+      what: didNotComeBack
+        ? `${seat.name} was running and its CLI did not come back (the terminal host restored the session without it)`
+        : `${seat.name} is in the file and is not running`,
       // With the session up, `team restart <seat>` is the per-seat repair the map admits to the
       // owner and the team's leads alike; `team add` is the owner's alone, and a lead that reads
       // this line must be handed a command it can run. With nothing running the session itself is
-      // down, a lead cannot prove its pane, and the owner's `team up` is what starts it.
-      repair: anyRunning ? `team restart ${seat.name}` : 'team up',
+      // down, a lead cannot prove its pane, and the owner's `team up` is what starts it. A session
+      // that came back without this seat is the exception: it is up, `team up` re-ties it, and a
+      // lead at a pane of it may run that — the mark follows the command, not the absence of a seat.
+      repair: didNotComeBack || !anyRunning ? 'team up' : `team restart ${seat.name}`,
       needs: 'approve',
-      ...(anyRunning ? {} : { owner: true as const }),
+      ...(didNotComeBack || anyRunning ? {} : { owner: true as const }),
     });
   }
 
@@ -692,17 +730,9 @@ export function compare(
 
   // The watch the state records, as one line: where it runs, whose process it is once a pass has
   // recorded one, and how old its last heartbeat is. The difference below says when that is too
-  // old; this note is what stands either way.
-  if (state.watch) {
-    const beat = Date.parse(state.watch.heartbeat);
-    const seconds = Number.isFinite(beat) ? Math.max(0, Math.round((now.getTime() - beat) / 1000)) : null;
-    const age = seconds === null
-      ? 'never recorded'
-      : seconds < 120 ? `${seconds}s ago` : `${Math.round(seconds / 60)} min ago`;
-    const where = state.watch.pane ? `pane ${state.watch.pane}` : 'pane not recorded';
-    const whose = state.watch.pid !== undefined ? `pid ${state.watch.pid}` : 'pid not recorded yet';
-    notes.push(`watch: ${where}, ${whose}, last heartbeat ${age}`);
-  }
+  // old; this note is what stands either way. A record left by a daemon that has since stopped
+  // is not the watch now, and the note says so rather than printing the dead process as it.
+  if (state.watch) notes.push(...watchNotes(state.watch, daemon, now));
 
   if (live.running && anyRunning) {
     const beat = state.watch ? Date.parse(state.watch.heartbeat) : NaN;
@@ -765,9 +795,70 @@ export function compare(
   return { rows, differences, notes };
 }
 
+/**
+ * The watch note, or the facts that replace it. The record's own words stand while they are
+ * true. A record a daemon host wrote (it carries the epoch fence) is not the current watch once
+ * its process is gone, or while the live daemon does not host this root: the reading says what
+ * the machine is doing now — the live daemon has this checkout in its own
+ * record, or has not reached it yet — and names a dead process for what it is. Nothing here
+ * rewrites a pane watch record, whose process is not a daemon's.
+ */
+function watchNotes(
+  watch: NonNullable<SessionState['watch']>,
+  daemon: WatchDaemonReading | undefined,
+  now: Date,
+): string[] {
+  const beat = Date.parse(watch.heartbeat);
+  const seconds = Number.isFinite(beat) ? Math.max(0, Math.round((now.getTime() - beat) / 1000)) : null;
+  const age = seconds === null
+    ? 'never recorded'
+    : seconds < 120 ? `${seconds}s ago` : `${Math.round(seconds / 60)} min ago`;
+  const where = watch.pane ? `pane ${watch.pane}` : 'pane not recorded';
+  const whose = watch.pid !== undefined ? `pid ${watch.pid}` : 'pid not recorded yet';
+  const record = `watch: ${where}, ${whose}, last heartbeat ${age}`;
+  if (daemon === undefined || watch.pid === undefined || watch.epoch === undefined) return [record];
+  // A live daemon that has not reached this root yet is a record that is not the current watch
+  // either, even while the process it names still exists (a daemon restarted onto other roots).
+  const notHosted = daemon.pid !== null && !daemon.hostsRoot;
+  if (daemon.recordedPidAlive && !notHosted) return [record];
+  const lines: string[] = [];
+  if (notHosted) {
+    // The first pass over the roots before this one is what holds it back, said only while one
+    // is really running.
+    lines.push(
+      `root not yet hosted by daemon ${String(daemon.pid)}${daemon.firstPassRunning ? ' (first pass running)' : ''}`,
+    );
+  }
+  if (!daemon.recordedPidAlive) lines.push(`watch record names a stopped daemon (pid ${String(watch.pid)})`);
+  return lines;
+}
+
 // A pane that no longer holds the process team launched: no CLI at all, or a foreground CLI that
 // is not the recorded one. The row and the difference read the same wherever the pane is found —
 // a pane herdr still lists an agent in, and one the agent went with its CLI.
+/** The restore proof for the seat's own recorded pane: the shared function `team up` adopts with,
+ *  read here so the two commands cannot disagree about what "restored" means. Null when there is
+ *  no record, or when the pane being read is not the pane the record names — another pane is
+ *  another reading, and `up` adopts only the recorded one. */
+function restoreProofAt(
+  seat: Seat,
+  recorded: SeatState | undefined,
+  live: Live,
+  pane: string,
+  recordedSession: string | undefined,
+): RestoreProof | null {
+  if (!recorded || recorded.pane !== pane) return null;
+  return restoreProof({
+    seat,
+    recorded,
+    agents: live.agents,
+    process: live.processes?.[pane] ?? null,
+    foreground: live.foreground?.[pane] ?? null,
+    recordedSession,
+    screen: live.screens[pane] ?? null,
+  });
+}
+
 /** A program is in front and the stored session does not tie it to the launch. The repair is to
  *  look. `up` does not close this pane. */
 function cannotTie(
@@ -778,6 +869,8 @@ function cannotTie(
   /** Herdr still names this seat on the pane the state recorded: `--abandon` is the form that
    *  takes that process. The flag without it only leaves the pane as it is. */
   namedOnPane: boolean,
+  /** The shared proof, when it could be run on the pane this difference is about. */
+  proof: RestoreProof | null = null,
 ): { row: Row; difference?: Difference; note?: string } {
   const running = runningModel(seat.cli, screen ?? '');
   const launcher = usesLauncher(seat);
@@ -795,6 +888,20 @@ function cannotTie(
     model: '-',
     pane,
   };
+  // The shared proof holds: the pane is the seat's own conversation, or — with no session id on
+  // either side — the declared CLI alone in its workspace at an idle prompt. `team up` re-ties
+  // the seat where it stands; the row is kept and the difference is the repair. The model, if it
+  // differs, is reported once the seat is tied again.
+  if (proof !== null && proof.kind !== 'none') {
+    return {
+      row,
+      difference: {
+        what: `${seat.name} was restored by the terminal host; its pane holds the seat's ${proof.kind === 'session' ? 'conversation' : 'declared CLI'} — team up re-ties it`,
+        repair: 'team up',
+        needs: 'approve',
+      },
+    };
+  }
   // A model that is not the file's, or a launch line that names a launcher, is the report.
   // The row stays `-`: the declared model is not shown as the one running. Nothing starts the seat.
   if (differs || launcher) {
@@ -818,10 +925,14 @@ function cannotTie(
       },
     };
   }
+  // The proof's reason, where it names something a reader can act on (another conversation,
+  // another CLI, another pane); the generic tail only restates that the pane cannot be tied.
   return {
     row,
     difference: {
-      what: `${seat.name}: its pane holds a process this record cannot tie to the launch`,
+      what: proof !== null && proof.kind === 'none' && proof.specific === true
+        ? `${seat.name}: ${proof.why}`
+        : `${seat.name}: its pane holds a process this record cannot tie to the launch`,
       repair: 'look at the pane',
     },
     ...(shown ? { note: shown } : {}),

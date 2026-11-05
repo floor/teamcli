@@ -274,7 +274,9 @@ export function orderDeclarationsOf<L extends string>(declared: Partial<Record<S
  * The legs a send may walk, in the words the delivery order is written in: `socket`, the frame on
  * the receiving seat's cross-session socket (a signed copy is written first); `native`, the
  * sender's own cross-session SendMessage, recorded by the sender with `--confirm`; `mcp-inbox`,
- * the seat's own MCP inbox; `typed`, the 0600 drop file and one composer trigger line; `drop`, the
+ * a name this build still reads but never walks: the MCP inbox is the store's reader, so a word
+ * naming it is reported unavailable with a `team check` note (`src/send/walk-cascade.ts`);
+ * `typed`, the 0600 drop file and one composer trigger line; `drop`, the
  * same 0600 drop file and no keystroke at all — for a receiver that watches its own drop folder,
  * or a pane that must not be typed into; `headless-resume`, the receiving seat's own CLI resumed
  * headlessly for one turn, with no TUI pane typed into. `socket` and `native` are distinct legs:
@@ -286,22 +288,28 @@ export function orderDeclarationsOf<L extends string>(declared: Partial<Record<S
  * development-channels flag and whose server is listening takes it, and every other receiver
  * walks its order exactly as written. Its delivery is the notification itself, ended as
  * `sent (channel)`; a push no signed receipt confirms in time is redelivered once by the watch.
+ * `session` is the receiving CLI's own session-creating call (`src/send/session-cli.ts`): the
+ * whole body goes as one argument, the CLI runs in the seat's own folder, and the delivery is
+ * the session line it prints. A seat whose profile declares one walks it first while no level
+ * of its chain declares an order, and no fallback adds it.
  */
-export type DeliveryLeg = 'socket' | 'native' | 'mcp-inbox' | 'typed' | 'drop' | 'headless-resume' | 'channel';
+export type DeliveryLeg = 'socket' | 'native' | 'mcp-inbox' | 'typed' | 'drop' | 'headless-resume' | 'channel' | 'session';
 
-export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'mcp-inbox', 'typed', 'drop', 'headless-resume'];
+export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'mcp-inbox', 'typed', 'drop', 'headless-resume', 'session'];
 
 /**
- * The order a send walks when no level of the receiving seat's chain declares one: mcp-inbox,
- * then typed, then drop. The mcp-inbox leg takes a send only while the seat's own inbox server is
- * listening, and writes the message to that inbox without typing; otherwise it is skipped as
- * `no live inbox listener` and the walk moves on. The typed leg is next because it is the leg
- * that wakes an idle seat: one trigger line, the seat's own drop read, and its signed receipt is
- * what makes the send `delivered (read)`. The drop leg is last: it writes the same 0600 file and
- * types nothing at all, so a receiver that watches its folder — the inbox server where its CLI
- * has an MCP front, the launch's start-of-turn read where it has a hook — takes the message
- * there, but nothing wakes a seat that is idle. A seat that watches nothing never walks this leg
- * (`src/send/delivery.ts` leaves it out of that seat's order). The `native` leg is not in the
+ * The order a send walks when no level of the receiving seat's chain declares one: typed, then
+ * drop. The walk itself is the owner's cascade (`src/send/walk-cascade.ts`): the channel-class
+ * legs first, the sender-posted webhook second, the typed leg third, and the mailbox last under
+ * all of them — this fallback names the two legs of the last two classes. The typed leg is the
+ * leg that wakes an idle seat: one trigger line, the seat's own drop read, and its signed
+ * receipt is what makes the send `delivered (read)`. The drop leg is last: it writes the same
+ * 0600 file and types nothing at all, so a receiver that watches its folder — the inbox server
+ * where its CLI has an MCP front, the launch's start-of-turn read where it has a hook — takes
+ * the message there, but nothing wakes a seat that is idle. A seat that watches nothing never
+ * walks this leg (`src/send/delivery.ts` leaves it out of that seat's order). The `mcp-inbox`
+ * name is not in this fallback: the MCP inbox is the store's reader, not a leg, and a word that
+ * names it is read as unavailable rather than walked. The `native` leg is not in the
  * default: a level that names it is the sender choosing the cross-session SendMessage and
  * recording the delivery itself, so `native` is a leg a declared word may add
  * (`src/policy/types.ts`). The `headless-resume` leg is not in the fallback and no implied default
@@ -313,13 +321,19 @@ export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'mcp-i
  * `hold` or `refuse` opts out, and with no word only a launch this build attested is authorized),
  * and no level of the chain names an order — the one implied default that adds it
  * (`src/commands/send.ts`).
+ * The `session` leg is the receiving CLI's own session-creating call
+ * (`src/send/session-cli.ts`): the whole body goes as one argument, the CLI runs in the seat's
+ * own folder, and the delivery is the session line it prints. It is not in the fallback: a
+ * profile that declares `session_cli` puts it first for its seats while no level names an order,
+ * and a level that wants it names it. A seat whose profile declares no session call records the
+ * leg as unavailable rather than attempting it.
  * A declared word may place `socket` anywhere or leave it out. The chain is the receiving seat's
  * own — entity, project, team, seat — because the order says how that seat's messages may travel.
  */
 export const DELIVERY_ORDER: OrderSettingSpec<DeliveryLeg> = {
   name: 'delivery_order',
   policy: 'delivery-order',
-  fallback: ['mcp-inbox', 'typed', 'drop'],
+  fallback: ['typed', 'drop'],
 };
 
 /**

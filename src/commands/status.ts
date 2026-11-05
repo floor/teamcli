@@ -31,12 +31,14 @@ import { leftoverDifferences, leftoverNote } from '../file/team-config.ts';
 import { isParseError } from '../file/load.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
-import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
+import { agentList, agentListAsync, foregroundArgv0, PANE_WINDOW, paneProcessesOf, paneProcessInfo, paneProcessInfoAsync, paneRead, paneReadAsync, sessionRunning, sessionRunningAsync, workspaceList, workspaceListAsync, type HerdrAgent, type HerdrReadOptions, type HerdrWorkspace, type PaneProcesses } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { emptySession, holdText, liveHold, liveProcs, pauseText, pidAlive, readState, type HoldRecord, type PauseRecord, type QueuedSwap, type SessionState } from '../state.ts';
 import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
+import { declaredUnreadAfter, unreadWindowSeconds, watchInForceWithPace, watchPaceOf } from '../watch/rhythm.ts';
 import { unmanagedEndpointNotes } from '../launch/codex-endpoint.ts';
+import { unfinishedWebhookNotes, webhookDeliveryNotes } from '../bus/webhook-notes.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { PresenceObservation, SeatStateWord, StateSource } from '../labels/state.ts';
 import { presenceChannelHealthy, presenceSeatsOf } from '../labels/presence.ts';
@@ -69,8 +71,8 @@ import { continuityIdsOf } from '../registry/resume.ts';
 import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
 import * as projectRegistry from '../registry/projects.ts';
 import { APPROVAL_REPAIR, compare, orderAndAnnotateDifferences } from '../status/compare.ts';
-import type { Comparison, Difference, Live } from '../status/compare.ts';
-import { seatWakeOf, wakeCell, type SeatWake } from '../status/wake.ts';
+import type { Comparison, Difference, Live, WatchDaemonReading } from '../status/compare.ts';
+import { seatWakeReadingOf, wakeAge, wakeCell, type SeatWake, type SeatWakeReading } from '../status/wake.ts';
 import { queuedSwaps, swapLine } from '../swap/queue.ts';
 import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
 import { blindDifferences, renderSeatsTable, seatRegistryRows, type SeatRegistryRow } from './seats.ts';
@@ -137,6 +139,7 @@ export const realSources: StatusSources = {
     if (!agents || !workspaces) return null;
     const screens: Record<string, string> = {};
     const processes: Record<string, PaneProcesses | null> = {};
+    const foreground: Record<string, string[] | null> = {};
     // Every agent's pane, not only one whose name is a seat: a stray in a seat's workspace has a
     // screen too. A null screen is left out, and that pane is then unread.
     for (const agent of agents) {
@@ -145,9 +148,11 @@ export const realSources: StatusSources = {
         const screen = paneRead(agent.pane, PANE_WINDOW, session);
         if (screen !== null) screens[agent.pane] = screen;
       }
-      // The pane's process identity, for the comparison with the one the state recorded: a pane
-      // that no longer holds what team launched is not the seat. Null when herdr can't tell.
-      processes[agent.pane] = paneProcesses(agent.pane, session);
+      // One process-info answers both maps: the pane's process identity (for the comparison
+      // with the one the state recorded) and its foreground argv0 names (for the quota figure).
+      const info = paneProcessInfo(agent.pane, session);
+      processes[agent.pane] = paneProcessesOf(info);
+      foreground[agent.pane] = foregroundArgv0(info);
     }
     // A recorded seat herdr no longer lists an agent for still has its pane standing where it was
     // launched: that pane is read too, so one left holding its shell is told apart from one that is
@@ -158,11 +163,13 @@ export const realSources: StatusSources = {
       if (seat.human === true) continue;
       const held = state.seats[seat.name];
       if (!held?.launched || !held.pane || held.pane in processes) continue;
-      processes[held.pane] = paneProcesses(held.pane, session);
+      const info = paneProcessInfo(held.pane, session);
+      processes[held.pane] = paneProcessesOf(info);
+      foreground[held.pane] = foregroundArgv0(info);
       const screen = paneRead(held.pane, PANE_WINDOW, session);
       if (screen !== null) screens[held.pane] = screen;
     }
-    return { running: true, agents, workspaces, screens, processes };
+    return { running: true, agents, workspaces, screens, processes, foreground };
   },
   branch(path) {
     try {
@@ -177,6 +184,109 @@ export const realSources: StatusSources = {
   projects: realProjectSources,
   machine: readMachine,
 };
+
+/** What one awaited whole-session read takes: the per-call kill, the loop's stop, the agent
+ *  index to start at, and the watch clock's deadline for the read. */
+export type AsyncLiveOptions = HerdrReadOptions & {
+  /** The agent index the read starts at: a pass after a cut resumes where the last one stopped. */
+  cursor?: number;
+  /** The watch clock's epoch ms after which no further pane is read. */
+  until: number;
+  /** The watch clock `until` is measured on. Absent, the wall clock. */
+  now?: () => number;
+};
+
+/** The terminal-host reads one awaited whole-session read is made of. The production set is
+ *  the real commands; a test injects its own and reads the options each call was given. */
+export type AsyncSessionReads = {
+  running(session: string, options: HerdrReadOptions): Promise<boolean | null>;
+  agents(session: string, options: HerdrReadOptions): Promise<HerdrAgent[] | null>;
+  workspaces(session: string, options: HerdrReadOptions): Promise<HerdrWorkspace[] | null>;
+  screen(pane: string, session: string, options: HerdrReadOptions): Promise<string | null>;
+  /** The pane's `pane process-info` page, untouched: it answers both the process identity and
+   *  the foreground names, so one read per pane feeds both maps. */
+  processInfo(pane: string, session: string, options: HerdrReadOptions): Promise<unknown | null>;
+};
+
+export const realAsyncSessionReads: AsyncSessionReads = {
+  running: (session, options) => sessionRunningAsync(session, options),
+  agents: (session, options) => agentListAsync(session, options),
+  workspaces: (session, options) => workspaceListAsync(session, options),
+  screen: (pane, session, options) => paneReadAsync(pane, PANE_WINDOW, session, options),
+  processInfo: (pane, session, options) => paneProcessInfoAsync(pane, session, options),
+};
+
+export type AsyncLiveRead = {
+  /** The session reading, or null when the session, its agents or its workspaces could not be
+   *  read at all: the caller's own unread, never a cut. */
+  live: Live | null;
+  /** Where the next pass's pane reads resume: the agent the read stopped before, or the start
+   *  when every pane was read. */
+  next: number;
+  /** True when the read stopped at its deadline or at the loop's stop before every pane. The
+   *  panes it did not reach are unread, never absent, and the next pass resumes at `next`. */
+  cut: boolean;
+};
+
+/**
+ * The whole-session read, awaited: the same figures `realSources.live` takes, with one
+ * `pane process-info` per pane answering both the process identity and the foreground names,
+ * and the panes read in a rotation that resumes at `cursor`. The read stops at `until` (the
+ * watch clock) or when the loop's stop aborts it; the panes it did not reach are left out of
+ * `screens`, `processes` and `foreground` — unread, which the pass reports as unknown, never as
+ * gone. A caller with no state reads no held pane: the watch passes none.
+ *
+ * `reads` is the terminal-host seam: the daemon and the CLI use the real commands, and a test
+ * supplies its own so no scene talks to a live session.
+ */
+export async function liveAsync(
+  session: string,
+  team: TeamFile,
+  options: AsyncLiveOptions,
+  reads: AsyncSessionReads = realAsyncSessionReads,
+): Promise<AsyncLiveRead> {
+  const clock = options.now ?? Date.now;
+  const call = (): HerdrReadOptions => ({
+    timeoutMs: options.timeoutMs,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  });
+  const running = await reads.running(session, call());
+  if (running === null) return { live: null, next: 0, cut: false };
+  if (!running) return { live: { running: false, agents: [], workspaces: [], screens: {} }, next: 0, cut: false };
+  const agents = await reads.agents(session, call());
+  if (agents === null) return { live: null, next: 0, cut: false };
+  const workspaces = await reads.workspaces(session, call());
+  if (workspaces === null) return { live: null, next: 0, cut: false };
+  const screens: Record<string, string> = {};
+  const processes: Record<string, PaneProcesses | null> = {};
+  const foreground: Record<string, string[] | null> = {};
+  const start = agents.length === 0 ? 0 : Math.abs(options.cursor ?? 0) % agents.length;
+  let next = start;
+  let cut = false;
+  for (let step = 0; step < agents.length; step += 1) {
+    if (options.signal?.aborted === true || clock() >= options.until) {
+      cut = true;
+      break;
+    }
+    const at = (start + step) % agents.length;
+    const agent = agents[at];
+    if (agent === undefined) continue;
+    const declared = team.seats.find((seat) => seat.name === agent.name);
+    if (declared?.human !== true) {
+      const screen = await reads.screen(agent.pane, session, call());
+      if (screen !== null) screens[agent.pane] = screen;
+    }
+    const info = await reads.processInfo(agent.pane, session, call());
+    processes[agent.pane] = paneProcessesOf(info);
+    foreground[agent.pane] = foregroundArgv0(info);
+    next = (at + 1) % agents.length;
+  }
+  return {
+    live: { running: true, agents, workspaces, screens, processes, foreground },
+    next,
+    cut,
+  };
+}
 
 export const status: Command = (argv, io) => runStatus(argv, io, realSources);
 export default status;
@@ -451,6 +561,32 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     seats: team.seats,
     states: state.seats,
   });
+  // One probe of the machine daemon for the whole run: the line below, the document's `daemon`
+  // field, the comparison's watch note and the seats' presence qualification all come from the
+  // same snapshot, so they cannot disagree. No second probe, no server, and no exit change — the
+  // reading is a fact, not a verdict.
+  const health = sources.daemonHealth === undefined
+    ? null
+    : await sources.daemonHealth(home);
+  // Whether the seats' presence projections may be called live: only a fresh route verdict that
+  // says serving and healthy for this session. Default closed — a persisted status word or a
+  // health answer without a verdict proves nothing.
+  const presenceHealthy = health !== null && presenceChannelHealthy(health, root, session, now);
+  // The same fresh answer's per-seat verdicts: when the route carries them, a seat is live only
+  // by its own serving entry whose sampled binding matches the seat state's recorded one.
+  const presenceSeats = health === null ? undefined : presenceSeatsOf(health, root, session, now);
+  // What that same snapshot proves about the recorded watch: the process it names is alive, and
+  // a live daemon has this checkout in its own record or has not reached it yet. The liveness
+  // probe is the caller's own seam, so no scene depends on a real pid.
+  const recordedWatch = state.watch;
+  const watchDaemon: WatchDaemonReading | undefined = health === null || recordedWatch?.pid === undefined
+    ? undefined
+    : {
+        pid: health.state === 'running' ? health.pid : null,
+        hostsRoot: health.roots.some((entry) => entry.root === root),
+        firstPassRunning: health.roots.some((entry) => entry.firstPass?.running === true),
+        recordedPidAlive: (sources.alive ?? pidAlive)(recordedWatch.pid),
+      };
   const comparison = compare(
     team, session, state, live, now,
     watchInForceOf(standing, team),
@@ -468,24 +604,11 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     // looked up under, the launch-effective settings and held-frame marks under the state folder,
     // and relative launch paths under the root.
     { dir, root, home },
+    watchDaemon,
   );
   const queues = readQueueDepths(team, root, sources.home, Object.keys(state.seats).filter((name) => state.seats[name]?.temporary));
   const backlog = queues ? readBacklogDepth(team, root, sources.home) : null;
   const all = args.flags.has('all');
-  // One probe of the machine daemon for the whole run: the line below, the document's `daemon`
-  // field and the seats' presence qualification all come from the same snapshot, so they cannot
-  // disagree. No second probe, no server, and no exit change — the reading is a fact, not a
-  // verdict.
-  const health = sources.daemonHealth === undefined
-    ? null
-    : await sources.daemonHealth(home);
-  // Whether the seats' presence projections may be called live: only a fresh route verdict that
-  // says serving and healthy for this session. Default closed — a persisted status word or a
-  // health answer without a verdict proves nothing.
-  const presenceHealthy = health !== null && presenceChannelHealthy(health, root, session, now);
-  // The same fresh answer's per-seat verdicts: when the route carries them, a seat is live only
-  // by its own serving entry whose sampled binding matches the seat state's recorded one.
-  const presenceSeats = health === null ? undefined : presenceSeatsOf(health, root, session, now);
   // The registry rows carry each seat's own reading: `--all` renders them as the expanded
   // table, and every `--json` document carries the reading on each row whether `--all` is
   // there or not. Without either, nothing here is read.
@@ -596,6 +719,11 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // A Codex seat whose last launch fell back to an unmanaged line says so here, with the reason:
   // the fallback is a reading worth acting on, never a silent state.
   comparison.notes.push(...unmanagedEndpointNotes(team.seats, state));
+  // A seat whose last webhook delivery did not arrive, in the same words `team check` prints.
+  comparison.notes.push(...webhookDeliveryNotes(team.seats, state));
+  // A send's webhook post left in flight with no bus serving the root to finish it: a reading,
+  // never a delivered post.
+  comparison.notes.push(...unfinishedWebhookNotes({ root, alive: sources.alive ?? pidAlive }));
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
     ...protectedCheckouts(team, root, sources),
@@ -626,12 +754,12 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // The compact table's wakeability reading, one read per row it shows. The expanded table gets
   // the same fact from `seatRegistryRows` (`wake: true` above), so the two can never disagree;
   // this path runs only where that table is not built.
-  const compactWake = all || json
+  const compactReadings = all || json
     ? undefined
-    : new Map<string, SeatWake>(visibleRows.map((row): [string, SeatWake] => {
+    : new Map<string, SeatWakeReading>(visibleRows.map((row): [string, SeatWakeReading] => {
       const declared = team.seats.find((one) => one.name === row.name);
       const recorded = state.seats[row.name];
-      return [row.name, seatWakeOf({
+      return [row.name, seatWakeReadingOf({
         dir,
         root,
         session,
@@ -642,6 +770,34 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
         now,
       })];
     }));
+  const compactWake = compactReadings === undefined
+    ? undefined
+    : new Map<string, SeatWake>([...compactReadings].map(([name, reading]): [string, SeatWake] => [name, reading.wake]));
+
+  // A row whose oldest drop has waited past its seat's unread window — the window the watch's
+  // unread pass uses for that seat: the file's declared word, or the class's own default (ADR
+  // zeus-message-path, D2). The cell's `!` marks a class nothing wakes while idle, and this line
+  // says what the class means in the class's own words (`deliveryWords`), so the table and a
+  // send's console line cannot promise different things. The line leads with the send's own
+  // outcome words — `queued, not woken` — so a lead scanning status finds the stall by the same
+  // word the send printed and the history line carries. The window is the watch's, paced exactly
+  // as the check paces the same reading. A note only: `status` never fails the gate for it —
+  // `check` does.
+  if (compactReadings !== undefined) {
+    const pace = watchPaceOf({ team, root, home: sources.home, standing, now });
+    const declared = declaredUnreadAfter(watchInForceWithPace(standing, team, pace), pace);
+    for (const [name, reading] of compactReadings) {
+      if (reading.wake.wakeable) continue;
+      const row = team.seats.find((one) => one.name === name);
+      if (row?.human === true) continue;
+      const windowSeconds = unreadWindowSeconds(declared, reading.wake.class);
+      const age = reading.wake.oldest_unread_seconds;
+      if (age === null || age < windowSeconds) continue;
+      const waits = reading.words.replace(/^queued; /, '');
+      const retry = reading.watchWake ? " the watch's typed retry has not delivered for it;" : '';
+      comparison.notes.push(`${name}: queued, not woken — its oldest unread drop has waited ${wakeAge(age)}, past the ${String(windowSeconds)}s unread window;${retry} ${waits}`);
+    }
+  }
 
   if (json) {
     writeJson(io, 'team.status', {

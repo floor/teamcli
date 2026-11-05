@@ -1,10 +1,15 @@
 // The event bus service over `.agents/bus.sock` (RFC 002 Amendment 01 §4.2, §4.4).
 //
 // A dedicated process beside the broker with its own Unix domain socket (`.agents/bus.sock`,
-// mode 0600), start lock (`.agents/bus.sock.lock`), and stale-socket recovery. Supports two
+// mode 0600), start lock (`.agents/bus.sock.lock`), and stale-socket recovery. Supports three
 // operations:
 // - `publish`: appends a signed event record to `events.jsonl` and fans it out to matching
-//   live subscribers with bounded per-subscriber buffers.
+//   live subscribers with bounded per-subscriber buffers. A `message.arrived` is the one kind
+//   that names a delivery, so it is verified against its signed drop record before it is
+//   appended and fanned out; the other kinds are appended as published.
+// - `nudge`: names one record in a seat's drop folder; the bus re-reads and verifies the signed
+//   record itself, then appends its `message.arrived` and fans it out. A missing, unsigned or
+//   misaddressed record delivers nothing, and the nudge carries no authority of its own.
 // - `subscribe`: validates the subscriber and any self-subscribed `kinds` against the
 //   privileged-kind ban (`privileged-self-subscription`, raising `team.policy-refused` on
 //   violation), reads unseen events from `cursor`, answers `gap` with `oldest_seq` when the
@@ -28,10 +33,14 @@ import {
 import { connect, createServer, type Socket } from 'node:net';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
+import { canonicalTeam } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
+import { validateTeamFile } from '../file/validate.ts';
 import { logLine } from '../log.ts';
 import { findAgent, getAgent, isAgentId } from '../registry/agents.ts';
+import { readStoredTeamConfig } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { approvalStanding, approvedRecordOf } from '../store/store.ts';
 import {
   checkPrivilegedSelfSubscription,
   DEFAULT_RECONCILE_INTERVAL_SECONDS,
@@ -50,14 +59,17 @@ import {
   parseEventPayload,
   parseSignedEventLine,
   pruneEventLog,
-  readEventsFromCursor,
+  readEventsFromCursorSliced,
+  type CursorReadResult,
   type EventAppendInput,
   type SignedEventRecord,
 } from './log.ts';
 import { createReconcileState, reconcilePassAsync } from './reconcile.ts';
 import { readEntityOrchestrator, readSeatResolver } from './seats.ts';
-import { makeWebhookDelivery } from './webhook.ts';
+import { makeWebhookDelivery, type WebhookFacts } from './webhook.ts';
+import { recordWebhookDelivery } from './webhook-record.ts';
 import type { SeatRecipientResolver } from './kinds.ts';
+import { RECORD_NAME, verifiedArrival } from './arrival.ts';
 
 /** The serving bus's process marker, beside its socket. */
 export function busMarkerPath(root: string): string {
@@ -116,6 +128,14 @@ export type BusPublishRequest = {
   event: EventAppendInput;
 };
 
+/** The one thing a nudge may name: a record the bus re-reads and verifies itself. */
+export type BusNudgeRequest = {
+  op: 'nudge';
+  session: string;
+  seat: string;
+  record_id: string;
+};
+
 export type BusSubscribeRequest = {
   op: 'subscribe';
   seat: string;
@@ -125,10 +145,11 @@ export type BusSubscribeRequest = {
   follow?: boolean;
 };
 
-export type BusRequest = BusPublishRequest | BusSubscribeRequest;
+export type BusRequest = BusPublishRequest | BusNudgeRequest | BusSubscribeRequest;
 
 export type BusAnswer =
   | { ok: true; kind: 'published'; event: SignedEventRecord; duplicate: boolean }
+  | { ok: true; kind: 'nudged'; event: SignedEventRecord | null; duplicate: boolean }
   | { ok: true; kind: 'events'; events: SignedEventRecord[]; cursor: number }
   | { ok: true; kind: 'event'; event: SignedEventRecord }
   | {
@@ -165,16 +186,44 @@ export type StartBusInput = {
   extraPrivilegedKinds?: readonly EventKind[];
   additiveRouting?: Partial<Record<EventKind, readonly string[]>>;
   now?: () => Date;
+  /** The folder of the team file: the state beside it records each seat's last webhook delivery,
+   *  which `team check` and `team status` note. Absent, a delivery's facts go to `stderr` alone. */
+  stateDir?: string;
   /** The webhook delivery every fanned-out record passes through: the built-in adapter reads
-   *  each seat's configured adapter row, and a caller may inject its own for a scene. */
+   *  each seat's configured adapter row and re-reads it when the root's registry record changes;
+   *  a caller may inject its own for a scene, and that one is the caller's to refresh. */
   deliver?: (record: SignedEventRecord) => void;
+  /**
+   * What the start does with the first reconcile pass. `await` (the default) runs it before the
+   * start resolves, so a bus a command started itself is caught up when it reports serving.
+   * `background` starts the same pass once the listener is bound and resolves without waiting
+   * for it: a host that brings up several roots does not serialize them behind one store's scan.
+   * The pass stays joinable through `reconcileNow` and every caller owns it until `close`, which
+   * aborts and drains it. `firstPass` says how far it has got in either mode.
+   */
+  initialReconcile?: 'await' | 'background';
 };
+
+/**
+ * How far the bus's first reconcile pass has got. While it runs, `scanned` is live: the files
+ * the pass has read or reused so far. Once it settles, `scanned` is the pass's total and
+ * `doneAt` is the instant it settled; `errors` says whether the walk finished or stopped on a
+ * failure, so a reader never prints a partial pass as a clean finish. A reader prints this beside
+ * a serving bus so that "serving" (bound and answering) is never read as "the store is caught up".
+ * A pass `close` aborted settles nothing: it is never reported as done.
+ */
+export type BusFirstPass =
+  | { running: true; scanned: number; doneAt: null }
+  | { running: false; scanned: number; doneAt: string; errors: boolean };
 
 export type BusHandle = {
   close(): Promise<void>;
   /** The pass in flight, or a new one started now; the pass yields between slices, so a caller
    *  that does not await it does not stop the bus's own answers. */
   reconcileNow(): Promise<SignedEventRecord[]>;
+  /** The first pass's progress. A second pass never rewrites it: the first pass's total and its
+   *  settle instant stay, so a reader is not sent back to "running" by a later scan. */
+  firstPass(): BusFirstPass;
 };
 
 export type StartBusResult =
@@ -194,6 +243,8 @@ const LOCK_WAIT_MS = 2000;
 const LOCK_POLL_MS = 50;
 const LOCK_YOUNG_MS = 1000;
 const UNKNOWN_REQUEST = 'the request is not one this bus knows';
+/** A published arrival is refused with fixed words when the record it names does not verify. */
+const UNVERIFIED_ARRIVAL = 'the message.arrived it publishes names no signed drop record for its seat';
 
 function alive(pid: number): boolean {
   try {
@@ -425,6 +476,18 @@ export function parseBusRequest(line: string): BusRequest | null {
     return { op: 'publish', event: rest };
   }
 
+  if (obj.op === 'nudge') {
+    const keys = Object.keys(obj);
+    if (keys.length !== 4 || !keys.every((k) => k === 'op' || k === 'session' || k === 'seat' || k === 'record_id')) return null;
+    const session = obj.session;
+    const seat = obj.seat;
+    const recordId = obj.record_id;
+    if (typeof session !== 'string' || !RECORD_NAME.test(session)) return null;
+    if (typeof seat !== 'string' || !RECORD_NAME.test(seat)) return null;
+    if (typeof recordId !== 'string' || !RECORD_NAME.test(recordId)) return null;
+    return { op: 'nudge', session, seat, record_id: recordId };
+  }
+
   if (obj.op === 'subscribe') {
     const allowed = new Set(['op', 'seat', 'pane', 'cursor', 'kinds', 'follow']);
     for (const k of Object.keys(obj)) {
@@ -476,6 +539,13 @@ export function parseBusAnswer(line: string): BusAnswer | null {
       const rec = parseSignedEventLine(JSON.stringify(obj.event));
       if (!rec || typeof obj.duplicate !== 'boolean') return null;
       return { ok: true, kind: 'published', event: rec, duplicate: obj.duplicate };
+    }
+    if (obj.kind === 'nudged') {
+      if (typeof obj.duplicate !== 'boolean') return null;
+      if (obj.event === null) return { ok: true, kind: 'nudged', event: null, duplicate: obj.duplicate };
+      const rec = parseSignedEventLine(JSON.stringify(obj.event));
+      if (!rec) return null;
+      return { ok: true, kind: 'nudged', event: rec, duplicate: obj.duplicate };
     }
     if (obj.kind === 'events') {
       if (!Array.isArray(obj.events) || typeof obj.cursor !== 'number' || !Number.isInteger(obj.cursor) || obj.cursor < 0) {
@@ -547,6 +617,14 @@ type LiveSubscriber = {
   queue: string[];
   flushing: boolean;
   bufferLimit: number;
+  /** Records fanned out while this subscriber's catch-up read runs, before its answer is built:
+   *  the subscription is registered before the read so nothing appended during it can slip
+   *  between the answer snapshot and the live feed. Null once the answer is built, when fanOut
+   *  goes back to the queue. The list is capped at `bufferLimit`; past it the read's answer is a
+   *  `gap`, exactly as a full queue's is. */
+  holding: { seq: number; line: string }[] | null;
+  /** The sequence of the record that overflowed the holding list, if one did. */
+  heldOverflowAt: number | null;
 };
 
 type SubscriberClaim = { kind: 'seat'; seat: string } | { kind: 'refused'; message: string };
@@ -611,6 +689,10 @@ function matchesSubscriber(
 
 export async function startBus(input: StartBusInput): Promise<StartBusResult> {
   const path = busSocket(input.root);
+  // A live socket is a bus already serving, answered before the start lock is read: a starting
+  // bus holds that lock through its whole first pass while its listener already answers, so
+  // waiting the lock out would report a serving bus as still starting.
+  if ((await probeSocket(path)) === 'live') return { kind: 'busy' };
   const lock = await acquireStartLock(`${path}.lock`);
   if (lock.kind === 'timeout') return { kind: 'locked' };
   try {
@@ -620,12 +702,31 @@ export async function startBus(input: StartBusInput): Promise<StartBusResult> {
   }
 }
 
+/** The registry record's canonical digest when it reads, or `''` when it is absent or cannot be
+ *  read yet: the bus already has its team, so a missing baseline is not a failure. */
+function storedRecordDigest(home: string, id: string): string {
+  try {
+    return readStoredTeamConfig(home, id)?.record_sha256 ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/** One line per distinct reload failure: a record that stays broken is not repeated on every
+ *  pass, and a different failure is still said. */
+function reportReloadProblem(stderr: (text: string) => void, previous: string | null, why: string): string {
+  const line = `team bus: the seat webhook rows were not reloaded: ${why}\n`;
+  if (line !== previous) stderr(line);
+  return line;
+}
+
 async function startBusWalk(input: StartBusInput, path: string): Promise<StartBusResult> {
   const home = input.home ?? homedir();
   const now = input.now ?? (() => new Date());
+  const registryTeamId = teamIdOf(input.root);
   // A routing word may name a seat by its registry id; resolve it against the registry on disk so
   // that `{ seat: agt_… }` reaches the seat that holds it, while plain names stand as written.
-  const resolveSeat = readSeatResolver(home, teamIdOf(input.root));
+  const resolveSeat = readSeatResolver(home, registryTeamId);
   // The entity's own lead, for the `entity` routing position: a lead's prompt and a climbed
   // `seat.prompt-escalated` name it. Read once at start; the watch resolves the mailbox target
   // fresh on every climb, so a reregistered entity team is reached without a bus restart.
@@ -677,12 +778,87 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
 
     // Every fanned-out record also reaches the seat's webhook adapter; it never throws and never
     // awaits, so a pass or a publish is never failed by a routine.
-    const deliver = input.deliver ?? makeWebhookDelivery({ team: input.team, stderr: input.stderr, root: input.root });
+    const stateDir = input.stateDir;
+    const builtIn = input.deliver === undefined
+      ? makeWebhookDelivery({
+          team: input.team,
+          stderr: input.stderr,
+          root: input.root,
+          ...(stateDir === undefined ? {} : {
+            onResult: (seat: string, record: SignedEventRecord, facts: WebhookFacts) =>
+              recordWebhookDelivery(stateDir, input.team.session, seat, record, facts),
+          }),
+        })
+      : null;
+    const deliver = input.deliver ?? builtIn!;
+
+    // A row changed in the root's registry record applies to this running bus: each pass re-reads
+    // the record and rebuilds the routes only when its canonical digest moved. The team the bus
+    // routes and subscribes with stays as it started — this reload touches the webhook rows alone.
+    // A delivery already scheduled captured its row, so nothing in flight is cancelled or moved.
+    let seenRecord = storedRecordDigest(home, registryTeamId);
+    let reloadProblem: string | null = null;
+    const reloadWebhookRoutes = (): void => {
+      if (builtIn === null) return;
+      let stored: ReturnType<typeof readStoredTeamConfig>;
+      try {
+        stored = readStoredTeamConfig(home, registryTeamId);
+      } catch {
+        // The store's refusal can name the file and the fault, but a diagnostic that forwards
+        // it could one day carry the record's own text (a parser quotes what it refused). The
+        // line says only that the read failed, and never what the record held.
+        reloadProblem = reportReloadProblem(input.stderr, reloadProblem, 'the registry record could not be read');
+        return;
+      }
+      if (stored === null) {
+        // A record that was here when the bus started and is now gone is a change outside the
+        // approval chain: say it once and keep the rows that run.
+        if (seenRecord !== '') {
+          reloadProblem = reportReloadProblem(input.stderr, reloadProblem, 'the registry holds no record of this team');
+        }
+        return;
+      }
+      if (stored.record_sha256 === seenRecord) {
+        reloadProblem = null;
+        return;
+      }
+      const parsed = validateTeamFile(stored.text, { home, root: input.root });
+      if (!parsed.ok) {
+        reloadProblem = reportReloadProblem(input.stderr, reloadProblem, 'the registry\'s record of this team does not validate');
+        return;
+      }
+      // Only the copy the owner approved may move a route. The approval's signature binds the
+      // canonical record, the root and the generation (src/store/store.ts), so a record rewritten
+      // outside that chain — even with its unkeyed digests recomputed — is a miss: the running
+      // rows stay, and the line is said once.
+      const standing = approvalStanding(input.root, home);
+      const approved = standing.kind === 'verified' ? approvedRecordOf(standing.record.file) : null;
+      if (approved === null || approved !== canonicalTeam(parsed.team)) {
+        reloadProblem = reportReloadProblem(input.stderr, reloadProblem, 'the registry\'s record of this team is not the copy the owner approved');
+        return;
+      }
+      seenRecord = stored.record_sha256;
+      builtIn.reload(parsed.team);
+      reloadProblem = null;
+    };
 
     const fanOut = (record: SignedEventRecord): void => {
       deliver(record);
       for (const sub of subscribers) {
         if (!matchesSubscriber(record, sub.seat, sub.kinds, routingTeam, input.additiveRouting, resolveSeat)) continue;
+        if (sub.holding !== null) {
+          // The subscriber's catch-up read is still running. Hold the record for the answer
+          // instead of writing it first: the answer carries everything up to its cursor, and the
+          // held records past that cursor follow it in order. Overflow is remembered, not
+          // answered here, because the read's own answer is what the subscriber is waiting for.
+          if (sub.heldOverflowAt !== null) continue;
+          if (sub.holding.length >= sub.bufferLimit) {
+            sub.heldOverflowAt = record.payload.seq;
+            continue;
+          }
+          sub.holding.push({ seq: record.payload.seq, line: encodeBusLine({ ok: true, kind: 'event', event: record }) });
+          continue;
+        }
         if (sub.queue.length >= sub.bufferLimit) {
           // Bounded per-subscriber buffer overflow: send `gap` so the subscriber resyncs from
           // durable records rather than dropping an event silently (Amendment 01 §4.2).
@@ -710,6 +886,21 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
     // large store never blocks the bus's event loop; `reconcileNow` joins a pass already in
     // flight instead of starting a second one over the same records.
     const reconcileState = createReconcileState();
+    // The first pass's own record, kept for a reader that must not be told the bus is caught up
+    // while the scan still runs. The state's counters reset at the start of every later pass, so
+    // the total is captured when the first pass settles; `doneAt` is the settle marker, and the
+    // handle answers `running` from its absence, never from a second pass's state.
+    const firstPass: { scanned: number; doneAt: string | null; errors: boolean } = {
+      scanned: 0, doneAt: null, errors: false,
+    };
+    // The pass answers its own failures and resolves empty, so this is the only local trace that
+    // the walk stopped on one instead of finishing it. Only the first pass's settle reads it.
+    let firstPassError = false;
+    const settleFirstPass = (): void => {
+      firstPass.scanned = reconcileState.stats.filesRead + reconcileState.stats.filesReused;
+      firstPass.errors = firstPassError;
+      firstPass.doneAt = now().toISOString();
+    };
     // Aborted by close. A pass in flight stops between slices and before its next append, and
     // every start path refuses once it is aborted, so the closing bus writes no event after
     // close resolves. The records it did not reach are not lost: no cursor advanced past them,
@@ -718,6 +909,7 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
     let reconcileRun: Promise<SignedEventRecord[]> | null = null;
     const runReconcile = (): Promise<SignedEventRecord[]> => {
       if (closing.signal.aborted) return Promise.resolve([]);
+      reloadWebhookRoutes();
       if (reconcileRun !== null) return reconcileRun;
       const run = reconcilePassAsync({
         project: input.team.project,
@@ -729,11 +921,24 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
         kept: input.keptLogFiles,
         ...(input.heldThresholdSeconds !== undefined ? { heldThresholdSeconds: input.heldThresholdSeconds } : {}),
         onEvent: fanOut,
+        // A record the pass will not raise is named once: a linked file or folder, an unsigned
+        // record or one addressed elsewhere. The refusal says where and why, never what the
+        // record said.
+        onRefused: (refusal) => {
+          input.stderr(`team bus: ${refusal.where} was not raised: ${refusal.reason}\n`);
+        },
         state: reconcileState,
         signal: closing.signal,
       }).then(
-        (res) => (res.ok ? res.raised : []),
+        (res) => {
+          // A cancelled pass is the closing bus's own abort, not a failure: the walk stopped
+          // between slices and left every unread record for the next pass. Only a result that
+          // failed for its own reason marks the walk as stopped on an error.
+          if (!res.ok && res.cancelled !== true) firstPassError = true;
+          return res.ok ? res.raised : [];
+        },
         (error: unknown) => {
+          firstPassError = true;
           input.stderr(`team bus: reconcile failed: ${error instanceof Error ? error.message : String(error)}\n`);
           return [];
         },
@@ -768,8 +973,20 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
     writeBusMarker(input.root, now());
 
     // Initial reconcile pass at bus start (Amendment 01 §4.2). The listener is already bound, so
-    // the pass's own yields let a liveness probe and a subscriber connect while it runs.
-    await runReconcile();
+    // the pass's own yields let a liveness probe and a subscriber connect while it runs. A host
+    // bringing up many roots starts it in the background and keeps ownership of it through the
+    // handle: `reconcileNow` joins it and `close` aborts and drains it.
+    const initialRun = runReconcile();
+    if ((input.initialReconcile ?? 'await') === 'await') {
+      await initialRun;
+      settleFirstPass();
+    } else {
+      void initialRun.then(() => {
+        // close aborted the walk: it never finished, so nothing may stamp it as done.
+        if (closing.signal.aborted) return;
+        settleFirstPass();
+      });
+    }
 
     const timer =
       reconcileIntervalMs > 0
@@ -783,6 +1000,19 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
     let closingPromise: Promise<void> | null = null;
     const handle: BusHandle = {
       reconcileNow: runReconcile,
+      firstPass: () => {
+        const doneAt = firstPass.doneAt;
+        if (doneAt === null) {
+          // Live: the pass's counters reset at the start of every pass, but this is the first,
+          // so they are the scan's own progress until `settleFirstPass` captures the total.
+          return {
+            running: true,
+            scanned: reconcileState.stats.filesRead + reconcileState.stats.filesReused,
+            doneAt: null,
+          };
+        }
+        return { running: false, scanned: firstPass.scanned, doneAt, errors: firstPass.errors };
+      },
       close: () => {
         if (closingPromise !== null) return closingPromise;
         // Cancel before waiting: the pass in flight stops at its next boundary, and every later
@@ -865,11 +1095,20 @@ function serveBusConnection(
     const line = buffer.slice(0, at);
     buffer = '';
     socket.setTimeout(0);
-    dispatchBusRequest(socket, line, input, home, now, bufferLimit, subscribers, fanOut, resolveSeat, routingTeam);
+    dispatchBusRequest(socket, line, input, home, now, bufferLimit, subscribers, fanOut, resolveSeat, routingTeam).catch(
+      (error: unknown) => {
+        input.stderr(`team bus: the request failed: ${error instanceof Error ? error.message : String(error)}\n`);
+        socket.destroy();
+      },
+    );
   });
 }
 
-function dispatchBusRequest(
+/** Serves one request. Synchronous except for a subscribe's catch-up read, which is sliced: the
+ *  read gives the event loop a turn, so a follower's first answer never holds the bus for a large
+ *  retained log, and the holding list the subscription registers with keeps the window between
+ *  that read and the live feed exact. */
+async function dispatchBusRequest(
   socket: Socket,
   line: string,
   input: StartBusInput,
@@ -880,7 +1119,7 @@ function dispatchBusRequest(
   fanOut: (record: SignedEventRecord) => void,
   resolveSeat: SeatRecipientResolver,
   routingTeam: TeamRoutingRoles,
-): void {
+): Promise<void> {
   const request = parseBusRequest(line);
   if (!request) {
     answerOnce(socket, { ok: false, at: 'caller', message: UNKNOWN_REQUEST });
@@ -888,7 +1127,22 @@ function dispatchBusRequest(
   }
 
   if (request.op === 'publish') {
-    const appended = appendEvent(input.team.project, input.root, home, request.event, {
+    // A published arrival names a delivery, so it is held to the record that delivery carries.
+    // The verified event is built from the signed record, never from the caller's fields.
+    let event = request.event;
+    if (event.kind === 'message.arrived') {
+      const verified = verifiedArrival(
+        { session: event.session, seat: event.to ?? '', record_id: event.record_id },
+        { root: input.root, session: input.team.session },
+        home,
+      );
+      if (verified === null) {
+        answerOnce(socket, { ok: false, at: 'caller', message: UNVERIFIED_ARRIVAL });
+        return;
+      }
+      event = verified;
+    }
+    const appended = appendEvent(input.team.project, input.root, home, event, {
       maxBytes: input.maxLogBytes,
       kept: input.keptLogFiles,
       maxTotalBytes: input.maxTotalLogBytes,
@@ -908,6 +1162,32 @@ function dispatchBusRequest(
       event: appended.record,
       duplicate: appended.duplicate,
     });
+    return;
+  }
+
+  if (request.op === 'nudge') {
+    const event = verifiedArrival(request, { root: input.root, session: input.team.session }, home);
+    if (event === null) {
+      // Nothing verified, so nothing is appended and no adapter is posted. The send's own record
+      // may still be landing; its reader's poll and the next pass both find it if it does.
+      answerOnce(socket, { ok: true, kind: 'nudged', event: null, duplicate: false });
+      return;
+    }
+    const appended = appendEvent(input.team.project, input.root, home, event, {
+      maxBytes: input.maxLogBytes,
+      kept: input.keptLogFiles,
+      maxTotalBytes: input.maxTotalLogBytes,
+      retentionSeconds: input.retentionSeconds,
+      deduplicate: true,
+    });
+    if (!appended.ok) {
+      answerOnce(socket, { ok: false, at: 'write', message: appended.reason });
+      return;
+    }
+    if (!appended.duplicate) {
+      fanOut(appended.record);
+    }
+    answerOnce(socket, { ok: true, kind: 'nudged', event: appended.record, duplicate: appended.duplicate });
     return;
   }
 
@@ -982,14 +1262,56 @@ function dispatchBusRequest(
     }
   }
 
-  const fromCursor = readEventsFromCursor(input.team.project, input.root, home, request.cursor, {
-    kept: input.keptLogFiles,
-  });
+  // The subscription is registered before the read, with a holding list: an append that lands
+  // while the sliced read gives the loop a turn is held for the answer instead of fanning out
+  // first, so no record inside the answer's window is written twice and none past its cursor is
+  // lost between the answer snapshot and the live feed.
+  const follow = request.follow === true;
+  const selfKinds = request.kinds !== undefined ? new Set<EventKind>(request.kinds) : null;
+  const sub: LiveSubscriber | null = follow
+    ? {
+        socket,
+        seat,
+        kinds: selfKinds,
+        queue: [],
+        flushing: false,
+        bufferLimit,
+        holding: [],
+        heldOverflowAt: null,
+      }
+    : null;
+  if (sub !== null) {
+    subscribers.add(sub);
+    socket.once('close', () => subscribers.delete(sub));
+  }
+  const dropSub = (): void => {
+    if (sub !== null) subscribers.delete(sub);
+  };
+
+  let fromCursor: CursorReadResult;
+  try {
+    fromCursor = await readEventsFromCursorSliced(input.team.project, input.root, home, request.cursor, {
+      kept: input.keptLogFiles,
+    });
+  } catch {
+    dropSub();
+    answerOnce(socket, { ok: false, at: 'write', message: 'the event log could not be read' });
+    return;
+  }
+  // The socket may have closed while the read gave the loop a turn; its close listener has
+  // removed the subscriber, and this deletes it if the listener has not run yet.
+  if (socket.destroyed) {
+    dropSub();
+    return;
+  }
+  if (sub !== null && !subscribers.has(sub)) return;
   if (!fromCursor.ok) {
+    dropSub();
     answerOnce(socket, { ok: false, at: 'write', message: fromCursor.reason });
     return;
   }
   if (fromCursor.kind === 'gap') {
+    dropSub();
     answerOnce(socket, {
       ok: true,
       kind: 'gap',
@@ -1006,7 +1328,6 @@ function dispatchBusRequest(
     return;
   }
 
-  const selfKinds = request.kinds !== undefined ? new Set<EventKind>(request.kinds) : null;
   const matching = fromCursor.events.filter((rec) =>
     matchesSubscriber(rec, seat, selfKinds, routingTeam, input.additiveRouting, resolveSeat),
   );
@@ -1015,6 +1336,7 @@ function dispatchBusRequest(
     // The window names the records it covers: the oldest this subscriber still needs, and the
     // newest one read — not merely the newest one it matched. The reset cursor has to step past
     // the records of other kinds at the end of the window too.
+    dropSub();
     const oldest = matching[0]!.payload.seq;
     const newest = fromCursor.events[fromCursor.events.length - 1]!.payload.seq;
     answerOnce(socket, {
@@ -1026,7 +1348,15 @@ function dispatchBusRequest(
     return;
   }
 
-  if (request.follow !== true) {
+  if (sub !== null && sub.heldOverflowAt !== null) {
+    // More records were held during the read than a subscription may carry: answer the same
+    // `gap` a full queue answers, so the subscriber resyncs instead of losing one silently.
+    dropSub();
+    answerOnce(socket, { ok: true, kind: 'gap', oldest_seq: sub.heldOverflowAt, newest_seq: sub.heldOverflowAt });
+    return;
+  }
+
+  if (sub === null) {
     answerOnce(socket, {
       ok: true,
       kind: 'events',
@@ -1036,23 +1366,21 @@ function dispatchBusRequest(
     return;
   }
 
-  const sub: LiveSubscriber = {
-    socket,
-    seat,
-    kinds: selfKinds,
-    queue: [
-      encodeBusLine({
-        ok: true,
-        kind: 'events',
-        events: matching,
-        cursor: fromCursor.cursor,
-      }),
-    ],
-    flushing: false,
-    bufferLimit,
-  };
-  subscribers.add(sub);
-  socket.once('close', () => subscribers.delete(sub));
+  // Seed the answer, then the records held past its cursor, then hand the subscriber back to the
+  // live queue — all in one turn, so nothing this read did not cover can be fanned out between
+  // the last held record and the first queued one.
+  sub.queue.push(
+    encodeBusLine({
+      ok: true,
+      kind: 'events',
+      events: matching,
+      cursor: fromCursor.cursor,
+    }),
+  );
+  for (const entry of sub.holding ?? []) {
+    if (entry.seq > fromCursor.cursor) sub.queue.push(entry.line);
+  }
+  sub.holding = null;
   flushSubscriber(sub, subscribers);
 }
 
@@ -1072,19 +1400,30 @@ export type BusPublishOutcome =
   | { kind: 'wrong' }
   | { kind: 'deadline' };
 
-export function publishToBus(
-  root: string,
-  event: EventAppendInput,
-  options: { deadlineMs?: number } = {},
-): Promise<BusPublishOutcome> {
-  const deadlineMs = options.deadlineMs ?? BUS_DEADLINE_MS;
-  const request: BusPublishRequest = { op: 'publish', event };
+/** What a nudge heard back. `event: null` is the bus saying the record did not verify: nothing
+ *  was appended and no adapter was posted. */
+export type BusNudgeOutcome =
+  | { kind: 'nudged'; event: SignedEventRecord | null; duplicate: boolean }
+  | { kind: 'refused'; at: 'caller' | 'policy' | 'write'; message: string }
+  | { kind: 'unavailable' }
+  | { kind: 'wrong' }
+  | { kind: 'deadline' };
+
+type BusAsk =
+  | { kind: 'answer'; answer: BusAnswer }
+  | { kind: 'unavailable' }
+  | { kind: 'wrong' }
+  | { kind: 'deadline' };
+
+/** One request to a running bus, bounded by `deadlineMs`. The socket is the bus's own: a bus
+ *  that is not serving refuses the connection, and the caller hears `unavailable`. */
+function askBus(root: string, request: BusRequest, deadlineMs: number): Promise<BusAsk> {
   return new Promise((done) => {
     let settled = false;
     let connected = false;
     let buffer = '';
     const socket = connect(busSocket(root));
-    const finish = (outcome: BusPublishOutcome) => {
+    const finish = (outcome: BusAsk) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -1109,19 +1448,47 @@ export function publishToBus(
         finish({ kind: 'wrong' });
         return;
       }
-      if (!parsed.ok) {
-        finish({ kind: 'refused', at: parsed.at, message: parsed.message });
-        return;
-      }
-      if (parsed.kind !== 'published') {
-        finish({ kind: 'wrong' });
-        return;
-      }
-      finish({ kind: 'published', event: parsed.event, duplicate: parsed.duplicate });
+      finish({ kind: 'answer', answer: parsed });
     });
     socket.once('error', () => finish(connected ? { kind: 'wrong' } : { kind: 'unavailable' }));
     socket.on('close', () => finish(connected ? { kind: 'wrong' } : { kind: 'unavailable' }));
   });
+}
+
+export async function publishToBus(
+  root: string,
+  event: EventAppendInput,
+  options: { deadlineMs?: number } = {},
+): Promise<BusPublishOutcome> {
+  const asked = await askBus(root, { op: 'publish', event }, options.deadlineMs ?? BUS_DEADLINE_MS);
+  if (asked.kind !== 'answer') return asked;
+  const answer = asked.answer;
+  if (!answer.ok) return { kind: 'refused', at: answer.at, message: answer.message };
+  if (answer.kind !== 'published') return { kind: 'wrong' };
+  return { kind: 'published', event: answer.event, duplicate: answer.duplicate };
+}
+
+/**
+ * Tells the bus serving `root` that a signed record has landed, naming it and nothing else. The
+ * bus resolves the drop folder, re-reads the file and verifies its signature before it appends
+ * anything, so the nudge grants no authority the record does not already carry. Best effort: a
+ * bus that is not running, refuses or answers slowly leaves the caller as it was.
+ */
+export async function nudgeBus(
+  root: string,
+  record: { session: string; seat: string; record_id: string },
+  options: { deadlineMs?: number } = {},
+): Promise<BusNudgeOutcome> {
+  const asked = await askBus(
+    root,
+    { op: 'nudge', session: record.session, seat: record.seat, record_id: record.record_id },
+    options.deadlineMs ?? BUS_DEADLINE_MS,
+  );
+  if (asked.kind !== 'answer') return asked;
+  const answer = asked.answer;
+  if (!answer.ok) return { kind: 'refused', at: answer.at, message: answer.message };
+  if (answer.kind !== 'nudged') return { kind: 'wrong' };
+  return { kind: 'nudged', event: answer.event, duplicate: answer.duplicate };
 }
 
 export type BusSubscribeOutcome =

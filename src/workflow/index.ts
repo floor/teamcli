@@ -4,6 +4,7 @@
 export * from './builtin/work-item.ts';
 export * from './canonical.ts';
 export * from './codes.ts';
+export * from './redispatch.ts';
 export * from './registry.ts';
 export * from './schema.ts';
 export * from './signals.ts';

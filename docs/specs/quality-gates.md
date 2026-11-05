@@ -172,7 +172,7 @@ team check [<ref>] [--pr <file>] [--since <ref>] [--file <path>] [--json]
 ```text
 bun run ci
 bun run e2e
-bun scripts/check-pack.ts <tarball>
+bun scripts/check-pack.ts <tarball> [expected-source-sha] [--wrapper <path>]
 ```
 
 Where `bun run ci` executes in order:
@@ -209,7 +209,7 @@ Environment knobs (`gate-common.sh`, `light-check.sh`, `hourly-suite.zsh`, `hub-
 2. **Full suite, capture provenance, executable documentation, tarball guard, and local end-to-end run.**
    - `bun run coverage:check` MUST fail if any screen fixture in `test/fixtures/` lacks stated provenance in its folder README or if `contract/capture-coverage.json` or `src/profiles/trust-captures.ts` is out of date; prose never determines provenance, and a fixture listed under a `Constructed` or `Not produced` heading MUST NOT be counted as a real `capture` (`scripts/coverage.ts`; *proof:* `test/scripts/coverage.test.ts`). Under Module 005 Quality commitments 12 and 15, screen-fixture verification MUST keep the name capture provenance, a code test-coverage floor policy MUST NOT be added under Module 005 Quality commitment 12, and code test coverage SHOULD be reported as a per-package coverage report only (the per-package code coverage report is unbuilt at `v0.5.0`).
    - Every console example in `docs/commands/*.md` MUST execute against its declared fixture in `test/docs.test.ts` and match its expected output and exit code byte for byte (*proof:* `test/docs.test.ts`).
-   - `bun scripts/check-pack.ts <tarball>` MUST extract the packed npm tarball and exit `1` (naming the file path only, never the matched identifier) if any packaged file matches the internal tracker identifier pattern, or exit `2` if the tarball cannot be extracted (`scripts/check-pack.ts`; *proof:* `.github/workflows/ci.yml`).
+   - `bun scripts/check-pack.ts <tarball> [expected-source-sha] [--wrapper <path>]` MUST extract the packed npm tarball and exit `1` (naming the file path only, never the matched identifier) if any packaged file matches the internal tracker identifier pattern, or exit `2` if the tarball cannot be extracted. It MUST also exit `1` when the wrapper manifest (default `packages/teamcli/package.json`, or `--wrapper <path>`) is not at the packed `version` or does not depend on `team` at exactly that version, and exit `2` when that manifest cannot be read (`scripts/check-pack.ts`; *proof:* `.github/workflows/ci.yml`, `test/scripts/check-pack.test.ts`).
    - `bun run e2e` MUST run locally only, refuse to start when the multiplexer is absent, when `sandbox-e2e` already exists, or when machine load, free memory, or swap crosses its gate (`GATE_WAIT_MS = 60_000`), and MUST clean up its temporary session and directories on every exit path (`scripts/e2e.ts`; *proof:* `test/e2e.test.ts`).
 
 3. **Dependency-aware test selection (`gate_select_tests` in `gate-common.sh`, external gate scripts, not published).** Both `light-check.sh` and `push-gate.sh` MUST select test files from the branch diff against `GATE_BASE` in exact order:

@@ -3,10 +3,12 @@ import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { selfRunner } from '../mcp/register.ts';
 import { codexDaemonForSeat, type CodexDaemonValue } from '../policy/codex-daemon.ts';
 import { profileFor } from '../profiles/index.ts';
-import { cliWordList, launchCommand, resumeCarry, shellQuote } from '../profiles/profile.ts';
+import { cliWordList, launchCommandOrRefusal, pinnedRecordLine, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
+import { shellScriptWordOf } from './cli-scope.ts';
+import { grokSandboxOf, type GrokSandbox } from './grok-sandbox.ts';
 import { launchedCliBinary } from './line.ts';
 import type { WaitingRecord } from '../state.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -35,7 +37,32 @@ export type Op =
    *  inbox server resolves the team from when the folder is a lobby. `watcher` is how the seat
    *  will learn a drop is waiting, as this run leaves it; recorded with the launch. Absent only
    *  on a hand-built op: every planned launch names them. */
-  | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string; cli?: string; cwd?: string; teamFile?: string; watcher?: CliWatcher;
+  | { do: 'launch'; seat: string; label: string; command: string; pane?: string;
+      /**
+       * The seat's own recorded pane is reused: the command runs there, nothing is created and
+       * nothing is closed. The value is the process identity the seat's record holds; the live
+       * run reads the pane, its workspace, its process and the agent list again immediately
+       * before the launch. Only a pane the workspace still lists, whose own shell is the only
+       * process in front and that the host does not name for another seat, is launched in — a
+       * pane back at the recorded CLI is the seat's again, and a pane holding anything else
+       * leaves the seat out with nothing launched.
+       */
+      reuse?: LaunchedIdentity;
+      /**
+       * The workspace the pane sits in: the reused pane's own for a launch that re-uses one
+       * (`reuse` above), and the recorded workspace of a seat launched again in its own pane
+       * after its bare restored CLI was exited there. Read again with the pane before the
+       * launch.
+       */
+      workspace?: string;
+      notice?: string; cli?: string; cwd?: string; teamFile?: string; watcher?: CliWatcher;
+      /**
+       * The base recipe the seat's record keeps when this run records it: `seat.launch` with the
+       * profile's pinned feature words appended, never the expanded command the pane runs (the
+       * environment prefix, the unattended flags, the rules line). Set only for a profile that
+       * pins features; absent leaves the record path exactly as it was.
+       */
+      recordLine?: string;
       /**
        * True when the command this step runs carries the seat's rules line: decided here, where
        * the line is given to `launchCommand`, never re-derived from the built command — the line
@@ -52,7 +79,13 @@ export type Op =
        * state folder the endpoint's record is written in, carried by the plan so the launch's
        * host methods take no folder of their own.
        */
-      codexEndpoint?: { dir: string } }
+      codexEndpoint?: { dir: string };
+      /**
+       * A Grok seat's sandbox profile, written at launch before the pane's command runs. Set
+       * only when this plan named the profile on the line, so a failure can take the same
+       * `--sandbox` off again instead of launching a line Grok would refuse.
+       */
+      grokSandbox?: GrokSandbox }
   /** `why` is the reason the record and the log carry; `detail`, when the reason has a fuller
    *  sentence with a folder in it, is the stderr line said under the record. */
   | { do: 'refuse'; seat: string; why: string; detail?: string }
@@ -145,9 +178,79 @@ export type Op =
        */
       reload?: { detail: string };
     }
+  /** A seat relaunched in a fresh workspace had a recorded pane the host did not restore. Its
+   *  recorded workspace is closed only here, after the seat is ready on its replacement, and only
+   *  when a fresh reading still shows that workspace holding the one old pane, bare at its own
+   *  shell and not named for another seat. Every other reading — an unreadable pane, one with a
+   *  process beside its shell, a name the host gives another seat — leaves the workspace and
+   *  says why. */
+  | { do: 'close-leftover'; seat: string; pane: string; workspace: string; cli?: string }
+  /**
+   * A workspace a seat vacated — a stopped seat's record, a record the file no longer declares,
+   * or the workspace a host-moved seat left — is closed only from readings taken immediately
+   * before the close. It closes when its pane list, its panes' processes, the agent names, the
+   * seat records and the screens all say no CLI and no seat is there; anything else leaves it
+   * exactly as it is, with the reason said. `replaced` holds the close until the seat's record
+   * reads ready on a pane other than `pane` (the one it left). `after: 'bus'` holds a stray Bus
+   * workspace until the Bus this run started is up.
+   */
+  | {
+      do: 'sweep';
+      workspace: string;
+      seat?: string;
+      pane?: string;
+      cli?: string;
+      replaced?: true;
+      after?: 'bus';
+    }
+  /**
+   * A restored pane is not the seat's own running form: it runs the bare CLI where the seat's
+   * launch line starts a wrapper, or its managed Codex endpoint died with the host. Re-read the
+   * host, re-run the same restore proof, then exit the CLI in that same pane — in its recorded
+   * workspace, which stays open — and let the steps after this one launch the seat through its
+   * own line there. A pane that is working or holds unsent text, or one whose exit does not come
+   * back to its shell in time, is left exactly as it is.
+   */
+  | {
+      do: 'relaunch';
+      seat: string;
+      cli: string;
+      pane: string;
+      workspace: string;
+      /** The launch record's identity: the proof's expected side, re-read before the exit. */
+      launched: LaunchedIdentity;
+      /** The recorded conversation the relaunch resumes; absent when none is proven. */
+      session?: string;
+      /** The seat's managed Codex endpoint is recorded but not live. The weak (`cli`) restore
+       *  proof is enough here: the pane is exited for the launch's fresh endpoint, not for a
+       *  conversation. */
+      endpoint?: true;
+    }
+  /**
+   * The host restored the seat's pane and cleared its name. Re-read the host, re-run the same
+   * proof, and only then rename the pane back and record the identity it holds now. No typing,
+   * no launch, no close, and no `team register` call.
+   */
+  | {
+      do: 'adopt';
+      seat: string;
+      cli: string;
+      pane: string;
+      workspace: string;
+      /** The pids the plan read; the execute re-reads them and records the live identity. */
+      launched: LaunchedIdentity;
+      /** The launch's own identity: what the execute's re-run of the proof reads the pane
+       *  against. It is never the identity the record takes (that is `launched`). */
+      recordedLaunched: LaunchedIdentity;
+      /** The recorded conversation the proof named; absent on a declared-CLI proof. */
+      session?: string;
+      /** Sidebar line 2, painted by the rename's own step (`also`). */
+      displayAgent?: string;
+    }
   | { do: 'watch'; label: string; command: string; file?: string }
-  /** The event bus's pane: `team bus` in its own workspace, recorded like the watch's. */
-  | { do: 'bus'; label: string; command: string }
+  /** The event bus's pane: `team bus` in its own workspace, recorded like the watch's. A reused
+   *  workspace carries its pane and workspace here; the plan made no new workspace for it. */
+  | { do: 'bus'; label: string; command: string; pane?: string; workspace?: string }
   | {
       do: 'type';
       seat: string;
@@ -216,6 +319,17 @@ export type Step =
   /** A seat that is left out, and why. */
   | { kind: 'skip'; text: string; note?: string; do?: Op };
 
+/**
+ * The seats a plan starts from the registry's record rather than through a named team file: the
+ * launches whose inbox registration resolves the seat by the registry's roster, so the roster
+ * must hold the seat's line before the plan runs. A launch that names a team file resolves the
+ * seat from that file instead, and the line its own completed launch writes is enough.
+ */
+export function registryLaunches(steps: readonly Step[]): string[] {
+  return steps.flatMap((step) =>
+    step.do !== undefined && step.do.do === 'launch' && step.do.teamFile === undefined ? [step.do.seat] : []);
+}
+
 export interface UpSeat {
   name: string;
   cli: string;
@@ -276,6 +390,20 @@ export interface UpSeat {
   replacedPane?: string;
   /** The recorded workspace, when the host still lists it. Named on that same line, and not closed. */
   leftWorkspace?: string;
+  /**
+   * A missing pane's recorded workspace, when the host still lists it: closed after the seat is
+   * ready on its replacement, never before. The plan's reading only says the host listed it; the
+   * close re-reads the workspace and its old pane immediately before it (`execute.ts`), and any
+   * other reading leaves the workspace and says so.
+   */
+  closeLeftover?: { pane: string; workspace: string };
+  /**
+   * A workspace this seat vacated and this run's close should sweep: a stopped seat's recorded
+   * workspace (nothing replaces the seat), or the workspace a host-moved seat left for another
+   * one. The sweep reads the host afresh immediately before the close; `replaced` says the close
+   * waits until the seat's own record reads ready on a pane other than `pane`.
+   */
+  sweep?: { workspace: string; pane?: string; replaced?: true };
   /** The seat works in worktrees: it waits in the lobby until a brief names its worktree. */
   lobby?: boolean;
   /**
@@ -296,6 +424,17 @@ export interface UpSeat {
     drift?: { way: string };
     /** Set by `team reload`: close only at an idle prompt, then launch the file's line. */
     reload?: { detail: string };
+    /** The restored pane is not the seat's running form: the bare CLI where this seat's launch
+     *  line starts a wrapper, or a Codex seat whose recorded managed endpoint died with the host.
+     *  The step re-proves the pane (strongly, or weakly for a dead endpoint), then exits the CLI
+     *  in place; the seat is launched through its own line in that same pane, never adopted. */
+    ownLine?: { session?: string; endpoint?: true };
+    /**
+     * The pane is back at its shell and still the seat's own: the launch runs in it, and nothing
+     * is created or closed. The live run re-reads the pane and its workspace immediately before
+     * the launch, and a changed reading leaves the seat out with nothing launched.
+     */
+    reuse?: true;
   };
   /** A ready seat whose model drifted and that this `up` will not close: herdr reports it
    *  working, or its screen shows a running turn. The record stays ready. */
@@ -312,6 +451,22 @@ export interface UpSeat {
    * `workspace` are set when the seat came back on another pane: the record moves with it.
    */
   restored?: { launched: LaunchedIdentity; session: string; detail: string; pane?: string; workspace?: string };
+  /**
+   * The host restored the pane and cleared the seat's name: the place and the process prove the
+   * seat without it. `up` renames the pane back and records the identity it holds now — no
+   * launch, no typing, no close. `via` is the proof: the recorded conversation, or the declared
+   * CLI alone. `sentence` is the proof's own words, for the plan and the audit line.
+   */
+  adopted?: {
+    pane: string;
+    workspace: string;
+    /** The launch's own identity, for the execute's re-run of the proof. */
+    recordedLaunched: LaunchedIdentity;
+    launched: LaunchedIdentity;
+    session?: string;
+    via: 'session' | 'cli';
+    sentence: string;
+  };
   /** A bound registry policy. Its launch/model are authoritative over the team file. */
   registry?: { launch: string; model: string; version: string; sessionId?: string };
   /**
@@ -380,11 +535,41 @@ export interface UpSeat {
  * is left as it is.
  */
 export function launchWillRun(
-  seat: Pick<UpSeat, 'stage' | 'pane' | 'agentLive' | 'waiting'>,
+  seat: Pick<UpSeat, 'stage' | 'pane' | 'agentLive' | 'waiting' | 'repair'>,
 ): boolean {
   const waiting = seat.waiting;
+  // A seat whose own pane came back at its shell runs its line again in that pane: nothing is
+  // created beside it and nothing is closed.
+  if (!waiting && seat.repair?.reuse === true) return true;
   const fresh = !waiting && (seat.stage === undefined || !seat.pane);
   return !waiting && (fresh || (seat.stage === 'launched' && !seat.agentLive));
+}
+
+/**
+ * Whether this launch is the seat's own Codex binary under the managed-endpoint policy: the one
+ * condition that makes a launch start an app-server and attach to it, and the same condition
+ * `team up` reads to decide a restored seat must be launched again for the endpoint it lost.
+ * A wrapper's own endpoint is not ours to bind, a `--remote` or `--no-daemon` the file already
+ * names is a collision, and a policy that is off or unreadable plans none. The collision is read
+ * from the CLI's own decoded words — a flag inside a trailing quoted script is one the CLI will
+ * read, a quoted flag name is the flag, and words before it are the shell's — with 0.5.10's
+ * whole-line question for a line this version cannot prove.
+ */
+export function managedCodexLaunch(input: {
+  cli: string;
+  binary: string;
+  codexDaemon: CodexDaemonValue | undefined;
+  stateDir: string | undefined;
+  launch: string;
+  command: string;
+}): boolean {
+  if (input.cli !== 'codex' || input.codexDaemon !== 'on' || input.stateDir === undefined) return false;
+  if (launchedCliBinary(input.launch) !== input.binary) return false;
+  const words = cliWordList(input.cli, input.command);
+  const names = words === null
+    ? (flag: string): boolean => new RegExp(`(^|\\s)${flag}(=|\\s|$)`).test(input.command)
+    : (flag: string): boolean => words.some((word) => word === flag || word.startsWith(`${flag}=`));
+  return !names('--remote') && !names('--no-daemon');
 }
 
 export interface UpInput {
@@ -424,6 +609,19 @@ export interface UpInput {
   busLabel?: string;
   /** The command the bus's pane runs. Defaults to `team bus`. */
   busLine?: string;
+  /** A workspace already labelled for the Bus whose pane this run starts the Bus in, instead of
+   *  making a second one. Absent: no such workspace was found, and one is made. */
+  busReuse?: { workspace: string; pane: string };
+  /** Labelled Bus workspaces left over beside the one the Bus lives in. Each is swept after the
+   *  Bus is up (or at once when it already answers), never before, and only from a fresh
+   *  reading that finds no CLI in it. */
+  busStrays?: readonly { workspace: string; pane?: string }[];
+  /** The Bus cannot be placed: a sentence the plan says instead of creating a second workspace.
+   *  Set when a labelled Bus workspace exists whose pane cannot be chosen safely. */
+  busHold?: string;
+  /** Records the team file no longer declares: each seat's vacated workspace is swept after the
+   *  plan's own steps. A seat this run declares is swept through its own `sweep`. */
+  vacated?: readonly { seat: string; workspace: string; pane?: string; cli?: string }[];
   /**
    * The team file a flagless watch in `root` would not read. Recorded for the watch's pane
    * before its command runs. Absent when that flagless watch already reads the file.
@@ -495,6 +693,60 @@ function unquoteWord(word: string): string {
   return out;
 }
 
+function unwrapCodexCommand(command: string): string {
+  let current = command;
+  for (let depth = 0; depth < 4; depth += 1) {
+    const found = shellScriptWordOf(current);
+    if (found === null) break;
+    current = found.word.text;
+  }
+  return current;
+}
+
+export function codexCommandHasFlag(command: string, flag: string): boolean {
+  const words = cliWordList('codex', command);
+  if (words !== null) {
+    let positional = false;
+    for (const word of words) {
+      if (word === '--') {
+        positional = true;
+        continue;
+      }
+      if (positional) continue;
+      if (word === flag || word.startsWith(`${flag}=`)) return true;
+    }
+    return false;
+  }
+  const unwrapped = unwrapCodexCommand(command);
+  const rawWords: string[] = unwrapped.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
+  for (const raw of rawWords) {
+    const word = unquoteWord(raw);
+    if (word === '--') break;
+    if (word === flag || word.startsWith(`${flag}=`)) return true;
+  }
+  return new RegExp(`(^|\\s)${flag}(=|\\s|$)`).test(unwrapped);
+}
+
+export function codexCommandRemoteUrl(command: string): string | null {
+  const unwrapped = unwrapCodexCommand(command);
+  const words: string[] = unwrapped.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
+  let found: string | null = null;
+  for (let i = 0; i < words.length; i++) {
+    const word = unquoteWord(words[i]!);
+    if (word === '--') break;
+    if (word === '--remote') {
+      const next = words[i + 1];
+      if (next !== undefined) {
+        found = unquoteWord(next);
+        i++;
+      }
+    } else if (word.startsWith('--remote=')) {
+      found = unquoteWord(word.slice('--remote='.length));
+    }
+  }
+  return found;
+}
+
 /**
  * The configuration a managed Codex endpoint is started with, from the seat's own line.
  * Measured on codex-cli 0.161.0: a TUI attached with `--remote` runs its turns under the
@@ -508,7 +760,8 @@ function unquoteWord(word: string): string {
  * prompt word shaped like an option never becomes an endpoint permission.
  */
 export function codexEndpointConfig(command: string): string[] {
-  const words: string[] = command.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
+  const unwrapped = unwrapCodexCommand(command);
+  const words: string[] = unwrapped.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
   const config: string[] = [];
   const toml = (value: string): string => JSON.stringify(value);
   // A joined value is part of its flag's own word: `--flag=value`, and a short option's
@@ -569,6 +822,22 @@ export function codexEndpointConfig(command: string): string[] {
  * and provider.py. This measurement used an endpoint carrying the line's config words.
  */
 export function remoteCodexCommand(command: string): string {
+  const trimmed = command.trimEnd();
+  const script = shellScriptWordOf(trimmed);
+  if (script !== null && script.trailing.length === 0) {
+    const inner = remoteCodexCommand(script.word.text);
+    if (inner === script.word.text) return command;
+    const open = trimmed[script.word.start];
+    const close = trimmed[script.word.end - 1];
+    if (open === "'" && close === "'") {
+      const encoded = `'${inner.replaceAll("'", "'\\''")}'`;
+      return `${trimmed.slice(0, script.word.start)}${encoded}${trimmed.slice(script.word.end)}${command.slice(trimmed.length)}`;
+    }
+    if (open === '"' && close === '"') {
+      const encoded = `"${inner.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('$', '\\$').replaceAll('`', '\\`')}"`;
+      return `${trimmed.slice(0, script.word.start)}${encoded}${trimmed.slice(script.word.end)}${command.slice(trimmed.length)}`;
+    }
+  }
   // Raw shell words, quotes kept: a word is only ever matched whole and unquoted, so a quoted
   // argument (the rules line, a `-c` value) that happens to hold `resume` is never touched.
   const words: string[] = command.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
@@ -717,6 +986,32 @@ export function upPlan(input: UpInput): Step[] {
       }
       continue;
     }
+    if (seat.adopted) {
+      // The pane is renamed back in one line, its sidebar line with it; the re-tie itself is the
+      // record step the run makes when that rename lands. Nothing is launched, typed or closed.
+      steps.push({
+        kind: 'run',
+        argv: herdr(session, 'agent', 'rename', seat.adopted.pane, seat.name),
+        ...(seat.displayAgent
+          ? { also: herdr(session, 'pane', 'report-metadata', seat.adopted.pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', seat.displayAgent) }
+          : {}),
+        do: {
+          do: 'adopt',
+          seat: seat.name,
+          cli: seat.cli,
+          pane: seat.adopted.pane,
+          workspace: seat.adopted.workspace,
+          launched: seat.adopted.launched,
+          recordedLaunched: seat.adopted.recordedLaunched,
+          ...(seat.displayAgent ? { displayAgent: seat.displayAgent } : {}),
+          ...(seat.adopted.session === undefined ? {} : { session: seat.adopted.session }),
+        },
+      });
+      // The plan's own line. It carries no `do`: the re-tie is the run step above, so a walk
+      // that stops before it leaves the seat exactly as the host restored it.
+      steps.push({ kind: 'skip', text: `${seat.name}: restored and re-tied: ${seat.adopted.sentence}; left as it is` });
+      continue;
+    }
     if (seat.restored) {
       // The seat keeps its pane; its sidebar is painted from the record like a ready seat's.
       repaint(seat, seat.restored.pane ?? seat.pane, seat.restored.workspace ?? seat.workspace);
@@ -839,12 +1134,18 @@ export function upPlan(input: UpInput): Step[] {
       });
       continue;
     }
-    const pane = seat.pane ?? paneOf(seat.name);
     const cwd = isAbsolute(seat.cwd) ? seat.cwd : resolve(input.root, seat.cwd);
     // A seat recorded waiting is never launched again: its recorded pane is reused, and the
     // idle step below reads it fresh and asks its owner (§5).
     const waiting = seat.waiting;
-    const fresh = !waiting && (seat.stage === undefined || !seat.pane);
+    // The seat's own recorded pane came back at its shell: the line runs there, and neither a
+    // workspace is created nor one is closed.
+    const reuse = !waiting && seat.repair?.reuse === true ? seat.repair : undefined;
+    // A wrapper seat restored to its bare CLI: its own pane is exited in place, with no
+    // workspace closed and none made, and the launch below runs in that same pane.
+    const ownLine = seat.repair?.ownLine;
+    const fresh = !waiting && reuse === undefined && (seat.stage === undefined || !seat.pane);
+    const pane = reuse?.pane ?? seat.pane ?? paneOf(seat.name);
     // The same condition as the launch step below. A seat already running keeps
     // its idle wait, rename and rules, and hears the reading as a notice.
     const wouldLaunch = launchWillRun(seat);
@@ -871,59 +1172,6 @@ export function upPlan(input: UpInput): Step[] {
       });
       continue;
     }
-    let notice: string | undefined;
-    if (seat.budget?.kind === 'unknown') notice = seat.budget.text;
-    else if (seat.budget?.kind === 'refuse') notice = seat.budget.why;
-    if (seat.replacedPane) {
-      const gone = seat.leftWorkspace
-        ? `its recorded pane ${seat.replacedPane} was gone and was replaced; its workspace ${seat.leftWorkspace} was left`
-        : `its recorded pane ${seat.replacedPane} was gone and was replaced`;
-      notice = notice ? `${notice}; ${gone}` : gone;
-    }
-    const takeNotice = (): string | undefined => {
-      const text = notice;
-      notice = undefined;
-      return text;
-    };
-    if (fresh) {
-      // A seat whose pane stopped holding the process team launched: what is in it now is not
-      // the seat, so it is closed with no key and no text, and everything after this step
-      // launches the seat from the beginning, in a workspace of its own.
-      if (seat.repair) {
-        const drift = !seat.repair.reload && seat.repair.drift && seat.model !== undefined && seat.version !== undefined
-          ? { model: seat.model, version: seat.version, way: seat.repair.drift.way }
-          : undefined;
-        const reload = seat.repair.reload;
-        steps.push({
-          kind: 'run',
-          argv: herdr(session, 'workspace', 'close', seat.repair.workspace),
-          note: reload
-            ? 'closed without input, at an idle prompt: its declared model, effort or rules differ from the launch'
-            : drift
-              ? 'closed without input: its model drifted from the file'
-              : 'closed without input: its pane no longer holds the process team launched',
-          do: {
-            do: 'repair',
-            seat: seat.name,
-            cli: seat.repair.cli,
-            pane: seat.repair.pane,
-            workspace: seat.repair.workspace,
-            launched: seat.repair.launched,
-            ...(drift ? { drift } : {}),
-            ...(reload ? { reload } : {}),
-          },
-        });
-      }
-      const said = takeNotice();
-      steps.push({
-        kind: 'run',
-        argv: herdr(session, 'workspace', 'create', '--cwd', cwd, '--label', seat.label, '--no-focus'),
-        ...(said ? { note: `${said}; would launch` } : {}),
-        // A seat that waits in the lobby is created in it: the host confirms that folder again
-        // directly before this create (`execute.ts`), with nothing in between.
-        do: { do: 'create', seat: seat.name, label: seat.label, cwd, repairLine: seat.repairLine, ...(seat.lobby ? { lobby: true as const } : {}), ...(said ? { notice: said } : {}), watcher },
-      });
-    }
     // The place's session is the herdr session this launch aims at. A file route binds the
     // team file's own session instead (`mcp/register.ts`), read from the file this run read:
     // the server refuses any other. A launch-line route names the same file to its server, so
@@ -949,13 +1197,39 @@ export function upPlan(input: UpInput): Step[] {
     const resumeGap = carried?.kind === 'refuse'
       ? `its recorded conversation cannot be resumed: ${carried.why}`
       : undefined;
-    // The rules line this launch gives `launchCommand`, and whether that call appends it: only a
-    // message-mode profile with a launch prompt carries one. `execute.ts` writes the rules file
-    // before the command runs from this decision, never by searching the built command for the
-    // line, which is shell-quoted there.
+    // The rules line this launch gives `launchCommandOrRefusal`, and whether that call carries
+    // it: only a message-mode profile with a launch prompt carries one. Whether the built line
+    // really hands it to the CLI is read from the CLI's own decoded words — the same reader the
+    // placement proves — so a line whose shape this version cannot place reports no carry
+    // instead of writing the file on the assumption of one. `execute.ts` writes the rules file
+    // before the command runs from this decision, never by searching the built command's text,
+    // which is shell-quoted there.
     const rulesLine = profile.rulesMode === 'message' && !seat.rulesRefusal ? seat.rulesFile?.line : undefined;
-    const rulesCarried = rulesLine !== undefined && profile.rulesPrompt !== null;
-    const command = launchCommand(profile, recordedLine, seat.rules, input.cliHooks?.[seat.name], {
+    // A Grok seat runs inside the sandbox profile this run writes for it: the workspace's own
+    // grant plus the two folders the seat's state lives in. The profile belongs to the team's
+    // project, and a launch line that names its own `--sandbox` keeps it — nothing is written
+    // for a profile this run did not name. A plan with no home or no team file cannot place the
+    // file, and names no profile rather than one Grok could not find.
+    const grokSandbox = profile.cli === 'grok' && input.home !== undefined && input.team !== undefined
+      ? grokSandboxOf({ home: input.home, root: input.root, project: input.team.project })
+      : undefined;
+    // The line's own `--sandbox` keeps the file's choice. Asked of the CLI's decoded words,
+    // exactly as the launch command asks every "does the line already set this": a flag inside a
+    // wrapper's trailing script is the CLI's flag, and a quoted mention in a prompt value is not.
+    // A line whose shape this version cannot prove is asked of the whole line, where a plainly
+    // written flag is still seen.
+    const lineWords = cliWordList(profile.cli, recordedLine);
+    const lineNamesSandbox = lineWords === null
+      ? /(^|\s)--sandbox(=|\s|$)/.test(recordedLine)
+      : lineWords.some((word) => word === '--sandbox' || word.startsWith('--sandbox='));
+    const plannedSandbox = grokSandbox !== undefined && !lineNamesSandbox
+      ? grokSandbox
+      : undefined;
+    // The line is built before the steps that create or close a workspace: a refusal must come
+    // before any of them, and the warnings it produces are said on the launch step where they
+    // have always been said.
+    const launchWarnings: string[] = [];
+    const launcher = launchCommandOrRefusal(profile, recordedLine, seat.rules, input.cliHooks?.[seat.name], {
       seat: seat.name,
       session,
       ...selfRunner(),
@@ -964,29 +1238,134 @@ export function upPlan(input: UpInput): Step[] {
     }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon }, rulesLine, (text) => {
       // A launch line whose shape this version cannot prove keeps 0.5.10's placement of the
       // options after it; the seat says so on the launch step rather than losing the words.
-      notice = notice ? `${notice}; ${text}` : text;
-    });
+      launchWarnings.push(text);
+    }, cwd, plannedSandbox?.profile, wouldLaunch);
+    // A line the profile's words cannot be placed on is refused before any workspace is created
+    // or closed: its options would be read as prompt text, or its rules line lost.
+    if (launcher.refusal !== undefined) {
+      steps.push({
+        kind: 'skip',
+        text: `${seat.name}: would refuse: ${launcher.refusal}`,
+        do: { do: 'refuse', seat: seat.name, why: launcher.refusal },
+      });
+      continue;
+    }
+    const command = launcher.command;
+    let notice: string | undefined;
+    if (seat.budget?.kind === 'unknown') notice = seat.budget.text;
+    else if (seat.budget?.kind === 'refuse') notice = seat.budget.why;
+    if (seat.replacedPane) {
+      const gone = seat.closeLeftover
+        ? `its recorded pane ${seat.replacedPane} was gone and was replaced; its recorded workspace ${seat.closeLeftover.workspace} is closed once the seat is ready, if it still holds only the old pane`
+        : seat.leftWorkspace
+          ? `its recorded pane ${seat.replacedPane} was gone and was replaced; its workspace ${seat.leftWorkspace} was left`
+          : `its recorded pane ${seat.replacedPane} was gone and was replaced`;
+      notice = notice ? `${notice}; ${gone}` : gone;
+    }
+    if (reuse !== undefined) {
+      const same = `its recorded pane ${reuse.pane} was at its shell; launched in the same pane`;
+      notice = notice ? `${notice}; ${same}` : same;
+    }
+    const takeNotice = (): string | undefined => {
+      const text = notice;
+      notice = undefined;
+      return text;
+    };
+    if (fresh) {
+      // A seat whose pane stopped holding the process team launched: what is in it now is not
+      // the seat, so it is closed with no key and no text, and everything after this step
+      // launches the seat from the beginning, in a workspace of its own. A wrapper seat the
+      // host restored to its bare CLI is the exception: its pane is the seat's own, and the
+      // exit — the profile's own way out — is typed in it, with no workspace closed or made.
+      if (seat.repair) {
+        const drift = !seat.repair.reload && !ownLine && seat.repair.drift && seat.model !== undefined && seat.version !== undefined
+          ? { model: seat.model, version: seat.version, way: seat.repair.drift.way }
+          : undefined;
+        const reload = seat.repair.reload;
+        const repair = seat.repair;
+        if (ownLine) {
+          steps.push({
+            kind: 'run',
+            argv: profile.exit !== null
+              ? herdr(session, 'pane', 'run', repair.pane, profile.exit)
+              : herdr(session, 'pane', 'send-keys', repair.pane, ...profile.exitKeys),
+            note: ownLine.endpoint === true
+              ? 'its recorded Codex endpoint is not live; exited in place and launched again here with its own endpoint'
+              : 'its pane holds the bare restored CLI, not its launch line; exited in place and launched again here',
+            do: {
+              do: 'relaunch',
+              seat: seat.name,
+              cli: repair.cli,
+              pane: repair.pane,
+              workspace: repair.workspace,
+              launched: repair.launched,
+              ...(ownLine.session === undefined ? {} : { session: ownLine.session }),
+              ...(ownLine.endpoint === true ? { endpoint: true as const } : {}),
+            },
+          });
+        } else {
+          steps.push({
+            kind: 'run',
+            argv: herdr(session, 'workspace', 'close', repair.workspace),
+            note: reload
+              ? 'closed without input, at an idle prompt: its declared model, effort or rules differ from the launch'
+              : drift
+                ? 'closed without input: its model drifted from the file'
+                : 'closed without input: its pane no longer holds the process team launched',
+            do: {
+              do: 'repair',
+              seat: seat.name,
+              cli: repair.cli,
+              pane: repair.pane,
+              workspace: repair.workspace,
+              launched: repair.launched,
+              ...(drift ? { drift } : {}),
+              ...(reload ? { reload } : {}),
+            },
+          });
+        }
+      }
+      if (!ownLine) {
+        const said = takeNotice();
+        steps.push({
+          kind: 'run',
+          argv: herdr(session, 'workspace', 'create', '--cwd', cwd, '--label', seat.label, '--no-focus'),
+          ...(said ? { note: `${said}; would launch` } : {}),
+          // A seat that waits in the lobby is created in it: the host confirms that folder again
+          // directly before this create (`execute.ts`), with nothing in between.
+          do: { do: 'create', seat: seat.name, label: seat.label, cwd, repairLine: seat.repairLine, ...(seat.lobby ? { lobby: true as const } : {}), ...(said ? { notice: said } : {}), watcher },
+        });
+      }
+    }
+    // A launch line whose shape this version cannot prove keeps 0.5.10's placement of the
+    // options after it; the seat says so on the launch step rather than losing the words.
+    for (const text of launchWarnings) notice = notice ? `${notice}; ${text}` : text;
+    // The launch carries the line exactly when the CLI's own decoded words end with it: a
+    // message-mode CLI reads its initial prompt as its last positional word, and a line this
+    // version could not place it on names no such word.
+    const launchWords = cliWordList(profile.cli, command);
+    const rulesCarried = rulesLine !== undefined && profile.rulesPrompt !== null
+      && launchWords !== null && launchWords.at(-1) === rulesLine;
+    // What the seat's record keeps as its launch line when this run records it: the same base
+    // recipe the record paths store today, with the profile's pins placed where the launch puts
+    // them — before the CLI's first delimiter, inside a proven script that runs the CLI. Never
+    // the expanded command — a dry run prints that and a pane runs it, and the record's line is
+    // the recipe, not the expansion. A profile that pins nothing records its base line unchanged.
+    const recordLine = pinnedRecordLine(profile.cli, seat.launch, profile.features);
     // A managed Codex seat's endpoint, decided from the same signed policy that shaped the line:
     // the launch must be the Codex binary itself (a wrapper's own endpoint is not ours to bind),
     // and a `--remote` or `--no-daemon` the file already names is a collision, refused rather
-    // than probed past. Nothing is recorded when the policy is off or unreadable.
-    // The collision is read from the CLI's own decoded words: a flag inside a trailing quoted
-    // script is one the CLI will read, a quoted flag name is the flag, and the shell's words
-    // before it are not. A line this version cannot prove is asked 0.5.10's question of the
-    // whole line: a collision it plainly names still stops the managed endpoint, and one only a
-    // quoted flag name appears to name does not.
-    const managedWords = cliWordList(profile.cli, command);
-    const managedFlag = managedWords === null
-      ? (flag: string): boolean => new RegExp(`(^|\\s)${flag}(=|\\s|$)`).test(command)
-      : (flag: string): boolean => managedWords.some((word) => word === flag || word.startsWith(`${flag}=`));
-    const managedCodex = profile.cli === 'codex'
-      && codexDaemon === 'on'
-      && input.stateDir !== undefined
-      && launchedCliBinary(seat.launch) === profile.binary
-      && !managedFlag('--remote')
-      // A resume line attaches too: the attach sheds its permission overrides
-      // (`remoteCodexCommand`), which codex-cli 0.161.0 refuses on a remote resume.
-      && !managedFlag('--no-daemon');
+    // than probed past. Nothing is recorded when the policy is off or unreadable. A resume line
+    // attaches too: the attach sheds its permission overrides (`remoteCodexCommand`), which
+    // codex-cli 0.161.0 refuses on a remote resume.
+    const managedCodex = managedCodexLaunch({
+      cli: profile.cli,
+      binary: profile.binary,
+      codexDaemon,
+      stateDir: input.stateDir,
+      launch: seat.launch,
+      command,
+    });
     // The `waiting` guard is not this condition's alone: §5's seat is never launched again,
     // whatever its live-ness reads, so the wait above is the whole of its plan.
     if (wouldLaunch) {
@@ -1000,7 +1379,7 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
         note: launchNote,
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}) },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: reuse?.pane ?? seat.pane, ...(reuse === undefined ? {} : { reuse: reuse.launched, workspace: reuse.workspace }), ...(reuse === undefined && seat.workspace !== undefined ? { workspace: seat.workspace } : {}), cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, recordLine, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}), ...(plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }) },
       });
     }
     const rules = profile.rulesMode;
@@ -1023,8 +1402,8 @@ export function upPlan(input: UpInput): Step[] {
           watcher,
           seconds: profile.idleTimeout,
           command,
-          pane: seat.pane,
-          workspace: seat.workspace,
+          pane: reuse?.pane ?? seat.pane,
+          workspace: reuse?.workspace ?? seat.workspace,
           repairLine: seat.repairLine,
           ...(seat.model !== undefined && seat.version !== undefined
             ? { model: seat.model, version: seat.version, ...(seat.effort ? { effort: seat.effort } : {}) }
@@ -1051,7 +1430,7 @@ export function upPlan(input: UpInput): Step[] {
           cli: seat.cli,
           seconds: profile.idleTimeout,
           rules,
-          pane: seat.pane,
+          pane: reuse?.pane ?? seat.pane,
           ...(seat.displayAgent ? { displayAgent: seat.displayAgent } : {}),
         },
       });
@@ -1087,7 +1466,7 @@ export function upPlan(input: UpInput): Step[] {
           line: file.line,
           seconds: profile.idleTimeout,
           launchCanCarryRules: profile.rulesPrompt !== null,
-          pane: seat.pane,
+          pane: reuse?.pane ?? seat.pane,
           ...(said ? { notice: said } : {}),
         },
       });
@@ -1100,21 +1479,94 @@ export function upPlan(input: UpInput): Step[] {
         do: { do: 'ready', seat: seat.name, rules: 'option', ...(said ? { notice: said } : {}) },
       });
     }
+    // The old workspace closes last, after every step that makes the seat ready on its
+    // replacement: a seat this run does not launch never reaches it. The close re-reads the
+    // workspace and its old pane immediately before it, and says why when it leaves them.
+    if (seat.closeLeftover !== undefined && wouldLaunch) {
+      steps.push({
+        kind: 'run',
+        argv: herdr(session, 'workspace', 'close', seat.closeLeftover.workspace),
+        note: 'closed once the seat is ready on its replacement, if it still holds only the old pane, with no CLI in it',
+        do: { do: 'close-leftover', seat: seat.name, pane: seat.closeLeftover.pane, workspace: seat.closeLeftover.workspace, cli: seat.cli },
+      });
+    }
   }
 
-  if (input.startBus === true && input.busAlive !== true && input.busLabel !== undefined) {
+  // The workspaces seats vacated close last, after every step that makes a replacement ready —
+  // and after a stopped seat's own (there is no replacement to wait for). Each close re-reads
+  // the host immediately before it; this plan only says which workspace to read.
+  // A human's pane and a granted seat's are not this run's to close, whatever a plan built by
+  // hand attached to them: neither reaches the swept collection.
+  const swept = [
+    ...input.seats.flatMap((seat) => (seat.sweep === undefined || seat.human || seat.grantKeep !== undefined
+      ? []
+      : [{ seat: seat.name, cli: seat.cli, ...seat.sweep }])),
+    ...(input.vacated ?? []),
+  ];
+  for (const held of swept) {
+    steps.push({
+      kind: 'run',
+      argv: herdr(session, 'workspace', 'close', held.workspace),
+      note: 'closed only if a fresh reading shows every pane bare at its own shell, with no other seat there',
+      do: {
+        do: 'sweep',
+        seat: held.seat,
+        workspace: held.workspace,
+        ...(held.pane === undefined ? {} : { pane: held.pane }),
+        ...(held.cli === undefined ? {} : { cli: held.cli }),
+        ...('replaced' in held && held.replaced === true ? { replaced: true as const } : {}),
+      },
+    });
+  }
+
+  const busLabel = input.busLabel;
+  const busStarting = input.startBus === true && input.busAlive !== true && busLabel !== undefined;
+  if (busStarting && busLabel !== undefined) {
     const busLine = input.busLine ?? 'team bus';
-    steps.push({
-      kind: 'run',
-      argv: herdr(session, 'workspace', 'create', '--cwd', input.root, '--label', input.busLabel, '--no-focus'),
-      do: { do: 'create', label: input.busLabel, cwd: input.root, bus: true },
-    });
-    steps.push({
-      kind: 'run',
-      argv: herdr(session, 'pane', 'run', paneOf(input.busLabel), busLine),
-      note: 'seats follow it for message.arrived; without it they poll',
-      do: { do: 'bus', label: input.busLabel, command: busLine },
-    });
+    if (input.busHold !== undefined) {
+      // A Bus workspace with the team's label exists and its pane cannot be chosen from an
+      // unreadable host: a second workspace now could sit beside a Bus already running in it.
+      steps.push({ kind: 'skip', text: input.busHold });
+    } else if (input.busReuse !== undefined) {
+      steps.push({
+        kind: 'run',
+        argv: herdr(session, 'pane', 'run', input.busReuse.pane, busLine),
+        note: 'seats follow it for message.arrived; without it they poll',
+        do: { do: 'bus', label: busLabel, command: busLine, pane: input.busReuse.pane, workspace: input.busReuse.workspace },
+      });
+    } else {
+      steps.push({
+        kind: 'run',
+        argv: herdr(session, 'workspace', 'create', '--cwd', input.root, '--label', busLabel, '--no-focus'),
+        do: { do: 'create', label: busLabel, cwd: input.root, bus: true },
+      });
+      steps.push({
+        kind: 'run',
+        argv: herdr(session, 'pane', 'run', paneOf(busLabel), busLine),
+        note: 'seats follow it for message.arrived; without it they poll',
+        do: { do: 'bus', label: busLabel, command: busLine },
+      });
+    }
+  }
+  // A stray Bus workspace closes only once the Bus this team runs is up: after the step that
+  // starts it, or at once when it already answers. With no Bus planned at all (autostart off,
+  // or a hold), strays stay exactly where they are.
+  if (input.busStrays !== undefined && (busStarting || (input.startBus === true && input.busAlive === true))) {
+    if (!(busStarting && input.busHold !== undefined)) {
+      for (const stray of input.busStrays) {
+        steps.push({
+          kind: 'run',
+          argv: herdr(session, 'workspace', 'close', stray.workspace),
+          note: 'a second Bus workspace; closed only after the Bus is up and only from a fresh reading',
+          do: {
+            do: 'sweep',
+            workspace: stray.workspace,
+            ...(stray.pane === undefined ? {} : { pane: stray.pane }),
+            ...(busStarting ? { after: 'bus' as const } : {}),
+          },
+        });
+      }
+    }
   }
   if (input.watchAlive || input.startWatch === false) return steps;
   if (input.watchUnknown) {

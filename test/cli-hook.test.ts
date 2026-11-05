@@ -11,7 +11,7 @@ import {
   symlinkSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { seatRegistryRows, type SeatRegistryRow } from '../src/commands/seats.ts';
 import { plantRecord } from '../src/commands/messages.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
@@ -27,14 +27,15 @@ import { DEFAULT_STATE_THRESHOLDS } from '../src/settings/inherit.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import {
   cliHookSettings, cliHookSettingsPath, cliHookStatePath, dropReadRunner, hookRunnerFor, installCliHooks,
-  plannedCliHooks, readCliHook, resetCliHookState,
+  namesRuntimeCopy, plannedCliHooks, readCliHook, refreshCliHooks, resetCliHookState,
 } from '../src/launch/cli-hook.ts';
 import { recordInstalledProgram, stableHookPath } from '../src/daemon/runtime-entry.ts';
+import { commandGuardScriptPath } from '../src/launch/command-guard.ts';
 import { presencePaths } from '../src/daemon/presence/spool.ts';
 import type { PresenceSeatsRead } from '../src/labels/presence.ts';
 import { profileFor } from '../src/profiles/index.ts';
 import { launchCommand } from '../src/profiles/profile.ts';
-import { emptySession, type SessionState } from '../src/state.ts';
+import { emptySession, readState, updateState, type SessionState } from '../src/state.ts';
 import type { Comparison, Live } from '../src/status/compare.ts';
 import { CLAUDE_IDLE, testIo } from './helpers.ts';
 
@@ -398,9 +399,9 @@ seats:
     expect(await runSend([SEAT, 'hello'], io, host)).toBe(0);
 
     // The bus inbox carried it: the seat's own drop-read trigger is never typed, and the
-    // sender's side has only the unconfirmed ending until the seat's own read writes the
-    // receipt. The drop leg wrote the record the trigger reads.
-    expect(io.out).toContain('sent (unconfirmed)');
+    // sender's side has only the queued, not woken ending until the seat's own read writes
+    // the receipt. The drop leg wrote the record the trigger reads.
+    expect(io.out).toContain('queued, not woken');
     expect(typed).toEqual([]);
     const dir = dropsAt();
     const id = readdirSync(dir).find((name) => MESSAGE_ID.test(name));
@@ -415,7 +416,7 @@ seats:
     expect(run(command)).toBe('');
   }, 60_000);
 
-  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a seat the session does not list takes the default walk to the drop leg: signed record, sent (unconfirmed), nothing typed', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a seat the session does not list takes the default walk to the drop leg: signed record, queued, not woken, nothing typed', async () => {
     const io = testIo(project, { kind: 'owner' });
     const typed: { pane: string; text: string }[] = [];
     const host: SendHost = {
@@ -442,9 +443,9 @@ seats:
     expect(await runSend([SEAT, 'hello'], io, host)).toBe(0);
 
     // The bus inbox is the channel: the drop file is written whole and nothing is typed, and
-    // the sender's side knows only the unconfirmed end. The reason the typed leg passed rides
-    // the one history line the drop leg wrote.
-    expect(io.out).toContain('sent (unconfirmed)');
+    // the sender's side knows only the queued, not woken end. The reason the typed leg passed
+    // rides the one history line the drop leg wrote.
+    expect(io.out).toContain('queued, not woken');
     expect(typed).toEqual([]);
     const dir = dropsAt();
     const id = readdirSync(dir).find((name) => MESSAGE_ID.test(name));
@@ -464,7 +465,7 @@ seats:
     if (!history.ok) throw new Error(`the history does not read: ${history.reason}`);
     const entry = history.entries.filter((one) => one.id === id).at(-1);
     if (entry === undefined) throw new Error('the send wrote no history line');
-    expect(entry.outcome).toBe('sent (unconfirmed)');
+    expect(entry.outcome).toBe('queued, not woken');
     expect(entry.via).toBe('drop');
     const reason = (entry.failed ?? []).find((one) => one.startsWith('typed: '));
     expect(reason).toBe(`typed: ${NO_PANE_MESSAGING}`);
@@ -1009,5 +1010,131 @@ describe('a registry row reads the state file', () => {
   test('no session given: the hook is not read', () => {
     writeState(`{"state":"working","since":"${ago(5)}"}\n`);
     expect(row({ stateDir: dir })).toMatchObject({ state: 'unknown', state_source: 'none' });
+  });
+});
+
+// A running seat is not relaunched by a refresh: the file its process already has is rewritten
+// with the command a launch installs today (through installCliHooks), the presence binding is
+// the one it was launched with, and the declaration time stands unless the inbound word moved —
+// the send walk compares that time with the seat's socket (`src/send/inbound.ts`).
+describe('a running seat\'s hook file, refreshed without a restart', () => {
+  const SESSION = 'teamcli';
+  const COPY = 'f'.repeat(64);
+  const OLD = new Date('2020-01-01T00:00:00Z');
+  const seat = (name: string) => ({ name, cli: 'claude-code', launch: CLAUDE });
+  const writeOld = (path: string, document: unknown, mode = 0o600): void => {
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    writeFileSync(path, `${JSON.stringify(document, null, 2)}\n`, { mode });
+    // `writeFileSync`'s mode is masked by the umask; the scene pins the file's own.
+    chmodSync(path, mode);
+    utimesSync(path, OLD, OLD);
+  };
+  const oldDocument = (word?: 'accept'): unknown => ({
+    hooks: {
+      UserPromptSubmit: [{
+        hooks: [{ type: 'command', command: `node /gone/daemon-runtime/${COPY}/dist/cli.js drops --read --seat worker --session ${SESSION}` }],
+      }],
+    },
+    ...(word === undefined ? {} : { crossSessionInbound: word }),
+  });
+
+  test('the command a launch installs today is written over the file, and no file is created', () => {
+    const path = cliHookSettingsPath(dir, SESSION, 'worker')!;
+    writeOld(path, oldDocument('accept'));
+    const refresh = refreshCliHooks(dir, SESSION, [{ ...seat('worker'), inbound: 'accept' as const }]);
+    expect(refresh.rewritten).toEqual(['worker']);
+    expect(refresh.failed).toEqual([]);
+    const text = readFileSync(path, 'utf8');
+    expect(text).not.toContain('daemon-runtime');
+    expect(text).toContain(dropReadRunner()!);
+    // A seat handed to the refresh that has no file keeps none: its running process never loaded
+    // one, and a file created now would declare a time newer than the seat's socket.
+    const other = cliHookSettingsPath(dir, SESSION, 'other')!;
+    expect(refreshCliHooks(dir, SESSION, [seat('other')]))
+      .toEqual({ rewritten: [], unchanged: [], failed: [], kept: [] });
+    expect(existsSync(other)).toBe(false);
+  });
+
+  test('a rewrite whose inbound word did not change keeps the declaration time', () => {
+    const path = cliHookSettingsPath(dir, SESSION, 'worker')!;
+    writeOld(path, oldDocument('accept'));
+    const refresh = refreshCliHooks(dir, SESSION, [{ ...seat('worker'), inbound: 'accept' as const }]);
+    expect(refresh.rewritten).toEqual(['worker']);
+    expect(refresh.kept).toEqual(['worker']);
+    // The atime is asserted before this test reads the file: reading it moves the atime.
+    expect(statSync(path).atimeMs).toBe(OLD.getTime());
+    expect(statSync(path).mtimeMs).toBe(OLD.getTime());
+    expect((JSON.parse(readFileSync(path, 'utf8')) as { crossSessionInbound?: string }).crossSessionInbound).toBe('accept');
+  });
+
+  test('a word that changed is a new declaration: the time advances', () => {
+    const path = cliHookSettingsPath(dir, SESSION, 'worker')!;
+    writeOld(path, oldDocument());
+    const refresh = refreshCliHooks(dir, SESSION, [{ ...seat('worker'), inbound: 'accept' as const }]);
+    expect(refresh.rewritten).toEqual(['worker']);
+    expect(refresh.kept).toEqual([]);
+    expect(statSync(path).mtimeMs).toBeGreaterThan(OLD.getTime());
+    expect((JSON.parse(readFileSync(path, 'utf8')) as { crossSessionInbound?: string }).crossSessionInbound).toBe('accept');
+  });
+
+  test('a file that already holds the text and mode is left untouched', () => {
+    const landed = installCliHooks(dir, SESSION, [{ ...seat('worker'), inbound: 'accept' as const }]);
+    const before = statSync(landed.worker!).mtimeMs;
+    expect(refreshCliHooks(dir, SESSION, [{ ...seat('worker'), inbound: 'accept' as const }]))
+      .toEqual({ rewritten: [], unchanged: ['worker'], failed: [], kept: [] });
+    expect(statSync(landed.worker!).mtimeMs).toBe(before);
+  });
+
+  test('a wider file is tightened and declared again', () => {
+    const path = cliHookSettingsPath(dir, SESSION, 'worker')!;
+    writeOld(path, oldDocument('accept'), 0o644);
+    const refresh = refreshCliHooks(dir, SESSION, [{ ...seat('worker'), inbound: 'accept' as const }]);
+    expect(refresh.rewritten).toEqual(['worker']);
+    expect(refresh.kept).toEqual([]);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(statSync(path).mtimeMs).toBeGreaterThan(OLD.getTime());
+  });
+
+  test('the presence binding is the one the running process was launched with', () => {
+    updateState(dir, (state) => {
+      (state.sessions[SESSION] ??= emptySession()).seats.worker = { stage: 'ready', presence_binding: 'prs_abc123def456' };
+    });
+    const path = cliHookSettingsPath(dir, SESSION, 'worker')!;
+    writeOld(path, oldDocument('accept'));
+    refreshCliHooks(dir, SESSION, [{ ...seat('worker'), inbound: 'accept' as const }]);
+    expect(readFileSync(path, 'utf8')).toContain('--binding prs_abc123def456');
+    expect(readState(dir).sessions[SESSION]?.seats.worker?.presence_binding).toBe('prs_abc123def456');
+  });
+
+  test('a runtime copy is recognised by its folder, and a stable path is not', () => {
+    expect(namesRuntimeCopy(`/var/lib/team/daemon-runtime/${COPY}/dist/cli.js`)).toBe(true);
+    expect(namesRuntimeCopy('/opt/homebrew/lib/node_modules/team/dist/cli.js')).toBe(false);
+    expect(namesRuntimeCopy(`/var/lib/team/daemon-runtime/${COPY.slice(1)}/dist/cli.js`)).toBe(false);
+  });
+});
+
+describe('the command guard hook reads the parsed gh word', () => {
+  test('a quoted gh uses the seat allowlist, and an unreadable policy denies the default deploy', () => {
+    const script = commandGuardScriptPath();
+    if (script === null) throw new Error('the command guard script has no stable path');
+    const root = join(base, 'project');
+    const home = join(base, 'home');
+    mkdirSync(join(root, '.agents'), { recursive: true });
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(root, '.agents', 'team.yaml'), ':\n');
+    const args = ['--project', 'crew', '--root', root, '--home', home, '--session', 'teamcli', '--seat', 'worker'];
+    const run = (command: string) => execFileSync(process.execPath, [script, ...args], {
+      input: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }),
+      encoding: 'utf8',
+    });
+    const denied = JSON.parse(run('"gh" workflow run deploy.yml')) as {
+      hookSpecificOutput: { permissionDecision: string };
+    };
+    expect(denied.hookSpecificOutput.permissionDecision).toBe('deny');
+    const backslash = JSON.parse(run('\\gh workflow run deploy.yml')) as {
+      hookSpecificOutput: { permissionDecision: string };
+    };
+    expect(backslash.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(run('gh pr view 1')).toBe('');
   });
 });

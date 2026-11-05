@@ -81,16 +81,35 @@ gates when it stands on the pane the team's own state records for it, in the tea
 main orchestrator is admitted the same way for a team under it: a team the registry holds whose
 folder strictly holds the target's, whose file names the caller its orchestrator under the
 target file's entity, and whose session places it on the pane its state records. The owner's own
-path is untouched, and no other seat is admitted — the admission is the one name the file
-resolves as its lead, so a separate operator seat gains nothing.
+path is untouched, and outside the `lead-gates` policy below no other seat is admitted — the
+admission is the one name the file resolves as its lead.
 
 - `team grant`, `team delegate`, `team revoke`
 - `team policy set`, `team policy unset`
+- `team settings set`, `team settings unset` — a `--file` write names another record and keeps
+  the gate
+- `team config set`, `team config unset` — the `seats.<seat>.stopped` mark is the team's own
+  power, dev mode on or off, and never this admission
 - `team check --repair`
 - `team remove --abandon`, `team down --abandon`
 - `team broker`, `team tempo`
 - `team daemon install`, `team daemon restart`, `team daemon uninstall`, `team daemon fault-watch`
   — `team daemon run` is not this gate, and no mode admits a seat to it
+
+**The operator place, under the `lead-gates` policy.** While dev mode is on, the enforced
+`lead-gates` policy — set at entity, project or team, never at a seat — admits the file's own
+`operator:` seat to five of the gates above when its effective value reads `lead+operator` for
+the caller's chain: `team check --repair`, `team remove --abandon`, `team down --abandon`,
+`team policy set` and `team policy unset`, and `team daemon restart`. `team answer` admits the
+same place under the same policy; its own page says so. The proof is the lead's own: the seat
+must stand on the pane the team's state records for it, in the team's session. The run prints
+the same `dev mode continues` warning and writes the same audit line, with `admitted as
+operator` naming the role. Everything else stays the lead's or the owner's: `grant`, `delegate`
+and `revoke`, `broker` and `tempo`, the daemon's `install`, `uninstall` and `fault-watch`, and
+the main-orchestrator route above have no operator share. The policy's default `lead` — and a
+chain that cannot be read — admit no operator; a nearer level that keeps `lead` cannot be
+widened by a farther `lead+operator`; and a seat spelled both `operator:` and the lead is the
+lead, never the operator.
 
 **The installer designation.** `team queue install` normally records an install only while the
 file's `installer:` section is part of the approval in force. With dev mode on at the team's
@@ -110,9 +129,9 @@ the refusal.
 
 Every lift logs its warning with the command and the caller, and every one carries the
 `dev mode continues` clause except `down`'s caller-placement line under a policy or the machine
-record, which carries the level note alone; the owner and installer admissions add the role they
-proved. The caller-gate, file-approval, owner-gate and reload warnings also print to stderr, while
-the installer admission's is in the audit log alone.
+record, which carries the level note alone; the owner, operator and installer admissions add the
+role they proved. The caller-gate, file-approval, owner-gate and reload warnings also print to
+stderr, while the installer admission's is in the audit log alone.
 
 ## What it never lifts
 

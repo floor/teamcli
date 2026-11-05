@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import type { Seen, StoredReading } from '../src/budgets/readings.ts';
@@ -45,6 +45,18 @@ export function recordAt(path: string): SignedRecord {
 /** The body the record at `path` carries. */
 export function recordBody(path: string): string {
   return recordAt(path).payload.body;
+}
+
+/** Names in a drop folder, without the unread hint. The hint is written beside a record on
+ *  purpose and is not a message. `.pending` and `.fallback.json` stay, so a listing can still
+ *  see those markers. */
+export function withoutUnreadHint(names: readonly string[]): string[] {
+  return names.filter((name) => name !== '.unread.json');
+}
+
+/** `readdir` of a drop folder with the unread hint removed. */
+export function dropNames(dir: string): string[] {
+  return withoutUnreadHint(readdirSync(dir));
 }
 
 /**
@@ -94,10 +106,12 @@ export function deliverBriefs(input: {
 }
 
 /** The seven-rule message the Codex 0.160.0 and Cursor 2026.10.01 captures were typed with,
- *  as today's `rulesText` composes it: 17 lines and 1194 characters. Only the first own-rule
- *  line differs from what the captures hold — the lead's name, `orchestrator` now — while the
- *  file's own rules keep the spelling those fixtures keep (17 lines, 1193 characters in the
- *  two fixture READMEs). Its shape is what `team` composes for a seat; no real seat or person
+ *  as today's `rulesText` composes it: 18 lines and 1303 characters — one line past the
+ *  captures, the end-of-turn drops read every seat without the inbox tools now carries. Only
+ *  the first own-rule line differs from what the captures hold — the lead's name,
+ *  `orchestrator` now — while the file's own rules keep the spelling those fixtures keep
+ *  (17 lines, 1193 characters in the two fixture READMEs). Its shape is what `team` composes
+ *  for a seat; no real seat or person
  *  is in it. */
 export const SAMPLE_RULES = rulesText(
   {

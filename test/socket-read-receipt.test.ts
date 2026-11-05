@@ -1,13 +1,16 @@
-// The socket delivery's read receipt: a frame the receiver's socket takes is the delivery, so
-// the send writes the signed `read` receipt itself — the same receipt a reader writes — and the
-// record stops at `read`. The watch does not ring for it and `team drops --read` and
-// `team messages` do not serve it again. A frame the box holds is not a delivery: it writes no
-// receipt and the record stays unread, so the watch's retry after its window remains the attempt.
-// The frame also opens with the sender's display line (the nickname the roster holds, else the
-// seat name) without touching the record's own attribution line or the typed wake's template.
-// Fake hosts and temporary homes: no pane is typed into and no socket is dialed.
+// The socket delivery writes no read receipt: a frame the receiver's socket takes is the
+// delivery, and only the seat writes a read receipt (its `inbox_read`, `team drops --read` or
+// hook receipt). The sender's own write used to mark every taken frame read, including a frame
+// an agent never saw; now the record stays unread for the seat's own read, and the watch's
+// unread pass re-wakes it like any other message — the report at twice the window is what speaks
+// when no seat receipt comes. A taken frame ends the sender's work at once: it reads no pane, so
+// a box showing a held-message dialog changes nothing here — the record stays unread, and the
+// daemon's held step is what marks a dialog. The watch's retry after its window remains the
+// attempt. The frame also opens with the sender's display line (the nickname the roster holds,
+// else the seat name) without touching the record's own attribution line or the typed wake's
+// template. Fake hosts and temporary homes: no pane is typed into and no socket is dialed.
 import { afterEach, expect, test } from 'bun:test';
-import { mkdirSync, readdirSync, readFileSync, realpathSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { listDrops } from '../src/commands/drops.ts';
 import { listUnacked } from '../src/commands/messages.ts';
@@ -24,9 +27,8 @@ import { isRead, signReceiptPayload, signedReceiptOf, verifyReceipt, writeReceip
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
-import { version } from '../src/version.ts';
 import type { RetrySources } from '../src/watch/retry.ts';
-import { wakeUnreadDrops } from '../src/watch/unread.ts';
+import { reportedPath, reportUnreadDrops, wakePath, wakeUnreadDrops } from '../src/watch/unread.ts';
 import { claudeBox, testIo } from './helpers.ts';
 import { NOW, dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
 
@@ -51,8 +53,9 @@ function declare(made: World, seat = 'lead', policy = 'accept'): string {
   return path;
 }
 
-/** The team file with an entity, and the entity's own lobby in its trust list: the owner-origin
- *  frame's reply address is read from the entity the team names. */
+/** The team file with an entity, and the entity's own lobby in its trust list: the team a
+ *  registry record reads by. The frame's reader line names the record's own id, so it needs no
+ *  address from the entity. */
 function declareEntity(made: World, entity = 'floor'): void {
   const path = join(made.dir, 'team.yaml');
   const lobby = resolveLobby(made.home, { entity });
@@ -153,7 +156,7 @@ function watchScene(made: World, sources: RetrySources, now: Date) {
   };
 }
 
-test('an accepted socket frame writes the signed read receipt, and the frame opens with the sender line', async () => {
+test('an accepted socket frame writes no read receipt, and the frame opens with the sender line', async () => {
   const made = world(null);
   cleanup = made.cleanup;
   declareEntity(made);
@@ -167,28 +170,16 @@ test('an accepted socket frame writes the signed read receipt, and the frame ope
   // The frame's first line is the sender as a person reads it; the record's own attribution
   // line follows it under one blank line, unchanged.
   expect(frameContent(host.frames[0] as string).startsWith('Message from owner (owner@acme)\n\nfrom the owner — admitted by: the owner\n')).toBe(true);
-  // The receipt is a signed read, naming the delivery that took the record.
+  // The taken frame is a delivery, never a read: the record has no receipt beside it and waits
+  // for the seat's own read.
   const drops = dropDir(made.dir, 'lead');
   const id = recordName(drops);
-  const receipt = signedReceiptOf(JSON.parse(readFileSync(join(drops, `${id}.read.json`), 'utf8')));
-  expect(receipt).not.toBeNull();
-  if (receipt === null) return;
-  const { writer, ...fields } = receipt.payload;
-  expect(fields).toEqual({
-    kind: 'receipt',
-    status: 'read',
-    id,
-    to: 'lead',
-    root: realpathSync(made.root),
-    session: 'acme',
-    at: NOW.toISOString(),
-    read_by: 'socket delivery',
-  });
-  expect(writer).toEqual({ version: version(), pid: process.pid });
-  expect(verifyReceipt(receipt, messageKeyOf(made.home))).toBe(true);
+  expect(readdirSync(drops).filter((name) => name.endsWith('.read.json'))).toEqual([]);
+  const context = { to: 'lead', root: realpathSync(made.root), session: 'acme' };
+  expect(listUnread(drops, context, made.home).map((message) => message.id)).toEqual([id]);
 });
 
-test('the watch does not ring for a socket-delivered record, and rings for it once the receipt is gone', async () => {
+test('the watch re-wakes a socket-delivered record like any other, and reports it when no seat read comes', async () => {
   const made = world(null);
   cleanup = made.cleanup;
   declareEntity(made);
@@ -198,21 +189,21 @@ test('the watch does not ring for a socket-delivered record, and rings for it on
   const drops = dropDir(made.dir, 'lead');
   const id = recordName(drops);
 
-  // Eleven minutes later the record would be due for the unread wake; the receipt is the read,
-  // so the watch types nothing.
+  // Eleven minutes later the record is unread and due. This build types nothing into a seat's
+  // pane, so the wake writes no line and leaves no reservation — the message keeps its place.
   const pane = watchPane();
   const { scene, said } = watchScene(made, pane.source, new Date(NOW.getTime() + 11 * 60_000));
   await wakeUnreadDrops(scene, { unreadAfter: 600 });
   expect(pane.typed).toEqual([]);
   expect(said).toEqual([]);
+  expect(existsSync(wakePath(drops, id))).toBe(false);
 
-  // The control: without the receipt the same scene types the wake line for the same record.
-  unlinkSync(join(drops, `${id}.read.json`));
-  await wakeUnreadDrops(scene, { unreadAfter: 600 });
-  expect(pane.typed).toEqual([]);
+  // Twice the window with still no seat receipt: the sender's mailbox and the lead are told.
+  reportUnreadDrops(watchScene(made, watchPane().source, new Date(NOW.getTime() + 22 * 60_000)).scene, { unreadAfter: 600 });
+  expect(existsSync(reportedPath(drops, id))).toBe(true);
 });
 
-test('a held socket frame writes no receipt, and the record waits for the watch retry', async () => {
+test('a socket-taken frame under a held dialog writes no receipt, and the record waits for the watch retry', async () => {
   const made = world(['socket', 'typed']);
   cleanup = made.cleanup;
   declareEntity(made);
@@ -220,7 +211,11 @@ test('a held socket frame writes no receipt, and the record waits for the watch 
   const rule = '─'.repeat(30);
   const heldDialog = `Held message from another session\n${rule}\n❯ \n${rule}`;
   const pane = scripted(['idle', 'working', 'idle', 'working', 'idle']);
-  pane.paneText = () => heldDialog;
+  let reads = 0;
+  pane.paneText = () => {
+    reads += 1;
+    return heldDialog;
+  };
   const dials: string[] = [];
   const host = fake(made, {
     native: pane,
@@ -232,16 +227,19 @@ test('a held socket frame writes no receipt, and the record waits for the watch 
 
   expect(await runSend(['lead', 'held note'], owner(made.root), host)).toBe(0);
   expect(dials).toHaveLength(1);
+  // The frame was taken, and the sender did not look at the box to ask what came of it: the one
+  // look is the quota preflight every send makes, never a held-dialog probe.
+  expect(reads).toBe(1);
   const drops = dropDir(made.dir, 'lead');
   const id = recordName(drops);
-  // No receipt, no other status file: the frame was held, not delivered.
+  // No receipt, no other status file: only the seat's own read writes one.
   expect(readdirSync(drops).filter((name) => name.endsWith('.read.json'))).toEqual([]);
   // The record is still the watch's to retry.
   const context = { to: 'lead', root: realpathSync(made.root), session: 'acme' };
   expect(listUnread(drops, context, made.home).map((message) => message.id)).toEqual([id]);
 });
 
-test('drops --read does not serve a socket-delivered record again', async () => {
+test("drops --read serves a socket-delivered record until the seat's own read", async () => {
   const made = world(null);
   cleanup = made.cleanup;
   declareEntity(made);
@@ -251,17 +249,19 @@ test('drops --read does not serve a socket-delivered record again', async () => 
   const id = recordName(drops);
   const context = { to: 'lead', root: realpathSync(made.root), session: 'acme' };
 
-  expect(listDrops(drops, messageKeyOf(made.home), context)).toEqual({ kind: 'ok', rows: [] });
-
-  // The control: a receipt that does not verify proves nothing, and the record is served.
-  unlinkSync(join(drops, `${id}.read.json`));
+  // No sender receipt hides the taken frame: the seat's own reader is served.
   const listing = listDrops(drops, messageKeyOf(made.home), context);
   expect(listing.kind).toBe('ok');
   if (listing.kind !== 'ok') return;
   expect(listing.rows.map((row) => row.id)).toEqual([id]);
+
+  // The seat's own signed read receipt is what settles it: nothing is served again.
+  const receipt = signReceiptPayload({ kind: 'receipt', status: 'read', id, to: 'lead', root: realpathSync(made.root), session: 'acme', at: NOW.toISOString() }, made.home);
+  expect(writeReceipt(drops, receipt, made.home).ok).toBe(true);
+  expect(listDrops(drops, messageKeyOf(made.home), context)).toEqual({ kind: 'ok', rows: [] });
 });
 
-test('team messages does not list a socket-delivered record as unacked', async () => {
+test("team messages lists a socket-delivered record as unacked until the seat's own read", async () => {
   const made = world(null);
   cleanup = made.cleanup;
   declareEntity(made);
@@ -270,10 +270,11 @@ test('team messages does not list a socket-delivered record as unacked', async (
   const drops = dropDir(made.dir, 'lead');
   const id = recordName(drops);
 
-  expect(listUnacked(made.root, 'acme', made.home)).toEqual([]);
-
-  unlinkSync(join(drops, `${id}.read.json`));
   expect(listUnacked(made.root, 'acme', made.home).map((row) => row.id)).toEqual([id]);
+
+  const receipt = signReceiptPayload({ kind: 'receipt', status: 'read', id, to: 'lead', root: realpathSync(made.root), session: 'acme', at: NOW.toISOString() }, made.home);
+  expect(writeReceipt(drops, receipt, made.home).ok).toBe(true);
+  expect(listUnacked(made.root, 'acme', made.home)).toEqual([]);
 });
 
 test('the read receipt verifies with read_by and an older receipt without it still does', () => {
@@ -287,10 +288,11 @@ test('the read receipt verifies with read_by and an older receipt without it sti
     return receipt;
   };
   const base = { kind: 'receipt' as const, status: 'read' as const, id: 'aaaa', to: 'lead', root: realpathSync(made.root), session: 'acme', at: NOW.toISOString() };
-  const signed = signReceiptPayload({ ...base, read_by: 'socket delivery' }, made.home);
+  const signed = signReceiptPayload({ ...base, read_by: 'channel' }, made.home);
   expect(verifyReceipt(parsedReceipt(JSON.parse(JSON.stringify(signed))), key)).toBe(true);
 
-  // A receipt written by a reader carries no read_by, and it verifies and reads exactly as before.
+  // read_by is optional: a receipt without it verifies and reads exactly as before, and that is
+  // what a plain seat reader (`team drops --read`) writes.
   const reader = signReceiptPayload(base, made.home);
   expect(verifyReceipt(parsedReceipt(JSON.parse(JSON.stringify(reader))), key)).toBe(true);
   const drops = dropDir(made.dir, 'lead');

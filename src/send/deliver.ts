@@ -95,6 +95,10 @@ export type DeliverResult = {
   dialog?: string;
   /** The unsent text this delivery found, copied and put back, when the box held any. */
   draft?: DraftMove;
+  /** Whether this delivery wrote to the pane at all: it typed the trigger line, or an Enter was
+   *  pressed. Absent means nothing was written, so no line of this delivery can have reached the
+   *  seat and a caller holding a wake reservation can give it back. */
+  typed?: boolean;
 };
 
 /** Binds a session to the pane operations a send already has. */
@@ -594,6 +598,10 @@ export async function deliverTrigger(
   }
 
   let seen: Look;
+  // Whether this delivery wrote to the pane at all — typed the line, or pressed an Enter. A
+  // caller holding a wake reservation reads it to tell a refused attempt (nothing written, the
+  // reservation belongs back) from one the seat may have acted on.
+  let wrote = false;
   if (start.state === 'trigger') {
     // The line is already in the box and a record says it is this delivery's own unsent trigger:
     // the Enter below submits it, and nothing is typed over it.
@@ -603,12 +611,13 @@ export async function deliverTrigger(
       const moved = draftText !== undefined ? await putDraftBack(host, pane, line, profile, input as InputBlock, draftText, copyPath as string) : undefined;
       return { outcome: 'unreachable', tries: 0, reason: 'the pane did not take the trigger', ...(moved === undefined ? {} : { draft: moved }) };
     }
+    wrote = true;
     await host.wait(SETTLE_MS);
 
     const typed = look(host, pane, line, profile);
     if (typed.state === 'dialog') {
       const moved = draftText !== undefined ? await putDraftBack(host, pane, line, profile, input as InputBlock, draftText, copyPath as string) : undefined;
-      return { ...dialogStop(typed.kind, 0), ...(moved === undefined ? {} : { draft: moved }) };
+      return { ...dialogStop(typed.kind, 0), typed: true, ...(moved === undefined ? {} : { draft: moved }) };
     }
     if (typed.state === 'other') {
       // The trigger typed into a box that clear had left empty no longer reads back alone: the
@@ -620,6 +629,7 @@ export async function deliverTrigger(
         box: typed.text,
         tries: 0,
         reason: `the composer read-back did not match the trigger${moved === undefined ? '' : `; ${draftNote(moved)}`}`,
+        typed: true,
         ...(moved === undefined ? {} : { draft: moved }),
       };
     }
@@ -674,18 +684,20 @@ export async function deliverTrigger(
             box: line,
             tries,
             reason: `the Enter was not taken and the trigger stayed in the composer${draft === undefined ? '' : `; ${draftNote(draft)}`}`,
+            ...(wrote ? { typed: true } : {}),
             ...(draft === undefined ? {} : { draft }),
           };
         }
-        return { outcome: 'unreachable', tries, reason: 'the Enter was not taken', ...(draft === undefined ? {} : { draft }) };
+        return { outcome: 'unreachable', tries, reason: 'the Enter was not taken', ...(wrote ? { typed: true } : {}), ...(draft === undefined ? {} : { draft }) };
       }
       tries += 1;
+      wrote = true;
     }
     await maybeRestore();
     const verified = await verify(host, pane, line, profile, before, BACKOFF_MS[round] ?? 9000, dropPath, afterDraft(), options.receipt);
     if (verified !== null) {
       await restoreOnDelivered();
-      return { outcome: 'delivered', tries, ...verified, ...(draft === undefined ? {} : { draft }) };
+      return { outcome: 'delivered', tries, ...verified, typed: true, ...(draft === undefined ? {} : { draft }) };
     }
     seen = look(host, pane, line, profile, afterDraft());
     if (seen.state === 'dialog') {
@@ -695,7 +707,7 @@ export async function deliverTrigger(
         restored = true;
         draft = await putDraftBack(host, pane, line, profile, input, draftText, copyPath);
       }
-      return { ...dialogStop(seen.kind, tries), ...(draft === undefined ? {} : { draft }) };
+      return { ...dialogStop(seen.kind, tries), ...(wrote ? { typed: true } : {}), ...(draft === undefined ? {} : { draft }) };
     }
     if (seen.state === 'other') break;
   }
@@ -706,7 +718,7 @@ export async function deliverTrigger(
     const late = await verify(host, pane, line, profile, before, Math.max(0, VERIFY_TOTAL_MS - spent), dropPath, afterDraft(), options.receipt);
     if (late !== null) {
       await restoreOnDelivered();
-      return { outcome: 'delivered', tries, ...late, ...(draft === undefined ? {} : { draft }) };
+      return { outcome: 'delivered', tries, ...late, typed: true, ...(draft === undefined ? {} : { draft }) };
     }
     seen = look(host, pane, line, profile, afterDraft());
     // A dialog that came up during the late window is why the seat was not reached, exactly as
@@ -716,7 +728,7 @@ export async function deliverTrigger(
         restored = true;
         draft = await putDraftBack(host, pane, line, profile, input, draftText, copyPath);
       }
-      return { ...dialogStop(seen.kind, tries), ...(draft === undefined ? {} : { draft }) };
+      return { ...dialogStop(seen.kind, tries), ...(wrote ? { typed: true } : {}), ...(draft === undefined ? {} : { draft }) };
     }
   }
   // The box decides after the last Enter. A trigger still in it was never taken — the draft goes
@@ -727,7 +739,7 @@ export async function deliverTrigger(
   // the status-alone judgement the window already made: nothing shows the line was taken.
   if (seen.state === 'empty' || seen.state === 'other') {
     await restoreOnDelivered();
-    return { outcome: 'delivered', tries, evidence: 'taken', prior: before, reason: TRIGGER_TAKEN_NOTE, ...(draft === undefined ? {} : { draft }) };
+    return { outcome: 'delivered', tries, evidence: 'taken', prior: before, reason: TRIGGER_TAKEN_NOTE, typed: true, ...(draft === undefined ? {} : { draft }) };
   }
   if (draftText !== undefined && copyPath !== undefined && input !== null && !restored) {
     restored = true;
@@ -742,6 +754,7 @@ export async function deliverTrigger(
       ? 'the trigger stayed in the composer after the Enters'
       : 'herdr did not report the seat working and the trigger did not leave the composer cleanly')
       + (draft === undefined ? '' : `; ${draftNote(draft)}`),
+    ...(wrote ? { typed: true } : {}),
     ...(draft === undefined ? {} : { draft }),
   };
 }

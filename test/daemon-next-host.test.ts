@@ -261,6 +261,12 @@ describe('one machine daemon: a proved next request reaches the handler on its r
         home,
       });
       expect(typeof calls[0]?.now).toBe('number');
+      // The verified pane's process identity is read the way the host reads a pane for a watch
+      // authority and handed to the handler, so the seat's class can prove its recorded socket is
+      // the pane's own. No terminal host answers for this fixture's pane, so the reading is null
+      // and the handler keeps the conservative rule.
+      expect(calls[0]).toHaveProperty('processes');
+      expect(calls[0]?.processes).toBeNull();
 
       // A v1 frame never reaches the boundary, even with both seams wired.
       const v1 = await request(machine, { v: 1, id: 'v1', op: 'next', scope: fullScope(root) });

@@ -1,7 +1,7 @@
 // The screen core. Stage order, dialog primitives, the four composer modes and the
 // safety floor live here, never in a profile. A profile is data: it can add a
 // pattern, and it cannot move a stage or turn the floor off.
-import { allDimAfter, hasSgr, stripSgr } from '../ansi.ts';
+import { allDimAfter, hasSgr, oneColourAfter, stripSgr } from '../ansi.ts';
 import type { Reset, Screen } from './screen.ts';
 import type { BlockStep, LinePattern, Rule, ScreenData, TextSpec, Wrap } from './screen-data.ts';
 
@@ -455,14 +455,20 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
     const composerFn = getProfileFn(data.profile, 'composer');
     if (composerFn !== undefined) {
       const composed = callComposer(composerFn, plain);
-      if (composed.kind === 'stop' || composed.kind === 'unknown') return failedComposer(data, plain, tick);
+      if (composed.kind === 'stop' || composed.kind === 'unknown') {
+        if (composed.kind === 'unknown' && scrolledBack(data, plain, tick)) return { kind: 'scroll back' };
+        return failedComposer(data, plain, tick);
+      }
       const marked = floorHits(plain, 0, -1, data.chrome, tick);
       if (marked) return floorScreen(marked);
       return asScreen(composed.kind, plain);
     }
 
     const composed = compose(data, plain, lines, tick, expectedCwd, home);
-    if (composed.kind === 'stop' || composed.kind === 'unknown') return failedComposer(data, plain, tick);
+    if (composed.kind === 'stop' || composed.kind === 'unknown') {
+      if (composed.kind === 'unknown' && scrolledBack(data, plain, tick)) return { kind: 'scroll back' };
+      return failedComposer(data, plain, tick);
+    }
     if (composed.kind !== 'idle' && composed.kind !== 'unsent') return asScreen(composed.kind, plain);
     const marked = floorHits(plain, composed.from, composed.input, data.chrome, tick);
     if (marked) return floorScreen(marked);
@@ -1267,8 +1273,22 @@ function boxToRule(lines: string[], styled: string[], composer: Extract<ScreenDa
     }
     from = input;
   }
-  const rows = lines.slice(input + 1, close);
-  if (rows.some((line) => line.trim()) && !rowsAreDim(composer, rows, styled.slice(input + 1, close))) {
+  // The pane draws rows of its own inside the box — Muse 1.4.14's completion row for the text
+  // being typed sits under the input row, between it and the closing rule. The captures name
+  // them per profile (`own_rows`), and only those are dropped: they are the pane's, not the
+  // person's text, so a box that shows exactly the typed text and its completion row still reads
+  // back as the text. Every other row stays, so a box with a row the typed text does not have is
+  // not the typed text, and the caller refuses it.
+  const own = composer.ownRows ?? [];
+  const rows: string[] = [];
+  const styledRows: (string | undefined)[] = [];
+  for (let i = input + 1; i < close; i++) {
+    const line = lines[i] ?? '';
+    if (own.some((pattern) => pattern.test(line))) continue;
+    rows.push(line);
+    styledRows.push(styled[i]);
+  }
+  if (rows.some((line) => line.trim()) && !rowsAreDim(composer, rows, styledRows)) {
     return { kind: 'unsent', from, input, rows };
   }
   const typed = (lines[input] ?? '').replace(composer.prompt, '').trim();
@@ -1481,22 +1501,42 @@ function stripTyped(line: string, composer: { prompt: RegExp; stripSuffix?: RegE
 }
 
 // A placeholder, not text. When the composer says its suggestions render dim and the input
-// line carries any styling at all, the styling decides alone: all faint past the prompt is a
-// greyed suggestion, anything else is text — the list is not asked, so no suggestion's
-// styling can lend its words to typed characters after it. A line without styling (a plain
-// read, an old herdr) leaves the list to decide, as does a composer without the style.
+// line carries any styling at all, a row that is not all faint past the prompt is text, except
+// an exact listed equals line whose own text is one non-bold colour: grey with no faint
+// attribute is still that placeholder. A second colour, a bold word, or a cursor cell inside
+// the text stays text. An all-faint row is
+// the suggestion, unless the composer names `slash-hint`: then the faint row must also be a
+// listed placeholder or a `/command …` hint, so a faint row of other words is text. A line
+// without styling (a plain read) leaves the list to decide, as does a composer
+// without the style. The slash shape is not asked on that plain read: a draft that starts
+// with `/` stays text.
 function placeholder(
   typed: string,
   composer: { prompt: RegExp; placeholders: ScreenData['composer']['placeholders']; placeholderStyle?: ScreenData['composer']['placeholderStyle'] },
   plainLine: string,
   styledLine: string | undefined,
 ): boolean {
+  const listed = composer.placeholders.some((entry) => ('equals' in entry ? typed === entry.equals : 'prefix' in entry ? typed.startsWith(entry.prefix) : false));
+  const equalsListed = composer.placeholders.some((entry) => 'equals' in entry && entry.equals !== '' && typed === entry.equals);
   if (composer.placeholderStyle === 'dim' && styledLine !== undefined && hasSgr(styledLine)) {
     const hit = composer.prompt.exec(plainLine);
     const skip = hit === null ? 0 : plainLine.slice(0, hit.index + hit[0].length).replace(/\s/g, '').length;
-    return allDimAfter(styledLine, skip);
+    // An exact listed placeholder in one non-bold colour is the empty box. A mix of colours,
+    // a cursor cell, a bold word, or a draft that only starts like the line stays text.
+    if (equalsListed && oneColourAfter(styledLine, skip)) return true;
+    if (!allDimAfter(styledLine, skip)) return false;
+    // A composer that names slash-hint keeps a dim row only when it is a known placeholder or
+    // that hint shape. Every other dim composer still takes any faint row as the suggestion.
+    if (!composer.placeholders.some((entry) => 'shape' in entry && entry.shape === 'slash-hint')) return true;
+    return listed || slashHint(typed);
   }
-  return composer.placeholders.some((entry) => ('equals' in entry ? typed === entry.equals : typed.startsWith(entry.prefix)));
+  return listed;
+}
+
+/** A rotating `/command …` hint: a slash, a command word, and text after it. A bare `/command`
+ *  is a draft, and so is any row this does not describe. */
+function slashHint(typed: string): boolean {
+  return /^\/[A-Za-z][A-Za-z0-9-]*\s+\S/.test(typed);
 }
 
 // Rows under the input row that hold only a greyed suggestion: a suggestion longer than the box is
@@ -1569,6 +1609,55 @@ function floorScreen(marked: false | 'stop' | string): Screen {
  *  into. */
 function failedComposer(data: ScreenData, plain: string[], tick: () => boolean): Screen {
   return floorScreen(floorLast(plain, data.chrome, tick));
+}
+
+/** The pane is scrolled back over its transcript: the composer cannot be read, and the
+ *  profile's declared bottom region is the pane's own. Two layouts are declared, each read as
+ *  whole rows from the pane's bottom region only, never from a transcript row higher up that
+ *  quotes them:
+ *
+ *  - `footer` — the composer is hidden and the footer is the pane's last non-blank row.
+ *  - `marker` with `statusFooter` — the composer stays drawn; its marker is the nearest
+ *    non-blank row above the last prompt row, and the status footer is the pane's last non-blank
+ *    row. Read here because that footer leaves the status row above the composer unread, so the
+ *    composer alone is unknown while the pane is still behind the scroll.
+ *
+ *  Asked only when a composer read came back unknown, after every caution stage, so a turn still
+ *  running, a draft, or a dialog that draws itself keeps its own reading and the bottom region
+ *  never hides one. False when the profile declares neither layout, when a row of the region is
+ *  anything else, or when the budget runs out — a row read out of time grounds nothing. */
+function scrolledBack(data: ScreenData, plain: string[], tick: () => boolean): boolean {
+  const spec = data.scrollBack;
+  if (spec === undefined) return false;
+  let last = -1;
+  for (let i = plain.length - 1; i >= 0; i--) {
+    if (tick()) return false;
+    if ((plain[i] ?? '').trim() === '') continue;
+    last = i;
+    break;
+  }
+  if (last < 0) return false;
+  const bottom = plain[last] ?? '';
+  if (spec.footer !== undefined && spec.footer.test(bottom)) return true;
+  if (spec.marker === undefined || spec.statusFooter === undefined) return false;
+  if (!spec.statusFooter.test(bottom)) return false;
+  const prompt = 'prompt' in data.composer ? data.composer.prompt : null;
+  if (prompt === null) return false;
+  let box = -1;
+  for (let i = last - 1; i >= 0; i--) {
+    if (tick()) return false;
+    if (!prompt.test(plain[i] ?? '')) continue;
+    box = i;
+    break;
+  }
+  if (box < 0) return false;
+  for (let i = box - 1; i >= 0; i--) {
+    if (tick()) return false;
+    const line = plain[i] ?? '';
+    if (line.trim() === '') continue;
+    return spec.marker.test(line);
+  }
+  return false;
 }
 
 function choiceLine(line: string): boolean {

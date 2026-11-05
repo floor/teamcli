@@ -36,7 +36,7 @@ test('hidden commands and undocumented short flags are marked', () => {
   expect(byName('init')?.flags.find((flag) => flag.name === '-h')?.hidden).toBe(true);
   expect(contract.program.flags.find((flag) => flag.name === '-V')?.hidden).toBe(true);
   expect(contract.program.flags.every((flag) => flag.repeatable === false)).toBe(true);
-  expect(byName('worktree')?.subcommands.map((sub) => sub.name)).toEqual(['list', 'new', 'remove']);
+  expect(byName('worktree')?.subcommands.map((sub) => sub.name)).toEqual(['list', 'new', 'pull', 'remove']);
   expect(byName('add')?.positionals).toEqual([{ name: 'name', optional: true, repeatable: false }]);
   const json = readFileSync(join(root, 'contract/cli.json'), 'utf8');
   expect(json.includes('/home/')).toBe(false);
@@ -189,7 +189,7 @@ test('every command and subcommand carries who may run it, and the map rows are 
   const sub = (command: string, verb: string) => byName(command)?.subcommands.find((word) => word.name === verb);
   expect(sub('policy', 'set')?.who?.gate).toBe('owner-only');
   expect(byName('policy')?.who?.gate).toBe('team-read');
-  expect(sub('mcp', 'serve')?.who?.gate).toBe('any-caller');
+  expect(sub('mcp', 'serve')?.who?.gate).toBe('seat-only');
   expect(sub('proc', 'list')?.who?.gate).toBe('team-read');
   expect(sub('worktree', 'remove')?.who?.gate).toBe('team-change');
   // `pause` and `resume` are the orchestrator's lever on the team: the owner or the

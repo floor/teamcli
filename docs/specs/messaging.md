@@ -64,11 +64,12 @@ nothing. Fields (`src/send/history.ts`):
 | `to` | string | yes | — | 0.4.x | the recipient seat |
 | `body` | string | yes | — | 0.4.x | the message body, whole |
 | `id` | string | yes | — | 0.4.x | the drop's id |
-| `outcome` | string | yes | — | 0.4.x | one of `delivered`, `delivered (read)`, `sent (unconfirmed)`, `held`, `not-submitted`, `unreachable`, `answered`, `timeout` |
+| `outcome` | string | yes | — | 0.4.x | one of `delivered`, `delivered (read)`, `delivered (late)`, `delivered (typed wake)`, `sent (unconfirmed)`, `queued, not woken`, `sent (channel)`, `held`, `queued (receiver busy)`, `not-submitted`, `unreachable`, `answered`, `timeout` |
 | `spec` | string | no | absent | 0.5.0 | the address the caller wrote, when not the resolved seat's own name |
 | `resolved` | string | no | absent | 0.5.0 | the agent id the spec resolved to, written with `spec` |
 | `ms` | number | no | absent | 0.5.0 | send to outcome in whole milliseconds, when measured |
 | `via` | string | no | absent | 0.5.0 | the path the message travelled: `typed` or `socket` |
+| `session` | string | no | absent | 0.5.12 | the id the receiving CLI printed on its own session line, on a line the `session` leg carried |
 | `failed` | string[] | no | absent | 0.5.0 | the legs that did not take the send, each `<leg>: <reason>`, in the order tried |
 | `note` | string | no | absent | 0.5.0 | a qualifier the outcome cannot carry: `trigger taken, no read receipt yet`, `taken but never acted on`, and `the unsent text was pasted back` beside either |
 
@@ -142,8 +143,9 @@ an earlier text or an earlier delivery left does not count for the current claim
 Every signed file — record, receipt, close — is authenticated over its complete payload exactly as
 it was parsed, before any field is projected or read. A field inserted, altered or removed after
 signing does not verify; a signed field this version does not read authenticates and is then
-refused as unsupported, never interpreted and never reported as a signature failure. A receipt
-without `writer` was written by an earlier build and is read exactly as it was.
+refused as unsupported, never interpreted and never reported as a signature failure. A reader
+ships one release before its writer; unknown kind VALUES are served, unknown FIELDS are refused.
+A receipt without `writer` was written by an earlier build and is read exactly as it was.
 
 ### The route record
 
@@ -232,7 +234,7 @@ team messages [--json]
 Shows a message that is already waiting and writes the receipt that says it was shown. Exits 0 when
 the inbox is read (`messages.shown`, or `messages.none` when empty), 1 when the caller, team file,
 or message record is refused (`messages.file`, `.id`, `.key`, `.root`, `.seat`, `.session`,
-`.shape`, `.signature`), 2 when the invocation cannot be read or this folder is not a git
+`.shape`, `.signature`, `.caller`), 2 when the invocation cannot be read or this folder is not a git
 repository (`messages.invocation`, `messages.not-a-repo`). A seat name matches
 `^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$`.
 
@@ -310,14 +312,17 @@ through (`src/send/admit.ts`; proof: the admit tests at the tag):
 5. an orchestrator to another orchestrator;
 6. an orchestrator or operator to a seat of its own team;
 7. an assistant seat to its entity's coordinator;
-8. a seat to its own team's orchestrator;
-9. an owner-signed grant naming `send`, which spells a team by its registry team id or a seat by
-   its agent id, never a runner or process name; the record is signed with the owner's approval
-   key and verified on every read, and its `to` may be the reserved `orchestrator@<entity>`, the
-   lead seat of a team of the sender's own entity. A record that names the pair but does not
-   verify admits nothing and refuses with `send.grant-invalid`, naming the record and the line
-   that re-issues it signed;
-10. a seat to a declared seat of its own team — any two roster-declared seats of one team, asked
+8. the entity's main orchestrator to any seat of the entity's teams — the lead of the team whose
+   project is the entity itself, the `seats_cross_teams` declaration with its own default on
+   (OD-20261103-02), never across entities;
+9. a seat to its own team's orchestrator;
+10. an owner-signed grant naming `send`, which spells a team by its registry team id or a seat by
+    its agent id, never a runner or process name; the record is signed with the owner's approval
+    key and verified on every read, and its `to` may be the reserved `orchestrator@<entity>`, the
+    lead seat of a team of the sender's own entity. A record that names the pair but does not
+    verify admits nothing and refuses with `send.grant-invalid`, naming the record and the line
+    that re-issues it signed;
+11. a seat to a declared seat of its own team — any two roster-declared seats of one team, asked
     after every rule above, the grant, and the open-thread reply rule.
 
 The project rules are asked first and are decided by the project record and the `leads`
@@ -331,26 +336,44 @@ it, and the header says the record is missing; it is never granted. Every other 
 
 ### The delivery order
 
-1. The legs are `native` (the sender is a session of the recipient's own kind and sends over its
-   own channel with its own attestation; the tool supplies the address from the registry, checks
-   admission and records the send), `mcp-inbox` (not in this build), and `typed` (the drop file and
-   the wake line). (`src/settings/inherit.ts`, `DELIVERY_LEGS`.)
+1. The catalogue's legs are `socket`, `native`, `mcp-inbox`, `typed`, `drop`, `headless-resume`,
+   `session` (the cross-session socket, a Codex seat's runtime queue or the sender's own handoff,
+   the seat's MCP inbox, the drop file with its wake line, the mailbox, a headless resume, and a
+   CLI's own session-creating call), and `channel`, the receiving server's development-channel
+   push, which is implied and never a declared word. Each belongs to one class: `socket`,
+   `native`, `headless-resume`, `session` and `channel` are the channel class; `typed` is the
+   typed class; `drop` is the mailbox. `mcp-inbox` is a name this build reads and never walks —
+   the MCP inbox is the store's reader, not a wake. The sender-posted `webhook` is the second
+   class, between the channel legs and the typed leg; no order names it, the receiving seat's
+   adapter row decides whether it exists (`src/send/walk-cascade.ts`, `src/settings/inherit.ts`
+   `DELIVERY_LEGS`).
 2. The order is the `delivery-order` policy of the receiving seat's chain — entity, project, team,
-   seat — because the order says how that seat's messages may travel. The fallback is `native`,
-   `mcp-inbox`, `typed`. A level drops or reorders the legs, never adds one.
-3. The legs are tried in order until one confirms; a leg that does not exist for this sender or
+   seat — because the order says how that seat's messages may travel, and it names the legs the
+   seat accepts. The walk that uses it is the owner's cascade (ADR `zeus-message-path`, D1):
+   channel-class legs first — the seat's serving `channel` ahead of them, then the ones the chain
+   names, in its own order — then the webhook, then typed (where the seat's profile declares a
+   typed wake), then the mailbox. The fallback order is `typed`,
+   `drop`. A level drops legs, reorders the ones it keeps, and may add `socket`, `native`,
+   `headless-resume` or `session`; a word naming any other leg the order in force does not have is
+   set aside and the order in force stands, and an `mcp-inbox` word is kept and reported
+   unavailable.
+3. The cascade is tried until one leg confirms; a leg that does not exist for this sender or
    receiver is skipped and recorded `unavailable`; a send falls through to the next leg only on a
-   definite failure before the send went through (no session, refused, a timeout before the send),
-   never on a missing acknowledgement after a send that went through — or the seat gets the message
-   twice. Every attempt is recorded with the leg and the failure (the history's `failed` field).
+   definite failure before the send went through (no session, refused, a timeout before the send,
+   a post the adapter did not take), never on a missing acknowledgement after a send that went
+   through — or the seat gets the message twice. Every attempt is recorded with the leg and the
+   failure (the history's `failed` field), and a typed line that passed a webhook names it there
+   as `webhook: <reason>`.
 4. The tool never attests a permission mode on a seat's behalf: a CLI process cannot truthfully say
    which mode it runs in, and attesting anyway would be a false statement to another tool's gate.
 
 ### What `delivered` means
 
 `delivered` means the message reached the seat by a path that reports its own receipt: the
-socket frame was written, or a `--confirm` run found the handoff's nonce in the recipient's
-transcript. The typed leg claims it only through the seat's own receipt: the line it types is
+socket frame was written, a `--confirm` run found the handoff's nonce in the recipient's
+transcript, or the seat's webhook adapter answered 2xx to the signed record the send posted —
+the console ending reads `delivered (webhook, <n> ms)` and the history records `delivered` with
+`via: webhook`, a claim that the adapter took the arrival and never that the seat read it. The typed leg claims it only through the seat's own receipt: the line it types is
 `Run team drops --read --seat <seat> --session <session> and do that.`, whose first act is the
 signed read receipt, and a receipt that verifies inside the delivery's window is
 `delivered (read)`. Without one, a trigger line that left the seat's input box after that one
@@ -361,19 +384,52 @@ reported `sent (unconfirmed)` with `trigger taken, no read receipt yet`, not a m
 inside the window is reported `sent (unconfirmed)` the same way: taken, never a failed send, and
 never a read. The console line for a send that ends without a delivery carries the receiving
 seat's delivery class in plain words after the leg's own parenthetical — `woken through its event
-adapter`, `woken through its runtime queue`, `queued; <seat> reads it at its next turn
-(pull-only)`, or `queued; <seat> has no way to be woken while idle` — because `unconfirmed` is a
-fact about the receipt, not an answer to whether the seat will read the message. Only a signed
+adapter`, `woken through its runtime queue`, `queued; its webhook fires when the bus takes it`,
+`queued; <seat> reads it at its next turn, and nothing
+here gives it one (pull-only)`, `queued; nothing wakes <seat> while it is idle; a person or a
+restart must give it a turn` (or, for a profile that declares the typed wake, `… while it is idle
+except a send-time typed wake and the watch's typed retry once a message passes its unread
+window, into an empty composer; a person or a restart must give it a turn`; a seat whose file
+turns `watch_wake` off keeps `except a send-time typed wake into an empty composer`),
+or `queued; <seat> has no way to be woken while idle` for a person — because `unconfirmed` is a
+fact about the receipt, not an answer to whether the seat will read the message. A send that
+reached for the typed wake inserts what the wake saw after `queued; `: `the typed wake failed
+(<reason>)` when it was attempted, `the typed wake did not run (<reason>)` when the send stopped
+before it. Only a signed
 read receipt makes a message `delivered (read)`. A seat
 whose CLI builds its own work item from its screens gets the drop file but the body typed
 through those screens; `delivered` there means the CLI printed the line that creates the item. A
 hold on the receiver's side — a message that reached
-a session but sits in a dialog the sender cannot see — is `held`, with the side named, never
-`delivered`. At most three Enters are pressed, each try waited on 1 s, 3 s, then 9 s, with a
+a session but sits in a dialog the sender cannot see — is not the sender's to report: the socket
+frame ends `delivered (socket)` at the frame, and the daemon's presence pass looks at the
+receiving pane after that delivery and, when the frame is at its dialog, writes one `held` line
+for the id — its fields are the signed record's — and marks the socket held, so the history
+carries both facts, taken at the frame and held at the box, and a sender that never saw the box
+never claims one for the other. At most three Enters are pressed, each try waited on 1 s, 3 s, then 9 s, with a
 further window for a cleared box to show the seat took the line. The whole verify window is
 bounded at 20 seconds (`VERIFY_TOTAL_MS`, `src/send/deliver.ts`): the three waits and the further
 window all fall inside it. The tag's measurements — about six seconds from send to a working
 seat, one millisecond to write the record — are measured, not promised.
+
+A socket frame carries the record's id in `msg_id` and in the reader line it ends with —
+`Answer with team reply <id> "…" (this marks it read), or team ack <id> if no answer is needed.`
+The id is not a secret, the line is the same for every sender, the owner included, and it
+carries no address, so the frame resolves no entity or owner-reply target (ADR
+`zeus-message-path`, D3). The line names both acts that settle the record: `team reply <id>`
+answers and writes the seat's signed read receipt beside its `replied` receipt, and
+`team ack <id>` writes the read receipt with no answer. A seat's own later `team send` to a
+sender settles the newest delivered-unread message that sender sent it before that send
+(`read_by: answered-by-send`); an older message from the same sender, a message from anyone
+else, and one delivered after the send stay unread. A socket delivery still without a receipt
+at its unread window is re-woken once, with the line `ack <id> or reply`; after that no pass
+wakes it again, and only the report at twice the window speaks.
+
+Every send that wrote a record names the message id on its closing line: a trailing ` (id <id>)`
+on that line, or the line's own words where it already carries one (the queued answer's
+`id <id>`, the handoff's `team send --confirm <id>`). A run that wrote no record — a refusal
+before it, a dry run, the roster — names none. The id is the key to that message's trace: the
+signed steps the send, the bus, the seat and the watch write for it, in one log, which
+`team trace <id>` prints in order.
 
 ### Typing into a pane
 

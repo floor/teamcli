@@ -29,6 +29,15 @@ export function paneHoldsShell(pane: PaneProcesses | null | undefined): boolean 
   return pane.foreground.includes(pane.shell);
 }
 
+/** The pane's own shell is the only process in front. This is the reading a pane gives before
+ *  a program is started in it and after the program is gone: no CLI, and no helper beside it.
+ *  It is stricter than `paneHoldsShell`, which a foreground of `[shell, cli]` also satisfies —
+ *  a pane that lists its shell *and* a process beside it is not one to launch into or close. */
+export function paneHoldsOnlyShell(pane: PaneProcesses | null | undefined): boolean {
+  if (!pane || pane.foreground.length === 0) return false;
+  return pane.foreground.every((pid) => pid === pane.shell);
+}
+
 export function seatProcessVerdict(recorded: LaunchedIdentity | undefined, pane: PaneProcesses | null | undefined): SeatProcessVerdict {
   if (!recorded || !pane || pane.foreground.length === 0) return 'unknown';
   if (recorded.shell === pane.shell && recorded.cli.some((pid) => pane.foreground.includes(pid))) return 'same';

@@ -42,6 +42,7 @@ describe('muse launch and captured screens', () => {
     expect(muse.exit).toBe('/exit');
     expect(muse.exitClear).toBe('ctrl+u');
     expect(muse.exitConfirm).toBeNull();
+    expect(muse.exitCompletion).toBe(true);
     expect(muse.idleTimeout).toBe(90);
     expect(muse.exitTimeout).toBe(30);
     expect(muse.processNames).toEqual(['muse', 'muse-bin-*']);
@@ -109,14 +110,15 @@ describe('muse launch and captured screens', () => {
     ['ambiguous-synthetic', 'unknown', 'unknown'],
     ['rules-line-unsent', 'unsent', 'unsent'],
     ['placeholder-synthetic', 'idle', 'idle'],
+    ['goal-hint-synthetic', 'idle', 'idle'],
   ] as const)('1.4.11 %s reads %s, its composer %s', (file, kind, composer) => {
     const text = fixture1411(file);
     expect(readScreen('muse', text).kind).toBe(kind);
     expect(classifyComposer('muse', text.split('\n')).kind).toBe(composer);
   });
 
-  test('the 1.4.11 ready footer names Wonder Full, and the tested range carries it', () => {
-    expect(muse.tested).toEqual({ from: '1.4.9', to: '1.4.11' });
+  test('the 1.4.11 ready footer names Wonder Full, and the tested range carries it and 1.4.14', () => {
+    expect(muse.tested).toEqual({ from: '1.4.9', to: '1.4.14' });
     expect(runningModel('muse', fixture1411('idle'))).toEqual({ model: 'Muse Wonder Full', version: '1.0' });
     expect(boxHoldsText('muse', 'anything', fixture1411('idle'))).toBe(false);
   });
@@ -180,6 +182,54 @@ describe('muse launch and captured screens', () => {
     expect(classifyComposer('muse', text.split('\n')).kind).toBe('idle');
     expect(readBox('muse', text)).toBeNull();
     expect(boxHoldsText('muse', 'Tab queues or steers while a run is active', text)).toBe(false);
+  });
+
+  test('the /goal hint row is the empty box, and the same words with more text are a draft', () => {
+    const text = fixture1411('goal-hint-synthetic');
+    expect(readScreen('muse', text).kind).toBe('idle');
+    expect(readBox('muse', text)).toBeNull();
+    expect(boxHoldsText('muse', '/goal pins a session objective with a progress bar', text)).toBe(false);
+    const draft = text.replace(
+      '❯ /goal pins a session objective with a progress bar',
+      '❯ /goal pins a session objective with a progress bar now',
+    );
+    expect(readScreen('muse', draft).kind).toBe('unsent');
+    expect(boxHoldsText('muse', '/goal pins a session objective with a progress bar now', draft)).toBe(true);
+  });
+
+  test('a dim /command hint is an empty box, and a draft that starts with / is unsent', () => {
+    const goal = fixture1411('goal-hint-dim');
+    const loop = fixture1411('loop-hint-dim');
+    const draft = fixture1411('slash-draft-synthetic');
+    expect(readScreen('muse', goal).kind).toBe('idle');
+    expect(readBox('muse', goal)).toBeNull();
+    expect(readScreen('muse', loop).kind).toBe('idle');
+    expect(readBox('muse', loop)).toBeNull();
+    expect(boxHoldsText('muse', '/loop 10m <prompt> schedules a recurring prompt', loop)).toBe(false);
+    expect(readScreen('muse', draft).kind).toBe('unsent');
+    expect(readBox('muse', draft)?.first).toBe('/goal ship the release');
+    expect(boxHoldsText('muse', '/goal ship the release', draft)).toBe(true);
+  });
+
+  test('a faint prose hint is an empty box, and the same words without the faint attribute are a draft', () => {
+    const prose = 'Ask to monitor a running build or log and get pinged on changes';
+    const tasks = '/tasks shows workflows, subagents and terminals in one place';
+    const dim = fixture1411('prose-hint-dim');
+    const slash = fixture1411('tasks-hint-dim');
+    const plain = fixture1411('prose-hint-plain');
+    const color = fixture1411('prose-hint-color');
+    expect(readScreen('muse', dim).kind).toBe('idle');
+    expect(readBox('muse', dim)).toBeNull();
+    expect(boxHoldsText('muse', prose, dim)).toBe(false);
+    expect(readScreen('muse', slash).kind).toBe('idle');
+    expect(readBox('muse', slash)).toBeNull();
+    expect(boxHoldsText('muse', tasks, slash)).toBe(false);
+    expect(readScreen('muse', plain).kind).toBe('unsent');
+    expect(readBox('muse', plain)?.first).toBe(prose);
+    expect(boxHoldsText('muse', prose, plain)).toBe(true);
+    expect(readScreen('muse', color).kind).toBe('unsent');
+    expect(readBox('muse', color)?.first).toBe(prose);
+    expect(boxHoldsText('muse', prose, color)).toBe(true);
   });
 
   test('the quota patterns read the 5-hour and weekly windows off the /usage box lines', () => {

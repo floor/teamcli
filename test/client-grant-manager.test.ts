@@ -378,9 +378,9 @@ describe('the manager bundle: what the owner signs is an explicit list, and neve
     expect(card).toContain('It cannot change permissions');
   });
 
-  test('every op a manager can name is either wired to a client route or says honestly that it is not yet', () => {
+  test('every op a manager can name has a route or says honestly that it has none yet', () => {
     const wired = MANAGER_OPS.filter((op) => BUNDLE_OP_ROUTES[op]);
-    expect(wired).toEqual(['status', 'seats', 'seat', 'sessions', 'send', 'up', 'down', 'restart', 'reload', 'add', 'remove']);
+    expect(wired).toEqual(['status', 'seats', 'seat', 'sessions', 'send', 'reply', 'ack', 'up', 'down', 'restart', 'reload', 'add', 'remove']);
     const card = bundleCard({ clientId: 'grok-bot', project: 'docs', ops: ['status', 'drops'], seats: [], expires: '2027-01-21T09:00:00.000Z' });
     expect(card).toContain('Not usable yet in this build: drops');
   });
@@ -755,6 +755,9 @@ describe('the other manager routes verify the same grant on the same team', () =
     const flagged = testIo(w.docs, noTerminal);
     expect(await runRestart(['worker', '--client', manager.path, '--key', w.grok.keyPath, '--abandon'], flagged, restartSources)).toBe(2);
     expect(flagged.err).toContain("are the owner's and take no --client");
+    const freshFlag = testIo(w.docs, noTerminal);
+    expect(await runRestart(['worker', '--client', manager.path, '--key', w.grok.keyPath, '--fresh'], freshFlag, restartSources)).toBe(2);
+    expect(freshFlag.err).toContain("--fresh are the owner's and take no --client");
   });
 });
 
@@ -801,7 +804,7 @@ describe('the developer bundle: the manager\'s list plus the pacing and work com
   });
 
   test('pause, resume and hold have a client route; the rest of the developer\'s own ops admit nothing yet', () => {
-    expect(DEVELOPER_OPS.filter((op) => BUNDLE_OP_ROUTES[op])).toEqual(['status', 'seats', 'seat', 'sessions', 'send', 'up', 'down', 'restart', 'reload', 'add', 'remove', 'pause', 'resume', 'hold']);
+    expect(DEVELOPER_OPS.filter((op) => BUNDLE_OP_ROUTES[op])).toEqual(['status', 'seats', 'seat', 'sessions', 'send', 'reply', 'ack', 'up', 'down', 'restart', 'reload', 'add', 'remove', 'pause', 'resume', 'hold']);
     expect(DEVELOPER_EXTRA.filter((op) => !BUNDLE_OP_ROUTES[op])).toEqual(['rename', 'swap', 'release', 'tempo', 'queue', 'lock', 'unlock', 'worktree', 'raise', 'route', 'pr', 'workflow', 'proc']);
   });
 

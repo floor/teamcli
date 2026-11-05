@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { logLine } from '../src/log.ts';
@@ -128,6 +129,40 @@ describe('the state file', () => {
     for (const classification of closed) {
       const seat = `ok-${classification.replace(' ', '-')}`;
       expect([seat, state.sessions.one?.seats[seat]?.waiting?.classification]).toEqual([seat, classification]);
+    }
+  });
+
+  test('a webhook delivery record enters only as the bus writes it; anything else is dropped', () => {
+    // The record is evidence a note is printed from, so the door keeps only the closed outcome,
+    // a whole count, a fixed-words reason and a parseable instant. A hand-edited file cannot make
+    // check or status print a failure the bus never reported.
+    const good = {
+      record_id: 'msg-1',
+      at: '2026-11-01T00:00:00.000Z',
+      outcome: 'failed' as const,
+      attempts: 3,
+      reason: 'could not connect (ConnectionRefused)',
+    };
+    const probes: Record<string, unknown> = {
+      outcome: { ...good, outcome: 'woken' },
+      attempts: { ...good, attempts: 1.5 },
+      negative: { ...good, attempts: -1 },
+      reason: { ...good, reason: '' },
+      at: { ...good, at: 'not a time' },
+      id: { ...good, record_id: '' },
+      array: [good],
+      text: 'failed',
+      nothing: null,
+    };
+    const seats: Record<string, unknown> = { good: { stage: 'ready', webhook_delivery: good } };
+    for (const [seat, record] of Object.entries(probes)) {
+      seats[seat] = { stage: 'ready', webhook_delivery: record };
+    }
+    writeFileSync(join(dir, STATE_FILE), JSON.stringify({ format: 1, sessions: { one: { seats, worktrees: {} } } }));
+    const state = readState(dir);
+    expect(state.sessions.one?.seats.good?.webhook_delivery).toEqual(good);
+    for (const seat of Object.keys(probes)) {
+      expect([seat, state.sessions.one?.seats[seat]?.webhook_delivery]).toEqual([seat, undefined]);
     }
   });
 
@@ -361,6 +396,38 @@ describe('the lock', () => {
     writeFileSync(join(dir, LOCK_FILE), '1\n');
     expect(() => updateState(dir, (state) => { state.sessions.crew = emptySession(); }, { waitMs: 0 })).toThrow(LockBusyError);
     expect(existsSync(join(dir, STATE_FILE))).toBe(false);
+  });
+
+  test('a link to a real folder at the lock path is refused, and nothing is written through it', () => {
+    const target = join(dir, 'target');
+    const link = join(dir, 'lock');
+    mkdirSync(target);
+    symlinkSync(target, link);
+    const ran: string[] = [];
+    expect(() => withLock(link, () => ran.push('ran'), { waitMs: 0 }))
+      .toThrow(/a symbolic link was found and not followed/);
+    expect(ran).toEqual([]);
+    expect(existsSync(join(target, LOCK_FILE))).toBe(false);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+  });
+
+  test('a FIFO at the lock path is refused instead of waited on', () => {
+    const fifo = join(dir, 'lock');
+    execFileSync('mkfifo', [fifo]);
+    const ran: string[] = [];
+    expect(() => withLock(fifo, () => ran.push('ran'), { waitMs: 0 }))
+      .toThrow(/a FIFO was found and not followed/);
+    expect(ran).toEqual([]);
+  });
+
+  test('a file at the lock path is refused as not a directory', () => {
+    const file = join(dir, 'lock');
+    writeFileSync(file, 'not a lock\n');
+    const ran: string[] = [];
+    expect(() => withLock(file, () => ran.push('ran'), { waitMs: 0 }))
+      .toThrow(/the lock folder path is not a directory/);
+    expect(ran).toEqual([]);
+    expect(readFileSync(file, 'utf8')).toBe('not a lock\n');
   });
 });
 

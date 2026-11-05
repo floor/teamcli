@@ -436,4 +436,44 @@ describe('a route whose team lives in the registry', () => {
     const result = await underRegistry(() => runRestoreSweepForRoute({ home, root, sources: sources(made) }));
     expect(result).toEqual({ kind: 'not-running', state: 'absent' });
   });
+
+  test('restores its recorded seats when the registry is the only copy of the team', async () => {
+    recordSeat();
+    intoRegistry(root, home);
+    rmSync(teamFile);
+    const made = world();
+    // The daemon-shaped call names no file. Its pass reads the team from the registry, and the
+    // run it hands the plan to must resolve the same way: naming the conventional path would
+    // stop `up` on a file that does not exist, with exit 2, and restore nothing.
+    const result = await underRegistry(async () => {
+      const approved = await runApprove([], testIo(root, { kind: 'owner' }), {
+        ask: async () => '5',
+        waiting: () => 'empty',
+        now: () => NOW,
+        home,
+      });
+      expect(approved).toBe(0);
+      return runRestoreSweepForRoute({ home, root, sources: sources(made) });
+    });
+    expect(result.kind).toBe('ran');
+    if (result.kind !== 'ran') return;
+    expect(result.summary.line).toBe('0 seats repaired, 0 skipped (working), 0 refused');
+    expect(result.failed).toBe(false);
+    expect(made.starts).toBe(0);
+    expect(made.closes).toEqual([]);
+    expect(made.runs.filter((run) => run.command.includes('team-deepseek'))).toEqual([]);
+  });
+
+  test('a root with neither a registry record nor a file is reported with the reason, never launched', async () => {
+    recordSeat();
+    rmSync(teamFile);
+    const made = world();
+    const result = await underRegistry(() => runRestoreSweepForRoute({ home, root, sources: sources(made) }));
+    expect(result.kind).toBe('unreadable');
+    if (result.kind !== 'unreadable') return;
+    expect(result.reason).toContain('no team is registered');
+    expect(made.starts).toBe(0);
+    expect(made.runs).toEqual([]);
+    expect(made.creates).toEqual([]);
+  });
 });

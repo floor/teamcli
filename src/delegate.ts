@@ -229,10 +229,11 @@ export function delegateReadGate(input: {
   sources?: DelegateSources;
 }): boolean {
   const { team, root, dir, home } = input;
+  const entries = team.delegates ?? [];
+  if (entries.length === 0) return false;
   const sources = input.sources ?? {};
   const standing = sources.standing ? sources.standing(root) : approvalStanding(root, home);
   if (standing.kind !== 'verified') return false;
-  const entries = team.delegates ?? [];
   const io = sources.callerSources ? { ...input.io, callerSources: sources.callerSources } : input.io;
   const evidence = evidenceOf(team, dir, io, sources, entries);
   if (!evidence.ok) return false;

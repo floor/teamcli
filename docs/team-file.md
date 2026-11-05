@@ -13,8 +13,8 @@ one-line `{ }` and `[ ]`, plain and quoted values, comments; anchors, aliases, m
 block scalars, a second document and duplicate keys are refused, with the line number. The JSON
 Schema ships at `schema/team.schema.json`, and every write is validated against it and the rules
 behind it before it is stored. The format is walked below, by example; after it, this page
-documents the sections one by one: `tasks`, `seats`, `delivery_order`, `grant`, `delegates`,
-tempo, and `budgets` with the format.
+documents the sections one by one: `tasks`, `seats`, `delivery_order`, `webhook`,
+`sender_name`, `grant`, `delegates`, tempo, and `budgets` with the format.
 
 ## Editing with team config
 
@@ -139,14 +139,15 @@ budgets:                      # the owner's: reserve or floor per account, marks
 ```
 
 - `session` names the herdr session and defaults to `project`; `--session` overrides it.
-- `in_project` names the project this team sits in, by the project's display name, while `project:`
-  keeps meaning the team's own name; `project_lead: true` beside it marks the team that leads that
-  project — one team per project, and `team check` refuses a second. The project's record then
-  carries the lead: the agent of the seat this record's `leads: true` marks as the team's lead,
-  re-resolved on every launch, so a mark that moves in the record moves the record with it.
-- `entity` names the entity this team belongs to: the level above its project that a setting, the
-  lobby's `<entity>` folder and a lead pair's reach are read from, and the name that makes two
-  teams one entity's when both records carry it.
+- `in_project` names the project this team sits in, by the project's display name (one path
+  segment, 128 characters at most), while `project:` keeps meaning the team's own name;
+  `project_lead: true` beside it marks the team that leads that project — one team per project,
+  and `team check` refuses a second. The project's record then carries the lead: the agent of the
+  seat this record's `leads: true` marks as the team's lead, re-resolved on every launch, so a
+  mark that moves in the record moves the record with it.
+- `entity` names the entity this team belongs to (one path segment, 128 characters at most): the
+  level above its project that a setting, the lobby's `<entity>` folder and a lead pair's reach
+  are read from, and the name that makes two teams one entity's when both records carry it.
 - `lobby` names the folder every seat except a lead starts in: the record's own `lobby:` wins over
   the lobby the registry recorded for the session and over the defaults, and setting it records
   that lobby for the session. The `workspace.mode` bullet below states the whole resolution order.
@@ -207,6 +208,8 @@ The Claude Code profile is tested with CLI 2.1.288 to 2.1.302 (`claude`).
 
 The Codex profile is tested with CLI 0.157.0 to 0.161.0. Its status line is read for a weekly figure
 (`weekly N% left`) when the pane is wide enough to show the number; a cut line is not a figure.
+Every launch also pins the profile's feature set, appended last as `-c features.<pair>` words, so
+every seat presents the same settings to the one background server they share.
 It adds `-a never -s danger-full-access`
 for unattended execution, plus `--no-daemon --no-alt-screen` for the captured pane mode,
 and checks login with `codex login status`. Rules go as a first message
@@ -225,10 +228,16 @@ before relaunching. Other unrecognised layouts stay unknown.
 The Jules profile is tested with CLI 0.1.42 to 0.1.42 (`jules`). Its ready screen is the session
 table, whose input line reads ` > Search sessions or type / to use`; its task box asks
 `What do you want Jules to work on?`. The TUI has no standing session, so rules are prepended to
-every brief, and a brief is typed through the CLI's own screens — `/`, the repo chooser, the task
-box, the create confirmation — with the CLI's `Session created:` line as the delivery proof. A send
-names only the repo of the seat's own folder: the module proves the chooser collapsed on it before
-it types, and refuses when the account's list does not hold it. One `ctrl+c` at the table quits,
+every brief. A send does not use those screens: the profile declares the CLI's own session call
+(`jules new`), and a send to a jules seat runs it with the whole body — rules, sender header and
+message — as ONE argument, in the seat's own folder, with no shell string and no pane touched.
+When that folder is a checkout whose `origin` names a repository, the call names it too
+(`--repo <owner>/<repo>`); otherwise the CLI chooses from its working folder. The CLI's
+`Session created:` line with its id is the delivery proof, the id is recorded on the send's
+delivery record, and no read receipt follows. A session's result lands locally only when the
+operator pulls it: `team worktree pull <task> --remote-session <id>` runs the profile's own
+`jules remote pull --session <id> --apply` in the named worktree and publishes nothing — no
+commit, no branch, no pull request. One `ctrl+c` at the table quits,
 and the profile sends no other exit key; it never sends the table's `ctrl+d` delete, and the rules
 every jules seat receives carry `Never delete a Jules session.` herdr reports a jules pane as no
 agent, and its status unknown, so the profile says `herdr_status: unreliable`: readiness is read
@@ -237,8 +246,16 @@ and `remove` treat the idle table as free where they would otherwise wait on a w
 give. Status, check and the watch read the seat's state from the same screen: its idle table is
 idle, a running turn is working, and only a screen the profile cannot read is unknown.
 
-The Cursor profile is tested with CLI 2026.10.01 to 2026.10.19 (`cursor-agent`). The 2026.10.19
-capture is its ready screen, and its dialog and working shapes are those captured at 2026.10.16.
+The Grok profile is tested with CLI 1.0.50 to 1.0.52 (`grok`). It adds `--trust
+--permission-mode auto` and three `--allow` rules naming the commands an unattended seat runs,
+and checks login with `grok models`. Rules ride the launch line as `--rules`. Each launch also
+starts the seat inside a sandbox profile TeamCLI writes first: `--sandbox team-seat-<project>`,
+kept in the user-level `sandbox.toml` under Grok's own home, granting read-write on the team's
+state folder and the project's `.agents` while everything else stays the workspace's own grant.
+
+The Cursor profile is tested with CLI 2026.10.01 to 2026.10.22 (`cursor-agent`). The 2026.10.22
+captures are its ready, unsent and working screens; its dialog shapes are those captured at
+2026.10.16.
 
 Launching a Cursor seat, like launching cursor-agent by hand, creates Cursor's own project record
 under ~/.cursor/projects for that folder; team writes no trust (.workspace-trusted) and no Cursor
@@ -450,14 +467,35 @@ waits in the drop file. `team send --wait` to such a seat writes the record on t
 nothing typed and awaits a reply record on the thread. The key is part of the seat's digest, and a record that marks no seat keeps every digest
 it had.
 
+`watch_wake` is optional on a seat: `on` or `off`, the seat's own word on the watch's typed
+retry. The retry is on exactly where the seat's CLI profile declares `typed_wake` (Muse, Cursor,
+Antigravity, Grok and Codex today) and the key is omitted; `on` on a profile with no typed wake is
+refused, because there is no wake to retry, and a word other than the two is refused under the seat.
+`off` keeps the drop-file wake for that seat — the send-time typed wake is unaffected. The key is
+part of the seat's digest, and a record that writes none keeps every digest it had.
+
+`public_only` is optional on a seat: `public_only: true` says its briefs go to a service outside
+this machine. The team's rules are never prepended to its briefs, and a send reads the whole body
+against the machine's private lists before the receiving CLI's own session call — a body that
+matches a rule is not handed to the service: the send names the rule by source, class and ordinal
+(never the text) and the walk falls through to the leg behind it, so the message still lands in
+the seat's own drop folder. The repository the session would target is proven public the same
+way, by one credential-free read of the forge's own record: a repository that is not public, a
+read that cannot be made, and a folder that names no repository all refuse the session call and
+fall through there too ([team send](commands/send.md)). A CLI whose whole service is hosted
+declares it for every seat of that CLI in its profile (`public_only: true` there); a seat's word
+can only add the guard, never remove it, and `public_only: false` reads as absent. The key is
+part of the seat's digest, and a record that marks no seat keeps every digest it had.
+
 `inbound` is optional on a seat: its own word on cross-session socket frames. `accept`
 authorizes a send's `socket` leg for any launch; `hold` and `refuse` never let it dial — the
 explicit opt-out — and an omitted key leaves the choice to the launch. A send always needs the
 seat's own launch to declare `crossSessionInbound: accept`; with no `inbound` word, a seat
 TeamCLI launched is authorized by that launch alone (its generated settings file carries the
 attestation), while a session launched some other way is dialed only when the record says
-`accept`. A frame the receiver's box holds at its dialog is recorded once as
-`held (socket)`, and the walk falls through to the next route with the same message id; the
+`accept`. A frame the socket takes is `delivered (socket)` at the frame; a frame the receiver's
+box then holds at its dialog is recorded once as `held` by the daemon's presence pass, which
+looks at the receiving pane after a socket delivery — the sender never waits on the box. The
 socket is not dialed again until the declaration the hold sat under is re-confirmed, by its
 settings file being rewritten. The key is part of the seat's digest, and a record that writes none
 keeps every digest it had; a word other than the three is refused under the seat.
@@ -476,54 +514,71 @@ section's `idle_first`, `idle_owner` and `blind_after` are the team's own, descr
 ## `delivery_order`
 
 The order a send to this team's seats walks. It is not an owner section: writing or changing it
-is an ordinary change, and a record that writes none reads as the default order.
-Omitted, the general order is `mcp-inbox`, then `typed`, then `drop`; neither `native` nor
-`headless-resume` is ever in that default. A Codex receiver with no declared order has an
+is an ordinary change, and a record that writes none reads as the default order `typed, drop`;
+none of `socket`, `native`, `headless-resume` or `session` is ever in that default. The order
+names the legs the seat accepts, and the walk that tries them is the owner's cascade (ADR
+`zeus-message-path`, D1): the channel-class legs first — the seat's serving `channel` ahead of
+them, then the ones the word names, in its own order — then the sender-posted `webhook` where the
+seat declares an adapter row (no order names it), then the typed leg, then the mailbox. A receiving CLI whose profile declares
+its own session call walks that call wherever an order's `typed` word stands — the call is the
+one route such a CLI has that reaches an agent at all — and walks it first while no level of its
+chain declares an order. A Codex receiver with no declared order
+has an
 implicit runtime queue first while its signed `codex-daemon` setting is on, then the typed wake,
-then the inbox and remaining default legs. If that setting is off or unavailable, the typed wake
-leads so an idle Codex inbox is not left unread. A declared `delivery_order` is followed as
-written. Only a declared word can add `native` or `headless-resume` to the general order. A typed leg
-that finds no live agent types nothing and
-hands the send to the leg behind it, recording `typed: <reason>`; a walk reaches `drop` when
-the legs before it did not take the send, or when the order puts `drop` before `typed`.
+then the drop. If that setting is off or unavailable, the typed wake
+leads so an idle Codex inbox is not left unread. A declared `delivery_order` names the legs the
+seat accepts and the order of the channel-class ones; the cascade decides where the webhook, typed
+and drop classes stand. A declared word may add `socket`, `native`, `headless-resume` or `session`
+to the general order. A `typed` word types only where the profile declares a typed wake; elsewhere
+the seat's own event adapters take its place. A typed leg that finds no live agent types nothing
+and
+hands the send to the leg behind it, recording `typed: <reason>`; the cascade always closes on
+`drop`: a word that places `drop` before `typed` still stores after every wake the order names,
+because the signed record is stored before the walk begins.
 
 ```yaml
 delivery_order: [typed]
 ```
 
-- The word is one or more of `socket`, `native`, `mcp-inbox`, `typed`, `drop` and
-  `headless-resume`, each at most once, in the order a send tries them. A written key with no
+- The word is one or more of `socket`, `native`, `mcp-inbox`, `typed`, `drop`, `headless-resume`
+  and `session`, each at most once, in the order a send tries them. A written key with no
   legs is `delivery_order needs at least one leg:
-  socket, native, mcp-inbox, typed, drop, headless-resume` — the default order is the absence of
+  socket, native, mcp-inbox, typed, drop, headless-resume, session` — the default order is the
+  absence of
   the key. A word outside
-  the six is `delivery_order "<word>" must be one of: socket, native, mcp-inbox, typed, drop, headless-resume`; a
+  the seven is `delivery_order "<word>" must be one of: socket, native, mcp-inbox, typed, drop, headless-resume, session`; a
   repeated one is `delivery_order names "<word>" twice`.
-- The six legs: `socket` is this build's own frame on the receiving Claude session's
+- The seven legs: `socket` is this build's own frame on the receiving Claude session's
   cross-session socket, a signed copy written first, dialed only for a seat whose launch
   declares `crossSessionInbound: accept` — an `inbound: accept` here authorizes any launch, an
   explicit `hold` or `refuse` opts out, and with no word a seat TeamCLI launched is authorized
-  by its launch; `native` is
-  the sender's own
-  cross-session SendMessage, recorded by the sender with `--confirm`;
-  `mcp-inbox` is the seat's own MCP inbox, which takes the send only while a server serves it —
-  a live `.inbox-listener` marker names the seat, session and root, and a walk with none records
-  `mcp-inbox: no live inbox listener` and moves on; `typed` is the 0600 drop file and one
-  composer trigger line; `drop` is the same 0600 drop file and nothing typed into the pane at
-  all — no trigger line and no socket frame, its run ending `sent (unconfirmed)` until the seat's
-  own read writes the receipt; `headless-resume` is the seat's own CLI resumed for one turn
-  without a TUI pane, which no default names and this build cannot take yet, so a walk that
-  reaches it records `headless-resume: this build carries no headless resume runtime` and moves
-  on. `delivery_order: [drop]` takes the drop leg alone, for a receiver
-  that watches its own drop folder and for a pane that must never receive typing; a seat the
-  file marks `human` walks `drop` alone, whatever its order holds.
+  by its launch; `native` is the sender's own cross-session SendMessage, recorded by the sender
+  with `--confirm`; `mcp-inbox` is a name this build reads and never walks — the MCP inbox is
+  the store's reader, and the walk reports the word `unavailable` rather than attempting the
+  leg; `typed` is the 0600 drop file and one composer trigger line; `drop` is the same 0600
+  drop file and nothing typed into the pane at all — no trigger line and no socket frame, its
+  run ending `queued, not woken` until the seat's own read writes the receipt;
+  `headless-resume` is the seat's own CLI resumed for one turn without a TUI pane, which no
+  default names and this build cannot take yet, so a walk that reaches it records
+  `headless-resume: this build carries no headless resume runtime` and moves on; `session` is
+  the receiving CLI's own session-creating call, run in the seat's own folder with the whole
+  body — the rules, the sender header and the message — as one argument after the profile's own
+  words and, when the folder's `origin` names a repository, `--repo <owner>/<repo>`. A send is
+  delivered on that leg only when the CLI printed its own session line with an id; the id is
+  recorded as `session` on the history line, and every other ending hands the send to the leg
+  behind it with `session: <reason>` among the failed legs. A seat whose CLI declares no
+  session call records `session: <cli> has no session-creating command in this build` and moves
+  on. `delivery_order: [drop]` takes the drop leg alone, for a receiver that watches its own
+  drop folder and for a pane that must never receive typing; a seat the file marks `human`
+  walks its webhook adapter, when it declares one, and then `drop`, whatever its order holds.
 - The receiving seat's chain is read outermost first: the entity, the project's registry record,
   this file's key, then the seat's own key. No entity record carries an order in this build, so
   that level is always silent; the project's word is `delivery_order` beside `teams` in
   `projects.yaml`, written `[typed]` the same way. Each level may drop legs from the order in
-  force or put the legs it keeps in a different order, and may add `native` or
-  `headless-resume`, or place `socket` where the order in force lacks it: a word naming any
-  other leg the order in force does not have is set aside, and the
-  order in force stands. A word equal to the order in force is no word at all.
+  force or put the legs it keeps in a different order, and may add `native`, `headless-resume`
+  or `session`, or place `socket` where the order in force lacks it: a word naming any other
+  leg the order in force does not have is set aside, and the order in force stands. A word equal
+  to the order in force is no word at all.
 - A seat's word is written on the seat, and is part of the seat's digest — writing or changing
   it changes the digest, like every other field of the seat:
 
@@ -542,6 +597,69 @@ delivery_order: [typed]
 - What a walk does with each leg — a leg takes the send or is recorded as a failure and the next
   one is tried — is [team send](commands/send.md)'s. A `--wait` send walks the same order and
   then awaits a reply record on the thread.
+
+## `webhook`
+
+A seat's webhook delivery adapter: the routine every accepted signed message for the seat is
+POSTed to, with the drop file kept as the backup. The record holds two absolute paths and nothing
+that authenticates — both values are read at POST time, so a rotated URL or secret works without
+rewriting the team file. The whole map is part of the seat's digest, so writing or changing it is
+a change the owner approves; a file that writes none keeps the digest it had.
+
+```yaml
+seats:
+  - role: remote
+    name: iris
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Sonnet
+    version: "5.5"
+    launch: claude --model claude-sonnet-5-5
+    webhook:
+      url_file: /home/me/team/iris-url
+      secret_file: /home/me/team/iris-secret
+      body: inbox
+      timeout_ms: 5000
+```
+
+- `url_file` and `secret_file` are required and name readable files: the URL's one line and the
+  secret's one line. The secret file must be mode `0600`; one readable by group or others is
+  refused with its mode, never its value.
+- `header` is optional: the HTTP field the secret authenticates. Set, the secret file's line is
+  that header's value verbatim; absent, the adapter sends `Authorization: Bearer <secret>`. It
+  must be an HTTP field name and cannot be `content-type`, which the adapter writes itself.
+- `body` is optional: `event` for the bus envelope, `inbox` for the seat-inbox record shape.
+  Absent, the routine reads the envelope.
+- `timeout_ms` is optional: how long one POST waits for the routine's answer, a whole number of
+  milliseconds from 1 to 60000, 5000 when absent. Anything else is refused —
+  `webhook.timeout_ms must be a whole number from 1 to 60000` — never clamped to a bound the
+  seat did not ask for.
+
+The send that walks a seat's cascade posts the signed record to its adapter as the cascade's
+second class — after every channel-class leg and before the typed line — and the bus carries the
+same arrival after the send returns. Whichever poster comes first leaves the `<id>.posted` mark
+beside the record on a 2xx, and both skip a record that carries it or a claim another poster
+holds, so one arrival is posted once and the routine is never asked twice. Only a 2xx is a
+delivery: the send's line says `delivered (webhook, <n> ms)`. The send's own post is one
+attempt, its wait for the routine's answer capped by the sender's own one-second deadline, so a
+person's command never waits out the row's `timeout_ms`: a non-2xx answer or a refused connection
+fails it after that attempt and releases its claim, so the walk moves on and the line says
+`webhook not delivered: <reason>` beside the class's words. The bus's pass is the one that
+retries: a request that could not be sent at all — a refused connection, a name that does not
+resolve — three attempts in all, with a pause before each retry, while a non-2xx answer fails it
+after one attempt and releases the claim. A redirect is not followed. A timeout after the body
+went out is reported as sent with its answer unknown — `sent (unconfirmed) (webhook, <n> ms);
+webhook delivery unknown: <reason>` — and its claim stays, so no later pass posts the record
+again. A line that keeps the `queued; its webhook fires when the bus takes it` words is one whose
+post took nothing — a failed post says so beside them, and the released record is the bus's and
+the seat's pull's to take; a post the adapter took, or one whose answer was not read, replaces
+them with the post's own clause.
+
+The drop file stays in place in every case, so the seat's own pull still reads the message. The
+last outcome is recorded on the seat's state row — `delivered`, `failed` with its attempts and
+reason, `refused`, or `sent-unknown` — and `team check` and `team status` print one note when it
+is not delivered: `<seat>: its last webhook delivery did not arrive: …; the delivery left the
+drop record for the seat's own pull`. A later delivered record clears the note.
 
 ## `sender_name`
 
@@ -692,10 +810,11 @@ tempo: urgent
 ```
 
 - `relaxed`, `normal` or `urgent`.
-- `relaxed` doubles `idle_repeat`, `team_idle`, `nudge_wait`, `unsent_after` and
+- `relaxed` doubles `idle_repeat`, `team_idle`, `nudge_wait`, `unsent_after` and a declared
   `unread_after`, and doubles the idle window the liveness chain resolved (`idle_first`).
   `urgent` halves them, to the nearest second, and never below one second. `normal` leaves
-  them as written.
+  them as written. The per-seat unread defaults — 30 s for a seat a message can wake while it
+  is idle, 60 s for a typed or pull-only seat — are release values, and no tempo scales them.
 - The idle window is scaled after the chain checks its word: the tempo is the owner's dial on
   the timing, so `relaxed` lengthens the resolved window without reading as a team loosening a
   liveness threshold, and `urgent` shortens it. `idle_owner` and `blind_after` are never scaled.

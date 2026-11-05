@@ -8,32 +8,45 @@ through its drop folder, and a seat no route can wake keeps it in the bus inbox 
 saying so. The record is the message: it carries the body, the sender, the
 rule that admitted the send, and the thread it belongs to, and its name is the send's id.
 A record waiting in a seat's folder is answered with [team reply](reply.md), which writes the
-answer as a record on the same thread and cites the record it answers.
+answer as a record on the same thread, cites the record it answers, and publishes the seat's
+signed read receipt beside it (ADR `zeus-message-path`, D3). A plain `team send` back to the
+sender is an answer too: it marks the newest message that sender delivered this seat read
+(`read_by: answered-by-send`), and only the newest — an older message from the same sender, a
+message from anyone else, and one delivered after this send keep waiting. `team ack <id>` marks
+a message read with no answer.
 The body is never split across several writes. A seat whose CLI builds its own work item from
 its screens — a profile with a compose module — still gets the record, but its compose path is
 refused before anything is typed, so the seat reads the message through its inbox or its drop
 folder like any other. The receiving seat's
-delivery order decides the channel: with no declaration it is `mcp-inbox`, then `typed`, then
-`drop`; `socket`, `channel`, `native` and `headless-resume` join it only where a default below or
-a declared word adds one. Each leg in
-turn either takes the send, which ends the walk, or
-definitely cannot take it, which hands the send to the next leg and is recorded as a failure —
-the history line names the channel the send went by and the legs that failed before it. The walk
-filters typing legs out before it runs anything, so a `typed` word contributes no leg wherever it
-stands in the order: where a declared order put it for a Claude seat, the seat's own event
-adapters stand in its place — the live channel, then the socket its launch accepts — and for a
-Codex seat its runtime queue stands there while its `codex-daemon` policy is on. The drop leg
-ends the walk: a seat no event adapter took keeps the message in its bus inbox, and the command
-says `queued, no event adapter` on stderr.
+delivery order names the legs it accepts: with no declaration it is `typed, drop`, and `socket`,
+`native`, `headless-resume` and `session` join it only where a default below or a declared word
+adds one; `channel` joins where the seat's server is serving. The order the walk tries them in is the owner's cascade (ADR
+`zeus-message-path`, D1): the channel-class legs first — the seat's serving `channel` ahead of
+them, then the ones the chain names, in its own order: `socket`, `native`, `headless-resume`,
+`session` — then the sender-posted `webhook` where the seat declares an adapter row (no order
+names it), then the `typed` leg where the seat's profile declares a typed wake, then the drop
+leg. Each leg in turn either takes the send, which
+ends the walk, or definitely cannot take it, which hands the send to the next leg and is recorded
+as a failure — the history line names the channel the send went by and the legs that failed
+before it. A word this build reads but never walks, `mcp-inbox`, is reported skipped with its
+reason — the MCP inbox is the store's reader, not a wake — and `team check` notes the word. The
+walk filters typing legs out before it runs anything, so a `typed` word contributes no leg
+wherever it stands in the order: where a declared order put it for a Claude seat, the seat's own
+event adapters stand in its place — the live channel, then the socket its launch accepts — for a
+Codex seat its runtime queue stands there while its `codex-daemon` policy is on, and for a CLI
+that creates its own session its session call stands there. The drop leg ends the walk: a seat no
+event adapter took keeps the message in its bus inbox, and the command says `queued, no event
+adapter` on stderr.
 
 The drop leg writes that same record and types nothing at all — no trigger line, no socket
 frame, nothing read from a pane — so a receiver that watches its own drop folder finds the
-message there. When no inbox listener serves the seat, the default order walks it after
-`mcp-inbox`; it is chosen alone with `delivery_order: [drop]`, and a human's seat always walks
-it alone. Its console line is `<seat>: sent (unconfirmed) (drop, <n> ms); <delivery>`, exit 0, with
-`via: drop` on the history line: the record is the message, safely on disk, and no receipt has
-come back yet. Beside the record the send leaves the marker `<id>.pending`, which says the drop
-leg left it. The seat's own watcher reads it: at turn start its hook runs `team drops --read`,
+message there. It is the cascade's last class and the order's own last word: the default order
+names it, it is chosen alone with `delivery_order: [drop]`, and a human's seat walks it alone
+unless it declares a webhook adapter, which is no pane route and is posted before it. Its console
+line is `<seat>: queued, not woken (drop, <n> ms); <delivery>`, exit 0, with `via: drop` on the
+history line: the record is the message, safely on disk, and no receipt has come back yet. Beside
+the record the send leaves the marker `<id>.pending`, which says the drop leg left it. The seat's
+own watcher reads it: at turn start its hook runs `team drops --read`,
 which proves the record's signature, writes the signed receipt `<id>.read.json` beside it and
 hands the body to the turn. A running `team watch` promotes the send on that receipt once — one
 `delivered (read)` history line, the marker cleared, nothing typed. A record no watcher has read
@@ -42,24 +55,26 @@ watch says the send was not read, and the record stays in the folder — never t
 called lost.
 
 When another command holds the seat's lock, the send is queued rather than refused: the seat's
-inbox and drop legs write the signed record and its `<id>.pending` marker
-without that lock, type nothing and dial nothing, and answer
-`<seat>: queued (receiver busy) (<leg>, <n> ms; id <id>); <delivery>`, exit 0. The id on that line is the id
-the delivery keeps, and the marker is the one the watch already carries — the retry pass takes an
-`mcp-inbox` marker after its fallback window, and a `drop` marker waits for the seat's own
-watcher read — so the queue ends in the retry's or the watcher's own word, with its own
-history line beside the acceptance the send wrote, and the message is never delivered twice. A queued send is an acceptance, never a delivery: no receipt is
-claimed, and nothing says `delivered` until one comes back.
-A walk reaches `drop` when the legs before it did not take the send — the inbox had no live
-listener, a socket frame was not taken, or the runtime queue was not there — or when the order
-puts `drop` first. A level of the receiving seat's own chain — entity, project, team, seat — may drop legs
-from the order or put the legs it keeps in a different order, and may add only `native`, the
-sender's own frame: a word naming any other leg the order in force does not have is set aside
-and the order in force stands. The
-words are read from the receiving seat's own files: the team file's `delivery_order` key and the
-seat's, and the registry project's record for the project the team sits in ([the team
-file](../team-file.md#delivery_order)). A team file that writes a word with no leg, an unknown
-leg, or a leg twice is refused when the file is read.
+drop leg, or the typed leg that would have typed into it, writes the signed record and its
+`<id>.pending` marker without that lock, types nothing and dials nothing, and answers
+`<seat>: queued (receiver busy) (<leg>, <n> ms; id <id>); <delivery>`, exit 0. The id on that line
+is the id the delivery keeps, and the marker is the one the watch already carries — a marker an
+older build's inbox leg left is taken after its fallback window, and a `drop` marker waits for
+the seat's own watcher read — so the queue ends in the retry's or the watcher's own word, with
+its own history line beside the acceptance the send wrote, and the message is never delivered
+twice. A queued send is an acceptance, never a delivery: no receipt is claimed, and nothing says
+`delivered` until one comes back.
+A walk reaches `drop` when the legs before it did not take the send — a socket frame was not
+taken, the runtime queue was not there, or the adapter did not take the post — because the
+cascade always closes on the mailbox: a word that places `drop` first still stores after every
+wake the order names. A level of the receiving seat's own chain — entity, project, team, seat —
+may drop legs from the order or put the legs it keeps in a different order, and may add `native`,
+`socket`, `headless-resume` or `session`, and keep an `mcp-inbox` word the walk reports
+unavailable: a word naming any other leg the order in force does not have is set aside and the
+order in force stands. The words are read from the receiving seat's own files: the team file's
+`delivery_order` key and the seat's, and the registry project's record for the project the team
+sits in ([the team file](../team-file.md#delivery_order)). A team file that writes a word with no
+leg, an unknown leg, or a leg twice is refused when the file is read.
 
 A receiving Claude session's `socket` leg is the one implied default outside a declared word:
 with no level of its chain declaring an order, a seat whose own launch declares
@@ -68,12 +83,14 @@ TeamCLI launched, that launch setting is the authorization on its own and the te
 `inbound` line; a session launched some other way is dialed only when its team file also says
 `inbound: accept`. An explicit team-file `hold` or `refuse` always keeps the socket out — the
 documented opt-out — and a launch that says `hold`, `refuse` or nothing is never dialed. A frame
-the receiver's box holds at its
-dialog ends `held (socket)`: the signed record is already on disk, the walk falls through to the
-next route with the same message id, and that seat's socket is not dialed again until the
-declaration the hold sat under is re-confirmed, by its settings file being rewritten. The
-hold's mark lives under the receiving team's state folder, outside the seat's drop folder, so
-its reader never sees it as a message.
+the socket takes ends `delivered (socket)` at the frame: the send never waits on the receiving
+box, so a frame that then sits at that box's held-message dialog is not the sender's to see. The
+daemon's presence pass looks at the receiving seat's pane after a socket delivery and, when the
+frame is at its dialog, writes one `held` line for that id — its fields are the signed record's —
+and marks the socket held; that seat's socket is not dialed again until the declaration the hold
+sat under is re-confirmed, by its settings file being rewritten. The hold's mark lives under the
+receiving team's state folder, outside the seat's drop folder, so its reader never sees it as a
+message.
 
 The `channel` leg is the second implied default outside a declared word, and the only one that is
 never a declared word: with no level of the receiving seat's chain declaring an order, a Claude
@@ -106,10 +123,50 @@ inside its two seconds wrote a record nothing pushed: the marker is cleared and 
 with `failed: channel: no push receipt within <n> ms`, because this leg took nothing and no later
 pass may redeliver a send whose own run is still walking the order.
 
-A listener that runs another install is no route for the channel or the `mcp-inbox` leg: the
-marker names the version, the entry build and the packed commit the server started from, and a
-listener of another install cannot take a record this build signs, so the channel is not walked
-and the `mcp-inbox` leg records `mcp-inbox: <the stale reason>` and moves on. The serving inbox
+The `session` leg is another implied default outside a declared word, and it belongs to a
+receiving CLI whose profile declares its own session call: where a word declares `typed`, the
+session call stands at that word instead, and with no level of its chain declaring
+an order, the walk runs the CLI's own session-creating call first, in the seat's own folder, with
+the whole body — the rules, the sender header and the message — as ONE argument after the
+profile's own words, never through a shell string. When the folder's `origin` names a repository,
+`--repo <owner>/<repo>` follows the profile's words and the body comes last. Nothing is typed
+and no pane is read. The send is delivered only when the CLI printed its own session line with an
+id: the console says `<seat>: delivered (session <id>)` (exit 0, `via: session`), and the
+history line records the id as `session`. Every other ending — the CLI could not run, exited
+non-zero, or exited 0 without its session line — records `session: <reason>` among the failed
+legs and hands the send to the leg behind it. A seat whose CLI declares no session call records
+`session: <cli> has no session-creating command in this build` and moves on. The send never pulls
+the remote session's result: that is the operator's own call, `team worktree pull <task>
+--remote-session <id>`, which runs the CLI's own pull into the worktree it belongs in
+([team worktree](worktree.md)).
+
+A public-only seat — its CLI's profile declares `public_only: true`, as a hosted CLI's does, or
+the team file marks the seat — never receives the team's rules: no rules text is prepended to its
+body. Its body is read against the machine's private lists, the names and phrases files the
+pre-push gate reads, before the session call. A body that matches a rule is a leg that did not
+take the send: the failed leg reads `session: the body matches a private rule (names entry 1); no
+session was created` (source, class and ordinal — never the text), the walk falls through to the
+leg behind it, and the message still lands in the seat's own drop folder. A list that is present
+and cannot be read refuses the body the same way; a machine with neither list has nothing
+configured to protect, and the send proceeds.
+
+The repository travels with the body: the CLI clones `owner/repo` from the forge, so a private
+one would hand the service the code the brief is about. Before the session call, the repository
+the seat's folder names as its `origin` is proven public by one credential-free read of the
+forge's own record — no header of any kind, no redirect followed, and only a 200 that marks the
+repository public counts (`src/send/repo-visibility.ts`). A repository that is not public, a read
+that cannot be made, and a folder that names no repository all refuse the leg the same way a
+private-list hit does — `session: the target repository owner/repo is not public; no session was
+created`, `session: the target repository owner/repo could not be read for visibility; no session
+was created`, or `session: the seat's folder names no repository, so the session's target cannot
+be proved public; no session was created` — and the walk falls through to the leg behind it, so
+the message still lands locally. A read the walk cannot make must not pass a message.
+
+A listener that runs another install is no route for the channel: the marker names the version,
+the entry build and the packed commit the server started from, and a listener of another install
+cannot take a record this build signs, so the channel is not counted as a route for this send and
+the walk goes on to its other legs. A walk that wakes the seat itself leaves the channel-held
+marker first, so the stale server cannot push the same record after it. The serving inbox
 compares the install under it with the one it started from on every channel tick and after each
 tool call; when they differ it removes its marker, starts the installed entry with the same
 arguments and this process's stdio, and exits. A stale channel listener is still a running old
@@ -134,37 +191,27 @@ the retry window's bound, or the pane never frees — leaves the channel push he
 read (`inbox_check`, the turn-start drop read, or `team messages`). The record stays in the inbox
 throughout, so a held name never withholds the message.
 
-The `mcp-inbox` leg writes the message whole into the seat's own inbox —
-`<root>/.agents/send-drops/<session>/<seat>`, the same 0600 record the drop leg leaves —
-and types nothing. It takes the send only when a server is serving that inbox: a marker
-`.inbox-listener` beside the message names this seat, this session and this root, and its pid is
-still running. A marker that is absent, malformed, dead, or names another seat, session or root
-is no listener: the leg is recorded `mcp-inbox: no live inbox listener` and the walk moves on. A
-live listener gets the message and a short wait — two seconds — for the receipt its `inbox_read`
-call leaves at `<id>.read.json`. The receipt is `delivered (read)`: the seat read the message, and
-the words claim nothing about what it did with it. A wait that ends without the receipt is
-`sent (unconfirmed)`, exit 0 — the record is the message, safely on disk, and the walk ends rather
-than typing into a pane the inbox was chosen over. A record beside the drop says which leg left
-it. A receipt that lands after the sender has gone is promoted by the watch — one
-`delivered (read)` history line, nothing typed — and a message still unread ten minutes after
-the send is handed to the retry pass at its fallback window, which types nothing in this build:
-the attempt is refused before the pane, the marker stays, and thirty minutes after the send it is
-given up with `the retry window passed`. Ten minutes is the window
-the native leg allows for a confirmation, so a live inbox never delays a message longer than the
-frame path does. The `native` leg is a call the sender's own process makes or the receiving
-seat's own runtime queue, never a frame this walk writes. A Codex receiver's queue takes the send
+The `mcp-inbox` word is not a delivery leg in this build: the MCP inbox is the store's reader —
+the same signed records the drop leg leaves, read by `team drops --read`, by the inbox server's
+own read tool or by `team messages` — and a reader is not a wake. The word keeps its place in the
+catalogue, and the walk reads it as unavailable: the leg is never attempted, the report lists it
+`skipped` with the reason `not a delivery leg in this build; the inbox is the store's reader`,
+and `team check` notes a seat whose order still names it. A record beside the drop says which leg
+left it, and a seat that reads one leaves the same signed receipt the drop leg's reader does. The
+`native` leg is a call the sender's own process makes or the receiving seat's own runtime queue,
+never a frame this walk writes. A Codex receiver's queue takes the send
 only when its `codex-daemon` policy is on, a trusted runtime session is bound to the seat, and
 the queue answers the bounded live readiness probe — the policy alone does not admit it. For a
 Claude receiver, a walk from the owner, or from a sender whose own file does not declare
 `cli: claude-code`, records the leg `unavailable`; a sender whose own file does declare it gets
 [the native handoff](#the-native-channel) instead — one pending record, the exact target, the
 body and the `--confirm` line — and makes the call itself.
-The typed leg is never
-walked in this build: `TYPING_LEGS` names it, the walk filters it out before any leg runs, and
-the trigger line is built but never typed. Where a declared order put `typed`, the seat's own
-event adapters stand in its place, and a send no adapter takes ends at the drop leg with the
-record in the bus inbox. The drop leg never types: there the run ends `sent (unconfirmed)` once
-the signed record and its marker are in place, and no box, status or transcript is read.
+The typed leg is the profile-gated typed wake: only a profile that declares `typed_wake` — the
+shipped `antigravity`, `codex`, `cursor`, `grok` and `muse` profiles do — lets the walk reach it; a `typed` word in any other
+profile's order is set aside before any leg runs, and the seat's own event adapters stand in its
+place, so a send no adapter takes ends at the drop leg with the record in the bus inbox. The drop
+leg never types: there the run ends `queued, not woken` once the signed record and its marker are
+in place, and no box, status or transcript is read.
 
 A seat whose live screen is its provider's usage wall is refused before the walk: no leg is
 tried, no drop file or record is written, no socket frame is sent and nothing is typed, whether
@@ -179,9 +226,11 @@ held. The send daemon takes the same read at its queue: a walled seat is answere
 with that detail, and no drop is staged and no worker started.
 
 A seat the team file marks `human: true` walks the drop leg alone, whatever its delivery order or
-the default says: every other leg — a channel push, a socket frame, the native route, the seat's
-own inbox — is skipped, each one's reason recorded on the history line, and the message arrives
-in the record with the pane never touched and no frame sent.
+the default says: every other leg — a channel push, a socket frame, the native route, a typed
+wake — is skipped, each one's reason recorded on the history line, and the message arrives in
+the record with the pane never touched and no frame sent. Its one exception is the sender-posted
+`webhook`: an adapter row is no pane route, so a person with one keeps it where the cascade puts
+it, before the drop file.
 `--wait` is allowed for such a seat: the record is written on its `drop` leg, nothing is typed,
 and the run awaits a reply record on the thread. The watch types no retry or
 nudge into a human's pane either: a held send's marker is given up on with the reason, and its
@@ -189,8 +238,9 @@ message waits in the record. A caller that reaches the send daemon directly is r
 queue for such a seat: no trigger is typed, no frame is sent, and no worker is started.
 
 `team send --wait` writes the signed message record through the receiving seat's delivery walk —
-its event legs or its `drop` folder, or `drop` alone when the seat is marked `human: true` —
-and then awaits the first verified reply record on the thread ([team reply](reply.md)) until the
+its event legs, its webhook adapter or its `drop` folder; for a seat marked `human: true`, its
+webhook adapter and drop alone — and then awaits the first verified reply record on the thread
+([team reply](reply.md)) until the
 `--timeout` window (120 seconds by default, 1 to 86,400) closes. A reply record that arrives on
 the thread inside the window ends the run `answered` (exit 0), printing `<seat>: answered` and
 the reply's body on stdout, and writes the `replied` receipt beside the sent record. When the
@@ -204,12 +254,13 @@ lands on the thread and moves the record's status once to `replied`.
 The socket frame — the channel the native leg will carry — is a measured observation of Claude Code 2.1.295, not a stable API: JSON
 lines, one frame per line, a first-line deadline of 30,000 ms, and a buffer limit of 1,048,576
 characters. A frame over that limit is refused, never truncated. The message's body is written
-down: a run that ends `delivered`, `delivered (read)`, `sent (unconfirmed)`, `answered`, `held`,
-`queued (receiver busy)`, `not-submitted`, `timeout` or `unreachable` appends one line
+down: a run that ends `delivered`, `delivered (read)`, `delivered (typed wake)`, `sent
+(unconfirmed)`, `answered`, `held`, `queued (receiver busy)`, `not-submitted`, `timeout` or
+`unreachable` appends one line
 to the project's message history, which [team feed](feed.md) reads. The daily log keeps the seat and the sizes.
 
-The outcome is always one of `delivered` (or `delivered (read)`), `sent (unconfirmed)`,
-`answered`, `held`, `queued (receiver busy)`, `not-submitted`, `timeout`,
+The outcome is always one of `delivered` (or `delivered (read)`, or `delivered (typed wake)`),
+`sent (unconfirmed)`, `queued, not woken`, `answered`, `held`, `queued (receiver busy)`, `not-submitted`, `timeout`,
 `unreachable` or `refused` — printed and matched by the exit code, or written as one machine-readable document
 with `--json`. `--list` sends nothing: it prints the addressable seats — the file's own roster,
 each seat's human name as its `@<nickname>` address (the name a seat signed standing where the
@@ -373,8 +424,9 @@ agents. A plain send writes `.agents/send-drops/<session>/<seat>/<id>` (the file
 signed record, carrying the body, both registry ids, the admitting rule and the thread; the
 receiver's `team drops --read` or its inbox's `inbox_read` writes a signed status receipt beside
 it (`<id>.<status>.json`), and the status is read from those receipts, never edited. No leg types
-into that seat's pane: the typed leg is never walked, so no composer is read back and no Enter
-is pressed. `send-drops`, the session directory, and the seat directory are each mode
+into that seat's pane except a profile's declared typed wake, which types into an empty idle box
+alone; the drop leg itself reads nothing back and presses no Enter. `send-drops`, the session
+directory, and the seat directory are each mode
 0700. This command never deletes a delivered record; the owner removes `.agents/send-drops` when
 those messages are no longer needed. A native handoff types nothing and writes no trigger: it
 writes the same signed record into the seat's folder and one pending record to the caller's own
@@ -384,21 +436,19 @@ line and then clears it. A waited send writes the signed record through the rece
 delivery walk, releases the seat lock, and watches `<root>/.agents/send-drops/<session>/*/` for
 the first verified reply record on the thread (`payload.thread === record.thread`).
 The command holds the seat's lock (`<state dir>/seat-locks/<session>/<seat>`) for the deliveries
-its inbox and drop legs make, so a launch of the same seat cannot act beside one of them and no two
-of them run at once. When the lock is held, those legs queue the send instead: they write the
+its drop leg makes, so a launch of the same seat cannot act beside one of them and no two of them
+run at once. When the lock is held, those legs queue the send instead: they write the
 signed record and its `<id>.pending` marker without the lock (above), an acceptance and never a
-delivery. It
-writes one line to `.agents/team.log` — a refusal writes its own line there — and appends the
-message's body to the project's message history
-([team feed](feed.md)) when a send completes. The history line names the channel the send went by,
-when one took it (`via`), and the legs of the walk that definitely could not take it (`failed`,
-each as `<leg>: <reason>` — `native` is recorded `unavailable` there when neither the receiving
-runtime's queue nor the handoff takes the send, and `mcp-inbox` `no live inbox listener` when no
-server is serving the seat's inbox). The line also carries `thread`, the first message's id, and `in-reply-to` when
-the message answers one, so [team feed](feed.md) reads a thread's status from the receipts
-beside its records. The daily log keeps the
-seat and the size; the
-history keeps the message.
+delivery. It writes one line to `.agents/team.log` — a refusal writes its own line there — and
+appends the message's body to the project's message history ([team feed](feed.md)) when a send
+completes. The history line names the channel the send went by, when one took it (`via`), and the
+legs of the walk that definitely could not take it (`failed`, each as `<leg>: <reason>` — `native`
+is recorded `unavailable` there when neither the receiving runtime's queue nor the handoff takes
+the send, and an `mcp-inbox` word is named once with `not a delivery leg in this build; the inbox
+is the store's reader`, in the report as a skipped leg and, on a human's walk, in the failure
+list). The line also carries `thread`, the first message's id, and `in-reply-to` when the message
+answers one, so [team feed](feed.md) reads a thread's status from the receipts beside its
+records. The daily log keeps the seat and the size; the history keeps the message.
 
 ## Who may send to whom
 
@@ -487,19 +537,22 @@ drop is written under the grant lock after the grant, the key, the registry bind
 request's target are read again. The record keeps the client's own principal: `from` is
 `client:grok-bot`, `from_id` is null, and `from_client` carries the client id and the grant id.
 
-Writing that drop is the message. The same signed record is then carried through the coordinator
-seat's resolved delivery order, restricted to the legs a client grant has — its own inbox, the
-cross-session socket, and the typed word, which the walk refuses before it types — so a seat in
-the middle of a turn can take the message. With no declared order the walk is that order: the
-inbox, then the socket when the seat's launch declares `crossSessionInbound: accept`, then the
-refused typed leg. A level that declares an order is walked as written. The drop, native and
-headless-resume legs are never walked here: the drop the
-grant wrote is already the durable copy, and the other two belong to the seat's own runtime.
+Writing that drop is the message: the record already waits in the seat's bus inbox. The same
+signed record is then carried through the coordinator seat's resolved delivery order, restricted
+to the legs a live receiver can take — the cross-session socket and the typed word, which the
+walk refuses before it types — so a seat in the middle of a turn can take the message. With no
+declared order the walk is the socket when the seat's launch declares `crossSessionInbound:
+accept`, then the refused typed leg. A level that declares an order is walked as written; its
+`drop`, `native` and `headless-resume` words add nothing, because the drop the grant wrote is
+already the durable copy and the other two belong to the seat's own runtime, and its `mcp-inbox`
+word is no leg in this build.
 
 Every leg keeps its ordinary pane-safety checks. A human's pane is never dialed or typed into, a
 bare shell is never typed into, and a held frame keeps the socket out until the seat's
 declaration is re-confirmed. No leg writes a second record: each write accepts the record at the
-same id, and a frame the socket takes writes its one signed read receipt beside it. The frame
+same id, and a frame the socket takes writes no receipt — only the seat writes a read receipt, so
+the record stays unread until the seat's own read, and the watch re-wakes it like any other
+message. The frame
 names its sender `Message from Grok Bot (owner)`, with the owner's reply target as its reply
 line, so the receiving seat reads a person's message and not a seat address. The walk's ending
 never changes the invocation: the drop is on disk, the confirmation already printed, and the
@@ -591,24 +644,33 @@ when it is saved, and the refusal names the placeholder:
 | `{subject}` | the sender's [`--subject`](#synopsis) line, sanitised like every field; empty when none was written |
 | `{summary}` | the body's first content line, sanitised and then cut at 80 characters — never paraphrased, and never the subject |
 | `{age}` | how long the message has waited: seconds, minutes, hours or days |
-| `{id}` | reserved for the record's id; this build leaves it empty, and the id travels in the socket frame's `msg_id` only |
+| `{id}` | reserved for the record's id; this build leaves it empty, and a socket frame carries the id in its `msg_id` and in its reader line |
 
 Every field is data: control characters, escape sequences and line breaks are neutralised, so a
 rendered header is one printable line. A body line that forges a sender header stays summary
 text and never becomes the header.
 
-The line the typed leg would carry — never typed in this build — is the rendered header, one
-space, and the fixed sentence `Read it with: team drops --read.` The whole line is one printable
-line of at most 100 characters; the hint is kept whole and the header gives way to it. The
-template cannot remove the hint — an agent seat always learns where to read the signed record —
-and the message's id is not in the line.
+The line a typed wake carries is the rendered header, one space, and a sentence naming the
+seat's fastest read path: the receiving profile's `read_hint` when it declares one — a profile
+whose seats carry an MCP inbox names the inbox tool, `Read it with: call inbox_check now.`,
+because the typed line never carries the id `inbox_read` takes — and the shipped
+`Read it with: team drops --read.` otherwise. The whole line is one printable line of at most 80
+characters; the sentence is kept whole and the header gives way to it. The template cannot remove
+the sentence — an agent seat always learns where to read the signed record — and no sentence
+carries the message's id except one: a socket delivery's single re-wake says `ack <id> or reply`,
+naming the message its frame carried, because either act settles that exact record (ADR
+`zeus-message-path`, D3).
 
 A socket frame is not a message-display line. The frame an agent seat receives opens with the
 sender's identity line, `Message from <name> (<seat>@<team>)` — the nickname the registry holds,
 the name the seat's written label carries before the middle dot, or its seat name, with no
 summary and no rule — then a blank line, the signed body with its own
-`from … — admitted by: …` header, and the fixed reply line,
-`Reply with: team send <address> "…"`. An ordinary send never frames a human's seat: a
+`from … — admitted by: …` header, and the reader line ADR `zeus-message-path`, D3 pins:
+`Answer with team reply <id> "…" (this marks it read), or team ack <id> if no answer is needed.`
+The id is the record's own and appears once; `team reply <id>` answers and marks it read,
+`team ack <id>` marks it read with no answer. The line is the same for every sender, the owner
+included, and carries no address — no entity or owner-reply target is resolved for it. An
+ordinary send never frames a human's seat: a
 `human: true` seat walks the drop leg alone, so no frame is dialed for it.
 
 A running watch builds the same header for the oldest waiting message; in this build the ring
@@ -621,34 +683,74 @@ Every run that reads a team file opens on stdout with one context line,
 line on stderr and has none.
 
 A line that ends without a delivery — `sent (channel)`, every `sent (unconfirmed)`,
-`queued (receiver busy)` — carries the receiving seat's delivery class in plain words after the
+`queued, not woken`, `queued (receiver busy)` — carries the receiving seat's delivery class in plain words after the
 leg's own parenthetical, so `unconfirmed` is never the whole answer to whether the seat will read
 the message:
 
 ```
 woken through its event adapter                        an event adapter wakes the seat
 woken through its runtime queue                        the runtime holds the message between turns
-queued; <seat> reads it at its next turn (pull-only)   the seat reads its inbox when it takes a turn
-queued; <seat> has no way to be woken while idle       a person, or a launch with no route at all
+queued; its webhook fires when the bus takes it        the seat's webhook adapter is its only route, and the send's own post took nothing: a failed post says so beside these words, and the released record is the bus's and the seat's pull's to take
+queued; <seat> reads it at its next turn, and nothing here gives it one (pull-only)
+                                                       the seat reads its inbox when it takes a turn
+queued; nothing wakes <seat> while it is idle; a person or a restart must give it a turn
+                                                       a seat with no route at all
+queued; nothing wakes <seat> while it is idle except a send-time typed wake and the watch's typed retry once a message passes its unread window, into an empty composer; a person or a restart must give it a turn
+                                                       a seat with no route but the typed wake its profile declares, with the watch's retry on
+queued; nothing wakes <seat> while it is idle except a send-time typed wake into an empty composer; a person or a restart must give it a turn
+                                                       the same, for a seat whose file turns `watch_wake` off
+queued; <seat> has no way to be woken while idle       a person
 ```
 
-`<delivery>` below stands for one of those four sentences. It is read from the seat's launch as
-the send runs — the watched endpoint, the channel, the socket route the send itself admits (its
-cross-session declaration, the team file's own `inbound` word, and the address the seat's launch
-recorded that still stands), the watcher — and a delivered line has none, because the delivery
-itself is the answer. A fallback whose walk proved the receiving session has no dialable socket
-lowers the class the line reports: it never claims a wake the attempt just disproved.
+A send that reached for the typed wake inserts what the wake saw after `queued; `, before the
+class's own words: `the typed wake failed (<reason>)` when the send attempted it and it did not
+deliver, `the typed wake did not run (<reason>)` when the send stopped before the attempt — no
+live agent carried the seat's name, its pane could not be told apart, it was back at its shell,
+or the trigger outgrew the measured line.
+
+`<delivery>` below stands for one of those sentences. It is read from the seat's launch as
+the send runs — the watched endpoint, the channel, the seat's webhook adapter, the socket
+route the send itself admits (its cross-session declaration, the team file's own `inbound` word,
+and the address the seat's launch recorded that still stands), the watcher — and a delivered
+line has none, because the delivery itself is the answer. A webhook-only route reads as queued
+unless the send's own post settles: a post the adapter took replaces these words with
+`webhook delivered (<n> ms)`, one whose answer was not read replaces them with
+`webhook delivery unknown: <reason>`, and a post that provably failed leaves them standing beside
+`webhook not delivered: <reason>`. The send's own post is bound at three seconds by default — the
+`webhook-sender-deadline-ms` policy in force for the receiving team, whose word is a whole number
+of milliseconds from 500 to 10000 and whose shorter value is the tighter one — so a person's
+command never waits out the bus's budget: a post that outlives the bound is `unknown`, never a
+failure, and the claim keeps its place. The request is not aborted at that bound. The command
+returns and the process exits; the same request runs on in a detached process, to the policy
+max, ten seconds. A 2xx in that window appends a new history line for the same id,
+`delivered (late)` via webhook with its milliseconds, and files `webhook.posted` under
+`<id>:webhook.posted:late`; the earlier unknown line stays. A non-2xx files `failed` under that
+same late id and leaves the claim `sent`, so nothing posts it again. A continuation that is
+killed leaves the claim `sent`. The bound leaves the post off the critical path: the
+record is already durable and staged for the bus and the seat's pull. The bus carries the same
+arrival after the send returns, so a post the send did not make is still the bus's to report. A
+fallback whose walk proved the receiving session has no dialable socket lowers the class the
+line reports: it never claims a wake the attempt just disproved.
+
+Every line that ends a send names the message id its steps are filed under: a trailing
+` (id <id>)` on the last line, or the id in the line's own words where it already carries one —
+the queued answer's `(…; id <id>)`, the handoff's `team send --confirm <id>`. A run that wrote no
+record (a refusal before it, a dry run, the roster) names none, and the rows below quote the
+wording without the trailing tail. The id is the key to `team trace <id>`, which prints that
+message's signed steps in order.
 
 | Outcome | Exit | Printed |
 | --- | --- | --- |
-| delivered | 0 | `<seat>: delivered` on stdout, or `<seat>: delivered (native, <n> ms)` when a `--confirm` run finds the handoff's nonce in the recipient's transcript |
-| delivered (read) | 0 | `<seat>: delivered (read)` on stdout, for a signed read receipt — the mcp-inbox leg's, the channel's ack, or the drop leg's watcher read: the seat read the message, which is not a claim that it acted on it |
+| delivered | 0 | `<seat>: delivered` on stdout; `<seat>: delivered (socket)` when the receiver's socket took the frame, reported at the frame with no look at the box; or `<seat>: delivered (native, <n> ms)` when a `--confirm` run finds the handoff's nonce in the recipient's transcript |
+| delivered (webhook) | 0 | `<seat>: delivered (webhook, <n> ms)` on stdout, for the sender-posted webhook leg: the seat's adapter answered 2xx to the signed record this run posted, which is the leg's whole proof, and the history records `delivered` with `via: webhook`; an adapter's 2xx is not a read receipt, so this is never `delivered (read)` |
+| delivered (read) | 0 | `<seat>: delivered (read)` on stdout, for a signed read receipt — the mcp-inbox's `inbox_read` receipt, the channel's ack, the drop leg's watcher read, a reply's `read` (`read_by: reply`), or the seat's own later answer send (`read_by: answered-by-send`): the seat read the message, which is not a claim that it acted on it |
+| delivered (typed wake) | 0 | `<seat>: delivered (typed wake)` on stdout, for the profile-gated typed wake: the signed drop record was written under the seat lock, the one-line trigger was typed into the seat's composer and Enter pressed, and the profile's working screen appeared after that Enter; the trigger is the seat reading the drop at its next turn, never the body |
 | sent (channel) | 0 | `<seat>: sent (channel) (<n> ms); <delivery>` on stdout, for the channel leg: the seat's own inbox server wrote the push notification and its `<id>.channel-push.json` marker, and the record's pending marker waits for the seat's signed receipt; the client acknowledges nothing at the transport, so this line is never a read |
-| sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (mcp-inbox, <n> ms); <delivery>` on stdout, for the mcp-inbox leg: the message is the signed 0600 record in the seat's inbox, no receipt came back inside the grace, and nothing was typed |
-| sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (drop, <n> ms); <delivery>` on stdout, for the drop leg: the message is the signed 0600 record and its `<id>.pending` marker in the seat's drop folder, no receipt has come back yet, and nothing was typed; the seat's own read promotes it to `delivered (read)` later |
+| sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (webhook, <n> ms); webhook delivery unknown: <reason>` on stdout, for the sender-posted webhook leg whose answer was never read: the post may have been taken, the history records `via: webhook` with `sent (unconfirmed)`, and the claim keeps its place so no later pass posts the same record again |
+| queued, not woken | 0 | `<seat>: queued, not woken (drop, <n> ms); <delivery>` on stdout, for the drop leg: the message is the signed 0600 record and its `<id>.pending` marker in the seat's drop folder, no receipt has come back yet, and nothing was typed — the seat's delivery class is pull-only or none, so nothing on the sender's side wakes it and the words say so; the seat's own read promotes it to `delivered (read)` later |
 | queued (receiver busy) | 0 | `<seat>: queued (receiver busy) (<leg>, <n> ms; id <id>); <delivery>` on stdout, when another command holds the seat's lock: the leg named on the line wrote the signed record and its marker without typing, and the delivery follows when the seat is free — the id is the one it keeps |
 | answered | 0 | `<seat>: answered` and the reply on stdout |
-| held | 1 | `team send: <seat>: held: <reason>` on stderr, or `held (socket)` when the socket's frame is what the dialog keeps |
+| held | 1 | `team send: <seat>: held: <reason>` on stderr — a hold the walk itself sees; a socket frame that later sits at the receiving dialog is the daemon's to record, and the send has already ended `delivered (socket)` |
 | not-submitted | 1 | `team send: <seat>: not-submitted: <reason>` on stderr — no send ends here in this build, which types nothing into a seat; the outcome stays in the vocabulary |
 | listed | 0 | a `SEAT  NICKNAME  ROLE  PROJECT  REACH` table, one row per seat, then `<n> seat` or `<n> seats` on stdout; `NICKNAME` is `-` without one, `@<nickname>` for the file's own seats and `<nickname>@<team>` for another team's, the word a seat signed standing where the file's word does, and a seat of another team of the same entity reads `<seat>@<team>` in `SEAT` |
 | recorded | 0 | `<seat>: recorded (native, <n> ms)` on stdout, for a `--record` run |
@@ -664,11 +766,12 @@ A running watch retries a message a send left pending once the seat is idle: it 
 the screen and the seat's status, and its wake attempt types nothing in this build — the trigger
 is refused before the pane — so a marker ends on a receipt or at the retry window's bound. A retry
 never types into a pane back at its shell — the seat's CLI has exited, so it is given up with
-`the seat is back at its shell; nothing was typed` and the record stays. A message the
-`mcp-inbox` leg left is not retried before its window: a receipt promotes it once the seat's
-client reads it — one `delivered (read)` history line, nothing typed — and a message still unread
-when the ten-minute fallback window ends is handed to the same retry, whose attempt types
-nothing, and thirty minutes after the send its marker is given up with `the retry window passed`.
+`the seat is back at its shell; nothing was typed` and the record stays. A marker an older
+build left on the `mcp-inbox` leg is not retried before its window: a receipt promotes it once
+the seat's client reads it — one `delivered (read)` history line, nothing typed — and a message
+still unread when the ten-minute fallback window ends is handed to the same retry, whose attempt
+types nothing, and thirty minutes after the send its marker is given up with `the retry window
+passed`.
 A message the `drop` leg left is never retried, on that schedule or any other: its marker waits
 for the seat's own signed receipt, and thirty minutes after the send it is given up on with the
 drop file's path, so a message no watcher read is never silently lost. A marker that records a
@@ -682,20 +785,20 @@ Under `--json` the same outcomes are one document: the action surface for a send
 document for `--list`, and the structured error document for an exit 1 or 2 — `error.id` is the
 outcome's own (`send.refused`, `send.not-submitted`, …), `error.message` the text the plain run
 prints without its `team send: ` prefix, and `error.repair` a way out when there is one. Exit
-codes are the outcome's: 0 when delivered, delivered (read), sent (unconfirmed), queued
-(receiver busy), answered, listed, recorded, or resolved by
+codes are the outcome's: 0 when delivered, delivered (read), delivered (typed wake), sent
+(unconfirmed), queued (receiver busy), answered, listed, recorded, or resolved by
 `--dry-run`, 1 when held, not-submitted, timed out, unreachable, stopped, or refused, 2 when the
 invocation or team file can't be read.
 
 `answered` and `timeout` belong to `--wait` on the thread: `answered` when a verified reply
 record on the thread arrives within the window, and `timeout` when the window closes with no
-reply on the thread (leaving the thread open). `held (socket)` stays for the socket write's
-return.
+reply on the thread (leaving the thread open).
 
-`held` is nothing sent: the message is safely on disk — or, on the socket's path, in the frame the
-receiving session's held-message dialog keeps for a person to let through — the run exits 1, and
-the reason it prints says what held it. A socket write the dialog keeps is `held (socket)`, and
-nothing is typed into the blocked box while the dialog stands.
+`held` is nothing typed and nothing further dialed: the message is safely on disk, the run exits
+1, and the reason it prints says what held it. A socket frame that ends at the receiving box's
+held-message dialog is not a hold this run reports — the send ended `delivered (socket)` when the
+frame was taken, and the daemon's presence pass records the hold afterwards, once for that id,
+and marks the socket held. Nothing is typed into the blocked box while the dialog stands.
 
 One hold writes nothing at all. When the recipient has a signed registry record and its pane
 names a model or version other than the record's, the run is `held` before the body is read and
@@ -706,17 +809,18 @@ out is to repair the seat: `team restart <seat>` relaunches it through the launc
 registry record keeps, under the restart's own rules (the restart is the owner's or a lead's to
 run, and a seat mid-turn is not interrupted), and the sender sends again.
 
-Unsent text is the seat's own, and no send touches it. This build types nothing into a pane, so
-no composer is read back, cleared or pasted into: the typed leg that read the profile's measured
-`input` surface, copied the box to `<drop>.draft` and restored it is never walked, and a box
-holding unsent text is left exactly as it is. The message waits in the record, and the seat reads
-it on its own turn.
+Unsent text is the seat's own, and no send touches it. The typed wake is the only leg that types,
+and it types only into a box it read twice as the empty idle prompt: a box holding unsent text
+gets no line and no Enter, and nothing is copied off, cleared or pasted into. The message waits
+in the record, and the seat reads it on its own turn.
 
-`not-submitted` is a line typed and never taken. No send ends here in this build: the typed leg is
-never walked, so no box is read, no Enter is pressed and no trigger is left unsent. The outcome
+`not-submitted` is a line typed and never taken. No send ends here in this build: the shipped
+profiles walk no compose screen, and a typed wake that typed without confirming leaves the
+message to the bus instead of ending the send here. The outcome
 stays in the contract and in [the exit-code reference](../reference/exit-codes.md); the walk's
-endings are the ones above — `delivered`, `delivered (read)`, `sent (unconfirmed)`, `sent
-(channel)`, `queued (receiver busy)`, `answered`, `held`, `timeout`, `unreachable` and `refused`.
+endings are the ones above — `delivered`, `delivered (read)`, `delivered (typed wake)`, `sent
+(unconfirmed)`, `sent (channel)`, `queued (receiver busy)`, `answered`, `held`, `timeout`,
+`unreachable` and `refused`.
 
 `unreachable` is the seat not reached: a walk that ran out of legs prints `no leg of its delivery
 order took the send` with the legs that failed — a client send's walk, whose grant walks no drop
@@ -797,9 +901,9 @@ receipt, which a running watch records as one `delivered (read)` history line.
 
 ```console
 $ team send claude-keeper "the gate is green" ; echo "exit $?"
-team send: claude-keeper: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
+team send: claude-keeper: queued, no event adapter (typing into a seat's pane is never a delivery: messages go through the bus and an event adapter); the message waits in its bus inbox
 team beacon, session "beacon"
-claude-keeper: sent (unconfirmed) (drop, 0 ms); queued; claude-keeper reads it at its next turn (pull-only)
+claude-keeper: queued, not woken (drop, 0 ms); queued; claude-keeper reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
 exit 0
 ```
 
@@ -809,9 +913,9 @@ like any other:
 
 ```console caller=operator-a
 $ team send operator-b "the handover is ready" ; echo "exit $?"
-team send: operator-b: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
+team send: operator-b: queued, no event adapter (typing into a seat's pane is never a delivery: messages go through the bus and an event adapter); the message waits in its bus inbox
 team beacon, session "beacon"
-operator-b: sent (unconfirmed) (drop, 0 ms); queued; operator-b reads it at its next turn (pull-only)
+operator-b: queued, not woken (drop, 0 ms); queued; operator-b reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
 exit 0
 ```
 
@@ -841,7 +945,7 @@ finds none:
 ```console caller=claude-keeper
 $ team send --confirm 22222222-2222-4222-8222-222222222222 ; echo "exit $?"
 team beacon, session "beacon"
-claude-scribe: delivered (native, 0 ms)
+claude-scribe: delivered (native, 0 ms) (id 22222222-2222-4222-8222-222222222222)
 exit 0
 $ team send --confirm 22222222-2222-4222-8222-222222222222 ; echo "exit $?"
 team send: refused: 22222222-2222-4222-8222-222222222222: no pending native record holds that id; nothing was recorded
@@ -853,9 +957,9 @@ verified reply record:
 
 ```console reply="the gate is green"
 $ team send claude-keeper "is the gate green?" --wait ; echo "exit $?"
-team send: claude-keeper: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
+team send: claude-keeper: queued, no event adapter (typing into a seat's pane is never a delivery: messages go through the bus and an event adapter); the message waits in its bus inbox
 team beacon, session "beacon"
-claude-keeper: answered
+claude-keeper: answered (id 44444444-4444-4444-8444-444444444444)
 the gate is green
 exit 0
 ```
@@ -865,7 +969,7 @@ A dry run of the same send names the walk and writes nothing:
 ```console
 $ team send claude-keeper "is the gate green?" --wait --dry-run ; echo "exit $?"
 team beacon, session "beacon"
-claude-keeper: dry-run: claude-code via the seat's own MCP inbox, falling back to a 0600 drop file, with nothing typed into the pane; nothing was written
+claude-keeper: dry-run: claude-code via a 0600 drop file with nothing typed into the pane; nothing was written
 exit 0
 ```
 
@@ -986,7 +1090,7 @@ own read hands it the message. The receipt it writes is what the watch promotes:
 $ team send gpt-reviewer "hello" ; echo "exit $?"
 team send: gpt-reviewer: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
 team beacon, session "beacon"
-gpt-reviewer: sent (unconfirmed) (drop, 0 ms); queued; gpt-reviewer reads it at its next turn (pull-only)
+gpt-reviewer: queued, not woken (drop, 0 ms); queued; the typed wake failed (the send host binds no pane writer; nothing was typed); gpt-reviewer reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
 exit 0
 ```
 
@@ -996,7 +1100,7 @@ it exits 1 and leaves the thread open:
 ```console
 $ team send gpt-reviewer "hello" --wait --timeout 5 ; echo "exit $?"
 team send: gpt-reviewer: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
-team send: gpt-reviewer: timeout: sent, no reply on the thread within 5s; the thread stays open
+team send: gpt-reviewer: timeout: sent, no reply on the thread within 5s; the thread stays open (id <id>)
 exit 1
 ```
 
@@ -1005,6 +1109,6 @@ exit 1
 ```console
 $ team send gpt-reviewer "hello" --dry-run ; echo "exit $?"
 team beacon, session "beacon"
-gpt-reviewer: dry-run: codex via its native runtime queue, falling back to the seat's own MCP inbox, then a 0600 drop file, with nothing typed into the pane; nothing was written
+gpt-reviewer: dry-run: codex via its native runtime queue, falling back to a 0600 drop file and one trigger line; nothing was written
 exit 0
 ```

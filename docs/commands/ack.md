@@ -7,7 +7,16 @@ link and made durable before the run says it is done. A seat that has already se
 a log line, in a summary, in a wake it acted on — acknowledges it here, and the message stops
 waiting: `team drops` no longer lists it, the unread watch neither rings it nor reports it, and
 the MCP inbox's `inbox_check` no longer counts it unread. `team reply` marks a message read by
-answering it; `team ack` is for a message that needs no answer.
+answering it — it publishes a signed `read` receipt naming `read_by: reply` beside its `replied`
+receipt — and `team ack` is for a message that needs no answer.
+
+`team ack --seat <seat> --older-than <dur>` is the lead's sweep of one stopped seat's folder:
+every record older than the window that no `read` or `replied` receipt serves gets the same signed
+`read` receipt, written in that seat's folder, so a backlog nobody is left to read stops waiting.
+The scoped form never acknowledges the general seat brief, a client's record, or a message a
+handoff has pending, and it leaves every record newer than the window alone. `--dry-run` lists
+what it would mark and writes nothing. It pairs with [`team archive`](archive.md) `--seat`: the ack
+writes the receipts, the archive moves the families they acknowledge.
 
 The record is found the way [`team reply`](reply.md) finds it: its id is looked up in
 `<root>/.agents/send-drops/<session>/<seat>/<id>`, it must verify against this checkout's message
@@ -31,6 +40,7 @@ would hold the name that reader needs.
 ## Synopsis
 
     team ack <id> [--json]
+    team ack --seat <seat> --older-than <dur> [--dry-run] [--json]
 
 `<id>` is the record being marked read, as it is named in the caller's folder.
 
@@ -38,20 +48,27 @@ would hold the name that reader needs.
 
 | Flag | Value | Effect |
 | --- | --- | --- |
+| `--seat` | `<seat>` | the scoped form: the seat of this team whose folder is swept |
+| `--older-than` | `<dur>` | the scoped form's window, `90m`, `12h`, `7d` or `30s`, read from the newest file of each family |
+| `--dry-run` | — | the scoped form: list what it would mark read and write nothing |
 | `--json` | — | one document instead of the lines, registered as `schema/ack.schema.json`: the action surface and the outcome in one |
 
 ## What it reads and writes
 
 Reads the team file, the caller's placement, the message key, and the record the id names. Writes
 one signed `read` receipt beside it, `.agents/send-drops/<session>/<seat>/<id>.read.json`, in the
-addressee's own folder. Nothing else is written: no record, no reply, no history line.
+addressee's own folder. Nothing else is written: no record, no reply, no history line. The scoped
+form reads the same key and the named seat's folder, and writes one such receipt per due record,
+in that seat's folder; a dry run writes none.
 
 ## Who may run it
 
 The owner, or a seat of the team, from a terminal outside herdr or its own pane. A run with no
 terminal is refused. The caller must be the record's addressee — the record's `to` names it, and
 the record sits in its own folder. The owner acknowledges a record addressed to it through this
-same path.
+same path. The scoped form is the owner's or a seat this team marks `leads`, the same admission as
+`team archive --seat`; any other seat is refused, and the receipt it writes names the seat the
+record belongs to.
 
 ## Output and exit codes
 
@@ -62,6 +79,9 @@ stderr and has none.
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | read | `<id>: read` on stdout — written now, or already served by a `read` or `replied` receipt | 0 |
+| scoped | `seat <seat>, older than <dur>: <n> marked read, <m> already read, <k> not due` on stdout | 0 |
+| scoped, a record could not be marked read | the summary above, and one `team ack: <id>: not marked read: <reason>` per failure on stderr | 1 |
+| scoped, refused | `team ack: only the owner or a seat this team marks \`leads\` acknowledges another seat's messages; this call is <caller>` on stderr | 1 |
 | refused | `team ack: <reason>` on stderr | 1 |
 | configuration | `team ack: <team-file problem>` on stderr | 2 |
 | usage | `team ack: <problem>` and the usage on stderr | 2 |
@@ -71,7 +91,9 @@ action_summary, project, session, record, to, thread, written, at}` — where `s
 `record` is the id, `to` is the addressee, and `written` says whether this run published the
 receipt (`false` when an earlier read or reply already served it); a refused run prints the
 structured error document instead (`error.id` is `ack.refused`, `ack.configuration` or
-`ack.usage`) and stderr stays empty.
+`ack.usage`) and stderr stays empty. The scoped form prints the same `team.ack` document with
+`seat`, `older_than`, `dry_run`, `read`, `already_read`, `not_due` and `failed` in it, `status`
+one of `read`, `would-read` or `failed`, and `error.id` `ack.scoped-refused` when it is refused.
 
 Refusals name what stopped them, and nothing is written:
 
@@ -165,11 +187,17 @@ An acknowledgement needs an id:
 $ team ack ; echo "exit $?"
 team ack: <id> is required
 Usage: team ack <id> [--json]
+Usage: team ack --seat <seat> --older-than <dur> [--dry-run] [--json]
 
 Marks the message record <id> read, without printing it. The signed read
 receipt is the same one team messages writes before it shows a body, so the
 message stops waiting for this seat and the unread watch stops ringing it.
 A message the caller answers with team reply is marked read by the answer.
+
+The scoped form marks every record one seat's folder holds that is older
+than <dur> read: the owner or a seat this team marks `leads` runs it, and it
+never acknowledges the general seat brief, a client's record or a message a
+handoff has pending. --dry-run lists what it would mark and writes nothing.
 
 Exits 0 when the message is read or already was, 1 when the caller or the
 record is refused, 2 when the invocation or the team file can't be read.

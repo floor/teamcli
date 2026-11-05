@@ -86,6 +86,13 @@ export type SeatWebhook = {
   /** The body the routine reads: the bus envelope when absent, the seat-inbox record shape when
    *  it says so. The record shape is flattened from the signed message the arrival names. */
   body?: WebhookBodyShape;
+  /**
+   * How long one POST waits for the routine's answer, in milliseconds: a whole number from 1 to
+   * 60000, five seconds when absent. A routine that needs longer than the default to run says so
+   *  here; an answer after the bound is not read, and the delivery is reported as sent with its
+   *  response unknown rather than retried.
+   */
+  timeoutMs?: number;
 };
 
 export type Seat = {
@@ -153,6 +160,15 @@ export type Seat = {
    */
   human?: true;
   /**
+   * The seat's own word on the watch's typed wake retry, when the file writes one: `on` lets
+   * the watch type the same wake a send types once a message has gone unread past its window;
+   * `off` keeps the seat on the drop-file leg alone. Absent, the seat's CLI profile decides
+   * (on exactly where it declares `typed_wake`). A field of the built seat like every other,
+   * so it is part of the seat's digest and omitted when the file omits the key — every file
+   * that writes none keeps the digest it had.
+   */
+  watchWake?: boolean;
+  /**
    * The seat's own word on cross-session socket frames, when the file writes one: `accept`
    * authorizes the socket leg, `hold` and `refuse` never let it dial. The launch must always
    * declare `crossSessionInbound: accept` itself — what the receiving CLI needs to take the
@@ -163,6 +179,16 @@ export type Seat = {
    * keeps the digest it had.
    */
   inbound?: CrossSessionInbound;
+  /**
+   * The seat is public-only, when the file marks it with `public_only: true`: the team's rules are
+   * never prepended to its briefs, a send reads the whole body against the machine's private
+   * lists before the CLI's session call, and the session's target repository must be proven
+   * public by one read of the forge's own record. A profile may declare every seat of its CLI
+   * public-only on its own; a seat can only add the guard, never remove it — `public_only: false`
+   * reads as absent. Omitted when the file marks none, so a file that marks no seat keeps its
+   * digest.
+   */
+  publicOnly?: true;
   /**
    * The seat's webhook delivery adapter, when the file writes one: the routine every accepted
    * signed message for the seat is POSTed to, with the drop file kept as the backup. Its two
@@ -285,6 +311,9 @@ export type TeamFile = {
     /** How long a delivered message may go without the seat's signed read receipt before the
      *  watch retries it once; the report follows at twice this window. */
     unreadAfter: number;
+    /** How long a proven "working" presence may stand, with unread mail waiting, before the
+     *  seat reads as stuck and the lead is told; 15 minutes when the file omits it. */
+    stuckAfter: number;
     quotaMarks: number[];
     // The checks this file turns off, by name. The four that can't be turned off never appear.
     checks: string[];

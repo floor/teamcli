@@ -101,6 +101,13 @@ where one was started on purpose. With more than one watched route, each line en
 `… (<root>)`, so a failed route still reads beside a good one. These lines are notes: never a
 difference, never in a total, never an exit.
 
+The seat's last webhook delivery is one more note when its recorded outcome is not delivered, in
+the check's words (`<seat>: its last webhook delivery did not arrive: …; the delivery left the
+drop record for the seat's own pull`); a delivered record draws none. A webhook post a send left
+in flight with no bus serving the root to finish it is a note in the same words as the check's:
+`<n> webhook posts await a bus that isn't serving (<root>)` (`1 webhook post awaits` for one);
+it never reports a post as delivered, and it changes no count.
+
 ## A leftover team file
 
 When the team is in the registry and a `.agents/team.yaml` is still in the project, the run
@@ -231,6 +238,17 @@ stands in the seat's drop folder, and `unread <age>` for the oldest unread drop.
 refuses to spend a wake and a dispatch pass on a seat whose class is `pull-on-turn` or `none`, so
 the table shows that before a message sits unread. `--json` carries the same reading on each row
 as `seat_wake`.
+
+A seat the reading marks unwakeable whose oldest unread drop has waited past the window the
+watch's unread pass uses is one more `note:` of the plain table:
+`<seat>: its oldest unread drop has waited <age>, past the <n>s unread window; <its delivery class
+in the send's own words>`. The window is the seat's own — the file's `watch.unread_after` when it
+moved the section, else 30 s for a seat a message can wake while it is idle and 60 s for a typed
+or pull-only seat (ADR `zeus-message-path`, D2) — and the words are the class's, so the table, a
+send's console line and the check cannot promise different things. It is a note only: `status`
+never fails for it — `check` does. The expanded `--all` table
+and the `--json` rows carry the same reading as each row's WAKE cell and `seat_wake`, and draw no
+note.
 
 ## Example
 

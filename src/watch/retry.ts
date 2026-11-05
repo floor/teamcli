@@ -43,12 +43,15 @@ import {
   recordPendingTry,
   type PendingDrop,
 } from '../send/pending.ts';
+import { wakeStep } from '../send/steps.ts';
 import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from '../send/deliver.ts';
 import { appendHistory } from '../send/history.ts';
 import { readTriggerLine } from '../send/native.ts';
+import type { TypedWakeResult } from '../send/typed-wake.ts';
 import { markTaken } from '../send/taken.ts';
 import { verifiedPayloadOf, wakeTrigger } from '../send/wake.ts';
 import type { Live } from '../status/compare.ts';
+import type { MailPass } from './mail-pass.ts';
 import { readScreen } from './screen.ts';
 
 /** What a retry reads and types through: the watch's own sources, narrowed to the pane calls. */
@@ -64,6 +67,11 @@ export type RetrySources = {
   /** The pane's process identity, as the send's typed leg reads it; null when herdr can't tell.
    *  A pane whose foreground is its own shell is not the seat, and no retry is typed there. */
   processes?(pane: string, session: string): PaneProcesses | null;
+  /** The profile-gated typed wake (src/send/typed-wake.ts), bound to one session: the one seam
+   *  through which the watch's unread pass types, and only for a seat whose profile declares
+   *  `typed_wake` and whose retry is on. Absent, the pass keeps its drop-file typed leg, whose
+   *  own writer refuses in every real binding. */
+  typedWake?(pane: string, line: string, cli: string, session: string): Promise<TypedWakeResult>;
 };
 
 export type RetryScene = {
@@ -85,6 +93,9 @@ export type RetryScene = {
   /** The channel's one redelivery over the socket: a push no receipt confirmed is written as a
    *  frame to the receiving session. Absent, the redelivery goes straight to the typed leg. */
   socketRedeliver?(dropDir: string, drop: PendingDrop): Promise<{ ok: true } | { ok: false; reason: string }>;
+  /** The pass's shared mail reading: the folds' unread and unacked lists, already taken once.
+   *  Absent, this pass takes its own — the same answer, read once more in the pass. */
+  mail?: MailPass;
 };
 
 /** The drop's words, minus the trigger line: one sentence for the watch's log. An inbox send
@@ -123,6 +134,33 @@ function giveUpUnread(scene: RetryScene, dropDir: string, drop: PendingDrop, why
     ? `the drop file is at ${join(dropDir, drop.id)}`
     : `its drop file is gone from ${dropDir}`;
   scene.say(`${drop.to}: a dropped send from ${drop.from} was not read (${why}); ${where}`, true);
+}
+
+/** One retry that actually typed (or, on the channel's redelivery, wrote the socket frame): a
+ *  signed step carrying the try number, the leg and the outcome, with the wall clock's own cost.
+ *  The event's timestamp is the pass's clock, as the retry's history line is; `ms` is measured
+ *  from the step's own start, so it is the delivery's cost, not a difference of pinned times. A
+ *  pass that only settled a receipt typed nothing and writes no step: the history line is its
+ *  word. Best-effort — a step that cannot be appended never fails the retry it records. */
+function noteWake(
+  scene: RetryScene,
+  drop: PendingDrop,
+  attempt: { via: string; outcome: string; ms: number; reason?: string },
+): void {
+  const home = scene.home;
+  if (home === undefined) return;
+  wakeStep(
+    {
+      store: { project: scene.team.project, root: scene.root, home },
+      id: drop.id,
+      session: scene.session,
+      from: drop.from,
+      to: drop.to,
+      ...(drop.thread === undefined ? {} : { thread: drop.thread }),
+      ts: scene.now.toISOString(),
+    },
+    { via: attempt.via, try: drop.tries + 1, outcome: attempt.outcome, ms: attempt.ms, ...(attempt.reason === undefined ? {} : { reason: attempt.reason }) },
+  );
 }
 
 /** The watch's sources as the delivery sees one pane. */
@@ -225,7 +263,7 @@ async function retryOne(scene: RetryScene, seat: Seat, pane: string, dropDir: st
     giveUp(scene, dropDir, drop, 'its signed record does not name a sender this home can pin');
     return;
   }
-  const line = readTriggerLine(drop.to, scene.session, sender);
+  const line = readTriggerLine(drop.to, scene.session, sender, seat.cli);
   if (line === null) {
     giveUp(scene, dropDir, drop, 'its trigger line would not fit in a pane');
     return;
@@ -277,10 +315,17 @@ async function retryOne(scene: RetryScene, seat: Seat, pane: string, dropDir: st
     // the listener: a marker already at that name is the server's own push, and the write is
     // refused while the retry goes on.
     if (channelSeat(scene, seat, dropDir)) holdChannelPush(scene, dropDir, drop);
+    const began = Date.now();
     const result = await deliverTrigger(hostOf(scene, pane), pane, line, seat.cli, {
       submitHeld: true,
       dropPath: join(dropDir, drop.id),
       receipt,
+    });
+    noteWake(scene, drop, {
+      via: 'typed',
+      outcome: result.outcome,
+      ms: Date.now() - began,
+      ...(result.reason === undefined ? {} : { reason: result.reason }),
     });
     if (result.outcome === 'delivered') {
       clearPending(dropDir, drop.id);
@@ -369,9 +414,10 @@ async function retryOne(scene: RetryScene, seat: Seat, pane: string, dropDir: st
  * reserved before the first wake leg, whichever install is listening; `retryOne` reserves again
  * before typing. A receipt
  * that landed first is the read itself: nothing is typed and the record is settled, exactly as
- * the promotion pass would settle it. A socket delivery writes its own receipt and history line;
- * the typed leg is the ordinary retry, whose history line carries `redelivered: channel
- * unconfirmed` as the failed note. A pane this pass cannot type at spends the one redelivery all
+ * the promotion pass would settle it. A socket delivery writes its own `delivered` history line
+ * and no receipt — only the seat writes a read receipt, so the record stays unread and the unread
+ * pass re-wakes it like any other message; the typed leg is the ordinary retry, whose history
+ * line carries `redelivered: channel unconfirmed` as the failed note. A pane this pass cannot type at spends the one redelivery all
  * the same: the marker says the watch tried, and the message stays where a person can send it
  * again.
  */
@@ -405,10 +451,15 @@ async function redeliverChannel(scene: RetryScene, seat: Seat, pane: string, dro
   if (channelSeat(scene, seat, dropDir)) holdChannelPush(scene, dropDir, drop);
   const marked: PendingDrop = { ...drop, redelivered: CHANNEL_UNCONFIRMED };
   if (scene.socketRedeliver !== undefined) {
+    const began = Date.now();
     const socket = await scene.socketRedeliver(dropDir, marked);
+    noteWake(scene, drop, socket.ok
+      ? { via: 'socket', outcome: 'delivered', ms: Date.now() - began }
+      : { via: 'socket', outcome: 'unreachable', ms: Date.now() - began, reason: socket.reason });
     if (socket.ok) {
-      // The socket attempt wrote the signed receipt and its own history line, marked with the
-      // channel's own note; the marker has nothing left to say.
+      // The socket attempt wrote its own `delivered` history line, marked with the channel's own
+      // note, and no receipt: the marker has nothing left to say, and the record stays unread for
+      // the seat's own read.
       clearPending(dropDir, drop.id);
       scene.say(`${drop.to}: a channel send from ${drop.from} was redelivered on the socket`, false);
       return;

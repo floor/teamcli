@@ -1,15 +1,31 @@
 // A launch profile, read from the CLI's YAML file. The screen is loaded separately.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { REACH_ROSTER_FILE, REACH_ROSTER_TEMP } from '../reach/rules.ts';
+import type { SessionCliSpec } from '../send/session-cli.ts';
+import { pinnedWords } from '../launch/features.ts';
+import {
+  appendOnLaunchLine,
+  appendPositionalOnLaunchLine,
+  cliBodyOn,
+  cliWordListOf,
+  isShellName,
+  lineDelimiterRisk,
+  placedOnLaunchLine,
+  plainBodyOf,
+  provenScriptWord,
+  shellScriptWordOf,
+  takesAppendedWord,
+} from '../launch/cli-scope.ts';
 import { DialectError, compilePattern } from '../watch/dialect.ts';
 import { loadProfileModule } from './module-loader.ts';
 import type { ComposeProfile } from './compose.ts';
 import { shippedEfforts } from './efforts.ts';
 import { WINDOWS, type QuotaPattern, type WindowName } from './quota.ts';
 import { YamlError, parseYaml, type YamlEntry, type YamlNode } from '../yaml.ts';
+import { MESSAGE_HINT_MAX } from '../settings/message-display.ts';
 import { trustAnswers, type TrustRecord } from './trust-answer.ts';
 import { shellWords, type ShellWord } from '../launch/shell-words.ts';
 import { questionAnswers, type QuestionAnswerRecord } from './question-answer.ts';
@@ -37,6 +53,35 @@ export type InputBlock = {
  * A launch profile: what `team` knows about one CLI, so a seat can't start
  * blocked. Keyed by the seat's `cli`.
  */
+/** A model id a vendor offers, with the model and version the seat row records. */
+export type VendorModel = { id: string; model: string; version: string; display: string };
+
+/** One provider a CLI can run on: the env words it reads for that provider, the credential item
+ *  the machine must hold, and the models the provider offers. Only the adapter that owns the
+ *  credential store's naming declares one. */
+export type VendorBlock = {
+  name: string;
+  /** The item this provider's key lives under, in the store the credentials block names. */
+  credential: string;
+  /** Whole shell words the CLI reads: each one variable assignment, with `{model}` and
+   *  `{credential}` filled from the chosen model and the item. */
+  env: readonly string[];
+  models: readonly VendorModel[];
+};
+
+/** The credential store a profile's vendors read: an attribute-only presence check, and the
+ *  one-time command a refusal prints — never a secret value and never a prompt. */
+export type CredentialsBlock = {
+  /** The lookup's program and its words, before `-s <item> -a <account>`: no `-w`, so the
+   *  secret is never asked for and never reaches an argument list. */
+  check: readonly string[];
+  /** The add command, with `{item}` where the item's name goes. The store asks for the secret
+   *  itself: nothing is read from stdin, so nothing lands in a shell history. */
+  add: string;
+  /** What the store answers when the item is not there. */
+  missingStatus: number;
+};
+
 /** The keys `--abandon` may press to answer a prompt: none of them selects a menu option. */
 export const ABANDON_SAFE_KEYS = ['escape', 'ctrl+c', 'ctrl+u'] as const;
 
@@ -58,6 +103,11 @@ export interface Profile {
   tested: { from: string; to: string };
   /** Options that make the CLI run without approvals, added to the launch. */
   unattended: readonly string[];
+  /** The one feature set every seat of this CLI's launch pins, as `name=value` pairs. Empty for a
+   *  CLI whose launch carries none. The pins ride after the seat's own line, so the CLI's own
+   *  last-wins config rule makes them the effective values: a seat and the shared background
+   *  server it joins then present the same set, whichever value its config file holds. */
+  features: readonly string[];
   /** The option that carries the rules, or null when they go as a first message or are
    *  prepended to each brief. */
   rulesOption: string | null;
@@ -66,6 +116,12 @@ export interface Profile {
    *  brief, like the Jules TUI's — has nowhere to keep a first-message line, so its profile
    *  says `prepend`. */
   rulesMode: 'option' | 'message' | 'prepend';
+  /** Whether a seat of this CLI is public-only: the team's rules are never prepended to its
+   *  briefs, a send scans the whole body with the machine's private lists before the CLI's
+   *  session call, and the session's target repository must be proven public by one read of the
+   *  forge's own record, so nothing private reaches a public service. False when the profile says
+   *  nothing; a team file may mark one seat so (`public_only: true`). */
+  publicOnly: boolean;
   /** For a first-message seat: how its launch line carries the one line that points at its rules
    *  file, so the line is never typed into its pane (0.5.9, src/send/no-pane-messaging.ts).
    *  `''` is the CLI's positional initial prompt; any other value is the option that precedes
@@ -92,6 +148,10 @@ export interface Profile {
   /** A module that drives a typed delivery the CLI's own screens require, or null when the
    *  generic drop-file trigger reaches this CLI. See ComposeProfile. */
   compose: ComposeProfile | null;
+  /** The CLI's own session call, when it creates a remote session from argv and takes the brief
+   *  as one argument (the `session` delivery leg), or null when no run measured one. See
+   *  SessionCliSpec. */
+  sessionCli: SessionCliSpec | null;
   /** The one key that empties the CLI's input box, sent to clear an exit text that did not
    *  read back as typed. Null when no key is established for this CLI: the text is left. */
   exitClear: string | null;
@@ -100,6 +160,10 @@ export interface Profile {
    *  key is established for this CLI: a seat that asks the question is one that could not be
    *  stopped by asking. */
   exitConfirm: string | null;
+  /** Whether the CLI draws its own completion row for the exit text inside the box, so the exit
+   *  typing has to wait for that row to settle and an Enter that lands early is drawn as a typed
+   *  newline. False where no capture shows one. */
+  exitCompletion: boolean;
   /** The measured way into this CLI's box — its clear keys and paste surface. Null when no run
    *  measured them: a delivery that finds unsent text there holds, and a restart refuses. */
   input: InputBlock | null;
@@ -112,6 +176,28 @@ export interface Profile {
   /** How the team inbox registers with this CLI, from the route a run measured. Null when no
    *  route is measured for this CLI: its seats stay on the drop and typed legs. */
   mcpInbox: InboxBlock | null;
+  /** A session-settings option the launch carries, with `{cwd}` filled from the seat's own
+   *  launch folder. Null when the CLI takes none. */
+  settings: SettingsBlock | null;
+  /** The one wake a send may type into this CLI's pane, when the profile declares one
+   *  (`typed_wake`). Null, the default, keeps the no-pane-messaging rule: the typed leg never
+   *  runs for this CLI. `screen` means one trigger line into an empty idle box the send saw on
+   *  two reads, and `delivered` only when the profile's own working screen shows — see
+   *  src/send/typed-wake.ts. */
+  typedWake: TypedWake | null;
+  /** The words a typed wake appends after the message's header, so the woken seat takes its
+   *  fastest read path: a profile whose seats carry an MCP inbox names the inbox tool, and one
+   *  without keeps the shipped sentence. Null, the default, is the shipped
+   *  `Read it with: team drops --read.` (src/settings/message-display.ts). */
+  readHint: string | null;
+  /** Whether the watch's unread pass may type the same wake a send types, when a message has
+   *  gone unread past its window. On by default exactly where the profile declares
+   *  `typed_wake`; a profile may turn it off (`watch_wake: off`), and may not turn it on
+   *  without one. A seat turns it off for itself in the team file. */
+  watchWake: boolean;
+  /** How many typed wake attempts one message gets from the watch's unread pass, the first at
+   *  the window and each later one after a backoff. A bound, never a loop. */
+  watchWakeTries: number;
   /** How an idle seat of this CLI can be told it has a message, as the profile's own
    *  measurements show: a push adapter, a runtime queue between turns, an inbox read on a
    *  turn, or nothing. The launch refines it (src/launch/delivery-class.ts). */
@@ -134,6 +220,12 @@ export interface Profile {
   startsOnLastModel: boolean;
   /** The model flag, and the id this profile maps to that model and version, when it knows one. */
   modelFlag(model: string, version: string): { option: string; id: string | null };
+  /** The providers this CLI can run on, as the adapter names them; empty when it names none, and
+   *  the seats of such a CLI move between providers only by copying a seat. */
+  vendors: readonly VendorBlock[];
+  /** The credential store the vendor items live in, or null when the profile declares no vendors:
+   *  nothing reads a store the profile has not named. */
+  credentials: CredentialsBlock | null;
   /** Trust-answer records. Empty when this version sends no trust key for the CLI. */
   answers: readonly TrustRecord[];
   /** The keys this profile presses to dismiss a dialog of each kind, per version. Empty when it
@@ -184,6 +276,21 @@ export type DeliveryClass = 'push' | 'between-turns' | 'pull-on-turn' | 'none';
 /** The delivery classes a profile may declare, in the order an effective class is chosen. */
 export const DELIVERY_CLASSES = ['push', 'between-turns', 'pull-on-turn', 'none'] as const;
 
+/** The one wake a send may type, when a profile declares `typed_wake`. `screen` is the measured
+ *  Muse wake: one trigger line into an empty idle box seen on two reads, and `delivered` only
+ *  when the profile's working screen shows (src/send/typed-wake.ts). */
+export type TypedWake = 'screen';
+
+/** The typed wakes a profile may declare: a closed set, never a guess. */
+export const TYPED_WAKES = ['screen'] as const;
+
+/** The most typed wake attempts the watch's unread pass gives one message: a bound, so a
+ *  wake that never lands is a few tries and a report, never a loop. */
+export const MAX_WATCH_WAKE_TRIES = 10;
+
+/** The attempts one message gets when a profile names no `watch_wake_tries`. */
+export const DEFAULT_WATCH_WAKE_TRIES = 3;
+
 /** The team inbox's registration for one CLI, as a run measured it. */
 export type InboxBlock = {
   /** Launch-line arguments, appended when a seat launches. `{seat}`, `{session}`, `{command}`
@@ -202,13 +309,42 @@ export type InboxBlock = {
   /** A config file team writes itself, relative to the seat's folder. Null when team writes
    *  none: the CLI's own command writes it, or no file is involved. */
   file: string | null;
+  /** The CLI's own command that removes this seat's entry from its user-level store, run by
+   *  `team down` for a seat it closes. Null when the route leaves nothing behind to remove:
+   *  a project file, a launch-line argument, or a user-level route with no measured remove. */
+  remove: readonly string[] | null;
 };
+
+/** A session-settings option and the value it carries. `{cwd}` in the value is the seat's own
+ *  launch folder, escaped as the inside of a JSON string: Antigravity's `--settings` takes one
+ *  inline JSON object, and `trustedWorkspaces` there is an array of absolute paths. */
+export type SettingsBlock = { option: string; value: string };
 
 /** What a launch fills into the profile's `mcp_inbox` words. `command` and `entry` are this
  *  install's runner — the executable and its entry script — which reach the inbox server
  *  whether or not `team` is on the PATH. `file` is the team file the launch read, when it read
  *  one: the server resolves the team from it, whatever folder it starts in. */
 export type InboxPlace = { seat: string; session: string; command: string; entry: string; file?: string; epoch?: string };
+
+/**
+ * This seat's own entry name in a CLI's user-level MCP store:
+ * `team-inbox-<session>-<seat>-<hash>`. A CLI whose store is shared by every team on the machine
+ * needs the session and the seat in the name, so two seats and two teams never overwrite each
+ * other's entry; the characters a team or seat name may not use are folded to `-`, so the name
+ * survives any store's parser.
+ *
+ * The folded parts are readable but not one-to-one — `red-team` with `writer` and `red` with
+ * `team-writer` fold alike — so a short hash of the exact pair follows them: pairs a store could
+ * confuse stay distinct entries.
+ */
+export function inboxEntryName(session: string, seat: string): string {
+  const slug = (value: string): string => {
+    const folded = value.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '');
+    return folded === '' ? 'x' : folded;
+  };
+  const digest = createHash('sha256').update(`${session}\u0000${seat}`).digest('hex').slice(0, 8);
+  return `team-inbox-${slug(session)}-${slug(seat)}-${digest}`;
+}
 
 /** A profile word with the launch's own values filled in.
  *
@@ -228,20 +364,27 @@ export type InboxPlace = { seat: string; session: string; command: string; entry
  *  `{command_json}`, `{entry_json}` and `{seat_json}` are the same values escaped for a
  *  double-quoted string inside such a structured word, for the profile that supplies the
  *  quotes: a quote or a backslash in a path stays part of the value. The plain forms stay raw
- *  for argv words (`mcp add`), where no escaping belongs. */
+ *  for argv words (`mcp add`), where no escaping belongs.
+ *
+ *  `{inbox}` is this seat's own entry name in a CLI's user-level store
+ *  (`inboxEntryName`): the launch registers that entry, and `team down` removes it by the
+ *  same name. */
 export function fillInboxPlace(text: string, place: InboxPlace): string {
   const inside = (value: string): string => JSON.stringify(value).slice(1, -1);
+  // The replacements are functions: a value holding `$&`, `$'`, `` $` `` or `$$` is a path a
+  // profile must fill, never a replacement pattern.
   return text
-    .replaceAll('{seat}', place.seat)
-    .replaceAll('{session}', place.session)
-    .replaceAll('{command}', place.command)
-    .replaceAll('{entry}', place.entry)
-    .replaceAll('{command_json}', inside(place.command))
-    .replaceAll('{entry_json}', inside(place.entry))
-    .replaceAll('{seat_json}', inside(place.seat))
-    .replaceAll('{session_args}', place.file === undefined ? `,"--session",${JSON.stringify(place.session)}` : '')
-    .replaceAll('{file_args}', place.file === undefined ? '' : `,"--file",${JSON.stringify(place.file)}`)
-    .replaceAll('{epoch_args}', place.epoch === undefined ? '' : `,"--epoch",${JSON.stringify(place.epoch)}`);
+    .replaceAll('{inbox}', () => inboxEntryName(place.session, place.seat))
+    .replaceAll('{seat}', () => place.seat)
+    .replaceAll('{session}', () => place.session)
+    .replaceAll('{command}', () => place.command)
+    .replaceAll('{entry}', () => place.entry)
+    .replaceAll('{command_json}', () => inside(place.command))
+    .replaceAll('{entry_json}', () => inside(place.entry))
+    .replaceAll('{seat_json}', () => inside(place.seat))
+    .replaceAll('{session_args}', () => (place.file === undefined ? `,"--session",${JSON.stringify(place.session)}` : ''))
+    .replaceAll('{file_args}', () => (place.file === undefined ? '' : `,"--file",${JSON.stringify(place.file)}`))
+    .replaceAll('{epoch_args}', () => (place.epoch === undefined ? '' : `,"--epoch",${JSON.stringify(place.epoch)}`));
 }
 
 /** Add defaults as complete options: a line's own flag keeps its value, including when the
@@ -250,19 +393,6 @@ export function fillInboxPlace(text: string, place: InboxPlace): string {
  *  prompt or config value is one word with the value and does not suppress a default, and a
  *  flag whose name is quoted (`"--sandbox"`) is still the flag the CLI reads. */
 function unattendedOptions(profile: Profile, launch: string): string[] {
-  const aliases: Record<string, string> = profile.cli === 'codex'
-    ? { '-a': '--ask-for-approval', '-s': '--sandbox' }
-    : {};
-  const key = (word: string): string => {
-    const flag = word.split('=', 1)[0]!;
-    const alias = aliases[flag];
-    if (alias !== undefined) return alias;
-    // A codex short option takes its value attached as well: measured on codex-cli 0.161.0,
-    // `codex -abogus --version` exits 2 with "invalid value 'bogus' for '--ask-for-approval
-    // <APPROVAL_POLICY>'" and `codex -aon-request -sworkspace-write completion bash` exits 0.
-    const attached = /^-([as]).+$/.exec(flag);
-    return (attached === null ? undefined : aliases[`-${attached[1]!}`]) ?? flag;
-  };
   // A wrapper's CLI is read inside its trailing quoted script: a `zsh -lc "codex --sandbox
   // read-only"` line set its own sandbox, and adding the profile's default would widen it. The
   // words are the decoded ones, so a quoted flag name still reads as a flag.
@@ -270,7 +400,7 @@ function unattendedOptions(profile: Profile, launch: string): string[] {
   for (const words of launchWordScopes(launch)) {
     for (const word of words) {
       if (word === '--') break;
-      if (word.startsWith('-')) flags.add(key(word));
+      if (word.startsWith('-')) flags.add(optionKey(profile.cli, word));
     }
   }
   const options: string[] = [];
@@ -278,13 +408,28 @@ function unattendedOptions(profile: Profile, launch: string): string[] {
     const flag = profile.unattended[i]!;
     const next = profile.unattended[i + 1];
     const value = !flag.includes('=') && next !== undefined && !next.startsWith('-') ? next : undefined;
-    if (!flags.has(key(flag))) {
+    if (!flags.has(optionKey(profile.cli, flag))) {
       options.push(flag);
       if (value !== undefined) options.push(value);
     }
     if (value !== undefined) i++;
   }
   return options;
+}
+
+/** The long name of one option word, so an alias and the option it stands for are one key. */
+function optionKey(cli: string, word: string): string {
+  const aliases: Record<string, string> = cli === 'codex'
+    ? { '-a': '--ask-for-approval', '-s': '--sandbox' }
+    : {};
+  const flag = word.split('=', 1)[0]!;
+  const alias = aliases[flag];
+  if (alias !== undefined) return alias;
+  // A codex short option takes its value attached as well: measured on codex-cli 0.161.0,
+  // `codex -abogus --version` exits 2 with "invalid value 'bogus' for '--ask-for-approval
+  // <APPROVAL_POLICY>'" and `codex -aon-request -sworkspace-write completion bash` exits 0.
+  const attached = /^-([as]).+$/.exec(flag);
+  return (attached === null ? undefined : aliases[`-${attached[1]!}`]) ?? flag;
 }
 
 /**
@@ -295,11 +440,23 @@ function unattendedOptions(profile: Profile, launch: string): string[] {
  * A launch with a place adds the profile's measured team-inbox arguments.
  * A launch line whose last word is a quoted script that runs the CLI takes the
  * options inside that script, where the CLI reads them, exactly as a carried
- * resume and a minted session id do. A line whose shape this version cannot
- * prove keeps 0.5.10's placement, the options after the line, and says so
- * through `warn`: it never refuses to launch a line 0.5.10 launched.
+ * resume and a minted session id do. A line that names a positional delimiter
+ * takes the options before it, where the CLI still reads them as options, and
+ * the line's own words after the delimiter keep their place. A line whose shape
+ * this version cannot prove keeps 0.5.10's placement, the options after the
+ * line, and says so through `warn`. Two lines are refused rather than launched
+ * with the profile's words where the CLI does not read them: one that hands its
+ * CLI a word the shell computes — a substitution, a backtick or an unquoted
+ * `$name` at or after the command word — or one this reader cannot read to its
+ * end whose unread part holds a `--` in any quoting, a backslash or an ANSI-C
+ * opening — anything that can spell the CLI's delimiter (`lineDelimiterRisk`) —
+ * because every word written after it would be prompt text; and one whose rules
+ * line cannot be placed inside it once its options have been. Every other line
+ * keeps the old placement with its notice.
+ * A sandbox profile is named only when the caller wrote one for this launch and
+ * the line names none of its own: the file's choice of profile stands.
  */
-export function launchCommand(
+export function launchCommandOrRefusal(
   profile: Profile,
   launch: string,
   rules: string,
@@ -309,7 +466,27 @@ export function launchCommand(
   runtimePolicies?: { codexDaemon?: 'on' | 'off' },
   rulesLine?: string,
   warn?: (text: string) => void,
-): string {
+  /** The seat's absolute launch folder, filled into a profile settings value's `{cwd}`. Absent:
+   *  a profile with settings contributes none, so a caller that launches nothing names no
+   *  folder. */
+  cwd?: string,
+  /** The Grok sandbox profile this run wrote for the seat, named only when the line names none
+   *  of its own (`--sandbox`): the file's choice of profile stands. */
+  sandboxProfile?: string,
+  /** Whether the caller will launch this line. One that will not (a running seat's pane read)
+   *  takes 0.5.10's placement even where a launch would be refused: nothing runs it. */
+  launching = true,
+): { command: string; refusal?: string } {
+  // A word the shell computes may be the CLI's delimiter, and a line this reader cannot read to
+  // its end may name one in the part it cannot see. Words written after such a line reach the
+  // CLI as prompt text, not options, so the launch is refused rather than launched with its
+  // configuration misplaced.
+  if (launching && lineDelimiterRisk(launch)) {
+    return {
+      command: '',
+      refusal: 'its launch line computes a word where it runs the CLI, or cannot be read where it names, or may name, the CLI\'s delimiter; words added after it would be read as prompt text, not options',
+    };
+  }
   // Every "does the line already set this" below reads the CLI's own decoded words, so a flag
   // inside a trailing quoted script counts exactly as one written on a plain line, and a quoted
   // flag name is the flag. A line this version cannot prove is asked 0.5.10's questions of the
@@ -327,6 +504,9 @@ export function launchCommand(
     if (altIdx >= 0) options.splice(altIdx, 0, '--no-daemon');
     else options.push('--no-daemon');
   }
+  if (sandboxProfile !== undefined && sandboxProfile !== '' && !sets(['--sandbox'], /(^|\s)--sandbox(=|\s|$)/)) {
+    options.push('--sandbox', sandboxProfile);
+  }
   // The session's own display name, where the CLI takes one and the line names none: a person
   // reading the session — its prompt box, its resume list, its terminal title — sees the seat's
   // readable name rather than an anonymous session.
@@ -338,34 +518,112 @@ export function launchCommand(
   if (place) {
     for (const word of profile.mcpInbox?.launchArgs ?? []) options.push(fillInboxPlace(word, place));
   }
+  // The CLI's session settings, with the seat's own folder filled in. Antigravity's
+  // `--settings` is one inline JSON object, taken for this session only and never saved (its
+  // `--help` says so; measured on 1.4.12), and `trustedWorkspaces` there is an array of
+  // absolute paths that pre-answers the trust dialog. A line that names its own `--settings`
+  // keeps it: the seat's file is the caller's, and nothing is appended.
+  if (profile.settings !== null && cwd !== undefined && !/(^|\s)--settings(=|\s|$)/.test(launch)) {
+    options.push(
+      profile.settings.option,
+      // A function replacement: a folder holding `$&`, `$'`, `` $` `` or `$$` is a path, never a
+      // replacement pattern.
+      profile.settings.value.replaceAll('{cwd}', () => JSON.stringify(cwd).slice(1, -1)),
+    );
+  }
   if (cliHook !== undefined && cliHook !== null && supportsCliHook(profile.cli)
     && !sets(['--settings'], /(^|\s)--settings(=|\s|$)/)) {
     options.push('--settings', cliHook);
   }
+  // The profile's pinned feature set rides after every word the seat's own line carries, ahead
+  // of a first-message seat's rules line, which is positional. The CLI reads the last value for
+  // a repeated config key (measured on codex-cli 0.161.0 in a scratch CODEX_HOME: a duplicated
+  // `-c` for one key took the last value in both orders), so the pin is the seat's effective
+  // value whichever its config file holds, and every seat of the CLI presents the same set to
+  // the one background server they share.
+  options.push(...pinnedWords(profile.features));
   // A first-message seat's rules line rides the launch as the CLI's initial prompt, last, so it
-  // is never typed into the pane.
+  // is never typed into the pane. It is positional: it stays after the line's own `--`, where a
+  // message-mode CLI reads its prompt, never among the options before the delimiter.
+  const positional: string[] = [];
   if (rulesLine !== undefined && profile.rulesMode === 'message' && profile.rulesPrompt !== null) {
-    if (profile.rulesPrompt !== '') options.push(profile.rulesPrompt);
-    options.push(rulesLine);
+    if (profile.rulesPrompt !== '') positional.push(profile.rulesPrompt);
+    positional.push(rulesLine);
   }
-  const addition = options.map(shellQuote).join(' ');
+  // The profile's options are options: they stand before the CLI's first positional delimiter,
+  // wherever the CLI's words are — on a plain line, after a wrapper, or inside a quoted script
+  // that runs the CLI, where the outer shell's own word scan never sees that delimiter.
+  // A line whose shape this version cannot prove keeps 0.5.10's placement after the line, and
+  // the seat says so.
   const trimmed = launch.trim();
-  if (addition === '') return ['AGENT_UNATTENDED=1', trimmed].join(' ');
-  // The options pass through appendOnLaunchLine like a resume does: a wrapper that forwards its
-  // arguments takes them at the end of the line, and a quoted script that runs the CLI takes
-  // them inside its quotes, no longer after them where the CLI never reads. A line whose shape
-  // this version cannot prove keeps 0.5.10's placement after the line, and the seat says so.
-  const placed = appendOnLaunchLine(trimmed, addition, profile.binary);
-  if (placed.uncertain) {
+  const addition = options.map(shellQuote).join(' ');
+  const optioned = addition === ''
+    ? { line: trimmed, uncertain: false }
+    : appendOnLaunchLine(trimmed, addition, profile.binary);
+  const placed = positional.length === 0
+    ? optioned
+    : appendPositionalOnLaunchLine(optioned.line, positional.map(shellQuote).join(' '), profile.binary);
+  // Once the options were placed inside the line, a rules line that cannot be placed there too
+  // is refused: the fallback writes it after the line, where this launch's CLI does not read
+  // it, and a seat that carries rules must not launch without them. A line where the options
+  // themselves were not placed keeps 0.5.10's placement and says so below.
+  if (launching && addition !== '' && !optioned.uncertain && positional.length > 0 && placed.uncertain) {
+    return {
+      command: '',
+      refusal: 'its rules line cannot be placed inside its launch line after its profile options were, and the CLI would not read it',
+    };
+  }
+  // Both are said when both are true: an unreadable line leaves the options after it and the
+  // rules line there too, and the seat names each word it could not place.
+  if (optioned.uncertain) {
     warn?.('its launch line could not be read to its end; its profile options are after the line, where the CLI may not read them');
   }
-  return ['AGENT_UNATTENDED=1', placed.line].join(' ');
+  if (positional.length > 0 && placed.uncertain) {
+    warn?.('its launch line could not be read to its end; its rules line is after the line, where the CLI may not read it');
+  }
+  return { command: ['AGENT_UNATTENDED=1', placed.line].join(' ') };
+}
+
+/** The command alone, as 0.5.10 built it: for a caller that is not launching this line (a
+ *  running seat's pane read). A launch asks {@link launchCommandOrRefusal}, which reports a
+ *  line it must not launch instead. */
+export function launchCommand(
+  profile: Profile,
+  launch: string,
+  rules: string,
+  cliHook?: string | null,
+  place?: InboxPlace,
+  displayName?: string,
+  runtimePolicies?: { codexDaemon?: 'on' | 'off' },
+  rulesLine?: string,
+  warn?: (text: string) => void,
+  cwd?: string,
+  sandboxProfile?: string,
+): string {
+  return launchCommandOrRefusal(profile, launch, rules, cliHook, place, displayName, runtimePolicies, rulesLine, warn, cwd, sandboxProfile, false).command;
 }
 
 /** True when the CLI loads a settings file named on its launch line, and that file may install
  *  command hooks: Claude Code's `--settings <file>`. */
 export function supportsCliHook(cli: string): boolean {
   return cli === 'claude-code';
+}
+
+/**
+ * The base recipe a launch record stores, with the profile's pins placed where its launch puts
+ * them: after every option word the seat's own line carries and before the CLI's first
+ * positional delimiter, inside a proven script that runs the CLI. The reader that checks this
+ * record ({@link featureSettings}) decodes the same CLI scope, so a pin written here is one the
+ * CLI reads, and a pin after a script's closing quote — where no CLI receives it — is never
+ * recorded. A line this version cannot prove keeps the pin after the line, exactly where its
+ * launch puts the options too; the report then says the line cannot be read rather than claiming
+ * the pin took effect.
+ */
+export function pinnedRecordLine(cli: string, line: string, features: readonly string[]): string {
+  const profile = profileFor(cli);
+  const addition = pinnedWords(features).map(shellQuote).join(' ');
+  if (profile === null || addition === '') return line;
+  return appendOnLaunchLine(line, addition, profile.binary).line;
 }
 
 /** True when the CLI takes a session display name on its launch line. The one measured is
@@ -519,552 +777,105 @@ export function withResume(cli: string, command: string, sessionId: string): str
   return placedOnLaunchLine(command, `--resume ${sessionId}`, 'claude');
 }
 
-/** The shells that take a command string. */
-const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh', 'ash', 'fish', 'csh', 'tcsh']);
 
-/** The shells whose quoting this tool writes inside: the POSIX shells, whose single quote
- *  splices as `'\''` and whose words split as the tokenizer reads them. A fish or csh command
- *  string is read for its flags but never written into: a line that runs one keeps 0.5.10's
- *  placement after the line, with the warning that says so. */
-const POSIX_SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh', 'ash']);
-
-/** The program word of a line, past its variable assignments and an `env` prefix. */
-function programWordAt(words: readonly ShellWord[]): number {
-  let at = 0;
-  while (at < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[at]!.text)) at += 1;
-  if (at < words.length && (words[at]!.text.split('/').pop() ?? words[at]!.text) === 'env') {
-    at += 1;
-    while (at < words.length) {
-      const text = words[at]!.text;
-      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(text) || text.startsWith('-')) {
-        at += 1;
-        continue;
-      }
-      break;
-    }
-  }
-  return at;
+/** The variable name an assignment word sets, or null when the word sets none. */
+export function assignmentWordName(word: string): string | null {
+  const match = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(word);
+  return match ? match[1]! : null;
 }
 
-/** The program word of a line, when that word is a shell. */
-function shellProgramOf(command: string): string | null {
-  const words = shellWords(command.trimEnd());
-  if (words === null) return null;
-  const program = words[programWordAt(words)];
-  if (program === undefined) return null;
-  const name = program.text.split('/').pop() ?? program.text;
-  return SHELLS.has(name) ? name : null;
+/** Whether an env word is exactly one shell word. A substitution or a quoted value may hold
+ *  spaces inside its own word; unquoted whitespace makes two words, and a vendor word that
+ *  splits would put the second one where the launch line's program is read. */
+function oneShellWord(text: string): boolean {
+  return shellWords(text)?.length === 1;
 }
 
-/** A shell's command-string flag: `-c`, or a cluster that ends in one — `-lc`, `-ec`, `-euc`.
- *  A cluster carrying `o` or `O` is not one: those take the rest of the cluster as their own
- *  name, so `-oc` names that option `c`, never the command-string flag. */
-function isCommandStringFlag(text: string): boolean {
-  return /^-[A-Za-z]*c$/.test(text) && !/[oO]/.test(text.slice(1));
-}
+/** What a move to another vendor of the same CLI needs from the profile: the vendor's env words
+ *  with their placeholders filled, every assignment name any vendor of the CLI supplies (a word
+ *  with one of those names belongs to the vendor the line was written for), the CLI's model flag
+ *  and the model id to run. */
+export type VendorMove = {
+  words: readonly string[];
+  replaced: readonly string[];
+  option: string;
+  modelId: string;
+};
 
-/** The word a shell on this line runs as its command string, with the words after it. Null when
- *  the line's program is not a shell, when the shell's options name no command string (a script
- *  file, stdin), and when a command-string flag has no word after it. Only a word right after a
- *  command-string flag is a script: `bash -l ../tools/y.sh` runs a file, and a script file is
- *  never read as a `-c` script. The words after that script are its positional words. */
-type ShellScript = { word: ShellWord; trailing: readonly ShellWord[] };
-function shellScriptWordOf(command: string): ShellScript | null {
-  const trimmed = command.trimEnd();
-  const words = shellWords(trimmed);
-  if (words === null || words.length === 0) return null;
-  const programAt = programWordAt(words);
-  const program = words[programAt];
-  if (program === undefined) return null;
-  if (!SHELLS.has(program.text.split('/').pop() ?? program.text)) return null;
-  for (let at = programAt + 1; at < words.length; at += 1) {
-    const word = words[at]!;
-    if (isCommandStringFlag(word.text)) {
-      const script = words[at + 1];
-      return script === undefined ? null : { word: script, trailing: words.slice(at + 2) };
-    }
-    // `--` ends the options and `-` names stdin: neither is a command string.
-    if (word.text === '--' || word.text === '-') return null;
-    if (word.text === '-o') {
-      // `-o` takes its option name as the next word: `sh -o errexit -c 'claude'`.
-      at += 1;
-      continue;
-    }
-    if (word.text.startsWith('-')) continue;
-    // A script file operand: the words after it are that script's own.
-    return null;
-  }
-  return null;
-}
-
-/** The quoting a script word's text can be written into. */
-type ScriptQuote = 'double' | 'single';
-
-/** The quote that opens a word's last source character, when that character closes it: the
- *  quote context open just before the word ends. Null when the word ends outside quotes
- *  (`claude`, `"claude"x`), where nothing can be placed inside its text. A `$'…'` word never
- *  reaches this reader: the tokenizer does not read ANSI-C quoting, so its line is unreadable. */
-function closingQuoteOf(command: string, word: ShellWord): ScriptQuote | null {
-  let quote: ScriptQuote | null = null;
-  let at = word.start;
-  const last = word.end - 1;
-  while (at < last) {
-    const char = command[at]!;
-    if (quote === null) {
-      if (char === '\\') {
-        at += 2;
-        continue;
-      }
-      if (char === "'") {
-        quote = 'single';
-        at += 1;
-        continue;
-      }
-      if (char === '"') {
-        quote = 'double';
-        at += 1;
-        continue;
-      }
-      at += 1;
-      continue;
-    }
-    if (quote === 'single') {
-      if (char === "'") quote = null;
-      at += 1;
-      continue;
-    }
-    if (char === '\\') {
-      at += 2;
-      continue;
-    }
-    if (char === '"') quote = null;
-    at += 1;
-  }
-  if (quote === null) return null;
-  const close = command[last];
-  if (quote === 'double') return close === '"' ? quote : null;
-  return close === "'" ? quote : null;
-}
-
-/** The source length of the delimiter a quoted word opens with, when its first source
- *  characters are that delimiter. Null when the word starts with something else (`x"…"`),
- *  whose source this reader cannot rebuild. */
-function openingOf(command: string, word: ShellWord, quote: ScriptQuote): number | null {
-  return command[word.start] === (quote === 'double' ? '"' : "'") ? 1 : null;
-}
-
-type QuotedWord = { quote: ScriptQuote; openLen: number };
-
-/** A word this reader can write inside: one quoted string in source, whose opening delimiter is
- *  the quote that closes its last character. */
-function quotedWordOf(command: string, word: ShellWord): QuotedWord | null {
-  const quote = closingQuoteOf(command, word);
-  if (quote === null) return null;
-  const openLen = openingOf(command, word, quote);
-  return openLen === null ? null : { quote, openLen };
-}
-
-/** Whether a script body runs the CLI as its command: its program word is `<binary>`, by name or
- *  path, given directly or after `exec` or `command` whose own options are none. */
-function startsWithCli(binary: string, command: string): boolean {
-  const words = shellWords(command);
-  if (words === null) return false;
-  let at = programWordAt(words);
-  let program = words[at];
-  if (program !== undefined && (program.text === 'exec' || program.text === 'command')) {
-    at += 1;
-    program = words[at];
-    if (program === undefined || program.text.startsWith('-')) return false;
-  }
-  return program !== undefined && (program.text.split('/').pop() ?? program.text) === binary;
-}
-
-/** Whether a script word's raw source reaches the shell that runs it unchanged. The shell that
- *  parses the command line reads a double-quoted word before any inner shell sees it: inside
- *  those quotes an unescaped `$` or backtick is expanded at that outer layer, whatever quotes
- *  appear inside it, and an unquoted stretch of the word is read there too. So a word whose raw
- *  text holds either hands the inner shell something other than the text this reader decoded.
- *  A single-quoted word is taken literally, and a backslash makes the next character literal.
- *  A word that closes and reopens quotes is followed as the outer shell reads it. */
-function outerWordKeepsText(body: string, quote: ScriptQuote): boolean {
-  let state: ScriptQuote | null = quote;
-  let at = 0;
-  while (at < body.length) {
-    const char = body[at]!;
-    if (state === 'single') {
-      if (char === "'") state = null;
-      at += 1;
-      continue;
-    }
-    if (char === '\\') {
-      at += 2;
-      continue;
-    }
-    if (state === 'double') {
-      if (char === '"') {
-        state = null;
-        at += 1;
-        continue;
-      }
-      if (char === '$' || char === '`') return false;
-      at += 1;
-      continue;
-    }
-    if (char === "'") {
-      state = 'single';
-      at += 1;
-      continue;
-    }
-    if (char === '"') {
-      state = 'double';
-      at += 1;
-      continue;
-    }
-    if ('$`*?['.includes(char)) return false;
-    at += 1;
-  }
-  return true;
-}
-
-/** Whether a script body is one simple command whose words the shell hands on exactly as
- *  written. A lexical reader cannot see what the shell does at run time, so a body holding a
- *  construct the shell changes is not proved: not a top-level operator (`;`, `&`, `|`, `<`, `>`,
- *  `(`, `)`), a newline or a comment, and not an expansion or a substitution (`$` in any form, a
- *  backtick) or a glob (`*`, `?`, `[`), which the shell reads unquoted and inside double quotes
- *  alike. Only single quotes make such characters literal, and a backslash makes the next
- *  character literal. A body with any other such construct is unprovable, and its line keeps the
- *  0.5.10 placement with its notice. */
-function isSimpleCommand(text: string): boolean {
-  let at = 0;
-  while (at < text.length) {
-    const char = text[at]!;
-    if (char === "'") {
-      const close = text.indexOf("'", at + 1);
-      if (close < 0) return false;
-      at = close + 1;
-      continue;
-    }
-    if (char === '"') {
-      at += 1;
-      let closed = false;
-      while (at < text.length) {
-        const inner = text[at]!;
-        if (inner === '\\') {
-          at += 2;
-          continue;
-        }
-        if (inner === '"') {
-          at += 1;
-          closed = true;
-          break;
-        }
-        if (inner === '$' || inner === '`') return false;
-        at += 1;
-      }
-      if (!closed) return false;
-      continue;
-    }
-    if (char === '\\') {
-      at += 2;
-      continue;
-    }
-    if (char === '$' || char === '`' || char === '*' || char === '?' || char === '[') return false;
-    if (char === '#' && (at === 0 || /\s/.test(text[at - 1]!))) return false;
-    if (';|&<>()\n'.includes(char)) return false;
-    at += 1;
-  }
-  return true;
-}
-
-/** The one proof a script word carries, asked by every reader: the shell that parses it hands
- *  it on exactly as this reader decoded it — one quoted source word whose raw text keeps every
- *  character that shell reads inside it ({@link outerWordKeepsText}) — and the body it runs is
- *  one simple command for that shell ({@link isSimpleCommand}). A placement never writes inside
- *  a script that fails either proof, and a word read reports no word from one. Both ask this
- *  same function, so they refuse the same lines by construction. Returns the body and the quote
- *  the shell reads inside it, or null when the word proves neither. */
-function provenScriptWord(text: string, word: ShellWord): { body: string; layer: QuotedWord } | null {
-  const layer = quotedWordOf(text, word);
-  if (layer === null) return null;
-  if (!outerWordKeepsText(text.slice(word.start + layer.openLen, word.end - 1), layer.quote)) return null;
-  if (!isSimpleCommand(word.text)) return null;
-  return { body: word.text, layer };
-}
-
-/** `text` written so one shell quoting layer hands it on exactly as written: a double-quoted
- *  script's shell reads `\`, `"`, `$` and a backtick back to themselves; a single-quoted one
- *  takes everything literally, with quotes spliced as `'\''`. */
-function encodeForQuote(quote: ScriptQuote, text: string): string {
-  if (quote === 'double') {
-    return text.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('$', '\\$').replaceAll('`', '\\`');
-  }
-  return text.replaceAll("'", "'\\''");
-}
-
-/** Where an addition belongs on a launch line. `script` is inside the innermost quoted script
- *  that runs the CLI, `at` the source position just before that script's closing quote, and
- *  `layers` the quotes the text passes through, outermost first. `uncertain` is a line whose
- *  shape this version cannot prove: it keeps 0.5.10's placement after the line. */
-type Placement =
-  | { kind: 'line' }
-  | { kind: 'script'; at: number; layers: readonly ScriptQuote[] }
-  | { kind: 'uncertain' };
-
-/** Whether a word written after a plain line reaches the command the line runs. A plain line has
- *  no shell command string, so the shell that runs it reads the appended word too — unless the
- *  line swallows the rest of its own text: an unquoted `#` that starts a word is a comment, an
- *  unquoted top-level operator (`;`, `|`, `&`, `<`, `>`) or a newline ends the command, an
- *  unclosed quote takes every later character into the quoted word, and a trailing backslash
- *  escapes the space before the appended word. A `$` expansion or a glob changes its own word
- *  only, so the words written after it still reach the command and it does not count here. */
-function takesAppendedWord(text: string): boolean {
-  let quote: ScriptQuote | null = null;
-  let at = 0;
-  while (at < text.length) {
-    const char = text[at]!;
-    if (quote === 'single') {
-      if (char === "'") quote = null;
-      at += 1;
-      continue;
-    }
-    if (char === '\\') {
-      if (at + 1 >= text.length) return false;
-      at += 2;
-      continue;
-    }
-    if (quote === 'double') {
-      if (char === '"') quote = null;
-      at += 1;
-      continue;
-    }
-    if (char === "'") {
-      quote = 'single';
-      at += 1;
-      continue;
-    }
-    if (char === '"') {
-      quote = 'double';
-      at += 1;
-      continue;
-    }
-    if (char === '#' && (at === 0 || /\s/.test(text[at - 1]!))) return false;
-    if (';|&<>\n'.includes(char)) return false;
-    at += 1;
-  }
-  return quote === null;
-}
-
-/** Where words written for the CLI are read on a launch line. A plain line and a wrapper that
- *  forwards its arguments take them after the line, when the line does not swallow the rest of
- *  its text ({@link takesAppendedWord}). A line ending in a quoted script that runs the CLI takes
- *  them inside that script, and one nested shell is followed to the script it runs. Everything
- *  else — an unreadable line, a script word after positional words, a script file, a bare command
- *  word, a shell whose quoting this tool does not write, a body that is more than one simple
- *  command, a nesting deeper than one shell, or a plain line that swallows an appended word — is
- *  uncertain, and keeps 0.5.10's placement after the line. */
-function placementOf(binary: string, command: string): Placement {
-  const trimmed = command.trimEnd();
-  if (trimmed === '') return { kind: 'line' };
-  if (shellWords(trimmed) === null) return { kind: 'uncertain' };
-  const found = shellScriptWordOf(trimmed);
-  if (found === null) return takesAppendedWord(trimmed) ? { kind: 'line' } : { kind: 'uncertain' };
-  if (found.trailing.length > 0) return { kind: 'uncertain' };
-  const shell = shellProgramOf(trimmed);
-  if (shell === null || !POSIX_SHELLS.has(shell)) return { kind: 'uncertain' };
-  const proof = provenScriptWord(trimmed, found.word);
-  if (proof === null) return { kind: 'uncertain' };
-  if (startsWithCli(binary, proof.body)) {
-    return { kind: 'script', at: found.word.end - 1, layers: [proof.layer.quote] };
-  }
-  return nestedPlacement(binary, trimmed, found.word, proof.layer) ?? { kind: 'uncertain' };
-}
-
-/** The script one nested shell runs, when that script runs the CLI: the outer body's source is
- *  normally exactly the text this reader decoded, so a position in the body is a position on the
- *  line. A line this tool has already written into no longer matches character for character —
- *  an addition inside a single-quoted inner script is spliced as `'\''` — but the inner script is
- *  the body's last word, so its closing quote is still the body's last character that is not
- *  whitespace: readable in the source when the outer quote is a double quote (a single quote is
- *  literal there) and that quote is not escaped (an odd backslash run before it). Deeper nesting,
- *  any other shell dialect, an inner double-quoted script and a body that is not one simple
- *  command are left to 0.5.10's placement. */
-function nestedPlacement(
-  binary: string,
-  command: string,
-  outer: ShellWord,
-  layer: QuotedWord,
-): Placement | null {
-  const body = outer.text;
-  const inner = shellScriptWordOf(body);
-  if (inner === null || inner.trailing.length > 0) return null;
-  const shell = shellProgramOf(body);
-  if (shell === null || !POSIX_SHELLS.has(shell)) return null;
-  const proof = provenScriptWord(body, inner.word);
-  if (proof === null) return null;
-  if (!startsWithCli(binary, proof.body)) return null;
-  const source = command.slice(outer.start + layer.openLen, outer.end - 1);
-  if (source === body) {
-    return {
-      kind: 'script',
-      at: outer.start + layer.openLen + inner.word.end - 1,
-      layers: [layer.quote, proof.layer.quote],
-    };
-  }
-  if (layer.quote !== 'double' || proof.layer.quote === 'double') return null;
-  const tail = source.replace(/\s+$/, '');
-  if (!tail.endsWith("'")) return null;
-  let backslashes = 0;
-  for (let index = tail.length - 2; index >= 0 && tail[index] === '\\'; index -= 1) backslashes += 1;
-  if (backslashes % 2 === 1) return null;
-  return {
-    kind: 'script',
-    at: outer.start + layer.openLen + tail.length - 1,
-    layers: [layer.quote, proof.layer.quote],
-  };
-}
+export type VendorLaunch = { ok: true; launch: string } | { ok: false; why: string };
 
 /**
- * Words appended to a launch line so a wrapper still forwards them. A wrapper that execs
- * `"$@"` (`zsh …/as-floor.sh <binary> …`) takes the words at the end of the line. A quoted
- * script that itself runs `<binary>` (`zsh -lc "grok --model …"`) would drop words written
- * after the quotes: those words go inside that script, still last, and a shell nested one level
- * deep is followed to the script it runs. The words are written so every quoting layer between
- * the line and the CLI reads them back exactly: a double-quoted script still has its text read
- * by the wrapping shell, so `\`, `"`, `$` and a backtick are escaped for it; a single-quoted
- * script takes them through the standard `'\''` splice.
- *
- * Every insertion is proved after the fact: the CLI's decoded words on the new line must be its
- * words on the old line followed by exactly the added words, in order. The separator is always a
- * literal space — a raw newline after a continuation backslash and an escaped space are not
- * separators to the inner shell, a space always is. If the line or the addition cannot be read,
- * or the words do not come back that way, the addition keeps 0.5.10's placement after the line
- * and `uncertain` reports it. This never refuses a line.
+ * The same CLI's launch line, written for another vendor of it. The line's leading variable
+ * assignments are kept unless a vendor supplies that name, and its wrapper prefix — a shell
+ * reading a script (`zsh ~/tools/as-floor.sh`) — is kept as written; everything after the CLI's
+ * own binary is the launcher's tail and is replaced by the vendor's words, the binary and the
+ * model flag. Every assignment word has to precede the command word, so the vendor's words go in
+ * front of the wrapper: the wrapper is `exec "$@"`, and a word written after it would be a
+ * program name, not an environment variable. A line this reader cannot prove — a `sh -c` script,
+ * an `env` or any other prefix, an unclosed quote, a shell option it does not follow — is
+ * refused rather than guessed at.
  */
-function appendOnLaunchLine(
-  command: string,
-  addition: string,
-  binary: string,
-): { line: string; uncertain: boolean } {
-  const trimmed = command.trimEnd();
-  const placement = placementOf(binary, trimmed);
-  const after = (): string => (trimmed === '' ? addition : `${trimmed} ${addition}`);
-  if (placement.kind === 'uncertain') return { line: after(), uncertain: true };
-  if (placement.kind === 'line') return { line: after(), uncertain: false };
-  const beforeWords = cliWordListOf(binary, trimmed);
-  const addedWords = shellWords(addition);
-  if (beforeWords === null || addedWords === null) return { line: after(), uncertain: true };
-  let text = addition;
-  for (let at = placement.layers.length - 1; at >= 0; at -= 1) text = encodeForQuote(placement.layers[at]!, text);
-  const line = `${trimmed.slice(0, placement.at)} ${text}${trimmed.slice(placement.at)}`;
-  const afterWords = cliWordListOf(binary, line);
-  const want = [...beforeWords, ...addedWords.map((word) => word.text)];
-  if (afterWords === null || afterWords.length !== want.length || afterWords.some((word, at) => word !== want[at])) {
-    return { line: after(), uncertain: true };
-  }
-  return { line, uncertain: false };
-}
-
-/** The line an addition this version can place, or null when it cannot prove the placement: a
- *  reader that records what it writes (a session id, a resume) never records one the CLI may
- *  not read. */
-function placedOnLaunchLine(command: string, addition: string, binary: string): string | null {
-  const placed = appendOnLaunchLine(command, addition, binary);
-  return placed.uncertain ? null : placed.line;
-}
-
-/** The whole line as the CLI's own body, when a word written after the line still reaches the
- *  CLI ({@link takesAppendedWord}): the one place a reader or rewriter takes the whole line as
- *  the CLI's text. Null when the line swallows its tail — a comment, an operator, a redirect, a
- *  newline or an unclosed quote after the program word — because the words a tokenizer reads
- *  there are not the words the CLI receives. */
-function plainBodyOf(command: string): CliBody | null {
-  const trimmed = command.trimEnd();
-  return takesAppendedWord(trimmed) ? { text: trimmed, start: 0, end: trimmed.length } : null;
-}
-
-/** Where a line's CLI words sit in the line's source: the innermost shell script that runs the
- *  CLI, with the span of its body text. Every layer's source must be exactly the text this
- *  reader decoded, so a position in the body is a position in the line, and every layer's body
- *  must be one simple command ({@link provenScriptWord}) — a reader that rewrites words inside a
- *  script asks the same proof a placement and a word read ask. One nested shell is followed,
- *  exactly as a placement follows it ({@link placementOf}); a line nested deeper has no body.
- *  Null when the line has no shell command string, or one this reader cannot read through. */
-type CliBody = { text: string; start: number; end: number };
-function cliBodyOn(binary: string, command: string): CliBody | null {
-  let text = command;
-  let offset = 0;
-  for (let depth = 0; depth < 2; depth += 1) {
-    const found = shellScriptWordOf(text);
-    if (found === null) return null;
-    const shell = shellProgramOf(text);
-    if (shell === null || !POSIX_SHELLS.has(shell)) return null;
-    // The proof every reader and every placement asks, before any span is trusted.
-    const proof = provenScriptWord(text, found.word);
-    if (proof === null) return null;
-    // The position guard this reader needs on top: the raw source between the quotes must be
-    // exactly the text this reader decoded, so a position in the body is a position in the line.
-    const openAt = found.word.start + proof.layer.openLen;
-    if (text.slice(openAt, found.word.end - 1) !== proof.body) return null;
-    const start = offset + openAt;
-    if (startsWithCli(binary, proof.body)) {
-      return { text: proof.body, start, end: start + proof.body.length };
+export function launchWithVendorWords(profile: Profile, command: string, move: VendorMove): VendorLaunch {
+  const cannot = 'its launch line is not one this version rewrites for another vendor; refused rather than guessing';
+  const words = shellWords(command);
+  if (words === null) return { ok: false, why: `its launch line has no knowable words; ${cannot}` };
+  const kept: string[] = [];
+  let at = 0;
+  while (at < words.length) {
+    const word = words[at]!;
+    const name = assignmentWordName(word.text);
+    if (name === null) break;
+    if (!move.replaced.includes(name)) {
+      const source = command.slice(word.start, word.end);
+      if (!takesAppendedWord(source)) {
+        return { ok: false, why: `its launch line's \`${source}\` swallows the words after it; ${cannot}` };
+      }
+      kept.push(source);
     }
-    offset = start;
-    text = proof.body;
+    at += 1;
   }
-  return null;
-}
-
-/** The text of the innermost shell script that runs the CLI, read through the decoded words of
- *  every layer. Null when the line has no shell command string, or none this reader can follow to
- *  the CLI, and null when a script word is not proved on the line ({@link provenScriptWord}): a
- *  word the shell that parses it may rewrite, a body that is more than one simple command, or a
- *  shell whose syntax this reader does not model, names no word of this CLI, whatever its
- *  decoded words appear to say. The proof is the one the placement asks, so a reader is unknown
- *  exactly where a placement refuses: one nested shell is followed, and a line nested deeper
- *  names no word either. Reading needs no
- *  source positions, so a line this tool has already written into — one whose inner quotes are
- *  spliced as `'\''` — still reads exactly as the CLI receives it. */
-function cliTextOf(binary: string, command: string): string | null {
-  let text = command.trimEnd();
-  for (let depth = 0; depth < 2; depth += 1) {
-    const found = shellScriptWordOf(text);
-    if (found === null) return null;
-    const shell = shellProgramOf(text);
-    if (shell === null || !POSIX_SHELLS.has(shell)) return null;
-    const proof = provenScriptWord(text, found.word);
-    if (proof === null) return null;
-    if (startsWithCli(binary, proof.body)) return proof.body;
-    if (found.trailing.length > 0) return null;
-    text = proof.body;
+  const prefix: string[] = [];
+  const first = words[at];
+  if (first === undefined) return { ok: false, why: `its launch line names no command; ${cannot}` };
+  if (isShellName(first.text.split('/').pop() ?? first.text)) {
+    const second = words[at + 1];
+    if (second === undefined) return { ok: false, why: `its launch line runs a shell that runs nothing; ${cannot}` };
+    if (second.text.startsWith('-')) {
+      const script = words[at + 2];
+      const proved = script === undefined ? null : provenScriptWord(command, script);
+      return {
+        ok: false,
+        why: proved === null
+          ? `its launch line runs a shell option this version does not follow; ${cannot}`
+          : `its launch line runs the CLI inside a quoted script this version does not rewrite; ${cannot}`,
+      };
+    }
+    const scriptName = second.text.split('/').pop() ?? second.text;
+    if (!/\.(?:z|ba)?sh$/.test(scriptName)) {
+      return { ok: false, why: `its launch line starts a shell on \`${second.text}\`, which is no wrapper script; ${cannot}` };
+    }
+    const scriptSource = command.slice(second.start, second.end);
+    if (!takesAppendedWord(scriptSource)) {
+      return { ok: false, why: `its launch line's \`${scriptSource}\` swallows the words after it; ${cannot}` };
+    }
+    prefix.push(command.slice(first.start, first.end), scriptSource);
+    at += 2;
   }
-  return null;
-}
-
-/** The CLI's own words on a launch line, decoded by the shell at every layer: the words inside
- *  the innermost shell script that runs it, or the line's own words when there is no shell
- *  command string and the line does not swallow the rest of its text ({@link takesAppendedWord}).
- *  A shell's own options — `-c`, `-lc`, `-ec`, `-l` — are the shell's, never the
- *  CLI's, and a word after the closing quote is a positional word of the script, not the CLI's
- *  either. A shell script that runs some other program, or one this reader cannot read through,
- *  names no word of this CLI at all. A script word the shell that parses the line may rewrite —
- *  an unescaped `$` or backtick inside the double quotes the word opens with — proves no word
- *  either, and a body that is more than one simple command — a comment, an operator, a
- *  substitution, a glob — names none: the words after such a construct are not the argv the
- *  script hands its CLI. Null when the line, or the script that runs the CLI, cannot be proved
- *  ({@link provenScriptWord}, the proof a placement asks too): no caller may treat an unproved
- *  line as a word list. */
-function cliWordListOf(binary: string, command: string): string[] | null {
-  const trimmed = command.trimEnd();
-  const lineWords = shellWords(trimmed);
-  if (lineWords === null) return null;
-  if (shellScriptWordOf(trimmed) === null) {
-    return takesAppendedWord(trimmed) ? lineWords.map((word) => word.text) : null;
+  const program = words[at];
+  if (program === undefined) return { ok: false, why: `its launch line names no command; ${cannot}` };
+  if ((program.text.split('/').pop() ?? program.text) !== profile.binary) {
+    return {
+      ok: false,
+      why: `its launch line starts \`${program.text}\`, not this profile's CLI \`${profile.binary}\`; ${cannot}`,
+    };
   }
-  const text = cliTextOf(binary, trimmed);
-  if (text === null) return null;
-  const words = shellWords(text);
-  return words === null ? null : words.map((word) => word.text);
+  for (const word of move.words) {
+    if (assignmentWordName(word) === null || !oneShellWord(word) || !takesAppendedWord(word)) {
+      return { ok: false, why: "the profile's vendor words are not one assignment word each; refused rather than guessing" };
+    }
+  }
+  const launch = [...kept, ...move.words, ...prefix, profile.binary, move.option, move.modelId].join(' ');
+  return { ok: true, launch };
 }
 
 /** The CLI's own decoded words on a launch line, as {@link cliWordListOf} reads them. Every
@@ -1507,7 +1318,11 @@ const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini'
 // `exit` and `exit_keys` are one or the other: a CLI exits by typing a word or by a key.
 // `models` is optional for a CLI that names no model on its screen or its launch line.
 const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'delivery', 'login', 'timeouts'] as const;
-const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'not_started', 'abandon_answers'] as const;
+// Every side's optional keys: `settings` (the settings edit), `session_cli`/`public_only`
+// (the delivery CLI a session runs and the public-only declaration the send path proves),
+// `features` (the pinned feature set the launch and the recorded line carry) and the watch
+// retry (`watch_wake`, `watch_wake_tries`).
+const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'session_cli', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'exit_completion', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'settings', 'typed_wake', 'read_hint', 'watch_wake', 'watch_wake_tries', 'not_started', 'abandon_answers', 'public_only', 'features'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -1622,6 +1437,52 @@ function deliveryOf(entry: YamlEntry): DeliveryClass {
   return value as DeliveryClass;
 }
 
+/** The value of `typed_wake`: one word from the closed set, never a guess. Only a profile whose
+ *  own screens were captured may name one: the wake is read back through those screens. */
+function typedWakeOf(entry: YamlEntry): TypedWake {
+  const value = text(entry, 'typed_wake');
+  if (!(TYPED_WAKES as readonly string[]).includes(value)) {
+    fail(entry.line, `"typed_wake" must be one of: ${TYPED_WAKES.join(', ')}`);
+  }
+  return value as TypedWake;
+}
+
+/** The value of `read_hint`: the one sentence a typed wake appends after the message's header.
+ *  It is display, never transport: one printable line with no controls, no padding space, and
+ *  short enough that the header still names the sender inside `MESSAGE_LINE_MAX`. The words are
+ *  the profile's own — the shipment's `Read it with: team drops --read.` stands when none is
+ *  declared — so a profile whose seat reads its MCP inbox names the inbox tool there. */
+function readHintOf(entry: YamlEntry): string {
+  const value = text(entry, 'read_hint');
+  if (value !== value.trim()) fail(entry.line, '"read_hint" must not start or end with whitespace');
+  if (/[\u0000-\u001f\u007f-\u009f\p{Zl}\p{Zp}]/u.test(value)) {
+    fail(entry.line, '"read_hint" must be one printable line');
+  }
+  if (value.length > MESSAGE_HINT_MAX) {
+    fail(entry.line, `"read_hint" must be at most ${String(MESSAGE_HINT_MAX)} characters`);
+  }
+  return value;
+}
+
+/** The value of `watch_wake`: `on` or `off`, never a guess. Only a profile that declares a
+ *  `typed_wake` may turn it on: the watch retry is the same typed wake. */
+function watchWakeOf(entry: YamlEntry): boolean {
+  const value = text(entry, 'watch_wake');
+  if (value !== 'on' && value !== 'off') fail(entry.line, '"watch_wake" must be on or off');
+  return value === 'on';
+}
+
+/** The value of `watch_wake_tries`: a whole number of attempts, from 1 to
+ *  `MAX_WATCH_WAKE_TRIES`. */
+function watchWakeTriesOf(entry: YamlEntry): number {
+  const node = entry.value;
+  if (node.kind !== 'scalar' || typeof node.value !== 'number' || !Number.isInteger(node.value)
+    || node.value < 1 || node.value > MAX_WATCH_WAKE_TRIES) {
+    fail(entry.line, `"watch_wake_tries" must be a whole number from 1 to ${String(MAX_WATCH_WAKE_TRIES)}`);
+  }
+  return node.value;
+}
+
 /** The value of `herdr_status`: `reliable` (the default when the key is absent) or
  *  `unreliable`, for a CLI herdr cannot report faithfully. */
 function herdrStatusOf(entry: YamlEntry): 'reliable' | 'unreliable' {
@@ -1696,25 +1557,32 @@ function startupReadsOf(entry: YamlEntry): readonly { path: string; directory: b
 
 /**
  * The value of `mcp_inbox`: the team inbox's measured registration for one CLI. One of three
- * routes, never two: launch-line arguments, the CLI's own `mcp add` with the file it writes,
- * or a config file team writes itself. Both file routes carry a relative path inside the seat's
- * folder, in the `lobby_files` grammar; the launch refuses it there when git tracks it.
+ * routes, never two: launch-line arguments, the CLI's own `mcp add`, or a config file team
+ * writes itself. With a `target`, the add writes a file inside the seat's folder — a relative
+ * path in the `lobby_files` grammar — and the launch refuses it there when git tracks it.
+ * Without one, the add writes the CLI's own user-level store, which belongs to no checkout;
+ * `remove` is then the same CLI's command that takes this seat's entry (`{inbox}`) out again
+ * on `team down`.
  */
 function inboxOf(entry: YamlEntry): InboxBlock {
   const entries = mapping(entry.value, 'mcp_inbox');
-  only(entries, ['launch_args', 'add', 'target', 'file']);
+  only(entries, ['launch_args', 'add', 'target', 'file', 'remove']);
   const launchArgsEntry = optional(entries, 'launch_args');
   const addEntry = optional(entries, 'add');
   const targetEntry = optional(entries, 'target');
   const fileEntry = optional(entries, 'file');
+  const removeEntry = optional(entries, 'remove');
   if (addEntry !== undefined && fileEntry !== undefined) {
     fail(fileEntry.line, '"mcp_inbox" registers with "add" or "file", not both');
   }
-  if (addEntry !== undefined && targetEntry === undefined) {
-    fail(addEntry.line, '"mcp_inbox" needs "target" beside "add": the file the command writes');
-  }
   if (targetEntry !== undefined && addEntry === undefined) {
     fail(targetEntry.line, '"mcp_inbox" needs "add" beside "target"');
+  }
+  if (removeEntry !== undefined && addEntry === undefined) {
+    fail(removeEntry.line, '"mcp_inbox" needs "add" beside "remove": the command its entries come from');
+  }
+  if (removeEntry !== undefined && targetEntry !== undefined) {
+    fail(removeEntry.line, '"mcp_inbox" removes an entry only from a route with no "target": a project file is left as it is');
   }
   if (launchArgsEntry === undefined && addEntry === undefined && fileEntry === undefined) {
     fail(entry.line, '"mcp_inbox" names launch_args, add or file');
@@ -1724,6 +1592,21 @@ function inboxOf(entry: YamlEntry): InboxBlock {
     add: addEntry === undefined ? null : strings(addEntry.value, 'add'),
     target: targetEntry === undefined ? null : relativeFileOf(targetEntry, 'target'),
     file: fileEntry === undefined ? null : relativeFileOf(fileEntry, 'file'),
+    remove: removeEntry === undefined ? null : strings(removeEntry.value, 'remove'),
+  };
+}
+
+/**
+ * The value of `settings`: the option and the one value it carries, with `{cwd}` filled from
+ * the seat's launch folder. The value rides the launch as one shell-quoted argument, so the
+ * inline JSON a CLI takes there keeps its quotes and spaces.
+ */
+function settingsOf(node: YamlNode): SettingsBlock {
+  const entries = mapping(node, 'settings');
+  only(entries, ['option', 'value']);
+  return {
+    option: text(required(entries, 'option', node.line), 'option'),
+    value: text(required(entries, 'value', node.line), 'value'),
   };
 }
 
@@ -1843,6 +1726,36 @@ export function exitClearKey(text: string): string | null {
   return entry === undefined ? null : clearKeyOf(entry);
 }
 
+/** The `typed_wake` a profile snippet names, by the loader's own rule: for tests. A word outside
+ *  the closed set throws; an absent key reads as null, as an absent optional key does. */
+export function typedWakeKey(text: string): TypedWake | null {
+  const entry = optional(mapping(parseYaml(text), 'a profile'), 'typed_wake');
+  return entry === undefined ? null : typedWakeOf(entry);
+}
+
+/** The `read_hint` a profile snippet names, by the loader's own rule: for tests. A value that is
+ *  not one printable line inside the bound throws; an absent key reads as null, as an absent
+ *  optional key does. */
+export function readHintKey(text: string): string | null {
+  const entry = optional(mapping(parseYaml(text), 'a profile'), 'read_hint');
+  return entry === undefined ? null : readHintOf(entry);
+}
+
+/** The `watch_wake` a profile snippet names, by the loader's own rule: for tests. A word outside
+ *  the two throws; an absent key reads as null, as an absent optional key does. The rule that
+ *  `on` needs a `typed_wake` is the loader's, read with the whole profile. */
+export function watchWakeKey(text: string): boolean | null {
+  const entry = optional(mapping(parseYaml(text), 'a profile'), 'watch_wake');
+  return entry === undefined ? null : watchWakeOf(entry);
+}
+
+/** The `watch_wake_tries` a profile snippet names, by the loader's own rule: for tests. A value
+ *  outside the bound throws; an absent key reads as null, as an absent optional key does. */
+export function watchWakeTriesKey(text: string): number | null {
+  const entry = optional(mapping(parseYaml(text), 'a profile'), 'watch_wake_tries');
+  return entry === undefined ? null : watchWakeTriesOf(entry);
+}
+
 /** The `input` block a profile snippet names, by the loader's own rule: for tests. A key outside
  *  the closed sets, or a `mid_turn` with no `clear_working`, throws; an absent block reads as
  *  null, as an absent optional key does. */
@@ -1899,7 +1812,7 @@ function launchOf(root: YamlNode): Shipped {
   const entries = mapping(root, 'a profile');
   const format = required(entries, 'format', root.line);
   if (format.value.kind !== 'scalar' || format.value.value !== 1) fail(format.line, '"format" must be 1');
-  only(entries, ['format', 'cli', 'screen', 'screen_module', 'quota', 'trust_answer', 'question_answer', ...LAUNCH_KEYS, ...OPTIONAL_LAUNCH_KEYS]);
+  only(entries, ['format', 'cli', 'screen', 'screen_module', 'quota', 'trust_answer', 'question_answer', 'vendors', 'credentials', ...LAUNCH_KEYS, ...OPTIONAL_LAUNCH_KEYS]);
   const cli = text(required(entries, 'cli', root.line), 'cli');
   required(entries, 'screen', root.line);
   const quotaEntry = optional(entries, 'quota');
@@ -1908,18 +1821,29 @@ function launchOf(root: YamlNode): Shipped {
   const unreadModelEntry = optional(entries, 'unread_model');
   const exitClearEntry = optional(entries, 'exit_clear');
   const exitConfirmEntry = optional(entries, 'exit_confirm');
+  const exitCompletionEntry = optional(entries, 'exit_completion');
   const inputEntry = optional(entries, 'input');
   const lobbyFilesEntry = optional(entries, 'lobby_files');
   const startupReadsEntry = optional(entries, 'startup_reads');
   const mcpInboxEntry = optional(entries, 'mcp_inbox');
+  const settingsEntry = optional(entries, 'settings');
+  const typedWakeEntry = optional(entries, 'typed_wake');
+  const readHintEntry = optional(entries, 'read_hint');
+  const watchWakeEntry = optional(entries, 'watch_wake');
+  const watchWakeTriesEntry = optional(entries, 'watch_wake_tries');
   const exitEntry = optional(entries, 'exit');
   const exitKeysEntry = optional(entries, 'exit_keys');
   const composeEntry = optional(entries, 'compose_module');
+  const sessionCliEntry = optional(entries, 'session_cli');
+  const publicOnlyEntry = optional(entries, 'public_only');
   const standingRulesEntry = optional(entries, 'standing_rules');
   const herdrStatusEntry = optional(entries, 'herdr_status');
   const modelsEntry = optional(entries, 'models');
   const notStartedEntry = optional(entries, 'not_started');
   const abandonAnswersEntry = optional(entries, 'abandon_answers');
+  const featuresEntry = optional(entries, 'features');
+  const vendorsEntry = optional(entries, 'vendors');
+  const credentialsEntry = optional(entries, 'credentials');
   for (const key of LAUNCH_KEYS) required(entries, key, root.line);
   if (exitEntry !== undefined && exitKeysEntry !== undefined) {
     fail(exitKeysEntry.line, '"exit" and "exit_keys" are one or the other, not both');
@@ -1930,7 +1854,22 @@ function launchOf(root: YamlNode): Shipped {
   const login = loginOf(required(entries, 'login', root.line).value);
   const timeouts = required(entries, 'timeouts', root.line).value;
   const models = modelsEntry ? modelsOf(modelsEntry.value) : { option: [] as string[], ids: [] as ModelRule[], absent: null };
+  if (vendorsEntry !== undefined && credentialsEntry === undefined) {
+    fail(vendorsEntry.line, '"vendors" needs a "credentials" block: the store its items live in');
+  }
+  if (credentialsEntry !== undefined && vendorsEntry === undefined) {
+    fail(credentialsEntry.line, '"credentials" names a store no vendor uses: declare "vendors" too');
+  }
   const rules = rulesOf(required(entries, 'rules', root.line).value);
+  const typedWake = typedWakeEntry ? typedWakeOf(typedWakeEntry) : null;
+  const watchWake = watchWakeEntry ? watchWakeOf(watchWakeEntry) : typedWake !== null;
+  if (watchWakeEntry !== undefined && watchWake && typedWake === null) {
+    fail(watchWakeEntry.line, '"watch_wake: on" needs "typed_wake": the watch retries the same wake a send types');
+  }
+  if (watchWakeTriesEntry !== undefined && !watchWake) {
+    fail(watchWakeTriesEntry.line, '"watch_wake_tries" needs "watch_wake: on"');
+  }
+  const watchWakeTries = watchWakeTriesEntry ? watchWakeTriesOf(watchWakeTriesEntry) : DEFAULT_WATCH_WAKE_TRIES;
   return {
     profile: {
       cli,
@@ -1940,9 +1879,11 @@ function launchOf(root: YamlNode): Shipped {
       abandonAnswers: abandonAnswersEntry ? abandonAnswersOf(abandonAnswersEntry.value) : [],
       tested: testedOf(required(entries, 'tested', root.line).value),
       unattended: stringsOrEmpty(required(entries, 'unattended', root.line).value, 'unattended'),
+      features: featuresEntry ? featuresOf(featuresEntry.value) : [],
       rulesOption: rules.option,
       rulesMode: rules.mode,
       rulesPrompt: rules.prompt,
+      publicOnly: publicOnlyEntry ? boolOf(publicOnlyEntry.value, 'public_only') : false,
       standingRules: standingRulesEntry ? strings(standingRulesEntry.value, 'standing_rules') : [],
       herdrStatus: herdrStatusEntry ? herdrStatusOf(herdrStatusEntry) : 'reliable',
       loginCheck: login.check,
@@ -1950,12 +1891,19 @@ function launchOf(root: YamlNode): Shipped {
       exit: exitEntry ? text(exitEntry, 'exit') : null,
       exitKeys: exitKeysEntry ? exitKeysOf(exitKeysEntry) : [],
       compose: composeEntry ? composeOf(composeEntry) : null,
+      sessionCli: sessionCliEntry ? sessionCliOf(sessionCliEntry) : null,
       exitClear: exitClearEntry ? clearKeyOf(exitClearEntry) : null,
       exitConfirm: exitConfirmEntry ? confirmKeyOf(exitConfirmEntry) : null,
+      exitCompletion: exitCompletionEntry ? boolOf(exitCompletionEntry.value, 'exit_completion') : false,
       input: inputEntry ? inputOf(inputEntry) : null,
       lobbyFiles: lobbyFilesEntry ? lobbyFilesOf(lobbyFilesEntry) : [],
       startupReads: startupReadsEntry ? startupReadsOf(startupReadsEntry) : [],
       mcpInbox: mcpInboxEntry ? inboxOf(mcpInboxEntry) : null,
+      settings: settingsEntry ? settingsOf(settingsEntry.value) : null,
+      typedWake,
+      readHint: readHintEntry ? readHintOf(readHintEntry) : null,
+      watchWake,
+      watchWakeTries,
       delivery: deliveryOf(required(entries, 'delivery', root.line)),
       idleTimeout: seconds(timeouts, 'idle'),
       exitTimeout: seconds(timeouts, 'exit'),
@@ -1968,6 +1916,8 @@ function launchOf(root: YamlNode): Shipped {
         option: models.option[0] ?? '--model',
         id: suggestId(models.ids, model, version),
       }),
+      vendors: vendorsEntry ? vendorsOf(vendorsEntry) : [],
+      credentials: credentialsEntry ? credentialsOf(credentialsEntry) : null,
       answers: trustAnswers(optional(entries, 'trust_answer')),
       questionAnswers: questionAnswers(optional(entries, 'question_answer')),
     },
@@ -1991,6 +1941,84 @@ function notStartedOf(node: YamlNode): RegExp[][] {
   });
 }
 
+/** The pinned feature set a profile declares, as `name=value` pairs with `value` the word true
+ *  or false. Anything else is refused here, so a launch never carries a pin the CLI would read
+ *  as another option or another value. */
+function featuresOf(node: YamlNode): string[] {
+  if (node.kind !== 'seq' || node.items.length === 0) fail(node.line, '"features" must be a non-empty list of name=true or name=false');
+  return node.items.map((item) => {
+    const pair = stringOf(item);
+    if (pair === null || !/^[A-Za-z0-9_]+=(true|false)$/.test(pair)) {
+      return fail(item.line, '"features" entries are name=true or name=false');
+    }
+    return pair;
+  });
+}
+
+/** The providers a CLI can run on, as the adapter names them. Each env word is one shell word
+ *  once its placeholders fill: a word that would split, or set no variable, is refused here. */
+function vendorsOf(entry: YamlEntry): VendorBlock[] {
+  const node = entry.value;
+  if (node.kind !== 'seq' || node.items.length === 0) fail(node.line, '"vendors" must be a non-empty list');
+  const names = new Set<string>();
+  return node.items.map((item) => {
+    const fields = mapping(item, 'a vendor');
+    only(fields, ['name', 'credential', 'env', 'models']);
+    const name = text(required(fields, 'name', item.line), 'name');
+    if (names.has(name)) fail(item.line, `two vendors are named "${name}"`);
+    names.add(name);
+    const credential = text(required(fields, 'credential', item.line), 'credential');
+    const env = strings(required(fields, 'env', item.line).value, 'env');
+    for (const word of env) {
+      const filled = word.replaceAll('{model}', 'an-id').replaceAll('{credential}', 'an-item');
+      if (assignmentWordName(filled) === null) {
+        fail(item.line, `vendor "${name}" has an env word that sets no variable: "${word}"`);
+      }
+      if (!oneShellWord(filled)) {
+        fail(item.line, `vendor "${name}" has an env word that is not one shell word once its placeholders fill: "${word}"`);
+      }
+    }
+    const modelsNode = required(fields, 'models', item.line).value;
+    if (modelsNode.kind !== 'seq' || modelsNode.items.length === 0) fail(modelsNode.line, '"models" must be a non-empty list');
+    const ids = new Set<string>();
+    const models = modelsNode.items.map((model) => {
+      const modelFields = mapping(model, 'a vendor model');
+      only(modelFields, ['id', 'model', 'version', 'display']);
+      const id = text(required(modelFields, 'id', model.line), 'id');
+      if (ids.has(id)) fail(model.line, `vendor "${name}" names the model "${id}" twice`);
+      ids.add(id);
+      return {
+        id,
+        model: text(required(modelFields, 'model', model.line), 'model'),
+        version: text(required(modelFields, 'version', model.line), 'version'),
+        display: text(required(modelFields, 'display', model.line), 'display'),
+      };
+    });
+    return { name, credential, env, models };
+  });
+}
+
+/** The store a profile's vendor items live in: the attribute-only lookup and the one-time add
+ *  command a refusal prints. A store the profile does not name is never read. */
+function credentialsOf(entry: YamlEntry): CredentialsBlock {
+  const node = entry.value;
+  const fields = mapping(node, '"credentials"');
+  only(fields, ['check', 'add', 'missing_status']);
+  const check = strings(required(fields, 'check', node.line).value, 'check');
+  if (check.length === 0) fail(node.line, '"credentials.check" must name the command that reads the store');
+  for (const word of check) {
+    if (['-w', '--wait', '-g'].includes(word)) {
+      fail(node.line, `"credentials.check" asks for the secret ("${word}"): the check is attribute-only`);
+    }
+  }
+  const add = text(required(fields, 'add', node.line), 'add');
+  if (!add.includes('{item}')) fail(node.line, '"credentials.add" must name where the item goes with "{item}"');
+  const statusEntry = required(fields, 'missing_status', node.line).value;
+  if (statusEntry.kind !== 'scalar' || typeof statusEntry.value !== 'number' || !Number.isInteger(statusEntry.value)) {
+    fail(statusEntry.line, '"missing_status" must be a whole number');
+  }
+  return { check, add, missingStatus: statusEntry.value };
+}
 
 function patternsOf(node: YamlNode, line: number, key: string): RegExp[] {
   return strings(node, key).map((pattern) => {
@@ -2241,6 +2269,22 @@ function composeOf(entry: YamlEntry): ComposeProfile {
     fail(entry.line, `profile: "compose_module" module "${specifier}" exports "reposArgs" that is not a list of strings`);
   }
   return { module: specifier, compose: mod.compose as ComposeProfile['compose'], repos: (repos as string[] | undefined) ?? [] };
+}
+
+/** The value of `session_cli`: the CLI's own session-creating and session-pulling calls, as a
+ *  run measured them. `argv` and `pull` are non-empty lists of words; `repo_flag` names the
+ *  option a repository is passed as, or is absent when the CLI takes none; `created` is the line
+ *  prefix the CLI prints once a session exists. */
+function sessionCliOf(entry: YamlEntry): SessionCliSpec {
+  const entries = mapping(entry.value, 'session_cli');
+  only(entries, ['argv', 'repo_flag', 'created', 'pull']);
+  const repoFlagEntry = optional(entries, 'repo_flag');
+  return {
+    argv: strings(required(entries, 'argv', entry.line).value, 'argv'),
+    repoFlag: repoFlagEntry ? text(repoFlagEntry, 'repo_flag') : null,
+    created: text(required(entries, 'created', entry.line), 'created'),
+    pull: strings(required(entries, 'pull', entry.line).value, 'pull'),
+  };
 }
 
 function loginOf(node: YamlNode): { check: string[] | null; hint: string } {

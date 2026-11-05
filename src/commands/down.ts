@@ -35,6 +35,7 @@ import {
   typeText,
   workspaceClose,
   paneProcesses,
+  workspacePanes,
   type HerdrAgent,
   type PaneProcesses,
 } from '../herdr.ts';
@@ -46,7 +47,8 @@ import { reportedLiveAgent } from '../launch/agent.ts';
 import { downPlan, formatPlan, type DownSeat } from '../launch/plan.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { resetCliHookState } from '../launch/cli-hook.ts';
-import { boxHoldsOther, boxHoldsText, DRAW_WAIT_MS, settleScreen } from '../launch/deliver.ts';
+import { removeInbox, type InboxRemoval } from '../mcp/register.ts';
+import { boxHoldsOther, boxHoldsText, boxHoldsTextAndEmptyRow, DRAW_WAIT_MS, EXIT_COMPLETION_SETTLE_MS, settleScreen } from '../launch/deliver.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { herdrUnreliable, profileFor } from '../profiles/index.ts';
 import { abandonAnswerKeys, isNotStartedScreen } from '../profiles/profile.ts';
@@ -89,6 +91,9 @@ export type DownSources = {
   /** Pids in the pane, for a seat whose record holds the process `up` launched. Absent: a
    *  record with no process is matched on pane and workspace alone. */
   processes?(session: string, pane: string): PaneProcesses | null;
+  /** Pane ids in a workspace as herdr lists them now; null when the list can't be read. The
+   *  vacated-workspace sweep reads it immediately before a close. */
+  workspacePanes?(session: string, workspace: string): string[] | null;
   now(): Date;
   sleep?(ms: number): Promise<void>;
   /** Approval store home. The real command uses the owner's home. */
@@ -106,6 +111,11 @@ export type DownSources = {
   codexEndpoint?: {
     stop(input: { dir: string; session: string; seat: string }): EndpointStopRead;
   };
+  /** Removes a closed seat's own entry from its CLI's user-level MCP store. Tests record it;
+   *  the shipped command runs the profile's own remove route (a CLI with none has nothing to
+   *  remove). Absent: nothing is removed — the real command carries the shipped `removeInbox`,
+   *  so a test's fake sources never run a real CLI. */
+  inboxRemove?: (input: { cli: string; seat: string; session: string }) => InboxRemoval | null;
   /** The delegate gate. Tests hand in a verdict; the shipped command asks the real one. */
   gate?: typeof delegateGate;
   /** The gate's own fakes: the approval standing, the approved copy, state, herdr, placement. */
@@ -191,11 +201,13 @@ export const realSources: DownSources = {
   shellBack: (session, pane) => paneShellBack(pane, aim(session)),
   foregroundCwd: (session, pane) => paneForegroundCwd(pane, aim(session)),
   processes: (session, pane) => paneProcesses(pane, aim(session)),
+  workspacePanes: (session, workspace) => workspacePanes(workspace, aim(session)),
   now: () => new Date(),
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   home: homedir(),
   launch: realLaunch,
   codexEndpoint: { stop: (input) => stopSeatCodexEndpoint(input) },
+  inboxRemove: removeInbox,
 };
 
 /** How long `--wait` gives a working seat, in seconds. */
@@ -258,7 +270,10 @@ export function stateOf(status: string, screen: Screen, cli?: string): DownSeat[
   // A screen showing a running turn is working even when herdr's status has not caught up:
   // `--wait` waits for it, and it is never typed into.
   if (screen.kind === 'working') return 'working';
-  if (screen.kind === 'unknown') return 'unknown';
+  // A pane scrolled back over its transcript hides the composer this typing goes into, so it is
+  // as unreadable to a key as an unrecognised screen: a scrolled pane is never typed into from
+  // here, and no status word makes it free.
+  if (screen.kind === 'unknown' || screen.kind === 'scroll back') return 'unknown';
   // A profile herdr cannot report faithfully is read from its screen: the profile's own module
   // read the seat as idle, which is its prompt. Every other screen kind above keeps its word —
   // a working turn or a dialog is never made less cautious by this reading.
@@ -291,8 +306,13 @@ export type ExitIo = {
  * that reads back as exactly the typed text, the same comparison delivery makes. When the
  * read-back does not confirm the text, nothing is sent on a screen that is not the CLI's own
  * composer; a box that holds exactly the typed text is cleared with the profile's one key, and
- * a profile without one leaves the text for the owner, saying so. The caller check that
- * precedes every key precedes each of these too.
+ * a profile without one leaves the text for the owner, saying so. A box whose first row is this
+ * run's text is cleared on every profile — an Enter the pane refused, or one that went out and
+ * never ran, leaves exactly that — and, where the profile declares the completion row, even
+ * when a row under it is not the one the profile names — a row Muse moved between versions —
+ * so a failed exit leaves the box as it was found; the typed-newline frame gets one backspace
+ * first, because the clearing key alone does nothing on it (measured on Muse Code 1.4.14). The
+ * caller check that precedes every key precedes each of these too.
  */
 export async function typeExit(io: ExitIo, cli: string, text: string): Promise<ExitTyping> {
   const names = profileFor(cli)?.processNames ?? [];
@@ -315,6 +335,11 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
   // never reaches a key.
   const kindOf = () => readScreen(cli, io.screen(), screenOpts()).kind;
   const holds = () => boxHoldsText(cli, text, io.screen(), screenOpts());
+  // A CLI whose composer draws a completion row for the exit text: the Enter waits for the row
+  // to settle, an Enter that lands early is retried on the typed-newline frame it leaves, and an
+  // exit the CLI never runs is cleared. The profile declares the row itself as the composer's
+  // own (`own_rows`), which is what makes the box read back while the row is drawn.
+  const completion = profileFor(cli)?.exitCompletion ?? false;
   // The reading that decides a key, waiting out the pane's late drawing — the one wait the exit
   // typing, the watch's nudge and delivery share (settleScreen in launch/deliver.ts).
   const settle = (undrawn: Screen['kind']): Promise<Screen['kind']> => settleScreen(undrawn, kindOf, io);
@@ -322,6 +347,59 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
     const other = boxHoldsOther(cli, text, io.screen(), screenOpts());
     if (other === null) return '';
     return ` (first row that differs: ${other === '' ? 'a blank row' : other})`;
+  };
+  // The reading the clearing keys use: this run's text is the box's first row, whatever rows the
+  // CLI drew under it. `holds` is the Enter's question — every row is the text's own; the clearing
+  // only needs the text this run typed to still be there, so a completion row the profile does
+  // not name (a row Muse moved between versions) does not leave the box for the owner.
+  const typedInBox = (): boolean => {
+    const box = readBox(cli, io.screen(), screenOpts());
+    return box !== null && box.first === text;
+  };
+  // The text this run typed is cleared with the profile's one key, and the box is left as it was
+  // found. Muse's typed-newline frame is not cleared by ctrl+u (measured: nothing happens there),
+  // so one backspace takes the empty row off first and draws the completion row back, and the key
+  // then clears that frame (both measured on 1.4.14). Every gate is read again before each key;
+  // `null` is "not cleared here", and the caller keeps its own refusal.
+  const clearTyped = async (): Promise<ExitTyping | null> => {
+    const clear = profileFor(cli)?.exitClear ?? null;
+    if (clear === null) return null;
+    if (!live()) return 'no-agent';
+    if (!resting() || kindOf() !== 'unsent' || !typedInBox()) return null;
+    // A row under the text that the run did not type is cleared only on the profile that declares
+    // the completion row: there the row is the pane's own answer to this text. A profile without
+    // one cannot tell such a row from a person's, and keeps its refusal.
+    if (!completion && !holds()) return null;
+    if (completion && boxHoldsTextAndEmptyRow(cli, text, io.screen(), screenOpts())) {
+      if (!io.sendKey('backspace')) {
+        return { left: 'its exit was not confirmed; the newline under the exit text was not removed; the text was left; left running' };
+      }
+      // Both frames read `unsent`, so the kind cannot see the redraw the backspace makes: the wait
+      // is on the box, until the empty row is gone.
+      const deadline = io.now() + DRAW_WAIT_MS;
+      while (boxHoldsTextAndEmptyRow(cli, text, io.screen(), screenOpts())) {
+        if (!live()) return 'no-agent';
+        if (io.now() >= deadline) break;
+        const before = io.now();
+        await io.sleep(100);
+        if (io.now() <= before) break;
+      }
+      if (!live()) return 'no-agent';
+      if (boxHoldsTextAndEmptyRow(cli, text, io.screen(), screenOpts())) {
+        return { left: 'its exit was not confirmed; the newline under the exit text was not removed; the text was left; left running' };
+      }
+      const frame = kindOf();
+      if (frame === 'idle' && resting()) return 'cleared';
+      if (frame !== 'unsent' || !resting() || !typedInBox()) {
+        return { left: `its exit was not confirmed; the text could not be cleared; the screen was reading ${frame}; left running` };
+      }
+    }
+    if (!io.sendKey(clear)) {
+      return { left: `its exit was not confirmed; the clearing key (${clear}) was not delivered; the text was left; left running` };
+    }
+    const after = await settle('unsent');
+    if (after === 'idle' && resting()) return 'cleared';
+    return { left: `its exit was not confirmed; the clearing key (${clear}) left the screen reading ${after}; left running` };
   };
   // The Enter above sends the exit text. A second key is only the profile's `exit_confirm`,
   // and only once the screen reads as that CLI's own exit question. A quote of the choice
@@ -333,16 +411,60 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
       return { left: 'its exit was not confirmed; the exit text was typed and not sent; left running' };
     }
     if (kindOf() !== 'unsent' || !holds()) {
+      // The box is not the exact read-back — a completion row the profile does not name reads as
+      // text the run did not type — so no Enter goes. The text is this run's own all the same,
+      // and is cleared before the refusal.
+      const cleared = await clearTyped();
+      if (cleared !== null) return cleared;
       return { left: 'its exit was not confirmed; the exit text was typed and not sent; left running' };
     }
+    // Wait out the CLI's completion row before the Enter, where the profile declares one: an
+    // Enter pressed on the row too early is drawn as a typed newline instead of running the
+    // command. Every gate is read again after the wait, so the wait is not a window a changed
+    // pane can send into.
+    if (completion) {
+      await io.sleep(EXIT_COMPLETION_SETTLE_MS);
+      if (!live()) return 'no-agent';
+      if (!resting() || kindOf() !== 'unsent' || !holds()) {
+        const cleared = await clearTyped();
+        if (cleared !== null) return cleared;
+        return { left: 'its exit was not confirmed; the exit text was typed and not sent; left running' };
+      }
+    }
     if (!io.pressEnter()) {
+      // The Enter never went out. The text this run typed is still the box's — the gates above
+      // held it exact — so it is cleared with the profile's one key on every profile that has
+      // one, not only those that declare a completion row: a refused Enter is this run's own
+      // refusal, and the box is left as it was found. A profile without a key, or a gate that
+      // no longer holds (clearTyped reads them again), keeps the refusal below.
+      const cleared = await clearTyped();
+      if (cleared !== null) return cleared;
       return { left: 'its exit was not confirmed; the exit text was typed and not sent; left running' };
     }
     const confirm = profileFor(cli)?.exitConfirm ?? null;
     const deadline = io.now() + DRAW_WAIT_MS;
     let confirmed = false;
+    let retried = false;
     for (;;) {
       if (!live()) return true;
+      // The frame an Enter that landed before the completion row had settled leaves: the text
+      // plus one empty row, the row gone. One more Enter on it runs the text (measured 10/10 on
+      // 1.4.14); it goes after the same settle, once, and every gate is read again first.
+      if (completion && !retried && boxHoldsTextAndEmptyRow(cli, text, io.screen(), screenOpts())) {
+        await io.sleep(EXIT_COMPLETION_SETTLE_MS);
+        if (!live()) return 'no-agent';
+        if (resting() && kindOf() === 'unsent' && boxHoldsTextAndEmptyRow(cli, text, io.screen(), screenOpts())) {
+          if (!io.pressEnter()) {
+            // The retry Enter never went out; the typed-newline frame is this run's own and is
+            // cleared off the box.
+            const cleared = await clearTyped();
+            if (cleared !== null) return cleared;
+            return { left: 'its exit was not confirmed; the exit text was typed and not sent; left running' };
+          }
+          retried = true;
+          continue;
+        }
+      }
       if (kindOf() === 'exit question') {
         if (confirm === null) {
           return { left: 'its exit was not confirmed; its profile names no key for the exit question; left running' };
@@ -365,6 +487,19 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
     if (kindOf() === 'exit question') {
       return { left: 'its exit was not confirmed; the exit question stayed open; left running' };
     }
+    // The exit text did not run: it is still the box's first row, so it is this run's own on
+    // every profile — with the completion frame it drew, or a row under it the profile does not
+    // name — and it is cleared with the profile's one key, so the box is left as it was found.
+    // An Enter the pane swallowed leaves exactly this frame, and a stop that times out waiting
+    // for the departure would otherwise strand its own typed text in a still-running seat. A
+    // box whose first row is anything else proved nothing about where the text went, and the
+    // departure wait below stays the answer. Muse's ctrl+u was measured to clear `/exit` and its
+    // completion row to the idle box, with the CLI still running; a key that leaves anything
+    // else is reported, not retried.
+    if (kindOf() === 'unsent' && typedInBox()) {
+      const cleared = await clearTyped();
+      if (cleared !== null) return cleared;
+    }
     return true;
   };
 
@@ -381,7 +516,10 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
     // carries a clearing key, and "not typed" is for a key-less profile the CLI is still on.
     if (!live()) return 'no-agent';
     if (!resting()) return false;
-    if (kindOf() !== 'unsent') return false;
+    // The box is read again on this fresh frame, exactly as before the first reading: a draft
+    // typed while the caller check ran is the user's, and only the exit text this run found is
+    // cleared. The kind alone does not tell a newer draft from the text.
+    if (kindOf() !== 'unsent' || !holds()) return false;
     if (key === null) return false;
     if (!io.sendKey(key)) return false;
     const after = await settle('unsent');
@@ -392,6 +530,11 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
       return { left: `its box already held this exit text; the clearing key (${key}) left the screen reading ${after}; left running` };
     }
   }
+  // The typing lands on a box read again right here: a draft that appeared after the reading
+  // above is the user's, and the exit text is never typed onto it.
+  if (!live()) return 'no-agent';
+  if (!resting()) return false;
+  if (kindOf() !== 'idle') return false;
   if (!io.typeText(text)) return false;
   if (!live()) return 'no-agent';
   if (!resting()) return false;
@@ -431,6 +574,13 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
       : { left: `its exit was not confirmed; its box was left holding other text${otherRow()}; the owner clears it in its pane` };
   }
   if (!holds()) {
+    // A completion row the profile does not name reads as other text; where the profile declares
+    // the row, this run's text is still the box's first row and is cleared, so the box is left as
+    // it was found. Every other box keeps the line that says what it holds.
+    if (completion && typedInBox()) {
+      const cleared = await clearTyped();
+      if (cleared !== null) return cleared;
+    }
     return { left: `its exit was not confirmed; its box holds text that is not only the exit text${otherRow()}; nothing more was sent; left running` };
   }
   if (!io.sendKey(key)) {
@@ -582,18 +732,18 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     }
     seatApproved = seat.kind === 'admitted';
   }
-  if (clientDown === null && !seatApproved && !isOwner(walkCaller(io))) {
-    seatApproved = ownerSeatRuleAdmits('team-down', io.cwd, dry, seatSources);
-  }
   // No create-grant admits a run with no terminal: the record matches the caller's own registry
   // record, and a caller outside herdr has none. This sentence is answered before any file is
   // read, as `init` asks it; the route names who may run it, so the sentence does not send every
   // reader to the owner. An owner-seat answer has already admitted this run.
   const detached = clientDown !== null || seatApproved ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) {
-    refuse(io, json, 'down', { id: 'down.detached', message: detached, repair: null });
-    // exit: down.detached
-    return 1;
+    seatApproved = ownerSeatRuleAdmits('team-down', io.cwd, dry, io, seatSources);
+    if (!seatApproved) {
+      refuse(io, json, 'down', { id: 'down.detached', message: detached, repair: null });
+      // exit: down.detached
+      return 1;
+    }
   }
   // Dev mode is resolved from the run's file below, once its chain is known.
   const refusals: DownRefusal[] = [];
@@ -803,7 +953,12 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // whole team, exactly as the owner's own `down` does: no seat of it is the caller.
   // A client's own down grant is the same kind of second door, and the verification above already
   // judged it whole: it admits whatever the caller is, for the grant's folder alone.
-  const createGranted = clientDown !== null || (!branching() && rule.kind !== 'ok'
+  // An owner-seat approval for this run, or a signed always rule asked only where the ordinary
+  // rule refused, admits it the way a create-grant does.
+  if (clientDown === null && !seatApproved && !branching() && rule.kind !== 'ok') {
+    seatApproved = ownerSeatRuleAdmits('team-down', root, dry, io, seatSources);
+  }
+  const createGranted = clientDown !== null || seatApproved || (!branching() && rule.kind !== 'ok'
     && readEntityCreateGrants(sources.home ?? homedir()).length > 0
     && entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: io.cwd }));
 
@@ -993,6 +1148,8 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       refusal: 'only the owner abandons a team, from a terminal outside herdr',
       ...(sources.home !== undefined ? { home: sources.home } : {}),
       now: sources.now(),
+      // Ruling D5: the placed operator may abandon, under the lead-gates policy.
+      admitsOperator: true,
     });
     if (lift === null || !lift.lifted) {
       refusals.push({
@@ -1346,7 +1503,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   if ('held' in runLock) {
     refuse(io, json, 'down', {
       id: 'down.run-lock',
-      message: runLockText(runLock.held, session, dir),
+      message: runLockText(runLock.held, session, dir, runLock.startedAt),
       repair: null,
     });
     // exit: down.run-lock
@@ -1503,6 +1660,13 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
         // The seat's own hook reading goes with its record: a `working` left by a turn the stop
         // interrupted must not answer for a seat that is no longer running.
         resetCliHookState(dir, session, [name]);
+        // The seat's own user-level inbox entry goes with the seat. Only the name the launch
+        // registered is removed; every other entry in the CLI's shared store is left as it is.
+        const cli = seats.find((seat) => seat.name === name)?.cli;
+        const removal = cli === undefined ? null : sources.inboxRemove?.({ cli, seat: name, session }) ?? null;
+        if (removal !== null && !removal.ok) {
+          io.stderr(`team down: ${name}: its team inbox entry was not removed: ${removal.reason}\n`);
+        }
         if (pane) forgetLaunchedPane(sources.home ?? homedir(), pane, session);
         // The registry: the seat's agent ends with its pane. A temporary seat is gone for good.
         if (sources.home !== undefined) {

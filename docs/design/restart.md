@@ -177,6 +177,7 @@ words, so the terminal never shows a fresh start that was meant to be a resume:
   (<why>)` when the record changed between the caller's read and the launch, so the id the caller
   saw is no longer the one the records bind.
 - `without passing the old transcript; abandoned by the caller` under `--abandon`.
+- `without passing the old transcript; started fresh by the caller` under `--fresh`.
 
 If graceful exit on a `free` seat fails to return the pane to its shell or close the workspace, `team restart` aborts (`restart.busy`, exit 1) and never launches a second copy beside the still-open pane.
 

@@ -138,15 +138,19 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
       expect(existsSync(machine)).toBe(true);
       expect(existsSync(join(root, '.agents', 'bus.sock'))).toBe(true);
       expect(existsSync(sendSocketPath('acme', root, home))).toBe(true);
-      expect(started.daemon.roots).toEqual([
-        { root, team: 'acme', send: 'serving', bus: 'serving', why: null },
-      ]);
+      // The row also carries the bus's first-pass progress, whose exact instant depends on when
+      // the background pass settled; the hosting facts are what this scene pins.
+      expect(started.daemon.roots).toHaveLength(1);
+      expect(started.daemon.roots[0]).toMatchObject({ root, team: 'acme', send: 'serving', bus: 'serving', why: null });
+      expect(started.daemon.roots[0]?.firstPass).toBeDefined();
 
       const health = await daemonHealth(home);
       expect(health.state).toBe('running');
       expect(health.startedBy).toBe('service-manager');
       expect(health.features).toEqual({ broker: 'absent' });
-      expect(health.roots).toEqual([{ root, team: 'acme', send: 'serving', bus: 'serving', why: null }]);
+      expect(health.roots).toHaveLength(1);
+      expect(health.roots[0]).toMatchObject({ root, team: 'acme', send: 'serving', bus: 'serving', why: null });
+      expect(health.roots[0]?.firstPass).toBeDefined();
 
       const status = testIo(home, owner);
       expect(await runDaemon(['status'], status, sourcesOf(home))).toBe(0);
@@ -659,6 +663,212 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
       await started.daemon.close();
     }
   });
+
+  test('the roots loop asks for a background first pass and records the pass once it settles', async () => {
+    const { root, home } = scratch();
+    const inputs: StartBusInput[] = [];
+    const initialBusStart = async (input: StartBusInput): Promise<StartBusResult> => {
+      inputs.push(input);
+      return startBus(input);
+    };
+    const started = await startMachineDaemon({
+      home,
+      roots: [root],
+      startedBy: 'manual',
+      version: '0.5.3-daemon-test',
+      heartbeatMs: 25,
+      initialBusStart,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      // The roots loop never waits for the pass: it asks for it in the background.
+      expect(inputs).toHaveLength(1);
+      expect(inputs[0]?.initialReconcile).toBe('background');
+      // The empty store's pass settles at once; the record then carries its instant, and both
+      // status surfaces print it, never claiming caught up without a time.
+      const done = await waitForValue(async () => {
+        const entry = (await daemonHealth(home)).roots[0];
+        return entry?.firstPass !== undefined && !entry.firstPass.running ? entry.firstPass : null;
+      }, 10_000);
+      expect(typeof done.doneAt).toBe('string');
+      const status = testIo(home, owner);
+      expect(await runDaemon(['status'], status, sourcesOf(home))).toBe(0);
+      expect(status.out).toContain(`first pass done at ${done.doneAt} for ${root}`);
+    } finally {
+      await started.daemon.close();
+    }
+  });
+
+  test('a slow background pass on root 1 never holds root 2 back, never says done early, and a revive uses the awaited start or clears firstPass on busy', async () => {
+    const { base, root, home } = scratch();
+    const second = join(base, 'repo-two');
+    mkdirSync(join(second, '.agents'), { recursive: true });
+    execFileSync('git', ['init', '-q'], { cwd: second });
+    writeFileSync(
+      join(second, '.agents', 'team.yaml'),
+      TEAM.replace('project: acme', 'project: beta').replace('session: acme', 'session: beta'),
+    );
+
+    let root1Running = true;
+    let root1Scanned = 1_234;
+    const initialInputs: StartBusInput[] = [];
+    const reviveInputs: StartBusInput[] = [];
+    let reviveMode: 'real' | 'busy' = 'real';
+
+    const initialBusStart = async (input: StartBusInput): Promise<StartBusResult> => {
+      initialInputs.push(input);
+      const started = await startBus(input);
+      if (started.kind !== 'serving' || input.root !== root) return started;
+      return {
+        ...started,
+        handle: {
+          ...started.handle,
+          firstPass: () =>
+            root1Running
+              ? { running: true, scanned: root1Scanned, doneAt: null }
+              : { running: false, scanned: root1Scanned, doneAt: '2026-11-03T19:45:00.000Z', errors: false },
+        },
+      };
+    };
+
+    const busStart = async (input: StartBusInput): Promise<StartBusResult> => {
+      reviveInputs.push(input);
+      if (reviveMode === 'busy') return { kind: 'busy' };
+      return startBus(input);
+    };
+
+    const started = await startMachineDaemon({
+      home,
+      roots: [root, second],
+      startedBy: 'manual',
+      version: '0.5.3-daemon-test',
+      heartbeatMs: 20,
+      initialBusStart,
+      busStart,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      expect(initialInputs.map((i) => ({ root: i.root, mode: i.initialReconcile }))).toEqual([
+        { root, mode: 'background' },
+        { root: second, mode: 'background' },
+      ]);
+
+      // Wait until root 2's empty store settles while root 1 is still running its first pass.
+      const snapshot = await waitForValue(async () => {
+        const h = await daemonHealth(home);
+        const r1 = h.roots.find((entry) => entry.root === root);
+        const r2 = h.roots.find((entry) => entry.root === second);
+        return r1?.firstPass?.running === true && r2?.firstPass?.running === false ? { r1, r2 } : null;
+      }, 5_000);
+      expect(snapshot.r1.firstPass).toEqual({ running: true, scanned: 1_234, doneAt: null });
+      expect(snapshot.r2.firstPass?.running).toBe(false);
+
+      // `team daemon status` reports root 1 as running (with grouped count) and root 2 as done, never claiming done early for root 1.
+      const statusRunning = testIo(home, owner);
+      expect(await runDaemon(['status'], statusRunning, sourcesOf(home))).toBe(0);
+      expect(statusRunning.out).toContain(`first pass running for ${root} (1,234 files scanned)`);
+      if (snapshot.r2.firstPass && !snapshot.r2.firstPass.running) {
+        expect(statusRunning.out).toContain(`first pass done at ${snapshot.r2.firstPass.doneAt} for ${second}`);
+      }
+      expect(statusRunning.out).not.toMatch(new RegExp(`first pass done at [^;\\n]+ for ${root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:;|\\n|$)`));
+
+      // Unlinking root 1's bus socket triggers a revive through `busStart`, which omits `initialReconcile` (keeping the awaited start).
+      unlinkSync(join(root, '.agents', 'bus.sock'));
+      const revivedRoot = await waitForValue(async () => {
+        if (reviveInputs.length === 0) return null;
+        const h = await daemonHealth(home);
+        const r1 = h.roots.find((entry) => entry.root === root);
+        return r1?.bus === 'serving' && r1.firstPass?.running === false ? r1 : null;
+      }, 5_000);
+      expect(reviveInputs[0]?.initialReconcile).toBeUndefined();
+      expect(revivedRoot.firstPass?.running).toBe(false);
+      if (revivedRoot.firstPass && !revivedRoot.firstPass.running) {
+        expect(typeof revivedRoot.firstPass.doneAt).toBe('string');
+      }
+
+      // If a later revive finds another process serving the bus (`busy`), `firstPass` is cleared.
+      reviveMode = 'busy';
+      unlinkSync(join(root, '.agents', 'bus.sock'));
+      await waitFor(async () => {
+        const h = await daemonHealth(home);
+        const r1 = h.roots.find((entry) => entry.root === root);
+        return reviveInputs.length >= 2 && r1?.bus === 'serving' && r1.firstPass === undefined;
+      }, 5_000);
+    } finally {
+      await started.daemon.close();
+    }
+  });
+
+  test('a bus row that failed follows a live socket back to serving, and a send recovery never clears the bus row\'s reason', async () => {
+    const { base, root, home } = scratch();
+    const absent = join(base, 'absent-send.sock');
+    const liveSend = join(base, 'live-send.sock');
+    // Answer the probe's ping as a live send daemon does: a socket that only half-closes leaves
+    // the probe waiting out its timeout, and a later server close waits on that connection.
+    const sendListener = createServer((socket) => {
+      socket.on('data', () => socket.write(`${JSON.stringify({ ok: true, pong: true })}\n`));
+    });
+    await new Promise<void>((done) => sendListener.listen(liveSend, () => done()));
+    let sendStarts = 0;
+    const sendStart = async (): Promise<{ kind: 'already-running'; socketPath: string; pid: number | null }> => {
+      sendStarts += 1;
+      // The start at daemon start names a socket nothing answers, so the send row stops
+      // answering and is restarted; the restart names a socket that does.
+      return sendStarts === 1
+        ? { kind: 'already-running', socketPath: absent, pid: null }
+        : { kind: 'already-running', socketPath: liveSend, pid: process.pid };
+    };
+    const started = await startMachineDaemon({
+      home,
+      roots: [root],
+      startedBy: 'manual',
+      version: '0.5.3-daemon-test',
+      heartbeatMs: 20,
+      sendStart,
+      // The start loses to the lock a standalone bus holds while its listener already answers.
+      initialBusStart: async (): Promise<StartBusResult> => ({ kind: 'locked' }),
+      busStart: async (): Promise<StartBusResult> => ({ kind: 'locked' }),
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    let busListener: ReturnType<typeof createServer> | null = null;
+    try {
+      // The bus row carries its own reason, and the send row's failure and recovery must not
+      // touch it: only the bus's own answer clears it.
+      const failed = await waitForValue(async () => {
+        const entry = (await daemonHealth(home)).roots.find((one) => one.root === root);
+        return entry?.bus === 'failed' ? entry : null;
+      }, 5_000);
+      expect(failed.busWhy).toBe('another bus server is starting');
+
+      await waitForValue(async () => (sendStarts >= 2 ? true : null), 5_000);
+      const afterSend = await waitForValue(async () => {
+        const entry = (await daemonHealth(home)).roots.find((one) => one.root === root);
+        return entry?.send === 'already-running' && entry.sendWhy === null ? entry : null;
+      }, 5_000);
+      expect(afterSend.bus).toBe('failed');
+      expect(afterSend.busWhy).toBe('another bus server is starting');
+
+      // A live socket is a serving bus whatever the row said: another process's start may have
+      // been holding this very lock while it answered. The row follows the socket and its reason
+      // clears with it, with no revive of this daemon's own.
+      busListener = createServer((socket) => socket.end());
+      await new Promise<void>((done) => busListener!.listen(join(root, '.agents', 'bus.sock'), () => done()));
+      const served = await waitForValue(async () => {
+        const entry = (await daemonHealth(home)).roots.find((one) => one.root === root);
+        return entry?.bus === 'serving' && entry.busFailedAt === null ? entry : null;
+      }, 5_000);
+      expect(served.busWhy === undefined || served.busWhy === null).toBe(true);
+    } finally {
+      // The daemon closes first: while it beats, it keeps probing both sockets, and a listener
+      // closed under a probing daemon waits for a connection the probe has not let go.
+      await started.daemon.close();
+      if (busListener !== null) await new Promise<void>((done) => busListener!.close(() => done()));
+      await new Promise<void>((done) => sendListener.close(() => done()));
+    }
+  }, 20_000);
 });
 
 describe('the service adapter writes and registers one user unit, neutrally', () => {
@@ -896,6 +1106,7 @@ const ANSWERING: DaemonHealth = {
   version: 'test',
   gitHead: null,
   heartbeatAt: null,
+  heartbeatSeconds: null,
   features: null,
   stuck: [],
   roots: [],
@@ -1364,6 +1575,44 @@ describe('team daemon status, install, uninstall and run', () => {
     expect(io.out).toContain(`1 endpoint failed (bus for ${root}: another bus server holds the project socket)`);
   });
 
+  test('run names each failed endpoint with its own reason, never the other row\'s', async () => {
+    const { root, home } = scratch();
+    const io = testIo(root, owner);
+    const code = await runDaemon(['run'], io, sourcesOf(home, {
+      start: async () => ({
+        kind: 'serving',
+        daemon: {
+          socketPath: join(home, 'daemon.sock'),
+          roots: [
+            {
+              root,
+              team: 'acme',
+              send: 'failed',
+              bus: 'failed',
+              why: 'the checkout could not be read',
+              sendWhy: 'the send socket could not be bound',
+              busWhy: 'another bus server is starting',
+            },
+          ],
+          routes: [],
+          health: () => snapshot,
+          close: async () => {},
+        },
+      }),
+      stop: (end) => {
+        setTimeout(end, 0);
+        return () => {};
+      },
+    }));
+    expect(code).toBe(0);
+    expect(io.out).toContain(
+      `2 endpoints failed (send for ${root}: the send socket could not be bound, bus for ${root}: another bus server is starting)`,
+    );
+    // The row-level reason is a fallback for records written before the split, never an
+    // endpoint's reading while its own reason is recorded.
+    expect(io.out).not.toContain('the checkout could not be read');
+  });
+
   test('run reports an existing daemon and a held lock without starting a second one', async () => {
     const { root, home } = scratch();
     const existing = testIo(root, owner);
@@ -1415,7 +1664,11 @@ describe('team daemon status, install, uninstall and run', () => {
     const health = await daemonHealth(home);
     expect(health.state).toBe('running');
     expect(health.startedBy).toBe('service-manager');
-    expect(health.roots).toEqual([{ root, team: 'acme', send: 'serving', bus: 'serving', why: null }]);
+    expect(health.roots).toHaveLength(1);
+    expect(health.roots[0]).toMatchObject({ root, team: 'acme', send: 'serving', bus: 'serving', why: null });
+    expect(health.roots[0]?.firstPass).toBeDefined();
+    // The row carries the chores report beside the hosting facts; its mode is the release default.
+    expect(health.roots[0]?.chores?.mode).toBe('per-root');
 
     release?.();
     expect(await running).toBe(0);

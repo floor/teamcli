@@ -59,6 +59,12 @@ function place(): Place {
   mkdirSync(join(home, '.config', 'team', 'lobby'), { recursive: true, mode: 0o700 });
   execFileSync('git', ['init', '-q'], { cwd: root });
   writeFileSync(join(root, '.agents', 'team.yaml'), TEAM);
+  // The state `team up` leaves: each server proves its caller stands on its seat's recorded pane.
+  const seats = Object.fromEntries(['lead', 'worker'].map((name) => [name, { stage: 'ready', pane: `pane-${name}` }]));
+  writeFileSync(
+    join(root, '.agents', 'team.state.json'),
+    `${JSON.stringify({ format: 1, sessions: { [SESSION]: { seats, worktrees: {} } } })}\n`,
+  );
   // A server started with no --file resolves its team from the registry record holding the seat.
   upsertTeam(home, teamIdOf(root), {
     project: 'acme',
@@ -86,6 +92,7 @@ async function bus(at: Place): Promise<BusHandle> {
       await started.handle.close();
     },
     reconcileNow: () => started.handle.reconcileNow(),
+    firstPass: () => started.handle.firstPass(),
   };
   cleanups.push(() => handle.close());
   return handle;
@@ -104,7 +111,7 @@ function server(at: Place, seat: string): Serving {
   const lines = (async function* () {
     while (!ended) await new Promise<void>((resolve) => { wake = resolve; });
   })();
-  const running = runMcpServe({ seat, session: SESSION }, testIo(at.root), {
+  const running = runMcpServe({ seat, session: SESSION }, testIo(at.root, { kind: 'seat', name: seat, pane: `pane-${seat}`, session: SESSION }), {
     lines,
     write: (line) => {
       const one = JSON.parse(line) as Record<string, any>;
@@ -166,7 +173,7 @@ async function deliver(at: Place, from: string, to: string, body: string, extra:
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const t0 = performance.now();
   writeFileSync(join(dir, id), `${JSON.stringify(signRecord(payload, at.home), null, 2)}\n`, { mode: 0o600 });
-  if (announce) await announceArrival(payload, () => new Date());
+  if (announce) await announceArrival(payload);
   return { id, t0 };
 }
 

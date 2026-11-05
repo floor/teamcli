@@ -74,6 +74,7 @@ const REACHED = [
   'bus',
   'delegate',
   'drops',
+  'fallback prune',
   'feed',
   'grant',
   'hold',
@@ -95,6 +96,7 @@ const REACHED = [
   'revoke grant',
   'route',
   'tempo',
+  'trace',
   'unlock',
 ];
 

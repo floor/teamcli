@@ -10,13 +10,16 @@
 // project's own rules. Those rules are decided by the project record and by the `leads`
 // capability a seat holds, never by a role's name, which is each team's own word in any language.
 // A pair whose teams share no project keeps the team rules below unchanged: nothing here ever
-// crosses projects. The one cross-team reach is the entity's own leads — a lead writes to a lead
-// of its entity, and the entity's coordinator to every team lead of that entity — read from the
-// two team records' `entity` and the `leads` capability, never from a role's word, and refused
-// across entities. And a record confers no right: registration, a lifecycle, a signing role —
-// none of it admits anything by itself; every verdict is made from the pair's own relationships
-// and capabilities, and a send with a record on each side but no rule for the pair is refused
-// exactly as a pair the registry never knew.
+// crosses projects. The cross-team reaches are the entity's own: its leads write to each other —
+// a lead to a lead of its entity, and the entity's coordinator to every team lead of that entity
+// — and the entity's main orchestrator, the lead of the team whose project is the entity itself,
+// writes to any seat of the entity's teams. Both are read from the team records' `entity` and the
+// `leads` capability, never from a role's word, and both are refused across entities. Each reads
+// the asker's own `seats_cross_teams` chain with its own default: on for both entity reaches,
+// off for the project's crossing seats. And a record confers no right: registration, a lifecycle,
+// a signing role — none of it admits anything by itself; every verdict is made from the pair's
+// own relationships and capabilities, and a send with a record on each side but no rule for the
+// pair is refused exactly as a pair the registry never knew.
 
 import type { Agent } from '../registry/agents.ts';
 import { declarationsOf, type SettingLevel, type SettingSpec } from '../settings/inherit.ts';
@@ -55,6 +58,10 @@ export type AdmitProject = { lead: string | null; teams: string[] };
 /** Every registered project, by project id — `readProjects`' own shape. */
 export type AdmitProjects = Record<string, AdmitProject>;
 
+/** The two reply contexts a reply command may hand in: the general open-thread reply, and the
+ *  bound answer to the entity's main orchestrator. Nothing else sets either. */
+export type ReplyContext = 'open-thread' | 'main-orchestrator-thread';
+
 /**
  * The project level, in the caller's own hands: the registered projects, and the asker's own
  * chain of `seats_cross_teams` declarations, entity → project → team → seat, as the records
@@ -66,11 +73,13 @@ export type AdmitContext = {
   projects: AdmitProjects;
   crossTeams?: Partial<Record<SettingLevel, boolean | undefined>>;
   /**
-   * Set to `open-thread` by a reply alone, and only after the caller has verified the record it
-   * answers and the thread it sits on: the rule `reply-on-open-thread` then admits the pair when
-   * no other rule does. A send never sets it.
+   * Set by a reply alone, and only after the caller has verified the records it stands on. A
+   * send never sets it. `open-thread` is the record-and-thread check `reply-on-open-thread`
+   * asks; `main-orchestrator-thread` is the narrower one a seat's answer to the entity's main
+   * orchestrator carries — its record, its sender and the opening record of its thread — and the
+   * reach is then asked again here, as a setting and as a chain place.
    */
-  reply?: 'open-thread';
+  reply?: ReplyContext;
 };
 
 export type SendVerdict = { ok: true; rule: string } | { ok: false; why: string };
@@ -130,6 +139,7 @@ export const RULE_SUMMARY = [
   'an orchestrator or operator to a seat of its own team',
   'an operator to another operator of its own team',
   "an assistant seat to its entity's coordinator",
+  "the entity's main orchestrator to any seat of the entity's teams",
   "a seat to its own team's orchestrator",
   'an owner-signed grant naming send',
   DECLARED_SEAT_RULE,
@@ -143,6 +153,16 @@ export const RULE_SUMMARY = [
  * read alike.
  */
 export const REPLY_RULE = 'a reply to the sender of a record on an open thread';
+
+/**
+ * The rule a seat's reply to the entity's main orchestrator is admitted by — the main
+ * orchestrator's reach (OD-20261103-02) in the direction of an answer: the main orchestrator
+ * wrote to the seat on a thread it opened, and the seat answers there, on that thread, and
+ * nowhere else. The caller sets the marker only after it verified the record, its sender and
+ * the thread's opening record; admission asks the chain place and the setting again. It is never
+ * a send's rule, so it is not in `RULE_SUMMARY`.
+ */
+export const MAIN_ORCHESTRATOR_REPLY_RULE = "a seat replying to the entity's main orchestrator on its thread";
 
 /** The project rules, in the order they are asked — ahead of the team rules above — and each
  *  names itself in the verdict as those do. All three are decided by the project record and the
@@ -254,11 +274,47 @@ export function admitSend(
   ) {
     return { ok: true, rule: "an assistant seat to its entity's coordinator" };
   }
+  // The entity's main orchestrator writes to any seat of the entity's teams: the lead of the team
+  // whose project is the entity itself reaches every seat below it, one entity and no further.
+  // The seat is the chain place `onMainCoordinator` reads — the `leads` capability on the head
+  // team, never a role's word — and the reach is a setting: the same `seats_cross_teams` word the
+  // lead pair reads, with its own default on (the owner's OD-20261103-02) and the project as the
+  // only level that may reopen it.
+  const entity = callerTeam?.entity ?? null;
+  if (
+    entity !== null && targetTeam?.entity === entity
+    && onMainCoordinator(caller, entity, teams)
+    && mainOrchestratorReaches(context?.crossTeams ?? {})
+  ) {
+    return { ok: true, rule: "the entity's main orchestrator to any seat of the entity's teams" };
+  }
   // Any seat writes to its own team's orchestrator.
   if (callerTeam !== undefined && targetTeam === callerTeam && seatOf(target) === targetOrchestrator) {
     return { ok: true, rule: "a seat to its own team's orchestrator" };
   }
   if (grant !== undefined) return { ok: true, rule: `an owner-signed grant naming send (${grant.name})` };
+  // Asked before the generic reply rule and instead of it: a seat answering the entity's main
+  // orchestrator on the thread that orchestrator opened. The caller set the marker only after it
+  // verified the answered record, its sender and the thread's opening record; the place and the
+  // reach's setting are asked again here, and the marker is decisive — a marked reply whose
+  // target does not hold the place, or whose reach the asker's chain closed, is refused rather
+  // than handed to the generic rule. The reach is the same `seats_cross_teams` word the send
+  // direction reads, with the same default on and the same project loosening level.
+  if (context?.reply === 'main-orchestrator-thread') {
+    if (!onMainCoordinator(target, entity, teams)) {
+      return {
+        ok: false,
+        why: `${seatAt(caller)} may not reply to ${seatAt(target)}: ${MAIN_ORCHESTRATOR_REPLY_RULE}, and ${seatAt(target)} does not hold the entity's main orchestrator place`,
+      };
+    }
+    if (!mainOrchestratorReaches(context.crossTeams ?? {})) {
+      return {
+        ok: false,
+        why: `${seatAt(caller)} may not reply to ${seatAt(target)}: the entity's main orchestrator reach is closed by the asker's seats_cross_teams chain (${MAIN_ORCHESTRATOR_REPLY_RULE})`,
+      };
+    }
+    return { ok: true, rule: MAIN_ORCHESTRATOR_REPLY_RULE };
+  }
   // Asked last before the declared same-team rule: a reply to a record on an open thread, when
   // every rule above leaves the pair unadmitted. The caller has already verified the record and
   // the thread.
@@ -287,11 +343,13 @@ function declaredInRoster(side: SendSide, team: AdmitTeam): boolean {
   return team.roster.some((entry) => entry.seat === seat);
 }
 
-/** The rules a refusal names, in the order they were asked: every rule above, and the reply rule
- *  only when the context asked it. A send's refusal names exactly the rules a send is judged by. */
+/** The rules a refusal names, in the order they were asked: every rule above, and the one reply
+ *  rule the context asked — the generic open-thread rule, or the bound answer to the entity's
+ *  main orchestrator. A send's refusal names exactly the rules a send is judged by. */
 function summaryFor(context: AdmitContext | undefined): string {
   const summary = context === undefined ? RULE_SUMMARY : `${PROJECT_RULE_SUMMARY}; ${RULE_SUMMARY}`;
-  return context?.reply === undefined ? summary : `${summary}; ${REPLY_RULE}`;
+  if (context?.reply === undefined) return summary;
+  return `${summary}; ${context.reply === 'open-thread' ? REPLY_RULE : MAIN_ORCHESTRATOR_REPLY_RULE}`;
 }
 
 /**
@@ -504,10 +562,11 @@ function leadsMayWrite(
 
 /**
  * The leadership reach at the entity's edge, over the asker's own chain: open unless a level
- * closes it. It is the same `seats_cross_teams` word the project setting reads, with this reach's
- * own default — a lead pair of one entity is what carries work between a team and the team above
- * it, so it stands until the seat's own chain says otherwise. Closing is legal at every level; the
- * project may open it again, as the setting itself allows.
+ * closes it. It is the same `seats_cross_teams` word the project setting and the main
+ * orchestrator's reach read, with this reach's own default — a lead pair of one entity is what
+ * carries work between a team and the team above it, so it stands until the seat's own chain says
+ * otherwise. Closing is legal at every level; the project may open it again, as the setting
+ * itself allows.
  */
 const LEADS_ACROSS_TEAMS: SettingSpec = {
   name: 'seats_cross_teams',
@@ -518,6 +577,24 @@ const LEADS_ACROSS_TEAMS: SettingSpec = {
 
 function leadsAcrossTeams(declared: Partial<Record<SettingLevel, boolean | undefined>>): boolean {
   return resolveSetting(LEADS_ACROSS_TEAMS, declarationsOf(declared)).value;
+}
+
+/**
+ * The main orchestrator's reach over the entity's teams: the same `seats_cross_teams` word the
+ * lead pair reads, with this reach's own default — on, the owner's decision that the entity's
+ * main orchestrator reaches any seat of the entity's teams (OD-20261103-02) — and the same
+ * project loosening level. A word at any level of the asker's chain that closes it closes this
+ * reach; only the project may reopen what an entity closed.
+ */
+const MAIN_ORCHESTRATOR_REACH: SettingSpec = {
+  name: 'seats_cross_teams',
+  policy: 'seats-cross-teams',
+  fallback: true,
+  looseningLevels: ['project'],
+};
+
+function mainOrchestratorReaches(declared: Partial<Record<SettingLevel, boolean | undefined>>): boolean {
+  return resolveSetting(MAIN_ORCHESTRATOR_REACH, declarationsOf(declared)).value;
 }
 
 /** The entity's assistant, with the team it sits in: the seat holding the `assistant` capability

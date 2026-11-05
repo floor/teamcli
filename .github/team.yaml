@@ -190,8 +190,10 @@ seats:
     display: DeepSeek V4.1 Flash
     launch: claude-deepseek
 
+  # The registry's `reviewer` is the GLM seat declared below; this Codex reviewer keeps its
+  # identity and signs under its own name, which a seat name must have.
   - role: reviewer
-    name: reviewer
+    name: reviewer-terra
     cli: codex
     vendor: openai
     model: GPT Terra
@@ -392,3 +394,126 @@ seats:
     version: "6.1"
     display: GrokBot 6.1
     launch: grok
+
+  # 2026-11-02: reviewer commits sign as writers; the hosted signature check reads these seats.
+  - role: writer
+    name: writer-glm
+    cli: claude-code
+    vendor: zai
+    model: GLM
+    version: "5.3"
+    display: GLM 5.3
+    launch: claude-glm
+
+  - role: writer
+    name: writer-sol-6-1
+    cli: codex
+    vendor: openai
+    model: GPT Sol
+    version: "6.1"
+    display: GPT Sol 6.1
+    launch: codex
+
+  # 2026-11-03: seats declared today, each signing with its registry display and role.
+  - role: builder
+    name: builder-5
+    cli: claude-code
+    vendor: zai
+    model: GLM
+    version: "5.3"
+    display: GLM 5.3
+    launch: claude-glm
+
+  # The registry's reviewer, under the name the registry gives it; the Codex reviewer above
+  # was moved to its own name so this one can be exact.
+  - role: reviewer
+    name: reviewer
+    cli: claude-code
+    vendor: zai
+    model: GLM
+    version: "5.3"
+    display: GLM 5.3
+    launch: claude-glm
+
+  - role: builder
+    name: builder-7
+    cli: cursor
+    vendor: xai
+    model: Grok
+    version: "4.7"
+    display: Grok 4.7 via Cursor
+    launch: cursor-agent
+
+  - role: tester
+    name: tester-3
+    cli: antigravity
+    vendor: google
+    model: Gemini Argon
+    version: "4"
+    display: Gemini 4 Argon
+    launch: agy
+
+  # 2026-11-04: seats repointed today, each signing with its registry display and role.
+  - role: tester
+    name: tester-2
+    cli: cursor
+    vendor: xai
+    model: Grok
+    version: "4.7"
+    display: Grok 4.7 via Cursor
+    launch: cursor-agent
+
+  - role: reviewer
+    name: grok-reviewer
+    cli: cursor
+    vendor: xai
+    model: Grok
+    version: "4.7"
+    display: Grok 4.7 via Cursor
+    launch: cursor-agent
+
+  - role: reviewer
+    name: reviewer-argon
+    cli: antigravity
+    vendor: google
+    model: Gemini Argon
+    version: "4"
+    display: Gemini 4 Argon
+    launch: agy
+
+  - role: operator
+    name: operator-1
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek Flash
+    version: "V4.1"
+    display: DeepSeek V4.1 Flash
+    launch: claude-deepseek
+
+  # 2026-11-04: three more seats repointed today, each signing with its registry display and role.
+  - role: tester
+    name: tester-1
+    cli: jules
+    vendor: google
+    model: Jules
+    version: "0.1.42"
+    display: Jules 0.1.42
+    launch: jules
+
+  - role: documentarist
+    name: documentarist-grok
+    cli: cursor
+    vendor: xai
+    model: Grok
+    version: "4.7"
+    display: Grok 4.7 via Cursor
+    launch: cursor-agent
+
+  - role: archivist
+    name: archivist-argon
+    cli: antigravity
+    vendor: google
+    model: Gemini Argon
+    version: "4"
+    display: Gemini 4 Argon
+    launch: agy

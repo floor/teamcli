@@ -21,9 +21,64 @@ unattended:
   - --dangerously-skip-permissions
 rules:
   launch_prompt: --prompt-interactive
-# The delivery class a run measured: no MCP inbox is registered for this CLI and it has no event
-# adapter, so an idle seat cannot be woken; a message waits in its bus inbox.
-delivery: none
+# The trust dialog is pre-answered for the seat's own launch folder. A run on 1.4.12 measured,
+# in a fresh never-answered folder, that `--dangerously-skip-permissions` alone still draws
+# "Do you trust the contents of this project?", that `agy --help` has no trust flag, and that
+# `--settings '{"trustedWorkspaces":["<absolute path>"]}'` opens straight at the banner and
+# composer: no dialog. The value is one inline JSON object, session-only and never saved
+# (`--help` says "Settings for this session only, never saved"), and its validation is strict:
+# an array of absolute paths is accepted; `true` and an object map are refused. `{cwd}` is the
+# seat's absolute launch folder, filled by the launch.
+settings:
+  option: --settings
+  value: '{"trustedWorkspaces":["{cwd}"]}'
+# The inbox registers in the CLI's own user-level store (under the seat's HOME, which every team
+# on the machine shares), so the entry is named per seat — `{inbox}` is
+# team-inbox-<session>-<seat>-<hash>, the hash of the exact pair keeping two pairs that fold to
+# the same readable part apart — and never replaces another entry. A run on 1.4.12 measured:
+# `agy mcp add <name> ...` adds or updates exactly that entry and keeps every other one;
+# `agy mcp remove <name>` removes exactly that one and keeps the rest (the owner's
+# `floor-committee` entry stayed); removing a name that is not there exits 1 with
+# `Error: MCP server "<name>" not found`. The add's flags go before the name; arguments after
+# the command pass through unparsed, including `--seat`, `--session`, `--file` and `--epoch`.
+mcp_inbox:
+  add:
+    - mcp
+    - add
+    - '{inbox}'
+    - '{command}'
+    - '{entry}'
+    - mcp
+    - serve
+    - --seat
+    - '{seat}'
+    - --session
+    - '{session}'
+    - '{file}'
+    - '{epoch}'
+  remove:
+    - mcp
+    - remove
+    - '{inbox}'
+# The class the launch installs: the inbox above is read when the model takes a turn, so an idle
+# seat is pull-only (the class grok, cursor and gemini also declare).
+delivery: pull-on-turn
+# The typed wake, granted 2026-11-02 on the 1.4.12 frames in test/fixtures/antigravity/1.4.12/:
+# a send may type one trigger line into a composer two reads showed as the empty idle prompt,
+# presses Enter only while the box still holds exactly that line, and calls itself delivered only
+# when the `working` screen (the braille spinner row, `⣾  Reading file...` or `Generating...`)
+# appears. The screens are captured whole, including the `Conversation compacted` transcript
+# under the same box. The box-holding frames are refusals: a draft the owner left, and the
+# `/exit` completion frame, whose box holds `/exit` while the completion row sits below the
+# closing rule. Nothing else is typed, and a wake that cannot deliver leaves the message in the
+# bus inbox. See src/send/typed-wake.ts.
+typed_wake: screen
+# The words the wake appends so the woken turn goes straight to the seat's fastest read path: the
+# inbox registered above. `inbox_check` is the one direct call — it lists the waiting messages
+# with their ids — and `inbox_read`, whose argument is the id inbox_check returned
+# (src/mcp/serve.ts), reads one and marks it read. The typed line never carries the message id,
+# so naming inbox_read alone would earn a refused call.
+read_hint: 'Read it with: call inbox_check now.'
 login:
   check:
     - models
@@ -287,5 +342,9 @@ screen:
       - 'Gemini\s+[0-9]'
       - 'esc to cancel'
       - '>\s*/exit\s+Exit'
+    # The empty box draws one of these hint rows. The same words with more text stay
+    # text, and so does a draft that only starts with `/tasks`.
     placeholders:
       - equals: ''
+      - equals: '/tasks shows your open tasks'
+      - equals: '/tasks shows workflows, subagents and terminals in one place'

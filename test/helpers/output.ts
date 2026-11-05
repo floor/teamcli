@@ -36,6 +36,15 @@ export function assertCleanHumanOutput(text: string, opts?: { home?: string }): 
   }
 }
 
+/** The ` (id <uuid>)` tail a `team send` closing line now carries: the step events are filed
+ *  under that id, so the sender can quote the line and run `team trace <id>`. Assertions on the
+ *  wording alone strip it; `test/send-steps.test.ts` asserts the tail's own shape. */
+const SEND_ID_TAIL = / \(id [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\)/g;
+
+export function withoutSendId(text: string): string {
+  return text.replace(SEND_ID_TAIL, '');
+}
+
 /**
  * Golden-text assertion helper for command plain output:
  * - verifies trailing newline and no ANSI sequences when `tty` is false

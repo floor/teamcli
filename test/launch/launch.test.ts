@@ -9,6 +9,7 @@ import { launchCommand, parseVersion, shellQuote, versionVerdict } from '../../s
 const rulesInput: RulesInput = {
   orchestrator: 'claude-coordinator-acme',
   rules: ['Run the tests your change touches, not the whole suite.'],
+  seatName: 'implementer-acme',
   signature: {
     commit: 'Agent: Claude Opus 5.5 · implementer',
     pullRequest: '**Agent:** Claude Opus 5.5 · implementer',
@@ -91,6 +92,7 @@ describe('the rules of a seat', () => {
     expect(seatRules(rulesInput)).toEqual([
       'End every commit message and every pull request body with your signature, given below.',
       'Never stop at a question: tell the orchestrator (claude-coordinator-acme) in one line and keep working.',
+      'At the end of every turn, run `team drops --read --seat implementer-acme` and act on what it prints.',
       'Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.',
       'In a protected checkout, never switch the branch, reset or commit.',
       'Run the tests your change touches, not the whole suite.',
@@ -109,10 +111,25 @@ describe('the rules of a seat', () => {
       'If your tools include `inbox_check`, call it at the start and the end of every turn and `inbox_read` for each message it lists, and act on what you read.',
       'Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.',
     ]);
-    // A seat whose CLI carries no measured route is asked for nothing: its rules are the ones
-    // earlier builds wrote, byte for byte.
+    // A seat whose CLI carries no measured route is asked for no inbox tools: its read is the
+    // drops command, and the end-of-turn line below is that seat's alone.
     expect(seatRules(rulesInput)).toEqual(seatRules({ ...rulesInput, inbox: false }));
     expect(seatRules(rulesInput).some((line) => line.includes('inbox_check'))).toBe(false);
+  });
+
+  test('the end-of-turn read is asked of every seat, worded per its read path, naming the seat', () => {
+    // A turn can outlive the wake that started it: a seat without the inbox tools reads its
+    // drops folder itself, and the command names the seat's own name — nothing else in the
+    // rules tells the seat its name.
+    const drops = 'At the end of every turn, run `team drops --read --seat implementer-acme` and act on what it prints.';
+    expect(seatRules(rulesInput)).toContain(drops);
+    expect(seatRules(rulesInput).filter((line) => line.includes('drops --read'))).toHaveLength(1);
+    // A caller that hands no name still gets the line, with the name's place marked.
+    expect(seatRules({ ...rulesInput, seatName: undefined })).toContain(
+      'At the end of every turn, run `team drops --read --seat <seat>` and act on what it prints.',
+    );
+    // The inbox seat's one line already names both ends of a turn: no drops command for it.
+    expect(seatRules({ ...rulesInput, inbox: true }).some((line) => line.includes('drops --read'))).toBe(false);
   });
 
   test('a shared seat gets no worktree rule, and the position is said as the file has it', () => {
@@ -121,13 +138,13 @@ describe('the rules of a seat', () => {
       signature: { ...rulesInput.signature, commitPosition: 'last-line' },
       workspace: { mode: 'shared', protected: [] },
     });
-    expect(rules).toHaveLength(7);
-    expect(rules[5]).toStartWith('Your signature in a commit message, as its last line: ');
+    expect(rules).toHaveLength(8);
+    expect(rules[6]).toStartWith('Your signature in a commit message, as its last line: ');
   });
 
   test('are one text, a rule per line', () => {
     const text = rulesText(rulesInput, 'message');
-    expect(text.split('\n')).toHaveLength(11);
+    expect(text.split('\n')).toHaveLength(12);
     expect(text).toStartWith('Rules for this session, from the team file:\n- End every commit');
   });
 
@@ -208,7 +225,7 @@ describe('up --dry-run', () => {
         '+ herdr --session acme-web agent rename <pane of claude-coordinator-acme> claude-coordinator-acme',
         "+ herdr --session acme-web pane report-metadata <pane of claude-coordinator-acme> --source team --display-agent 'Claude Opus 5.5 default'",
         '+ herdr --session acme-web workspace create --cwd /work/acme-web --label grok-acme --no-focus',
-        "+ herdr --session acme-web pane run <pane of grok-acme> 'AGENT_UNATTENDED=1 grok --always-approve --rules Rules.'",
+        "+ herdr --session acme-web pane run <pane of grok-acme> 'AGENT_UNATTENDED=1 grok --trust --permission-mode auto --allow '\\''Bash(bun *)'\\'' --allow '\\''Bash(team *)'\\'' --allow '\\''Bash(git *)'\\'' --rules Rules.'",
         '    (reads its drops through its MCP inbox)',
         '  wait until grok-acme shows its idle prompt (90 s at most); anything else is reported, its workspace closed without input, and the seat left out',
         '+ herdr --session acme-web agent rename <pane of grok-acme> grok-acme',

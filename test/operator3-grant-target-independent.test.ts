@@ -14,6 +14,7 @@ import {GRANT_REQUEST_DOMAIN,GRANT_RULE_DOMAIN,grantApprovalsFolder,grantRequest
 import {keyOf,signDomain,type Json} from '../src/store/keys.ts';
 import {writePolicySet} from '../src/policy/sources.ts';
 import {teamIdOf,upsertTeam} from '../src/registry/teams.ts';
+import {updateState} from '../src/state.ts';
 import type {Caller} from '../src/caller.ts';
 import type {Io} from '../src/io.ts';
 
@@ -31,7 +32,8 @@ const spawnGuard=spyOn(child,'spawn').mockImplementation((()=>{external.push('sp
 afterEach(()=>{expect(external.splice(0)).toEqual([]);});
 afterAll(()=>{execGuard.mockRestore();spawnGuard.mockRestore();});
 const owner:Caller={kind:'owner'};
-const seat:Caller={kind:'seat',name:'independent-caller',pane:'synthetic-pane'};
+const lead:Caller={kind:'seat',name:'lead',pane:'synthetic-lead-pane',session:'independent-target'};
+const seat:Caller={kind:'seat',name:'independent-caller',pane:'synthetic-pane',session:'independent-target'};
 const now=new Date();
 function fixture(){
  const base=realpathSync(mkdtempSync(fixturePrefix)),home=join(base,'home'),scope=join(base,'covered');mkdirSync(scope,{recursive:true});
@@ -63,7 +65,10 @@ function teamRule(w:World,root:string){
  return requested.record.request_id;
 }
 function records(w:World,root:string){
- mkdirSync(root,{recursive:true});const team='independent-target';upsertTeam(w.home,teamIdOf(root),{project:team,session:team,entity:'independent-entity',root,roster:[],lifecycle:'running'});
+ mkdirSync(join(root,'.agents'),{recursive:true});const team='independent-target';
+ writeFileSync(join(root,'.agents','team.yaml'),['format: 1',`project: ${team}`,'entity: independent-entity',`session: ${team}`,'coordinator: lead','operator: lead','workspace:','  mode: shared','seats:','  - role: coordinator','    name: lead','    cli: claude-code','    vendor: anthropic','    model: Claude Opus','    version: "5.5"','    launch: claude --model claude-opus-5-5','    leads: true','  - role: implementer','    name: independent-caller','    cli: claude-code','    vendor: anthropic','    model: Claude Opus','    version: "5.5"','    launch: claude --model claude-opus-5-5',''].join('\n'));
+ updateState(join(root,'.agents'),state=>{state.sessions[team]={seats:{lead:{stage:'ready',pane:'synthetic-lead-pane'},'independent-caller':{stage:'ready',pane:'synthetic-pane'}},worktrees:{}};});
+ upsertTeam(w.home,teamIdOf(root),{project:team,session:team,entity:'independent-entity',root,roster:[],lifecycle:'running'});
  const pending='gr_'+randomBytes(12).toString('hex');
  const params:PendingGrantParams={client_id:'independent-client',entity:'independent-entity',public_key:'04'+'ab'.repeat(64),key_id:'key-1',key_dir:join(w.base,'synthetic-keys'),team,seat:null,expires:null,inbox:false,allow_grant:false,grant_scope:null};
  const body={request_id:pending,params,params_sha256:pendingGrantHash(params),created:now.toISOString(),expires_at:new Date(now.getTime()+900000).toISOString(),adapter:'owner-answer',seal:''};
@@ -85,9 +90,10 @@ async function invoke(form:typeof forms[number],w:World,target:ReturnType<typeof
  return{code,err:channel.err(),out:channel.out()};
 }
 for(const form of forms){
- test(`${form}: an unapproved seat changes no record bytes`,async()=>{const w=fixture(),target=records(w,join(w.scope,'target')),before=snapshot(w.home);const result=await invoke(form,w,target,w.scope,seat);expect(result.code,result.err).toBe(1);expect(snapshot(w.home)).toEqual(before);});
- test(`${form}: consent follows the target even when the caller is outside its scope`,async()=>{const w=fixture();signedRevokeConsent(w);const target=records(w,join(w.scope,'target'));const elsewhere=join(w.base,'unrelated-caller');mkdirSync(elsewhere);const result=await invoke(form,w,target,elsewhere,seat);expect(result.code,result.err).toBe(0);});
- test(`${form}: a caller inside scope cannot change an outside target`,async()=>{const w=fixture();signedRevokeConsent(w);const target=records(w,join(w.base,'outside-target'));const caller=join(w.scope,'caller');mkdirSync(caller);child.execFileSync('git',['init','-q'],{cwd:caller});const before=snapshot(w.home);const result=await invoke(form,w,target,caller,seat);expect(result.code,result.err).toBe(1);expect(snapshot(w.home)).toEqual(before);});
- test(`${form}: tampered standing consent grants no authority`,async()=>{const w=fixture();const rule=signedRevokeConsent(w);writeFileSync(rule,readFileSync(rule,'utf8').replace('fixture-signer','forged-signer'));const target=records(w,join(w.scope,'target')),before=snapshot(w.home);const result=await invoke(form,w,target,w.scope,seat);expect(result.code,result.err).toBe(1);expect(snapshot(w.home)).toEqual(before);});
+ test(`${form}: an unapproved seat changes no record bytes`,async()=>{const w=fixture(),target=records(w,join(w.scope,'target')),before=snapshot(w.home);const result=await invoke(form,w,target,w.scope,lead);expect(result.code,result.err).toBe(1);expect(snapshot(w.home)).toEqual(before);});
+ test(`${form}: a plain seat cannot spend standing consent even at a covered target`,async()=>{const w=fixture();signedRevokeConsent(w);const target=records(w,join(w.scope,'target')),before=snapshot(w.home);const result=await invoke(form,w,target,w.scope,seat);expect(result.code,result.err).toBe(1);expect(snapshot(w.home)).toEqual(before);});
+ test(`${form}: consent follows the target even when the caller is outside its scope`,async()=>{const w=fixture();signedRevokeConsent(w);const target=records(w,join(w.scope,'target'));const elsewhere=join(w.base,'unrelated-caller');mkdirSync(elsewhere);const result=await invoke(form,w,target,elsewhere,lead);expect(result.code,result.err).toBe(0);});
+ test(`${form}: a caller inside scope cannot change an outside target`,async()=>{const w=fixture();signedRevokeConsent(w);const target=records(w,join(w.base,'outside-target'));const caller=join(w.scope,'caller');mkdirSync(caller);child.execFileSync('git',['init','-q'],{cwd:caller});const before=snapshot(w.home);const result=await invoke(form,w,target,caller,lead);expect(result.code,result.err).toBe(1);expect(snapshot(w.home)).toEqual(before);});
+ test(`${form}: tampered standing consent grants no authority`,async()=>{const w=fixture();const rule=signedRevokeConsent(w);writeFileSync(rule,readFileSync(rule,'utf8').replace('fixture-signer','forged-signer'));const target=records(w,join(w.scope,'target')),before=snapshot(w.home);const result=await invoke(form,w,target,w.scope,lead);expect(result.code,result.err).toBe(1);expect(snapshot(w.home)).toEqual(before);});
  test(`${form}: the owner still acts without standing consent`,async()=>{const w=fixture(),target=records(w,join(w.scope,'target'));const result=await invoke(form,w,target,w.scope,owner);expect(result.code,result.err).toBe(0);});
 }

@@ -91,6 +91,7 @@ function health(over: Partial<DaemonHealth>): DaemonHealth {
     version: '0.5.4',
     gitHead: null,
     heartbeatAt: '2026-10-14T09:29:58Z',
+    heartbeatSeconds: null,
     features: null,
     stuck: [],
     roots: [],

@@ -34,6 +34,7 @@ Hidden: no
 Usage:
 
     team ack <id> [--json]
+    team ack --seat <seat> --older-than <dur> [--dry-run] [--json]
 
 ### Who may run it
 
@@ -45,17 +46,20 @@ A run with no terminal is refused: only the owner or a seat of this team runs th
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--older-than` | yes | no | no |
+| `--seat` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
 
 | Name | Optional | Repeatable |
 | --- | --- | --- |
-| `id` | no | no |
+| `id` | yes | no |
 
 ## `add`
 
@@ -314,6 +318,7 @@ Hidden: no
 Usage:
 
     team archive [--out <folder>] [--keep-running] [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>]
+    team archive --seat <seat> --older-than <dur> [--dry-run] [--file <path>]
 
 ### Who may run it
 
@@ -330,7 +335,9 @@ Usage:
 | `--help` | no | no | no |
 | `--keep-running` | no | no | no |
 | `--key` | yes | no | no |
+| `--older-than` | yes | no | no |
 | `--out` | yes | no | no |
+| `--seat` | yes | no | no |
 | `--session` | yes | no | no |
 | `--wait` | no | no | no |
 | `-h` | no | no | yes |
@@ -941,10 +948,34 @@ Usage:
 | --- | --- | --- | --- |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--inherited` | yes | no | yes |
 | `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
+
+None.
+
+### `chores`
+
+Hidden: yes
+
+Usage: none
+
+#### Who may run it
+
+`owner-only` — the hidden child start is the daemon's own act: the daemon starts its chores children through their own program entry, and this verb is the same start with the whole command table loaded, so it runs only from the daemon's one-use token — never from a seat or a pane, and the owner's terminal is the one interactive caller the row admits while the token still decides inside
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
 
 None.
 
@@ -1307,6 +1338,58 @@ Usage:
 | `-h` | no | no | yes |
 
 ### Positionals
+
+None.
+
+## `fallback`
+
+Hidden: no
+
+Usage:
+
+    team fallback prune [--apply] [--json]
+
+### Who may run it
+
+`any-caller` — the listing reads the project's fallback store and the signed retention word and changes nothing, so any caller reads it; --apply retires finished episodes and reclaims stale lock folders, and that write is the owner's, from a terminal outside herdr
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `prune`
+
+Hidden: no
+
+Usage:
+
+    team fallback prune [--apply] [--json]
+
+#### Who may run it
+
+`any-caller` — the only verb: the listing changes nothing and is any caller's, and --apply retires the listed episodes and is the owner's, from a terminal outside herdr
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--apply` | no | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
 
 None.
 
@@ -1705,7 +1788,7 @@ Usage:
 
 ### Who may run it
 
-`any-caller` — status and doctor write nothing and ask for no caller; serve is the launch line's own invocation for a declared seat and asks for none either
+`any-caller` — status and doctor write nothing and ask for no caller; serve is the launch line's own invocation for a declared seat, and its own row says who it admits
 
 ### Flags
 
@@ -1756,7 +1839,7 @@ Usage:
 
 #### Who may run it
 
-`any-caller` — the launch line names its seat and session; the server reads and receipts only that seat's inbox, and asks for no caller
+`seat-only` — the launch line starts it for its own seat: the process it starts must place as the seat --seat names, on the pane the state records for it in the team's own session, and never the owner; the seat's current claim, when there is one, must be the --epoch the server carries
 
 #### Flags
 
@@ -1890,6 +1973,34 @@ Usage:
 | `--mine` | no | no | no |
 | `--release` | no | no | no |
 | `--wait` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+## `order`
+
+Hidden: no
+
+Usage:
+
+    team order [--dry-run] [--session <name>] [--file <path>]
+
+### Who may run it
+
+`owner-or-leads` — the `restart` row per out-of-order seat: reordering the sidebar closes and relaunches seats, one `restart` each
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--file` | yes | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--key` | yes | no | no |
+| `--session` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -2844,7 +2955,7 @@ Hidden: no
 
 Usage:
 
-    team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>] [--json]
+    team restart <seat> [--abandon] [--fresh] [--dry-run] [--session <name>] [--file <path>] [--json]
     team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
 
 ### Who may run it
@@ -2859,6 +2970,7 @@ Usage:
 | `--client` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
+| `--fresh` | no | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
@@ -3625,6 +3737,34 @@ Usage:
 | --- | --- | --- |
 | `word` | no | no |
 
+## `trace`
+
+Hidden: no
+
+Usage:
+
+    team trace <id> [--json]
+
+### Who may run it
+
+`seat-record` — a trace reads the team's own verified event log and changes nothing: any seat with a registry record reads one message's steps, as it reads the Runtime's read surfaces
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `id` | no | no |
+
 ## `unlock`
 
 Hidden: no
@@ -3660,8 +3800,9 @@ Hidden: no
 Usage:
 
     team up [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]
+    team up --all [--dry-run] [--serial] [--no-launch] [--json]
     team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--json]
-    team up --general <grant.json> --key <client-key> [--dry-run] [--serial] [--no-launch] [--json]
+    team up --general <grant.json> --key <client-key> [--all] [--dry-run] [--serial] [--no-launch] [--json]
     team up --request [--reason <text>] [--serial] [--json]
     team up --approval <request-id> [--dry-run] [--serial] [--json]
 
@@ -3673,6 +3814,7 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--all` | no | no | no |
 | `--approval` | yes | no | no |
 | `--client` | yes | no | no |
 | `--dry-run` | no | no | no |
@@ -3715,6 +3857,32 @@ Usage:
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
 | `--tree` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+## `waits`
+
+Hidden: no
+
+Usage:
+
+    team waits [--json]
+
+### Who may run it
+
+`seat-record` — a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -3875,6 +4043,7 @@ Usage:
 
     team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]
     team worktree list [--session <name>] [--file <path>] [--json]
+    team worktree pull <task> --remote-session <id> [--seat <name>] [--session <name>] [--file <path>] [--json]
     team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]
 
 ### Who may run it
@@ -3944,6 +4113,38 @@ Usage:
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
 | `--kind` | yes | no | no |
+| `--seat` | yes | no | no |
+| `--session` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `task` | no | no |
+
+### `pull`
+
+Hidden: no
+
+Usage:
+
+    team worktree pull <task> --remote-session <id> [--seat <name>] [--session <name>] [--file <path>] [--json]
+
+#### Who may run it
+
+`team-change` — the owner, the orchestrator's seat or the operator's seat pulls a remote session's result into a worktree; --session and --file are the owner's
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--file` | yes | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `--remote-session` | yes | no | no |
 | `--seat` | yes | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |

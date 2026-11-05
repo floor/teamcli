@@ -1,4 +1,5 @@
 import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
+import { MCP_INBOX_UNAVAILABLE } from '../src/send/walk-cascade.ts';
 // Every world here declares the native leg first — `delivery_order: [native, mcp-inbox, typed]`,
 // since a word naming native is what puts it in the walk. A sender whose own file declares Claude
 // Code gets the handoff: one pending record, the exact SendMessage target, the body, and the
@@ -26,8 +27,9 @@ import {
 import { updateState } from '../src/state.ts';
 import { expirePendingNative } from '../src/watch/native.ts';
 import type { RetryScene } from '../src/watch/retry.ts';
-import { recordBody, testIo, wrapperPane, type TestIo } from './helpers.ts';
+import { dropNames, recordBody, testIo, wrapperPane, type TestIo } from './helpers.ts';
 import { NOW, dropDir, fake, filed, owner, scripted, world, type Fake, type World } from './send-native-fixtures.ts';
+import { withoutSendId } from './helpers/output.ts';
 
 let cleanup: () => void = () => {};
 
@@ -452,8 +454,8 @@ test('a claude-code seat gets the native handoff: a pending record, the exact ta
     confirm: `team send --confirm ${ID}`,
     message: HANDOFF_BODY,
     delivery: [
+      { leg: 'mcp-inbox', state: 'skipped', reason: MCP_INBOX_UNAVAILABLE },
       { leg: 'native', state: 'attempted' },
-      { leg: 'mcp-inbox', state: 'not-reached' },
       { leg: 'drop', state: 'not-reached' },
     ],
     ids: { sent: ID, reply: null },
@@ -464,7 +466,7 @@ test('a claude-code seat gets the native handoff: a pending record, the exact ta
   expect(host.frames).toEqual([]);
   expect(pane.typed).toEqual([]);
   const drops = join(made.dir, 'send-drops', 'acme', 'lead');
-  expect(readdirSync(drops)).toEqual([ID]);
+  expect(dropNames(drops)).toEqual([ID]);
   expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
   // One pending record, the caller's own, at 0600 — and no history line yet.
   const path = pending(made);
@@ -507,7 +509,7 @@ test('the confirm with the nonce in the fake transcript records delivered and cl
 
   const confirmIo = helperCaller(made.root);
   expect(await runSend(['--confirm', ID], confirmIo, host)).toBe(0);
-  expect(confirmIo.out).toBe('team acme, session "acme"\nlead: delivered (native, 0 ms)\n');
+  expect(withoutSendId(confirmIo.out)).toBe('team acme, session "acme"\nlead: delivered (native, 0 ms)\n');
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok && history.entries).toEqual([
     {
@@ -541,7 +543,7 @@ test('the confirm with the nonce in the fake transcript records delivered and cl
     format: 1,
     dry_run: false,
     status: 'delivered',
-    action_summary: 'lead: delivered (native, 0 ms)',
+    action_summary: `lead: delivered (native, 0 ms) (id ${ID})`,
     project: 'acme',
     session: 'acme',
     seat: 'lead',
@@ -562,7 +564,7 @@ test('confirm without the nonce in the recipient transcript records sent (unconf
 
   const confirmIo = helperCaller(made.root);
   expect(await runSend(['--confirm', ID], confirmIo, host)).toBe(0);
-  expect(confirmIo.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (native, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
+  expect(withoutSendId(confirmIo.out)).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (native, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok && history.entries).toEqual([
     {
@@ -588,7 +590,7 @@ test('confirm without the nonce in the recipient transcript records sent (unconf
     format: 1,
     dry_run: false,
     status: 'sent (unconfirmed)',
-    action_summary: 'lead: sent (unconfirmed) (native, 0 ms); queued; lead reads it at its next turn (pull-only)',
+    action_summary: `lead: sent (unconfirmed) (native, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only) (id ${ID})`,
     project: 'acme',
     session: 'acme',
     seat: 'lead',
@@ -610,7 +612,7 @@ test('a nonce from another handoff in the recipient transcript does not count as
 
   const confirmIo = helperCaller(made.root);
   expect(await runSend(['--confirm', ID], confirmIo, host)).toBe(0);
-  expect(confirmIo.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (native, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
+  expect(withoutSendId(confirmIo.out)).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (native, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok && history.entries).toEqual([
     {
@@ -661,7 +663,7 @@ test('a handoff with no socket falls back to the typed drop and records the skip
   const code = await runSend(['lead', 'hello'], io, host);
 
   expect(code).toBe(0);
-  expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
+  expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
   expect(pane.typed.length).toBe(0);
   expect(readdirSync(dropDir(made.dir, 'lead')).filter((name) => !name.includes('.')).length).toBe(1);
   expect(existsSync(pending(made))).toBe(false);
@@ -675,13 +677,12 @@ test('a handoff with no socket falls back to the typed drop and records the skip
       body: HELPER_BODY,
       id: expect.any(String),
       thread: expect.any(String),
-      outcome: 'sent (unconfirmed)',
+      outcome: 'queued, not woken',
       ms: 0,
       via: 'drop',
       failed: [
         `typed: ${NO_PANE_MESSAGING}`,
         `native: no socket was found for its pane's processes (looked in ${made.sockets})`,
-        'mcp-inbox: no live inbox listener',
       ],
     },
   ]);
@@ -918,7 +919,7 @@ test('expiry after 10m falls through to drop for a human-pane seat ([native, dro
   expect(watchPane.enters).toBe(0);
 
   const drops = dropDir(made.dir, 'lead');
-  const files = readdirSync(drops).sort();
+  const files = dropNames(drops).sort();
   expect(files).toEqual([ID, `${ID}.pending`]);
   expect(statSync(join(drops, ID)).mode & 0o777).toBe(0o600);
   expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
@@ -988,7 +989,7 @@ test('a native hold keeps an expired handoff pending: no claim, no drop fallback
   expect(watchPane.typed).toEqual([]);
 });
 
-test('expiry writes the handoff into a live MCP inbox and leaves the retry a marker, zero pane writes', async () => {
+test('expiry writes the handoff into the bus inbox whatever the listener says, and leaves the retry a marker, zero pane writes', async () => {
   const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
@@ -1016,7 +1017,9 @@ test('expiry writes the handoff into a live MCP inbox and leaves the retry a mar
   const { scene, pane: watchPane, said } = watchScene(made, expiredAt);
   await expirePendingNative(scene);
 
-  // The handoff's body is the inbox message, marked for the inbox leg; nothing was typed.
+  // The handoff's body is the store's record, marked for the drop leg; nothing was typed. The
+  // listener beside the seat is not a leg in this build (ADR D1): the inbox is the store's
+  // reader, so its presence changes neither the walk nor the marker.
   expect(existsSync(pending(made))).toBe(false);
   expect(watchPane.typed).toEqual([]);
   expect(watchPane.enters).toBe(0);
@@ -1028,12 +1031,11 @@ test('expiry writes the handoff into a live MCP inbox and leaves the retry a mar
     to: 'lead',
     body: HANDOFF_BODY,
     ts: expiredAt.toISOString(),
-    thread: ID,
     tries: 0,
-    leg: 'mcp-inbox',
+    leg: 'drop',
   });
   expect(said).toEqual([
-    'lead: a native handoff from helper was unconfirmed after 10m; written to its MCP inbox',
+    `lead: a native handoff from helper was unconfirmed after 10m; sent (unconfirmed) (dropped ${String(HANDOFF_BODY.length)} characters)`,
   ]);
 
   const history = readHistory('acme', made.root, made.home);
@@ -1047,7 +1049,7 @@ test('expiry writes the handoff into a live MCP inbox and leaves the retry a mar
       thread: ID,
       outcome: 'sent (unconfirmed)',
       ms: PENDING_NATIVE_CONFIRM_WINDOW_MS + 1,
-      via: 'mcp-inbox',
+      via: 'drop',
       failed: ['native: unconfirmed after 10m'],
     },
   ]);
@@ -1084,8 +1086,8 @@ test('confirm after expiry is refused and never causes a second delivery', async
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok && history.entries.length).toBe(1);
   expect(history.ok && history.entries[0]?.via).toBe('drop');
-  // The drop file and its marker, nothing else: a late confirm never delivers twice.
-  expect(readdirSync(dropDir(made.dir, 'lead')).sort()).toEqual([ID, `${ID}.pending`]);
+  // The drop file and its marker: a late confirm never delivers twice. The unread hint is not a message.
+  expect(dropNames(dropDir(made.dir, 'lead')).sort()).toEqual([ID, `${ID}.pending`]);
 });
 
 test('confirm inside the 10m window leaves no fallback triggered', async () => {
@@ -1109,7 +1111,7 @@ test('confirm inside the 10m window leaves no fallback triggered', async () => {
   expect(existsSync(pending(made))).toBe(true);
   // The handoff wrote its signed record; the watch's passes have written no second file.
   const drops = dropDir(made.dir, 'lead');
-  expect(readdirSync(drops)).toEqual([ID]);
+  expect(dropNames(drops)).toEqual([ID]);
   expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
 
   // Confirm inside the window records native delivery; a subsequent watch pass past 10m sees no
@@ -1117,12 +1119,12 @@ test('confirm inside the 10m window leaves no fallback triggered', async () => {
   const confirmIo = helperCaller(made.root);
   const confirmHost = fake(made, { native: pane, now: () => insideAt, newId: () => ID });
   expect(await runSend(['--confirm', ID], confirmIo, confirmHost)).toBe(0);
-  expect(confirmIo.out).toBe('team acme, session "acme"\nlead: delivered (native, 300000 ms)\n');
+  expect(withoutSendId(confirmIo.out)).toBe('team acme, session "acme"\nlead: delivered (native, 300000 ms)\n');
 
   const pastWindow = new Date(NOW.getTime() + PENDING_NATIVE_CONFIRM_WINDOW_MS + 60_000);
   await expirePendingNative(watchScene(made, pastWindow).scene);
 
-  expect(readdirSync(drops)).toEqual([ID]);
+  expect(dropNames(drops)).toEqual([ID]);
   expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok && history.entries).toEqual([
@@ -1141,7 +1143,7 @@ test('confirm inside the 10m window leaves no fallback triggered', async () => {
   ]);
 });
 
-test('an expired handoff with no inbox listener lands in the bus inbox, and its history names every refused leg', async () => {
+test('an expired handoff lands in the bus inbox, and its history names the refused leg', async () => {
   const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
@@ -1165,7 +1167,7 @@ test('an expired handoff with no inbox listener lands in the bus inbox, and its 
   expect(said.join('\n')).toContain('sent (unconfirmed) (dropped');
 
   const drops = dropDir(made.dir, 'lead');
-  expect(readdirSync(drops).sort()).toEqual([ID, `${ID}.pending`]);
+  expect(dropNames(drops).sort()).toEqual([ID, `${ID}.pending`]);
   expect(statSync(join(drops, ID)).mode & 0o777).toBe(0o600);
   expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
   expect(JSON.parse(readFileSync(join(drops, `${ID}.pending`), 'utf8'))).toEqual({
@@ -1193,10 +1195,10 @@ test('an expired handoff with no inbox listener lands in the bus inbox, and its 
     via: 'drop',
   });
   // The walk never carries the typed leg (the no pane messaging rule filters it out before the
-  // pending record is written), so the expiry names the inbox refusal and then the drop.
+  // pending record is written), so the drop is what takes the expiry and the native refusal is
+  // the only word it keeps; an `mcp-inbox` name is no leg of this build.
   expect(history.entries[0]?.failed).toEqual([
     'native: unconfirmed after 10m',
-    'mcp-inbox: no live inbox listener',
   ]);
 });
 
@@ -1269,7 +1271,7 @@ test('an expired handoff writes its record, marker and history under the record\
   expect(said.join('\n')).toContain('sent (unconfirmed) (dropped');
 
   const drops = join(made.dir, 'send-drops', 'other', 'lead');
-  expect(readdirSync(drops).sort()).toEqual([ID, `${ID}.pending`]);
+  expect(dropNames(drops).sort()).toEqual([ID, `${ID}.pending`]);
   expect(statSync(join(drops, ID)).mode & 0o777).toBe(0o600);
   expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
   expect(JSON.parse(readFileSync(join(drops, `${ID}.pending`), 'utf8'))).toMatchObject({
@@ -1335,7 +1337,7 @@ test('an expiry whose typed trigger never runs writes no receipt: the drop stays
   expect(receipt.at).toBeNull();
   expect(existsSync(join(drops, `${ID}.read.json`))).toBe(false);
   expect(said.join('\n')).toContain('sent (unconfirmed) (dropped');
-  expect(readdirSync(drops).sort()).toEqual([ID, `${ID}.pending`]);
+  expect(dropNames(drops).sort()).toEqual([ID, `${ID}.pending`]);
   expect(statSync(join(drops, ID)).mode & 0o777).toBe(0o600);
   expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
   expect(JSON.parse(readFileSync(join(drops, `${ID}.pending`), 'utf8'))).toMatchObject({
@@ -1418,7 +1420,7 @@ test('an expired handoff whose recorded pane was replaced still writes its recor
   expect(said.join('\n')).toContain('sent (unconfirmed) (dropped');
 
   const drops = join(made.dir, 'send-drops', 'other', 'lead');
-  expect(readdirSync(drops).sort()).toEqual([ID, `${ID}.pending`]);
+  expect(dropNames(drops).sort()).toEqual([ID, `${ID}.pending`]);
   expect(statSync(join(drops, ID)).mode & 0o777).toBe(0o600);
   expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
   expect(JSON.parse(readFileSync(join(drops, `${ID}.pending`), 'utf8'))).toMatchObject({
@@ -1467,7 +1469,7 @@ test('a [native, drop] fallback and a human-marked seat never type into the pane
   // Without a socket, handOff returns fallback and the walk continues straight to drop with zero pane writes.
   const sendIo = helperCaller(made.root);
   expect(await runSend(['lead', 'hello'], sendIo, host)).toBe(0);
-  expect(sendIo.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
+  expect(withoutSendId(sendIo.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
   expect(pane.typed).toEqual([]);
   expect(pane.enters).toBe(0);
 
@@ -1494,7 +1496,6 @@ test('a [native, drop] fallback and a human-marked seat never type into the pane
   expect(history.ok && history.entries[1]?.via).toBe('drop');
   expect(history.ok && history.entries[1]?.failed).toEqual([
     'native: unconfirmed after 10m',
-    "mcp-inbox: the pane is a human's, and the drop leg is the only one walked",
   ]);
 });
 
@@ -1555,7 +1556,6 @@ test("a human seat's expired-native fallback goes to drop, never a live inbox, w
       via: 'drop',
       failed: [
         'native: unconfirmed after 10m',
-        "mcp-inbox: the pane is a human's, and the drop leg is the only one walked",
       ],
     },
   ]);

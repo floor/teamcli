@@ -28,11 +28,11 @@
 // call could substitute. It lives beside `messages.jsonl` in the project's state folder, at mode
 // 0600, one file per id, written whole by rename; a file that cannot be written refuses the
 // handoff, so an unrecorded native send is never the easy path.
-import { chmodSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 import { storePath } from '../store/store.ts';
-import { ensureStoreLadder, readNoFollow } from './history.ts';
+import { ensureStoreLadder, readNoFollow, createDir0700 } from './history.ts';
 import { dropMessage } from './native.ts';
 
 /** How many typed retries one held send is given, after the send's own attempt. */
@@ -360,13 +360,12 @@ export function writePending(project: string, root: string, home: string, record
   const dir = pendingDir(project, root, home);
   const problem = folderProblem(dir);
   if (problem !== null) return { ok: false, reason: problem };
-  try {
-    if (heldAt(dir).kind === 'missing') {
-      mkdirSync(dir, { mode: 0o700 });
-      chmodSync(dir, 0o700);
-    }
-  } catch {
-    return { ok: false, reason: 'the pending folder could not be created' };
+  // Two handoffs beginning in a brand-new home race the same `mkdir`: one wins, and the loser
+  // accepts the winner's folder through the store ladder's own verified-EEXIST rule instead of
+  // refusing a write its folder is ready for.
+  if (heldAt(dir).kind === 'missing') {
+    const made = createDir0700(dir, 'the pending folder');
+    if (made !== null) return { ok: false, reason: made };
   }
   sweepPendingDir(dir, Date.parse(record.ts));
   const path = pendingPath(project, root, home, record.id);

@@ -5,6 +5,10 @@
 //   answer: "5"              what the owner types at `team approve`'s question (default: the seat count)
 //   herdr: running           running | absent | stopped | none (none: herdr doesn't answer)
 //   agents: all              all | none | a list of seat names that are running
+//   sidebar:                 the sidebar's workspace order the fixture's session holds: a page
+//     [claude-beacon, ...]     whose team was reordered (a seat re-added, a seat restarted)
+//                              names the seats in the order the pane host created them, which is
+//                              the order the sidebar draws; default: the roster's own order
 //   screens:                 what each seat's pane shows: idle | working | permission | trust |
 //     claude-keeper: working   question | unsent | unknown
 //   caller: owner            owner | a seat's name | agent (run by a CLI outside herdr)
@@ -58,6 +62,11 @@ export type Spec = {
   answer: string | null;
   herdr: 'running' | 'absent' | 'stopped' | 'none';
   agents: 'all' | 'none' | string[];
+  /** The sidebar's workspace order the fixture's session holds: a page whose team was reordered
+   *  (a seat re-added or restarted) says so, and the world seeds its workspaces in that order —
+   *  the order the pane host created them in, which is the order the sidebar draws. Empty: the
+   *  roster's own order, the order a fresh `team up` creates. */
+  sidebar: string[];
   screens: Record<string, ScreenKind>;
   caller: string;
   now: string;
@@ -76,6 +85,7 @@ export const DEFAULT_SPEC: Spec = {
   answer: null,
   herdr: 'running',
   agents: 'all',
+  sidebar: [],
   screens: {},
   caller: 'owner',
   now: '2026-10-04T09:00:00Z',
@@ -242,6 +252,7 @@ export function specOf(block: Block | undefined): Spec {
     answer: map.answer === undefined || map.answer === null ? null : text(map.answer, '', 'answer'),
     herdr: oneOf(map.herdr, HERDR, DEFAULT_SPEC.herdr, 'herdr'),
     agents: chosen,
+    sidebar: listed(map.sidebar, DEFAULT_SPEC.sidebar),
     screens: mapped(map.screens, SCREENS, 'screens'),
     caller: text(map.caller, DEFAULT_SPEC.caller, 'caller'),
     now: text(map.now, DEFAULT_SPEC.now, 'now'),

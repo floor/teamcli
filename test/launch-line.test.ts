@@ -13,6 +13,7 @@ import {
   launchLineFinding,
   launchLineFindings,
   launchProgram,
+  launchedCliBinary,
   startFolder,
   type LineSources,
 } from '../src/launch/line.ts';
@@ -92,6 +93,30 @@ describe('the launch line check', () => {
     expect(launchBinary('AGENT_UNATTENDED=1 claude --model x')).toBe('claude');
     expect(launchBinary('  team-deepseek  ')).toBe('team-deepseek');
     expect(launchBinary('')).toBeNull();
+  });
+
+  // A vendor line puts its credential lookup inside one assignment word. The word holds spaces,
+  // and the program is the word after it, never a word the substitution runs.
+  test('a vendor line names the CLI after its assignment words', () => {
+    const line =
+      'ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic ' +
+      'ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security find-generic-password -s deepseek-api-key -a "$USER" -w) ' +
+      'ANTHROPIC_MODEL=deepseek-flash claude --model deepseek-flash';
+    expect(launchBinary(line)).toBe('claude');
+    expect(launchedCliBinary(line)).toBe('claude');
+    expect(launchedCliBinary(`ANTHROPIC_MODEL=glm-5.3 zsh ~/tools/as-floor.sh claude --model glm-5.3`)).toBe('claude');
+    // The program the line starts is still the wrapper shell, while the CLI it ends at is claude.
+    expect(launchBinary('ANTHROPIC_MODEL=glm-5.3 zsh ~/tools/as-floor.sh claude --model glm-5.3')).toBe('zsh');
+  });
+
+  test('a vendor line is checked for its CLI, never for a word inside its credential lookup', () => {
+    const launch =
+      'ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security find-generic-password -s item -a "$USER" -w) claude --model m';
+    // `find-generic-password` is not on this PATH, and it is not the program: the line runs
+    // claude, and the substitution's words are not checked.
+    const finding = launchLineFinding(team(launch), seat(launch), root, sources({ onPath: (binary) => binary === 'claude' }));
+    expect(finding?.level).toBe('note');
+    expect(finding?.why).toContain('not checked');
   });
 
   // The program a launch line really starts, for the reader that decides whether a launcher

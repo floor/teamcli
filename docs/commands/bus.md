@@ -1,8 +1,10 @@
 # team bus
 
 Runs the foreground process that owns the project's event log (`events.jsonl`), runs the periodic
-reconciliation pass over durable message and seat records, and serves `publish` and `subscribe`
-over `.agents/bus.sock`. The reconciliation pass and each subscription verify only the event
+reconciliation pass over durable message and seat records, and serves `publish`, `nudge` and
+`subscribe` over `.agents/bus.sock`. An arrival is raised only from the signed drop record it
+names: a `nudge` names one record in a seat's drop folder, and a `publish` of `message.arrived` is
+held to the same record, so a missing, unsigned or misaddressed record delivers nothing. The reconciliation pass and each subscription verify only the event
 records appended since the last verified sequence; when the log's checkpoint is missing or does
 not match — after a trim or a rewrite, or because a record was altered — the whole retained log is
 verified again, so an earlier alteration is still caught. The owner starts it, in a terminal outside herdr, and a seat the team marks `leads` starts it from that seat's own pane. One per clone. Ctrl-C

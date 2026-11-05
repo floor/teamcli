@@ -81,6 +81,7 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   // "Team change" workflow's step where a record is required. It is read as the source writes
   // it, cut at its escaped apostrophe.
   { literal: /^the team has no approval record; the Team change workflow\\$/, why: "up's no-record notice: it names the inventory's step where a record is required" },
+  { literal: /^\$\{team\.project\}'s approval record$/, why: "order, restart, and worktree name the team's approval record in an owner-action description" },
   // Grant emission and owner-seat approval (`team grant`, `team init`): the request/answer flags,
   // the standing-rule listing and revocation, and their refusal id. These name the owner's answer
   // to one request or a standing rule, never a verified copy of the live file.

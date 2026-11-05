@@ -4,11 +4,14 @@ import { dirname, join } from 'node:path';
 import { auditClientRefusal, authorizeClientRun, clientFormProblem, verifyClientForm, type ClientRun } from '../client/client-form.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { budgetsInForceOf, ceilingsOf, notInForce } from '../approve/approval.ts';
+import { unverifiedRecordSentence } from '../approve/unverified-record.ts';
 import { readArgs } from '../args.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import {
   anotherPaneRefusal,
+  callerOf,
+  callerVerdict,
   describeCaller,
   detachedRefusal,
   fileOwnerRefusal,
@@ -27,12 +30,14 @@ import { gateVerdict } from '../permissions/who.ts';
 import { forgetLaunchedPane, launchedTeamFile, noteLaunchedPane } from '../file/launched-file.ts';
 import { launchTeamFile, placedProblems } from '../file/load.ts';
 import { teamTextTarget } from '../file/team-text.ts';
-import { readTeamConfig } from '../file/team-config.ts';
-import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
+import { readTeamConfig, type ReadTeamConfigOptions } from '../file/team-config.ts';
+import { readLaunchedTeam, readTeamText, readTeamTextTarget, teamPlace, writeTeamText } from '../file/team-text.ts';
 import { clearStopped, hasSeat, markStopped } from '../file/lines.ts';
+import { setSeatStopped } from '../file/stopped-mark.ts';
+import { validateTeamFile } from '../file/validate.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
-import type { Problem, Seat, TeamFile } from '../file/types.ts';
+import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import {
   agentList,
   agentRename,
@@ -57,7 +62,7 @@ import {
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { boxHoldsText, deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
-import { executePlan, type Host } from '../launch/execute.ts';
+import { executePlan, launchKind, type Host } from '../launch/execute.ts';
 import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { bindCodexSeatThread } from '../launch/codex-thread-binding.ts';
 import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../daemon/presence/codex-source.ts';
@@ -67,7 +72,7 @@ import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/c
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchRefusal, readEntityModelRule } from '../launch/model-guard.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
-import { formatPlan, upPlan, type DownSeat, type UpSeat } from '../launch/plan.ts';
+import { formatPlan, registryLaunches, upPlan, type DownSeat, type UpSeat } from '../launch/plan.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
@@ -83,13 +88,13 @@ import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQ
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
 import { recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
-import { registerEnd, registerLaunch } from '../registry/sync.ts';
+import { ensureSeatLine, registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { bannerModel, modelDiffers, seatModel, wrapperSeat } from '../status/statusline.ts';
-import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
+import { approvalStanding, findStore, readApproval, type Ceilings, type Standing } from '../store/store.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
-import { teamIdOf } from '../registry/teams.ts';
+import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
@@ -99,10 +104,10 @@ import { realSources as downSources, stateOfPane } from './down.ts';
 import { stopRunning, type RemoveSources } from './remove.ts';
 import type { Launch } from './up.ts';
 
-export const USAGE = `Usage: team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>] [--json]
+export const USAGE = `Usage: team restart <seat> [--abandon] [--fresh] [--dry-run] [--session <name>] [--file <path>] [--json]
        team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
 
-The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying restart for: it restarts a seat of that one team, as signed, and nothing else. It never prompts, never abandons a pane (--abandon, --file and --session are the owner's and take no --client), and is never the owner.
+The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying restart for: it restarts a seat of that one team, as signed, and nothing else. It never prompts, never abandons a pane (--abandon, --fresh, --file and --session are the owner's and take no --client), and is never the owner.
 
 Exits 0 when the seat is restarted or the dry-run plan is printed, 1 when restart is refused or fails, 2 when the invocation or team file can't be read.
 `;
@@ -183,6 +188,80 @@ const LEFT: Record<Exclude<DownSeat['state'], 'free'>, string> = {
   exited: 'its CLI had exited; closed without typing',
 };
 
+/** Whether the caller, placed in `session`, stands on the pane that session's team state records
+ *  for its seat: the proof that a registry candidate read without a session is this run's team
+ *  and not a stranger's. The placement must be asked for the session — the sessionless walk
+ *  places nobody under the terminal host — so the caller reads as a seat only when a name and a
+ *  pane were found there together. */
+function recordsCallerAt(dir: string, session: string, caller: Caller): boolean {
+  if (caller.kind !== 'seat' || caller.session !== session) return false;
+  const at = standingOf(dir, session, caller);
+  return at.recordedPane !== undefined && at.recordedPane === caller.pane;
+}
+
+/** What the registry's records say about `name`: a team that declares it, a record that names the
+ *  session but whose own team cannot be read, or nothing proven. */
+type RegistryDeclaration =
+  | { kind: 'declared'; loaded: LoadResult & { ok: true }; session: string }
+  | { kind: 'unreadable'; loaded: LoadResult & { ok: false } };
+
+/** The team the registry records for this run's session, when its roster holds `name`.
+ *
+ *  `registeredRootOf` is not used: it falls back to every holder when the session matches none,
+ *  and a team chosen by a shared seat name alone is not a declaration. A named session must be
+ *  the record's own (`session`) or one of its recorded lobbies; with no session to name, the
+ *  caller is placed in each candidate's own session (`callerOf`, the same session-aware walk
+ *  every command uses) and only a candidate whose state records the caller's own pane survives
+ *  the narrowing. Only after that narrowing must exactly one candidate remain: two teams on
+ *  different sessions may share a seat name, and the placement is what tells them apart.
+ *
+ *  A named session is counted before anything is read. Two records that both name it are
+ *  unproven — an unreadable one cannot be dropped to leave the other as the answer — and the
+ *  single record that names it is read for real: a file that does not load keeps its
+ *  configuration refusal instead of being skipped back to the pointer's team. */
+function registryDeclaredTeam(
+  io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
+  home: string,
+  name: string,
+  session: string | undefined,
+  readOptions: ReadTeamConfigOptions,
+): RegistryDeclaration | undefined {
+  let records: Record<string, TeamRecord>;
+  try {
+    records = readTeams(home);
+  } catch {
+    return undefined;
+  }
+  const holders = Object.values(records).filter((record) => record.roster.some((line) => line.seat === name));
+  // A named session is the narrowing itself: the record must carry that session, and two records
+  // carrying it stay unproven without reading either — the seat is refused as today rather than
+  // one file being picked over the other.
+  if (session !== undefined) {
+    const narrowed = holders.filter((record) => record.session === session || record.lobbies[session] !== undefined);
+    if (narrowed.length !== 1) return undefined;
+    const record = narrowed[0]!;
+    const loaded = readTeamConfig(record.root, readOptions);
+    if (!loaded.ok) return { kind: 'unreadable', loaded };
+    if (!loaded.team.seats.some((seat) => seat.name === name)) return undefined;
+    return { kind: 'declared', loaded, session };
+  }
+  // No session to name: the placement narrows first, and only then must exactly one candidate
+  // remain. A team the caller does not stand in is dropped, not counted, so a record left behind
+  // by another session's fleet never blocks this one; an unreadable candidate can prove nothing
+  // and is dropped the same way.
+  const proven: { loaded: LoadResult & { ok: true }; session: string }[] = [];
+  for (const record of holders) {
+    const loaded = readTeamConfig(record.root, readOptions);
+    if (!loaded.ok || !loaded.team.seats.some((seat) => seat.name === name)) continue;
+    const placed = callerOf(io, record.session);
+    if (recordsCallerAt(dirname(loaded.path), record.session, placed)) {
+      proven.push({ loaded, session: record.session });
+    }
+  }
+  if (proven.length !== 1) return undefined;
+  return { kind: 'declared', loaded: proven[0]!.loaded, session: proven[0]!.session };
+}
+
 export const restart: Command = (argv, io) => runRestart(argv, io, realSources);
 export default restart;
 
@@ -191,11 +270,11 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team'], ['abandon', 'dry-run', 'json']);
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team'], ['abandon', 'fresh', 'dry-run', 'json']);
   const clientProblem = args.error === undefined && args.rest.length === 1
     ? clientFormProblem(args.values, 'team restart <seat> --client <grant-file> --key <client-key-file>')
-      ?? (args.values.client !== undefined && (args.values.file !== undefined || args.values.session !== undefined || args.flags.has('abandon'))
-        ? "--client restarts a seat of the one team its grant names: --file, --session and --abandon are the owner's and take no --client"
+      ?? (args.values.client !== undefined && (args.values.file !== undefined || args.values.session !== undefined || args.flags.has('abandon') || args.flags.has('fresh'))
+        ? "--client restarts a seat of the one team its grant names: --file, --session, --abandon and --fresh are the owner's and take no --client"
         : null)
     : null;
   if (args.error || args.rest.length !== 1 || clientProblem !== null) {
@@ -204,6 +283,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   }
   const name = args.rest[0] ?? '';
   const abandon = args.flags.has('abandon');
+  // `--fresh` decides the conversation only: it is not `--abandon`, and never changes what the
+  // stop may do to a pane.
+  const fresh = args.flags.has('fresh');
   const dry = args.flags.has('dry-run');
   // Collapsed notes: what plain output writes to stdout while it works (the pre-close readings,
   // the stop's own lines) ride on the document instead.
@@ -238,6 +320,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     ?? (args.values.session !== undefined && !isOwner(walked) ? sessionOwnerRefusal(walked) : undefined);
   if (flagRefusal !== undefined) return callerRefused(out, json, flagRefusal, undefined, 'owner-only');
 
+  const home = sources.home ?? homedir();
   const launched = args.values.file ? undefined : launchedTeamFile(io, sources.home);
   const readOptions = {
     home: sources.home,
@@ -247,20 +330,62 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   // A launched pointer names where this session was launched from, not a copy to read: a team
   // the registry holds is read there, so a sign-off an edit wrote is never missed over the file
   // `up` launched from. A `--file` names its file, and is read as that file.
-  const loaded = args.values.file
-    ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })
-    : launched !== undefined
+  const namedFile = args.values.file === undefined
+    ? launched !== undefined
       ? readLaunchedTeam(launched, readOptions)
-      : readTeamConfig(io.cwd, readOptions);
+      : readTeamConfig(io.cwd, readOptions)
+    : readTeamConfig(io.cwd, { ...readOptions, file: args.values.file });
+  // The pointer names a place, not a frozen definition: a file retired when the team moved on
+  // (or an older copy left behind) must not undeclare a seat the team's current record holds. A
+  // declaration is proven by any of three authorities, in order — the team this run named, the
+  // team this folder holds, the team the registry records for this session — and only when none
+  // declares the seat is it refused. A `--file` names one file and never falls back, and a team
+  // that fails to load keeps the configuration refusal it was: neither reaches a lower authority.
+  const declares = (read: LoadResult): read is LoadResult & { ok: true } =>
+    read.ok && read.team.seats.some((seat) => seat.name === name);
+  let loaded = namedFile;
+  let declaredBy: { where: 'folder' | 'registry'; session?: string } | undefined;
+  if (args.values.file === undefined && launched !== undefined && namedFile.ok && !declares(namedFile)) {
+    const folder = readTeamConfig(io.cwd, readOptions);
+    if (declares(folder)) {
+      loaded = folder;
+      declaredBy = { where: 'folder' };
+    } else {
+      const walkedSession = walked.kind === 'seat' || walked.kind === 'pane' ? walked.session : undefined;
+      const registered = registryDeclaredTeam(io, home, name, args.values.session ?? walkedSession, readOptions);
+      if (registered?.kind === 'declared') {
+        loaded = registered.loaded;
+        declaredBy = { where: 'registry', session: registered.session };
+      } else if (registered?.kind === 'unreadable') {
+        loaded = registered.loaded;
+      }
+    }
+  }
   if (!loaded.ok) {
     return configuration(out, json, loaded.errors.map((problem) => `${where(problem)}${plainText(problem.message)}`).join('\n'));
   }
   const { team, root, path } = loaded;
   const dir = dirname(path);
+  // The fallback is spoken once, where the answer is read: the reader knows which team answered
+  // and can find the pointer's file if it wants that one back.
+  if (declaredBy !== undefined) {
+    const notice = declaredBy.where === 'folder'
+      ? `note: ${name} is not in the team this session was launched from; reading the team this folder holds (${path})`
+      : `note: ${name} is not in the team this session was launched from; reading the team registered for session ${declaredBy.session ?? ''} (${root})`;
+    if (json) notes.push(notice);
+    else if (dry) out.stdout(`! ${notice}\n`);
+    else out.stderr(`${notice}\n`);
+  }
+
+  // The team's text is the registry's record whenever the registry holds this team, whatever
+  // file the caller named: a record that cannot be read is the refusal the plain read already
+  // gives, in the same words and at the same exit, before anything is stopped or planned. Never
+  // a fallback to the stale file, and never an exception out of the policy reader below.
+  const teamText = readTeamTextTarget(path, { home: sources.home });
+  if (!teamText.ok) return configuration(out, json, teamText.why);
 
   // The gate is the map's (`gateVerdict`), read in the verdict shape the branches below already
   // speak: owner or `leads` for this team, decided from records.
-  const home = sources.home ?? homedir();
   const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
     gateVerdict(who, team, root, home, 'restart', at, sources.now);
   const judged = args.values.session !== undefined
@@ -269,7 +394,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   const { caller, shown, session } = judged;
   // Dev mode, from the file this run restarts against: a `dev-mode` value anywhere in the
   // caller's chain governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value the
-  // variable set to exactly `1` keeps its behaviour. Only the caller line below is ever folded.
+  // variable set to exactly `1` keeps its behaviour. The caller line below is folded, and so is
+  // a stored approval that does not verify: dev mode says that once and continues, and never
+  // signs.
   const dev = resolveDevMode('restart', io, { home: sources.home, team, root, now: sources.now() });
   if (!dry) logDevModeState(dir, 'restart', describeCaller(caller), dev, sources.now());
   let devFolded = false;
@@ -279,19 +406,33 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
 
   const standing = sources.standing?.(root) ?? approvalStanding(root, sources.home);
   if (standing.kind !== 'verified' && standing.kind !== 'none') {
-    return callerRefused(out, json, notInForce(standing));
+    // Outside dev mode the refusal is the standing's own line, exactly as before. In dev mode
+    // the fold is the one `check` and `up` already apply: say it and continue. The sentence is
+    // the stored copy's lines. Standing cannot be renewed in this build. Nothing here writes an approval.
+    if (!dev.on) return callerRefused(out, json, notInForce(standing));
+    const store = findStore(root, home);
+    const file = store === null ? '' : (readApproval(store)?.file ?? '');
+    const sentence = unverifiedRecordSentence(`${team.project}'s approval record`, file);
+    if (json) notes.push(sentence);
+    else if (dry) out.stdout(`! ${sentence}\n`);
+    else out.stderr(`team restart: ${plainText(sentence)}\n`);
   }
   // The live file is the record: the roster, the ceilings and the grant all read from it, and a
   // file that changed since the last approval is not a refusal.
   const ceilings = ceilingsOf(team);
 
   const mayChange = verdictOf(caller, standingOf(dir, session, caller));
+  // The entity's main orchestrator stands as this team's lead (OD-02): proven by its own head
+  // team's record, live file and recorded pane, never by its seat name. A run that proves it
+  // passes the gate the way a lead of this team would, and the guard below decides the rest.
+  const mainOrchestrator = entityMainOrchestrator(io, { home, root, entity: team.entity });
   // The who-may-run-it gate: the caller, its placement, and the owner rule. Set to exactly
   // `1`, dev mode says this gate once, as a warning, and the restart continues — exactly as
-  // `up` does. Every other refusal stays a refusal: the target placement, the CLI, the
-  // records, the approvals and trust. The warning is logged where this call runs; a dry run
-  // says it beside the dry answer and decides nothing.
-  const mayRun = clientRun !== null ? null : mayChange.kind === 'no-pane' ? noPaneRefusal(mayChange.name)
+  // `up` does. A stored approval that does not verify was already said above. Every other
+  // refusal stays a refusal: the target placement, the CLI, the records, and trust. The
+  // warning is logged where this call runs; a dry run says it beside the dry answer and
+  // decides nothing.
+  const mayRun = clientRun !== null || mainOrchestrator !== null ? null : mayChange.kind === 'no-pane' ? noPaneRefusal(mayChange.name)
     : mayChange.kind === 'another-pane' ? anotherPaneRefusal(mayChange.name, mayChange.recordedPane)
       : mayChange.kind === 'refused' ? `only the owner or \`leads\` restarts a seat; this call is ${plainLine(describeCaller(shown))}${devModeExpiryNote(dev)}`
         : null;
@@ -319,10 +460,19 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     }
   }
 
+  // A seat cannot restart the pane it stands on. The pane arm is physical and stands for every
+  // caller. The name arm is identity, not spelling: two teams may name an orchestrator the
+  // same, so a run that proved it is the entity's main orchestrator elsewhere is judged by its
+  // pane alone, never by the name it shares with this team's seat.
   const recordedSession = readState(dir).sessions[session] ?? emptySession();
   const recordedSeat = recordedSession.seats[name];
-  if (caller.kind === 'seat' && (caller.name === name || (recordedSeat?.pane !== undefined && caller.pane === recordedSeat.pane))) {
-    return selfRefused(out, json, caller.name);
+  const standingOn = (who: Caller | null): string | null =>
+    who !== null && who.kind === 'seat' && recordedSeat?.pane !== undefined && who.pane === recordedSeat.pane ? who.name : null;
+  const onRecordedPane = standingOn(caller) ?? standingOn(mainOrchestrator);
+  const byName = caller.kind === 'seat' && mainOrchestrator === null && caller.name === name ? caller.name : null;
+  const selfName = onRecordedPane ?? byName;
+  if (selfName !== null) {
+    return selfRefused(out, json, selfName);
   }
 
   const declared = team.seats.find((seat) => seat.name === name);
@@ -335,12 +485,12 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   if (abandon && caller.kind !== 'owner' && (name === team.orchestrator || name === team.operator)) {
     return leadRefused(out, json, describeCaller(caller));
   }
-  // A stopped seat is its own team's sign-off to lift: the owner, or a seat this team's map
-  // admits as `leads` on its recorded pane, restarts it, and the run clears the mark in the same
-  // write that records the launch. The caller gate above is not that proof on its own — dev mode
-  // folds its refusal into a warning, and a client run reads past it — so the verdict itself must
-  // be `ok`, not merely unfolded.
-  if (declared.stopped && mayChange.kind !== 'ok') {
+  // A stopped seat is its own team's sign-off to lift: the owner, a seat this team's map admits
+  // as `leads` on its recorded pane, or the entity's main orchestrator standing as its lead,
+  // restarts it, and the run clears the mark in the same write that records the launch. The
+  // caller gate above is not that proof on its own — dev mode folds its refusal into a warning,
+  // and a client run reads past it — so the verdict itself must be `ok`, not merely unfolded.
+  if (declared.stopped && mayChange.kind !== 'ok' && mainOrchestrator === null) {
     return signedOffRefused(out, json, name);
   }
 
@@ -414,16 +564,18 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     const listed = recordedPane === undefined
       ? undefined
       : agents.find((agent) => agent.name === name && agent.pane === recordedPane);
-    // The recorded launcher's own selection, read before anything is stopped: `--abandon` is the
-    // caller's fresh start, and a line that itself names a conversation — the recorded id or any
-    // other — cannot be run fresh. It is never rewritten, so the flag is refused here rather than
-    // pretending the line it would run is a fresh one.
+    // The recorded launcher's own selection, read before anything is stopped: `--abandon` and
+    // `--fresh` are the caller's fresh start, and a line that itself names a conversation — the
+    // recorded id or any other — cannot be run fresh. It is never rewritten, so the flag is
+    // refused here rather than pretending the line it would run is a fresh one.
     const pinned = namedResumeTarget(declared.cli, resumeCandidate.launch) !== null;
-    if (pinned && abandon) {
+    if (pinned && (abandon || fresh)) {
       return notReadyRefused(
         out,
         json,
-        `${name}: its launch line itself names a conversation, so --abandon cannot start a fresh one; left as it is (clear the resume selection from its launch line for a fresh start)`,
+        abandon
+          ? `${name}: its launch line itself names a conversation, so --abandon cannot start a fresh one; left as it is (clear the resume selection from its launch line for a fresh start)`
+          : `${name}: its launch line itself names a conversation, so --fresh cannot start a new one; left as it is (clear the resume selection from its launch line for a fresh start)`,
       );
     }
     if (listed?.session !== undefined && listed.session !== '' && listed.session !== resumeCandidate.id) {
@@ -434,9 +586,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       const carried = resumeCarry(declared.cli, resumeCandidate.launch, resumeCandidate.id);
       if (carried.kind === 'line') {
         // The line selects the recorded id, or names none and takes it appended — never under
-        // the caller's `--abandon`, which starts fresh.
-        if (!abandon) resume = resumeCandidate.id;
-        else resumeNote = 'abandoned by the caller';
+        // the caller's `--abandon` or `--fresh`, which both start a new conversation.
+        if (!abandon && !fresh) resume = resumeCandidate.id;
+        else resumeNote = abandon ? 'abandoned by the caller' : 'started fresh by the caller';
       } else if (pinned) {
         // The recorded launcher names another conversation, or resumes without naming one:
         // stopping the seat and running that line would resume something nothing proved. Nothing
@@ -447,7 +599,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
           json,
           `${name}: its recorded launcher does not select the recorded conversation; left as it is (its launch line names a conversation of its own: clear that selection from its launch line for a fresh start)`,
         );
-      } else if (abandon) {
+      } else if (abandon || fresh) {
         // The caller's fresh start: the id the records bind is not put on the line. The line
         // names no conversation of its own here, so running it as it is starts one.
         if (carried.kind === 'refuse') noResume(carried.why);
@@ -535,7 +687,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     case 'herdr':
       return herdrRefused(out, json);
     case 'run-lock':
-      return runLockRefused(out, json, performed.held, session, dir);
+      return runLockRefused(out, json, performed.held, session, dir, performed.startedAt);
     case 'ready':
       return readyExit(
         out,
@@ -653,7 +805,7 @@ export type PerformResult =
   | { kind: 'busy'; message: string }
   | { kind: 'not-ready'; message: string }
   | { kind: 'herdr' }
-  | { kind: 'run-lock'; held: number }
+  | { kind: 'run-lock'; held: number; startedAt: number | null }
   | {
       kind: 'ready';
       oldPane: string;
@@ -732,6 +884,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   for (const finding of doctorFindings(doctorTeam, root, dir, session, sources.doctor, [], standing, team, [], [], input.rulesOrigin ?? 'file')) {
     if (blocksLaunch(finding)) {
       if (finding.text.includes('team approve') || finding.text.includes('never approved')) continue;
+      // Dev mode already said this standing and is continuing. The preflight must not refuse
+      // the same record a second time. Nothing here signs.
+      if (dev.on && standing.kind !== 'verified' && standing.kind !== 'none' && finding.text === notInForce(standing)) continue;
       if (finding.text.includes(' is read at start by ')) continue;
       return { kind: 'not-ready', message: finding.text };
     }
@@ -844,7 +999,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   // the holder named and nothing stopped once the wait is spent.
   const runLock = await acquireRunLockWithin(dir, session, { sleep: (ms) => sources.upLaunch.sleep(ms) });
   if ('held' in runLock) {
-    return { kind: 'run-lock', held: runLock.held };
+    return { kind: 'run-lock', held: runLock.held, startedAt: runLock.startedAt };
   }
   // A revival's sign-off comes off before the launch reads the file, and the `finally` below
   // puts it back unless the launch reached ready: a run that fails, returns early or throws
@@ -1178,6 +1333,16 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       doctor: sources.doctor,
       ...(expectedBrief === undefined ? {} : { brief: expectedBrief }),
     });
+    // The roster line this relaunch needs before its CLI starts when it starts from the
+    // registry's record: the inbox registration and the server it starts resolve the seat by it,
+    // before the run's own registerLaunch writes one. A launch that names a team file reads the
+    // seat from that file, and the completed launch's own record writes the line.
+    for (const name of registryLaunches(plan)) {
+      const declared = team.seats.find((candidate) => candidate.name === name);
+      if (declared === undefined) continue;
+      const lined = ensureSeatLine({ home, team, root, by: who, session }, declared);
+      if ('note' in lined) logLine(dir, input.command, who, lined.note, sources.now());
+    }
     const report = await executePlan(plan, session, host);
     let afterwards = readState(dir).sessions[session]?.seats[name];
     const launchedOk = !report.held && !report.dropped.includes(name) && afterwards?.stage === 'ready' && !report.serverFailed;
@@ -1686,13 +1851,15 @@ function hostOf(input: {
     stopSession: () => false,
     dialog: { mode: 'keep' },
     recordWaiting(name, waiting, pane, workspace) {
+      // The terminal host is read before the state lock: its 10 s timeout must not hold team.lock
+      // while another command waits to write.
+      const identity = launchedIdentity(launch.processInfo?.(session, pane) ?? null);
       updateState(dir, (file) => {
         const current = (file.sessions[session] ??= emptySession());
         const prior = current.seats[name] ?? { stage: 'launched' as const };
         const retained = current.retained_seats?.[name];
         if (current.retained_seats?.[name]) delete current.retained_seats[name];
         const id = prior.id ?? retained?.id ?? mintSeatId();
-        const identity = launchedIdentity(launch.processInfo?.(session, pane) ?? null);
         current.seats[name] = {
           ...prior,
           id,
@@ -1707,7 +1874,7 @@ function hostOf(input: {
     agentPanes: launch.agentPanes,
     agentList: launch.agents,
     workspacePanes: launch.workspacePanes ? (s, workspace) => launch.workspacePanes!(s, workspace) : undefined,
-    classify: (_name, pane, cli) => readScreen(cli, launch.paneText(session, pane) ?? undefined).kind,
+    classify: (_name, pane, cli) => launchKind(readScreen(cli, launch.paneText(session, pane) ?? undefined).kind),
     paneText: (_name, pane) => launch.paneText(session, pane),
     foreground: (_name, pane) => launch.foreground(session, pane),
     shellBack: (_name, pane) => launch.shellBack?.(session, pane) ?? null,
@@ -1721,6 +1888,12 @@ function hostOf(input: {
     },
     record(name, patch) {
       let replaced: string | undefined;
+      // The terminal host is read before the state lock: its 10 s timeout must not hold team.lock
+      // while another command waits to write. It is read only when the brief's diagnostics can
+      // use it; whether they are written is still decided under the lock, below.
+      const identity = name === seat.name && patch.pane !== undefined && input.brief !== undefined
+        ? launchedIdentity(launch.processInfo?.(session, patch.pane) ?? null)
+        : null;
       updateState(dir, (file) => {
         const current = (file.sessions[session] ??= emptySession());
         const prior = current.seats[name] ?? { stage: patch.stage };
@@ -1732,7 +1905,9 @@ function hostOf(input: {
         const model = (isTarget ? seat.model : undefined) ?? prior.model;
         const version = (isTarget ? seat.version : undefined) ?? prior.version;
         const effort = (isTarget ? seat.effort : undefined) ?? prior.effort;
-        const launch_line = (isTarget ? seat.launch : undefined) ?? prior.launch_line;
+        // The line this run launched the target with, pins included when its profile has them;
+        // any other seat keeps the line its own record holds.
+        const launch_line = patch.launch_line ?? (isTarget ? seat.launch : undefined) ?? prior.launch_line;
         const last_active = patch.stage === 'ready'
           ? input.now().toISOString()
           : (prior.last_active ?? retained?.last_active);
@@ -1758,7 +1933,8 @@ function hostOf(input: {
         // The brief's pane diagnostics, written under this same state lock and only while the
         // state still holds the claim this launch was delivered at: id, incarnation, epoch,
         // digest and stage, compared whole. A claim a recovery or a replacement delivery wrote
-        // in between is the claim that stands, and nothing here overwrites it.
+        // in between is the claim that stands, and nothing here overwrites it. The pane's
+        // process identity was read before the lock, above.
         const expected = input.brief;
         if (isTarget && patch.pane !== undefined && expected !== undefined) {
           const claim = current.briefs?.[name];
@@ -1770,7 +1946,6 @@ function hostOf(input: {
             && claim.sha256 === expected.sha256
             && claim.stage === expected.stage
           ) {
-            const identity = launchedIdentity(launch.processInfo?.(session, patch.pane) ?? null);
             const diagnosed = { ...claim, seat_handle: id, pane: patch.pane };
             if (identity === null) delete diagnosed.pane_root_pid;
             else diagnosed.pane_root_pid = identity.shell;
@@ -2011,6 +2186,50 @@ function callerRefused(
   return 1;
 }
 
+/**
+ * The entity's main orchestrator, when this run is it: the lead seat of the team whose project
+ * is the entity itself — the head team send admission reads in `onMainCoordinator` — placed in
+ * that team's own session on the pane its state records. The reach is the same one OD-02 names
+ * for sends, limited to the entity: the target's registry record must name that entity, and the
+ * proof comes from the caller's own team's record, live file and state. A name alone is never
+ * this proof, and the target team is never the head team this reach comes from: its own
+ * orchestrator is judged by this team's map, exactly as before.
+ */
+function entityMainOrchestrator(
+  io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
+  options: { home: string; root: string; entity: string | null },
+): Caller | null {
+  if (options.entity === null) return null;
+  let records: ReturnType<typeof readTeams>;
+  try {
+    records = readTeams(options.home);
+  } catch {
+    // A registry that cannot be read admits nobody, never the registry's absence.
+    return null;
+  }
+  const targetId = teamIdOf(options.root);
+  const target = records[targetId];
+  if (target === undefined || target.entity === null || target.entity !== options.entity) return null;
+  for (const [id, record] of Object.entries(records)) {
+    if (id === targetId) continue;
+    if (record.entity !== options.entity || record.project !== options.entity) continue;
+    const placed = callerOf(io, record.session);
+    if (placed.kind !== 'seat' || placed.session !== record.session) continue;
+    let loaded: ReturnType<typeof readTeamConfig>;
+    try {
+      loaded = readTeamConfig(record.root, { home: options.home });
+    } catch {
+      continue;
+    }
+    if (!loaded.ok) continue;
+    if (loaded.team.entity !== options.entity || placed.name !== loaded.team.orchestrator) continue;
+    const at = standingOf(dirname(loaded.path), record.session, placed);
+    if (callerVerdict(placed, placed.name, at).kind !== 'ok') continue;
+    return placed;
+  }
+  return null;
+}
+
 function selfRefused(out: Io, json: boolean, callerName: string): number {
   refuse(out, json, 'restart', {
     id: 'restart.self',
@@ -2062,15 +2281,20 @@ function signedOffRefused(out: Io, json: boolean, name: string): number {
 }
 
 /**
- * One team-file write a revival makes: the seat's entry edited on the text the file holds now,
- * and the whole file validated before it replaces the one on disk. A file the schema refuses is
- * left as it was, and a seat taken out of the file since the run read it is said, never re-added.
+ * One team-text write a revival makes: the seat's entry edited on the record as the source holds
+ * it now, and the whole text validated before it replaces what was read. A text the schema
+ * refuses is left as it was, and a seat the record no longer declares is said, never re-added.
+ *
+ * The seat's existence is the parsed record's answer, not the line writer's: a seat written as a
+ * flow mapping or in a list at the `seats:` header's own column is declared, and the record editor
+ * rewrites its mark where the line writer could not see it. A record that no longer validates
+ * keeps the line writer's edit, so the write below refuses it with the problems it always did.
  */
 function rewriteSeatEntry(
   path: string,
   name: string,
   home: string,
-  edit: (text: string, name: string) => string,
+  stopped: boolean,
 ): { ok: true } | { ok: false; why: string } {
   const where = { home, command: 'restart' };
   let text: string;
@@ -2079,8 +2303,22 @@ function rewriteSeatEntry(
   } catch (error) {
     return { ok: false, why: `${teamPlace(path, where, 'the file')} cannot be read (${error instanceof Error ? error.message : String(error)})` };
   }
-  if (!hasSeat(text, name)) return { ok: false, why: `${name} is no longer in ${teamPlace(path, where, 'the file')}` };
-  const written = writeTeamText(path, edit(text, name), where);
+  const place = teamPlace(path, where, 'the file');
+  const parsed = validateTeamFile(text, { home });
+  const declared = parsed.ok ? parsed.team.seats.some((seat) => seat.name === name) : hasSeat(text, name);
+  if (!declared) return { ok: false, why: `${name} is no longer in ${place}` };
+  let next: string;
+  if (parsed.ok) {
+    const edited = setSeatStopped(text, name, stopped);
+    if (!edited.ok) {
+      const what = stopped ? 'put the stopped mark back on' : 'clear the stopped mark on';
+      return { ok: false, why: `couldn't ${what} ${name} in ${place}: ${edited.why}` };
+    }
+    next = edited.text;
+  } else {
+    next = stopped ? markStopped(text, name) : clearStopped(text, name);
+  }
+  const written = writeTeamText(path, next, where);
   if (!written.ok) {
     const problem = written.errors[0];
     return {
@@ -2093,22 +2331,22 @@ function rewriteSeatEntry(
 
 /**
  * The sign-off a revival lifts, cleared after the old pane is closed and before the launch,
- * which reads the file's own words: the seat's block loses `stopped: true` and keeps everything
+ * which reads the file's own words: the seat's entry loses `stopped: true` and keeps everything
  * else. A failed write is the caller's abort: nothing is launched from a file the run could not
  * rewrite.
  */
 function declareRevived(path: string, name: string, home: string): { ok: true } | { ok: false; why: string } {
-  return rewriteSeatEntry(path, name, home, clearStopped);
+  return rewriteSeatEntry(path, name, home, false);
 }
 
 /**
- * The sign-off a launch that did not reach ready puts back: the seat's block is marked
+ * The sign-off a launch that did not reach ready puts back: the seat's entry is marked
  * `stopped: true` again — exactly as it was, without re-adding a seat that left the file and
- * without touching another entry — and the whole file is validated before it replaces the one
- * on disk.
+ * without touching another entry — and the whole text is validated before it replaces what was
+ * read.
  */
 function declareStopped(path: string, name: string, home: string): { ok: true } | { ok: false; why: string } {
-  return rewriteSeatEntry(path, name, home, markStopped);
+  return rewriteSeatEntry(path, name, home, true);
 }
 
 function herdrRefused(out: Io, json: boolean): number {
@@ -2160,8 +2398,8 @@ function notReadyRefused(out: Io, json: boolean, message: string): number {
   return 1;
 }
 
-function runLockRefused(out: Io, json: boolean, held: number, session: string, dir: string): number {
-  refuse(out, json, 'restart', { id: 'restart.run-lock', message: runLockText(held, session, dir), repair: null });
+function runLockRefused(out: Io, json: boolean, held: number, session: string, dir: string, startedAt: number | null = null): number {
+  refuse(out, json, 'restart', { id: 'restart.run-lock', message: runLockText(held, session, dir, startedAt), repair: null });
   // exit: restart.run-lock
   return 1;
 }

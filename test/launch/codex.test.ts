@@ -18,7 +18,7 @@ import { upsertProject } from '../../src/registry/projects.ts';
 import { teamIdOf } from '../../src/registry/teams.ts';
 import { runningModel } from '../../src/status/statusline.ts';
 import { bumpGeneration, keyOf, signDomain } from '../../src/store/keys.ts';
-import { classify, classifyComposer, readScreen } from '../../src/watch/screen.ts';
+import { classify, classifyComposer, readBox, readScreen } from '../../src/watch/screen.ts';
 import type { YamlValue } from '../../src/yaml.ts';
 import { SAMPLE_RULES, wordWrap } from '../helpers.ts';
 
@@ -29,9 +29,9 @@ if (!codex) throw new Error('codex has no profile');
 
 describe('Codex launch and captured screens', () => {
   test('unattended flags are launch arguments; rules are a first message', () => {
-    expect(launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.')).toBe('AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen');
-    expect(launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.', undefined, undefined, undefined, { codexDaemon: 'on' })).toBe('AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen');
-    expect(launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.', undefined, undefined, undefined, { codexDaemon: 'off' })).toBe('AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-daemon --no-alt-screen');
+    expect(launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.')).toBe('AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false');
+    expect(launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.', undefined, undefined, undefined, { codexDaemon: 'on' })).toBe('AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false');
+    expect(launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.', undefined, undefined, undefined, { codexDaemon: 'off' })).toBe('AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-daemon --no-alt-screen -c features.mcp_oauth_refresh_coordination=false');
     expect(codex.rulesOption).toBeNull();
     expect(codex.loginCheck).toEqual(['login', 'status']);
     expect(codex.exit).toBe('/exit');
@@ -51,6 +51,7 @@ describe('Codex launch and captured screens', () => {
       add: null,
       target: null,
       file: null,
+      remove: null,
     });
     // A launch that names no file names its session: with two registered teams holding the seat
     // name, `mcp serve` exits 2 without `--session`. A file-bound line names the file instead
@@ -65,7 +66,8 @@ describe('Codex launch and captured screens', () => {
     ).toBe(
       'AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen'
       + ' -c \'mcp_servers.team_inbox.command="/opt/bun"\''
-      + ' -c \'mcp_servers.team_inbox.args=["/src/cli.ts","mcp","serve","--seat","helper","--session","acme"]\'',
+      + ' -c \'mcp_servers.team_inbox.args=["/src/cli.ts","mcp","serve","--seat","helper","--session","acme"]\''
+      + ' -c features.mcp_oauth_refresh_coordination=false',
     );
   });
   test('a quote or backslash in a structured value is escaped inside the TOML string', () => {
@@ -79,7 +81,8 @@ describe('Codex launch and captured screens', () => {
     ).toBe(
       'AGENT_UNATTENDED=1 codex -a never -s danger-full-access --no-alt-screen'
       + ' -c \'mcp_servers.team_inbox.command="/opt/my \\"bun\\""\''
-      + ' -c \'mcp_servers.team_inbox.args=["/src/with \\\\ backslash/cli.ts","mcp","serve","--seat","helper","--session","acme"]\'',
+      + ' -c \'mcp_servers.team_inbox.args=["/src/with \\\\ backslash/cli.ts","mcp","serve","--seat","helper","--session","acme"]\''
+      + ' -c features.mcp_oauth_refresh_coordination=false',
     );
   });
   test('a launch that read a team file names it to the server, inside the -c array', () => {
@@ -94,7 +97,8 @@ describe('Codex launch and captured screens', () => {
     ).toBe(
       'AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen'
       + ' -c \'mcp_servers.team_inbox.command="/opt/bun"\''
-      + ' -c \'mcp_servers.team_inbox.args=["/src/cli.ts","mcp","serve","--seat","helper","--file","/tmp/my project/.agents/team.yaml"]\'',
+      + ' -c \'mcp_servers.team_inbox.args=["/src/cli.ts","mcp","serve","--seat","helper","--file","/tmp/my project/.agents/team.yaml"]\''
+      + ' -c features.mcp_oauth_refresh_coordination=false',
     );
   });
   test('a plan for a seat in a lobby carries the team file onto the codex launch line', () => {
@@ -214,6 +218,19 @@ describe('Codex launch and captured screens', () => {
     // nothing from them.
     expect(readScreen('codex', latest('idle-hint')).kind).toBe('idle');
     expect(readScreen('codex', latest('unsent')).kind).toBe('unsent');
+  });
+
+  test('the interrupted frame is the empty prompt under the banner', () => {
+    const captured = readFileSync(new URL('../fixtures/codex/0.161.0/interrupted-idle.txt', import.meta.url), 'utf8');
+    const rows = captured.trimEnd().split('\n');
+    expect(rows[0]).toBe('■ Conversation interrupted - use /feedback if something went wrong');
+    expect(rows.at(-3)).toBe('› Ask Codex to do anything');
+    const status = rows.at(-1) ?? '';
+    expect(status.startsWith('  GPT-6.1-Sol high · Context 64% left · weekly 5% left')).toBe(true);
+    expect(status.endsWith('⚠ 3 warnings · f2 to view')).toBe(true);
+    expect(readScreen('codex', captured).kind).toBe('idle');
+    expect(classifyComposer('codex', captured.split('\n')).kind).toBe('idle');
+    expect(readBox('codex', captured)).toBeNull();
   });
   test('a dialog above the status row and its chrome row is still the dialog', () => {
     // Constructed from the captures: permission.txt's dialog with idle-hint.txt's last two

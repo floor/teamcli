@@ -15,9 +15,12 @@ import { reportedLiveAgent } from './agent.ts';
 import { refusalReport, type Refusal } from './deliver.ts';
 import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeTarget, withoutResume, conversationMissingOnScreen } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
-import { launchedIdentity, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
+import { withoutGrokSandbox, writeGrokSandbox } from './grok-sandbox.ts';
+import { launchedIdentity, paneHoldsOnlyShell, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
+import { restoreProof } from './restore-proof.ts';
 import type { CliWatcher } from './cli-hook.ts';
-import { codexEndpointConfig, IDLE_POLL_MS, remoteCodexCommand, type Op, type Step, type UpSeat } from './plan.ts';
+import { appendOnLaunchLine } from './cli-scope.ts';
+import { codexCommandHasFlag, codexEndpointConfig, IDLE_POLL_MS, remoteCodexCommand, type Op, type Step, type UpSeat } from './plan.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from './codex-endpoint.ts';
 import {
   closeTarget,
@@ -28,14 +31,14 @@ import {
   type WaitingProblem,
   type WaitingReads,
 } from './pause.ts';
-import { plainPaneText } from './plain.ts';
+import { plainPaneText, plainText } from './plain.ts';
 import { unreadIdle } from './unread.ts';
 import { recordWhat, cleanRecord, classificationOf, type Classification, type FinalRecord, type ProgressState } from './progress.ts';
 import type { LobbyRefusal } from '../lobby/gate.ts';
 import type { InboxRegistration } from '../mcp/register.ts';
 import type { SeatState, WaitingRecord } from '../state.ts';
 import { continuitySessionOf } from '../registry/resume.ts';
-import { vendorNoticeRange } from '../watch/screen.ts';
+import { vendorNoticeRange, type Screen } from '../watch/screen.ts';
 import type { SessionEndReason } from '../sessions/registry.ts';
 import { endpointCleanupHost } from './endpoint-cleanup.ts';
 
@@ -54,6 +57,15 @@ export type ScreenKind =
   | 'rate limit'
   | 'unsent'
   | 'unknown';
+
+/** A screen reading as the launch host's kind: the closed list above has no scrolled-back
+ *  prompt, because a launch types its rules into the composer and a back-scrolled pane hides
+ *  that composer. A pane scrolled back over its transcript — idle behind the scroll, returned to
+ *  a typed prompt only by the wake's own guarded key — is the `unknown` a launch saw before the
+ *  kind existed, so every launch decision keeps its conservative reading of it. */
+export function launchKind(kind: Screen['kind']): ScreenKind {
+  return kind === 'scroll back' ? 'unknown' : kind;
+}
 
 /** What a live `up` or `down` can do, apart from deciding it. Tests stand in for all of it. */
 /** What one live exit typing ended in. `true`: the box read back as the typed text and the
@@ -112,6 +124,12 @@ export type Host = {
   /** The live exit typing; see `ExitTyping`. May wait: the pane draws typed text late, and the
    *  reading that decides the Enter or the clearing key waits for it. */
   typeLine(session: string, pane: string, text: string): ExitTyping | Promise<ExitTyping>;
+  /** Types text into the pane's box, with no read-back and no Enter: the bare restored CLI's
+   *  own exit word (`profile.exit`), typed by a wrapper seat's relaunch. False when the text
+   *  was not typed; the caller then presses no Enter. */
+  typeText?(session: string, pane: string, text: string): boolean | Promise<boolean>;
+  /** Presses Enter in the pane, straight after `typeText`. False when the key was not sent. */
+  pressEnter?(session: string, pane: string): boolean | Promise<boolean>;
   /** The live key exit, for a CLI whose TUI takes no exit text: the profile's keys, pressed at
    *  the seat's idle screen only; see `ExitKeys`. Present where a seat can be stopped. */
   pressKeys?(session: string, pane: string, cli: string, keys: readonly string[]): ExitKeys | Promise<ExitKeys>;
@@ -156,6 +174,9 @@ export type Host = {
   /** The session's recorded seats, read fresh; null when unreadable. The waiting proof refuses a
    *  pane or workspace any other seat's record names. */
   seatStates?(session: string): Record<string, SeatState> | null;
+  /** The pane this command itself runs in, when the caller's placement or the environment names
+   *  one. A sweep or a close-leftover never closes a workspace holding it. */
+  callerPane?: string;
   classify(session: string, pane: string, cli: string): ScreenKind;
   /** The pane's visible text, ANSI styling and all, or null when the pane can't be read. */
   paneText?(session: string, pane: string): string | null;
@@ -414,6 +435,54 @@ function echoIndex(lines: readonly string[], command: string): number {
   return head.length >= 8 ? lines.findLastIndex((line) => line.includes(head)) : -1;
 }
 
+/** The last drawn (non-empty) row of the screen; -1 when the screen is blank. */
+function lastDrawnRow(lines: readonly string[]): number {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if ((lines[i] ?? '').trim() !== '') return i;
+  }
+  return -1;
+}
+
+/** Whether the launch line still sits at its shell's prompt, typed and not executed: its echo
+ *  is on the screen and nothing was drawn below it. A line that wraps fills row after row with
+ *  its own text, so the rows from the echo down are joined and the line's tail is looked for at
+ *  their end — a wrap can split the tail across two rows, or fall where the command holds a
+ *  space the tty did not draw. A prompt or output row below the echo is what the shell wrote
+ *  after reading it, and a screen with no echo of the line is not a box this can be said of:
+ *  neither is ever treated as the line sitting. The rows are the pane's own text, uncut: the
+ *  excerpt `plainPaneText` makes is for the report, and its cut would lose a long line's tail. */
+function lineAtPrompt(lines: readonly string[], command: string): boolean {
+  const echo = echoIndex(lines, command);
+  if (echo < 0) return false;
+  const last = lastDrawnRow(lines);
+  if (last < echo) return false;
+  if (last === echo) return true;
+  const tail = command.trimEnd().slice(-24);
+  if (tail.length < 8) return false;
+  if ((lines[last] ?? '').includes(tail)) return true;
+  return lines.slice(echo, last + 1).join('').replace(/\s+/g, '').endsWith(tail.replace(/\s+/g, ''));
+}
+
+/** How long a relaunch's line may sit at its shell's prompt before the Enter the host sent is
+ *  read as lost and one more is pressed. A fresh shell can leave a typed line unread while the
+ *  tty's echo sits on the screen — 8.9 s to 10.3 s across seven of 24 synthetic trials, 10 265
+ *  ms the longest — and past that a shell still drawing nothing below the line cannot be told
+ *  from one whose Enter never arrived. The extra Enter costs a slow shell nothing (it becomes
+ *  an empty command after the line the shell finally reads) and is what submits a line whose
+ *  first Enter was dropped. */
+const UNREAD_LAUNCH_MS = 12_000;
+
+/** Whether a relaunch's pane is still one to press Enter in: no other seat is named on it, the
+ *  agent list can be read (one that cannot be read cannot show the pane is free), and — when the
+ *  host reads processes — nothing but the pane's own shell is in front. The launch step's own
+ *  guard, read fresh for the one key the wait may press. */
+function launchPaneFree(host: Host, session: string, pane: string, seat: string): boolean {
+  const agents = host.agentList?.(session) ?? null;
+  if (agents === null) return false;
+  if (agents.some((agent) => agent.pane === pane && agent.name !== null && agent.name !== seat)) return false;
+  return host.processInfo === undefined || paneHoldsOnlyShell(host.processInfo(session, pane));
+}
+
 /** The pane's last lines for a report: at most six, the newest kept, empty lines dropped,
  *  control characters and styling gone (`plainPaneText`). The launch line's own echo comes
  *  first when it is within reach: the last line holding the start of the command that was
@@ -450,6 +519,54 @@ async function until(
     if (cancelled()) return false;
     // A clock that does not move would spin. Treat that as the wait running out.
     if (host.now() <= before) return false;
+  }
+}
+
+/** The naming wait re-asks the host to take a seat's name on a short backoff after a refusal.
+ *  The host refuses a rename while the agent's startup is still pending, so the pane's
+ *  foreground can name the CLI before the host will; the first pause is short and doubles up to
+ *  the cap, and every pause is cut to what is left of the wait, so the retry never runs past it. */
+const RENAME_RETRY_MS = 250;
+const RENAME_RETRY_MAX_MS = 2000;
+
+/** Whether the host lists the pane under another seat's name now. A rename of it would take that
+ *  seat's pane, so the naming stops there; an unreadable list is not such a reading. */
+function namedForAnotherSeat(host: Host, session: string, pane: string, seat: string): boolean {
+  const agents = host.agentList?.(session) ?? null;
+  return agents !== null
+    && agents.some((agent) => agent.pane === pane && agent.name !== null && agent.name !== seat);
+}
+
+/** What the naming settled on: the host took the name, the pane turned out to be another
+ *  seat's, or the wait ran out (or was cancelled) with the name not taken. */
+type RenameOutcome = 'named' | 'other seat' | 'not named';
+
+/** Asks the host for the seat's name until it takes it or `leftMs` runs out. It pauses before
+ *  the first ask: the call that led here was already made at this instant. A pane the host has
+ *  begun naming for another seat ends the naming without a call. */
+async function retryRename(
+  host: Host,
+  session: string,
+  pane: string,
+  seat: string,
+  leftMs: number,
+  sleep: (ms: number) => Promise<void>,
+  cancelled: () => boolean,
+): Promise<RenameOutcome> {
+  if (leftMs <= 0) return 'not named';
+  const deadline = host.now() + leftMs;
+  let pause = RENAME_RETRY_MS;
+  for (;;) {
+    if (cancelled()) return 'not named';
+    const now = host.now();
+    if (now >= deadline) return 'not named';
+    await sleep(Math.min(pause, deadline - now));
+    if (cancelled()) return 'not named';
+    // A clock that does not move would spin. Treat that as the wait running out.
+    if (host.now() <= now) return 'not named';
+    if (namedForAnotherSeat(host, session, pane, seat)) return 'other seat';
+    if (host.renameAgent(session, pane, seat)) return 'named';
+    pause = Math.min(pause * 2, RENAME_RETRY_MAX_MS);
   }
 }
 
@@ -491,6 +608,9 @@ export async function executePlan(
   const logged = new Set<string>();
   let serverFailed = false;
   let watchFailed = false;
+  // The Bus this run started or found already answering. A stray Bus workspace closes only
+  // once this is true, so a failed start never leaves the team with no Bus at all.
+  let busLive = false;
   // A stale watch that was not confirmed gone suppresses the replacement's workspace and pane
   // command: the run holds instead of leaving two watches on the route.
   let watchHeld = false;
@@ -729,13 +849,25 @@ export async function executePlan(
   // launched again; it is ready when it reaches its prompt, and the detail says why it was
   // launched. Any other end of that seat keeps its own record, and the close is what the plan
   // and the state already show.
-  const relaunched = new Map<string, 'gone' | 'replaced' | 'drift'>();
+  const relaunched = new Map<string, 'gone' | 'replaced' | 'drift' | 'own-line' | 'endpoint'>();
   // The conversation id each launch is known to carry: the `--session-id` it minted, or the id its
   // line resumes. The seat state records it (and the registry's reach from it), so the next
   // relaunch can resume it when herdr's reading after the launch has none (herdr's reading, when present, wins).
   const launchSessions = new Map<string, string>();
   // The line each seat's pane actually ran this run, read again when its resume fails on screen.
   const launchedCommands = new Map<string, string>();
+  // The seats whose launch this run ran in their own recorded pane (item 7's relaunch). The
+  // idle wait that follows reads the line it typed for submission, gives a line still sitting
+  // at the prompt one more guarded Enter, and takes its end from the foreground.
+  const reusedPanes = new Set<string>();
+  // The base recipe each seat's record keeps when this run records it: the plan's pinned line for
+  // a launched seat, never the expanded command above. A seat this run did not launch has no
+  // entry, so every later record of it keeps what its own earlier launch wrote.
+  const recordLines = new Map<string, string>();
+  const recordSeat = (seat: string, patch: Parameters<Host['record']>[1]): void => {
+    const line = recordLines.get(seat);
+    host.record(seat, line === undefined || patch.launch_line !== undefined ? patch : { ...patch, launch_line: line });
+  };
   // The seats this run launched: only a launch carries rules; a seat already running is never
   // typed into to give it them.
   const launchedThisRun = new Set<string>();
@@ -748,6 +880,10 @@ export async function executePlan(
       final(seat, { kind: 'ready' }, '  its pane held a process team did not launch; closed without input and launched again\n');
     } else if (verdict === 'drift') {
       final(seat, { kind: 'ready' }, '  its model drifted; closed without input and launched again\n');
+    } else if (verdict === 'own-line') {
+      final(seat, { kind: 'ready' }, '  its pane held the bare restored CLI, not its launch line; exited in place and launched again in the same pane\n');
+    } else if (verdict === 'endpoint') {
+      final(seat, { kind: 'ready' }, '  its recorded Codex endpoint was not live; exited in place and launched again in the same pane\n');
     } else final(seat, { kind: 'ready' });
   };
   // The identity read after the idle prompt, to carry into every later record of the seat.
@@ -809,7 +945,7 @@ export async function executePlan(
    *  session over state that records none. The identity the close itself reads is never written:
    *  it is the changed process the close was refused for, and proves nothing. */
   const keepWaiting = (seat: string, here: Place, classification: Classification, launched?: LaunchedIdentity): void => {
-    host.record(seat, {
+    recordSeat(seat, {
       stage: 'launched',
       pane: here.pane,
       ...(here.workspace ? { workspace: here.workspace } : {}),
@@ -986,17 +1122,21 @@ export async function executePlan(
       abort = true;
       return;
     }
-    if (seat && dropped.has(seat)) return;
+    // The old workspace's close is the one step a settled seat still runs: it is planned after
+    // everything that makes the seat ready, and it reads the seat's own record before closing.
+    // A vacated workspace's sweep is the same kind of step, for a seat this run settled.
+    const leftover = op?.do === 'close-leftover' || op?.do === 'sweep';
+    if (seat && dropped.has(seat) && !leftover) return;
     // A seat settled ready during its idle wait — the owner answered its prompt with
     // `team answer` — has nothing left in the plan: a rename would overwrite the ready stage,
     // and a delivery would send the rules a second time while the first turn is still running.
-    if (seat && ready.has(seat)) return;
+    if (seat && ready.has(seat) && !leftover) return;
 
     if (step.kind === 'skip') {
       if (op?.do === 'record' && op.seat) {
         if (op.held) held = true;
         if (op.launched) {
-          host.record(op.seat, {
+          recordSeat(op.seat, {
             stage: 'ready',
             ...(op.pane ? { pane: op.pane } : {}),
             ...(op.workspace ? { workspace: op.workspace } : {}),
@@ -1007,7 +1147,7 @@ export async function executePlan(
         final(op.seat, op.record, op.detail ?? '');
       } else if (op?.do === 'ready' && op.seat) {
         if (op.notice) hold(op.seat, `${op.seat}: ${op.notice}\n`);
-        host.record(op.seat, { stage: 'ready', rules: op.rules });
+        recordSeat(op.seat, { stage: 'ready', rules: op.rules });
         finishReady(op.seat);
       } else if (op?.do === 'refuse') {
         // The record carries the reason in words; the full finding — the start folder it names —
@@ -1113,7 +1253,7 @@ export async function executePlan(
         const made = host.createWorkspace(session, op.cwd, op.label);
         if (!made) {
           if (op.seat) {
-            host.record(op.seat, { stage: 'launched' });
+            recordSeat(op.seat, { stage: 'launched' });
             dropped.add(op.seat);
             final(op.seat, { kind: 'left out', reason: 'its workspace was not created; left at launched' });
           } else if ('bus' in op && op.bus) {
@@ -1134,8 +1274,10 @@ export async function executePlan(
           // this new workspace too.
           closed.delete(op.seat);
           // Name the pane right after it is created, before any wait, so a left-out pane is
-          // always findable.
-          if (host.renameAgent(session, made.pane, op.seat)) {
+          // always findable. A pane the host already lists under another seat's name is not
+          // this seat's to rename: the naming wait below leaves the seat out without touching it.
+          if (!namedForAnotherSeat(host, session, made.pane, op.seat)
+            && host.renameAgent(session, made.pane, op.seat)) {
             namedAtCreate.add(op.seat);
           } else {
             namedAtCreate.delete(op.seat);
@@ -1143,7 +1285,7 @@ export async function executePlan(
           // A fresh workspace is a fresh seat: any waiting record named an older pane, and is
           // void here. Clearing it in the same write is what makes the whole-team repair
           // (`team down` then `team up`) clear the record the next `up` would otherwise resume.
-          host.record(op.seat, {
+          recordSeat(op.seat, {
             stage: 'launched',
             pane: made.pane,
             workspace: made.workspace,
@@ -1157,6 +1299,69 @@ export async function executePlan(
       }
       case 'launch': {
         reportProgress(op.seat, 'launching');
+        // A launch that reuses the seat's own recorded pane re-reads the pane and its workspace
+        // immediately before anything is typed, and judges the process reading against the
+        // identity the seat's record holds. Only a pane the workspace still lists and whose own
+        // shell is the only process in front is launched in: a shell with another process beside
+        // it is not a bare pane, whatever the `gone` verdict says. A pane back at the recorded
+        // CLI is the seat's again: nothing launches, and the seat is not an error. A pane whose
+        // process team cannot name, or that cannot be read, launches nothing and fails the run.
+        // The agent list is read with the pane, and a pane the host names for another seat is
+        // never typed into either — the launch line would land in that seat's pane.
+        if (op.reuse !== undefined) {
+          const panes = op.workspace === undefined ? null : host.workspacePanes?.(session, op.workspace) ?? null;
+          const left = (reason: string, error: boolean) => {
+            if (error) held = true;
+            dropped.add(op.seat);
+            final(op.seat, { kind: 'left out', reason });
+          };
+          if (panes === null) {
+            left('its recorded workspace could not be read; nothing launched, nothing closed', true);
+            break;
+          }
+          if (op.pane === undefined || !panes.includes(op.pane)) {
+            left('its recorded pane is no longer listed in its recorded workspace; nothing launched, nothing closed', true);
+            break;
+          }
+          // The agent list is read with the pane, and before the process: the process reading
+          // stays the last one before the launch line, and the name read is one release older
+          // than nothing at all. A list that cannot be read leaves the pane alone — the same
+          // fail-closed reading a pane's own process gets.
+          const agents = host.agentList?.(session) ?? null;
+          const process = op.pane === undefined ? null : host.processInfo?.(session, op.pane) ?? null;
+          const verdict = seatProcessVerdict(op.reuse, process);
+          if (verdict === 'same') {
+            provedRestored.add(op.seat);
+            left("its pane is the seat's again; left as it is", false);
+            break;
+          }
+          if (verdict === 'replaced') {
+            left('the process in its pane is not the one team launched; nothing launched, nothing closed', true);
+            break;
+          }
+          if (verdict === 'unknown') {
+            left('its pane could not be read; nothing launched, nothing closed', true);
+            break;
+          }
+          // `gone` only says the shell is in front, which is also true with a process beside it.
+          // Only a pane whose own shell is the only process in front is a bare pane to type into.
+          if (!paneHoldsOnlyShell(process)) {
+            left('the process in its pane is not the one team launched; nothing launched, nothing closed', true);
+            break;
+          }
+          if (agents === null) {
+            left('its pane could not be checked against the agent list; nothing launched, nothing closed', true);
+            break;
+          }
+          // The pane is never typed into while the host names another seat on it: the launch
+          // line would land in that seat's pane.
+          if (agents.some((agent) => agent.pane === op.pane && agent.name !== null && agent.name !== op.seat)) {
+            left('its pane is named for another seat; nothing launched, nothing closed', true);
+            break;
+          }
+          // `gone`: the seat's own pane is bare at its shell, and the launch line runs there.
+          reusedPanes.add(op.seat);
+        }
         if (op.notice) {
           hold(op.seat, `${op.seat}: ${op.notice}\n`);
           // The plan's fallback placement is said once here, and `team.log` keeps the same
@@ -1187,7 +1392,7 @@ export async function executePlan(
             break;
           }
         }
-        const here = place(op.seat, op.pane);
+        const here = place(op.seat, op.pane, op.workspace);
         // The rules line rides this launch: its file is written before anything starts, so the
         // CLI reads it on its first turn, and a file that cannot be written leaves the seat out
         // before a managed endpoint is started for it. Whether the launch carries the line is the
@@ -1214,19 +1419,35 @@ export async function executePlan(
         // attach is added only once an endpoint exists to attach to. A start failure is said
         // once and the seat launches on the line it had; presence for it is unproven, not guessed.
         let command = op.command;
+        // A Grok seat's sandbox profile is written before its command runs, the same place the
+        // plan decided to name it. Grok refuses to start for a profile it cannot find, so a file
+        // that cannot be written takes the plan's own `--sandbox` off the line and the seat
+        // launches on the profile the workspace already gives it; the owner hears why.
+        if (op.grokSandbox !== undefined) {
+          const written = writeGrokSandbox(op.grokSandbox);
+          if (!written.ok) {
+            command = withoutGrokSandbox(command, op.grokSandbox.profile);
+            hold(op.seat, `${op.seat}: its sandbox profile was not written: ${written.why}; launched without it\n`);
+          }
+        }
         let startedEndpoint = false;
+        let attachedEndpoint = false;
         if (op.codexEndpoint !== undefined) {
           const read = host.managedCodexEndpoint === undefined
             ? { kind: 'unmanaged' as const, why: 'this launch starts no managed Codex endpoint' }
             : await host.managedCodexEndpoint({ dir: op.codexEndpoint.dir, session, seat: op.seat, config: codexEndpointConfig(op.command), ...(here ? { pane: here.pane } : {}), ...(op.cwd === undefined ? {} : { cwd: op.cwd }) });
           if (read.kind === 'up') {
             const attached = remoteCodexCommand(command);
-            command = `${attached} --remote ${shellQuote(read.url)}`;
+            command = appendOnLaunchLine(attached, `--remote ${shellQuote(read.url)}`, 'codex').line;
             startedEndpoint = read.started;
+            attachedEndpoint = true;
             for (const note of read.notes ?? []) hold(op.seat, `${op.seat}: ${note}\n`);
           } else {
             hold(op.seat, `${op.seat}: the managed Codex endpoint was not started: ${read.why}\n`);
           }
+        }
+        if (op.cli === 'codex' && !attachedEndpoint && !codexCommandHasFlag(command, '--no-daemon')) {
+          command = appendOnLaunchLine(command, '--no-daemon', 'codex').line;
         }
         // A resume of a conversation its CLI never wrote stops at the CLI's own error and leaves
         // the pane at its shell: the seat is launched fresh instead, and says so.
@@ -1248,6 +1469,7 @@ export async function executePlan(
           host.log(op.seat, launch.notice);
         }
         launchedCommands.set(op.seat, launch.command);
+        if (op.recordLine !== undefined) recordLines.set(op.seat, op.recordLine);
         launchedThisRun.add(op.seat);
         if (!here || !host.paneRun(session, here.pane, launch.command)) {
           // The fresh-start fallback is logged with its real outcome, never as a launch that
@@ -1288,7 +1510,7 @@ export async function executePlan(
         // The watcher is what this run left beside the seat: a hook the map installed, an MCP
         // inbox the launch registered, or nothing. Written even when the launch path had no
         // created workspace to record it with.
-        if (op.watcher) host.record(op.seat, { stage: 'launched', watcher: op.watcher });
+        if (op.watcher) recordSeat(op.seat, { stage: 'launched', watcher: op.watcher });
         break;
       }
       case 'idle': {
@@ -1330,7 +1552,7 @@ export async function executePlan(
           }
           // What this run leaves watching for a drop is recorded before the screen is read, so
           // a seat whose identity cannot be read still carries the truth beside it.
-          if (op.watcher) host.record(op.seat, { stage: 'launched', watcher: op.watcher });
+          if (op.watcher) recordSeat(op.seat, { stage: 'launched', watcher: op.watcher });
           const model = op.model;
           const version = op.version;
           const screen = model !== undefined && version !== undefined
@@ -1343,14 +1565,14 @@ export async function executePlan(
           if (identity) {
             identities.set(op.seat, identity);
             const sessionId = liveSession(op.seat, here.pane, op.cli) ?? launchSessions.get(op.seat);
-            host.record(op.seat, {
+            recordSeat(op.seat, {
               stage: 'launched',
               pane: here.pane,
               launched: identity,
               ...(here.workspace ? { workspace: here.workspace } : {}),
               ...(sessionId ? { agent_session: sessionId } : {}),
               ...(model !== undefined && version !== undefined
-                ? { model, version, launch_line: op.command, effort: op.effort ?? null }
+                ? { model, version, effort: op.effort ?? null }
                 : {}),
             });
           }
@@ -1432,6 +1654,21 @@ export async function executePlan(
         // stretch above it is never cleared, so a stretch broken by one unreadable poll does not
         // restart the count the message states.
         let shellBackFirst: number | null = null;
+        // A launch that reuses a recorded pane (item 7's relaunch) typed into a shell that was
+        // already at its prompt. The same screen — the line's echo with the shell in front —
+        // covers both a shell that has not read the line yet and an Enter that never arrived,
+        // so neither may be called an end. The wait tracks whether the line was ever submitted
+        // (the echo left the prompt row, something was drawn below it, or the foreground left
+        // the shell), gives a line still sitting past every captured unread echo one more Enter
+        // under the typed-wake guard, and reads the end off the foreground rather than a stretch
+        // of echo. The echo-budget stretch below stays the verdict for a fresh pane, where the
+        // line was typed into a shell this run found.
+        const reusedPane = reusedPanes.has(op.seat);
+        let launchEchoSeen = false;
+        let launchSubmitted = false;
+        let launchSittingSince: number | null = null;
+        let launchEnterAgain = false;
+        let shellBackAfterSubmit = 0;
         for (;;) {
           if (stopped || closing()) break;
           if (parallel && !identities.has(op.seat)) {
@@ -1476,6 +1713,13 @@ export async function executePlan(
                 else launchSessions.delete(op.seat);
                 shellBackSince = null;
                 shellBackFirst = null;
+                // A line typed now is a new one: its own echo, its own submission, and its own
+                // one guarded Enter.
+                launchEchoSeen = false;
+                launchSubmitted = false;
+                launchSittingSince = null;
+                launchEnterAgain = false;
+                shellBackAfterSubmit = 0;
                 deadline = host.now() + op.seconds * 1000;
                 await sharedSleep(pollMs);
                 if (stopped || closing()) break;
@@ -1484,19 +1728,76 @@ export async function executePlan(
             }
           }
           const at = host.now();
+          // The relaunch's line is confirmed submitted before its pane may say anything about
+          // the launch: the echo left the prompt row (something was drawn below it, or the echo
+          // itself moved off the screen), or the foreground left the shell. A line still sitting
+          // at the prompt past every captured unread echo is given one more Enter — under the
+          // launch step's own guard, read fresh this poll: the key goes only while the agent list
+          // can be read, no other seat is named on the pane, the pane's own shell alone is in
+          // front, and the line is exactly where it was. A screen with no echo of the line, an
+          // unreadable pane, and a herdr that cannot read the shell get no key.
+          if (reusedPane) {
+            const typedLine = launchedCommands.get(op.seat) ?? op.command;
+            const read = host.paneText?.(session, here.pane) ?? null;
+            const lines = read === null ? null : plainText(read).split('\n').map((line) => line.trimEnd());
+            const echo = lines === null ? -1 : echoIndex(lines, typedLine);
+            if (echo >= 0) launchEchoSeen = true;
+            const atPrompt = lines !== null && lineAtPrompt(lines, typedLine);
+            if (!launchSubmitted) {
+              if (back === false) launchSubmitted = true;
+              else if (lines !== null && echo >= 0 && !atPrompt) launchSubmitted = true;
+              else if (launchEchoSeen && lines !== null && echo < 0) launchSubmitted = true;
+            }
+            if (!launchSubmitted && back === true && atPrompt) {
+              launchSittingSince ??= at;
+              if (
+                !launchEnterAgain &&
+                host.pressEnter !== undefined &&
+                at - launchSittingSince >= UNREAD_LAUNCH_MS &&
+                launchPaneFree(host, session, here.pane, op.seat)
+              ) {
+                launchEnterAgain = true;
+                if (await host.pressEnter(session, here.pane)) {
+                  host.log(op.seat, 'its launch line had not been submitted; pressed Enter again');
+                }
+              }
+            } else if (!launchSubmitted) launchSittingSince = null;
+          }
           if (kind === 'unknown' && back === true) {
-            shellBackSince ??= at;
             shellBackFirst ??= at;
-            if (at - shellBackSince >= 12 * pollMs) {
-              const read = host.paneText?.(session, here.pane) ?? null;
-              if (read !== null && echoIndex(plainPaneText(read).split('\n'), op.command) >= 0) {
-                endedRead = read;
-                endedFor = Math.round((at - shellBackFirst) / 1000);
-                outcome = 'ended';
-                break;
+            if (reusedPane) {
+              // The relaunch's end is the foreground's verdict: the line was submitted, and the
+              // pane's own shell has held the front since. Three readings in a row, so a process
+              // that has only just exec'd — herdr can still name the shell for a poll after the
+              // line runs — is seen before the end is said. An unsubmitted line is never an end,
+              // however long its echo sits: the re-press above is its answer, and the deadline
+              // its report.
+              shellBackAfterSubmit = launchSubmitted ? shellBackAfterSubmit + 1 : 0;
+              if (shellBackAfterSubmit >= 3) {
+                const read = host.paneText?.(session, here.pane) ?? null;
+                if (read !== null && echoIndex(plainText(read).split('\n'), launchedCommands.get(op.seat) ?? op.command) >= 0) {
+                  endedRead = read;
+                  endedFor = Math.round((at - shellBackFirst) / 1000);
+                  outcome = 'ended';
+                  break;
+                }
+              }
+            } else {
+              shellBackSince ??= at;
+              if (at - shellBackSince >= 12 * pollMs) {
+                const read = host.paneText?.(session, here.pane) ?? null;
+                if (read !== null && echoIndex(plainPaneText(read).split('\n'), op.command) >= 0) {
+                  endedRead = read;
+                  endedFor = Math.round((at - shellBackFirst) / 1000);
+                  outcome = 'ended';
+                  break;
+                }
               }
             }
-          } else shellBackSince = null;
+          } else {
+            shellBackSince = null;
+            shellBackAfterSubmit = 0;
+          }
           // Herdr's own status is the last word on a screen the profile cannot read: an agent it
           // reports idle or done is at its prompt, the same reading `reload` and `restart` make
           // before a close that types nothing. The shell in front of the pane is not: a pane back
@@ -1623,6 +1924,53 @@ export async function executePlan(
         );
         break;
       }
+      case 'adopt': {
+        reportProgress(op.seat, 'naming');
+        // The host is read again with nothing between the readings and the write, and the same
+        // proof the plan ran decides again. A changed world is a refusal, never a partial
+        // adoption: no rename, no record.
+        const agentsNow = host.agentList?.(session) ?? null;
+        const processNow = host.processInfo?.(session, op.pane) ?? null;
+        const proof = restoreProof({
+          seat: { name: op.seat, cli: op.cli },
+          recorded: { stage: 'ready', pane: op.pane, workspace: op.workspace, launched: op.recordedLaunched },
+          agents: agentsNow,
+          process: processNow,
+          foreground: host.foreground?.(session, op.pane) ?? null,
+          recordedSession: op.session,
+          screen: host.paneText?.(session, op.pane) ?? null,
+        });
+        if (proof.kind === 'none') {
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: proof.why });
+          break;
+        }
+        if (!host.renameAgent(session, op.pane, op.seat)) {
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: 'its pane was not named; left as the host restored it' });
+          break;
+        }
+        // Line 2, after the name, as the launch's own rename does. A failed call is one line;
+        // the seat stays re-tied.
+        if (op.displayAgent && host.reportDisplayAgent && !host.reportDisplayAgent(session, op.pane, op.displayAgent)) {
+          sayForSeat(op.seat, `${op.seat}: its display was not reported\n`);
+        }
+        recordSeat(op.seat, {
+          stage: 'ready',
+          pane: op.pane,
+          workspace: op.workspace,
+          // The identity the pane holds now, read in the same breath as the proof; the plan's
+          // is the fallback for a reading the host could not give twice.
+          launched: launchedIdentity(processNow) ?? op.launched,
+          ...(proof.kind === 'session' && op.session !== undefined ? { agent_session: op.session } : {}),
+        });
+        provedRestored.add(op.seat);
+        dropped.add(op.seat);
+        final(op.seat, { kind: 'ready' }, `  restored and re-tied: ${proof.sentence}\n`);
+        break;
+      }
       case 'rename': {
         reportProgress(op.seat, 'naming');
         const here = place(op.seat, op.pane);
@@ -1640,6 +1988,7 @@ export async function executePlan(
         const listed = (): boolean => host.agentPanes(session)?.includes(here.pane) === true;
         const runsCli = (): boolean =>
           reportedLiveAgent(host.foreground?.(session, here.pane) ?? null, processNames);
+        const namingStarted = host.now();
         const seen = await until(
           op.seconds,
           2000,
@@ -1660,13 +2009,50 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: 'was not in the agent list in time; left at launched' });
           break;
         }
-        const renamed = namedAtCreate.has(op.seat) || host.renameAgent(session, here.pane, op.seat);
+        // The host refuses a rename while the agent's startup is still pending, and only takes
+        // one for a pane it currently lists as an agent; the pane's foreground can name the CLI
+        // before the host will take the name. One refused call is not the seat's last chance:
+        // the retry keeps this wait's own budget, on a short backoff, until the host takes the
+        // name or the wait runs out — and only the wait running out leaves the seat unnamed.
+        // A pane the host has begun naming for another seat is never renamed here: it is that
+        // seat's, and a rename would take it.
+        let renamed = namedAtCreate.has(op.seat);
+        if (!renamed) {
+          let outcome: RenameOutcome;
+          if (namedForAnotherSeat(host, session, here.pane, op.seat)) {
+            outcome = 'other seat';
+          } else if (host.renameAgent(session, here.pane, op.seat)) {
+            outcome = 'named';
+          } else {
+            outcome = await retryRename(
+              host,
+              session,
+              here.pane,
+              op.seat,
+              op.seconds * 1000 - (host.now() - namingStarted),
+              sharedSleep,
+              () => stopped || closing(),
+            );
+          }
+          if (stopped || closing()) {
+            // A closing host cancelled the naming wait: the seat keeps the stage it had.
+            stopped = true;
+            abort = true;
+            break;
+          }
+          if (outcome === 'other seat') {
+            dropped.add(op.seat);
+            final(op.seat, { kind: 'left out', reason: 'its pane is named for another seat; left at launched' });
+            break;
+          }
+          renamed = outcome === 'named';
+        }
         if (!renamed) {
           dropped.add(op.seat);
           final(op.seat, { kind: 'left out', reason: 'was not named in time; left at launched' });
           break;
         }
-        host.record(op.seat, {
+        recordSeat(op.seat, {
           stage: 'named',
           pane: here.pane,
           ...laterLaunchSession(op.seat, here.pane, op.cli ?? ''),
@@ -1676,7 +2062,7 @@ export async function executePlan(
         // Rules carried on the launch line, or prepended to each brief: there is nothing left
         // to deliver, so the seat is ready at its name.
         if (op.rules !== 'message') {
-          host.record(op.seat, {
+          recordSeat(op.seat, {
             stage: 'ready',
             rules: op.rules,
             pane: here.pane,
@@ -1735,7 +2121,7 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: 'its rules were not delivered; left at named' });
           break;
         }
-        host.record(op.seat, {
+        recordSeat(op.seat, {
           stage: 'ready',
           rules: 'message',
           pane: here.pane,
@@ -1767,6 +2153,53 @@ export async function executePlan(
         break;
       }
       case 'bus': {
+        if (op.pane !== undefined && op.workspace !== undefined) {
+          // The Bus workspace outlived the Bus: its pane is reused, and every reading the typing
+          // is judged by is taken here, immediately before it. A pane holding anything beside its
+          // own shell — or one the host cannot read — is not typed into, and no second workspace
+          // is made in its place: a duplicate Bus would answer the same route twice.
+          const said = (why: string) => {
+            host.say(`bus: its workspace ${op.workspace} ${why}\n`);
+            host.log('bus', `its workspace ${op.workspace} ${why}`);
+          };
+          const panes = host.workspacePanes?.(session, op.workspace) ?? null;
+          if (panes === null) {
+            said('could not be read; not started there, and no second workspace was made');
+            break;
+          }
+          if (!panes.includes(op.pane)) {
+            said('no longer lists its pane; not started there, and no second workspace was made');
+            break;
+          }
+          const process = host.processInfo?.(session, op.pane) ?? null;
+          if (process === null) {
+            said('holds a pane that could not be read; not started there, and no second workspace was made');
+            break;
+          }
+          if (!paneHoldsOnlyShell(process)) {
+            said('holds a process beside its shell; not started there');
+            break;
+          }
+          const named = host.agentList?.(session) ?? null;
+          if (named === null) {
+            said('holds a pane whose name could not be read; not started there, and no second workspace was made');
+            break;
+          }
+          if (named.some((agent) => agent.pane === op.pane && agent.name !== null)) {
+            said('holds a pane named for a seat; not started there, and no second workspace was made');
+            break;
+          }
+          if (!host.paneRun(session, op.pane, op.command)) {
+            host.say('bus: it did not start; seats poll their inboxes\n');
+            host.log('bus', 'it did not start');
+            break;
+          }
+          host.noteBus?.(op.pane, op.workspace);
+          busLive = true;
+          host.say('bus: started\n');
+          host.log('bus', 'started');
+          break;
+        }
         const here = places.get(op.label);
         if (!here || !host.paneRun(session, here.pane, op.command)) {
           host.say('bus: it did not start; seats poll their inboxes\n');
@@ -1774,6 +2207,7 @@ export async function executePlan(
           break;
         }
         host.noteBus?.(here.pane, here.workspace);
+        busLive = true;
         host.say('bus: started\n');
         host.log('bus', 'started');
         break;
@@ -1868,6 +2302,141 @@ export async function executePlan(
         }
         break;
       }
+      case 'relaunch': {
+        reportProgress(op.seat, 'launching');
+        // The plan found a restored pane that is not the seat's running form: the bare CLI on a
+        // seat whose own line starts a wrapper (adopting it would leave the wrapper's settings
+        // behind), or a Codex seat whose recorded managed endpoint died with the host (adopting
+        // it would leave the seat on Codex's own endpoint). The CLI is exited in that same pane —
+        // its recorded workspace is neither closed nor replaced — and the steps after this one
+        // launch the seat through its own line there, resuming the conversation where one is
+        // proven. The plan's reading may be minutes
+        // old, so the host is read again with nothing between the readings and the exit, and the
+        // same proof decides: a changed world is a refusal, never a partial exit. A working turn
+        // or unsent text is left where it stands.
+        const agentsNow = host.agentList?.(session) ?? null;
+        const processNow = host.processInfo?.(session, op.pane) ?? null;
+        const proof = restoreProof({
+          seat: { name: op.seat, cli: op.cli },
+          recorded: { stage: 'ready', pane: op.pane, workspace: op.workspace, launched: op.launched },
+          agents: agentsNow,
+          process: processNow,
+          foreground: host.foreground?.(session, op.pane) ?? null,
+          recordedSession: op.session,
+          screen: host.paneText?.(session, op.pane) ?? null,
+        });
+        // A dead-endpoint relaunch (`op.endpoint`) exists to give the seat a fresh managed
+        // server, not to carry a conversation: the weak proof — the CLI alone at an idle
+        // prompt — is enough there. The wrapper relaunch still needs the conversation itself.
+        const proven = proof.kind === 'session' || (op.endpoint === true && proof.kind === 'cli');
+        if (!proven) {
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, {
+            kind: 'left out',
+            reason: proof.kind === 'none'
+              ? proof.why
+              : 'its pane no longer proves the recorded conversation; nothing typed',
+          });
+          break;
+        }
+        const listedNow = agentsNow?.find((agent) => agent.pane === op.pane && (agent.name === null || agent.name === op.seat));
+        const kind = host.classify(session, op.pane, op.cli);
+        if (listedNow?.status === 'working' || kind === 'working') {
+          // A seat that came back working is left to finish its turn: nothing is typed and the
+          // run does not fail on it (the restore sweep reports it as skipped working).
+          skippedWorking.add(op.seat);
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: 'is working; nothing typed' });
+          break;
+        }
+        if (kind === 'unsent') {
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: 'holds unsent text; nothing typed' });
+          break;
+        }
+        const profile = profileFor(op.cli);
+        if (profile === null) {
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: 'its CLI has no profile to exit with; left as it is' });
+          break;
+        }
+        // The CLI's own way out, exactly as its profile measured it: the exit word and Enter,
+        // or the profile's keys at its idle screen. Nothing else is typed into the pane.
+        let refused: string | null = null;
+        if (profile.exit !== null) {
+          const typed = await host.typeText?.(session, op.pane, profile.exit);
+          const pressed = typed === true && (await host.pressEnter?.(session, op.pane)) === true;
+          if (!pressed) refused = 'its exit was not typed; left as it is';
+        } else {
+          for (const key of profile.exitKeys) {
+            if (!(host.sendKey?.(session, op.pane, key) ?? false)) {
+              refused = 'its exit was not sent; left as it is';
+              break;
+            }
+          }
+        }
+        if (refused !== null) {
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: refused });
+          break;
+        }
+        // The pane is back at its own shell when nothing but the shell is in front. The wait is
+        // the profile's exit time; a pane that does not come back is left exactly as it is, its
+        // record untouched, so the next run reads the same world this one left.
+        const back = await until(
+          profile.exitTimeout,
+          2000,
+          host,
+          () => paneHoldsOnlyShell(host.processInfo?.(session, op.pane) ?? null),
+          sharedSleep,
+          () => stopped || closing(),
+        );
+        if (!back) {
+          if (closing()) {
+            stopped = true;
+            abort = true;
+            break;
+          }
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: `its pane was not back at its shell in ${profile.exitTimeout} s; left as it is` });
+          break;
+        }
+        // The same pane, still in its recorded workspace, named for no other seat: the launch
+        // steps after this one run there. Anything else is left exactly as it is.
+        const agentsAfter = host.agentList ? host.agentList(session) : null;
+        const entryAfter = agentsAfter?.find((agent) => agent.pane === op.pane);
+        const foreign = entryAfter !== undefined && entryAfter.name !== null && entryAfter.name !== op.seat;
+        const panesAfter = host.workspacePanes ? host.workspacePanes(session, op.workspace) : null;
+        const inWorkspace = panesAfter !== null
+          ? panesAfter.includes(op.pane)
+          : entryAfter?.workspace === op.workspace;
+        if (agentsAfter === null || foreign || !inWorkspace
+          || !paneHoldsOnlyShell(host.processInfo?.(session, op.pane) ?? null)) {
+          held = true;
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: 'its pane did not come back to its shell in the recorded workspace; left as it is' });
+          break;
+        }
+        // The seat stands on its recorded pane with nothing but its shell in front, and the
+        // launch steps after this one run there. Its record is kept, never dropped — a drop is
+        // for a pane this run closed — and moves to launched on that same pane: a line that
+        // fails to run, or one stopped at a dialog, leaves a seat a later `up` reads as launched
+        // there, never as one that ended with its pane still open. The identity the record holds
+        // stays: a pane back at its shell alone gives no new process reading to record.
+        recordSeat(op.seat, { stage: 'launched', pane: op.pane, workspace: op.workspace });
+        // The launch steps after this one run the seat's line in that same pane, with no
+        // `reuse` flag on the launch op: the shell is already at its prompt, so the idle wait
+        // that follows reads the line it typed for submission and takes its end from the
+        // foreground, exactly as for a launch that reuses a recorded pane.
+        reusedPanes.add(op.seat);
+        relaunched.set(op.seat, op.endpoint === true ? 'endpoint' : 'own-line');
+        break;
+      }
       case 'repair': {
         reportProgress(op.seat, 'launching');
         // The pane holds a process team did not launch (or no CLI at all): the workspace is
@@ -1883,7 +2452,14 @@ export async function executePlan(
         // the one team launched, the model must still differ, and the seat must still be free.
         // Anything else: nothing closed, nothing launched for this seat, its state left as it
         // is, and the seat out of this run.
-        const listed = host.agentList ? host.agentList(session)?.find((agent) => agent.name === op.seat) : null;
+        const agentListNow = host.agentList ? host.agentList(session) : null;
+        const named = agentListNow?.find((agent) => agent.name === op.seat);
+        // A drift close re-reads the pane even when the host cleared the seat's name (a restore
+        // clears it): the process identity and the model, not the name, are what it closes on.
+        // A seat the host names on another pane still refuses; any other repair keeps the name
+        // binding it always had.
+        const listed = named
+          ?? (op.drift ? agentListNow?.find((agent) => agent.pane === op.pane && agent.name === null) : undefined);
         if (!listed || listed.pane !== op.pane || listed.workspace !== op.workspace) {
           held = true;
           dropped.add(op.seat);
@@ -2010,7 +2586,7 @@ export async function executePlan(
           if (continuity === 'restored' && recordedSession !== undefined) {
             const identity = launchedIdentity(host.processInfo?.(session, op.pane) ?? null);
             if (identity) {
-              host.record(op.seat, {
+              recordSeat(op.seat, {
                 stage: 'ready',
                 pane: op.pane,
                 workspace: op.workspace,
@@ -2087,6 +2663,172 @@ export async function executePlan(
         }
         host.dropBus?.();
         host.say('bus: stopped\n');
+        break;
+      }
+      case 'close-leftover': {
+        // The seat was relaunched in a fresh workspace, and its recorded workspace was left to
+        // close only now. The seat must be ready on a pane that is not the old one; then every
+        // reading the close is judged by is taken here, immediately before it, and never from
+        // the plan's minutes-old list. The old pane must read as its own shell alone — a reading
+        // that returns nothing is not a bare pane — and must not be named for another seat.
+        // Anything else leaves the workspace exactly as it is.
+        const said = (why: string) => {
+          host.say(`${op.seat}: its recorded workspace ${op.workspace} ${why}\n`);
+          host.log(op.seat, `its recorded workspace ${op.workspace} ${why}`);
+        };
+        const current = host.seatStates?.(session)?.[op.seat];
+        if (current?.stage !== 'ready' || current.pane === undefined || current.pane === op.pane) {
+          said('was left as it is; the seat is not ready on a replacement');
+          break;
+        }
+        const panes = host.workspacePanes?.(session, op.workspace) ?? null;
+        if (panes === null) {
+          said('could not be read; left as it is');
+          break;
+        }
+        if (host.callerPane !== undefined && panes.includes(host.callerPane)) {
+          said('holds the pane this command runs in; left as it is');
+          break;
+        }
+        if (!panes.includes(op.pane)) {
+          said('no longer lists its old pane; left as it is');
+          break;
+        }
+        if (panes.length !== 1) {
+          said('holds other panes; left as it is');
+          break;
+        }
+        const process = host.processInfo?.(session, op.pane) ?? null;
+        if (process === null) {
+          said('holds a pane that could not be read; left as it is');
+          break;
+        }
+        if (!paneHoldsOnlyShell(process)) {
+          said('holds a process in its old pane; left as it is');
+          break;
+        }
+        // The name is read with the pane: a pane the host names for another seat is that
+        // seat's now, and this workspace is not the one to close. A list that cannot be read
+        // leaves the workspace alone, as every other unreadable reading here does.
+        const agents = host.agentList?.(session) ?? null;
+        if (agents === null) {
+          said('holds a pane whose name could not be read; left as it is');
+          break;
+        }
+        if (agents.some((agent) => agent.pane === op.pane && agent.name !== null && agent.name !== op.seat)) {
+          said('holds a pane named for another seat; left as it is');
+          break;
+        }
+        const kind = host.classify(session, op.pane, op.cli ?? '');
+        if (kind === 'working') {
+          said('holds a screen that is working; left as it is');
+          break;
+        }
+        if (kind === 'unsent') {
+          said('holds unsent text; left as it is');
+          break;
+        }
+        if (!host.closeWorkspace(session, op.workspace)) {
+          held = true;
+          said('did not close; left as it is');
+          break;
+        }
+        host.say(`${op.seat}: its recorded workspace ${op.workspace} was closed\n`);
+        host.log(op.seat, `its recorded workspace ${op.workspace} was closed`);
+        break;
+      }
+      case 'sweep': {
+        // A workspace a seat vacated — a stopped seat's, a record the file no longer declares, or
+        // the one a host-moved seat left — is closed only from readings taken here, immediately
+        // before the close, and never from the plan's. It closes when every pane in it is back at
+        // its own shell alone, no pane is named, no other seat's record names the workspace, and
+        // no screen is working or holding unsent text. Anything else leaves it exactly as it is
+        // and says why. A stray Bus workspace waits for the Bus this run started (`after: 'bus'`);
+        // a replacement's workspace waits for the seat to be ready on another pane (`replaced`).
+        const who = op.seat ?? 'bus';
+        const said = (why: string) => {
+          host.say(`${who}: its workspace ${op.workspace} ${why}\n`);
+          host.log(who, `its workspace ${op.workspace} ${why}`);
+        };
+        if (op.after === 'bus' && !busLive) {
+          said('was left as it is; the Bus is not up');
+          break;
+        }
+        if (op.replaced === true && op.seat !== undefined) {
+          const current = host.seatStates?.(session)?.[op.seat];
+          if (current?.stage !== 'ready' || current.pane === undefined || (op.pane !== undefined && current.pane === op.pane)) {
+            said('was left as it is; the seat is not ready on a replacement');
+            break;
+          }
+        }
+        const panes = host.workspacePanes?.(session, op.workspace) ?? null;
+        // An empty list is not a workspace with nothing in it: a workspace is closed with its
+        // last pane, so no panes means the reading proved nothing and the close is not made.
+        if (panes === null || panes.length === 0) {
+          said('could not be read; left as it is');
+          break;
+        }
+        if (host.callerPane !== undefined && panes.includes(host.callerPane)) {
+          said('holds the pane this command runs in; left as it is');
+          break;
+        }
+        if (op.pane !== undefined && !panes.includes(op.pane)) {
+          said('no longer lists its pane; left as it is');
+          break;
+        }
+        // Every name and record below is read with the panes: a workspace the host gives another
+        // seat, or one another seat's own record still names, is that seat's to keep. A reading
+        // that cannot be taken leaves the workspace alone, as every unreadable reading here does.
+        const seats = host.seatStates?.(session) ?? null;
+        if (seats === null) {
+          said('was left as it is; the seat records could not be read');
+          break;
+        }
+        if (Object.entries(seats).some(([other, held]) => other !== op.seat && held.workspace === op.workspace)) {
+          said("is named by another seat's record; left as it is");
+          break;
+        }
+        const agents = host.agentList?.(session) ?? null;
+        if (agents === null) {
+          said('holds panes whose names could not be read; left as it is');
+          break;
+        }
+        if (agents.some((agent) => agent.pane !== undefined && panes.includes(agent.pane) && agent.name !== null && agent.name !== op.seat)) {
+          said('holds a pane named for another seat; left as it is');
+          break;
+        }
+        let blocked: string | undefined;
+        for (const pane of panes) {
+          const process = host.processInfo?.(session, pane) ?? null;
+          if (process === null) {
+            blocked = `holds a pane (${pane}) that could not be read; left as it is`;
+            break;
+          }
+          if (!paneHoldsOnlyShell(process)) {
+            blocked = 'holds a process beside its shell; left as it is';
+            break;
+          }
+          const kind = host.classify(session, pane, op.cli ?? '');
+          if (kind === 'working') {
+            blocked = 'holds a screen that is working; left as it is';
+            break;
+          }
+          if (kind === 'unsent') {
+            blocked = 'holds unsent text; left as it is';
+            break;
+          }
+        }
+        if (blocked !== undefined) {
+          said(blocked);
+          break;
+        }
+        if (!host.closeWorkspace(session, op.workspace)) {
+          held = true;
+          said('did not close; left as it is');
+          break;
+        }
+        host.say(`${who}: its workspace ${op.workspace} was closed\n`);
+        host.log(who, `its workspace ${op.workspace} was closed`);
         break;
       }
       case 'kill': {
@@ -2324,7 +3066,7 @@ export async function executePlan(
       if (!seat || logged.has(seat)) continue;
       if (step.kind === 'skip' && op?.do === 'ready') {
         if (op.notice) hold(seat, `${seat}: ${op.notice}\n`);
-        host.record(seat, { stage: 'ready', rules: op.rules });
+        recordSeat(seat, { stage: 'ready', rules: op.rules });
         finishReady(seat);
       } else if (step.kind === 'skip' && op?.do === 'record') {
         if (op.held) held = true;

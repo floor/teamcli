@@ -8,8 +8,9 @@ rule behind the status words.
 
 ## Per-CLI routes, as measured
 
-Every row was measured on this machine on 2026-10-18 with the binary's own `--version` and
-`--help`; no owner config file was opened.
+Every row was measured on this machine with the binary's own `--version` and `--help`; no owner
+config file was opened. The rows were measured on 2026-10-18 except antigravity's, measured on
+2026-11-02 in a scratch HOME, whose store was seeded with an unrelated entry and left holding it.
 
 | CLI | Version measured | Route team uses | Written in the seat's folder | Registration surface quoted |
 | --- | --- | --- | --- | --- |
@@ -18,7 +19,7 @@ Every row was measured on this machine on 2026-10-18 with the binary's own `--ve
 | gemini | 0.64.0 | `gemini mcp add -s project team-inbox ...` | `.gemini/settings.json` | `-s, --scope <user\|project> (default: "project")` |
 | cursor | 2026.10.16-e3cb207 | team merges the entry into `.cursor/mcp.json`; the launch line adds `--approve-mcps` | `.cursor/mcp.json` | `mcp login <identifier>` names ".cursor/mcp.json"; `--approve-mcps` "Automatically approve all MCP servers" |
 | grok | 1.0.60 | `grok mcp add -s project team-inbox ...` | `.grok/config.toml` | `-s, --scope <user\|project>`; "project (./.grok/config.toml)" |
-| antigravity/agy | 1.4.2 | none — the drop leg | nothing | `agy mcp add` has no scope flag and no per-run config route |
+| antigravity/agy | 1.4.12 | `agy mcp add team-inbox-<session>-<seat>-<hash> ...`, one entry per seat in the CLI's user-level store | nothing | `agy mcp add [flags] <name> <commandOrUrl> [args...]`; no scope flag, and `--help` shows no per-run config route |
 | muse | 1.4.10 | none — the drop leg | nothing | `muse init` scaffolds `AGENTS.md`; no workspace settings route in `--help` |
 | jules | no MCP in `--help` | none — the drop leg | nothing | none |
 
@@ -41,6 +42,21 @@ beside the file and renamed over it at mode 0600. A file that is a link, not a r
 JSON, not one object, or whose `mcpServers` is not an object is left exactly as it is and the
 registration is refused.
 
+An antigravity seat's launch runs `agy mcp add` and writes nothing into the seat's folder: the
+entry lives in the CLI's user-level store (`$HOME/.gemini/config/mcp_config.json`, created on the
+first add), which every team on the machine shares. The entry is named for the team and the seat —
+`team-inbox-<session>-<seat>-<hash>`, in the characters the store accepts — so two seats never
+overwrite each other; the hash of the exact pair keeps pairs that fold to the same readable part
+(`red-team` with `writer`, `red` with `team-writer`) apart. On 1.4.12, measured in a scratch HOME:
+a re-add replaced that entry and printed
+`Added MCP server "<name>" (stdio)`; an unrelated `floor-committee` entry seeded in the store
+survived both the add and the remove byte for byte; `agy mcp remove <name>` removed that one entry
+and exited 0; removing a name the store did not hold exited 1 with
+`Error: MCP server "<name>" not found`. `team down` and `team remove` run that remove for each seat
+they close and nothing else; an exit 1 is the entry already gone only when stderr carries that
+message for this seat's own name, and any other exit is reported on stderr while the seat's
+teardown proceeds.
+
 The written config names this install's runner — the executable and its entry script — so the
 server starts whether or not `team` is on the PATH.
 
@@ -55,6 +71,20 @@ A refused registration leaves the seat on its drop leg and the seat's line carri
 reason, prefixed `the team inbox was not registered: ` — for example `its project does not ignore
 .cursor/mcp.json`, `` `gemini mcp add` exited 1 ``, or `.gemini/settings.json was not written`.
 The seat still launches.
+
+## The server serves only its own launch
+
+The server a registration starts is bound to the seat and launch it was started for, not only to
+the folder it reads. Before it opens the inbox, `serve` proves that the process the CLI started is
+the seat `--seat` names: the caller must place as that seat — the same reading every command makes
+of its caller — on the pane the team's state records for it, in the team's own session. A
+process started with another seat's file, seat or session is refused even when it carries that
+seat's launch epoch, and so is a seat the state records on another pane or with no pane. The
+seat's current claim is the launch's other half: when the state holds one, `--epoch` must name
+that claim's epoch; when there is none, the server must carry no epoch. Both proofs run again on
+every tool call and every channel push, so a seat stopped, moved or relaunched under a running
+server is served nothing by it — no list, no body, no receipt — and no push marker is written.
+The refusal sentences are listed in [mcp.md](./mcp.md).
 
 ## The bounds
 
@@ -72,10 +102,16 @@ Every wait on the leg is bounded.
 | `CHANNEL_CONFIRM_MS` | 3 minutes | how long a push waits for its signed read receipt before the one redelivery |
 
 A send with no receipt in the grace prints `sent (unconfirmed)` with the receiving seat's
-delivery class appended — `queued; <seat> reads it at its next turn (pull-only)`, `queued;
-<seat> has no way to be woken while idle`, `woken through its event adapter` or `woken through
-its runtime queue` — keeps the drop and the marker, and ends the walk there: the message is
-safe, and the seat's client may still read it. The watch promotes a receipt to one `delivered
+delivery class appended — `queued; <seat> reads it at its next turn, and nothing here gives it one
+(pull-only)`, `queued; nothing wakes <seat> while it is idle; a person or a restart must give it a
+turn` (or the typed-wake variant, `… except a send-time typed wake and the watch's typed retry
+once a message passes its unread window, into an empty composer`, with the shorter `… except a
+send-time typed wake into an empty composer` for a seat that turns `watch_wake` off),
+`queued; <seat> has no way to be woken while idle`, `queued; its webhook fires when the bus takes
+it`, `woken through its event adapter` or `woken through its runtime queue`, with `the typed wake
+failed (<reason>)` or `the typed wake did not run (<reason>)` inserted after `queued; ` when the
+send reached for the typed leg — keeps the drop and the marker, and ends the walk there: the
+message is safe, and the seat's client may still read it. The watch promotes a receipt to one `delivered
 (read)` history line and clears the marker, typing nothing. Past `INBOX_FALLBACK_MS` the watch's
 retry pass looks at the marker again, but the retry types nothing in this build
 (`src/send/no-pane-messaging.ts`): it can promote a receipt that has arrived and deliver nothing

@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
+import { DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
 import { daemonSocketPath } from './paths.ts';
 import { DAEMON_PROTOCOL_VERSION, type DaemonHealthSnapshot } from './protocol.ts';
 import {
@@ -44,6 +45,10 @@ export type DaemonHealth = {
    *  record. It is the other half of the install identity the daemon records beside `version`. */
   gitHead: string | null;
   heartbeatAt: string | null;
+  /** The whole seconds the loop's `daemon.heartbeat` word resolved to; null when the reading
+   *  cannot tell, when an older record or answer carries no field, or when the daemon runs an
+   *  injected test beat. */
+  heartbeatSeconds: number | null;
   features: DaemonFeatures | null;
   stuck: DaemonStuckRequest[];
   /**
@@ -72,6 +77,16 @@ function stamp(now: () => Date): string {
   return now().toISOString();
 }
 
+/** The word a live answer or a state record carries, when it is the exact shape the daemon
+ *  promises: whole seconds inside the policy bounds. Anything else reads as null, never as a
+ *  guess — an older daemon's record and a seam-driven daemon both carry nothing. */
+function heartbeatSecondsOf(raw: unknown): number | null {
+  return typeof raw === 'number' && Number.isInteger(raw)
+    && raw >= DAEMON_HEARTBEAT_SECONDS.min && raw <= DAEMON_HEARTBEAT_SECONDS.max
+    ? raw
+    : null;
+}
+
 /**
  * Reads the daemon's state record and probes its socket. Never throws: an unreadable state
  * record or socket comes back as `unknown`, and a live pid whose socket does not answer comes
@@ -96,6 +111,7 @@ export async function daemonHealth(home: string = homedir(), options: DaemonHeal
       version: null,
       gitHead: null,
       heartbeatAt: null,
+      heartbeatSeconds: null,
       features: null,
       stuck: [],
       roots: [],
@@ -116,6 +132,7 @@ export async function daemonHealth(home: string = homedir(), options: DaemonHeal
       version: null,
       gitHead: null,
       heartbeatAt: null,
+      heartbeatSeconds: null,
       features: null,
       stuck: [],
       roots: [],
@@ -138,6 +155,7 @@ export async function daemonHealth(home: string = homedir(), options: DaemonHeal
       version: health.version,
       gitHead: typeof health.gitHead === 'string' && health.gitHead !== '' ? health.gitHead : null,
       heartbeatAt: health.heartbeatAt,
+      heartbeatSeconds: heartbeatSecondsOf(health.heartbeatSeconds),
       features: health.features,
       stuck: health.stuck,
       roots: mergedRoots(read.state, health),
@@ -285,6 +303,7 @@ function runningFromState(state: DaemonState, socket: string, probe: DaemonProbe
     version: state.version,
     gitHead: state.gitHead ?? null,
     heartbeatAt: state.heartbeatAt,
+    heartbeatSeconds: state.heartbeatSeconds ?? null,
     features: state.features,
     stuck: state.stuck,
     roots: state.roots,
@@ -306,6 +325,7 @@ function unknown(socket: string, why: string, now: () => Date): DaemonHealth {
     version: null,
     gitHead: null,
     heartbeatAt: null,
+    heartbeatSeconds: null,
     features: null,
     stuck: [],
     roots: [],

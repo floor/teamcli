@@ -7,6 +7,317 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.12] - 2026-11-05
+
+A send walks one cascade and stops at the first leg that takes it. A message stays in the mailbox
+until the seat that must read it signs the receipt.
+
+### Delivery
+
+A send tries three leg classes, in order, and stops at the first one that takes the message. First
+the channel: a live socket, a runtime queue, or the CLI's own session. Then a webhook the sender
+posts itself. Then a gated typed nudge, one trigger line into an idle prompt. The mailbox sits under
+all three and is the last resort. The inbox server is how a seat reads that mailbox; it is not a
+wake, and a delivery order that still names it is reported unavailable. A seat marked human uses the
+mailbox only. A reply walks the same cascade toward the sender and reports the leg that took it.
+
+### Re-wake
+
+The sender does not move on because a receipt is missing. The watch does. When the unread window
+passes with no receipt the seat signed, the watch tries the next leg down the cascade. The window is
+30 seconds for a seat that can be woken while idle, 60 seconds for a typed or pull-only seat, or the
+team's own setting. At twice that window the sender and the lead are told the message is queued, not
+woken. A mailbox drop that no leg can wake ends with those words.
+
+### Read receipts
+
+Only the seat signs a read receipt: its inbox read, its drops read, an acknowledgement, or a reply.
+A frame the channel took is reported delivered as taken. Delivered as read means the seat signed the
+receipt. The frame's last line names the record and the two acts that settle it: a reply marks it
+read, and an acknowledgement marks it read when no answer is needed. A taken frame that is still
+unread is re-woken once, with that hint.
+
+### Messages
+
+`team messages` serves and signs one mailbox: the caller's own. A run as the owner serves the
+owner's mailbox, and a run as a seat serves the mailbox of the seat it is placed as. A caller placed
+nowhere is refused. A record waiting on another seat's mailbox is listed as waiting; a seat's run
+does not show its body, and the owner's run shows a verified body read-only without spending that
+seat's receipt.
+
+### Client answers
+
+A client that holds a bundle grant can open a thread with a seat the grant reaches. That seat can
+now answer it: `team reply` and `team ack` accept a verified bundle grant, and the ops the grant
+signed decide which of the two is allowed — a reply needs the reply op, an acknowledgement needs the
+ack op, and a bundle without it is refused as before. The grant is verified, and the recipient
+re-checked, while the grant lock is held. A reply whose recipient seat, or whose agent id, moved
+while it waited is refused and writes nothing; it says to send the reply again.
+
+### Trace
+
+Each step of a message writes a signed event on that message's id. `team trace` prints the steps in
+order with the time between them. A send prints the id on its last line.
+
+### Daemon start
+
+The daemon answers as soon as it is bound. Each root's first store scan runs behind that, and status
+reports the scan while it runs and when it finishes.
+
+### Chores
+
+Heavy work for a root — its watch, its presence steps, and its fallback sweep — runs in a supervised
+child. The release default is one child per root. The daemon's own loop keeps answering. A child
+that has exited is not given another beat. A cold event-log read verifies from a signed checkpoint
+in slices, and the send endpoint's terminal host is read off the loop that answers health, so
+neither holds the daemon up.
+
+### Webhook deadline
+
+The sender's webhook post waits for the `webhook-sender-deadline-ms` policy: 3 seconds when unset, a
+whole number of milliseconds from 500 to 10000. It waits the tighter of that bound and the seat
+row's own answer bound. A post that outlives the wait is reported unknown, not failed, and is not
+posted again. An answer that arrives after the wait is still recorded.
+
+### Typed wakes
+
+Antigravity, Grok, Codex, Muse, and Cursor can declare a typed wake. A send types one trigger line,
+never the message, into a prompt two reads showed empty and idle, presses Enter only while the box
+still holds that line, at most three times, and calls the send delivered only when the working
+screen shows and the box no longer holds the line. Otherwise it is not delivered, the line is not
+typed again, and the message stays for a later wake. The line names how that profile reads its
+inbox. `delivered (typed wake)` is a history outcome. Muse's faint placeholder reads as an empty
+box, and a typed wake waits out a drawing line before it presses Enter.
+
+### Scroll-back
+
+A pane scrolled back over its transcript hides the prompt, so a wake used to find a screen it did
+not recognise and refuse. Codex's scroll-back view is now read as its own screen, in two layouts:
+the footer on the last row with the prompt hidden, and the marker directly above the prompt with the
+status footer on the last row. Both are read from the pane's bottom rows only, never from a
+transcript row higher up that quotes them. The wake presses the view's own return key once, then
+reads the prompt twice before typing, and keeps every guard it already had: a draft the return
+reveals, a working turn, or a dialog refuses, and Enter is pressed only while two reads agree on the
+line. A scrolled pane whose host word says unknown is woken this way too. A footer this build does
+not know is still an unrecognised screen, and nothing is typed into it; a launch keeps reading the
+view as unrecognised.
+
+### Codex prompt chrome
+
+The hint row Codex draws after the scroll-back return — `esc again to edit previous message` — is
+the prompt's own chrome: the empty composer reads idle and a wake may type its line there, and the
+hint is never answered with esc. With a line in the box, Codex hides its shortcuts row and draws the
+account's warning row under the status row; that row is the pane's own chrome too, so the box still
+reads unsent and a typed wake presses its guarded Enter into the line it typed. Neither row is read
+from a transcript row that quotes it, and no key is pressed into either.
+
+### Exit text
+
+`team down` and `team restart` clear the exit text they typed when the submit Enter is refused or
+never runs.
+
+### End of turn
+
+A seat whose tools do not include the inbox is told, in its own rules, to read its drops at the end
+of every turn.
+
+### Sidebar order
+
+`team order` puts the sidebar back in roster order, restarting one seat at a time. An owner who
+names a session or a team file has that choice followed by the placement and by every restart the
+pass delegates.
+
+### Placement
+
+When the terminal host hands a live session to a new server, placement follows the new server's root
+process, and a caller keeps its seat placement and any development-mode lift across the handoff.
+
+### Actions and comments
+
+A seat may read workflow runs, and may run the Actions commands its policy allows. The release set
+is rerunning the failed jobs of a run, and starting the deploy and ci workflows on a named ref. A
+lower level may only drop a command. Deleting or dismissing a comment is refused; the seat posts a
+superseding comment instead.
+
+### Lead settings
+
+Every seat's rules carry the owner's reserved scope, and under it the line that checkouts, seats,
+and team config belong to the teams. A lead's rules also say when a lead may act in a seat's pane,
+and when a lead in development mode may restore a stopped seat. Those two lines ship on, and each
+can be turned off. The third ships off: inside an entity, an entity may turn on the line that a
+decision the main orchestrator relays from the owner is quoted, cited, and acted on — off by
+default, because a relayed decision carries the owner's authority and a sender's claim to relay one
+does not yet verify. The reserved scope stays whatever is set.
+
+### Development mode
+
+Under development mode, the owner lift on `team config set` and `team add` admits only its subject:
+the target team's lead, placed in that team's session, or the entity's main orchestrator. An
+`always` rule for an owner action admits only its subject as well, and the rule spent is the one
+naming the caller's team; revoking an approval is one of those actions. While development mode is on
+for a team, `team check` reports a pending owner card that asks for anything beyond the general
+grant and the development-mode switch as policy drift.
+
+In development mode, `team restart`, `team order` and `team worktree` continue when a stored
+approval does not verify: each names the record and the unverified lines, restart names
+`team approve` as the command that writes a new approval, and none of them signs one. Outside
+development mode the refusal is unchanged; order and worktree say that standing cannot be renewed in
+this build.
+
+### Main orchestrator
+
+The entity's main orchestrator can reach any seat of the entity's teams. A seat can answer that
+orchestrator on the thread the orchestrator opened, and cannot open a thread toward it. A restart of
+a stopped seat by that orchestrator is judged by who the caller is.
+
+### Heartbeat
+
+`daemon.heartbeat` is a whole number of seconds from 1 to 60. Unset, the beat is 5 seconds. The
+daemon records it and answers a health probe while other work runs.
+
+### Store
+
+Two first writers of a new home share the state folders and the pending folder. A folder that is
+already a real folder of this user is used. A link, a file, or another user's folder is still
+refused.
+
+### Chores liveness
+
+A chores child reports the processor time it has been charged on every heartbeat, so a healthy beat
+does not stop to read the process table. The daemon asks the process table only for a child that has
+gone silent: one question at a time, off the answering loop. A reading that fails, or runs
+backwards, spares the child. A child still being charged work is not forced off. A child that has
+not yet had time to hear a beat is not judged silent. A root's next child waits 60 seconds from the
+moment the last one was ended, including when the start itself throws, so a child that comes up
+under load is not replaced again inside that minute.
+
+### Roster
+
+A seat written on one line, or as a list at the seats header's own column, can be revived. Restart
+decides that the seat exists from the validated record, and clears or re-marks the stopped mark
+through that record, wherever the text holds the key. A record that no longer validates keeps the
+old line writer. A registry team can declare a seat no launch has run for yet. Up, add, restart and
+reload write that seat's roster line before the plan runs, so the first launch can register. A name
+the launching record does not declare is refused, and the registry is left as it was.
+
+### Idle colour
+
+An exact listed line drawn in one non-bold colour reads as idle, so a seat that has gone idle can be
+woken. A second colour, a bold word, or a cursor cell stays text. A webhook delivery the seat has
+not read is posted once more, with the same message id. The wake marker stops a second pass.
+
+### Tasks hint
+
+A tasks hint is an empty box only when the whole row is that exact text. The same words with
+anything after them stay a draft, so a wake does not type over a draft. A listed tasks sentence in
+one non-bold colour is that empty box. The same words split across two colours stay a draft.
+
+### Held wake line
+
+Two reads that hold exactly the wake line press Enter, and a listed placeholder row under that line
+does not spoil the hold. A working screen that still holds the line is not delivered. The wait stays
+inside the existing bound. A bound that ends with the line still there leaves the message for a
+later wake.
+
+### Blocked screen
+
+When unread mail is due and the seat's screen is one the watch does not recognise, the watch does
+not type into it. It tells the lead once and records the message delivered but blocked. The notice
+is owed once the message is due, not only inside twice the unread window: a pass that first looks
+late still names the screen, where the queued, not woken report was the only word before. Twice the
+window keeps the notice single — a report already standing for the same seat and screen is the one
+later messages join. A screen the watch already knows keeps its own handling, so a later idle screen
+can still be typed.
+
+### Stuck seat
+
+Some states keep the wake path from looking at a seat at all: the message already has a retry, or a
+proven presence says the seat is mid-turn. When the oldest unread message has waited past twice the
+seat's unread window, the watch now names the seat to the lead anyway, once per episode, for every
+seat not marked human and not stopped. The notice says what waits — how many messages, and the
+oldest one's age — and why: the screen is not recognised, or presence has said working for longer
+than `watch.stuck_after`. That bound is 15 minutes when the team does not set it, and it is never
+scaled by the tempo; a working word younger than it is a live turn and gets no notice. The episode
+closes when the seat reads one of the messages the notice named, or its state is recognised and
+fresh again. The blocked-screen report shares the episode, so one stall is one notice, and the
+queued, not woken report stays quiet while an episode is open. The notice types nothing, takes no
+seat lock, and leaves every pending retry and wake marker as it found it.
+
+The stuck-episode marker is taken from the pass's own folder listing: an absent marker costs no
+read, and a marker is read at most once per seat per pass.
+
+### Watch pass
+
+One watch pass reads each message file once. It checks a receipt before it reads the record, and the
+unread set and the unacked set from that read are what the pass wakes, reports and waits on. A later
+check in the same pass uses that set. It does not open the file again. A very large drop folder,
+tens of thousands of old messages, still slows the hosted watch until archived drops are reclaimed
+in the next release.
+
+### Power-loss restore
+
+After a machine loses power, the terminal host reopens the sessions it can, but the agent names it
+had given their panes do not survive. A caller places itself by that name, so every restored seat
+reads as unplaced and its sends and reads are refused. `team up` now re-ties a restored seat to its
+record when the proof holds: the pane is the recorded one, in the recorded workspace, and either its
+conversation is the one the record names, or — when neither side names a conversation — the declared
+CLI is alone in its workspace, at an idle prompt, with nothing unsent in its box. The run names the
+pane back, repaints the sidebar line and records the process the pane holds now; nothing is typed
+into the pane and nothing is closed, and the seat counts as neither repaired nor refused. A pane
+that fails the proof is left as it is, with the reason said.
+
+A seat whose program the terminal host did not bring back is launched again. When its recorded pane
+is back at its shell, the seat runs in that same pane; when the pane is gone or was replaced, the
+seat launches from the beginning in a workspace of its own, and the workspace left behind closes
+without input once the seat is ready — only while it still holds nothing but the old pane and is not
+named for another seat. Replacing, removing or stopping a seat closes the workspace it vacates once
+the replacement is ready, or at once when nothing replaces it, and only when the host, read just
+before the close, shows no CLI and no other seat's pane in it. A team keeps one watch workspace: one
+that already carries the team's label is reused instead of a second being made.
+
+A restored pane that runs the bare CLI where the seat's own launch line starts a wrapper — an
+alternate endpoint — is not adopted: every turn would lack the wrapper's settings. `team up` lets
+the bare CLI exit by its own exit word or keys in that same pane, launches the seat again there
+through its own launch line with its conversation resumed, and neither closes nor replaces the
+workspace.
+
+A Codex seat whose recorded managed endpoint did not survive the host is not left on it. When the
+record names this seat's own socket and that socket is not live, or the recorded process is gone, or
+the process now at that pid started at another time, `team up` lets the CLI exit in its pane and
+launches the seat again there, so the launch starts a fresh endpoint and attaches to it. A live
+endpoint stays. A record that is absent or not this seat's, and a start time this build cannot read,
+leave the pane as it is: nothing is relaunched on a guess. The relaunch is the Codex binary itself
+with the managed endpoint on. A wrapper, or a line that already names `--remote` or `--no-daemon`,
+is not given one.
+
+A launch asks the terminal host for the seat's name, and asks again when the host refuses because
+the agent is still starting. The asks stay inside the naming wait: the first pause is a quarter of a
+second and each later one doubles up to two seconds, cut to whatever the wait has left. A pane the
+host has begun naming for another seat is left to that seat. Only the wait running out leaves the
+seat unnamed, at launched.
+
+One command runs the restore across every registered team: `team up --all`, which only the owner or
+a lead in development mode runs, takes the teams in a fixed order — a team whose folder holds
+another team's first, then by session name — runs the ordinary pass for each team whose session is
+running and whose record holds seats, and skips a team whose session is not running rather than
+starting it cold. One team's failure never stops the next; the run ends with a line counting the
+teams swept and the seats repaired, skipped and refused, and a run that restores nothing says so
+instead of reporting success. The daemon's startup pass does the same for the checkouts its unit
+names and retries a session that is still restoring — five seconds, then twice as long each time up
+to a minute, for five minutes and a quarter — before it reports that session pending. That pass is
+this home's unit alone: a loaded job whose path is not the unit file this home installed is not this
+daemon's, and the retry does not borrow it. A seat lock left by the previous boot is stale unless
+its process is alive and its start time matches the one recorded, so a reused pid no longer holds a
+seat shut.
+
+`team check` names each restore gap with its repair: a restored pane that holds the seat's
+conversation or declared CLI, a seat whose CLI did not come back, a pane running no CLI, and a
+process the record cannot tie to the launch. `team restart` proves the team of a restored session
+from the team it was launched from, then the team the folder holds, then the team the registry
+records for the session, and says which one it fell back to. A restored pane is `team up`'s to
+re-tie, not restart's; restart takes one only while the host still names the seat on the recorded
+pane, and only with `--abandon`.
+
 ## [0.5.11] - 2026-11-02
 
 Clearer delivery reports and approval cards, steadier team recovery, and tighter checks before

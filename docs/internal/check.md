@@ -134,39 +134,61 @@ none of it and has no writer mode and no `--rollout` of its own.
 Unread work is named on the same pass (`unreadDifferences`, `src/check/team.ts`): every non-human
 seat's drop folder is read through `listUnread` (`src/mcp/inbox.ts`), the watch's own reading of
 what waits — a UUID-named regular file with no verified read receipt beside it, the general seat
-brief's current and superseded ids aside. A message older than `watch.unread_after` — the value in
-force, 600 s when the file omits it — is one difference for the seat,
+brief's current and superseded ids aside. A message older than the seat's unread window — the
+file's `watch.unread_after` when it moved the section, else the delivery class's default (30 s
+for a seat a message can wake while it is idle, 60 s for a typed or pull-only seat; ADR
+`zeus-message-path`, D2) — is one difference for the seat,
 `<seat>: a message from <from> has been unread for <n> min (id <id>)`, with `; <m> more unread`
-when others are due and the oldest named. The repair is the seat's next turn, or
-`team drops --read --seat <seat>` when the seat's record says no turn-start reader is installed.
+when others are due and the oldest named. The repair reads the seat's delivery class on this
+pass (`seatDeliveryClass`), so it cannot promise a wake the seat does not have. A seat whose
+record says no turn-start reader is installed earns `team drops --read --seat <seat> reads it
+now; no turn-start reader is installed, so team reload <seat> installs the launch's hooks`.
+Otherwise a seat something can wake while it is idle — a `push` or `between-turns` class — earns
+`a wake route stands for <seat> and the message is still unread; team drops --read --seat <seat>
+reads it now`, and a seat nothing can wake earns `nothing gives <seat> a turn while it is idle;
+team drops --read --seat <seat> reads it now, or a person or a restart must give it a turn` —
+with `nothing wakes <seat> while it is idle except a send-time typed wake into an empty composer`
+in place of `nothing gives <seat> a turn while it is idle` when the seat's profile declares
+`typed_wake: screen`, and `nothing wakes <seat> while it is idle except a send-time typed wake,
+and the watch's typed retry has not delivered this message` when that profile's watch retry is on
+for the seat.
 The sender is the verified record's `from`; a record that does not verify is named `an
 unverified message`, and the `.pending` marker beside it is never read as a sender — it is
 unsigned, so it may not lend a message the owner's name or a seat's standing. A person's drop is
 read by a person and is never asked for a receipt, and with no message key no receipt can be
 judged: neither is named.
-The line is advice like the rest. The watch types nothing for it: its unread wake reserves a
-marker and reaches no pane in this build, and a message still unread at twice the window is
+The line is advice like the rest. The watch types nothing for it: its unread wake attempts the
+delivery and reaches no pane in this build, and an attempt that wrote nothing gives its
+reservation back, so the message keeps its one wake. A message still unread at twice the window is
 reported as a signed record to its sender's own mailbox and to the team's lead, naming the
-reserved wake and where the drop waits.
+standing wake marker — a wake that was sent, or one that was attempted and whose outcome is
+unconfirmed — and where the drop waits.
 
 One more delivery family is named, with the send's own reading (`socketSkippedDeliveries`,
 `src/check/team.ts`): a live Claude seat whose profile promises a push delivery but whose socket
 leg a send would skip. The gate is the send's — `socketIneligibleReason` and `socketAddressOf`
 behind `socketLegOf`, the reading `team status` prints — and only a pane that still holds the
-seat is read. Three reasons are the team's to fix, each a difference with its repair, exit 1:
+seat is read. Four reasons are the team's to fix, each a difference with its repair, exit 1:
 
 - `<seat>: sends go to its drop folder, not its socket: <gate>`, repaired by
   `team config set seats.<seat>.inbound accept` when the launch's own settings declare accept
   but the team file never did;
+- `<seat>: sends go to its drop folder, not its socket: its launch-effective generated settings
+  do not declare crossSessionInbound accept, though its team file declares inbound accept`,
+  repaired by `team restart <seat>`; the same finding names the launch's own settings file (or
+  the launch line's own `--settings`) with that file as the repair's first act, and a wrapper
+  launch that carries no settings at all is repaired by `team restart <seat>`. This reason is
+  read before the address, for every seat: a session whose settings never declared accept is
+  why no socket serves it;
 - the same line, repaired by `team restart <seat>`, when the seat's box held a frame its
   declaration has not re-confirmed since;
 - `<seat>: sends go to its drop folder, not its socket: the socket predates the settings that
   declare it accepts`, repaired by `team restart <seat>`.
 
-A socket that is nowhere is its class's ordinary state, not a broken promise: the seat earns a
-note instead — `<seat>: no cross-session socket is live, so sends go to its drop folder; its
-delivery class is <class>, and <it reads them at its next turn | nothing wakes it while idle>` —
-and the exit does not change. A seat that opts out in the team file, a human's pane, a seat its
+Otherwise a socket that is nowhere is its class's ordinary state, not a broken promise: the
+seat earns a note instead — `<seat>: no cross-session socket is live, so sends go to its drop
+folder; its delivery class is <class> — <the class's own words>`, read from `deliveryWords` so
+it matches every send's console line — and the exit does not change. A seat that opts out in the team file, a human's pane, a seat its
 launch already wakes through the push channel, and a between-turns seat keep no promise the
 socket would keep, so none is named.
 

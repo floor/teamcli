@@ -74,15 +74,20 @@ export const MANAGER_ONLY_OPS: readonly BundleOp[] = MANAGER_ELIGIBLE_OPS.filter
 /** The ops only the developer bundle carries. */
 export const DEVELOPER_ONLY_OPS: readonly BundleOp[] = DEVELOPER_ELIGIBLE_OPS.filter((op) => !(MANAGER_ELIGIBLE_OPS as readonly string[]).includes(op));
 
-/** Whether each eligible op has a `--client <grant> --key <key>` form in this build. A record may
- *  carry an op whose route does not exist yet (it admits nothing today and says so); the route
- *  arrives without any grant being widened or re-signed.
+/** Whether each eligible op has a route in this build. A record may carry an op whose route does
+ *  not exist yet (it admits nothing today and says so); the route arrives without any grant being
+ *  widened or re-signed.
+ *
+ *  `reply` and `ack` have no `--client <grant> --key <key>` form — a client has no identity in
+ *  those records — but they are routed through the identity that does exist: the bundle's own
+ *  client inbox. A seat answers (`team reply`) or acknowledges (`team ack`) a thread that client
+ *  opened, and the seat's command reads the bundle as the thread's origin, for that client's own
+ *  opening record only, when the bundle's signed op list carries the op.
  *
  *  Not routed yet, and why: `list`, `check`, `feed`, `messages`, `usage`, `drops`, `projects`, `issues`,
  *  `plan`, `next`, `brief`, `watch`, `doctor`, `commits` and `ask-show` read machine-wide state, mutate
  *  something the name hides (`next --release`, `brief rollout --apply`, `drops --read`, `watch`'s
- *  nudges) or have no per-team narrowing to carry yet; `reply` and `ack` answer as the owner or a seat
- *  and a client has no identity in those records (the one that exists is the client inbox's).
+ *  nudges) or have no per-team narrowing to carry yet.
  *
  *  The developer's own ops that are routed: `pause`, `resume` and `hold`, the commands whose only gate
  *  is "the owner, the orchestrator or a lead may" and whose whole effect is one record in the one team's
@@ -112,8 +117,8 @@ export const BUNDLE_OP_ROUTES: Readonly<Record<BundleOp, boolean>> = {
   doctor: false,
   commits: false,
   send: true,
-  reply: false,
-  ack: false,
+  reply: true,
+  ack: true,
   'ask-show': false,
   up: true,
   down: true,

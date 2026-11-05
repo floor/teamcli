@@ -276,7 +276,7 @@ describe('a send admitted by the operators\' rule is logged like every send', ()
     const reading = await send({ team: 'acme', seat: 'operator-2' }, 'operator-3', []);
     expect(reading.err).toBe(queuedLine('operator-3'));
     expect(reading.code).toBe(0);
-    expect(reading.out).toContain('operator-3: sent (unconfirmed) (drop, 0 ms)');
+    expect(reading.out).toContain('operator-3: queued, not woken (drop, 0 ms)');
     // The drop folder: the one signed record (the `.pending` marker beside it is the watch's),
     // whose payload carries the sender header and the admitting rule, the message one empty line
     // under it. The raw drop body the record replaced is gone.
@@ -294,7 +294,7 @@ describe('a send admitted by the operators\' rule is logged like every send', ()
     expect(read.ok).toBe(true);
     if (!read.ok) return;
     expect(read.entries).toHaveLength(1);
-    expect(read.entries[0]).toMatchObject({ from: 'operator-2', to: 'operator-3', outcome: 'sent (unconfirmed)', via: 'drop' });
+    expect(read.entries[0]).toMatchObject({ from: 'operator-2', to: 'operator-3', outcome: 'queued, not woken', via: 'drop' });
   });
 
   test('the same pair from the operator place is logged under the place\'s own rule', async () => {

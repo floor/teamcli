@@ -47,7 +47,11 @@ export function loadScreen(text: string, baseDir?: string, profileFile?: string)
   const root = parseYaml(text);
   const entries = mapping(root, 'a profile');
   // Launch keys are read by profile.ts. A screen-only snippet, as in the tests, omits them.
-  only(entries, ['format', 'cli', 'screen', 'screen_module', 'quota', 'trust_answer', 'question_answer', 'binary', 'process_names', 'tested', 'unattended', 'rules', 'delivery', 'standing_rules', 'herdr_status', 'login', 'exit', 'exit_keys', 'compose_module', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'mcp_inbox', 'timeouts', 'models', 'status_model', 'last_used_model', 'unread_model', 'not_started', 'abandon_answers']);
+  // Every side's keys: the settings edit, the delivery CLI the session runs, the public-only
+  // declaration, the pinned feature set and the vendor list with its credential store are each
+  // read by profile.ts, so a screen-only snippet may name all of them, as it may the watch
+  // retry keys.
+  only(entries, ['format', 'cli', 'screen', 'screen_module', 'quota', 'trust_answer', 'question_answer', 'binary', 'process_names', 'tested', 'unattended', 'features', 'rules', 'delivery', 'standing_rules', 'herdr_status', 'login', 'exit', 'exit_keys', 'compose_module', 'session_cli', 'public_only', 'exit_clear', 'exit_confirm', 'exit_completion', 'input', 'lobby_files', 'startup_reads', 'mcp_inbox', 'settings', 'typed_wake', 'read_hint', 'watch_wake', 'watch_wake_tries', 'timeouts', 'models', 'vendors', 'credentials', 'status_model', 'last_used_model', 'unread_model', 'not_started', 'abandon_answers']);
   const format = required(entries, 'format', root.line);
   if (format.value.kind !== 'scalar' || format.value.value !== 1) fail(format.line, '"format" must be 1');
   const cli = required(entries, 'cli', root.line);
@@ -112,7 +116,7 @@ function loadScreenModule(specifier: string, baseDir: string | undefined, line: 
 
 function screenOf(node: YamlNode, topScreenModule?: YamlEntry, baseDir?: string, profileFile?: string): ScreenData {
   const entries = mapping(node, 'screen');
-  only(entries, ['chrome', 'turn_end', 'composer', 'screen_module', 'question_text', ...STAGES]);
+  only(entries, ['chrome', 'turn_end', 'composer', 'screen_module', 'question_text', 'scroll_back', ...STAGES]);
   const chrome = optional(entries, 'chrome');
   const screenScreenModule = optional(entries, 'screen_module');
   const moduleEntry = screenScreenModule ?? topScreenModule;
@@ -156,7 +160,56 @@ function screenOf(node: YamlNode, topScreenModule?: YamlEntry, baseDir?: string,
   }
   const questionText = optional(entries, 'question_text');
   if (questionText) data.questionText = questionTextOf(questionText);
+  const scrollBack = optional(entries, 'scroll_back');
+  if (scrollBack) data.scrollBack = scrollBackOf(scrollBack);
   return data;
+}
+
+/** The keys a `scroll_back` return may name: only a key a run established at that screen — an
+ *  Escape that returned the pane to its composer with the transcript still above it. Never a
+ *  guess: the wake presses this key into a pane whose composer it cannot see. */
+const SCROLL_BACK_KEYS = ['escape'] as const;
+
+/** A pane scrolled back over its transcript reads from the bottom region the profile declares,
+ *  as whole rows: either the CLI's footer on the pane's last non-blank row, in the composer's
+ *  place (`footer`), or the marker row directly above the drawn composer together with the
+ *  status footer on the last non-blank row (`marker` and `status_footer`). A profile declares
+ *  one layout or both; half of the marker layout is refused, and so is neither. The return key
+ *  is the one the CLI's own row names, from the list above. */
+function scrollBackOf(entry: YamlEntry): { footer?: RegExp; marker?: RegExp; statusFooter?: RegExp; returnKey: string } {
+  const entries = mapping(entry.value, 'scroll_back');
+  only(entries, ['footer', 'marker', 'status_footer', 'return_key']);
+  const key = required(entries, 'return_key', entry.line);
+  const keyText = stringOf(key.value);
+  if (keyText === null) fail(key.line, '"scroll_back.return_key" must be a string');
+  if (!(SCROLL_BACK_KEYS as readonly string[]).includes(keyText)) {
+    fail(key.line, `"scroll_back.return_key" must be one of ${SCROLL_BACK_KEYS.join(', ')}: only a key a run established`);
+  }
+  const row = (name: 'footer' | 'marker' | 'status_footer'): RegExp | undefined => {
+    const found = optional(entries, name);
+    if (found === undefined) return undefined;
+    const text = stringOf(found.value);
+    if (text === null) fail(found.line, `"scroll_back.${name}" must be a string`);
+    if (!anchored(text)) fail(found.line, `a scroll_back ${name.replace(/_/g, ' ')} must match the whole line: "^…$"`);
+    return patternOf(text, false, found.line);
+  };
+  const footer = row('footer');
+  const marker = row('marker');
+  const statusFooter = row('status_footer');
+  if (marker === undefined || statusFooter === undefined) {
+    if (marker !== undefined || statusFooter !== undefined) {
+      fail(entry.line, '"scroll_back" must declare both "marker" and "status_footer": the marker sits above the composer and the status footer is the last row');
+    }
+    if (footer === undefined) {
+      fail(entry.line, '"scroll_back" must declare "footer", or "marker" and "status_footer"');
+    }
+  }
+  return {
+    ...(footer === undefined ? {} : { footer }),
+    ...(marker === undefined ? {} : { marker }),
+    ...(statusFooter === undefined ? {} : { statusFooter }),
+    returnKey: keyText,
+  };
 }
 
 /**
@@ -448,11 +501,12 @@ function composerOf(node: YamlNode): Composer {
   const frameEntry = optional(entries, 'frame_rows');
   const frameRows = frameEntry ? frameRowsOf(frameEntry) : 0;
   if (name === 'box-to-rule') {
-    only(entries, ['mode', 'prompt', 'rule', 'footers', 'status', 'placeholders', 'placeholder_style', 'strip_suffix', 'wrap', 'frame_rows']);
+    only(entries, ['mode', 'prompt', 'rule', 'footers', 'status', 'placeholders', 'placeholder_style', 'strip_suffix', 'wrap', 'frame_rows', 'own_rows']);
     // For a scrolled-out box, the non-blank lines under the closing rule must match
     // every pattern, in order, and the counts must be equal.
     const footers = optional(entries, 'footers');
     const suffix = optional(entries, 'strip_suffix');
+    const own = optional(entries, 'own_rows');
     return {
       mode: name,
       prompt: regexField(entries, 'prompt', node.line),
@@ -464,6 +518,7 @@ function composerOf(node: YamlNode): Composer {
       placeholderStyle,
       wrap,
       frameRows,
+      ...(own ? { ownRows: ownRowsOf(own.value) } : {}),
     };
   }
   if (name === 'status-last') {
@@ -589,10 +644,12 @@ function placeholdersOf(node: YamlNode): Placeholder[] {
   if (node.kind !== 'seq') fail(node.line, '"placeholders" must be a list');
   return node.items.map((item) => {
     const entries = mapping(item, 'a placeholder');
-    only(entries, ['equals', 'prefix']);
+    only(entries, ['equals', 'prefix', 'shape']);
     const equals = optional(entries, 'equals');
     const prefix = optional(entries, 'prefix');
-    if (equals && prefix) fail(item.line, 'a placeholder is "equals" or "prefix", not both');
+    const shape = optional(entries, 'shape');
+    const named = [equals, prefix, shape].filter((entry) => entry !== undefined);
+    if (named.length !== 1) fail(item.line, 'a placeholder is "equals", "prefix", or "shape", and only one');
     if (equals) {
       const text = stringOf(equals.value);
       if (text === null) fail(equals.line, '"equals" must be a string');
@@ -603,7 +660,9 @@ function placeholdersOf(node: YamlNode): Placeholder[] {
       if (!text) fail(prefix.line, '"prefix" must be a non-empty string');
       return { prefix: text };
     }
-    fail(item.line, 'a placeholder needs "equals" or "prefix"');
+    const word = stringOf(shape!.value);
+    if (word !== 'slash-hint') fail(shape!.line, '"shape" must be slash-hint');
+    return { shape: 'slash-hint' };
   });
 }
 

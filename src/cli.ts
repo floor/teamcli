@@ -38,6 +38,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   watch: () => import('./commands/watch.ts'),
   messages: () => import('./commands/messages.ts'),
   issues: () => import('./commands/issues.ts'),
+  order: () => import('./commands/order.ts'),
   sessions: () => import('./commands/sessions.ts'),
   next: () => import('./commands/next.ts'),
   plan: () => import('./commands/plan.ts'),
@@ -61,6 +62,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   usage: () => import('./commands/usage.ts'),
   lock: () => import('./commands/lock.ts'),
   tempo: () => import('./commands/tempo.ts'),
+  trace: () => import('./commands/trace.ts'),
   unlock: () => import('./commands/unlock.ts'),
   hold: () => import('./commands/hold.ts'),
   pause: () => import('./commands/pause.ts'),
@@ -79,6 +81,8 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   swap: () => import('./commands/swap.ts'),
   workflow: () => import('./commands/workflow.ts'),
   agents: () => import('./commands/agents.ts'),
+  fallback: () => import('./commands/fallback.ts'),
+  waits: () => import('./commands/waits.ts'),
 };
 
 /** Commands an earlier line carried and this one does not, each with the one line a typed one

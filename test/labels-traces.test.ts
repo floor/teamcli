@@ -100,19 +100,27 @@ describe('the seat traces', () => {
   });
 
   test('the send history answers with the seat\'s last message, and an answered one is its ack', () => {
-    message('orchestrator', 'builder-2', 'delivered', '2026-10-17T08:00:00Z');
+    message('orchestrator', 'builder-2', 'delivered (read)', '2026-10-17T08:00:00Z');
     expect(messageTrace('acme-web', root, 'builder-2', home)).toEqual({
       kind: 'message',
       at: '2026-10-17T08:00:00Z',
-      what: 'a message from orchestrator (delivered)',
+      what: 'a message from orchestrator (read)',
     });
-    message('builder-2', 'builder-1', 'delivered', '2026-10-17T08:30:00Z');
+    message('builder-2', 'builder-1', 'delivered (read)', '2026-10-17T08:30:00Z');
     expect(messageTrace('acme-web', root, 'builder-2', home)).toEqual({
       kind: 'message',
       at: '2026-10-17T08:30:00Z',
-      what: 'a message to builder-1 (delivered)',
+      what: 'a message to builder-1 (read)',
     });
     message('orchestrator', 'builder-2', 'answered', '2026-10-17T09:00:00Z');
+    expect(messageTrace('acme-web', root, 'builder-2', home)).toEqual({
+      kind: 'ack',
+      at: '2026-10-17T09:00:00Z',
+      what: 'answered a message from orchestrator',
+    });
+    // A bare `delivered` is a frame taken, not a seat that moved: passed over like the failures.
+    // Only the seat's own read (`delivered (read)`, above) shows the message reached it.
+    message('orchestrator', 'builder-2', 'delivered', '2026-10-17T09:05:00Z');
     expect(messageTrace('acme-web', root, 'builder-2', home)).toEqual({
       kind: 'ack',
       at: '2026-10-17T09:00:00Z',
@@ -153,7 +161,7 @@ describe('the seat traces', () => {
   });
 
   test('no home named: the send history is skipped rather than read from somewhere else', () => {
-    message('orchestrator', 'builder-2', 'delivered', '2026-10-17T08:00:00Z');
+    message('orchestrator', 'builder-2', 'delivered (read)', '2026-10-17T08:00:00Z');
     const session = sessionWith({});
     const seat = { name: 'builder-2', cli: 'claude-code' };
     // The entry above sits in the store; a caller that names no home reads none of it (the way

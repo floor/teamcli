@@ -61,15 +61,19 @@ export function seatBlocks(text: string): SeatBlock[] {
   for (let i = header + 1; i < lines.length; i++) {
     const line = lines[i] ?? '';
     if (line.trim() === '' || /^\s*#/.test(line)) continue;
-    if (indent(line) <= key) {
-      flush(i);
-      break;
-    }
-    if (/^\s*-\s+/.test(line)) {
+    // A dash at the header's own column is an item of the seats list too: YAML writes an
+    // indentless sequence that way (`seats:` then `- name: …` at the same column), and the
+    // validator reads those entries as seats. Anything shallower is outside the section.
+    if (indent(line) >= key && /^\s*-(?:\s|$)/.test(line)) {
       if (itemIndent < 0) itemIndent = indent(line);
       if (indent(line) > itemIndent) continue;
       flush(i);
       start = i;
+      continue;
+    }
+    if (indent(line) <= key) {
+      flush(i);
+      break;
     }
   }
   if (start >= 0) flush(lines.length);
@@ -104,7 +108,14 @@ function setValue(line: string, value: string): string {
   const rest = match[2] ?? '';
   const comment = /\s+#.*$/.exec(rest)?.[0] ?? '';
   const raw = rest.slice(0, rest.length - comment.length).trim();
-  const quoted = raw.startsWith('"') ? `"${value}"` : raw.startsWith("'") ? `'${value}'` : value;
+  // The value keeps the line's own quoting style, so the quote characters inside it have to be
+  // escaped for that style: a shell word may carry `"$USER"` or a quoted argument, and writing
+  // those raw into a double-quoted scalar ended the string early and left the file unparseable.
+  const quoted = raw.startsWith('"')
+    ? `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
+    : raw.startsWith("'")
+      ? `'${value.replaceAll("'", "''")}'`
+      : value;
   return `${match[1]}${quoted}${comment}`;
 }
 
@@ -147,10 +158,17 @@ export function seatIsStopped(text: string, name: string): boolean {
   return lines.slice(block.start, block.end).some((line) => /^\s*stopped:\s*(true|yes)\b/.test(line));
 }
 
+/** `text` with the counted entry that expands to `name` split into one entry per instance, so a
+ *  write can change that one instance and leave the others as they were. Text without a counted
+ *  entry for `name` is returned as it is. */
+export function splitSeatCount(text: string, name: string): string {
+  const counted = seatBlocks(text).find((block) => block.count > 1 && expanded(block).includes(name));
+  return counted?.name ? rewriteCount(text, counted.name) ?? text : text;
+}
+
 /** Drops `stopped: true` from the entry whose name is `name`. A counted entry is split first. */
 export function clearStopped(text: string, name: string): string {
-  const counted = seatBlocks(text).find((block) => block.count > 1 && expanded(block).includes(name));
-  const rewritten = counted?.name ? rewriteCount(text, counted.name) ?? text : text;
+  const rewritten = splitSeatCount(text, name);
   const block = seatBlocks(rewritten).find((item) => item.name === name);
   if (!block) return rewritten;
   const lines = body(rewritten, block).filter((line) => !/^\s*stopped:\s*(true|yes)\s*(#.*)?$/.test(line));
@@ -186,10 +204,10 @@ export function takeOut(text: string, name: string): string {
 /**
  * Copies `fromName`'s entry as a new entry named `toName`. A counted source is split first. The
  * copy carries the entry's fields and no comments or blank lines — a note written beside the
- * source stays with it — drops `count:` and `stopped: true` (it is one seat that starts now),
- * and is named and titled `toName`; a source with no `label:` gains one. It sits directly under
- * the source's last field, so the source's trailing blank lines and comments stay where they
- * were and `takeOut(text, toName)` gives back `text`.
+ * source stays with it — drops `count:`, `nickname:` and `stopped: true` (it is one seat that
+ * starts now, with no persona), and is named and titled `toName`; a source with no `label:`
+ * gains one. It sits directly under the source's last field, so the source's trailing blank
+ * lines and comments stay where they were and `takeOut(text, toName)` gives back `text`.
  */
 export function copySeat(text: string, fromName: string, toName: string): string {
   const ready = prepared(text, fromName);
@@ -198,7 +216,8 @@ export function copySeat(text: string, fromName: string, toName: string): string
   const end = fieldEnd(lines);
   const copied = lines.slice(0, end).flatMap((line) => {
     if (line.trim() === '' || /^\s*#/.test(line)) return [];
-    if (/^\s*count:/.test(line)) return [];
+    if (/^\s*-\s*(?:#.*)?$/.test(line)) return [`${' '.repeat(indent(line))}-`];
+    if (/^\s*(?:count|nickname):/.test(line)) return [];
     if (/^\s*(?:-\s+)?name:/.test(line)) return [setValue(line, toName)];
     if (/^\s*label:/.test(line)) return [setValue(line, toName)];
     if (/^\s*stopped:\s*(?:true|yes)\s*(?:#.*)?$/.test(line)) return [];

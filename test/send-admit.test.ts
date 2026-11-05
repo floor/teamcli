@@ -150,16 +150,21 @@ describe('send admission: the rules that admit', () => {
     expect(admitSend(marked, orchCli, withMark)).toEqual({ ok: true, rule: "an assistant seat to its entity's coordinator" });
   });
 
-  test('an orchestrator reaches every seat of its own team, and no seat of another', () => {
+  test("an orchestrator reaches every seat of its own team; the entity's main orchestrator also another team of the entity", () => {
     // The team's lead briefs its own seats; this is the command it does it with.
     const own = { ok: true, rule: 'an orchestrator or operator to a seat of its own team' } as const;
     expect(admitSend(orchCli, builder1, teams)).toEqual(own);
     expect(admitSend(orchCli, tester1, teams)).toEqual(own);
     expect(admitSend(orchCli, assistantCli, teams)).toEqual(own);
     expect(admitSend(orchRadio, builderRadio, teams)).toEqual(own);
-    // Another team's seats are reached through that team's orchestrator, not directly.
-    expect(admitSend(orchCli, builderLabs, teams).ok).toBe(false);
+    // Another team's plain seat of the same entity: the head team's lead reaches it
+    // (OD-20261103-02). Another entity's seat, and a sub-team's lead, still do not.
+    expect(admitSend(orchCli, builderLabs, teams)).toEqual({
+      ok: true,
+      rule: "the entity's main orchestrator to any seat of the entity's teams",
+    });
     expect(admitSend(orchCli, builderRadio, teams).ok).toBe(false);
+    expect(admitSend(orchLabs, builder1, teams).ok).toBe(false);
   });
 
   test('any seat reaches its own team\'s orchestrator', () => {
@@ -501,6 +506,7 @@ describe('send admission: default deny', () => {
     ...everyone.map((one) => `owner -> ${one.name}`),
     'orchestrator@teamcli -> orchestrator@labs',
     'orchestrator@teamcli -> orchestrator@teamcli',
+    'orchestrator@teamcli -> builder-1@labs',
     'orchestrator@labs -> orchestrator@teamcli',
     'orchestrator@labs -> orchestrator@labs',
     'orchestrator@radio -> orchestrator@radio',
@@ -558,8 +564,13 @@ describe('send admission: default deny', () => {
     expect(admitSend(builderLabs, orchCli, teams).ok).toBe(false);
   });
 
-  test('an orchestrator reaches no worker seat of another team', () => {
-    expect(admitSend(orchCli, builderLabs, teams).ok).toBe(false);
+  test("the entity's main orchestrator reaches a worker seat of another team of its entity; another entity's does not", () => {
+    // The owner's decision (OD-20261103-02): the head team's lead reaches every seat of the
+    // entity's teams, and stops at the entity's edge.
+    expect(admitSend(orchCli, builderLabs, teams)).toEqual({
+      ok: true,
+      rule: "the entity's main orchestrator to any seat of the entity's teams",
+    });
     expect(admitSend(orchRadio, builderLabs, teams).ok).toBe(false);
   });
 

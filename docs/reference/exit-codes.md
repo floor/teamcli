@@ -7,7 +7,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | Id | Command | Code | Meaning | Example |
 | --- | --- | --- | --- | --- |
 | `ack.read` | `ack` | 0 | the message was marked read, or another reader had already marked it read or answered it | `team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `ack.scoped` | `ack` | 0 | every record of the seat due by the window was marked read, or already was | `team ack --seat worker --older-than 7d` |
 | `ack.refused` | `ack` | 1 | the message can't be marked read, or the call is not the record's addressee | `team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `ack.scoped-failed` | `ack` | 1 | at least one record of the seat due by the window could not be marked read; the others were | `team ack --seat worker --older-than 7d` |
+| `ack.scoped-refused` | `ack` | 1 | the scoped ack is not the owner's or a seat this team marks `leads`, or no message key stands | `team ack --seat worker --older-than 7d` |
 | `ack.configuration` | `ack` | 2 | the team file can't be read | `team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
 | `ack.usage` | `ack` | 2 | the invocation can't be read | `team ack` |
 | `add.approval-requested` | `add` | 0 | an owner-seat request for this add was recorded and sent to the owner seat | `team add <name> --request` |
@@ -42,9 +45,9 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.machine-again` | `add` | 1 | the machine goes over a launch limit before the seat starts | `team add worker` |
 | `add.merged-base` | `add` | 1 | workspace.base is required to read a merged end | `team add --temporary --like lead --until merged:topic` |
 | `add.never-approved` | `add` | 1 | the file was never approved | `team add worker` |
-| `add.no-like` | `add` | 1 | the file has no seat to copy | `team add --temporary --like missing --until result:out.md` |
+| `add.no-like` | `add` | 1 | the team has no seat to copy | `team add --temporary --like missing --until result:out.md` |
 | `add.no-profile` | `add` | 1 | the seat has no launch profile | `team add worker` |
-| `add.no-seat` | `add` | 1 | the file has no such seat | `team add missing` |
+| `add.no-seat` | `add` | 1 | the team has no such seat | `team add missing` |
 | `add.not-ready` | `add` | 1 | the launch finished without a ready seat | `team add worker` |
 | `add.not-restored` | `add` | 1 | the seat can't be put back into the file | `team add worker` |
 | `add.override-owner` | `add` | 1 | --model and --effort on a declared seat are the owner's | `team add worker --model claude-sonnet-5-5` |
@@ -118,10 +121,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `approvals.refused` | `approvals` | 1 | the revoke was refused | `team approvals revoke <id...>` |
 | `approvals.invocation` | `approvals` | 2 | the invocation cannot be read | `team approvals` |
 | `archive.keep-running` | `archive` | 0 | the snapshot was written and the team was left running | `team archive --keep-running` |
+| `archive.scoped` | `archive` | 0 | every family of the seat due by the window was moved, or nothing was due | `team archive --seat worker --older-than 7d` |
 | `archive.detached` | `archive` | 1 | a run with no terminal | `team archive` |
 | `archive.exists` | `archive` | 1 | the archive folder already exists | `team archive, when this run’s folder is already there` |
 | `archive.file-owner` | `archive` | 1 | --file is the owner’s | `team archive --file .agents/team.yaml` |
 | `archive.out-owner` | `archive` | 1 | --out is the owner’s | `team archive --out ~/archives` |
+| `archive.scoped-failed` | `archive` | 1 | at least one family of the seat due by the window could not be moved; the others were | `team archive --seat worker --older-than 7d` |
+| `archive.scoped-refused` | `archive` | 1 | the scoped archive is not the owner's or a seat this team marks `leads`, or no message key stands | `team archive --seat worker --older-than 7d` |
 | `archive.file` | `archive` | 2 | the team file can’t be read | `team archive --file missing.yaml` |
 | `archive.file-invalid` | `archive` | 2 | the team file can’t be parsed | `team archive --file team.yaml` |
 | `archive.invocation` | `archive` | 2 | the invocation can’t be read | `team archive extra` |
@@ -242,6 +248,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `config.usage` | `config` | 2 | a get, set, unset or edit invocation is not one of its forms, or the path does not parse | `team config set watch` |
 | `conformance-adapter.finished` | `conformance-adapter` | 0 | the protocol finished | `team conformance-adapter` |
 | `daemon.already-running` | `daemon` | 0 | a machine daemon is already answering; nothing second was started | `team daemon run` |
+| `daemon.chores-ended` | `daemon` | 0 | the chores child served until its host ended its input, and left without error | `team daemon chores --inherited <token>` |
 | `daemon.dry-run` | `daemon` | 0 | the install plan was printed and nothing was written | `team daemon install --dry-run` |
 | `daemon.fault-dry-run` | `daemon` | 0 | the fault plan was printed and no request was written | `team daemon fault-watch --root <folder> --route <id> --dry-run` |
 | `daemon.faulted` | `daemon` | 0 | the one named route's hosted run ended as a counted fault and restarts on the next heartbeat | `team daemon fault-watch --root <folder> --route <id>` |
@@ -276,6 +283,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `daemon.service-managed.unit` | `daemon` | 1 | no unit file of this daemon's own can be read: another label, another owner, a group- or world-writable file, or no readable unit on this platform | `team daemon run --started-by service-manager` |
 | `daemon.service-unavailable` | `daemon` | 1 | no system service manager adapter is available on this platform yet | `team daemon install` |
 | `daemon.uninstall-failed` | `daemon` | 1 | the system's service manager refused to stop or remove the unit | `team daemon uninstall` |
+| `daemon.chores-refused` | `daemon` | 2 | a chores child was started without a readable one-use token, so it refused to run any work | `team daemon chores --inherited <token>` |
 | `daemon.fault-root` | `daemon` | 2 | a checkout named on fault-watch cannot be read, so no request was written | `team daemon fault-watch --root <folder> --route <id>` |
 | `daemon.fault-usage` | `daemon` | 2 | the invocation cannot be read, or the route id is not one a hosted watch records | `team daemon fault-watch --route nope` |
 | `daemon.no-root` | `daemon` | 2 | no checkout was named and the current folder has no readable team file | `team daemon install` |
@@ -336,6 +344,14 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `drops.unreadable` | `drops` | 1 | the drop folder can't be read | `team drops` |
 | `drops.invocation` | `drops` | 2 | the invocation can't be read | `team drops extra` |
 | `drops.not-a-repo` | `drops` | 2 | not inside a git repository | `team drops` |
+| `fallback.plan` | `fallback` | 0 | the dry run found no finished episode to retire | `team fallback prune` |
+| `fallback.retired` | `fallback` | 0 | every listed episode that could be retired was retired | `team fallback prune --apply` |
+| `fallback.incomplete` | `fallback` | 1 | --apply left an episode unretired because its retirement did not complete | `team fallback prune --apply` |
+| `fallback.owner` | `fallback` | 1 | --apply was aimed by a caller who is not the owner | `team fallback prune --apply` |
+| `fallback.policy` | `fallback` | 1 | the event retention word cannot be read | `team fallback prune` |
+| `fallback.stale` | `fallback` | 1 | the dry run found finished episodes to retire | `team fallback prune` |
+| `fallback.configuration` | `fallback` | 2 | the team file cannot be read | `team fallback prune` |
+| `fallback.invocation` | `fallback` | 2 | the invocation cannot be read | `team fallback prune --nope` |
 | `feed.ok` | `feed` | 0 | the message feed was printed | `team feed` |
 | `feed.presence-unreadable` | `feed` | 1 | the presence event log cannot be read | `team feed` |
 | `feed.unreadable` | `feed` | 1 | the history log cannot be read | `team feed` |
@@ -420,6 +436,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `messages.client-shown` | `messages` | 0 | a client reading completed, and an acknowledged reply's receipt was written when it was asked for | `team messages --client client-grant.json --key client.key --ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
 | `messages.none` | `messages` | 0 | nothing is waiting | `team messages` |
 | `messages.shown` | `messages` | 0 | a waiting message was shown and its receipt was written | `team messages` |
+| `messages.caller` | `messages` | 1 | the caller is not placed as the owner or a seat of the team's session | `team messages` |
 | `messages.client-key` | `messages` | 1 | the client key is missing or unreadable, or the ack receipt could not be signed with it | `team messages --client client-grant.json --key client.key --ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
 | `messages.client-pane` | `messages` | 1 | a client reading ran inside a team pane (a herdr seat or its child) and was refused before the grant or key was opened | `team messages --client client-grant.json --key client.key` |
 | `messages.client-refused` | `messages` | 1 | the signed request, its grant, its placement or its inbox can't be read, or a reply record or the ack does not verify | `team messages --client client-grant.json --key client.key` |
@@ -458,6 +475,19 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `next.swap` | `next` | 1 | the seat waits on a queued model swap, so nothing was claimed | `team next` |
 | `next.invocation` | `next` | 2 | the invocation can't be read | `team next extra` |
 | `next.not-a-repo` | `next` | 2 | not inside a git repository | `team next` |
+| `order.done` | `order` | 0 | the sidebar was brought to roster order (the moving seats were closed and re-created through team restart) | `team order` |
+| `order.dry-run` | `order` | 0 | the moving set was printed; nothing was closed | `team order --dry-run` |
+| `order.match` | `order` | 0 | the sidebar already read in roster order; nothing was closed | `team order` |
+| `order.busy` | `order` | 1 | a seat of the moving set is working or blocked at a prompt; nothing was closed | `team order` |
+| `order.caller` | `order` | 1 | not the owner or `leads` for this team, or an owner-only flag from another caller | `team order` |
+| `order.detached` | `order` | 1 | a run with no terminal | `team order` |
+| `order.herdr` | `order` | 1 | the pane host did not answer | `team order` |
+| `order.no-session` | `order` | 1 | the session is not running | `team order` |
+| `order.self` | `order` | 1 | the run sits in a seat of the moving set, and closing it would end the pass | `team order` |
+| `order.stopped` | `order` | 1 | a team restart inside the pass exited nonzero; the pass stopped there | `team order` |
+| `order.unordered` | `order` | 1 | after the pass the sidebar still does not read in roster order | `team order` |
+| `order.configuration` | `order` | 2 | the team file or its state record can't be read | `team order` |
+| `order.usage` | `order` | 2 | the invocation can't be read | `team order` |
 | `owner-seat.done` | `owner-seat` | 0 | the owner seat was read, set up, its security profile signed or proposed, or the owner page served | `team owner-seat status` |
 | `owner-seat.refused` | `owner-seat` | 1 | no owner seat, a cancelled or unverifiable owner-device signature, or a profile outside its bounds | `team owner-seat profile relaxed` |
 | `owner-seat.invocation` | `owner-seat` | 2 | the command arguments are invalid | `team owner-seat profile maybe` |
@@ -715,6 +745,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.client-sent` | `send` | 0 | a client grant's signed drop was written to the entity orchestrator's drop folder | `team send --client grant.json --key client.key orchestrator@floor hello` |
 | `send.confirmed` | `send` | 0 | a native handoff was recorded to the history and its pending record cleared | `team send --confirm 11111111-1111-4111-8111-111111111111` |
 | `send.delivered` | `send` | 0 | the record is written and the seat's channel took the message | `team send worker hello` |
+| `send.delivered-webhook` | `send` | 0 | the record is written and the seat's webhook adapter took the message | `team send worker hello` |
 | `send.dry-run` | `send` | 0 | the seat and channel were resolved and nothing was written | `team send worker hello --dry-run` |
 | `send.listed` | `send` | 0 | the addressable seats were printed, nothing was sent | `team send --list` |
 | `send.native` | `send` | 0 | a native handoff was printed for the sender's own SendMessage, and nothing was delivered | `team send worker hello` |
@@ -723,6 +754,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.recorded` | `send` | 0 | a native delivery the sender made itself was written to the history | `team send --record builder-2 --channel native --ms 812` |
 | `send.sent-channel` | `send` | 0 | the seat's own inbox server wrote the push notification and its marker; the signed read receipt that follows is the read | `team send lead hello` |
 | `send.sent-unconfirmed` | `send` | 0 | the record is written and left in the seat's own folder — its inbox on the mcp-inbox leg, its drop folder on the drop leg — and no signed read receipt has come back | `team send worker hello` |
+| `send.session-created` | `send` | 0 | the receiving CLI created a remote session from the message and printed its session line with an id; that id is the delivery, and no read receipt follows | `team send worker hello` |
 | `send.approval-refused` | `send` | 1 | the owner-seat request or approval for this send was refused: missing, expired, mismatched, unsigned, self-approved or already used | `team send <seat> <message> --approval <request-id>` |
 | `send.brief-memory` | `send` | 1 | a --brief send is refused because the team's brief transport is memory; nothing was written and there is no fallback | `team send worker --brief brief.md` |
 | `send.client-pane` | `send` | 1 | a client invocation ran inside a team pane (a herdr seat or its child) and was refused before the grant or key was opened | `team send --client client-grant.json --key client.key orchestrator@floor hello` |
@@ -804,12 +836,15 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `team.command-threw` | `team` | 1 | a command threw | `team init` |
 | `team.general-refused` | `team` | 1 | the general grant does not admit this command here (expired, another key, or an op it does not cover); nothing ran | `team status --general <grant.json> --key <client.key>` |
 | `team.general-target` | `team` | 1 | the general grant lists entities, and this release admits a wildcard grant only (scoped grants arrive in 0.5.11); nothing ran | `team status --general <grant.json> --key <client.key> (a grant that lists entities)` |
+| `team.mcp-serve-replacement-ended` | `team` | 1* | the stale inbox server's fresh replacement ended, and the server left with that process's exit code (1 when a signal ended it) | `team mcp serve` |
 | `team.mcp-serve-restart-failed` | `team` | 1 | a stale inbox server could not start its fresh replacement, said why and left | `team mcp serve` |
 | `team.presence-hook-invalid` | `team` | 1 | the presence hook's words can't be read | `team presence-hook --event turn-end` |
 | `team.presence-hook-refused` | `team` | 1 | the presence event could not be staged | `team presence-hook --event turn-end` |
 | `team.approve-removed` | `team` | 2 | the approve command was removed in 0.5.0 | `team approve` |
+| `team.chores-entry-refused` | `team` | 2 | the machine daemon's chores child was started without a readable one-use token, so it served nothing | `the daemon starts its chores child entry` |
 | `team.general-usage` | `team` | 2 | --general is given where no grant can admit the run: without --key, on the grant-issuing command, beside an owner-seat option (--request, --approval, --approvals, --approve-as-owner-seat), or on a form that reads no team record (config keys, init --approval-modes) | `team status --general <grant.json>, team init --request --general <grant.json> --key <client.key>, or team config keys --general <grant.json> --key <client.key>` |
 | `team.no-command` | `team` | 2 | no command was given | `team` |
+| `team.restore-entry-refused` | `team` | 2 | the machine daemon's restore child was started without a readable one-use token, so it restored nothing | `the daemon starts its restore child entry` |
 | `team.unknown` | `team` | 2 | the command is unknown | `team nosuch` |
 | `tempo.set` | `tempo` | 0 | the tempo was written | `team tempo urgent` |
 | `tempo.unchanged` | `tempo` | 0 | the tempo was already that word | `team tempo urgent` |
@@ -819,6 +854,11 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `tempo.invocation` | `tempo` | 2 | the invocation can't be read | `team tempo` |
 | `tempo.not-a-repo` | `tempo` | 2 | not inside a git repository | `team tempo urgent` |
 | `tempo.word` | `tempo` | 2 | the word is not a tempo | `team tempo faster` |
+| `trace.shown` | `trace` | 0 | the message's steps were printed | `team trace 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `trace.empty` | `trace` | 1 | the event log holds no step under that id | `team trace 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `trace.unreadable` | `trace` | 1 | the event log cannot be read | `team trace 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `trace.configuration` | `trace` | 2 | the team file can't be read | `team trace 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `trace.usage` | `trace` | 2 | the invocation can't be read | `team trace` |
 | `unlock.released` | `unlock` | 0 | the lock was released | `team unlock heavy-run` |
 | `unlock.io` | `unlock` | 1 | the lock directory could not be removed | `team unlock heavy-run` |
 | `unlock.not-held` | `unlock` | 1 | the lock is not held | `team unlock heavy-run` |
@@ -869,6 +909,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `usage.block` | `usage` | 0 | the machine's report printed | `team usage` |
 | `usage.invocation` | `usage` | 2 | the invocation can't be read | `team usage extra` |
 | `usage.store` | `usage` | 2 | the store folder can't be read | `team usage` |
+| `waits.ok` | `waits` | 0 | the waits were listed | `team waits` |
+| `waits.refused` | `waits` | 1 | the caller is not a seat of this team | `team waits` |
+| `waits.configuration` | `waits` | 2 | the team file, the registry or the retention policy can't be read | `team waits` |
+| `waits.usage` | `waits` | 2 | the invocation can't be read | `team waits --all` |
 | `watch.standby` | `watch` | 0 | a hosted watch stood down for a running watch | `team watch` |
 | `watch.started` | `watch` | 0 | the watch started in its own workspace | `team watch` |
 | `watch.stopped` | `watch` | 0 | the watch ran and stopped | `team watch` |
@@ -901,6 +945,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `workflow.invocation` | `workflow` | 2 | the invocation can't be read | `team workflow` |
 | `worktree.created` | `worktree` | 0 | the worktree was created | `team worktree new task --kind fix` |
 | `worktree.listed` | `worktree` | 0 | the recorded worktrees were listed | `team worktree list` |
+| `worktree.pulled` | `worktree` | 0 | the seat CLI's own pull call applied the remote session's patch in the worktree; nothing was committed, branched or pushed | `team worktree pull task --remote-session 123456` |
 | `worktree.record-gone` | `worktree` | 0 | the record was removed after the folder was already gone | `team worktree remove task` |
 | `worktree.removed` | `worktree` | 0 | the worktree was removed | `team worktree remove task` |
 | `worktree.another-pane` | `worktree` | 1 | the state records another pane for the caller's seat | `team worktree new task` |
@@ -929,6 +974,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `worktree.path-kind` | `worktree` | 1 | workspace.path must not contain {kind} | `team worktree new task` |
 | `worktree.placeholder` | `worktree` | 1 | the branch or path pattern has an unknown placeholder | `team worktree new task` |
 | `worktree.published` | `worktree` | 1 | the branch already exists on a remote | `team worktree new task --kind fix` |
+| `worktree.pull-elsewhere` | `worktree` | 1 | the task is recorded in another session; nothing was pulled | `team worktree pull task --remote-session 123456` |
+| `worktree.pull-failed` | `worktree` | 1 | the seat CLI's pull call failed; no patch was applied | `team worktree pull task --remote-session 123456` |
+| `worktree.pull-gone` | `worktree` | 1 | the worktree is recorded but its folder is not on disk | `team worktree pull task --remote-session 123456` |
+| `worktree.pull-missing` | `worktree` | 1 | no worktree of that name is recorded; nothing was pulled | `team worktree pull task --remote-session 123456` |
+| `worktree.pull-seat` | `worktree` | 1 | no seat's CLI pull command resolves for the worktree, so no pull was run | `team worktree pull task --remote-session 123456` |
+| `worktree.pull-task` | `worktree` | 1 | the task name is not a single segment | `team worktree pull ../task --remote-session 123456` |
 | `worktree.recorded` | `worktree` | 1 | the task is already recorded | `team worktree new task --kind fix` |
 | `worktree.recorded-elsewhere` | `worktree` | 1 | the task is recorded in another session | `team worktree new task --kind fix` |
 | `worktree.remove-branch` | `worktree` | 1 | the --branch given does not name the branch the worktree is on | `team worktree remove task --branch fix/other` |
@@ -950,6 +1001,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `worktree.file-invalid` | `worktree` | 2 | the team file can't be parsed | `team worktree new task --file team.yaml` |
 | `worktree.invocation` | `worktree` | 2 | the invocation can't be read | `team worktree --nope` |
 | `worktree.not-a-repo` | `worktree` | 2 | not inside a git repository | `team worktree new task` |
+| `worktree.pull-flags` | `worktree` | 2 | pull takes no --kind | `team worktree pull task --remote-session 123456 --kind fix` |
+| `worktree.pull-remote` | `worktree` | 2 | pull needs --remote-session, and no other subcommand takes it | `team worktree pull task` |
 | `worktree.remove-flags` | `worktree` | 2 | remove takes no --kind or --seat | `team worktree remove task --kind fix` |
 | `worktree.subcommand` | `worktree` | 2 | a subcommand is required | `team worktree` |
 | `worktree.task-required` | `worktree` | 2 | a task name is required | `team worktree new` |
+
+`*` the command leaves with the code the process it waited on exited with. The code listed is the fallback: what it leaves when that process gave none, because a signal ended it.

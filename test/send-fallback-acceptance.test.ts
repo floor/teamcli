@@ -195,10 +195,11 @@ test('a replayed delivery is served once by the real gate and takes its task onc
   });
 });
 
-test('a held socket frame falls through to the drop with the same record and id, and the marker names both attempts', async () => {
-  // The frame reaches the transport and the receiver holds it at its dialog: the write landed but
-  // no seat took it, and the receipt stays `unknown` — a transport fact, never a read. The walk
-  // continues with the same signed record and id, and the drop stores the one copy.
+test('a socket frame taken into a held dialog is the delivery: the walk stops there, and held is the presence pass\'s word', async () => {
+  // The frame reaches the transport and the receiver holds it at its dialog. A taken frame is
+  // the delivery: the sender reads no other seat's screen, so the walk stops there, and the
+  // daemon's presence pass raises `message.held` from the record and the screen on its own beat.
+  // The staged record is the copy the watch and the seat read.
   const made = world(['socket', 'typed']);
   cleanup = made.cleanup;
   declareEntity(made, 'floor');
@@ -241,40 +242,32 @@ test('a held socket frame falls through to the drop with the same record and id,
 
   const recipient: CanonicalRecipient = { team: 'acme', seat: 'lead', toId: null, session: 'acme', root: made.root };
   const marker = JSON.parse(readFileSync(markerPathOf(recipient, id), 'utf8')) as FallbackMarker;
-  // Nothing live took the message: the drop stores the durable copy, so the episode is
-  // all-failed and schedules the delayed escalation that names an unread message.
-  expect(marker).toMatchObject({ format: 1, messageId: id, status: 'all-failed', sender: 'owner' });
+  // The one live route took the frame: the episode is delivered, no escalation is scheduled, and
+  // the walk made no second attempt.
+  expect(marker).toMatchObject({ format: 1, messageId: id, status: 'delivered', sender: 'owner' });
   expect(marker.recipient).toEqual(recipient);
-  expect(marker.dueAt).toBeDefined();
+  expect(marker.dueAt).toBeUndefined();
   expect(marker.attempts.map((attempt) => ({ route: attempt.route, outcome: attempt.outcome, receipt: attempt.receipt }))).toEqual([
-    { route: 'socket', outcome: 'held', receipt: { kind: 'unknown' } },
-    { route: 'drop', outcome: 'held', receipt: { kind: 'unknown' } },
+    { route: 'socket', outcome: 'delivered', receipt: { kind: 'unknown' } },
   ]);
-  const heldReason = marker.attempts[0]?.reason ?? '';
-  expect(heldReason).toContain('Held message from another session');
 
-  // The durable ledger keeps every attempt in the order the walk made them.
+  // The durable ledger keeps every attempt in the order the walk made them: the socket's one.
   const ledger = join(dirname(historyPath('acme', made.root, made.home)), attemptLedgerFileName(recipient, id));
   const attempts = readFileSync(ledger, 'utf8')
     .trim()
     .split('\n')
     .map((line) => JSON.parse(line) as { route: string; outcome: string });
   expect(attempts.map((attempt) => ({ route: attempt.route, outcome: attempt.outcome }))).toEqual([
-    { route: 'socket', outcome: 'held' },
-    { route: 'drop', outcome: 'held' },
+    { route: 'socket', outcome: 'delivered' },
   ]);
 
-  // The history names both the held frame and the drop that stored the copy.
+  // The history records the taken frame as the delivery: the record stays unread for the seat's
+  // own receipt, and the presence pass is where a dialog becomes `held`.
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok).toBe(true);
   if (!history.ok) return;
   expect(history.entries.map((entry) => ({ id: entry.id, outcome: entry.outcome, via: entry.via }))).toEqual([
-    { id, outcome: 'held', via: 'socket' },
-    { id, outcome: 'sent (unconfirmed)', via: 'drop' },
-  ]);
-  expect(history.entries[1]?.failed).toEqual([
-    "typed: typing into a seat's pane is never a delivery: messages go through the bus and an event adapter",
-    `socket: ${heldReason}`,
+    { id, outcome: 'delivered', via: 'socket' },
   ]);
 });
 

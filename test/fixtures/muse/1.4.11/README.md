@@ -41,6 +41,15 @@ herdr 0.7.1 does not report this CLI's agent status: its `agent list` carried th
 `agent` type and `agent_status: "unknown"` while Muse sat at this ready box. `muse.yaml` therefore
 declares `herdr_status: unreliable`, and the rules delivery reads the seat's own screen there.
 
+- `goal-hint-dim.txt`: the ready box whose empty input row drew the dim placeholders
+  `❯ /goal pins a session objective with a progress bar` (the row is wrapped in dim SGR). The
+  hint is a placeholder, not typed text, so the frame reads as `idle`. Sanitized the same way
+  as `idle.txt`; 1264 bytes, SHA256
+  `5f6c939f81eef4b9fa46c95b0ecdc63cd1206347c1e3a2cacaf3b068bcd6b93b`.
+- `loop-hint-dim.txt`: the same box with the dim loop hint
+  `❯ /loop 10m <prompt> schedules a recurring prompt`. It reads as `idle` for the same reason;
+  1261 bytes, SHA256 `5c120ec292be9238c332addfb90b6b47e93cee97be46bed20e2b0cef4ee9a2f3`.
+
 ## Constructed (synthetic)
 
 These files are derived from `idle.txt` for the tests; nothing in them was read from a live pane.
@@ -53,6 +62,11 @@ These files are derived from `idle.txt` for the tests; nothing in them was read 
   `❯ Tab queues or steers while a run is active`. The hint row itself was confirmed on a running
   1.4.11 pane; the frame around it is constructed here, and a full authorized capture of that
   screen replaces this file as it stands.
+- `goal-hint-synthetic.txt`: `idle.txt` with the input row replaced by
+  `❯ /goal pins a session objective with a progress bar`. The row is the pane's rotating hint.
+  A plain read of that exact line was `unsent` until the profile listed it as a placeholder;
+  with the equals, the same frame reads `idle` and the box is empty. The frame around the row
+  is constructed, the same way as `placeholder-synthetic.txt`.
 - `ambiguous-synthetic.txt`: the banner, skills line and footer with the composer box removed: an
   idle-looking screen that is not the ready box, expected to read `unknown`.
 

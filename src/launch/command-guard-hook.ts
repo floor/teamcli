@@ -8,7 +8,9 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
-import { refusedByGuard } from './command-guard.ts';
+import { loadAndResolvePolicyChain } from '../policy/sources.ts';
+import { ACTIONS_COMMANDS_DEFAULT, type ActionsCommand } from '../policy/types.ts';
+import { lineRunsGh, refusedByGuard } from './command-guard.ts';
 
 /** The one decision this hook can make about a tool call. */
 export type GuardDecision =
@@ -19,7 +21,7 @@ export type GuardDecision =
  * The decision for one parsed hook payload. Only a Bash call with a string command is read;
  * any other shape is allowed, so a CLI that changes its payload never freezes a seat.
  */
-export function guardDecision(input: unknown): GuardDecision {
+export function guardDecision(input: unknown, actions?: readonly ActionsCommand[]): GuardDecision {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) return { decision: 'allow' };
   const record = input as { tool_name?: unknown; tool_input?: unknown };
   if (record.tool_name !== 'Bash') return { decision: 'allow' };
@@ -27,8 +29,30 @@ export function guardDecision(input: unknown): GuardDecision {
   if (tool === null || typeof tool !== 'object' || Array.isArray(tool)) return { decision: 'allow' };
   const command = (tool as { command?: unknown }).command;
   if (typeof command !== 'string' || command === '') return { decision: 'allow' };
-  const match = refusedByGuard(command);
+  const match = actions === undefined ? refusedByGuard(command) : refusedByGuard(command, actions);
   return match === null ? { decision: 'allow' } : { decision: 'deny', rule: match.rule, reason: match.guidance };
+}
+
+/** The Actions allowlist in force for this hook: the resolved policy, the Floor default when
+ *  nothing sets it, and nothing when the policy cannot be read. No seat is named. */
+export function actionsAllowlist(home: string, teamRoot: string): readonly ActionsCommand[] {
+  try {
+    const chain = loadAndResolvePolicyChain({ home, teamRoot });
+    if (!chain.ok) return [];
+    const value = chain.policies['actions-commands']?.value;
+    if (!Array.isArray(value)) return ACTIONS_COMMANDS_DEFAULT;
+    return value as readonly ActionsCommand[];
+  } catch {
+    return [];
+  }
+}
+
+function bashCommand(input: unknown): string | null {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) return null;
+  const tool = (input as { tool_input?: unknown }).tool_input;
+  if (tool === null || typeof tool !== 'object' || Array.isArray(tool)) return null;
+  const command = (tool as { command?: unknown }).command;
+  return typeof command === 'string' ? command : null;
 }
 
 /** The JSON the CLI reads for a deny: the documented PreToolUse object, nothing else. */
@@ -92,11 +116,16 @@ function main(argv: readonly string[]): void {
   } catch {
     return;
   }
-  const decision = guardDecision(input);
+  const command = bashCommand(input);
+  const gh = command !== null && lineRunsGh(command);
+  const context = gh ? guardContext(argv) : null;
+  const decision = !gh
+    ? guardDecision(input)
+    : guardDecision(input, context === null ? [] : actionsAllowlist(context.home, context.root));
   if (decision.decision !== 'deny') return;
   process.stdout.write(guardDenyOutput(decision.reason));
-  const context = guardContext(argv);
-  if (context !== null) raiseGuardRefusal(context, decision.rule);
+  const refusal = context ?? guardContext(argv);
+  if (refusal !== null) raiseGuardRefusal(refusal, decision.rule);
 }
 
 const entry = fileURLToPath(import.meta.url);

@@ -59,7 +59,7 @@ export async function runForget(argv: string[], io: Io, sources: ForgetSources =
   }
   if (seat.kind === 'refused') seatRefused = true;
   else if (seat.kind === 'admitted') seatApproved = true;
-  else if (!isOwner(caller)) seatApproved = ownerSeatRuleAdmits('team-forget', io.cwd, false, seatSources);
+  else if (!isOwner(caller)) seatApproved = ownerSeatRuleAdmits('team-forget', io.cwd, false, io, seatSources);
   if (!seatRefused && !seatApproved && args.values.approval === undefined) {
     const detached = detachedRefusal(caller, { who: 'the owner', where: 'a terminal outside herdr' });
     if (detached !== undefined) return refused(io, json, detached);

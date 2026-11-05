@@ -6,7 +6,8 @@ import { dirname, extname, join, resolve, sep } from 'node:path';
 import { deliver as relayDeliver, stage as relayStage } from '../../packages/relay/index.js';
 import { readArgs, type Args } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
-import { busListening, publishToBus } from '../bus/server.ts';
+import { nudgeBus } from '../bus/server.ts';
+import { postArrivalWebhook, type SenderPostOutcome } from '../bus/webhook.ts';
 import { runClientSend, type ClientSendDelivery, type ResolvedClientTarget } from '../client/send.ts';
 import { CLIENT_SLICE_DISPLAY_NAME, KEY_ISOLATION_LINE } from '../client/records.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, isOwner, judgeCallerIn, logTag, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
@@ -19,31 +20,38 @@ import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneForegroundCwd, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
-import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, WEBHOOK_QUEUED_WORDS, type DeliveryClass } from '../launch/delivery-class.ts';
+import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, wakeableWhileIdle, WEBHOOK_QUEUED_WORDS, type DeliveryClass, type WakeOutcome } from '../launch/delivery-class.ts';
 import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
-import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
+import { acquireSeatLock, holderText, seatLockHolder, seatLockPath, type LockHolder } from '../launch/seat-lock.ts';
 import { readState, type SeatState } from '../state.ts';
 import { logLine } from '../log.ts';
 import { briefTransportOf, MEMORY_TRANSPORT_UNSUPPORTED } from '../policy/brief-transport.ts';
 import { codexDaemonForSeat } from '../policy/codex-daemon.ts';
 import { contextLine, hasJsonFlag, jsonError, pluralCount, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
-import { profileFor } from '../profiles/index.ts';
+import { profileFor, type TypedWake } from '../profiles/index.ts';
 import { PENDING_ID, clearPending, dropTaken, markPending, nativeNonceOf, readPending, restoreTaken, takePending, writePending, type PendingNative, type PendingNativeFallbackLeg } from '../send/pending.ts';
 import { getAgent, readAgents, type Agent } from '../registry/agents.ts';
 import * as projectRegistry from '../registry/projects.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
 import { socketAddressOf, type SocketAddress } from '../send/address.ts';
-import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, unverifiedGrantFor, type AdmitContext, type AdmitTeam, type AdmitTeams, type DeclaredSender, type SendSide } from '../send/admit.ts';
+import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, unverifiedGrantFor, type AdmitContext, type AdmitTeam, type AdmitTeams, type DeclaredSender, type ReplyContext, type SendSide } from '../send/admit.ts';
 import { deliverCompose } from '../send/compose.ts';
 import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.ts';
 import { appendHistory } from '../send/history.ts';
+import { markAnsweredBySend } from '../send/answered-by-send.ts';
+import { noteUnread } from '../send/unread-hint.ts';
 import { ensureRecord, readRecord, signReceiptPayload, signRecord, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
+import { legStep, stagedStep, webhookStep, type StepFields } from '../send/steps.ts';
+import { isPublicOnly, scanPublicBody, type PrivateListPaths } from '../send/public-only.ts';
+import { realRepoRead, type RepoRead } from '../send/repo-visibility.ts';
+import { createSession, originRepoOf, type SessionCliSpec } from '../send/session-cli.ts';
 import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { verifiedPayloadOf } from '../send/wake.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
-import { deliveryChainOf } from '../send/delivery.ts';
-import { webhookRouteOf } from '../send/webhook.ts';
+import { deliveryChainOf, DeliveryChainUnreadable, type DeliveryChain } from '../send/delivery.ts';
+import { cascadeOrder, cascadeWalk, legClassOf, MCP_INBOX_UNAVAILABLE, unavailableLegsOf, type WalkLeg } from '../send/walk-cascade.ts';
+import { webhookRefusal } from '../send/webhook.ts';
 import { namingFor, senderDisplayName, senderNickname, type SenderNaming } from '../send/names.ts';
 import {
   deliverCodexNativeRoute,
@@ -52,9 +60,10 @@ import {
   isHeadlessResumeCli,
   type HeadlessResumeSpawn,
 } from '../send/push-adapters.ts';
-import { bindPane, deliverTrigger, draftNote, showsHeldFrameDialog, showsTranscriptToken, TRIGGER_TAKEN_NOTE, type DeliverResult } from '../send/deliver.ts';
-import { POLL_MS, readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
-import { awaitReceipt, claimBindingIn, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld } from '../mcp/inbox.ts';
+import { bindPane, deliverTrigger, draftNote, showsTranscriptToken, TRIGGER_TAKEN_NOTE, type DeliverResult } from '../send/deliver.ts';
+import { readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
+import { deliverTypedWake, herdrTypedWakeHost, type TypedWakeHost } from '../send/typed-wake.ts';
+import { awaitReceipt, claimBindingIn, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld, type InboxLiveness } from '../mcp/inbox.ts';
 import { channelLaunchEnabled, channelPushed, recordChannelHeld, CHANNEL_HELD_RECEIPT, CHANNEL_PUSH_GRACE_MS, CHANNEL_TICK_MS, CHANNEL_UNCONFIRMED_REASON } from '../mcp/channel.ts';
 import { beginFallbackWalk, type FallbackWalk, type WalkAttempt } from '../send/fallback-walk.ts';
 import type { AttemptOutcome, RelayReceipt } from '../send/fallback-events.ts';
@@ -62,9 +71,9 @@ import { markTaken } from '../send/taken.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
 import { quotaOutDetail, quotaOutOf } from '../send/quota-out.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
-import { frameFor, frameReplyFor, type FrameReply } from '../send/frame.ts';
+import { frameFor, readerLine } from '../send/frame.ts';
 import {
-  declaredInboundOf, heldSocketPath, inboundStaleReason, readHeldSocket, recordHeldSocket,
+  declaredInboundOf, heldSocketPath, inboundStaleReason, preciseSocketSkipReason, readHeldSocket,
   socketEligible, socketHeldReason, socketIneligibleReason, socketSkipReason,
   type CrossSessionInbound, type InboundDeclaration,
 } from '../send/inbound.ts';
@@ -98,7 +107,7 @@ CLI builds its own work item from its screens — a profile with a compose modul
 still gets the drop file, but the body is typed through those screens and never
 becomes a trigger line; delivered there means the CLI printed the line that creates
 the item. On the typed leg the run is sent (unconfirmed): the line left the seat's
-input box after that trigger line and Enter, and herdr reported the seat working — or
+input box after that trigger line and Enter, and the pane host reported the seat working — or
 done or blocked, changed from the status read before Enter — or the transcript shows
 the drop being read; no signed receipt has come back, so the message is never called
 read. The pane must not be a dialog this command already classifies (question,
@@ -107,7 +116,8 @@ those is not reached: the kind and the drop path are named, and nothing further 
 pressed. Who may call it is the registry's decision, default deny: the
 owner; an orchestrator to an orchestrator of its own team or entity; an orchestrator
 or operator to a seat of its own team; a seat whose role is operator to another such
-seat of its own team; an assistant seat to its entity's coordinator; any seat to its
+seat of its own team; an assistant seat to its entity's coordinator; the entity's main
+orchestrator to any seat of the entity's teams; any seat to its
 own team's orchestrator; or an owner-signed grant naming send. The record is signed
 with the checkout's message key, and its payload names the sender and the rule that
 admitted it. --list sends nothing: it prints
@@ -123,14 +133,22 @@ writes nothing, and the log records writes. Under --json its document's \`delive
 names every leg in order with \`eligible\` and the reason it would be skipped, including
 the socket leg a Claude receiver's files keep out.
 
-A send walks the receiving seat's delivery order — mcp-inbox, typed, drop by
-default. For Codex with no declared order, the runtime queue leads when its signed
-codex-daemon setting is on, followed by a typed wake before the inbox fallback; when off,
-the typed wake leads. A declared order is followed as written. A level of that seat's own
+A send walks the owner's cascade: the channel-class legs the receiving seat's delivery
+order names, then the typed leg, then the drop file. For Codex with no declared order, the
+runtime queue leads when its signed
+codex-daemon setting is on, followed by a typed wake before the drop; when off,
+the typed wake leads. A receiving CLI whose profile declares its own session call is walked
+that call first while no level declares an order. Nothing declared leaves typed, then drop.
+A declared order names the legs the seat accepts, and the cascade sets the order they are
+tried in — a word placing the drop first still walks it last, because the channel classes
+and the typed leg are tried before it. The mcp-inbox name is not a leg in this build: the
+MCP inbox is the store's reader, and a push from an MCP server is not a wake; a word naming
+it is read and reported unavailable. A level of that seat's own
 chain, entity, project, team, seat, may drop legs from the order or put the legs it keeps in a
 different order, and may add
 native, the sender's own frame, headless-resume, a headless runtime's own turn,
-or place socket anywhere: a word naming a leg the order does not have, or naming
+session, a CLI's own session-creating call, or place socket anywhere: a word naming a leg
+the order does not have, or naming
 one twice, is set aside and the order in force stands. Each leg in turn
 either takes the send, which ends the walk, or definitely cannot take it, which
 hands the send to the next leg and is recorded as a failure. A typed leg that
@@ -144,47 +162,43 @@ says: every other leg is kept out — each one's reason is recorded — and the 
 writes the drop file, with nothing typed and no frame sent. The history line names
 the channel the send went by and the legs that failed before it.
 
-The mcp-inbox leg writes the same 0600 drop file and types nothing: it takes the
-send only when the seat's own inbox server is running (\`.inbox-listener\` beside
-the message names this seat, this session and this root, with a live pid), and is
-otherwise skipped as \`mcp-inbox: no live inbox listener\`. A live listener gets
-the message and a short wait for the receipt its \`inbox_read\` call leaves; that
-receipt is \`delivered (read)\` — the seat read the message, not that it acted on
-it — and its absence is \`sent (unconfirmed)\`, exit 0: the file is safe on disk
-and the walk ends rather than typing into a pane the inbox was chosen over.
+The MCP inbox is the store's reader, not a delivery leg (\`src/send/walk-cascade.ts\`):
+the signed record every leg writes is what its server reads, the same records \`team drops
+--read\` reads, and a push from an MCP server is not a wake. A \`delivery_order\` that still
+names \`mcp-inbox\` keeps the word — the catalogue reads it — and the walk reports it as
+skipped with its reason; \`team check\` notes the word. A receipt the inbox's \`inbox_read\`
+call leaves on a record the drop leg stored is still the read the watch promotes; the drop
+leg itself waits for no receipt and ends the walk.
 
 Every sent, sent (unconfirmed), sent (channel) and queued (receiver busy) line ends
 with the receiving seat's delivery class in plain words: \`woken through its event
 adapter\` for a seat an event adapter wakes, \`woken through its runtime queue\` for a
-runtime that holds the message between turns, \`queued; <seat> reads it at its next turn
-(pull-only)\` for a seat that reads its inbox when it takes a turn, and \`queued; <seat>
-has no way to be woken while idle\` for a person or a launch with no route at all. A
-delivered line needs no class: the delivery itself is the answer.
+runtime that holds the message between turns, \`queued; <seat> reads it at its next turn,
+and nothing here gives it one (pull-only)\` for a seat that reads its inbox when it takes a
+turn, and \`queued; nothing wakes <seat> while it is idle; a person or a restart must give
+it a turn\` for a launch with no route at all. A profile that declares a typed wake says so
+in the same sentence, and a wake this run tried says what it saw: a wake that ran and did not
+deliver names its reason, and one the run never reached says it did not run. A delivered line
+needs no class: the delivery itself is the answer.
 
 The outcome is one of eight, and none of them is silent:
-  delivered    the socket path (exit 0): the frame was taken, or herdr reported the
-               seat working; \`delivered (read)\` when the mcp-inbox leg's receipt came
-               back inside its grace — the seat read the message, which is not a claim
-               that it acted on it. A trigger typed into a composer is never delivered:
-               it is \`sent (unconfirmed)\`
-  sent         a leg's success with no signed read receipt (exit 0). The mcp-inbox and
-               drop legs left the 0600 record in the seat's inbox or drop folder and
-               typed nothing; the typed leg wrote the same record and the trigger left
-               the composer, and its line says \`trigger taken, no read receipt yet\`
+  delivered    the socket path (exit 0): the frame was taken, printed \`delivered (socket)\`
+               with no look at the box; \`delivered (read)\` when a transport leg's receipt
+               came back inside its grace — the seat read the message, which is not a
+               claim that it acted on it. A trigger typed into a composer is never
+               delivered: it is \`sent (unconfirmed)\`
+  sent         a leg's success with no signed read receipt (exit 0). The drop leg left
+               the 0600 record in the seat's drop folder and typed nothing; the typed
+               leg wrote the same record and the trigger left the composer, and its
+               line says \`trigger taken, no read receipt yet\`
   answered     --wait: a reply record on the thread arrived within the window; the
                reply follows on stdout (exit 0)
-  held         the message is safe — on disk, or in the frame a Claude Code seat's
-               held-message dialog keeps, printed held (socket) — and the pane was
-               left untouched because the seat remained busy, locked, or in a dialog,
-               or its unsent text has no way out of the box this version measured:
-               the reason names the copy's path when one was kept. A box holding
-               unsent text does not hold the delivery: the text is copied beside the
-               drop, the box is cleared with the profile's measured keys, the trigger
-               is typed and pressed Enter, and the text is pasted back exactly, its
-               row unchanged, before the run's verdict (exit 1 only where the box
-               could not be cleared or the text put back); a box drawn over more than
-               one row is held untouched, since a soft wrap cannot be told from a
-               newline
+  held         the message is safe — the signed record is on disk — and nothing was typed
+               or dialed further: the reason names what held it, and the copy's path when
+               one was kept. A socket frame that lands at the receiving box's held-message
+               dialog is not this run's to see: the send reports \`delivered (socket)\` at
+               the frame, and the daemon's presence pass records the hold afterwards, once
+               for that id, and keeps the socket out until the declaration is re-confirmed
   not-submitted the line was typed and the seat never took it (exit 1): Enter was
                pressed up to three times, and only to a box still holding exactly the
                trigger; the message names what the box holds, faint suggestions not
@@ -305,8 +319,8 @@ export type DirectSendResult = {
 
 /**
  * The watch's idle dispatch uses this hook. With it set, the send walks only routes that reach a
- * live receiver without a keystroke — the typed and native legs type, and the drop and mcp-inbox
- * legs are stored copies rather than wakes, so none of the four is attempted. The walk's ending is
+ * live receiver without a keystroke — the typed and native legs type, and the drop leg is a
+ * stored copy rather than a wake, so none of the three is attempted. The walk's ending is
  * handed back as a result instead of only an exit code. Admission, the delivery order and every
  * remaining route's rules are the same ones an ordinary send runs.
  */
@@ -357,6 +371,10 @@ export type SendHost = {
   deliver(socketPath: string, frame: string): Promise<SendOutcome>;
   /** Types a native seat's trigger and reads herdr's status. Tests pass a fake. */
   native: NativePane;
+  /** The pane operations a profile's `typed_wake` needs, bound to one session. Absent, the real
+   *  herdr binding is used; tests pass a fake. Every other binding in this host still refuses to
+   *  type — this one is the single wake the profile gate allows (src/send/typed-wake.ts). */
+  typedWake?: (session: string) => TypedWakeHost;
   now(): Date;
   /** The id a native handoff prints and records under; the real host mints a UUID, and a test or
    *  the docs runner pins one so the printed confirm line is exact. */
@@ -379,9 +397,10 @@ export type SendHost = {
    *  key and the seat's, and the registry project's (`src/send/delivery.ts`). A test hands in a
    *  chain to decide the order without a file to write. */
   delivery?: Partial<Record<SettingLevel, readonly (DeliveryLeg | PendingNativeFallbackLeg)[] | undefined>>;
-  /** How long the mcp-inbox leg waits for its receipt, in milliseconds. The real host leaves it
-   *  at `INBOX_GRACE_MS`; a test sets 0 (beside a listener it also writes) to see the
-   *  unconfirmed ending without waiting, or a small number to watch the receipt land. */
+  /** How long a receipt-earning transport leg (native queue, headless resume, typed) waits for
+   *  its receipt, in milliseconds. The real host leaves it at `INBOX_GRACE_MS`; a test sets 0
+   *  (beside a listener it also writes) to see the unconfirmed ending without waiting, or a
+   *  small number to watch the receipt land. */
   inboxGraceMs?: number;
   /** How long the channel leg waits for the seat server's push marker, in milliseconds. The real
    *  host leaves it at `CHANNEL_PUSH_GRACE_MS`; a test sets 0 to see the ending without waiting,
@@ -402,6 +421,14 @@ export type SendHost = {
   watch?: WatchSendPrincipal;
   /** Optional process runner override for the `headless-resume` leg (`gemini` / `cursor-agent`). */
   headlessResumeSpawn?: HeadlessResumeSpawn;
+  /** The two external private lists a public-only body is scanned against. Absent (the real
+   *  host), the machine's default paths are read; a test hands in its own files, so no send
+   *  touches the machine's lists. */
+  privateLists?: PrivateListPaths;
+  /** The repository read a public-only session leg makes on the repository it would target.
+   *  Absent (the real host), one credential-free read of the forge's own record; a test hands in
+   *  its own answer, so no send touches the network. */
+  repoVisibility?: RepoRead;
 };
 
 export const realHost: SendHost = {
@@ -423,6 +450,7 @@ export const realHost: SendHost = {
     sendKey: refuseTyping,
     foregroundCwd: (session, pane) => paneForegroundCwd(pane, session),
   },
+  typedWake: (session) => herdrTypedWakeHost(session),
   now: () => new Date(),
   home: homedir(),
   projects: realProjectSources,
@@ -447,7 +475,7 @@ type LegState = 'attempted' | 'queued' | 'skipped' | 'refused' | 'not-reached' |
 /** One ordered entry of a send's delivery report. The leg's own name is here, so the reason
  *  never repeats it: a reader joins the two. */
 type LegReport = {
-  leg: DeliveryLeg;
+  leg: WalkLeg;
   state: LegState;
   /** On a dry run: whether the walk would take this leg. Absent on a real send. */
   eligible?: boolean;
@@ -458,7 +486,7 @@ type LegReport = {
 /** The entry the walk left for one leg, whatever state it already holds: a leg the walk marked
  *  `attempted` before its transport answered ends as a queue or a refusal, and the report says
  *  which. A run with no resolved walk (a brief's own delivery) has no list to mark. */
-function setLegState(report: Report, leg: DeliveryLeg, state: LegState, reason?: string): void {
+function setLegState(report: Report, leg: WalkLeg, state: LegState, reason?: string): void {
   const entry = report.delivery?.find((one) => one.leg === leg && one.state !== 'not-reached');
   if (entry === undefined) return;
   entry.state = state;
@@ -485,6 +513,16 @@ type Report = {
    *  ends without a delivery appends it, so `sent (unconfirmed)` never stands as the whole answer
    *  to whether the seat will read the message. Absent on paths that never read the class. */
   deliveryWords?: string;
+  /** The class those words came from, set wherever the words are: the drop leg's ending reads it
+   *  back to say `queued, not woken` — never `sent (unconfirmed)`, which reads like success — when
+   *  the seat it stored the record for is one nothing wakes while it is idle. Absent on the same
+   *  paths the words are. */
+  deliveryClass?: DeliveryClass;
+  /** What the send's own webhook post ended as, when the receiving seat configures an adapter and
+   *  the send wrote a fresh record: set right after that record is signed, and read by the
+   *  summary line. Absent when nothing was posted — no adapter, a route that names nothing usable,
+   *  or an id whose record was already there — and the class words then stand as before. */
+  webhookPost?: SenderPostOutcome;
 };
 
 /** The address as the caller wrote it, kept on the history line beside the resolved seat: the
@@ -508,32 +546,46 @@ function seatStateOf(dir: string, session: string, seat: string): SeatState | un
   }
 }
 
-/** The class a class read ended in, and whether the seat's webhook adapter is the only route the
- *  reading still counts. That route is fired by the bus's announcement of the record, never by
+/** The class a class read ended in, whether the seat's webhook adapter is the only route the
+ *  reading still counts, and what a typed wake would read: the seat's CLI and whether its pane
+ *  is a human's. That adapter route is fired by the bus's announcement of the record, never by
  *  the send itself, so a wake through it is the bus's to make, not the send's to claim. */
-type ClassRead = { cls: DeliveryClass; webhookOnly: boolean };
+type ClassRead = { cls: DeliveryClass; webhookOnly: boolean; cli: string; human: boolean; watchWake: boolean };
 
-/** The words for a class read at send time. A webhook-only push with no bus serving the
- *  receiving root is a message queued for that bus, never a wake this send made; every other
- *  reading keeps its class's own words. */
-function classWords(read: ClassRead, seat: string, busLive: boolean): string {
-  if (read.cls === 'push' && read.webhookOnly && !busLive) return WEBHOOK_QUEUED_WORDS;
-  return deliveryWords(read.cls, seat);
+/** The words for a class read at send time. A webhook-only push is a message queued for the
+ *  bus's delivery routine, never a wake this send made: the send writes the record and returns,
+ *  and whether the adapter posted it is the bus's own reading to report. Every other reading
+ *  keeps its class's own words, with the profile's typed wake and this run's wake outcome told
+ *  in the same sentence: a profile that declares a typed wake is not a seat with no way to be
+ *  woken, and a wake that ran and did not deliver must not leave the class's "reads it at its
+ *  next turn" standing alone. A human's pane is never typed, so its words say only that. Used
+ *  both for the class read before the walk and for every class lowered after a leg is disproved,
+ *  so a fallback that ends in the bus inbox keeps saying how the seat is left. */
+function classWords(read: ClassRead, seat: string, wake?: WakeOutcome): string {
+  if (read.cls === 'push' && read.webhookOnly) return WEBHOOK_QUEUED_WORDS;
+  return deliveryWords(read.cls, seat, {
+    ...(read.human ? { human: true } : {}),
+    ...(!read.human && (profileFor(read.cli)?.typedWake ?? null) !== null ? { typedWake: true } : {}),
+    ...(read.watchWake ? { watchWake: true } : {}),
+    ...(wake === undefined ? {} : { wake }),
+  });
 }
 
-/** The receiving seat's delivery class in plain words, ready for an outcome line. The runtime
+/** The receiving seat's delivery class in plain words, ready for an outcome line, with the class
+ *  itself beside them: the drop leg's ending reads it back to name its own outcome. The runtime
  *  record wins over the team file's row; a state that cannot be read is no record, so the class
- *  falls to what the file and its launch line prove, never to a guess. `busLive` is the bus
- *  serving the receiving root, proved when the send ran: a webhook adapter posts only when a bus
- *  announces the record. */
+ *  falls to what the file and its launch line prove, never to a guess. A webhook-only route
+ *  reads as queued whatever the bus is doing now: the send posts that adapter as its own
+ *  webhook leg, and the bus carries the same arrival after the send returns, so no liveness
+ *  check made here could truthfully upgrade the words to a wake. */
 function deliveryWordsOf(input: {
   dir: string;
   root: string;
   session: string;
   seat: string;
-  declared?: Pick<Seat, 'cli' | 'launch' | 'human' | 'inbound' | 'webhook'>;
+  declared?: Pick<Seat, 'cli' | 'launch' | 'human' | 'watchWake' | 'inbound' | 'webhook'>;
   home?: string;
-}, busLive: boolean): string {
+}, wake?: WakeOutcome): { words: string; cls: DeliveryClass } {
   const state = seatStateOf(input.dir, input.session, input.seat);
   const read = seatDeliveryClass({
     dir: input.dir,
@@ -544,18 +596,72 @@ function deliveryWordsOf(input: {
     ...(state === undefined ? {} : { state }),
     ...(input.home === undefined ? {} : { home: input.home }),
   });
-  return classWords(
-    { cls: read.class, webhookOnly: read.evidence.webhook && !read.evidence.channel && !read.evidence.socket },
-    input.seat,
-    busLive,
-  );
+  const cls = read.class;
+  return {
+    words: classWords(
+      {
+        cls,
+        webhookOnly: read.evidence.webhook && !read.evidence.channel && !read.evidence.socket,
+        cli: state?.cli ?? input.declared?.cli ?? '',
+        human: read.evidence.human === true,
+        watchWake: read.evidence.watchWake,
+      },
+      input.seat,
+      wake,
+    ),
+    cls,
+  };
 }
 
 /** A console summary with the receiving seat's delivery class appended when the run read one: a
  *  line that ended at the leg's own word would leave "unconfirmed" as the whole answer to
- *  whether the seat ever reads the message. */
+ *  whether the seat ever reads the message. The send's own webhook post is the last clause: a
+ *  delivered or fate-unknown one replaces the class's queued-for-the-bus words, which its own
+ *  post has just made untrue (a claim left in `sent` makes the bus skip the record, so nothing
+ *  will fire later), and a failed one says so beside them — the claim is released, and the record
+ *  stays where the bus and the seat's pull read it. */
+/** Whether the drop leg's ending left the seat with nothing that wakes it: the class it read is
+ *  `pull-on-turn` or `none` (or the seat is a person's, which reads `none`), so the record sits
+ *  stored and the seat reads it only at a turn nothing gives it. That ending says `queued, not
+ *  woken` — never `sent (unconfirmed)`, which reads like success while the drop waits — and the
+ *  word is written the same way on the console line, the JSON status and the history line. Every
+ *  other leg wakes the seat itself: a typed trigger starts the turn, native and headless-resume
+ *  are the sender's own runtime action, and the channel and socket legs ended the walk before
+ *  the drop. A class the run never read is no evidence either way, so the ending keeps the
+ *  ordinary `sent (unconfirmed)` there. */
+function dropNotWoken(report: Report): boolean {
+  return report.deliveryClass !== undefined && !wakeableWhileIdle(report.deliveryClass);
+}
+
+/** The send's id on the end of its closing line, so the one thing a sender needs to `team trace`
+ *  is on the line it quotes back. A run with no record (a refusal before the record was written,
+ *  a dry run) has no id to print; a line that already names the id — the queued answer's — is
+ *  left as it stands rather than naming it twice. */
+function withId(summary: string, report: Report): string {
+  const id = report.sent;
+  if (id === null || id === '' || summary.includes(id)) return summary;
+  return `${summary} (id ${id})`;
+}
+
+/** A console summary with the receiving seat's delivery class appended when the run read one: a
+ *  line that ended at the leg's own word would leave "unconfirmed" as the whole answer to
+ *  whether the seat ever reads the message. The send's own webhook post is the last clause: a
+ *  delivered or fate-unknown one replaces the class's queued-for-the-bus words, which its own
+ *  post has just made untrue (a claim left in `sent` makes the bus skip the record, so nothing
+ *  will fire later), and a failed one says so beside them — the claim is released, and the record
+ *  stays where the bus and the seat's pull read it. */
 function withDelivery(summary: string, report: Report): string {
-  return report.deliveryWords === undefined ? summary : `${summary}; ${report.deliveryWords}`;
+  const words: string[] = [];
+  const post = report.webhookPost;
+  const posted = post?.kind === 'posted' ? post : null;
+  const settled = posted !== null || post?.kind === 'unknown';
+  if (report.deliveryWords !== undefined && !(settled && report.deliveryWords === WEBHOOK_QUEUED_WORDS)) {
+    words.push(report.deliveryWords);
+  }
+  if (posted !== null) words.push(`webhook delivered (${String(posted.ms)} ms)`);
+  else if (post?.kind === 'failed') words.push(`webhook not delivered: ${post.reason}`);
+  else if (post?.kind === 'unknown') words.push(`webhook delivery unknown: ${post.reason}`);
+  return words.length === 0 ? summary : `${summary}; ${words.join('; ')}`;
 }
 
 /** Where one send goes: the registry's answer for the spec, or the declared seat of the
@@ -772,6 +878,234 @@ function outputMarkerLines(body: string): number {
   return body.split('\n').filter((line) => OUTPUT_LINE.test(line)).length;
 }
 
+/** The receiving seat's walk, resolved once for both callers. `team send` and `team reply` call
+ *  this one function, so an implied default added here reaches both and the two order tables
+ *  cannot drift apart. Every input is receiver-side: the chain already resolved, the seat's file
+ *  row, its CLI, and the host reads the implied defaults ask for (the launch's inbound
+ *  declaration, the Codex-daemon policy, the inbox listener). The function only reads. */
+type WalkOrderPlan = {
+  dropDir: string;
+  order: readonly DeliveryLeg[];
+  inbound: InboundDeclaration;
+  socketWord: CrossSessionInbound | undefined;
+  heldStanding: string | null;
+  socketNow: boolean;
+  declaredOrder: boolean;
+  nativeFirst: boolean;
+  sessionCli: SessionCliSpec | null;
+  channelProbe: InboxLiveness | null;
+  channelFirst: boolean;
+  staleChannel: InboxLiveness | null;
+  sessionFirst: boolean;
+  ordered: readonly DeliveryLeg[];
+  human: boolean;
+  typedWake: TypedWake | null;
+  walkingTyped: boolean;
+  webhookWalked: boolean;
+  webhookReason: string | null;
+  cascade: readonly WalkLeg[];
+  eventLegs: WalkLeg[];
+  typingSetAside: DeliveryLeg[];
+  noEventAdapter: boolean;
+  chosen: readonly WalkLeg[];
+  unavailable: DeliveryLeg[];
+};
+
+type WalkOrderInput = {
+  /** The receiving team's `.agents` folder, its root and its home, and its session. */
+  dir: string;
+  root: string;
+  home: string;
+  session: string;
+  seat: string;
+  cli: string;
+  declared: Seat | undefined;
+  /** The receiving team file, when it could be read; null when it could not. */
+  team: TeamFile | null;
+  rawChain: DeliveryChain;
+  overrides: SeatOverrides;
+  now: () => Date;
+  build?: () => BuildIdentity;
+};
+
+function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
+  const order = deliveryOrder(input.rawChain);
+  // A receiving seat whose launch declares `crossSessionInbound: "accept"` takes the frame
+  // first: the socket is the fastest channel and the owner asked for it ahead of the rest of the
+  // order. A receiver keeps the order its files declare — hold, refuse and unset in the launch
+  // are never dialed, since a held frame would block the seat's box — and another CLI has no
+  // cross-session socket at all.
+  const inbound = declaredInboundOf({
+    dir: input.dir,
+    root: input.root,
+    session: input.session,
+    seat: input.seat,
+    ...(input.declared?.launch !== undefined ? { launch: input.declared.launch } : {}),
+  });
+  // The one implied default that names the socket: a receiving Claude session whose launch
+  // declares `crossSessionInbound: accept`, with no level of its chain declaring an order, walks
+  // socket first. A seat this build launched (its generated settings file is on the line) is
+  // authorized by that launch alone; an explicit team-file `inbound: hold` or `refuse` keeps the
+  // socket out, and a session launched some other way still needs the team file's
+  // `inbound: accept`. The launch word is always what the receiving CLI needs to take the frame.
+  // A word the chain declares — team, seat, project — is walked as written: it may place `socket`
+  // anywhere or leave it out, and this build never force-prepends it. A seat whose box held a
+  // frame keeps the socket out until its declaration is re-confirmed.
+  const socketWord = input.declared?.inbound;
+  const heldStanding = socketHeldReason(readHeldSocket(heldSocketPath(input.dir, input.session, input.seat)), inbound);
+  const socketNow = SOCKET_SEND && socketEligible(socketWord, inbound) && heldStanding === null;
+  const declaredOrder = Object.values(input.rawChain).some((word) => word !== undefined && word.length > 0);
+  // A human's pane never takes typing, whatever its order says — and the ruling goes further: its
+  // walk is the drop leg alone, whatever the order or the default holds. Every other leg the
+  // order names is kept out, and each one's human reason is recorded on the history line, so a
+  // reader sees what the pane was spared. The drop file waits where a keystroke cannot be taken
+  // back.
+  const human = human0(input.overrides, input.declared);
+  // The second implied default: a receiving Codex seat with no declared order walks its own
+  // runtime's queue first while its effective `codex-daemon` policy is `on` (the signed default).
+  // The policy is read once, here, and the same read decides the declared-order splice below: a
+  // policy that is off or cannot be verified must add no attempt at all, and a declared order
+  // that places another runtime's leg first is never preempted.
+  const codexDaemonOn =
+    input.cli === 'codex' &&
+    codexDaemonForSeat({
+      home: input.home,
+      root: input.root,
+      ...(input.team === null ? {} : { team: input.team }),
+      seat: input.seat,
+      session: input.session,
+      now: input.now(),
+    }) === 'on';
+  const nativeFirst = !declaredOrder && input.cli === 'codex' && codexDaemonOn;
+  // Codex must receive a typed wake before its inbox can take a message: an inbox write alone
+  // does not wake its idle TUI. Keep the native runtime route first when its signed default is
+  // active, then rank typed ahead of the inbox as its fallback. If that route is off, typed leads.
+  // A declared order is still walked as written. The socket default keeps its held-box and
+  // dual-declaration gate; only a receiver whose box is not holding a frame is walked socket first.
+  const codexWakeOrder: readonly DeliveryLeg[] =
+    nativeFirst
+      ? ['native', 'typed', ...order.filter((leg) => leg !== 'typed')]
+      : ['typed', ...order.filter((leg) => leg !== 'typed')];
+  // The third implied default: a receiving Claude seat whose launch carries the development
+  // channel naming this team server, and whose own inbox server is listening with the channel
+  // declared, takes the push first. Both words are the seat's own: the flag authorizes the
+  // client to load the channel, the listener marker says the server declared it, and a seat
+  // with either word missing walks its order exactly as a send without the channel would. A
+  // declared order is walked as written, and the channel is never a declared word.
+  const dropDir = join(input.dir, 'send-drops', input.session, input.seat);
+  // The listener is probed whenever the seat's launch enables the channel, even for a declared
+  // order the channel is never a word of: a serving channel this build cannot vouch for pushes
+  // whatever the sender's walk chooses, so the sender leaves its held marker before a wake of its
+  // own and the stale push cannot follow that wake as a second one.
+  const channelProbe = input.cli === 'claude-code' && channelLaunchEnabled(input.declared?.launch)
+    ? inboxLive(dropDir, input.root, input.session, input.seat, input.build?.())
+    : null;
+  const channelFirst = !declaredOrder && channelProbe !== null && channelProbe.live === true && channelProbe.listener.channel === true;
+  const staleChannel = channelProbe !== null && channelProbe.live === false && channelProbe.listener?.channel === true
+    ? channelProbe
+    : null;
+  // The fourth implied default: a receiving CLI whose profile declares its own session call
+  // (`session_cli`) takes the send there first, while no level of its chain declares an order.
+  // The call is the only route such a CLI has that reaches an agent at all — it has no inbox, no
+  // runtime queue and no pane to wake — and it is never forced ahead of an order a level wrote.
+  const sessionCli = profileFor(input.cli)?.sessionCli ?? null;
+  const sessionFirst = !declaredOrder && sessionCli !== null;
+  const impliedFirst: readonly DeliveryLeg[] = !declaredOrder && input.cli === 'claude-code' && socketNow
+    ? ['socket', ...order]
+    : !declaredOrder && input.cli === 'codex'
+      ? codexWakeOrder
+      : sessionFirst
+        ? ['session', ...order]
+        : order;
+  const declaredWithWake = channelFirst ? ['channel', ...impliedFirst] as DeliveryLeg[] : [...impliedFirst];
+  // No pane messaging: a declared order's `typed` word asked for a wake. With typing retired, the
+  // seat's own event adapters stand where it stood — the live channel, then the socket its launch
+  // accepts — so a declared order is not left with the bus inbox alone when an adapter is there.
+  if (declaredOrder && input.cli === 'claude-code' && !human && declaredWithWake.includes('typed')) {
+    const at = declaredWithWake.indexOf('typed');
+    const wake: DeliveryLeg[] = [];
+    const pushLive = channelProbe !== null && channelProbe.live === true && channelProbe.listener.channel === true;
+    if (pushLive && !declaredWithWake.includes('channel')) wake.push('channel');
+    if (socketNow && !declaredWithWake.includes('socket')) wake.push('socket');
+    declaredWithWake.splice(at, 0, ...wake);
+  }
+  // The same for a Codex seat: its wake is its own runtime's queue while its `codex-daemon`
+  // policy is on, read the same fail-closed way the implied default reads it.
+  if (declaredOrder && input.cli === 'codex' && !human && declaredWithWake.includes('typed')
+    && !declaredWithWake.includes('native')
+    && codexDaemonOn) {
+    declaredWithWake.splice(declaredWithWake.indexOf('typed'), 0, 'native');
+  }
+  // The same for a seat whose CLI creates a session from its own argv: the retired wake word
+  // stands where the seat's own session call can, and every other route the order names is kept
+  // exactly as written.
+  if (declaredOrder && sessionCli !== null && !human && declaredWithWake.includes('typed')
+    && !declaredWithWake.includes('session')) {
+    declaredWithWake.splice(declaredWithWake.indexOf('typed'), 0, 'session');
+  }
+  const ordered: readonly DeliveryLeg[] = declaredWithWake;
+  // No pane messaging (src/send/no-pane-messaging.ts): the typed and native legs are never walked,
+  // with one profile-gated exception (src/send/typed-wake.ts). A profile that declares
+  // `typed_wake: screen` keeps the order's own `typed` word, wherever the order puts it: the
+  // event legs still run first as the order resolves them, the typed wake is the fallback, and
+  // the drop leg closes the walk as the bus inbox. The `native` leg is set aside as before, and
+  // every CLI that declares no typed wake keeps the absolute refusal. A human's walk stays the
+  // drop leg alone: the ruling runs further than any profile.
+  const typedWake = human ? null : (profileFor(input.cli)?.typedWake ?? null);
+  const walkingTyped = typedWake !== null && ordered.includes('typed');
+  // The owner's cascade (src/send/walk-cascade.ts): whatever order the chain declared, the
+  // walk tries the channel-class legs first, then the sender-posted webhook, then typed, then
+  // the mailbox — and it stops at the first leg taken. The webhook leg exists exactly when the
+  // receiving team file declares an adapter row for the seat; no order names it. An `mcp-inbox`
+  // word is read as unavailable: the leg is never attempted, and the report says why. The
+  // mailbox sits under all the classes because the signed record is stored before the walk
+  // begins.
+  const unavailable = unavailableLegsOf(ordered);
+  // The human ruling keeps every pane route out of a person's walk, and the webhook is not a
+  // pane route: a person with an adapter row keeps it where the cascade puts it, before the
+  // drop file. Without one the walk is the drop leg alone.
+  const webhookWalked = input.declared?.webhook !== undefined;
+  // The adapter row's usability, read once before the walk runs: it decides whether the dry
+  // phrase names the webhook, whether a stale serving channel is held off (the sender's own
+  // post is a wake only when the route stands), and the leg itself re-reads it when reached.
+  const webhookReason = input.declared === undefined || input.declared.webhook === undefined ? null : webhookRefusal(input.declared.webhook);
+  const cascade = cascadeWalk(ordered, webhookWalked);
+  // No pane messaging, continued: the drop leg always closes the walk, so a seat with no event
+  // adapter keeps the message in its bus inbox and the sender is told so.
+  const eventLegs: WalkLeg[] = cascade.filter((leg) => !isTypingLeg(leg) || (walkingTyped && leg === 'typed'));
+  if (!eventLegs.includes('drop')) eventLegs.push('drop');
+  const typingSetAside = ordered.filter((leg) => isTypingLeg(leg) && !(walkingTyped && leg === 'typed'));
+  const noEventAdapter = !human && !eventLegs.some((leg) => leg !== 'drop' && leg !== 'webhook');
+  const chosen: readonly WalkLeg[] = human ? (webhookWalked ? ['webhook', 'drop'] : ['drop']) : eventLegs;
+  return {
+    dropDir,
+    order,
+    inbound,
+    socketWord,
+    heldStanding,
+    socketNow,
+    declaredOrder,
+    nativeFirst,
+    sessionCli,
+    channelProbe,
+    channelFirst,
+    staleChannel,
+    sessionFirst,
+    ordered,
+    human,
+    typedWake,
+    walkingTyped,
+    webhookWalked,
+    webhookReason,
+    cascade,
+    eventLegs,
+    typingSetAside,
+    noEventAdapter,
+    chosen,
+    unavailable,
+  };
+}
+
 export async function runSend(argv: string[], io: Io, host: SendHost): Promise<number> {
   const args = readArgs(argv, ['file', 'brief', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id', 'subject', 'approval', 'reason'], ['wait', 'json', 'list', 'dry-run', 'request']);
   const seatName = args.rest[0];
@@ -820,7 +1154,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     host.watch === undefined && !seatApproved && !isOwner(callerOf(io))
     && !args.flags.has('list') && args.values.confirm === undefined && args.values.record === undefined
   ) {
-    seatApproved = ownerSeatRuleAdmits('team-send', io.cwd, args.flags.has('dry-run'), seatSources);
+    seatApproved = ownerSeatRuleAdmits('team-send', io.cwd, args.flags.has('dry-run'), io, seatSources);
   }
   // The no-terminal refusal judges the ordinary caller. A direct-work run's caller is the watch
   // principal, established and verified by its internal entry, which may run with no terminal;
@@ -973,24 +1307,36 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const receiving = to.cross ? readTeamConfig(to.root, { home: host.home }) : loaded;
   const declared = receiving.ok ? receiving.team.seats.find((seat) => seat.name === to.seat) : undefined;
   if (declared?.stopped === true) return stoppedSeat(io, dir, who, to.seat, host, report);
+  // The receiving CLI's own session call, when its profile declares one (`session_cli`): the leg
+  // that hands the whole body to the CLI as one argument, in the seat's own folder. A profile
+  // without the block gives its seats no session leg, and a level of the chain that names the
+  // leg for such a seat hears it recorded as unavailable rather than attempted.
+  const sessionCli: SessionCliSpec | null = profileFor(to.cli)?.sessionCli ?? null;
+  // A public-only seat's CLI keeps its sessions on a service this machine does not run: the
+  // team's rules are never prepended to its briefs, and the session leg below reads the whole
+  // body against the machine's private lists before the CLI is asked to create one. The profile
+  // says so for a hosted CLI; a team file may mark one seat the same way.
+  const publicOnly = isPublicOnly(profileFor(to.cli), declared);
   // The receiving seat's delivery class, read once for this send. An outcome that cannot claim
   // delivery appends it, so `sent (unconfirmed)` never stands as the whole answer to whether the
   // seat will read the message: the line says whether it is woken, holds the message between
   // turns, or reads it at its next turn. The class comes from the launch's own records, never
   // from the CLI's shipped profile alone.
   //
-  // A webhook adapter is posted by the bus that announces the record, never by this send: the
-  // wake is claimed only while the bus serving the receiving root answers a connect, the same
-  // proof `busListening` gives the bus's own start walk. A marker alone is not that proof.
-  const busLive = await busListening(to.root);
-  report.deliveryWords = deliveryWordsOf({
+  // A readable webhook adapter still reads as push here: the words describe how the seat is
+  // woken, and under the cascade the send itself walks that adapter as its second leg class.
+  // An ending that names the webhook's own answer never appends these words — the walk's report
+  // already says what the routine answered, and an unconfirmed post must not claim a wake.
+  const classRead = deliveryWordsOf({
     dir: to.dir,
     root: to.root,
     session: to.session,
     seat: to.seat,
     ...(declared === undefined ? {} : { declared }),
     home: host.home,
-  }, busLive);
+  });
+  report.deliveryClass = classRead.cls;
+  report.deliveryWords = classRead.words;
   // The registry's signing model is the running seat's authority. A pane whose live status
   // names another model is held before the body is read and before any delivery leg is walked;
   // the team file is only the roster projection and cannot override that signed record.
@@ -1099,14 +1445,18 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // them: `rules: prepend` puts the same text a launch would deliver in front of each brief,
   // on every leg — the drop file, the socket frame and a compose seat's typed box all carry
   // this one body. `rulesOf` is the launch's own builder, so the file's rules, the seat's
-  // signature lines and the workspace lines are the ones its launch would have sent.
-  if (declared !== undefined && receiving.ok && profileFor(declared.cli)?.rulesMode === 'prepend') {
+  // signature lines and the workspace lines are the ones its launch would have sent. A
+  // public-only seat is never given them: its rules are the team's own text, and a service
+  // outside this machine reads the whole body it is handed.
+  if (declared !== undefined && receiving.ok && !publicOnly && profileFor(declared.cli)?.rulesMode === 'prepend') {
     body = `${rulesOf(receiving.team, declared, to.root, undefined, rulesOriginOf(receiving.source))}\n\n${body}`;
   }
 
   const dry = args.flags.has('dry-run');
-  // The receiving seat's own chain — entity, project, team, seat — decides the order the send
-  // walks; nothing declared leaves mcp-inbox, typed, drop. Each level's word is the signed
+  // The receiving seat's own chain — entity, project, team, seat — decides the legs the send
+  // may walk; nothing declared leaves typed, drop, and the walk itself is the owner's cascade
+  // (src/send/walk-cascade.ts): channel-class legs first, the sender-posted webhook second,
+  // typed third, and the mailbox last under all of them. Each level's word is the signed
   // `delivery-order` policy its record holds, and the receiving team file's own keys, the
   // seat's and the registry project's legacy words fill in where no signed record is held; the
   // seat's signed settings say `delivery_order` and `human` in the file's place; a host that
@@ -1122,169 +1472,67 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     }
     overrides = read.overrides;
   }
-  const rawChain = host.delivery ?? deliveryChainOf({
-    root: to.root,
-    seat: to.seat,
-    home: host.home,
-    // Across teams the file loaded above is the caller's own: the receiving team's is loaded
-    // from its root, and one that cannot be read declares nothing.
-    ...(to.cross ? {} : { file: team }),
-    projectOfTeam: (id) => (host.projects ? host.projects.ofTeam(id) : projectRegistry.ofTeam(host.home, id)),
-    overrides,
-    now: host.now(),
-  });
-  const order = deliveryOrder(rawChain as Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>);
-  // A receiving seat whose launch declares `crossSessionInbound: "accept"` takes the frame
-  // first: the socket is the fastest channel and the owner asked for it ahead of the rest of the
-  // order. A receiver keeps the order its files declare — hold, refuse and unset in the launch
-  // are never dialed, since a held frame would block the seat's box — and another CLI has no
-  // cross-session socket at all.
-  const inbound = declaredInboundOf({
+  // The project's word can only narrow the order, so a project registry or project policy record
+  // that exists and cannot be read refuses the send: walking the fallback behind it could type
+  // into a pane the project keeps out. `host.delivery` (tests) names the order itself.
+  let rawChain: DeliveryChain;
+  try {
+    rawChain = host.delivery ?? deliveryChainOf({
+      root: to.root,
+      seat: to.seat,
+      home: host.home,
+      // Across teams the file loaded above is the caller's own: the receiving team's is loaded
+      // from its root, and one that cannot be read declares nothing.
+      ...(to.cross ? {} : { file: team }),
+      projectOfTeam: (id) => (host.projects ? host.projects.ofTeam(id) : projectRegistry.ofTeam(host.home, id)),
+      overrides,
+      now: host.now(),
+    });
+  } catch (error) {
+    if (!(error instanceof DeliveryChainUnreadable)) throw error;
+    return configuration(io, error.message, report);
+  }
+  const plan = resolveWalkOrder({
     dir: to.dir,
     root: to.root,
+    home: host.home,
     session: to.session,
     seat: to.seat,
-    ...(declared?.launch !== undefined ? { launch: declared.launch } : {}),
+    cli: to.cli,
+    declared,
+    team: receiving.ok ? receiving.team : null,
+    rawChain,
+    overrides,
+    now: host.now,
+    ...(host.build === undefined ? {} : { build: host.build }),
   });
-  // The one implied default that names the socket: a receiving Claude session whose launch
-  // declares `crossSessionInbound: accept`, with no level of its chain declaring an order, walks
-  // socket first. A seat this build launched (its generated settings file is on the line) is
-  // authorized by that launch alone; an explicit team-file `inbound: hold` or `refuse` keeps the
-  // socket out, and a session launched some other way still needs the team file's
-  // `inbound: accept`. The launch word is always what the receiving CLI needs to take the frame.
-  // A word the chain declares — team, seat, project — is walked as written: it may place `socket`
-  // anywhere or leave it out, and this build never force-prepends it. A seat whose box held a
-  // frame keeps the socket out until its declaration is re-confirmed.
-  const socketWord = declared?.inbound;
-  const heldStanding = socketHeldReason(readHeldSocket(heldSocketPath(to.dir, to.session, to.seat)), inbound);
-  const socketNow = SOCKET_SEND && socketEligible(socketWord, inbound) && heldStanding === null;
-  const declaredOrder = Object.values(rawChain).some((word) => word !== undefined && word.length > 0);
-  // The second implied default: a receiving Codex seat with no declared order walks its own
-  // runtime's queue first while its effective `codex-daemon` policy is `on` (the signed default).
-  // The policy is read here, ahead of the leg's own fail-closed read, because a policy that is
-  // off or cannot be verified must add no attempt at all: the walk then keeps the file default
-  // and `native` stays reachable only where a chain names it. A declared order is walked as
-  // written, so a chain that places another runtime's leg first is never preempted.
-  const nativeFirst =
-    !declaredOrder &&
-    to.cli === 'codex' &&
-    codexDaemonForSeat({
-      home: host.home,
-      root: to.root,
-      ...(receiving.ok ? { team: receiving.team } : {}),
-      seat: to.seat,
-      session: to.session,
-      now: host.now(),
-    }) === 'on';
-  // Codex must receive a typed wake before its inbox can take a message: an inbox write alone
-  // does not wake its idle TUI. Keep the native runtime route first when its signed default is
-  // active, then rank typed ahead of the inbox as its fallback. If that route is off, typed leads.
-  // A declared order is still walked as written. The socket default keeps its held-box and
-  // dual-declaration gate; only a receiver whose box is not holding a frame is walked socket first.
-  const codexWakeOrder: readonly DeliveryLeg[] =
-    nativeFirst
-      ? ['native', 'typed', ...order.filter((leg) => leg !== 'typed')]
-      : ['typed', ...order.filter((leg) => leg !== 'typed')];
-  // The third implied default: a receiving Claude seat whose launch carries the development
-  // channel naming this team server, and whose own inbox server is listening with the channel
-  // declared, takes the push first. Both words are the seat's own: the flag authorizes the
-  // client to load the channel, the listener marker says the server declared it, and a seat
-  // with either word missing walks its order exactly as a send without the channel would. A
-  // declared order is walked as written, and the channel is never a declared word.
-  const dropDir = join(to.dir, 'send-drops', to.session, to.seat);
-  // The listener is probed whenever the seat's launch enables the channel, even for a declared
-  // order the channel is never a word of: a serving channel this build cannot vouch for pushes
-  // whatever the sender's walk chooses, so the sender leaves its held marker before a wake of its
-  // own and the stale push cannot follow that wake as a second one.
-  const channelProbe = to.cli === 'claude-code' && channelLaunchEnabled(declared?.launch)
-    ? inboxLive(dropDir, to.root, to.session, to.seat, host.build?.())
-    : null;
-  const channelLive = declaredOrder ? null : channelProbe;
-  const channelFirst = channelLive !== null && channelLive.live === true && channelLive.listener.channel === true;
-  const staleChannel = channelProbe !== null && channelProbe.live === false && channelProbe.listener?.channel === true
-    ? channelProbe
-    : null;
-  const impliedFirst: readonly DeliveryLeg[] = !declaredOrder && to.cli === 'claude-code' && socketNow
-    ? ['socket', ...order]
-    : !declaredOrder && to.cli === 'codex'
-      ? codexWakeOrder
-      : order;
-  const declaredWithWake = channelFirst ? ['channel', ...impliedFirst] as DeliveryLeg[] : [...impliedFirst];
-  // No pane messaging: a declared order's `typed` word asked for a wake. With typing retired, the
-  // seat's own event adapters stand where it stood — the live channel, then the socket its launch
-  // accepts — so a declared order is not left with the bus inbox alone when an adapter is there.
-  if (declaredOrder && to.cli === 'claude-code' && !human0(overrides, declared) && declaredWithWake.includes('typed')) {
-    const at = declaredWithWake.indexOf('typed');
-    const wake: DeliveryLeg[] = [];
-    const pushLive = channelProbe !== null && channelProbe.live === true && channelProbe.listener.channel === true;
-    if (pushLive && !declaredWithWake.includes('channel')) wake.push('channel');
-    if (socketNow && !declaredWithWake.includes('socket')) wake.push('socket');
-    declaredWithWake.splice(at, 0, ...wake);
-  }
-  // The same for a Codex seat: its wake is its own runtime's queue while its `codex-daemon`
-  // policy is on, read the same fail-closed way the implied default reads it.
-  if (declaredOrder && to.cli === 'codex' && !human0(overrides, declared) && declaredWithWake.includes('typed')
-    && !declaredWithWake.includes('native')
-    && codexDaemonForSeat({
-      home: host.home,
-      root: to.root,
-      ...(receiving.ok ? { team: receiving.team } : {}),
-      seat: to.seat,
-      session: to.session,
-      now: host.now(),
-    }) === 'on') {
-    declaredWithWake.splice(declaredWithWake.indexOf('typed'), 0, 'native');
-  }
-  const ordered: readonly DeliveryLeg[] = declaredWithWake;
-  // A human's pane never takes typing, whatever its order says — and the ruling goes further: its
-  // walk is the drop leg alone, whatever the order or the default holds. Every other leg the
-  // order names is kept out, and each one's human reason is recorded on the history line, so a
-  // reader sees what the pane was spared. The drop file waits where a keystroke cannot be taken
-  // back.
-  const human = overrides.human ?? (declared?.human === true);
-  // No pane messaging (src/send/no-pane-messaging.ts): the typed and native legs are never walked;
-  // the drop leg always closes the walk, so a seat with no event adapter keeps the message in its
-  // bus inbox and the sender is told so.
-  const eventLegs: DeliveryLeg[] = ordered.filter((leg) => !isTypingLeg(leg));
-  if (!eventLegs.includes('drop')) eventLegs.push('drop');
-  const typingSetAside = ordered.filter((leg) => isTypingLeg(leg));
-  const noEventAdapter = !human && !eventLegs.some((leg) => leg !== 'drop');
-  const chosen: readonly DeliveryLeg[] = human ? ['drop'] : eventLegs;
+  const {
+    dropDir, order, inbound, socketWord, heldStanding, socketNow, declaredOrder,
+    staleChannel, human, typedWake, walkingTyped, webhookWalked, webhookReason,
+    typingSetAside, noEventAdapter, chosen, unavailable,
+  } = plan;
   // A direct-only walk (the watch's idle dispatch) is a wake or nothing: only a route that
-  // reaches a live receiver without a keystroke stays. The typed and native legs type, the drop
-  // leg is a stored copy and the mcp-inbox leg is the seat's own storage — none of them is a
-  // wake, so none is attempted. A functional headless route would stay if this build carried
-  // one. Every remaining leg keeps its own rules, and the order's own words decide whether the
-  // receiver offers it. A watch principal makes the walk direct by itself: the watch's own send
-  // never falls back to a route that types or stores, whatever hook its caller built.
-  const DIRECT_WAKE_LEGS: readonly DeliveryLeg[] = ['socket', 'headless-resume'];
+  // reaches a live receiver without a keystroke stays. The typed and native legs type, and the
+  // drop leg is a stored copy rather than a wake, so none of the three is attempted. A
+  // functional headless route would stay if this build carried one. Every remaining leg keeps
+  // its own rules, and the order's own words decide whether the receiver offers it. A watch
+  // principal makes the walk direct by itself: the watch's own send never falls back to a route
+  // that types or stores, whatever hook its caller built.
+  const DIRECT_WAKE_LEGS: readonly WalkLeg[] = ['socket', 'headless-resume'];
   const directWalk = host.direct !== undefined || host.watch !== undefined;
-  const declaredWalk: readonly DeliveryLeg[] = directWalk ? chosen.filter((leg) => DIRECT_WAKE_LEGS.includes(leg)) : chosen;
-  // A live inbox listener is walked even when the delivery order leaves it out or places it
-  // behind the drop: the listener is the seat's own server standing beside its inbox, so reaching
-  // it puts the record in front of the seat, while the drop file behind it would leave a
-  // listening seat to read the message a turn late. The rest of the order is walked exactly as
-  // written. A human's walk is the drop alone and a watch's walk stores nothing, so neither takes
-  // a leg spliced in here. The plain line beside the walk says the order did not put it there.
-  let inboxSplicedAt = -1;
-  const walk: readonly DeliveryLeg[] = (() => {
-    if (human || directWalk) return [...declaredWalk];
-    const dropAt = declaredWalk.indexOf('drop');
-    const inboxAt = declaredWalk.indexOf('mcp-inbox');
-    if (dropAt === -1 || (inboxAt !== -1 && inboxAt < dropAt)) return [...declaredWalk];
-    if (!inboxLive(dropDir, to.root, to.session, to.seat, host.build?.()).live) return [...declaredWalk];
-    inboxSplicedAt = dropAt;
-    return [
-      ...declaredWalk.slice(0, dropAt),
-      'mcp-inbox' as const,
-      ...declaredWalk.slice(dropAt).filter((leg) => leg !== 'mcp-inbox'),
-    ];
-  })();
-  // The legs that put the message in front of the seat themselves: a typed trigger, a frame, or
-  // the socket. When one of them takes the send, a channel push for the same id would wake the
-  // seat a second time, so a stale serving channel is held off before the record is written.
-  const WAKE_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'typed'];
-  const wakesSeat = (legs: readonly DeliveryLeg[]): boolean => legs.some((leg) => WAKE_LEGS.includes(leg));
+  const declaredWalk: readonly WalkLeg[] = directWalk ? chosen.filter((leg) => DIRECT_WAKE_LEGS.includes(leg)) : chosen;
+  // The walk is the cascade exactly as resolved: a live MCP inbox server standing beside the
+  // seat no longer splices a leg into it. MCP push is not a wake (ADR D1); the inbox is the
+  // store's reader, and the record is already stored there for it to read.
+  const walk: readonly WalkLeg[] = [...declaredWalk];
+  // The legs that put the message in front of the seat themselves: a typed trigger, a frame, a
+  // socket, or the seat's own webhook adapter. When one of them takes the send, a channel push
+  // for the same id would wake the seat a second time, so a stale serving channel is held off
+  // before the record is written. The webhook counts only when its route stands: a row whose
+  // files name no usable adapter is skipped by the walk, so it cannot stand in for the channel.
+  const WAKE_LEGS: readonly WalkLeg[] = ['socket', 'native', 'typed'];
+  const wakesSeat = (legs: readonly WalkLeg[]): boolean =>
+    legs.some((leg) => (leg === 'webhook' ? webhookReason === null : WAKE_LEGS.includes(leg)));
   // The ordered leg report the JSON documents carry. A real send lists the walk itself; the
   // states fill in as it runs and a leg it never reaches stays `not-reached`. A human's only
   // walked leg is the drop file, so the legs the ruling kept out are listed in the order they
@@ -1292,14 +1540,18 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // files do not let the socket be dialed has the implied socket default listed as skipped with
   // its reason: the omission the report used to leave unexplained. A run that resolved no walk
   // carries no list at all.
-  const planLegs: readonly DeliveryLeg[] = human
-    ? (order.includes('drop') ? order : [...order, 'drop'])
+  const planLegs: readonly WalkLeg[] = human
+    ? [...(webhookWalked ? ['webhook' as const] : []), ...(order.includes('drop') ? order : ([...order, 'drop'] as WalkLeg[]))]
     : walk;
   const impliedSocketReason = !human && to.cli === 'claude-code' && !declaredOrder && !order.includes('socket')
-    ? socketIneligibleReason(to.cli, socketWord, inbound, heldStanding)
+    ? socketIneligibleReason(to.cli, socketWord, inbound, heldStanding, true)
     : null;
   report.delivery = [
     ...(impliedSocketReason === null ? [] : [{ leg: 'socket' as const, state: 'skipped' as const, reason: impliedSocketReason }]),
+    // A word this build reads but never walks is reported first, with its reason: it is not a
+    // leg of the walk, and the states that follow are. A human's plan lists it among the legs
+    // the ruling spared instead, with the human reason.
+    ...(human ? [] : unavailable.map((leg) => ({ leg, state: 'skipped' as const, reason: MCP_INBOX_UNAVAILABLE }))),
     ...planLegs.map((leg) => ({ leg, state: 'not-reached' as const })),
   ];
 
@@ -1315,21 +1567,23 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   if (dry) {
     // A dry run reports the same ordered legs a real send would, but it can only say whether each
     // would be tried: the socket default the walk did not take is listed too, with the word that
-    // kept it out, so an omitted socket always has its reason. Nothing is dialed, staged or
-    // written.
+    // kept it out, so an omitted socket always has its reason. The webhook leg's row is read the
+    // same way: a row whose files name no usable route is skipped, with the reason. Nothing is
+    // dialed, staged or written.
     report.delivery = dryDeliveryPlan({
       walk,
       order,
       cli: to.cli,
       declaredOrder,
       human,
-      socketReason: socketIneligibleReason(to.cli, socketWord, inbound, heldStanding),
+      socketReason: socketIneligibleReason(to.cli, socketWord, inbound, heldStanding, true),
+      webhookReason,
       handoffEligible: callerNative && !wait,
     });
     // A grant is the one rule the message's own header carries a record of: the dry run names
     // it too, so a preview says which owner-signed record admits a pair no rule reaches.
     const granted = admission.ok && admission.rule.startsWith('an owner-signed grant naming send') ? `; admitted by: ${admission.rule}` : '';
-    return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(walk, to.cli, callerNative && !wait, socketNow)}${dryWebhookClause(declared, human, busLive)}; nothing was written${granted}`, report);
+    return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(walk, to.cli, callerNative && !wait, socketNow, webhookReason === null)}${dryWebhookClause(webhookReason)}; nothing was written${granted}`, report);
   }
   // The display words every transport opens the message with: the receiving team's
   // `message-display` template, the sender's nickname (its seat name when the file writes none),
@@ -1391,24 +1645,29 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // remember to pass one.
   const directGuard = composedGuard(host);
 
-  // The delivery walk, in the order the receiving seat's chain resolves to. A leg that takes
+  // The delivery walk, in the owner's cascade over the legs the receiving seat's chain resolves
+  // to: the channel classes, then typed, then the mailbox. A leg that takes
   // the send ends the walk; a leg that definitely cannot take it hands the send to the next
   // one and its reason joins `failures`, which every history line this walk writes carries.
   // The typed leg looks for a live agent before it types; one it cannot find is a leg that
   // definitely cannot take the send, so the walk moves on with the reason recorded. Once the
   // typed leg types, its own outcome is the send's. The drop leg
-  // writes the typed leg's own file and stops there, with nothing typed. The mcp-inbox leg
-  // takes the send only while the seat's own inbox server is listening, and is otherwise
-  // recorded and passed. The native leg reaches a Codex seat through its own runtime queue, with
+  // writes the typed leg's own file and stops there, with nothing typed. The native leg reaches
+  // a Codex seat through its own runtime queue, with
   // nothing typed into a pane; a sender whose own file declares Claude Code gets the handoff
   // instead (unless `--wait` is set, since a handoff returns immediately to the caller before the
   // frame is sent). A human's walk is the drop leg alone; the legs this rule kept out are
   // recorded first, so the history line the drop leg writes (or the refusal) names what the pane
   // was spared.
   const failures: string[] = [];
+  // What this run's typed wake did, once the walk knows: the words a fallback prints must not
+  // promise a wake that ran and did not deliver, nor leave out one the run never reached. Absent
+  // until the typed leg is reached (or ruled out), which is the truth for a send that ended
+  // before it.
+  let wakeOutcome: WakeOutcome | undefined;
   // Fill in one planned leg's state. A leg is marked once: the first ending that reaches it is
   // the one the report keeps. A leg that is never marked stays `not-reached`.
-  const markLeg = (leg: DeliveryLeg, state: LegState, reason?: string): void => {
+  const markLeg = (leg: WalkLeg, state: LegState, reason?: string): void => {
     const entry = report.delivery?.find((one) => one.leg === leg && one.state === 'not-reached');
     if (entry === undefined) return;
     entry.state = state;
@@ -1416,6 +1675,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   };
   if (!human) {
     for (const leg of typingSetAside) failures.push(`${leg}: ${NO_PANE_MESSAGING}`);
+    // A profile that declares a typed wake but whose order leaves the typed leg out: the wake
+    // cannot run, and the words a fallback prints say that rather than implying one was tried.
+    if (typedWake !== null && !walkingTyped) {
+      wakeOutcome = { attempted: false, reason: 'the delivery order leaves the typed leg out' };
+    }
   }
   if (human) {
     for (const leg of order) {
@@ -1437,6 +1701,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // only leaves the walk without an episode to record.
   let stagedTried = false;
   let stagedWalk: RecordWritten | null = null;
+  let announced = false;
   // A leg records through this; until a record is staged it is a no-op, so a walk that never
   // began an episode records nothing, and a leg that began one records every attempt after it.
   let note: WalkNote = (_attempt) => { /* no episode yet */ };
@@ -1445,7 +1710,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   let ended = false;
   // The direct-only hook fires once, when a route's ending closes the walk.
   let directEnded = false;
-  const ensureEpisode = async (): Promise<void> => {
+  const ensureStaged = async (): Promise<void> => {
     if (stagedTried) return;
     stagedTried = true;
     // A serving channel from an install this build cannot vouch for keeps its old code in memory
@@ -1461,8 +1726,32 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         reason: "the sender's own walk wakes the seat; the serving channel runs another install",
       });
     }
-    stagedWalk = await writeSendRecord(dropDir, record, host.home, host.now);
+    stagedWalk = await stageSendRecord(dropDir, record, host.home, host.now, to.project);
     if (!stagedWalk.ok) return;
+    // ADR `zeus-message-path`, D3: the seat's own answer is a read. A send from this seat to its
+    // recipient settles the newest message that recipient delivered it before this send's own
+    // instant — the seat's signed act, never the original sender's — and only the newest, so one
+    // answer never swallows the older unread work. A sweep that cannot read or write is a missing
+    // annotation, never a failed send.
+    if (caller.kind === 'seat') {
+      try {
+        const answered = markAnsweredBySend({
+          seat: caller.name,
+          sender: to.seat,
+          senderId: to.agentId,
+          root,
+          session: team.session,
+          project: team.project,
+          home: host.home,
+          at: record.at,
+        });
+        if (answered.kind === 'unavailable') {
+          logLine(dir, 'send', who, `${caller.name}: the answered message could not be marked read (${answered.reason})`, host.now());
+        }
+      } catch {
+        // The send's record is staged; the read receipt is an annotation beside it.
+      }
+    }
     const begun = beginFallbackWalk({
       caller,
       team,
@@ -1476,8 +1765,32 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     });
     note = (attempt) => {
       if (!attempt.liveRoutesRemain) ended = true;
-      const noted = begun.note(attempt);
+      // The record is durable before the first note, so a busy episode's key never holds the
+      // sender's line: the fact is written beside the record and the next drain pass records it.
+      const noted = begun.noteSoon(attempt);
       if (!noted.ok) logLine(dir, 'send', who, `${to.seat}: the fallback attempt was not recorded (${noted.reason})`, host.now());
+      // One signed step per attempted leg, filed in the receiving team's store beside the bus's
+      // own `message.arrived`, so `team trace <id>` prints the walk in order. The append is
+      // bounded (`STEP_APPEND_MS`); a step that cannot be written is a missing trace line, never
+      // a failed send, and it is logged here where the send's own log folder is in hand.
+      const step = legStep(
+        {
+          store: { project: to.project, root: to.root, home: host.home },
+          id: msgId,
+          session: to.session,
+          from: who,
+          to: to.seat,
+          thread: record.thread,
+          ts: attempt.at.toISOString(),
+        },
+        {
+          route: attempt.route,
+          outcome: attempt.outcome,
+          ms: attempt.ms,
+          ...(attempt.reason === undefined ? {} : { reason: attempt.reason }),
+        },
+      );
+      if (!step.ok) logLine(dir, 'send', who, `${to.seat}: the leg step ${attempt.route} was not written (${step.reason})`, host.now());
       // A direct-only caller hears the walk's ending here: the attempt that took the send, or
       // the last route's failure. The record was staged before the first attempt, whatever it was.
       if (host.direct !== undefined && !directEnded && (attempt.outcome === 'delivered' || !attempt.liveRoutesRemain)) {
@@ -1492,7 +1805,21 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       }
     };
   };
-  // The staged copy is assigned inside `ensureEpisode`'s closure, so the walk reads it through
+  // Tells the bus the record has landed, once. A walk whose first attempted leg is the webhook
+  // posts before this call, so the post's claim decides who posts and one arrival wakes the seat;
+  // every other leg announces as soon as the record is staged, which is what the write always
+  // did. A record that never staged is never announced, and neither is one the folder already
+  // held: the send that first stored a duplicate id announced that arrival.
+  const announceStaged = async (): Promise<void> => {
+    if (announced || stagedWalk === null || !stagedWalk.ok || stagedWalk.existing === true) return;
+    announced = true;
+    await announceArrival(record);
+  };
+  const ensureEpisode = async (): Promise<void> => {
+    await ensureStaged();
+    await announceStaged();
+  };
+  // The staged copy is assigned inside `ensureStaged`'s closure, so the walk reads it through
   // this call: the declared type, not the narrowing control flow takes at the declaration.
   const stagedRecordOf = (): RecordWritten | null => stagedWalk;
   // A direct-only send stages its record before its first attempt: no route the watch can take
@@ -1504,8 +1831,13 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // taken: a socket the walk found unusable, a runtime queue its attempt never reached. Each
   // lowering keeps every route not yet disproved, and the class is re-read with only those.
   const walkLost: { socket?: boolean; endpoint?: boolean } = {};
+  // The class in words, as the walk has disproved it so far and with the wake this run made: every
+  // ending that appends the class reads the same sentence.
+  const wordsNow = (wake: WakeOutcome | undefined): string =>
+    classWords(classWithout(to, host.home, walkLost, declared), to.seat, wake);
   const lowerDelivery = (): void => {
-    report.deliveryWords = classWords(classWithout(to, host.home, walkLost, declared), to.seat, busLive);
+    report.deliveryClass = classWithout(to, host.home, walkLost, declared).cls;
+    report.deliveryWords = wordsNow(wakeOutcome);
   };
   for (const [at, leg] of walk.entries()) {
     if (leg === 'channel') {
@@ -1518,7 +1850,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // delivered on this leg, so the walk moves on to the next one.
       markLeg('channel', 'attempted');
       await ensureEpisode();
-      const staged = await stageChannelRecord(dir, to.session, to.seat, dropDir, record, from, host, report, to.sentAs);
+      const staged = await stageChannelRecord(dir, to.session, to.seat, dropDir, record, from, host, report, to.sentAs, to.project);
       const grace = host.channelGraceMs ?? CHANNEL_PUSH_GRACE_MS;
       const miss = staged ?? (await awaitChannelPush(dropDir, msgId, grace, host) ? null : `no push receipt within ${String(grace)} ms`);
       if (miss !== null) {
@@ -1541,28 +1873,152 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       }
       return sentChannel(io, to.seat, report, ms);
     }
-    if (leg === 'mcp-inbox') {
-      // The one line a send whose order put the drop first owes its reader: the walk is not the
-      // order, because this seat's inbox server is listening and a stored copy behind it would be
-      // read a turn late. Printed when the leg is reached, not when it takes the send.
-      if (at === inboxSplicedAt) {
-        io.stderr(`team send: ${to.seat}: the delivery order names the drop before its inbox, but its inbox server is listening; the inbox is walked before the drop\n`);
-      }
-      // The seat's own inbox, not a pane: the leg takes the send only when a listener beside
-      // the message names this seat, session and root with a live pid — and, when this process
-      // knows its own build, when that listener's marker names the same build. A listener left
-      // running from an older install has that build's parsers in memory and cannot read a
-      // record this build signs; the walk records the stale runtime and moves on.
-      const live = inboxLive(dropDir, to.root, to.session, to.seat, host.build?.());
-      if (!live.live) {
-        failures.push(`mcp-inbox: ${live.reason}`);
-        markLeg('mcp-inbox', 'skipped', live.reason);
-        note(walkAttempt('mcp-inbox', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: live.reason }));
+    if (leg === 'webhook') {
+      // The sender-posted webhook is the cascade's second class (ADR D1): every channel-class
+      // leg the order names has been walked and none took the send, so this process posts the
+      // arrival itself, once, before any typed wake. A 2xx takes the send and ends the walk; a
+      // request that provably never left hands the send to the leg behind it; a request whose
+      // fate is unknown ends the walk too, because the routine is never asked twice. A record
+      // this leg staged itself is posted before the bus is told of it, so the claim decides who
+      // posts and one arrival wakes the seat once.
+      const hook = declared?.webhook;
+      const routeRefusal = hook === undefined ? 'the receiving seat declares no webhook row' : webhookRefusal(hook);
+      if (hook === undefined || routeRefusal !== null) {
+        const why = routeRefusal ?? 'the receiving seat declares no webhook row';
+        failures.push(`webhook: ${why}`);
+        markLeg('webhook', 'skipped', why);
+        note(walkAttempt('webhook', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
         continue;
       }
-      markLeg('mcp-inbox', 'attempted');
-      await ensureEpisode();
-      return deliverInbox(io, to.dir, who, from, to.project, to.root, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, wait, timeoutS, callerRoot, note);
+      await ensureStaged();
+      const stagedHook = stagedRecordOf();
+      if (stagedHook === null || !stagedHook.ok) {
+        const why = stagedHook === null ? 'the record could not be written' : stagedHook.reason;
+        failures.push(`webhook: ${why}`);
+        markLeg('webhook', 'skipped', why);
+        note(walkAttempt('webhook', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
+        continue;
+      }
+      if (stagedHook.existing === true) {
+        // A duplicate id's arrival was decided when the record first landed; this run posts
+        // nothing under a name another send holds.
+        const why = 'the record was already there; its arrival was not posted again';
+        failures.push(`webhook: ${why}`);
+        markLeg('webhook', 'skipped', why);
+        note(walkAttempt('webhook', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
+        continue;
+      }
+      markLeg('webhook', 'attempted');
+      const posted = await postSeatWebhook(to.seat, hook, record, stagedHook.signed, dropDir, host.home, host.now, receiving.ok ? receiving.team : null, to.project, body);
+      if (posted.kind !== 'none') {
+        // The walk's own post is one signed event beside the bus's arrival; a `none` is another
+        // poster's claim, whose post the bus records as its own step. A step that cannot be
+        // written is a missing trace line, never a failed send.
+        const step = webhookStep(
+          {
+            store: { project: to.project, root: to.root, home: host.home },
+            id: msgId,
+            session: to.session,
+            from: who,
+            to: to.seat,
+            thread: record.thread,
+            ts: host.now().toISOString(),
+          },
+          posted.kind === 'posted' ? { kind: 'posted', ms: posted.ms } : { kind: posted.kind, reason: posted.reason },
+        );
+        if (!step.ok) logLine(dir, 'send', who, `${to.seat}: the webhook step was not written (${step.reason})`, host.now());
+      }
+      const hookMs = host.now().getTime() - startedAt;
+      const hookEntry = { ts: host.now().toISOString(), from, to: to.seat, ...(to.sentAs === null ? {} : to.sentAs), body, id: msgId, thread: record.thread };
+      const hookFailures = (): { failed?: string[] } => (failures.length > 0 ? { failed: [...failures] } : {});
+      if (posted.kind === 'posted') {
+        // The routine answered 2xx: this leg takes the send. The bus learns of the record only
+        // now, so the `posted` mark this run just wrote is the one the bus skips.
+        report.sent = msgId;
+        await announceStaged();
+        note(walkAttempt('webhook', 'delivered', false, host.now(), startedAt, { reason: `posted in ${String(posted.ms)} ms` }));
+        logLine(dir, 'send', who, `${to.seat}: delivered to its webhook adapter (${String(posted.ms)} ms; drop ${String(body.length)} characters)`, host.now());
+        appendHistory(to.project, to.root, host.home, { ...hookEntry, ...historySender(report), outcome: 'delivered', ms: hookMs, via: 'webhook', ...hookFailures() });
+        if (wait) {
+          return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'webhook', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
+        }
+        return deliveredWebhook(io, to.seat, report, posted.ms);
+      }
+      await announceStaged();
+      if (posted.kind === 'unknown') {
+        // The body may have reached the routine and the answer was not read: the claim stays in
+        // `sent`, so no one posts the record again. The walk ends here — a second body for the
+        // same message is worse than a late one — and the line says the fate is unknown.
+        report.sent = msgId;
+        report.webhookPost = posted;
+        // The class's own words are never appended to a post whose fate is unknown: `woken
+        // through its event adapter` would be a wake this run cannot prove. The unknown clause
+        // beside the ending is the whole truth.
+        report.deliveryWords = undefined;
+        note(walkAttempt('webhook', 'unreachable', false, host.now(), startedAt, { reason: posted.reason }));
+        logLine(dir, 'send', who, `${to.seat}: the webhook post may have been taken; no answer was read (${posted.reason})`, host.now());
+        appendHistory(to.project, to.root, host.home, { ...hookEntry, ...historySender(report), outcome: 'sent (unconfirmed)', ms: hookMs, via: 'webhook', ...hookFailures() });
+        noteLateWebhook(
+          posted,
+          {
+            store: { project: to.project, root: to.root, home: host.home },
+            id: msgId,
+            session: to.session,
+            from: who,
+            to: to.seat,
+            thread: record.thread,
+            ts: host.now().toISOString(),
+          },
+          (ms) => {
+            appendHistory(to.project, to.root, host.home, {
+              ...hookEntry,
+              ...historySender(report),
+              ts: host.now().toISOString(),
+              outcome: 'delivered (late)',
+              ms,
+              via: 'webhook',
+              ...hookFailures(),
+            });
+          },
+        );
+        return sentUnconfirmed(io, to.seat, report, hookMs, 'webhook');
+      }
+      if (posted.kind === 'none') {
+        if (posted.why === 'claim-held' || posted.why === 'already-posted') {
+          // Another poster holds the record's claim: the bus took the arrival first and is
+          // posting it now (or has finished). The webhook leg is taken either way — a typed
+          // wake now would be the second one — so the walk ends with what the claim proves.
+          report.sent = msgId;
+          const postedAlready = posted.why === 'already-posted';
+          const why = postedAlready
+            ? 'the arrival was already posted; another poster got there first'
+            : 'the bus holds the claim and is posting it';
+          note(walkAttempt('webhook', postedAlready ? 'delivered' : 'unreachable', false, host.now(), startedAt, { reason: why }));
+          logLine(dir, 'send', who, `${to.seat}: webhook ${postedAlready ? 'already posted' : 'being posted by the bus'} (drop ${String(body.length)} characters)`, host.now());
+          appendHistory(to.project, to.root, host.home, { ...hookEntry, ...historySender(report), outcome: postedAlready ? 'delivered' : 'sent (unconfirmed)', ms: hookMs, via: 'webhook', ...hookFailures() });
+          if (postedAlready) {
+            if (wait) {
+              return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'webhook', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
+            }
+            return deliveredWebhook(io, to.seat, report, hookMs);
+          }
+          return sentUnconfirmed(io, to.seat, report, hookMs, 'webhook', 'the bus is posting it');
+        }
+      }
+      // A row that provably could not deliver, or a post that did nothing without a reason to
+      // stop: the leg did not take the send, and the walk moves to the leg behind it with the
+      // reason recorded. A `failed` post released the claim, so the bus and the seat's pull keep
+      // the fallback they always had.
+      const why = posted.kind === 'failed'
+        ? posted.reason
+        : posted.kind === 'none' && posted.why === 'no-route'
+          ? 'the adapter row names no usable route'
+          : 'the post failed unexpectedly';
+      if (posted.kind === 'failed') report.webhookPost = posted;
+      failures.push(`webhook: ${why}`);
+      markLeg('webhook', 'attempted', why);
+      note(walkAttempt('webhook', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
+      continue;
     }
     if (leg === 'socket') {
       // The socket leg dials only a receiving Claude session whose launch declares
@@ -1587,7 +2043,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         continue;
       }
       if (!socketEligible(socketWord, inbound)) {
-        const why = socketSkipReason(socketWord, inbound);
+        const why = preciseSocketSkipReason(socketWord, inbound);
         failures.push(`socket: ${why}`);
         markLeg('socket', 'skipped', why);
         note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
@@ -1625,7 +2081,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         team.project,
         caller.kind === 'seat' ? labelNameOf(team, caller.name) : null,
       );
-      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, root, identityHeader, human);
+      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, identityHeader, human);
       if (attempt.kind === 'delivered') {
         markLeg('socket', 'attempted');
         note(walkAttempt('socket', 'delivered', false, host.now(), startedAt));
@@ -1633,24 +2089,6 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
           return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'socket', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
         }
         return delivered(io, to.seat, report, 'socket');
-      }
-      if (attempt.kind === 'held') {
-        // The mark is written once, under the receiving team's state folder: the next send reads
-        // it and keeps the socket out until the declaration this hold sat under is re-confirmed.
-        // The history line and the line below already carry the outcome; the mark is the retry guard.
-        markLeg('socket', 'attempted', attempt.reason);
-        recordHeldSocket(heldSocketPath(to.dir, to.session, to.seat), inbound, host.now());
-        const remaining = liveRoutesAfter(walk, at, to.cli);
-        note(walkAttempt('socket', 'held', remaining, host.now(), startedAt, { reason: attempt.reason }));
-        // A held frame is not a delivery, and a live route behind it may still take the send:
-        // the frame stays in the receiver's folder as its durable copy and the walk moves on.
-        if (remaining) {
-          failures.push(`socket: ${attempt.reason}`);
-          socketNote = `typed, socket ${attempt.reason}`;
-          logLine(dir, 'send', who, `${to.seat}: the socket held the frame (${attempt.reason}); falling back to the next route`, host.now());
-          continue;
-        }
-        return held(io, dir, who, to.seat, attempt.reason, host, report, 'socket');
       }
       failures.push(`socket: ${attempt.reason}`);
       // The walk proved the receiving session has no dialable socket now — none for its pane, a
@@ -1742,6 +2180,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
           // the seat is woken through its runtime queue whatever the class read said before the
           // walk and whatever routes stand beside it — a bound endpoint or a webhook row. The
           // adapter's bus clause belongs only to an ending where the adapter is the route left.
+          report.deliveryClass = 'between-turns';
           report.deliveryWords = deliveryWords('between-turns', to.seat);
           const failed = failures.length > 0 ? { failed: [...failures] } : {};
           const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: record.thread };
@@ -1785,7 +2224,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // it waits on the thread, so it skips the handoff and continues the walk.
       if (callerNative && !wait) {
         const fallback = fallbackAfterNative(walk, at);
-        const off = await handOff(team.project, root, from, to, record, admission, fallback, dropDir, host);
+        const off = await handOff(team.project, root, from, to, record, admission, fallback, dropDir, host, report);
         if (off.kind === 'refused') {
           await ensureEpisode();
           markLeg('native', 'refused', off.why);
@@ -1904,6 +2343,81 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       failures.push(`headless-resume: ${attempt.reason}`);
       continue;
     }
+    if (leg === 'session') {
+      // The receiving CLI's own call creates a remote session from the brief: the whole body —
+      // the rules, the sender header and the message — goes as ONE argument, never through a
+      // shell string, and the CLI runs in the seat's own folder. Delivered is the session line
+      // the CLI prints with an id; every other ending is a route that did not take the send, and
+      // the walk moves to the leg behind it with the reason recorded.
+      if (sessionCli === null) {
+        const why = `${to.cli} has no session-creating command in this build`;
+        failures.push(`session: ${why}`);
+        markLeg('session', 'skipped', why);
+        note(walkAttempt('session', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
+        continue;
+      }
+      const seatCwd = declared?.cwd === undefined ? to.root : resolve(to.root, declared.cwd);
+      const repo = originRepoOf(seatCwd);
+      // A public-only body leaves this machine for a service it does not run, so it is read
+      // against the machine's private lists before any session call. A hit, or a list that is
+      // configured and cannot be read, is a route that did not take the send: the reason names
+      // the rule by source, class and ordinal and never the text, and the walk falls through to
+      // the leg behind it — the message still lands locally.
+      if (publicOnly) {
+        const scan = scanPublicBody(body, host.privateLists);
+        if (!scan.ok) {
+          const why = `${scan.why}; no session was created`;
+          failures.push(`session: ${why}`);
+          markLeg('session', 'skipped', why);
+          note(walkAttempt('session', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
+          continue;
+        }
+        // The repository travels with the body: the CLI clones `owner/repo` from the forge, so a
+        // private one would hand the service the code the brief is about. Only a repository the
+        // forge answers as public takes the call; a folder that names none has no target the
+        // walk can prove, and a read that cannot be made proves nothing — all three refuse the
+        // leg and fall through, so the message still lands locally.
+        const read = host.repoVisibility ?? realRepoRead;
+        const visibility = repo === null ? 'unread' : await read(repo);
+        if (visibility !== 'public') {
+          const why = repo === null
+            ? "the seat's folder names no repository, so the session's target cannot be proved public; no session was created"
+            : visibility === 'not-public'
+              ? `the target repository ${repo} is not public; no session was created`
+              : `the target repository ${repo} could not be read for visibility; no session was created`;
+          failures.push(`session: ${why}`);
+          markLeg('session', 'skipped', why);
+          note(walkAttempt('session', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
+          continue;
+        }
+      }
+      // The signed record is staged before the call: a session the CLI created and then failed to
+      // report still leaves the seat a durable copy of what it was asked to do.
+      await ensureEpisode();
+      const attempt = await createSession({
+        spec: sessionCli,
+        cwd: seatCwd,
+        repo,
+        body,
+      });
+      markLeg('session', 'attempted', attempt.outcome === 'created' ? undefined : attempt.reason);
+      if (attempt.outcome === 'created') {
+        report.sent = msgId;
+        note(walkAttempt('session', 'delivered', false, host.now(), startedAt, { reason: `session ${attempt.session} created` }));
+        const ms = host.now().getTime() - startedAt;
+        const failed = failures.length > 0 ? { failed: [...failures] } : {};
+        const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: record.thread };
+        logLine(dir, 'send', who, `${to.seat}: delivered (session ${attempt.session}) (drop ${String(body.length)} characters)`, host.now());
+        appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'delivered', ms, via: 'session', session: attempt.session, ...failed });
+        if (wait) {
+          return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'session', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
+        }
+        return deliveredSession(io, to.seat, report, attempt.session);
+      }
+      failures.push(`session: ${attempt.reason}`);
+      note(walkAttempt('session', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: attempt.reason }));
+      continue;
+    }
     // The drop leg: the same 0600 drop file the typed leg writes, and no keystroke at all — no
     // trigger line, no socket frame, no daemon round trip. It is the channel for a seat whose
     // receiver watches its own drop folder, and for a pane that must never be typed into: a
@@ -1915,12 +2429,13 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // print are the one claim this ending disproves.
       walkLost.endpoint = true;
       lowerDelivery();
+      await ensureEpisode();
       // The drop leg is the bus inbox, never a wake: when it takes the send no event adapter
-      // did, and the sender is told so (src/send/no-pane-messaging.ts).
+      // did, and the sender is told so (src/send/no-pane-messaging.ts). It is the cascade's last
+      // resort, under every other class (src/send/walk-cascade.ts).
       if (!human && !dry) {
         io.stderr(queuedLine(to.seat, noEventAdapter ? NO_PANE_MESSAGING : NO_EVENT_ADAPTER_TOOK_IT));
       }
-      await ensureEpisode();
       return deliverDropped(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, human, wait, timeoutS, callerRoot, note);
     }
     // The typed leg. The trigger is built here, so an order that reaches this leg is refused a
@@ -1942,8 +2457,8 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       body: record.body,
       ageMs: 0,
       ...(record.subject === undefined ? {} : { subject: record.subject }),
-    });
-    if (trigger === null && compose === null) {
+    }, to.cli);
+    if (trigger === null && compose === null && typedWake === null) {
       const why = `${to.seat}: the trigger would exceed ${String(MESSAGE_LINE_MAX)} characters; nothing was sent`;
       markLeg('typed', 'refused', `the trigger would exceed ${String(MESSAGE_LINE_MAX)} characters; nothing was sent`);
       note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the trigger would exceed ${String(MESSAGE_LINE_MAX)} characters; nothing was sent` }));
@@ -1957,9 +2472,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     const daemonSock = host.daemonSocket ?? daemonSocketPath(to.project, to.root, host.home);
     // A daemon dial is a route attempt: the record is staged before it, so a daemon that took the
     // request and died before answering still leaves the walk a durable copy. No socket file at
-    // the path means no daemon to dial, so a send every leg will refuse stages nothing.
-    if (!to.cross && compose === null && !wait && existsSync(daemonSock)) await ensureEpisode();
-    const viaDaemon = to.cross || compose !== null || wait
+    // the path means no daemon to dial, so a send every leg will refuse stages nothing. A typed
+    // wake is never handed to the daemon: its type and Enter refuse there, and the screen walk and
+    // the seat lock belong to this process.
+    if (!to.cross && compose === null && typedWake === null && !wait && existsSync(daemonSock)) await ensureEpisode();
+    const viaDaemon = to.cross || compose !== null || typedWake !== null || wait
       ? null
       : await requestDaemon(daemonSock, { v: 1, op: 'send', id: msgId, from, to: to.seat, ...sentAs, body, ...(record.from_id === null ? {} : { from_id: record.from_id }), ...(record.subject === undefined ? {} : { subject: record.subject }), name: wakeName, template: wakeTemplate, ...(failures.length > 0 ? { failed: [...failures] } : {}), ...(at + 1 < walk.length ? { fallthrough: true as const } : {}) });
     if (viaDaemon && !('pong' in viaDaemon) && !('shutdown' in viaDaemon)) {
@@ -1982,6 +2499,16 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     // behind the typed leg that is the walk's ending, and when one does the send goes on to it.
     const found: Found = findAgent(host, to.session, to.seat);
     if (!found.ok) {
+      // A typed wake is the order's fallback, not its only route: an ambiguous pane is one this
+      // wake will not type into, and the send goes on to the leg behind it (the drop inbox).
+      if (found.kind === 'refused' && typedWake !== null && at + 1 < walk.length) {
+        const why = `${to.seat}: the session lists more than one agent with this name; nothing was typed`;
+        wakeOutcome = { attempted: false, reason: 'the session lists more than one agent with this name' };
+        failures.push(`typed: ${why}`);
+        markLeg('typed', 'skipped', why);
+        note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
+        continue;
+      }
       if (found.kind === 'refused') {
         markLeg('typed', 'refused', found.reason);
         note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: found.reason }));
@@ -1989,6 +2516,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       }
       if (at + 1 < walk.length) {
         failures.push(`typed: ${found.reason}`);
+        wakeOutcome = { attempted: false, reason: found.reason };
         markLeg('typed', 'skipped', found.reason);
         note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: found.reason }));
         continue;
@@ -2000,6 +2528,14 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       return unreachable(io, dir, who, to.seat, found.reason, host, report);
     }
     if (isBareShellPane(to.dir, to.session, to.seat, host.processInfo(to.session, found.pane))) {
+      const why = 'the seat is back at its shell; nothing was typed';
+      if (typedWake !== null && at + 1 < walk.length) {
+        failures.push(`typed: ${why}`);
+        wakeOutcome = { attempted: false, reason: 'the seat is back at its shell' };
+        markLeg('typed', 'skipped', why);
+        note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
+        continue;
+      }
       const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: record.thread, outcome: 'unreachable', ms: host.now().getTime() - startedAt, ...(failures.length > 0 ? { failed: [...failures] } : {}) };
       appendHistory(to.project, to.root, host.home, entry);
       markLeg('typed', 'skipped', 'the seat is back at its shell; nothing was typed');
@@ -2007,6 +2543,31 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       return unreachable(io, dir, who, to.seat, 'the seat is back at its shell; nothing was typed', host, report);
     }
     report.sent = msgId;
+    if (typedWake !== null) {
+      // The profile-gated typed wake: one line into the empty idle box the wake saw twice, and a
+      // delivery only when the profile's working screen shows. A wake that does not deliver is
+      // not the walk's ending — the message is in the bus inbox, and the drop leg behind this one
+      // queues it there and reports that — so its reason joins the walk and the send goes on.
+      if (trigger === null) {
+        const why = `the trigger would exceed ${String(MESSAGE_LINE_MAX)} characters; nothing was typed`;
+        failures.push(`typed: ${why}`);
+        wakeOutcome = { attempted: false, reason: 'the trigger would exceed the measured line' };
+        markLeg('typed', 'skipped', why);
+        note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
+        continue;
+      }
+      await ensureEpisode();
+      const wake = await deliverTypedWakeSeat(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, trigger, host, report, startedAt, failures, to.sentAs, note);
+      if (wake.delivered) {
+        markLeg('typed', 'attempted');
+        return delivered(io, to.seat, report, 'typed wake', 'typed');
+      }
+      wakeOutcome = { attempted: true, reason: wake.reason };
+      failures.push(`typed: ${wake.reason}`);
+      markLeg('typed', 'attempted', wake.reason);
+      note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: wake.reason }));
+      continue;
+    }
     if (compose !== null) {
       // The seat's own folder: the record's `cwd` under the receiving team's root, else the
       // folder this send already writes to.
@@ -2049,13 +2610,16 @@ function nativeIneligibleReason(cli: string, handoffEligible: boolean): string |
 }
 
 /** The human ruling's reason for one leg, or null for the drop file. These are the same words
- *  the history line records, without the leg prefix the report entry already carries. */
+ *  the history line records, without the leg prefix the report entry already carries.
+ *  `mcp-inbox` is not a leg at all (ADR D1): whatever the seat's pane is, the word is reported
+ *  as the store's reader, never as a leg the human ruling spared. */
 function humanSkipReason(leg: DeliveryLeg): string | null {
   if (leg === 'typed') return "the pane is a human's, and nothing is typed into it";
   if (leg === 'native' || leg === 'socket') return "the pane is a human's, and no frame is sent";
-  if (leg === 'mcp-inbox') return "the pane is a human's, and the drop leg is the only one walked";
+  if (leg === 'mcp-inbox') return MCP_INBOX_UNAVAILABLE;
   if (leg === 'channel') return "the pane is a human's, and the drop leg is the only one walked";
   if (leg === 'headless-resume') return "the pane is a human's, and the drop leg is the only one walked";
+  if (leg === 'session') return "the pane is a human's, and no session is created for it";
   return null;
 }
 
@@ -2064,24 +2628,29 @@ function humanSkipReason(leg: DeliveryLeg): string | null {
  *  lists the implied socket candidate the walk did not take, so a socket omission always has
  *  its reason. Nothing here reads a pane, dials a socket or writes a file. */
 function dryDeliveryPlan(input: {
-  walk: readonly DeliveryLeg[];
+  walk: readonly WalkLeg[];
   order: readonly DeliveryLeg[];
   cli: string;
   declaredOrder: boolean;
   human: boolean;
   socketReason: string | null;
+  webhookReason: string | null;
   handoffEligible: boolean;
 }): LegReport[] {
-  const candidate = (leg: DeliveryLeg): LegReport => {
+  const candidate = (leg: WalkLeg): LegReport => {
     const reason = input.human
-      ? humanSkipReason(leg)
+      ? (leg === 'webhook' ? null : humanSkipReason(leg))
       : leg === 'socket'
         ? input.socketReason
-        : leg === 'native'
-          ? nativeIneligibleReason(input.cli, input.handoffEligible)
-          : leg === 'headless-resume'
-            ? 'this build carries no headless resume runtime'
-            : null;
+        : leg === 'webhook'
+          ? input.webhookReason
+          : leg === 'native'
+            ? nativeIneligibleReason(input.cli, input.handoffEligible)
+            : leg === 'headless-resume'
+              ? 'this build carries no headless resume runtime'
+              : leg === 'session' && profileFor(input.cli)?.sessionCli == null
+                ? `${input.cli} has no session-creating command in this build`
+                : null;
     return reason === null
       ? { leg, state: 'candidate', eligible: true }
       : { leg, state: 'skipped', eligible: false, reason };
@@ -2099,8 +2668,18 @@ function dryDeliveryPlan(input: {
   ) {
     entries.push(candidate('socket'));
   }
-  const legs: readonly DeliveryLeg[] = input.human
-    ? (input.order.includes('drop') ? input.order : [...input.order, 'drop'])
+  // A word this build reads but never walks is named with its reason, ahead of the walk, the
+  // same way the real send's report names it.
+  if (!input.human) {
+    for (const leg of unavailableLegsOf(input.order)) {
+      entries.push({ leg, state: 'skipped', eligible: false, reason: MCP_INBOX_UNAVAILABLE });
+    }
+  }
+  const legs: readonly WalkLeg[] = input.human
+    ? [
+        ...(input.walk.includes('webhook') ? ['webhook' as const] : []),
+        ...(input.order.includes('drop') ? input.order : ([...input.order, 'drop'] as WalkLeg[])),
+      ]
     : input.walk;
   for (const leg of legs) entries.push(candidate(leg));
   return entries;
@@ -2116,50 +2695,58 @@ function human0(overrides: { human?: boolean }, declared: { human?: boolean } | 
  *  (src/send/uds.ts's SOCKET_SEND is off) or a seat whose CLI has no cross-session socket — is
  *  not a channel a run would take, and neither is named. The handoff counts as the native leg
  *  only for a sender whose own file declares Claude Code, since only that sender makes the call
- *  the leg is. The mcp-inbox leg is a channel: it writes the seat's inbox drop and waits for its
- *  receipt, and the legs behind it are named as the fallbacks. The where-nothing-is-carried
- *  phrase is unreachable by the default order of any seat — its legs are mcp-inbox, typed,
- *  drop, and each is either named or passed over for a reason — and only an order that holds
- *  none of them prints it. */
-function walkPhrase(order: readonly DeliveryLeg[], cli: string, handoffEligible: boolean, socketDialable: boolean): string {
+ *  the leg is. A name this build only reads (`mcp-inbox`) is no channel and is never named here.
+ *  The where-nothing-is-carried phrase is unreachable by the default order of any seat — its
+ *  legs are typed and drop, and each is either named or passed over for a reason — and only an
+ *  order that holds none of them prints it. */
+function walkPhrase(order: readonly WalkLeg[], cli: string, handoffEligible: boolean, socketDialable: boolean, webhookWalkable: boolean): string {
   // The socket leg is walkable only where this run would dial it: a Claude receiver that itself
   // declares accept. The native leg is a Codex receiver's own runtime queue, and for any other
-  // receiver only the sender's own handoff — a sender whose own file declares Claude Code.
+  // receiver only the sender's own handoff — a sender whose own file declares Claude Code. The
+  // webhook leg is walkable when the adapter row's files name a usable route.
   const socketWalkable = SOCKET_SEND && socketDialable;
   const nativeWalkable = cli === 'codex' || (cli === 'claude-code' && handoffEligible);
   const resumeWalkable = isHeadlessResumeCli(cli);
   const typed = profileFor(cli)?.compose != null
     ? 'a typed brief through its own screens'
     : 'a 0600 drop file and one trigger line';
-  const words = (leg: DeliveryLeg): string => {
+  const words = (leg: WalkLeg): string => {
     if (leg === 'socket') return 'its cross-session socket';
     if (leg === 'native') {
       return cli === 'codex' ? 'its native runtime queue' : 'the native handoff (your own SendMessage, then --confirm)';
     }
     if (leg === 'headless-resume') return 'its headless session resume';
     if (leg === 'channel') return 'its own development channel';
-    if (leg === 'mcp-inbox') return "the seat's own MCP inbox";
+    if (leg === 'webhook') return 'its own webhook adapter';
+    if (leg === 'session') return 'the CLI\'s own session call, with the brief as one argument';
     if (leg === 'drop') return 'a 0600 drop file, with nothing typed into the pane';
     return typed;
   };
   const walkable = order.filter(
     (leg) =>
       leg === 'drop'
-      || leg === 'mcp-inbox'
       || leg === 'channel'
       || leg === 'typed'
+      || (leg === 'webhook' && webhookWalkable)
       || (leg === 'socket' && socketWalkable)
       || (leg === 'native' && nativeWalkable)
-      || (leg === 'headless-resume' && resumeWalkable),
+      || (leg === 'headless-resume' && resumeWalkable)
+      || (leg === 'session' && profileFor(cli)?.sessionCli != null),
   );
-  const [first] = walkable;
+  // The mailbox closes the walk. Behind the typed leg it is the same 0600 record the typed leg
+  // already stores, so naming it again would describe one file twice; the typed leg's own words
+  // carry it. Anywhere else the drop leg is named like every other leg.
+  const named = walkable.length >= 2 && walkable[walkable.length - 1] === 'drop' && walkable[walkable.length - 2] === 'typed'
+    ? walkable.slice(0, -1)
+    : walkable;
+  const [first] = named;
   if (first === undefined) return 'no leg of its delivery order this build can walk';
   // The drop leg is a file and no keystroke: it always takes the send, so nothing stands behind it.
   if (first === 'drop') return 'a 0600 drop file with nothing typed into the pane';
   // Every leg of the order is named: the typed leg hands the send to a leg behind it when it
   // finds no live agent, so nothing after it is dropped from the walk's description.
-  if (walkable.length === 1) return words(first);
-  return `${words(first)}, falling back to ${walkable.slice(1).map(words).join(', then ')}`;
+  if (named.length === 1) return words(first);
+  return `${words(first)}, falling back to ${named.slice(1).map(words).join(', then ')}`;
 }
 
 /** What a direct-only run reports: the command's own exit code and the walk's ending. A run
@@ -2225,22 +2812,18 @@ function walkAttempt(
 /** Whether a leg after this one can still take the send: a walk's remaining routes, less the one
  *  this build carries no runtime for. A route is live when it stands; the drop leg's file always
  *  stands in front of a copy. */
-function liveRoutesAfter(walk: readonly DeliveryLeg[], at: number, cli?: string): boolean {
+function liveRoutesAfter(walk: readonly WalkLeg[], at: number, cli?: string): boolean {
   return walk
     .slice(at + 1)
     .some((leg) => leg !== 'headless-resume' || (cli !== undefined && isHeadlessResumeCli(cli)));
 }
 
-/** The dry run's webhook clause: the seat's adapter as a waking route only while a bus serves
- *  the root, the queued words when one does not, or the reason a configured adapter cannot post
- *  right now. Empty for a seat that configures none and for a human's pane, which nothing
- *  wakes. */
-function dryWebhookClause(declared: Seat | undefined, human: boolean, busLive: boolean): string {
-  if (human || declared?.webhook === undefined) return '';
-  const route = webhookRouteOf(declared.webhook);
-  if (route === null) return '';
-  if (!route.ok) return `; its webhook adapter cannot deliver: ${route.reason}`;
-  return busLive ? '; woken through its webhook adapter' : `; ${WEBHOOK_QUEUED_WORDS}`;
+/** The dry run's webhook clause: the reason a configured adapter cannot post right now. Empty
+ *  when the row is usable — the walk phrase names the webhook among the legs it would try — and
+ *  for a seat that configures none. The clause never claims a wake: a preview runs before the
+ *  record exists, so the adapter has not posted anything this run. */
+function dryWebhookClause(reason: string | null): string {
+  return reason === null ? '' : `; its webhook adapter cannot deliver: ${reason}`;
 }
 
 /** What a native handoff leaves behind, or why the send goes to the leg behind native. */
@@ -2267,14 +2850,16 @@ function stampHandoffNonce(body: string, nonce: string): string {
 /** The legs of the recipient's `delivery_order` that stand after `native`: when a handoff is
  *  not confirmed within the 10m window, `team watch` walks these legs in order. The socket leg is
  *  not one of them: a frame is written by the send that walks it, and a handoff's pending record
- *  names only the legs the watcher itself can take. */
+ *  names only the legs the watcher itself can take. An `mcp-inbox` word is no leg in this build
+ *  (src/send/walk-cascade.ts), so no new record names it; the watcher still reads a record an
+ *  older build wrote. */
 function fallbackAfterNative(
-  walk: readonly DeliveryLeg[],
+  walk: readonly WalkLeg[],
   at: number,
 ): readonly PendingNativeFallbackLeg[] {
   return walk
     .slice(at + 1)
-    .filter((leg): leg is PendingNativeFallbackLeg => leg === 'mcp-inbox' || leg === 'typed' || leg === 'drop');
+    .filter((leg): leg is PendingNativeFallbackLeg => leg === 'typed' || leg === 'drop');
 }
 
 /** The registry id the sender's record carries, when it has one: the owner and the watch are
@@ -2307,8 +2892,95 @@ function recordOf(msgId: string, to: Aim, body: string, from: string, admission:
 }
 
 /** The record a leg wrote, with its signed text: the socket leg carries those bytes in its frame
- *  attempt's message. */
-type RecordWritten = { ok: true; path: string; existing?: true; record: string } | { ok: false; reason: string };
+ *  attempt's message, and the webhook leg posts the signed record the adapter's inbox shape
+ *  carries. */
+type RecordWritten =
+  | { ok: true; path: string; existing?: true; record: string; signed: SignedRecord }
+  | { ok: false; reason: string };
+
+/**
+ * Posts one arrival to one seat's adapter row. The caller supplies the row: the walk's webhook
+ * leg carries the receiving team file's row itself, and the older write path reads it from the
+ * file. The post holds the record's claim, so a bus pass that reaches the record at the same
+ * moment posts nothing; a 2xx ends the claim as the `posted` mark the bus skips, and a poster
+ * that cannot prove the request never left leaves the claim in `sent` so no one posts the record
+ * again. Never throws and never fails the send.
+ */
+/** A request that outlived the deadline keeps running after the command has said unknown. A late
+ *  2xx appends `delivered (late)` for the same message id and files `webhook.posted` under the
+ *  `late` record id. A late non-2xx files `failed` under that id and does not append a delivery.
+ *  An unanswered continuation files nothing: the claim stays `sent`. History is only appended. */
+function noteLateWebhook(posted: SenderPostOutcome, fields: StepFields, onDelivered: (ms: number) => void): void {
+  if (posted.kind !== 'unknown' || posted.late === undefined) return;
+  void posted.late.then((late) => {
+    if (late.kind === 'posted') {
+      webhookStep(fields, { kind: 'posted', ms: late.ms }, 'late');
+      onDelivered(late.ms);
+      return;
+    }
+    if (late.kind === 'failed') webhookStep(fields, { kind: 'failed', reason: late.reason }, 'late');
+  });
+}
+
+async function postSeatWebhook(
+  seat: string,
+  webhook: NonNullable<Seat['webhook']>,
+  payload: RecordPayload,
+  message: SignedRecord,
+  dropDir: string,
+  home: string,
+  now: () => Date,
+  team: TeamFile | null,
+  project?: string,
+  body?: string,
+): Promise<SenderPostOutcome> {
+  try {
+    return await postArrivalWebhook({
+      seat,
+      webhook,
+      team,
+      root: payload.root,
+      session: payload.session,
+      id: payload.id,
+      from: payload.from,
+      ...(payload.thread === undefined ? {} : { thread: payload.thread }),
+      message,
+      dropDir,
+      home,
+      now,
+      ...(project === undefined ? {} : { project }),
+      ...(body === undefined ? {} : { body }),
+    });
+  } catch {
+    return { kind: 'none', why: 'unexpected' };
+  }
+}
+
+/**
+ * Posts the arrival to the receiving seat's own webhook adapter, when the receiving team's file
+ * declares one for that seat: the write path's own wake, taken right after the record is signed
+ * and before the bus is told of it. Any doubt — a team file that does not read, no row, a seat
+ * with no adapter — is no post, and the bus and the seat's pull stand exactly as they did. Never
+ * throws and never fails the send.
+ */
+async function postArrivalNow(
+  dropDir: string,
+  payload: RecordPayload,
+  message: SignedRecord,
+  home: string,
+  now: () => Date,
+  project: string,
+): Promise<SenderPostOutcome> {
+  try {
+    const loaded = readTeamConfig(payload.root, { home });
+    if (!loaded.ok) return { kind: 'none', why: 'no-route' };
+    const seat = loaded.team.seats.find((one) => one.name === payload.to);
+    if (seat === undefined || seat.webhook === undefined) return { kind: 'none', why: 'no-route' };
+    return await postSeatWebhook(payload.to, seat.webhook, payload, message, dropDir, home, now, loaded.team, project, payload.body);
+  } catch {
+    return { kind: 'none', why: 'unexpected' };
+  }
+}
 
 /**
  * Writes the signed record under the leg's own lock, before the leg's transport action. Every
@@ -2317,8 +2989,17 @@ type RecordWritten = { ok: true; path: string; existing?: true; record: string }
  * bytes as this build signs them. A name already held by a regular file is left untouched by the
  * relay and judged here by `ensureRecord`, so a duplicate id is this message's record exactly as
  * before: a walk that falls from the socket to the typed leg writes one record, not two.
+ *
+ * This is the staging half alone: it posts nothing and tells the bus nothing, so a caller that
+ * walks the owner's cascade decides when the webhook is tried (its own leg, after every
+ * channel-class leg) and when the arrival is announced.
+ *
+ * The staging is one signed event in the receiving team's log (`message.staged`), bound to the
+ * message id; `project` is that team's project, the key the post's own `webhook.posted` shares.
+ * The event is a record, never a delivery fact: an append that cannot be written is logged and
+ * changes nothing about the send.
  */
-async function writeSendRecord(dropDir: string, payload: RecordPayload, home: string, now: () => Date): Promise<RecordWritten> {
+async function stageSendRecord(dropDir: string, payload: RecordPayload, home: string, now: () => Date, project: string): Promise<RecordWritten> {
   let signed: SignedRecord;
   try {
     signed = signRecord(payload, home);
@@ -2328,41 +3009,101 @@ async function writeSendRecord(dropDir: string, payload: RecordPayload, home: st
   const record = `${JSON.stringify(signed, null, 2)}\n`;
   const staged = await relayStage({ dir: dropDir, name: payload.id }, { id: payload.id, record }, { now });
   if (staged.outcome === 'refused') return { ok: false, reason: staged.reason };
+  // The step fields are the record's own: the receiving team's store, the message id, the
+  // session, the pair and the thread. `ts` differs per step — the record's signed `at` for the
+  // staging, the post's own instant for the webhook.
+  const fields = (ts: string): StepFields => ({
+    store: { project, root: payload.root, home },
+    id: payload.id,
+    session: payload.session,
+    from: payload.from,
+    to: payload.to,
+    thread: payload.thread,
+    ts,
+  });
   if (staged.receipt.existing) {
     // Admission still decides whether the file at the name is this message's record: `ensureRecord`
     // reads it and, while the name is held, writes nothing.
     const held = ensureRecord(dropDir, signed);
     if (!held.ok) return { ok: false, reason: held.reason };
-    return { ok: true, path: held.path, existing: true, record };
+    stagedStep(fields(payload.at));
+    return { ok: true, path: held.path, existing: true, record, signed };
   }
-  await announceArrival(payload, now);
-  return { ok: true, path: staged.receipt.copy ?? join(dropDir, payload.id), record };
+  stagedStep(fields(payload.at));
+  // The recipient's unread index names this record as its sender's newest. It is a hint the
+  // receiver's sweep verifies against the record itself, never a second source of truth, and a
+  // hint that cannot be written never changes what this send did.
+  noteUnread(dropDir, payload.from, payload.id, payload.at);
+  return { ok: true, path: staged.receipt.copy ?? join(dropDir, payload.id), record, signed };
 }
 
-/** How long a send waits on the bus to take its `message.arrived`. A bus that is not running
- *  refuses the connection at once; one that is running answers within a few milliseconds. */
-export const ARRIVAL_PUBLISH_MS = 250;
+/**
+ * Stages the record and, for the callers that transport it without walking the cascade, posts
+ * the arrival to the receiving seat's adapter and announces it, in that order. The order is what
+ * makes one wake: the post takes the record's claim and decides who posts, a 2xx ends the claim
+ * as the mark the bus skips, and only then is the arrival announced. A failed post releases the
+ * claim, so the bus and the seat's pull still carry the fallback; a post whose fate is unknown
+ * leaves the claim in `sent`, so the record is reported rather than posted a second time. A
+ * record whose name already existed is left exactly as it was.
+ *
+ * The post is one signed event in the receiving team's log (`webhook.posted`), beside the
+ * staging's own; `project` is that team's project, as `stageSendRecord` takes it.
+ */
+async function writeSendRecord(dropDir: string, payload: RecordPayload, home: string, now: () => Date, report: Report, project: string): Promise<RecordWritten> {
+  const written = await stageSendRecord(dropDir, payload, home, now, project);
+  if (!written.ok || written.existing === true) return written;
+  const posted = await postArrivalNow(dropDir, payload, written.signed, home, now, project);
+  if (posted.kind !== 'none') {
+    report.webhookPost = posted;
+    const fields: StepFields = {
+      store: { project, root: payload.root, home },
+      id: payload.id,
+      session: payload.session,
+      from: payload.from,
+      to: payload.to,
+      thread: payload.thread,
+      ts: now().toISOString(),
+    };
+    webhookStep(
+      fields,
+      posted.kind === 'posted' ? { kind: 'posted', ms: posted.ms } : { kind: posted.kind, reason: posted.reason },
+    );
+    noteLateWebhook(posted, fields, (ms) => {
+      appendHistory(project, payload.root, home, {
+        ts: now().toISOString(),
+        from: payload.from,
+        to: payload.to,
+        body: payload.body,
+        id: payload.id,
+        thread: payload.thread,
+        outcome: 'delivered (late)',
+        ms,
+        via: 'webhook',
+      });
+    });
+  }
+  await announceArrival(payload);
+  return written;
+}
+
+/** How long a send waits on the bus to take its nudge. A bus that is not running refuses the
+ *  connection at once; one that is running answers within a few milliseconds. */
+export const ARRIVAL_NUDGE_MS = 250;
 
 /**
  * Tells the project's event bus that a signed record has landed, so a seat subscribed to it (the
- * serving inbox's channel, a watch) reads that one record now instead of on its next poll. The
- * event names the record and carries no body. Best effort: no bus, a refusal or a slow answer
- * leaves the send exactly as it was, and the reader's own poll still finds the record.
+ * serving inbox's channel, a watch) reads that one record now instead of on its next poll, and a
+ * seat with an event adapter is posted within seconds. The nudge names the record and carries
+ * nothing else: the bus re-reads the signed file and verifies it before it raises the arrival,
+ * so a missing or unsigned record delivers nothing. Best effort: no bus, a refusal or a slow
+ * answer leaves the send exactly as it was, and the reader's own poll still finds the record.
  */
-export async function announceArrival(payload: RecordPayload, now: () => Date): Promise<void> {
+export async function announceArrival(payload: RecordPayload): Promise<void> {
   try {
-    await publishToBus(
+    await nudgeBus(
       payload.root,
-      {
-        ts: now().toISOString(),
-        kind: 'message.arrived',
-        session: payload.session,
-        record_id: payload.id,
-        from: payload.from,
-        to: payload.to,
-        ...(payload.thread === undefined ? {} : { thread: payload.thread }),
-      },
-      { deadlineMs: ARRIVAL_PUBLISH_MS },
+      { session: payload.session, seat: payload.to, record_id: payload.id },
+      { deadlineMs: ARRIVAL_NUDGE_MS },
     );
   } catch {
     // The announcement is an optimisation; the record is already where its reader looks.
@@ -2379,6 +3120,7 @@ async function handOff(
   fallback: readonly PendingNativeFallbackLeg[],
   dropDir: string,
   host: SendHost,
+  report: Report,
 ): Promise<HandOff> {
   if (!admission.ok) return { kind: 'refused', why: 'the send was not admitted' };
   const body = payload.body;
@@ -2386,7 +3128,7 @@ async function handOff(
   if (!found.ok) return { kind: 'fallback', reason: found.reason };
   const at = socketPathFor(host, to, found.pane);
   if (at === null) return { kind: 'fallback', reason: noSocketReason(host) };
-  if (at.kind === 'stale') return { kind: 'fallback', reason: await staleSocketReason(to, at.path, host.home) };
+  if (at.kind === 'stale') return { kind: 'fallback', reason: staleSocketReason(to, at.path, host.home) };
   const id = host.newId?.() ?? randomUUID();
   if (!PENDING_ID.test(id)) {
     return { kind: 'refused', why: 'the handoff id is not a UUID; no pending record was written and nothing was sent' };
@@ -2429,6 +3171,8 @@ async function handOff(
     { ...payload, id, body: stamped, thread, at: host.now().toISOString() },
     host.home,
     host.now,
+    report,
+    to.project,
   );
   if (!signed.ok) {
     return { kind: 'refused', why: `the record could not be written (${signed.reason}); nothing was sent` };
@@ -2613,7 +3357,7 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
  *  0, always. */
 function recorded(io: Io, seat: string, ms: number, id: string, report: Report): number {
   report.sent = id;
-  const summary = `${seat}: recorded (native, ${String(ms)} ms)`;
+  const summary = withId(`${seat}: recorded (native, ${String(ms)} ms)`, report);
   if (report.json) {
     writeAction(io, report, { status: 'recorded', summary, channel: 'native' });
   } else {
@@ -2722,19 +3466,22 @@ async function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): Pr
   const outcome: 'delivered' | 'sent (unconfirmed)' = verified ? 'delivered' : 'sent (unconfirmed)';
   // An unconfirmed confirm appends the receiving seat's class, read from the receiving team's
   // own records: the sender learns whether the seat is woken, holds the message between turns,
-  // or reads it at its next turn. A verified delivery needs none. A webhook adapter that is the
-  // only route is woken by the receiving root's bus, so the claim needs that bus serving now.
+  // or reads it at its next turn. A verified delivery needs none. A webhook-only route reads as
+  // queued whatever the bus is doing now: the send's own webhook leg posts it, and the bus
+  // carries the same arrival after the send returns.
   if (outcome === 'sent (unconfirmed)') {
     const receiving = readTeamConfig(record.root, { home: host.home });
     const receivingSeat = receiving.ok ? receiving.team.seats.find((seat) => seat.name === record.to) : undefined;
-    report.deliveryWords = deliveryWordsOf({
+    const unconfirmedWords = deliveryWordsOf({
       dir: join(record.root, '.agents'),
       root: record.root,
       session: record.session,
       seat: record.to,
       ...(receivingSeat === undefined ? {} : { declared: receivingSeat }),
       home: host.home,
-    }, await busListening(record.root));
+    });
+    report.deliveryClass = unconfirmedWords.cls;
+    report.deliveryWords = unconfirmedWords.words;
   }
   // Take before writing: only the confirm that renamed the record writes the line.
   const taken = takePending(team.project, root, host.home, id);
@@ -2778,7 +3525,7 @@ function confirmed(
   report: Report,
 ): number {
   report.sent = id;
-  const summary = withDelivery(`${seat}: ${outcome} (native, ${String(ms)} ms)`, report);
+  const summary = withId(withDelivery(`${seat}: ${outcome} (native, ${String(ms)} ms)`, report), report);
   if (report.json) {
     writeAction(io, report, { status: outcome, summary, channel: 'native' });
   } else {
@@ -2868,18 +3615,18 @@ function queuedBusy(
   dir: string,
   who: string,
   seatName: string,
-  leg: 'typed' | 'mcp-inbox' | 'drop',
+  leg: 'typed' | 'drop',
   msgId: string,
-  /** The pid holding the seat's lock, when this process met it; null for the daemon's own
-   *  queue, which keeps the message itself and writes its own log line. */
-  held: number | null,
+  /** The lock's holder, when this process met one; null for the daemon's own queue, which
+   *  keeps the message itself and writes its own log line. */
+  held: LockHolder | null,
   host: SendHost,
   report: Report,
   startedAt: number,
 ): number {
   report.sent = msgId;
   if (held !== null) {
-    const why = `another command holds the seat (pid ${String(held)})`;
+    const why = `another command holds the seat (${holderText(held)})`;
     logLine(dir, 'send', who, `${seatName}: queued (receiver busy) (${leg}; ${why}; id ${msgId})`, host.now());
   }
   const ms = host.now().getTime() - startedAt;
@@ -3006,7 +3753,7 @@ async function finishThreadWait(
   seatName: string,
   dropDir: string,
   payload: RecordPayload,
-  via: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | 'headless-resume' | 'channel',
+  via: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | 'headless-resume' | 'channel' | 'session' | 'webhook',
   timeoutS: number,
   host: SendHost,
   report: Report,
@@ -3080,6 +3827,93 @@ function findAgent(host: SendHost, session: string, seatName: string): Found {
   return { ok: true, pane: (named[0] as { pane: string }).pane };
 }
 
+/** What storing a record in the seat's own drop folder took. The caller owns the ending and
+ *  releases the lock after it. `busy` is another command holding the seat — its pid and the start
+ *  its token records — and nothing was written here, so the leg's own queued answer (which writes
+ *  the record without that lock) is the caller's. */
+type DropStore =
+  | { ok: true; release: () => void }
+  | { ok: false; busy: number; startedAt: number | null }
+  | { ok: false; reason: string };
+
+/**
+ * The drop leg's storage half, under the seat lock: the seal, the signed record written whole,
+ * the durable copy confirmed, the pending marker beside it and the log line. `heldReason` is what
+ * the walk's episode records for the copy this leg stored.
+ */
+async function storeDropRecord(
+  dir: string,
+  who: string,
+  session: string,
+  seatName: string,
+  dropDir: string,
+  payload: RecordPayload,
+  from: string,
+  host: SendHost,
+  report: Report,
+  /** The address as written, when it was a form: the pending marker carries it beside the seat. */
+  sentAs: SentAs | null,
+  /** The receiving pane is a human's: a person reads the drop and writes no receipt. */
+  human: boolean,
+  startedAt: number,
+  note: WalkNote,
+  heldReason: string,
+  /** The receiving team's project: the store key its record's step events are filed under. */
+  project: string,
+): Promise<DropStore> {
+  const lock = acquireSeatLock(dir, session, seatName);
+  if (!('release' in lock)) return { ok: false, busy: lock.held, startedAt: lock.startedAt };
+  try {
+    try {
+      sealDropTree(dir, session, seatName);
+    } catch {
+      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
+      lock.release();
+      return { ok: false, reason: 'the record could not be written' };
+    }
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
+    if (!written.ok) {
+      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${written.reason})` }));
+      lock.release();
+      return { ok: false, reason: `the record could not be written (${written.reason})` };
+    }
+    // The drop leg's one route attempt. The durable copy is the route: stored by the write above
+    // and confirmed by `deliver`, which returns `held` — a copy is never a delivery.
+    const attempt = await relayDeliver(
+      { route: 'durable-copy', copy: { dir: dropDir, name: payload.id } },
+      { id: payload.id, record: written.record },
+      { now: host.now },
+    );
+    if (attempt.outcome === 'refused') {
+      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: attempt.reason }));
+      lock.release();
+      return { ok: false, reason: `the record could not be written (${attempt.reason})` };
+    }
+    // A durable copy with no seat woken is the walk's last route's `held`: the episode counts it
+    // so the delayed escalation can name a message nothing live ever took.
+    note(walkAttempt('drop', 'held', false, host.now(), startedAt, { reason: heldReason }));
+    if (!human) {
+      // Written before the send returns: a watcher that reads the drop a moment later still finds
+      // the marker the receipt promotes, and a process that dies here leaves the watch its record.
+      markPending(dropDir, {
+        ts: host.now().toISOString(),
+        from,
+        to: seatName,
+        ...(sentAs === null ? {} : sentAs),
+        body: payload.body,
+        id: payload.id,
+        leg: 'drop',
+      });
+    }
+    logLine(dir, 'send', who, `${seatName}: sent to its drop folder (drop ${String(payload.body.length)} characters); no read receipt yet`, host.now());
+    report.sent = payload.id;
+    return { ok: true, release: () => { lock.release(); } };
+  } catch (error) {
+    lock.release();
+    throw error;
+  }
+}
+
 /**
  * The drop leg: the body is written to the seat's 0600 drop file under the seat lock, and the
  * pane is not touched — no trigger line, no socket frame, no daemon round trip, so no agent has
@@ -3118,50 +3952,18 @@ async function deliverDropped(
   const failed = failures.length > 0 ? { failed: [...failures] } : {};
   const msgId = payload.id;
   const body = payload.body;
-  const lock = acquireSeatLock(dir, session, seatName);
-  if (!('release' in lock)) {
-    // Another command holds the seat, and a held seat is a queue, not a refusal. The drop is a
-    // file, not a keystroke: the record and the marker are written without that lock — the id
-    // names the file, the seal is idempotent and the relay publishes each name once — and the
-    // seat's watcher reads it when the seat is free. An acceptance, never a delivery.
-    setLegState(report, 'drop', 'queued');
-    try {
-      sealDropTree(dir, session, seatName);
-    } catch {
-      setLegState(report, 'drop', 'refused', 'the record could not be written');
-      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
-      return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was sent`, host, report);
+  const stored = await storeDropRecord(dir, who, session, seatName, dropDir, payload, from, host, report, sentAs, human, startedAt, note, 'the record is stored; no seat was woken', project);
+  if (stored.ok) {
+    stored.release();
+    if (wait) {
+      return finishThreadWait(io, dir, root, who, from, project, session, seatName, dropDir, payload, 'drop', timeoutS, host, report, startedAt, failures, sentAs, undefined, extraRoot);
     }
-    const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now);
-    if (!queuedWrite.ok) {
-      setLegState(report, 'drop', 'refused', `the record could not be written (${queuedWrite.reason})`);
-      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${queuedWrite.reason})` }));
-      return refuse(io, dir, who, `${seatName}: the record could not be written (${queuedWrite.reason}); nothing was sent`, host, report);
-    }
-    const queuedAttempt = await relayDeliver(
-      { route: 'durable-copy', copy: { dir: dropDir, name: msgId } },
-      { id: msgId, record: queuedWrite.record },
-      { now: host.now },
-    );
-    if (queuedAttempt.outcome === 'refused') {
-      setLegState(report, 'drop', 'refused', queuedAttempt.reason);
-      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: queuedAttempt.reason }));
-      return refuse(io, dir, who, `${seatName}: the record could not be written (${queuedAttempt.reason}); nothing was sent`, host, report);
-    }
-    note(walkAttempt('drop', 'held', false, host.now(), startedAt, { reason: 'the record is stored; no seat was woken' }));
-    if (!human) {
-      // The marker is the watcher's receipt record, as on every drop send: it is never typed,
-      // and its receipt promotes the send once the seat reads the file.
-      markPending(dropDir, {
-        ts: host.now().toISOString(),
-        from,
-        to: seatName,
-        ...(sentAs === null ? {} : sentAs),
-        body,
-        id: msgId,
-        leg: 'drop',
-      });
-    }
+    const ms = host.now().getTime() - startedAt;
+    // The drop leg stores and wakes nothing, so a seat nothing wakes while it is idle is left with
+    // a message only a turn can serve: that ending is `queued, not woken`, on the history line and
+    // the console line alike (the daemon's re-wake reads this line — `via: 'drop'` is the only leg
+    // this word ever names).
+    const notWoken = dropNotWoken(report);
     appendHistory(project, root, host.home, {
       ts: host.now().toISOString(),
       from,
@@ -3171,60 +3973,58 @@ async function deliverDropped(
       body,
       id: msgId,
       thread: payload.thread,
-      outcome: 'queued (receiver busy)',
-      ms: host.now().getTime() - startedAt,
+      outcome: notWoken ? 'queued, not woken' : 'sent (unconfirmed)',
+      ms,
+      via: 'drop',
       ...failed,
     });
-    return queuedBusy(io, dir, who, seatName, 'drop', msgId, lock.held, host, report, startedAt);
+    return sentUnconfirmed(io, seatName, report, ms, 'drop');
   }
+  if (!('busy' in stored)) {
+    return refuse(io, dir, who, `${seatName}: ${stored.reason}; nothing was sent`, host, report);
+  }
+  // Another command holds the seat, and a held seat is a queue, not a refusal. The drop is a
+  // file, not a keystroke: the record and the marker are written without that lock — the id
+  // names the file, the seal is idempotent and the relay publishes each name once — and the
+  // seat's watcher reads it when the seat is free. An acceptance, never a delivery.
+  setLegState(report, 'drop', 'queued');
   try {
-    try {
-      sealDropTree(dir, session, seatName);
-    } catch {
-      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
-      return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was sent`, host, report);
-    }
-    const written = await writeSendRecord(dropDir, payload, host.home, host.now);
-    if (!written.ok) {
-      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${written.reason})` }));
-      return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was sent`, host, report);
-    }
-    // The drop leg's one route attempt. The durable copy is the route: stored by the write above
-    // and confirmed by `deliver`, which returns `held` — a copy is never a delivery.
-    const attempt = await relayDeliver(
-      { route: 'durable-copy', copy: { dir: dropDir, name: msgId } },
-      { id: msgId, record: written.record },
-      { now: host.now },
-    );
-    if (attempt.outcome === 'refused') {
-      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: attempt.reason }));
-      return refuse(io, dir, who, `${seatName}: the record could not be written (${attempt.reason}); nothing was sent`, host, report);
-    }
-    // A durable copy with no seat woken is the walk's last route's `held`: the episode counts it
-    // so the delayed escalation can name a message nothing live ever took.
-    note(walkAttempt('drop', 'held', false, host.now(), startedAt, { reason: 'the record is stored; no seat was woken' }));
-    if (!human) {
-      // Written before the send returns: a watcher that reads the drop a moment later still finds
-      // the marker the receipt promotes, and a process that dies here leaves the watch its record.
-      markPending(dropDir, {
-        ts: host.now().toISOString(),
-        from,
-        to: seatName,
-        ...(sentAs === null ? {} : sentAs),
-        body,
-        id: msgId,
-        leg: 'drop',
-      });
-    }
-    logLine(dir, 'send', who, `${seatName}: sent to its drop folder (drop ${String(body.length)} characters); no read receipt yet`, host.now());
-    report.sent = msgId;
-  } finally {
-    lock.release();
+    sealDropTree(dir, session, seatName);
+  } catch {
+    setLegState(report, 'drop', 'refused', 'the record could not be written');
+    note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
+    return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was sent`, host, report);
   }
-  if (wait) {
-    return finishThreadWait(io, dir, root, who, from, project, session, seatName, dropDir, payload, 'drop', timeoutS, host, report, startedAt, failures, sentAs, undefined, extraRoot);
+  const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
+  if (!queuedWrite.ok) {
+    setLegState(report, 'drop', 'refused', `the record could not be written (${queuedWrite.reason})`);
+    note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${queuedWrite.reason})` }));
+    return refuse(io, dir, who, `${seatName}: the record could not be written (${queuedWrite.reason}); nothing was sent`, host, report);
   }
-  const ms = host.now().getTime() - startedAt;
+  const queuedAttempt = await relayDeliver(
+    { route: 'durable-copy', copy: { dir: dropDir, name: msgId } },
+    { id: msgId, record: queuedWrite.record },
+    { now: host.now },
+  );
+  if (queuedAttempt.outcome === 'refused') {
+    setLegState(report, 'drop', 'refused', queuedAttempt.reason);
+    note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: queuedAttempt.reason }));
+    return refuse(io, dir, who, `${seatName}: the record could not be written (${queuedAttempt.reason}); nothing was sent`, host, report);
+  }
+  note(walkAttempt('drop', 'held', false, host.now(), startedAt, { reason: 'the record is stored; no seat was woken' }));
+  if (!human) {
+    // The marker is the watcher's receipt record, as on every drop send: it is never typed,
+    // and its receipt promotes the send once the seat reads the file.
+    markPending(dropDir, {
+      ts: host.now().toISOString(),
+      from,
+      to: seatName,
+      ...(sentAs === null ? {} : sentAs),
+      body,
+      id: msgId,
+      leg: 'drop',
+    });
+  }
   appendHistory(project, root, host.home, {
     ts: host.now().toISOString(),
     from,
@@ -3234,12 +4034,11 @@ async function deliverDropped(
     body,
     id: msgId,
     thread: payload.thread,
-    outcome: 'sent (unconfirmed)',
-    ms,
-    via: 'drop',
+    outcome: 'queued (receiver busy)',
+    ms: host.now().getTime() - startedAt,
     ...failed,
   });
-  return sentUnconfirmed(io, seatName, report, ms, 'drop');
+  return queuedBusy(io, dir, who, seatName, 'drop', msgId, { held: stored.busy, startedAt: stored.startedAt }, host, report, startedAt);
 }
 
 /**
@@ -3299,7 +4098,7 @@ async function deliverNative(
       walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was typed`, host, report);
     }
-    const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now);
+    const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
     if (!queuedWrite.ok) {
       setLegState(report, 'typed', 'refused', `the record could not be written (${queuedWrite.reason})`);
       walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${queuedWrite.reason})` }));
@@ -3307,7 +4106,7 @@ async function deliverNative(
     }
     const queuedEntry = { ts: host.now().toISOString(), from, to: seatName, ...(sentAs === null ? {} : sentAs), body, id: msgId, thread: payload.thread };
     markPending(dropDir, queuedEntry);
-    walkNote?.(walkAttempt('typed', 'delivered', false, host.now(), startedAt, { reason: `another command holds the seat (pid ${String(lock.held)}); queued for the watch` }));
+    walkNote?.(walkAttempt('typed', 'delivered', false, host.now(), startedAt, { reason: `another command holds the seat (${holderText(lock)}); queued for the watch` }));
     appendHistory(project, root, host.home, {
       ...queuedEntry,
       ...historySender(report),
@@ -3315,7 +4114,7 @@ async function deliverNative(
       ms: host.now().getTime() - startedAt,
       ...failed,
     });
-    return queuedBusy(io, dir, who, seatName, 'typed', msgId, lock.held, host, report, startedAt);
+    return queuedBusy(io, dir, who, seatName, 'typed', msgId, lock, host, report, startedAt);
   }
   let taken = false;
   // An unsent draft the delivery moved out of the box and put back: its one-line word rides
@@ -3329,7 +4128,7 @@ async function deliverNative(
       walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was typed`, host, report);
     }
-    const written = await writeSendRecord(dropDir, payload, host.home, host.now);
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
     if (!written.ok) {
       walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${written.reason})` }));
       return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was typed`, host, report);
@@ -3432,26 +4231,29 @@ async function deliverNative(
 }
 
 /**
- * The mcp-inbox leg: the message is written whole into the seat's own inbox — the same 0600
- * drop file the typed leg would leave — and nothing is typed. The leg takes the send whenever
- * the seat's own server is listening (`inboxLive` has just said so); the wait that follows is
- * only for the receipt, and either ending exits 0. A receipt means the seat's client read the
- * message — `delivered (read)`, never a claim that it acted on it — and clears the pending
- * record. No receipt is `sent (unconfirmed)`, with the record left beside the drop carrying its
- * leg, so a watch pass can tell the message is the seat's own to read and never types it. The
- * lock is held across the write, as the typed leg holds it across its trigger.
+ * The profile-gated typed wake (`typed_wake: screen`, walked for a seat whose profile declares
+ * it; src/send/typed-wake.ts). The signed record is written under the seat lock first — the same
+ * drop file every leg leaves — so a wake that cannot deliver leaves the message in the bus
+ * inbox, and the walk goes on to the drop leg, which queues it. The lock is held across the
+ * typing so a second send cannot type into the same composer. Only the profile's working screen,
+ * seen after an Enter this wake pressed, ends the send as `delivered (typed wake)`; a box that
+ * held other text, a working screen seen before any Enter, and a pane that could not be read are
+ * all reasons to leave the message to the bus, never a delivery.
  */
-async function deliverInbox(
+async function deliverTypedWakeSeat(
   io: Io,
   dir: string,
+  root: string,
   who: string,
   from: string,
   project: string,
-  root: string,
   session: string,
   seatName: string,
+  cli: string,
+  pane: string,
   dropDir: string,
   payload: RecordPayload,
+  trigger: string,
   host: SendHost,
   report: Report,
   startedAt: number,
@@ -3459,84 +4261,55 @@ async function deliverInbox(
   failures: readonly string[] = [],
   /** The address as written, when it was a form: every history line carries it beside the seat. */
   sentAs: SentAs | null = null,
-  wait = false,
-  timeoutS = 60,
-  extraRoot?: { root: string; session: string },
-  note: WalkNote = (_attempt) => { /* no episode */ },
-): Promise<number> {
-  const failed = failures.length > 0 ? { failed: [...failures] } : {};
-  const msgId = payload.id;
-  const body = payload.body;
+  walkNote: WalkNote = (_attempt) => { /* no episode */ },
+  /** False for a caller that writes the walk's one history line itself (the reply's own
+   *  cascade): this leg then records nothing. A send leaves it true. */
+  writeHistory = true,
+): Promise<{ delivered: true } | { delivered: false; reason: string }> {
   const lock = acquireSeatLock(dir, session, seatName);
   if (!('release' in lock)) {
-    // The seat's lock is another command's, so nothing reaches its inbox server here. The record
-    // and its inbox marker are written without that lock — the id names the file, the seal is
-    // idempotent and the relay publishes each name once — and the seat's own server reads the
-    // record when the seat is free; a marker past the inbox window is the watch's typed retry.
-    // An acceptance, never a delivery.
-    setLegState(report, 'mcp-inbox', 'queued');
-    try {
-      sealDropTree(dir, session, seatName);
-    } catch {
-      setLegState(report, 'mcp-inbox', 'refused', 'the record could not be written');
-      note(walkAttempt('mcp-inbox', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
-      return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was sent`, host, report);
-    }
-    const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now);
-    if (!queuedWrite.ok) {
-      setLegState(report, 'mcp-inbox', 'refused', `the record could not be written (${queuedWrite.reason})`);
-      note(walkAttempt('mcp-inbox', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${queuedWrite.reason})` }));
-      return refuse(io, dir, who, `${seatName}: the record could not be written (${queuedWrite.reason}); nothing was sent`, host, report);
-    }
-    const queuedEntry = { ts: host.now().toISOString(), from, to: seatName, ...(sentAs === null ? {} : sentAs), body, id: msgId, thread: payload.thread };
-    markPending(dropDir, { ...queuedEntry, leg: 'mcp-inbox' });
-    note(walkAttempt('mcp-inbox', 'delivered', false, host.now(), startedAt, { reason: `another command holds the seat (pid ${String(lock.held)}); queued for the seat's inbox and the watch` }));
-    appendHistory(project, root, host.home, {
-      ...queuedEntry,
-      ...historySender(report),
-      outcome: 'queued (receiver busy)',
-      ms: host.now().getTime() - startedAt,
-      ...failed,
-    });
-    return queuedBusy(io, dir, who, seatName, 'mcp-inbox', msgId, lock.held, host, report, startedAt);
+    return { delivered: false, reason: `another command holds the seat (${holderText(lock)}); nothing was typed` };
   }
-  const entry = { ts: host.now().toISOString(), from, to: seatName, ...(sentAs === null ? {} : sentAs), body, id: msgId, thread: payload.thread };
   try {
     try {
       sealDropTree(dir, session, seatName);
     } catch {
-      note(walkAttempt('mcp-inbox', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
-      return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was sent`, host, report);
+      return { delivered: false, reason: 'the record could not be written; nothing was typed' };
     }
-    const written = await writeSendRecord(dropDir, payload, host.home, host.now);
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
     if (!written.ok) {
-      note(walkAttempt('mcp-inbox', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${written.reason})` }));
-      return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was sent`, host, report);
+      return { delivered: false, reason: `the record could not be written (${written.reason}); nothing was typed` };
     }
-    report.sent = msgId;
-    // The seat's own inbox server took the record: the transport delivered it, whether or not a
-    // read receipt follows inside the window.
-    note(walkAttempt('mcp-inbox', 'delivered', false, host.now(), startedAt, { reason: "written to the seat's own MCP inbox" }));
-    // Written before the wait: a process that dies mid-wait still leaves the message marked
-    // for the watch's later pass. A receipt clears it; `sent (unconfirmed)` leaves it on disk.
-    markPending(dropDir, { ...entry, leg: 'mcp-inbox' });
-    if (!wait) {
-      const grace = host.inboxGraceMs ?? INBOX_GRACE_MS;
-      if (await awaitReceipt(dropDir, msgId, { to: seatName, root, session }, host.home, grace, claimBindingIn(root, session, seatName, msgId))) {
-        clearPending(dropDir, msgId);
-        logLine(dir, 'send', who, `${seatName}: delivered (read) (drop ${String(body.length)} characters, receipt)`, host.now());
-        appendHistory(project, root, host.home, { ...entry, ...historySender(report), outcome: 'delivered (read)', ms: host.now().getTime() - startedAt, via: 'mcp-inbox', ...failed });
-        return delivered(io, seatName, report, 'read');
-      }
-      const ms = host.now().getTime() - startedAt;
-      logLine(dir, 'send', who, `${seatName}: sent to its own MCP inbox (drop ${String(body.length)} characters); no receipt within ${String(grace)} ms`, host.now());
-      appendHistory(project, root, host.home, { ...entry, ...historySender(report), outcome: 'sent (unconfirmed)', ms, via: 'mcp-inbox', ...failed });
-      return sentUnconfirmed(io, seatName, report, ms, 'mcp-inbox');
+    const wakeHost = host.typedWake?.(session);
+    if (wakeHost === undefined) return { delivered: false, reason: 'the send host binds no pane writer; nothing was typed' };
+    const wake = await deliverTypedWake(wakeHost, pane, trigger, cli);
+    if (!wake.delivered) return { delivered: false, reason: wake.reason };
+    const ms = host.now().getTime() - startedAt;
+    logLine(dir, 'send', who, `${seatName}: delivered (typed wake) (drop ${String(payload.body.length)} characters, typed; ${wake.reason})`, host.now());
+    if (writeHistory) {
+      appendHistory(project, root, host.home, {
+        ts: host.now().toISOString(),
+        from,
+        to: seatName,
+        ...(sentAs === null ? {} : sentAs),
+        ...historySender(report),
+        body: payload.body,
+        id: payload.id,
+        thread: payload.thread,
+        outcome: 'delivered (typed wake)',
+        note: wake.reason,
+        ms,
+        via: 'typed',
+        ...(failures.length > 0 ? { failed: [...failures] } : {}),
+      });
     }
+    walkNote(walkAttempt('typed', 'delivered', false, host.now(), startedAt, { reason: wake.reason }));
+    // The exit belongs to the caller: `delivered` is returned there, so its marked literal is
+    // the send's own exit site rather than a number carried through this result.
+    return { delivered: true };
   } finally {
     lock.release();
   }
-  return finishThreadWait(io, dir, root, who, from, project, session, seatName, dropDir, payload, 'mcp-inbox', timeoutS, host, report, startedAt, failures, sentAs, undefined, extraRoot);
 }
 
 /**
@@ -3558,13 +4331,14 @@ async function stageChannelRecord(
   host: SendHost,
   report: Report,
   sentAs: SentAs | null,
+  project: string,
 ): Promise<string | null> {
   try {
     sealDropTree(dir, session, seatName);
   } catch {
     return 'the record could not be written';
   }
-  const written = await writeSendRecord(dropDir, payload, host.home, host.now);
+  const written = await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
   if (!written.ok) return `the record could not be written (${written.reason})`;
   report.sent = payload.id;
   const entry = { ts: host.now().toISOString(), from, to: seatName, ...(sentAs === null ? {} : sentAs), body: payload.body, id: payload.id, thread: payload.thread };
@@ -3630,7 +4404,7 @@ async function deliverComposeSeat(
     // A compose seat is typed on its CLI's own screens, and nothing on the watch's side walks
     // those screens: there is no queued leg to leave the record for, so the send is refused and
     // says so — and says that the way forward is another send once the seat is free.
-    const why = `another command holds it (pid ${String(lock.held)}); nothing was sent and a compose send is not queued; run it again when the seat is free`;
+    const why = `another command holds it (${holderText(lock)}); nothing was sent and a compose send is not queued; run it again when the seat is free`;
     note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: why }));
     return refuse(io, dir, who, `${seatName}: ${why}`, host, report);
   }
@@ -3643,7 +4417,7 @@ async function deliverComposeSeat(
       note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was typed`, host, report);
     }
-    const written = await writeSendRecord(dropDir, payload, host.home, host.now);
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
     if (!written.ok) {
       note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${written.reason})` }));
       return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was typed`, host, report);
@@ -3740,22 +4514,32 @@ export async function walkBriefDelivery(input: {
   } catch {
     // A file that cannot even be read declares nothing, as one that does not validate does.
   }
-  const order = deliveryOrder(deliveryChainOf({
-    root: input.root,
-    seat: seatName,
-    home: input.host.home,
-    ...(file === undefined ? {} : { file }),
-    projectOfTeam: (id: string) => (input.host.projects ? input.host.projects.ofTeam(id) : projectRegistry.ofTeam(input.host.home, id)),
-    overrides: read.overrides,
-  }));
+  // A project word the reader cannot see is not "no word": it may keep legs out, and the
+  // fallback behind it could travel where the project forbids. No leg is walked on it.
+  let order: readonly DeliveryLeg[];
+  try {
+    order = deliveryOrder(deliveryChainOf({
+      root: input.root,
+      seat: seatName,
+      home: input.host.home,
+      ...(file === undefined ? {} : { file }),
+      projectOfTeam: (id: string) => (input.host.projects ? input.host.projects.ofTeam(id) : projectRegistry.ofTeam(input.host.home, id)),
+      overrides: read.overrides,
+    }));
+  } catch (error) {
+    if (!(error instanceof DeliveryChainUnreadable)) throw error;
+    return { via: null, walked: false, exit: 0, failures: [error.message] };
+  }
   const declared = file?.seats.find((seat) => seat.name === seatName);
   const project = input.project ?? file?.project ?? '';
   // A human's pane never takes typing, whatever its order says: its walk is the drop leg alone,
   // and the legs this ruling kept out are named first, exactly as a send's walk records them.
   const human = read.overrides.human ?? (declared?.human === true);
   // The bus inbox closes every walk: with no typed leg, the drop is where an unreached seat's
-  // message waits (src/send/no-pane-messaging.ts).
-  const walk: readonly DeliveryLeg[] = human ? ['drop'] : order.includes('drop') ? order : [...order, 'drop'];
+  // message waits (src/send/no-pane-messaging.ts). The walk itself is the owner's cascade
+  // (src/send/walk-cascade.ts): channel legs, typed, then the mailbox — never a name this
+  // build only reads.
+  const walk: readonly DeliveryLeg[] = human ? ['drop'] : [...cascadeOrder(order), ...(order.includes('drop') ? [] : ['drop'] as const)];
   const report: Report = {
     json: false,
     seat: seatName,
@@ -3769,19 +4553,12 @@ export async function walkBriefDelivery(input: {
     for (const leg of order) {
       if (leg === 'typed') failures.push("typed: the pane is a human's, and nothing is typed into it");
       else if (leg === 'native') failures.push("native: the pane is a human's, and no frame is sent");
-      else if (leg === 'mcp-inbox') failures.push("mcp-inbox: the pane is a human's, and the drop leg is the only one walked");
+      else if (leg === 'mcp-inbox') failures.push(`mcp-inbox: ${MCP_INBOX_UNAVAILABLE}`);
     }
+  } else {
+    for (const leg of unavailableLegsOf(order)) failures.push(`${leg}: ${MCP_INBOX_UNAVAILABLE}`);
   }
   for (const leg of walk) {
-    if (leg === 'mcp-inbox') {
-      const live = inboxLive(dropDir, input.root, input.session, seatName, input.host.build?.());
-      if (!live.live) {
-        failures.push(`mcp-inbox: ${live.reason}`);
-        continue;
-      }
-      const exit = await deliverInbox(input.io, input.dir, from, from, project, input.root, input.session, seatName, dropDir, input.payload, input.host, report, startedAt, failures);
-      return { via: 'mcp-inbox', walked: true, exit, failures };
-    }
     if (leg === 'native') {
       // This build's send reads `native` as the frame on a cross-session socket — a socket write
       // SOCKET_SEND does not make here — or as a handoff to a Claude Code sender's own
@@ -3852,10 +4629,10 @@ const CLIENT_FRAME_HEADER = `Message from ${CLIENT_SLICE_DISPLAY_NAME} (owner)`;
 
 /** The legs a client send walks. The drop its grant wrote is already the durable copy, so a
  *  declared order's drop, native and headless-resume legs add nothing here: the walk is the
- *  transport that reaches a live receiver — its own inbox channel, the cross-session socket and
- *  the typed trigger — in the order the receiver's files name, or channel, then socket, then
- *  typed. */
-const CLIENT_LEGS: readonly DeliveryLeg[] = ['mcp-inbox', 'socket', 'typed'];
+ *  transport that reaches a live receiver — the cross-session socket and the typed trigger — in
+ *  the cascade's order, or socket, then typed. An `mcp-inbox` word is no leg in this build
+ *  (src/send/walk-cascade.ts), so a declared order's word for it is not walked. */
+const CLIENT_LEGS: readonly DeliveryLeg[] = ['socket', 'typed'];
 
 /**
  * The client send's own walk, after the grant wrote its drop: the same signed record, carried
@@ -3941,22 +4718,33 @@ async function deliverClientRecord(
       body: record.body,
       id: record.id,
       thread: record.thread,
-      outcome: 'sent (unconfirmed)',
+      // A person's pane is the one seat nothing ever wakes while it is idle, so the stored drop
+      // is `queued, not woken`, never `sent (unconfirmed)`.
+      outcome: 'queued, not woken',
       ms: host.now().getTime() - startedAt,
       via: 'drop',
     });
     return;
   }
-  const rawChain = host.delivery ?? deliveryChainOf({
-    root,
-    seat: seatName,
-    home: host.home,
-    file: team,
-    projectOfTeam: (id) => (host.projects ? host.projects.ofTeam(id) : projectRegistry.ofTeam(host.home, id)),
-    overrides,
-    now: host.now(),
-  });
-  const order = deliveryOrder(rawChain as Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>);
+  // The client's drop is already written; a project order this run cannot read leaves it as the
+  // delivery, and no leg is walked on a guess that could travel where the project forbids.
+  let rawChain: DeliveryChain;
+  try {
+    rawChain = host.delivery ?? deliveryChainOf({
+      root,
+      seat: seatName,
+      home: host.home,
+      file: team,
+      projectOfTeam: (id) => (host.projects ? host.projects.ofTeam(id) : projectRegistry.ofTeam(host.home, id)),
+      overrides,
+      now: host.now(),
+    });
+  } catch (error) {
+    if (!(error instanceof DeliveryChainUnreadable)) throw error;
+    logLine(dir, 'send', from, `${seatName}: the client drop was written; ${error.message}, so no delivery leg was walked`, host.now());
+    return;
+  }
+  const order = deliveryOrder(rawChain);
   const declaredOrder = Object.values(rawChain).some((word) => word !== undefined && word.length > 0);
   const inbound = declaredInboundOf({
     dir,
@@ -3972,17 +4760,19 @@ async function deliverClientRecord(
   // holds them, the receiving file's own seat otherwise.
   const agentRecord = getAgent(host.home, target.recipientId);
   const cli = agentRecord?.cli ?? seat.cli;
-  const defaultWalk: DeliveryLeg[] = ['mcp-inbox'];
+  const defaultWalk: DeliveryLeg[] = [];
   if (socketNow) defaultWalk.push('socket');
   defaultWalk.push('typed');
   const walk: readonly DeliveryLeg[] = declaredOrder
-    ? order.filter((leg) => CLIENT_LEGS.includes(leg))
+    ? cascadeOrder(order.filter((leg) => CLIENT_LEGS.includes(leg)))
     : defaultWalk;
   // The implied socket default's omission is named when the walk does not carry it, the same
-  // way an ordinary send's report explains the socket it did not dial.
-  const impliedSocket = declaredOrder || socketNow ? null : socketIneligibleReason(cli, socketWord, inbound, heldStanding);
+  // way an ordinary send's report explains the socket it did not dial. A declared word this
+  // build only reads is named the same way, with its own reason.
+  const impliedSocket = declaredOrder || socketNow ? null : socketIneligibleReason(cli, socketWord, inbound, heldStanding, true);
   report.delivery = [
     ...(impliedSocket === null ? [] : [{ leg: 'socket' as const, state: 'skipped' as const, reason: impliedSocket }]),
+    ...unavailableLegsOf(order).map((leg) => ({ leg, state: 'skipped' as const, reason: MCP_INBOX_UNAVAILABLE })),
     ...walk.map((leg) => ({ leg, state: 'not-reached' as const })),
   ];
   const aim: Aim = {
@@ -4003,55 +4793,32 @@ async function deliverClientRecord(
   const canSocket = canPane && typeof host.deliver === 'function' && host.native !== undefined;
   const canType = canPane && host.native !== undefined;
   for (const leg of walk) {
-    if (leg === 'mcp-inbox') {
-      // The seat's own server, not a pane: the leg takes the record only when a live listener
-      // beside the drop names this seat, session and root.
-      const live = inboxLive(dropDir, root, session, seatName, host.build?.());
-      if (!live.live) {
-        failures.push(`mcp-inbox: ${live.reason}`);
-        markLeg('mcp-inbox', 'skipped', live.reason);
-        continue;
-      }
-      markLeg('mcp-inbox', 'attempted');
-      await deliverInbox(quiet, dir, from, from, project, root, session, seatName, dropDir, record, host, report, startedAt, failures);
-      return;
-    }
     if (leg === 'socket') {
       // The socket dials only a receiving Claude session whose launch declares
       // `crossSessionInbound: accept`; the checks are the ordinary walk's, in its order, plus the
       // host capability a client send may lack.
       const why = canSocket
-        ? socketIneligibleReason(cli, socketWord, inbound, heldStanding)
+        ? socketIneligibleReason(cli, socketWord, inbound, heldStanding, true)
         : 'the send host cannot read a pane or write a socket, so no frame was dialed';
       if (why !== null) {
         failures.push(`socket: ${why}`);
         markLeg('socket', 'skipped', why);
         continue;
       }
-      const reply = frameReplyFor(host.home, root, 'owner', '');
-      if ('missing' in reply) {
-        failures.push(`socket: ${reply.missing}`);
-        markLeg('socket', 'skipped', reply.missing);
-        continue;
-      }
       markLeg('socket', 'attempted');
-      const attempt = await deliverSocketFrame(dir, from, from, aim, record, failures, host, report, startedAt, false, inbound, root, CLIENT_FRAME_HEADER, false, reply);
+      const attempt = await deliverSocketFrame(dir, from, from, aim, record, failures, host, report, startedAt, false, inbound, CLIENT_FRAME_HEADER, false);
       if (attempt.kind === 'delivered') return;
-      if (attempt.kind === 'held') {
-        // The mark is written once: the next send keeps the socket out until the declaration
-        // this hold sat under is re-confirmed.
-        recordHeldSocket(heldSocketPath(dir, session, seatName), inbound, host.now());
-        failures.push(`socket: ${attempt.reason}`);
-        markLeg('socket', 'attempted', attempt.reason);
-        logLine(dir, 'send', from, `${seatName}: the socket held the client frame (${attempt.reason}); the remaining legs continue`, host.now());
-        continue;
-      }
       failures.push(`socket: ${attempt.reason}`);
       // Same evidence as the ordinary walk: a fallback that proved no dialable socket lowers
-      // the reported class, so the summary never claims a wake that did not happen. The bus
-      // that posts a webhook is read the way the send's own first read reads it.
+      // the reported class, so the summary never claims a wake that did not happen. A surviving
+      // webhook-only route still reads as queued — the send's webhook leg posts it before the
+      // typed leg, and the bus carries it after the send returns — and the words keep the
+      // typed-wake exception: a profile that declares a typed wake reads the message at its
+      // next turn, not "no way to be woken".
       if (attempt.socketUnusable === true) {
-        report.deliveryWords = classWords(classWithoutSocket(aim, host.home), aim.seat, await busListening(root));
+        const lowered = classWithoutSocket(aim, host.home);
+        report.deliveryClass = lowered.cls;
+        report.deliveryWords = classWords(lowered, aim.seat);
       }
       markLeg('socket', 'attempted', attempt.reason);
       logLine(dir, 'send', from, `${seatName}: the socket was not taken (${attempt.reason}); falling back to the typed trigger`, host.now());
@@ -4076,7 +4843,7 @@ async function deliverClientRecord(
       body: record.body,
       ageMs: 0,
       ...(record.subject === undefined ? {} : { subject: record.subject }),
-    });
+    }, cli);
     if (trigger === null && compose === null) {
       failures.push(`typed: the trigger would exceed ${String(TRIGGER_MAX)} characters`);
       markLeg('typed', 'skipped', `the trigger would exceed ${String(TRIGGER_MAX)} characters`);
@@ -4108,9 +4875,22 @@ async function deliverClientRecord(
     return;
   }
   // The client drop is already the seat's bus inbox: no event adapter took it, so it waits there
-  // (src/send/no-pane-messaging.ts), recorded as the drop leg, never as unreachable.
+  // (src/send/no-pane-messaging.ts), recorded as the drop leg, never as unreachable. The class is
+  // read at the ending, the read the plain walk makes before it starts: a seat nothing wakes
+  // while it is idle is left `queued, not woken`, never `sent (unconfirmed)`.
   const why = `${QUEUED_NO_EVENT_ADAPTER}${failures.length === 0 ? '' : ` (${failures.join('; ')})`}; the client drop waits in its bus inbox`;
   logLine(dir, 'send', from, `${seatName}: ${why}`, host.now());
+  const ending = deliveryWordsOf({
+    dir,
+    root,
+    session,
+    seat: seatName,
+    ...(seat === undefined ? {} : { declared: seat }),
+    home: host.home,
+  });
+  report.deliveryClass = ending.cls;
+  report.deliveryWords = ending.words;
+  const notWoken = dropNotWoken(report);
   appendHistory(project, root, host.home, {
     ts: host.now().toISOString(),
     from,
@@ -4119,10 +4899,476 @@ async function deliverClientRecord(
     id: record.id,
     thread: record.thread,
     via: 'drop',
-    outcome: 'sent (unconfirmed)',
+    outcome: notWoken ? 'queued, not woken' : 'sent (unconfirmed)',
     ms: host.now().getTime() - startedAt,
     ...(failures.length > 0 ? { failed: [...failures] } : {}),
   });
+}
+
+/** The leg a reply's walk took, and the words the reply's own report prints for it. */
+export type ReplyWalkResult = {
+  /** The leg that took the reply; `drop` when no wake leg did (or no walk could run). */
+  via: WalkLeg;
+  /** Whether the cascade ran at all. A settings record the store disowns, a delivery chain that
+   *  will not load, or a receiving file that names no such seat stops it before any leg. */
+  walked: boolean;
+  /** True when the leg that took the reply cannot prove its arrival: an unknown webhook fate, or
+   *  a claim another poster holds. The reply's history line says `sent (unconfirmed)`. */
+  unconfirmed: boolean;
+  /** The reasons legs did not take the reply, and why a walk did not run. */
+  failures: readonly string[];
+  /** The line the reply prints for the leg that took it; null for the mailbox, whose own
+   *  sentence the reply writes. */
+  summary: string | null;
+};
+
+/**
+ * The delivery half of `team reply`. The reply has already written the signed record into the
+ * receiving seat's folder and written its receipts; this walks that same record through the
+ * owner's cascade a send walks — the receiving seat's channel-class legs, the sender-posted
+ * webhook, the profile-gated typed wake, and the bus inbox under all three — and reports the leg
+ * that took it. Nothing about the reply rules changes here: admission, the thread and the read
+ * the answer marks were decided before this call, and no leg writes a second record (every write
+ * finds the reply's own copy at the id).
+ *
+ * This process makes the same walk a send makes, from the same resolution: the channel-class
+ * legs (the development channel's push, the frame on the receiving Claude session's
+ * cross-session socket, the Codex seat's own runtime queue, a headless resume), the
+ * sender-posted webhook, the profile-gated typed wake, and the bus inbox under all of them. The
+ * one leg it does not attempt is the CLI session call: that would hand the service a brief
+ * rather than a reply, so it is recorded as skipped. The webhook is posted even though the
+ * record is already on disk: the reply's own write posts no arrival, so the record's claim
+ * decides who posts, exactly as it does for a send's first store.
+ */
+export async function walkReplyDelivery(input: {
+  io: Io;
+  host: SendHost;
+  /** The receiving team's `.agents` folder and root. */
+  dir: string;
+  root: string;
+  /** The receiving team's project. */
+  project: string;
+  session: string;
+  seat: string;
+  /** The receiving seat's CLI, when the caller knows it; the file's own row decides when it can
+   *  be read. */
+  cli: string;
+  /** The reply's signed record, as the reply wrote it. */
+  payload: RecordPayload;
+  /** The receiving side's word on how its sender reads: the frame's identity line. */
+  naming: SenderNaming;
+  /** The receiving team file when the caller already read it; null reads it here. */
+  file: TeamFile | null;
+  /** The replying side's own identity: the team it stands in, its project, and the label its
+   *  file writes on it (a seat's; null for the owner). */
+  sender: { teamId: string; project: string; label: string | null };
+  /** The receiving seat's registry address, when the caller resolved one: the socket's first
+   *  candidate. */
+  address: string | null;
+  /** The caller's log tag, as every leg logs it. */
+  who: string;
+}): Promise<ReplyWalkResult> {
+  const seatName = input.seat;
+  const from = input.payload.from;
+  const msgId = input.payload.id;
+  const startedAt = input.host.now().getTime();
+  const dropDir = join(input.dir, 'send-drops', input.session, seatName);
+  const quiet: Io = {
+    ...input.io,
+    stdout: () => { /* the reply prints its own one line */ },
+    stderr: () => { /* a leg's reason is on the history line, never a second stream */ },
+  };
+  const report: Report = {
+    json: false,
+    seat: seatName,
+    sent: null,
+    project: input.project,
+    session: input.session,
+    from_team: input.sender.teamId,
+  };
+  const failures: string[] = [];
+  const ended = (result: Omit<ReplyWalkResult, 'failures'>): ReplyWalkResult => ({ ...result, failures });
+  // A settings record the store disowns is no declaration to route on: walking the fallback
+  // behind it could type into a pane the seat keeps out. The reply's own record stands.
+  let overrides: SeatOverrides = {};
+  if (!input.host.delivery) {
+    const read = resolveSeatOverrides({ home: input.host.home, root: input.root, seat: seatName });
+    if (!read.ok) {
+      failures.push(`the receiving seat's settings record cannot be read: ${read.why}`);
+      return ended({ via: 'drop', walked: false, unconfirmed: false, summary: null });
+    }
+    overrides = read.overrides;
+  }
+  let file: TeamFile | null = input.file;
+  if (file === null) {
+    try {
+      const loaded = readTeamConfig(input.root, { home: input.host.home });
+      if (loaded.ok) file = loaded.team;
+    } catch {
+      file = null;
+    }
+  }
+  const declared = file === null ? undefined : file.seats.find((seat) => seat.name === seatName);
+  if (declared === undefined) {
+    failures.push('the receiving team file names no such seat, so no delivery leg was walked');
+    return ended({ via: 'drop', walked: false, unconfirmed: false, summary: null });
+  }
+  const cli = declared.cli === '' ? input.cli : declared.cli;
+  // A project word the reader cannot see is not "no word": it may keep legs out, and the
+  // fallback behind it could travel where the project forbids. No leg is walked on it.
+  let rawChain: DeliveryChain;
+  try {
+    rawChain = input.host.delivery ?? deliveryChainOf({
+      root: input.root,
+      seat: seatName,
+      home: input.host.home,
+      ...(file === null ? {} : { file }),
+      projectOfTeam: (id) => (input.host.projects ? input.host.projects.ofTeam(id) : projectRegistry.ofTeam(input.host.home, id)),
+      overrides,
+      now: input.host.now(),
+    });
+  } catch (error) {
+    if (!(error instanceof DeliveryChainUnreadable)) throw error;
+    failures.push(error.message);
+    return ended({ via: 'drop', walked: false, unconfirmed: false, summary: null });
+  }
+  const plan = resolveWalkOrder({
+    dir: input.dir,
+    root: input.root,
+    home: input.host.home,
+    session: input.session,
+    seat: seatName,
+    cli,
+    declared,
+    team: file,
+    rawChain,
+    overrides,
+    now: input.host.now,
+    ...(input.host.build === undefined ? {} : { build: input.host.build }),
+  });
+  const { human, ordered, typingSetAside, typedWake, walkingTyped, socketWord, inbound, heldStanding, chosen } = plan;
+  if (!human) {
+    for (const leg of typingSetAside) failures.push(`${leg}: ${NO_PANE_MESSAGING}`);
+    for (const leg of unavailableLegsOf(ordered)) failures.push(`${leg}: ${MCP_INBOX_UNAVAILABLE}`);
+  } else {
+    // The history line's failure list keeps the shipped four a send's walk records; the legs
+    // the ruling spared beyond them are not this line's to name.
+    for (const leg of ordered) {
+      const reason = humanSkipReason(leg);
+      if (reason === null) continue;
+      if (leg === 'typed' || leg === 'native' || leg === 'socket' || leg === 'mcp-inbox') {
+        failures.push(`${leg}: ${reason}`);
+      }
+    }
+  }
+  // The record is on disk before this walk began: every leg's own write finds the reply's copy
+  // at the id, and `stageSendRecord` is what the webhook leg reads its signed bytes from.
+  let stagedTried = false;
+  let stagedWalk: RecordWritten | null = null;
+  const ensureStaged = async (): Promise<void> => {
+    if (stagedTried) return;
+    stagedTried = true;
+    stagedWalk = await stageSendRecord(dropDir, input.payload, input.host.home, input.host.now, input.project);
+  };
+  const stagedRecordOf = (): RecordWritten | null => stagedWalk;
+  const aim: Aim = {
+    seat: seatName,
+    agentId: null,
+    session: input.session,
+    cli,
+    address: input.address,
+    sentAs: null,
+    dir: input.dir,
+    project: input.project,
+    root: input.root,
+    cross: false,
+  };
+  for (const [at, leg] of chosen.entries()) {
+    if (leg === 'channel') {
+      // The seat's own inbox server pushes the record into its CLI. The marker beside the record
+      // is what the watch reads when no receipt follows; a marker that never appears inside the
+      // short grace means nothing was delivered on this leg, so the walk moves on.
+      const staged = await stageChannelRecord(input.dir, input.session, seatName, dropDir, input.payload, from, input.host, report, null, input.project);
+      const grace = input.host.channelGraceMs ?? CHANNEL_PUSH_GRACE_MS;
+      const miss = staged ?? ((await awaitChannelPush(dropDir, msgId, grace, input.host)) ? null : `no push receipt within ${String(grace)} ms`);
+      if (miss !== null) {
+        clearPending(dropDir, msgId);
+        failures.push(`channel: ${miss}`);
+        continue;
+      }
+      const ms = input.host.now().getTime() - startedAt;
+      return ended({ via: 'channel', walked: true, unconfirmed: false, summary: `${seatName}: sent (channel) (${String(ms)} ms)` });
+    }
+    if (leg === 'webhook') {
+      const hook = declared.webhook;
+      const routeRefusal = hook === undefined ? 'the receiving seat declares no webhook row' : webhookRefusal(hook);
+      if (hook === undefined || routeRefusal !== null) {
+        failures.push(`webhook: ${routeRefusal ?? 'the receiving seat declares no webhook row'}`);
+        continue;
+      }
+      await ensureStaged();
+      const staged = stagedRecordOf();
+      if (staged === null || !staged.ok) {
+        failures.push(`webhook: ${staged === null ? 'the record could not be written' : staged.reason}`);
+        continue;
+      }
+      // The reply's own write never posts an arrival, so a record already at the id is the
+      // normal state here and no reason to skip the post: the claim decides who posts.
+      const posted = await postSeatWebhook(seatName, hook, input.payload, staged.signed, dropDir, input.host.home, input.host.now, file, input.project, input.payload.body);
+      const ms = input.host.now().getTime() - startedAt;
+      if (posted.kind === 'posted') {
+        return ended({ via: 'webhook', walked: true, unconfirmed: false, summary: `${seatName}: delivered (webhook, ${String(posted.ms)} ms)` });
+      }
+      if (posted.kind === 'unknown') {
+        return ended({ via: 'webhook', walked: true, unconfirmed: true, summary: `${seatName}: sent (unconfirmed) (webhook, ${String(ms)} ms)` });
+      }
+      if (posted.kind === 'none' && (posted.why === 'claim-held' || posted.why === 'already-posted')) {
+        const postedAlready = posted.why === 'already-posted';
+        return ended({
+          via: 'webhook',
+          walked: true,
+          unconfirmed: !postedAlready,
+          summary: postedAlready
+            ? `${seatName}: delivered (webhook, ${String(ms)} ms)`
+            : `${seatName}: sent (unconfirmed) (webhook, ${String(ms)} ms; the bus is posting it)`,
+        });
+      }
+      const why = posted.kind === 'failed'
+        ? posted.reason
+        : posted.kind === 'none' && posted.why === 'no-route'
+          ? 'the adapter row names no usable route'
+          : 'the post failed unexpectedly';
+      failures.push(`webhook: ${why}`);
+      continue;
+    }
+    if (leg === 'socket') {
+      if (cli !== 'claude-code') {
+        failures.push(`socket: ${cli} sessions have no cross-session socket`);
+        continue;
+      }
+      if (!SOCKET_SEND) {
+        failures.push('socket: this build does not carry the cross-session socket');
+        continue;
+      }
+      if (!socketEligible(socketWord, inbound)) {
+        failures.push(`socket: ${preciseSocketSkipReason(socketWord, inbound)}`);
+        continue;
+      }
+      if (heldStanding !== null) {
+        failures.push(`socket: ${heldStanding}`);
+        continue;
+      }
+      await ensureStaged();
+      const identityHeader = frameIdentityHeader(input.payload, input.naming, input.sender.teamId, input.sender.project, input.sender.label);
+      const attempt = await deliverSocketFrame(
+        input.dir, input.who, from, aim, input.payload, failures, input.host, report, startedAt,
+        false, inbound, identityHeader, false, false,
+      );
+      if (attempt.kind === 'delivered') {
+        return ended({ via: 'socket', walked: true, unconfirmed: false, summary: `${seatName}: delivered (socket)` });
+      }
+      failures.push(`socket: ${attempt.reason}`);
+      continue;
+    }
+    if (leg === 'typed') {
+      // The profile-gated typed wake is the one wake a reply's process may type: a profile that
+      // declares none keeps the no-pane rule, and the walk goes on to the mailbox behind it.
+      if (!walkingTyped || typedWake === null) {
+        failures.push(`typed: ${NO_PANE_MESSAGING}`);
+        continue;
+      }
+      const found = findAgent(input.host, input.session, seatName);
+      if (!found.ok) {
+        failures.push(`typed: ${found.reason}`);
+        continue;
+      }
+      if (isBareShellPane(input.dir, input.session, seatName, input.host.processInfo(input.session, found.pane))) {
+        failures.push('typed: the seat is back at its shell; nothing was typed');
+        continue;
+      }
+      const wakeTemplate = messageDisplayInForce({ home: input.host.home, root: input.root, team: file, now: input.host.now() });
+      const wakeName = senderDisplayName(
+        { seat: from, ...(input.payload.from_id === null ? {} : { id: input.payload.from_id }) },
+        { ...input.naming, mode: 'nickname' },
+      );
+      const trigger = readTriggerLine(seatName, input.session, {
+        seat: from,
+        team: input.sender.project,
+        template: wakeTemplate,
+        name: wakeName,
+        body: input.payload.body,
+        ageMs: 0,
+      }, cli);
+      if (trigger === null) {
+        failures.push(`typed: the trigger would exceed ${String(TRIGGER_MAX)} characters`);
+        continue;
+      }
+      await ensureStaged();
+      const wake = await deliverTypedWakeSeat(
+        quiet, input.dir, input.root, input.who, from, input.project, input.session, seatName, cli,
+        found.pane, dropDir, input.payload, trigger, input.host, report, startedAt, failures, null, () => {}, false,
+      );
+      if (wake.delivered) {
+        return ended({ via: 'typed', walked: true, unconfirmed: false, summary: `${seatName}: delivered (typed wake)` });
+      }
+      failures.push(`typed: ${wake.reason}`);
+      continue;
+    }
+    if (leg === 'native') {
+      // A Codex seat's native route is its own runtime's queue, and the reply's process walks it
+      // exactly as a send does: the same staged copy, the same fail-closed policy read, the same
+      // bounded live readiness probe, and one pointer line handed to the seat's bound thread. A
+      // queue acceptance is transport only — the signed read receipt the seat's own `inbox_read`
+      // writes is still the one proof of a read.
+      if (cli === 'codex') {
+        // The route's clock starts here, before this process prepares anything for it: the
+        // policy read, the staged copy and the bounded readiness probe all spend the signed
+        // attempt budget rather than getting a fresh one.
+        const routeStartedAt = input.host.now().getTime();
+        await ensureStaged();
+        // The control-flow view of the staged copy is the value before the closure ran, so the
+        // copy is read through its declared type here.
+        const staged = stagedRecordOf();
+        if (staged === null || !staged.ok) {
+          const why = staged === null ? 'the record could not be written' : staged.reason;
+          failures.push(`native: ${why}`);
+          continue;
+        }
+        // The receiving seat's signed chain sets the attempt budget. A chain that does not read
+        // refuses the route rather than falling back to a release default no level chose.
+        const deliveryTimeout = file === null
+          ? { ok: false as const, why: 'the receiving team file could not be read; the native attempt budget is undecided' }
+          : deliveryTimeoutInForce({
+              home: input.host.home,
+              entity: file.entity ?? '',
+              projectId: projectIdOfTeam(input.host.home, file, input.root) ?? '',
+              root: input.root,
+              team: file,
+              seat: seatName,
+              now: input.host.now(),
+            });
+        const attempt = await deliverCodexNativeRoute(
+          {
+            route: 'native',
+            runtime: 'codex',
+            copy: { dir: dropDir, name: msgId },
+            root: input.root,
+            home: input.host.home,
+            session: input.session,
+            seat: seatName,
+            sender: { seat: from, team: teamIdOf(input.root) },
+          },
+          { id: msgId, record: staged.record },
+          {
+            now: input.host.now,
+            startedAt,
+            routeStartedAt,
+            deliveryTimeout,
+            liveRoutesRemain: liveRoutesAfter(chosen, at, cli),
+            skipStage: true,
+            // Readiness is always read live: a queue that would hold the pointer is a route that
+            // did not take the reply, never a hopeful enqueue.
+            liveProbe: true,
+          },
+        );
+        if (attempt.outcome === 'enqueue') {
+          const grace = input.host.inboxGraceMs ?? INBOX_GRACE_MS;
+          if (await awaitReceipt(dropDir, msgId, { to: seatName, root: input.root, session: input.session }, input.host.home, grace, claimBindingIn(input.root, input.session, seatName, msgId))) {
+            return ended({ via: 'native', walked: true, unconfirmed: false, summary: `${seatName}: delivered (read) (drop ${String(input.payload.body.length)} characters, native queue receipt)` });
+          }
+          return ended({
+            via: 'native',
+            walked: true,
+            unconfirmed: true,
+            summary: `${seatName}: queued to its native runtime (drop ${String(input.payload.body.length)} characters); no receipt within ${String(grace)} ms`,
+          });
+        }
+        failures.push(`native: ${attempt.reason}`);
+        continue;
+      }
+      // Any other CLI has no native route this walk can take. A Claude Code seat's native leg is
+      // the sending session's own SendMessage, which this process is not, so the skip keeps its
+      // true reason. Every other CLI is skipped without a failure: no reply of this seat's could
+      // ever leave by it.
+      if (cli !== 'claude-code') continue;
+      failures.push(`native: ${NATIVE_LEG_UNAVAILABLE}`);
+      continue;
+    }
+    if (leg === 'headless-resume') {
+      // The seat's own CLI resumed headlessly for one turn: no TUI pane, so no keystroke. The
+      // reply walks it for the profiles a send walks it for — Gemini and Cursor — with the same
+      // staged copy, fail-closed budget and runtime; a CLI this build carries no resume runtime
+      // for keeps the recorded skip, and the walk moves on.
+      if (!isHeadlessResumeCli(cli)) {
+        failures.push(`headless-resume: ${HEADLESS_RESUME_UNAVAILABLE_REASON}`);
+        continue;
+      }
+      const routeStartedAt = input.host.now().getTime();
+      await ensureStaged();
+      const staged = stagedRecordOf();
+      if (staged === null || !staged.ok) {
+        const why = staged === null ? 'the record could not be written' : staged.reason;
+        failures.push(`headless-resume: ${why}`);
+        continue;
+      }
+      const deliveryTimeout = file === null
+        ? { ok: false as const, why: 'the receiving team file could not be read; the headless-resume attempt budget is undecided' }
+        : deliveryTimeoutInForce({
+            home: input.host.home,
+            entity: file.entity ?? '',
+            projectId: projectIdOfTeam(input.host.home, file, input.root) ?? '',
+            root: input.root,
+            team: file,
+            seat: seatName,
+            now: input.host.now(),
+          });
+      const seatCwd = declared.cwd === undefined ? input.root : resolve(input.root, declared.cwd);
+      const attempt = await deliverHeadlessResumeRoute(
+        {
+          route: 'headless-resume',
+          cli,
+          copy: { dir: dropDir, name: msgId },
+          root: input.root,
+          home: input.host.home,
+          session: input.session,
+          seat: seatName,
+          sender: { seat: from, team: teamIdOf(input.root) },
+          cwd: seatCwd,
+        },
+        { id: msgId, record: staged.record },
+        {
+          now: input.host.now,
+          startedAt,
+          routeStartedAt,
+          deliveryTimeout,
+          liveRoutesRemain: liveRoutesAfter(chosen, at, cli),
+          skipStage: true,
+          ...(input.host.headlessResumeSpawn === undefined ? {} : { spawn: input.host.headlessResumeSpawn }),
+        },
+      );
+      if (attempt.outcome === 'enqueue') {
+        const grace = input.host.inboxGraceMs ?? INBOX_GRACE_MS;
+        if (await awaitReceipt(dropDir, msgId, { to: seatName, root: input.root, session: input.session }, input.host.home, grace, claimBindingIn(input.root, input.session, seatName, msgId))) {
+          return ended({ via: 'headless-resume', walked: true, unconfirmed: false, summary: `${seatName}: delivered (read) (drop ${String(input.payload.body.length)} characters, headless-resume receipt)` });
+        }
+        return ended({
+          via: 'headless-resume',
+          walked: true,
+          unconfirmed: true,
+          summary: `${seatName}: resumed headlessly (drop ${String(input.payload.body.length)} characters); no receipt within ${String(grace)} ms`,
+        });
+      }
+      failures.push(`headless-resume: ${attempt.reason}`);
+      continue;
+    }
+    if (leg === 'session') {
+      failures.push('session: a reply does not create a session; the record waits in the bus inbox');
+      continue;
+    }
+    // The drop leg closes the walk: the reply's record is already the mailbox's copy.
+    return ended({ via: 'drop', walked: true, unconfirmed: false, summary: null });
+  }
+  return ended({ via: 'drop', walked: true, unconfirmed: false, summary: null });
 }
 
 /** The brief was typed into a compose seat's own box and the CLI never confirmed it. The
@@ -4133,7 +5379,7 @@ function typedBriefNotSubmitted(io: Io, dir: string, who: string, seat: string, 
 /** A send that typed its line and was never taken: the trigger line of a drop-file send, or a
  *  compose seat's brief. One site, one exit id: both are the same outcome to a caller. */
 function notSubmittedAt(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report): number {
-  const message = `${seat}: not-submitted: ${reason}`;
+  const message = withId(`${seat}: not-submitted: ${reason}`, report);
   logLine(dir, 'send', who, message, host.now());
   if (report.json) writeSendError(io, 'send.not-submitted', message, report);
   else io.stderr(`team send: ${message}\n`);
@@ -4312,26 +5558,13 @@ function socketDirs(host: SendHost): string {
  *  started before its declaration — the walk's own evidence, which the reported class follows. */
 type SocketAttempt =
   | { kind: 'delivered' }
-  | { kind: 'held'; reason: string }
   | { kind: 'fallback'; reason: string; socketUnusable?: true };
-
-/** The one sentence a held socket frame reports: the pane, the frame's state, and why nothing
- *  further is typed. */
-const HELD_FRAME_REASON =
-  'the session holds the socket frame at its held-message dialog ("Held message from another session"): the box is blocked while it is up, and nothing further is typed';
 
 /** What the walk records for the native leg when the sender cannot make the leg itself: the
  *  frame is the sending session's own cross-session SendMessage, which this process cannot make,
  *  so the leg cannot take this send, and the walk skips and records it. A sender whose own file
  *  declares Claude Code gets the handoff instead. */
 const NATIVE_LEG_UNAVAILABLE = "unavailable; the native leg is the sending session's own SendMessage";
-
-/** How long a socket write's pane is read for the held-message dialog, in all. */
-const HELD_READ_MS = 1000;
-
-/** The taker a socket-delivered record's read receipt names: the frame was taken, and no reader
- *  served the record. It is display for the receipt's readers and signed with the payload. */
-const SOCKET_READ_BY = 'socket delivery';
 
 /**
  * The human name a seat's written label carries: the text before its middle dot, trimmed. A label
@@ -4340,7 +5573,7 @@ const SOCKET_READ_BY = 'socket delivery';
  * seat with no written label has no such name: the stored label is its model and version, and its
  * workspace title its seat name and role, so the seat name stands in its place. Display only.
  */
-function labelNameOf(team: TeamFile, seat: string): string | null {
+export function labelNameOf(team: TeamFile, seat: string): string | null {
   const found = team.seats.find((one) => one.name === seat);
   return found === undefined ? null : labelPersona(found);
 }
@@ -4371,20 +5604,6 @@ function frameIdentityHeader(record: RecordPayload, naming: SenderNaming, sender
   return `Message from ${name === '' ? record.from : name} (${record.from}@${teamName})`;
 }
 
-/** Reads the target pane until the held-message dialog shows, or ~1s passes: the dialog renders
- *  right after the write lands, and a write the session holds is not a delivery. A host with no
- *  pane reader keeps the write's own answer — there is nothing to look at. */
-async function heldAtDialog(session: string, pane: string, host: SendHost): Promise<boolean> {
-  const reader = host.native.paneText;
-  if (reader === undefined) return false;
-  if (showsHeldFrameDialog(reader(session, pane))) return true;
-  for (let waited = 0; waited < HELD_READ_MS; waited += POLL_MS) {
-    await host.native.wait(POLL_MS);
-    if (showsHeldFrameDialog(reader(session, pane))) return true;
-  }
-  return false;
-}
-
 /**
  * The default path's first leg: one frame on the target's cross-session socket, nothing typed.
  * The address is resolved first — the registry's recorded one while it is still live, else the pane's
@@ -4394,6 +5613,13 @@ async function heldAtDialog(session: string, pane: string, host: SendHost): Prom
  * or refusing, a frame past the measured limit. A recorded address whose write refuses gets one
  * live re-resolution first: a pid the registry has not caught up with must not cost the fast
  * path, while the record itself remains the registry's to refresh.
+ *
+ * A taken frame ends the sender's work at once — the frame was taken, so the send reports
+ * `delivered (socket)` and returns. The pane is never read here: whether the receiving session
+ * held the frame at its held-message dialog is the daemon's held step to see on its own 250 ms
+ * beat (`src/daemon/presence/held.ts`), which raises `held` and marks the socket until the
+ * seat's declaration is re-confirmed. A person's command must not wait a second on another
+ * seat's screen.
  */
 async function deliverSocketFrame(
   dir: string,
@@ -4408,15 +5634,14 @@ async function deliverSocketFrame(
   startedAt: number,
   wait = false,
   inbound: InboundDeclaration = { policy: null, declaredAt: null, source: null },
-  /** The sending run's team root: the entity an owner-origin reply line is read from. */
-  callerRoot: string,
   /** The display line the frame opens with; empty, the body alone. */
   header = '',
-  /** True for a person-pane seat: no reply line and no read hint, a person answers in its client. */
+  /** True for a person-pane seat: no reader line, a person answers in its client. */
   personPane = false,
-  /** The reply line for an origin that is not a seat of a sending run — a client grant's owner
-   *  origin. Given, the frame does not need a sending team and the line is used as built. */
-  replyOverride?: FrameReply,
+  /** False for a caller that writes the walk's one history line itself (the reply's own
+   *  cascade): this leg then records nothing, and the caller's line carries the leg and the
+   *  failures. A send leaves it true. */
+  writeHistory = true,
 ): Promise<SocketAttempt> {
   const msgId = payload.id;
   const body = payload.body;
@@ -4424,28 +5649,17 @@ async function deliverSocketFrame(
   // The address as written, when it was a form: every history line carries it beside the seat.
   const sentAs = to.sentAs === null ? {} : to.sentAs;
   const failed = failures.length > 0 ? { failed: [...failures] } : {};
-  // The reply line names the seat the signed record carries and the team this run stood in; a
-  // team the run does not know is no address at all, and the frame is not dialed rather than
-  // answering somewhere guessed. A person-pane seat has no reply line at all, and an injected
-  // line (an owner-origin client grant) already names its target and needs no sending team.
-  let reply: FrameReply | null;
-  if (replyOverride !== undefined) {
-    reply = replyOverride;
-  } else {
-    const sendingTeam = report.from_team;
-    if (sendingTeam === undefined && !personPane) {
-      return { kind: 'fallback', reason: 'the sending team is not known, so the frame carries no reply address' };
-    }
-    reply = personPane || sendingTeam === undefined
-      ? null
-      : frameReplyFor(host.home, callerRoot, payload.from, sendingTeam);
-  }
-  if (reply !== null && 'missing' in reply) return { kind: 'fallback', reason: reply.missing };
+  // The reader line names the record's own id, the same id the frame carries in `msg_id`: an
+  // answering seat runs `team reply <id>` and a seat that needs no answer runs `team ack <id>`,
+  // and both write its own signed read receipt (ADR D3). It addresses the record, never the
+  // sender, so an owner-origin frame needs no reply target and no sending team. A person-pane
+  // seat has no reader line at all: a person answers in their own client.
+  const reply = personPane ? null : readerLine(msgId);
   // The frame opens with the sender's display line, then the signed record's own body: the
   // header is display, and the body it precedes still carries the attribution line a reader
   // judges. One blank line separates them, so no body line can pass for the header.
   const content = header === '' ? body : `${header}\n\n${body}`;
-  const frame = frameFor(content, msgId, reply === null ? null : reply.line);
+  const frame = frameFor(content, msgId, reply);
   if (frame.length > FRAME_LIMIT) {
     return { kind: 'fallback', reason: `the frame is ${String(frame.length)} characters, past the socket's measured limit of ${String(FRAME_LIMIT)}` };
   }
@@ -4455,14 +5669,15 @@ async function deliverSocketFrame(
   if (!found.ok) return { kind: 'fallback', reason: found.reason };
   // The seat lock stays the gate: a command that holds it — a send typing a trigger, an `up`,
   // an outstanding --wait — keeps this fast path out, and the typed path below answers the
-  // refusal exactly as it always has. The lock file is read here, never taken: the fallback's
-  // own delivery takes it for real.
-  if (existsSync(seatLockPath(to.dir, to.session, to.seat))) {
+  // refusal exactly as it always has. The lock is read here, never taken: the fallback's own
+  // delivery takes it for real. Held is not the same as present: a file a dead process, or a
+  // process whose pid the OS has reused, left behind holds nothing, and the socket is walked.
+  if (seatLockHolder(to.dir, to.session, to.seat) !== null) {
     return { kind: 'fallback', reason: 'another command holds the seat' };
   }
   const first = socketPathFor(host, to, found.pane);
   if (first === null) return { kind: 'fallback', reason: noSocketReason(host), socketUnusable: true };
-  if (first.kind === 'stale') return { kind: 'fallback', reason: await staleSocketReason(to, first.path, host.home), socketUnusable: true };
+  if (first.kind === 'stale') return { kind: 'fallback', reason: staleSocketReason(to, first.path, host.home), socketUnusable: true };
   // A session started before the file that declares `accept` changed was launched without the
   // setting in force: the frame would be held at its box, so the walk passes this leg over until
   // the seat's CLI host is restarted. The socket's own age is the evidence (`inboundIsLive`).
@@ -4473,7 +5688,7 @@ async function deliverSocketFrame(
   // The record is on disk before the frame leaves: a frame the seat never reads still leaves a
   // signed record in its folder, which is the copy `team messages` and the watch read.
   const copy = { dir: join(to.dir, 'send-drops', to.session, to.seat), name: msgId };
-  const written = await writeSendRecord(copy.dir, payload, host.home, host.now);
+  const written = await writeSendRecord(copy.dir, payload, host.home, host.now, report, to.project);
   if (!written.ok) return { kind: 'fallback', reason: `the record could not be written (${written.reason})` };
   // One frame on the socket, through the relay's socket route. The caller's own dial is handed in,
   // so an injected host's transport is the transport this attempt uses. A recorded address whose
@@ -4493,35 +5708,16 @@ async function deliverSocketFrame(
   }
   if (taken.outcome !== 'delivered') return { kind: 'fallback', reason: taken.reason };
   logLine(to.dir, 'send', who, `${to.seat}: sent on the socket (${String(frame.length)} characters)`, host.now());
-  if (await heldAtDialog(to.session, found.pane, host)) {
-    appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: payload.thread, outcome: 'held', ms: host.now().getTime() - startedAt, via: 'socket', ...failed });
-    return { kind: 'held', reason: HELD_FRAME_REASON };
-  }
-  // The frame was taken and no held dialog answered it: the receiving session has the message,
-  // so an ordinary send's record is read now. The signed receipt is what keeps the watch from
-  // ringing for a message the socket already delivered, and what keeps `team drops --read` and
-  // `team messages` from serving it again — the same receipt a reader would have written. A held
-  // frame returned above writes none: it was not a delivery, and the watch's retry stays the
-  // attempt.
-  //
-  // A direct-only run is the watch's own dispatch, and there the frame is a request: the
-  // receiving runtime reads it through the read gate and acts on it, so the send leaves the
-  // record unread — a receipt here would stop the very reader the push exists for.
-  if (host.direct === undefined) {
-    try {
-      const receipt = signReceiptPayload(
-        { kind: 'receipt', status: 'read', id: msgId, to: payload.to, root: payload.root, session: payload.session, at: host.now().toISOString(), read_by: SOCKET_READ_BY },
-        host.home,
-      );
-      const receiptWrite = writeReceipt(copy.dir, receipt, host.home);
-      if (!receiptWrite.ok) {
-        logLine(to.dir, 'send', who, `${to.seat}: the frame was taken, but its read receipt was not written (${receiptWrite.reason})`, host.now());
-      }
-    } catch {
-      logLine(to.dir, 'send', who, `${to.seat}: the frame was taken, but its read receipt was not written`, host.now());
-    }
-  }
-  if (!wait) {
+  // The frame was taken: that is the delivery, and only the seat writes a read receipt. The
+  // sender no longer marks its own frame read — a frame a wrapper launch took but the agent never
+  // saw must stay unread — so the record waits for the seat's own `inbox_read`,
+  // `team drops --read` or hook receipt, and the watch's unread pass re-wakes it like any other
+  // message. The sender does not wait here to see whether the receiving session held the frame
+  // at its held-message dialog either: a taken frame is reported `delivered (socket)` at once,
+  // and the daemon's held step reads the pane on its own beat and raises `held` if it finds the
+  // dialog. Waiting on another seat's screen is what made this path slow, and the dialog's own
+  // arrival is never part of what this process can prove.
+  if (!wait && writeHistory) {
     appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: payload.thread, outcome: 'delivered', ms: host.now().getTime() - startedAt, via: 'socket', ...failed });
   }
   return { kind: 'delivered' };
@@ -4535,9 +5731,10 @@ export type ChannelRedelivery = { ok: true } | { ok: false; reason: string };
  * written, dialed now with the stored signed record, and marked on its history line and in the
  * walk's words as `redelivered: channel unconfirmed`. The receiving declaration is read exactly
  * as a send's socket leg reads it — a receiver that would hold the frame is never dialed — and a
- * delivery writes the same signed read receipt a socket send writes, so the message is served
- * once and no later pass rings for it. Every refusal comes back as a reason the watch turns into
- * its typed fallback; the wrapper itself never types and never clears the marker.
+ * taken frame is the delivery: no receipt is written, so the record stays unread for the seat's
+ * own read and the unread pass re-wakes it like any other message. Every refusal comes back as a
+ * reason the watch turns into its typed fallback; the wrapper itself never types and never clears
+ * the marker.
  */
 export async function redeliverChannelOnSocket(input: {
   host: SendHost;
@@ -4597,12 +5794,10 @@ export async function redeliverChannelOnSocket(input: {
     host.now().getTime(),
     false,
     inbound,
-    root,
     frameIdentityHeader(payload, naming, fromTeam, input.team.project, labelNameOf(input.team, seat)),
     false,
   );
   if (attempt.kind === 'delivered') return { ok: true };
-  if (attempt.kind === 'held') return { ok: false, reason: `the socket held the frame (${attempt.reason})` };
   return { ok: false, reason: attempt.reason };
 }
 
@@ -4642,7 +5837,7 @@ function classWithout(
   /** The receiving team file's row for the seat, when the caller has it: the launch line, human
    *  word, inbound word and webhook row the class was first read with. Without it the walk's own
    *  reading of the seat stands in, exactly as the first read did. */
-  declaredRow?: Pick<Seat, 'cli' | 'launch' | 'human' | 'inbound' | 'webhook'>,
+  declaredRow?: Pick<Seat, 'cli' | 'launch' | 'human' | 'watchWake' | 'inbound' | 'webhook'>,
 ): ClassRead {
   let record: Pick<SeatState, 'id' | 'cli' | 'launch_line' | 'watcher' | 'agent_session' | 'codex_endpoint' | 'presence_binding'> | undefined;
   try {
@@ -4678,6 +5873,11 @@ function classWithout(
     // The adapter is the only reason left for `push` when no direct route stands: a failed
     // socket or queue leaves it, and its wake belongs to the bus that announces the record.
     webhookOnly: webhookStanding && !channel && !socket,
+    // The row the lowered class speaks for: a typed wake is the profile's, so the words need the
+    // CLI and the pane's kind even after the walk disproved a leg.
+    cli: record?.cli ?? declaredRow?.cli ?? to.cli,
+    human: read.evidence.human === true,
+    watchWake: read.evidence.watchWake,
   };
 }
 
@@ -4693,11 +5893,14 @@ function noSocketReason(host: SendHost): string {
   return `no socket was found for its pane's processes (looked in ${socketDirs(host)})`;
 }
 
-async function staleSocketReason(to: Aim, path: string, home: string | undefined): Promise<string> {
-  // The words follow the class the walk can still prove, and a webhook that is the only route
-  // left is only the bus's wake: the same liveness proof the send's first read makes.
-  const busLive = await busListening(to.root);
-  return `the socket recorded for ${to.seat} (${path}) is gone; ${classWords(classWithoutSocket(to, home), to.seat, busLive)}`;
+function staleSocketReason(to: Aim, path: string, home: string | undefined): string {
+  // The words follow the class the walk can still prove; a webhook that is the only route left
+  // reads as queued, since the send's webhook leg posts it next and the bus carries it after
+  // this send returns. The typed-wake exception
+  // applies here too: this sentence is read while the typed leg is still ahead of the walk, so a
+  // profile that declares a typed wake says the seat reads the message at its next turn rather
+  // than claiming it has no way to be woken.
+  return `the socket recorded for ${to.seat} (${path}) is gone; ${classWords(classWithoutSocket(to, home), to.seat)}`;
 }
 
 /** Raises the owner's `security.refused` for a denied identity or admission: the rule, the
@@ -4846,9 +6049,13 @@ export type Admission = { ok: true; rule: string; sender: Agent | DeclaredSender
  * record and this receiver (`sendGrantFor`); a grant for another pair is not a grant here, so
  * nothing looser than the pair reaches `admitSend`.
  *
- * `reply` is handed in by `team reply` alone, and only after it verified the record it answers
- * and found the thread open: the context then carries `open-thread`, and the reply rule — the
- * last one `admitSend` asks — can admit a pair no rule above admits.
+ * `reply` is handed in by `team reply` alone, and only after it verified the records it stands
+ * on. `open-thread` says the answered record verified and the thread is open; the reply rule —
+ * the last one `admitSend` asks — can then admit a pair no rule above admits.
+ * `main-orchestrator-thread` is the narrower answer to the entity's main orchestrator: the
+ * answered record verified, its sender is the entity's main orchestrator, and the thread's
+ * opening record is that same sender's and this seat's. `admitSend` asks the chain place and the
+ * reach's setting again, and that marker never falls through to the generic rule.
  */
 export function admissionOf(
   caller: Caller,
@@ -4859,7 +6066,7 @@ export function admissionOf(
   fileTeamId: string,
   now: () => Date,
   at: SeatStanding,
-  reply?: 'open-thread',
+  reply?: ReplyContext,
   watch?: { principal: WatchSendPrincipal; root: string },
 ): Admission {
   if (caller.kind === 'owner') return { ok: true, rule: 'the owner', sender: 'owner' };
@@ -4897,9 +6104,10 @@ export function admissionOf(
   const records = admitRecordsOf(home, team, ownTeam, target);
   // The project level `admitSend` reads: the registered projects, which decide the pairs a
   // project's own rules admit, and the asker's `seats_cross_teams` chain, entity → project →
-  // team → seat, which `admitSend` resolves itself (`seatsCrossTeams`). No level's record
-  // carries a declaration of that setting yet, so the chain is empty here and the setting
-  // stands at its own default, off.
+  // team → seat, which `admitSend` resolves itself, once per reach. No level's record carries a
+  // declaration of that setting yet, so the chain is empty here and each reach stands at its own
+  // default: the project's crossing seats off, the entity's lead pair and its main orchestrator's
+  // reach on.
   const context: AdmitContext = { projects: projectRegistry.readProjects(home), crossTeams: {}, ...(reply !== undefined ? { reply } : {}) };
   const verdict = admitSend(sender, judged, records, undefined, context);
   if (verdict.ok) return { ok: true, rule: verdict.rule, sender };
@@ -5166,19 +6374,19 @@ function seatList(team: TeamFile): string {
   return names.length === 0 ? '(none)' : names.join(', ');
 }
 
-/** The socket frame was taken, the seat's inbox server returned the message, or the typed
- *  trigger's own drop read wrote a signed receipt. Exit 0, always. The note names the path —
- *  `socket` — and `read` for a signed receipt (the mcp-inbox leg's, or a typed trigger's own),
- *  whose own words are `delivered (read)`: the seat read the message, which is not a claim that
- *  it acted on it. `via` names the channel for a read that came through the typed leg. */
+/** The socket frame was taken, or a transport leg's own drop read wrote a signed receipt
+ *  (the native queue's, a headless resume's, or a typed trigger's). Exit 0, always. The note
+ *  names the path — `socket` — and `read` for a signed receipt, whose own words are
+ *  `delivered (read)`: the seat read the message, which is not a claim that it acted on it.
+ *  `via` names the channel the read came through. */
 function delivered(io: Io, seat: string, report: Report, note?: string, via?: 'typed' | 'native' | 'headless-resume'): number {
-  const summary = `${seat}: delivered${note === undefined ? '' : ` (${note})`}`;
+  const summary = withId(`${seat}: delivered${note === undefined ? '' : ` (${note})`}`, report);
   const read = note === 'read';
   if (report.json) {
     writeAction(io, report, {
       status: read ? 'delivered (read)' : 'delivered',
       summary,
-      channel: read ? (via ?? 'mcp-inbox') : note === 'socket' ? 'socket' : 'typed',
+      channel: read ? (via ?? 'typed') : note === 'socket' ? 'socket' : 'typed',
     });
   } else {
     openText(io, report);
@@ -5187,14 +6395,35 @@ function delivered(io: Io, seat: string, report: Report, note?: string, via?: 't
   return 0; // exit: send.delivered
 }
 
-/** A leg's success with no read receipt: on the mcp-inbox and drop legs the message is the 0600
- *  drop file in the seat's folder and nothing was typed; on the typed leg the trigger left the
- *  composer and the drop is still the message. The `note` says which — a typed send's names the
- *  trigger and the receipt that has not come back. Exit 0, always. */
-function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 'mcp-inbox' | 'drop' | 'typed' | 'native' | 'headless-resume', note?: string): number {
-  const summary = withDelivery(`${seat}: sent (unconfirmed) (${leg}, ${String(ms)} ms${note === undefined ? '' : `; ${note}`})`, report);
+/** The session leg's ending: the receiving CLI printed its own session line with an id, and that
+ *  session is the delivery. There is no read receipt to wait for — the agent runs in the CLI's
+ *  own remote session, which writes no team record — so the printed line is the whole proof, and
+ *  the id is what the sender and the history line keep. Exit 0. */
+function deliveredSession(io: Io, seat: string, report: Report, session: string): number {
+  const summary = withId(withDelivery(`${seat}: delivered (session ${session})`, report), report);
   if (report.json) {
-    writeAction(io, report, { status: 'sent (unconfirmed)', summary, channel: leg });
+    writeAction(io, report, { status: 'delivered', summary, channel: 'session' });
+  } else {
+    openText(io, report);
+    io.stdout(`${summary}\n`);
+  }
+  return 0; // exit: send.session-created
+}
+
+/** A leg's success with no read receipt: on the drop leg the message is the 0600
+ *  drop file in the seat's folder and nothing was typed; on the typed leg the trigger left the
+ *  composer and the drop is still the message; a native or headless route's record waits for a
+ *  receipt that has not come back. The `note` says which — a typed send's names the
+ *  trigger and the receipt. The drop leg's ending to a seat nothing wakes
+ *  while it is idle says `queued, not woken` instead — the same word the history line carries —
+ *  because `sent (unconfirmed)` reads like success while the drop waits for a turn nothing gives.
+ *  Exit 0, always. */
+function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 'drop' | 'typed' | 'native' | 'headless-resume' | 'webhook', note?: string): number {
+  const notWoken = leg === 'drop' && dropNotWoken(report);
+  const status: 'sent (unconfirmed)' | 'queued, not woken' = notWoken ? 'queued, not woken' : 'sent (unconfirmed)';
+  const summary = withId(withDelivery(`${seat}: ${status} (${leg}, ${String(ms)} ms${note === undefined ? '' : `; ${note}`})`, report), report);
+  if (report.json) {
+    writeAction(io, report, { status, summary, channel: leg });
   } else {
     openText(io, report);
     io.stdout(`${summary}\n`);
@@ -5206,7 +6435,7 @@ function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 
  *  channel's own word says so. The push is not a read — the signed receipt that follows is — so
  *  a channel ending is never `delivered (read)`. Exit 0, always. */
 function sentChannel(io: Io, seat: string, report: Report, ms: number): number {
-  const summary = withDelivery(`${seat}: sent (channel) (${String(ms)} ms)`, report);
+  const summary = withId(withDelivery(`${seat}: sent (channel) (${String(ms)} ms)`, report), report);
   if (report.json) {
     writeAction(io, report, { status: 'sent (channel)', summary, channel: 'channel' });
   } else {
@@ -5216,16 +6445,31 @@ function sentChannel(io: Io, seat: string, report: Report, ms: number): number {
   return 0; // exit: send.sent-channel
 }
 
+/** The seat's own webhook adapter answered the sender's post with 2xx: the routine took the
+ *  arrival, which is the leg's whole proof — the routine's own run is not a read receipt, so the
+ *  ending is never `delivered (read)`. The ending names its own leg, so it carries its own exit
+ *  id: `send.delivered` is the channel's site above, this one is the adapter's. Exit 0, always. */
+function deliveredWebhook(io: Io, seat: string, report: Report, ms: number): number {
+  const summary = withId(`${seat}: delivered (webhook, ${String(ms)} ms)`, report);
+  if (report.json) {
+    writeAction(io, report, { status: 'delivered', summary, channel: 'webhook' });
+  } else {
+    openText(io, report);
+    io.stdout(`${summary}\n`);
+  }
+  return 0; // exit: send.delivered-webhook
+}
+
 /** A reply record on the thread arrived within the window: printed, and the send is over. Exit 0, always. */
 function answered(
   io: Io,
   seat: string,
   read: { reply: string; msg_id: string | null },
   report: Report,
-  channel: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | 'headless-resume' | 'channel' = 'socket',
+  channel: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | 'headless-resume' | 'channel' | 'session' | 'webhook' = 'socket',
   thread: string | null = report.sent,
 ): number {
-  const summary = `${seat}: answered`;
+  const summary = withId(`${seat}: answered`, report);
   if (report.json) {
     writeAction(io, report, { status: 'answered', summary, channel, reply: read.reply, replyId: read.msg_id, thread });
   } else {
@@ -5238,7 +6482,7 @@ function answered(
 /** The record was sent, and the wait window closed with no reply on the thread (the thread stays open). Exit 1, always. */
 function timedOut(io: Io, seat: string, seconds: number, report: Report): number {
   const why = `sent, no reply on the thread within ${String(seconds)}s; the thread stays open`;
-  const message = `${seat}: timeout: ${why}`;
+  const message = withId(`${seat}: timeout: ${why}`, report);
   if (report.json) writeSendError(io, 'send.timeout', message, report);
   else io.stderr(`team send: ${message}\n`);
   return 1; // exit: send.timeout
@@ -5249,7 +6493,7 @@ function timedOut(io: Io, seat: string, seconds: number, report: Report): number
  *  the path, in the delivery lines' own shape (`socket`). */
 function held(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report, note?: string): number {
   const label = note === undefined ? 'held' : `held (${note})`;
-  const message = `${seat}: ${label}: ${reason}`;
+  const message = withId(`${seat}: ${label}: ${reason}`, report);
   logLine(dir, 'send', who, message, host.now());
   if (report.json) writeSendError(io, 'send.held', message, report);
   else io.stderr(`team send: ${message}\n`);
@@ -5309,7 +6553,7 @@ function unreachable(
   dialog?: string,
 ): number {
   const words = dialog === undefined ? `unreachable: ${reason}` : `unreachable now (the screen reads ${dialog}); ${reason}`;
-  const message = `${seat}: ${words}`;
+  const message = withId(`${seat}: ${words}`, report);
   logLine(dir, 'send', who, message, host.now());
   if (report.json) writeSendError(io, 'send.unreachable', message, report);
   else io.stderr(`team send: ${message}\n`);
@@ -5352,6 +6596,7 @@ type ActionFields = {
     | 'delivered'
     | 'delivered (read)'
     | 'sent (unconfirmed)'
+    | 'queued, not woken'
     | 'sent (channel)'
     | 'queued (receiver busy)'
     | 'answered'
@@ -5361,8 +6606,9 @@ type ActionFields = {
   summary: string;
   dryRun?: boolean;
   /** The leg that carried the send: `socket`, `typed`, `drop`, `mcp-inbox`, `headless-resume`,
-   *  `channel` for the seat's own development channel, or `native` for a record or handoff. */
-  channel?: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | 'headless-resume' | 'channel' | null;
+   *  `channel` for the seat's own development channel, `session` for the CLI's own
+   *  session-creating call, or `native` for a record or handoff. */
+  channel?: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | 'headless-resume' | 'channel' | 'session' | 'webhook' | null;
   /** The reply's text, on an answered wait. */
   reply?: string;
   /** The reply record's own id, on an answered wait. */

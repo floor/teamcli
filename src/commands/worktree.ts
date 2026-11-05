@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { notInForce } from '../approve/approval.ts';
+import { unverifiedRecordSentence } from '../approve/unverified-record.ts';
+import { devModeState } from '../dev_mode.ts';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
 import { insideTrust } from '../file/paths.ts';
@@ -14,8 +16,10 @@ import type { Problem, TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { contextLine, displayPath, formatTable, hasJsonFlag, pluralCount, refuse, renderNotes, writeJson } from '../output/index.ts';
+import { profileFor } from '../profiles/index.ts';
+import { pullSession } from '../send/session-cli.ts';
 import { emptySession, readState, withLock, writeAtomic, STATE_FILE, type State } from '../state.ts';
-import { approvalStanding, type Standing } from '../store/store.ts';
+import { approvalStanding, findStore, readApproval, type Standing } from '../store/store.ts';
 import { fillPattern, publicNameHit, realLanding, taskProblem } from '../worktree/place.ts';
 
 // What the command reads from outside the process, so a test can point the approval store elsewhere.
@@ -39,17 +43,19 @@ type Run = { code: number; stdout: string; stderr: string };
 
 export const USAGE = `Usage: team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]
        team worktree list [--session <name>] [--file <path>] [--json]
+       team worktree pull <task> --remote-session <id> [--seat <name>] [--session <name>] [--file <path>] [--json]
        team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]
 Ignored files in the worktree are deleted with it.
+A pull runs the seat CLI's own pull call in the worktree; it commits, pushes and creates no branch.
 
-Exits 0 when the worktree is created, listed, or removed, 1 when the operation is refused or fails, 2 when the invocation or team file can't be read.
+Exits 0 when the worktree is created, listed, pulled into, or removed, 1 when the operation is refused or fails, 2 when the invocation or team file can't be read.
 `;
 
 export const worktree: Command = (argv, io) => runWorktree(argv, io, realSources);
 export default worktree;
 
 export async function runWorktree(argv: string[], io: Io, sources: WorktreeSources = realSources): Promise<number> {
-  const args = readArgs(argv, ['kind', 'seat', 'session', 'file', 'branch'], ['json']);
+  const args = readArgs(argv, ['kind', 'seat', 'session', 'file', 'branch', 'remote-session'], ['json']);
   // Read from the raw argv before the parser runs: a bad option before `--json`, or a
   // malformed `--json=<value>`, still asks for the structured refusal.
   const json = hasJsonFlag(argv);
@@ -60,7 +66,7 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
     // exit: worktree.invocation
     return 2;
   }
-  if (sub !== 'new' && sub !== 'remove' && sub !== 'list') {
+  if (sub !== 'new' && sub !== 'remove' && sub !== 'list' && sub !== 'pull') {
     refuse(io, json, 'worktree', {
       id: 'worktree.subcommand',
       message: sub ? `unknown subcommand "${sub}"` : 'a subcommand is required',
@@ -99,6 +105,29 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
   if (sub !== 'remove' && args.values.branch !== undefined) {
     refuse(io, json, 'worktree', { id: 'worktree.branch-flags', message: `${sub} takes no --branch`, repair: null, usage: USAGE });
     // exit: worktree.branch-flags
+    return 2;
+  }
+  // Pulling needs the session whose result is pulled and takes no --kind: the operator names one
+  // id, and the CLI its seat's profile declares does the rest.
+  const remoteSession = args.values['remote-session'];
+  const remoteProblem = sub === 'pull' && remoteSession === undefined
+    ? 'pull needs --remote-session <id>'
+    : sub !== 'pull' && remoteSession !== undefined
+      ? `${sub} takes no --remote-session`
+      : null;
+  if (remoteProblem !== null) {
+    refuse(io, json, 'worktree', {
+      id: 'worktree.pull-remote',
+      message: remoteProblem,
+      repair: null,
+      usage: USAGE,
+    });
+    // exit: worktree.pull-remote
+    return 2;
+  }
+  if (sub === 'pull' && args.values.kind !== undefined) {
+    refuse(io, json, 'worktree', { id: 'worktree.pull-flags', message: 'pull takes no --kind', repair: null, usage: USAGE });
+    // exit: worktree.pull-flags
     return 2;
   }
 
@@ -204,15 +233,25 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
   // removed has, and it runs (as up, remove and down do). A stored record that is legacy or
   // cannot be verified still refuses.
   if (standing.kind !== 'verified' && standing.kind !== 'none') {
-    refuse(io, json, 'worktree', { id: 'worktree.never-approved', message: notInForce(standing), repair: null });
-    // exit: worktree.never-approved
-    return 1;
+    // Outside dev mode the refusal stays. In dev mode the fold names the record and continues.
+    // Nothing here signs.
+    const dev = devModeState(io, { home: sources.home, team, root, now: sources.now() });
+    if (!dev.on) {
+      refuse(io, json, 'worktree', { id: 'worktree.never-approved', message: notInForce(standing), repair: null });
+      // exit: worktree.never-approved
+      return 1;
+    }
+    const store = findStore(root, sources.home);
+    const file = store === null ? '' : (readApproval(store)?.file ?? '');
+    const sentence = unverifiedRecordSentence(`${team.project}'s approval record`, file);
+    io.stderr(`team worktree: ${sentence}\n`);
   }
   const who = describeCaller(caller);
   if (sub === 'list') return listWorktrees(io, json, reading, root, dir, session, sources.home);
   // `list` is the only subcommand that arrives without a task; the gate above already returned.
   const named = task ?? '';
   if (sub === 'new') return create(io, json, sources, reading, root, dir, session, named, args.values.kind, args.values.seat, who);
+  if (sub === 'pull') return pullWorktree(io, json, sources, reading, root, dir, session, named, remoteSession ?? '', args.values.seat, who);
   return removeWorktree(io, json, sources, reading, root, dir, session, named, args.values.branch, who);
 }
 
@@ -578,6 +617,102 @@ export function removeWorktree(
   action(io, json, team, session, 'removed', `removed ${task}; the branch ${removed.branch} is kept`,
     'remove', task, removed.branch, removed.path);
   // exit: worktree.removed
+  return 0;
+}
+
+// The operator's pull: the seat that owns the worktree names the CLI, and that CLI's own pull
+// call — the profile's `session_cli.pull`, then `--session <id> --apply` — runs in the
+// worktree's folder. Nothing here commits, pushes, branches or records: the patch the CLI applies
+// is the whole result, and the worktree stays on the branch it was made with.
+async function pullWorktree(
+  io: Io, json: boolean, sources: WorktreeSources, team: TeamFile, root: string, dir: string, session: string,
+  task: string, remoteSession: string, seatName: string | undefined, who: string,
+): Promise<number> {
+  const named = taskProblem(task);
+  if (named) {
+    refuse(io, json, 'worktree', { id: 'worktree.pull-task', message: named, repair: null });
+    // exit: worktree.pull-task
+    return 1;
+  }
+  const found = findWorktree(readState(dir), task, session);
+  if (!found) {
+    refuse(io, json, 'worktree', { id: 'worktree.pull-missing', message: `no worktree named ${JSON.stringify(task)} is recorded`, repair: null });
+    // exit: worktree.pull-missing
+    return 1;
+  }
+  if (!found.record) {
+    refuse(io, json, 'worktree', {
+      id: 'worktree.pull-elsewhere',
+      message: `${JSON.stringify(task)} is recorded in session ${found.elsewhere.join(', ')}, not in ${session}; nothing was pulled`,
+      repair: null,
+    });
+    // exit: worktree.pull-elsewhere
+    return 1;
+  }
+  const record = found.record;
+  const folder = resolve(root, record.path);
+  if (!existsSync(folder)) {
+    refuse(io, json, 'worktree', {
+      id: 'worktree.pull-gone',
+      message: `${record.path} is recorded but not on disk; nothing was pulled`,
+      repair: null,
+    });
+    // exit: worktree.pull-gone
+    return 1;
+  }
+  const seat = seatName ?? record.seat;
+  const declared = seat === undefined ? undefined : team.seats.find((one) => one.name === seat);
+  const spec = declared === undefined ? null : (profileFor(declared.cli)?.sessionCli ?? null);
+  const wrongSeat = seatName !== undefined && record.seat !== undefined && record.seat !== seatName;
+  if (wrongSeat || spec === null) {
+    const why = wrongSeat
+      ? `this worktree records seat ${String(record.seat)}, not ${JSON.stringify(seatName)}`
+      : seat === undefined
+        ? `the worktree records no seat, and no --seat was given, so no CLI's pull command is known (name one with --seat, or remake it with team worktree new ${task} --seat <name>)`
+        : declared === undefined
+          ? `seat ${JSON.stringify(seat)} is not in this team file`
+          : `${declared.cli} has no session pull command in this build`;
+    refuse(io, json, 'worktree', { id: 'worktree.pull-seat', message: `${why}; nothing was pulled`, repair: null });
+    // exit: worktree.pull-seat
+    return 1;
+  }
+  const result = await pullSession({
+    spec,
+    session: remoteSession,
+    cwd: folder,
+  });
+  // The CLI's own words belong to the operator; a `--json` run keeps its document clean and
+  // carries the ending in `action_summary` instead.
+  if (!json) {
+    if (result.stdout !== '') io.stdout(result.stdout.endsWith('\n') ? result.stdout : `${result.stdout}\n`);
+    if (result.stderr !== '') io.stderr(result.stderr.endsWith('\n') ? result.stderr : `${result.stderr}\n`);
+  }
+  if (result.outcome === 'refused') {
+    logLine(dir, 'worktree pull', who, `${task}: the pull of session ${remoteSession} failed (${result.reason})`, sources.now());
+    refuse(io, json, 'worktree', { id: 'worktree.pull-failed', message: `${result.reason}; nothing was pulled`, repair: null });
+    // exit: worktree.pull-failed
+    return 1;
+  }
+  logLine(dir, 'worktree pull', who, `${task}: pulled session ${remoteSession} into ${record.path}`, sources.now());
+  const line = `remote session ${remoteSession}: pulled into ${record.path}`;
+  if (json) {
+    writeJson(io, 'team.worktree', {
+      format: 1 as const,
+      dry_run: false,
+      status: 'pulled',
+      action_summary: line,
+      project: team.project,
+      session,
+      action: 'pull',
+      task,
+      branch: record.branch,
+      path: record.path,
+      remote_session: remoteSession,
+    });
+  } else {
+    io.stdout(`${contextLine(team.project, session)}\n${line}\n`);
+  }
+  // exit: worktree.pulled
   return 0;
 }
 

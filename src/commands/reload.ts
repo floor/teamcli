@@ -48,12 +48,12 @@ import {
 } from '../dev_mode.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import type { Host } from '../launch/execute.ts';
-import { executePlan } from '../launch/execute.ts';
+import { executePlan, launchKind } from '../launch/execute.ts';
 import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
-import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
+import { installCliHooks, plannedCliHooks, refreshCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { plainLine } from '../launch/plain.ts';
-import { upPlan } from '../launch/plan.ts';
+import { registryLaunches, upPlan } from '../launch/plan.ts';
 import { recordText } from '../launch/progress.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
@@ -68,7 +68,7 @@ import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { modelDiffers, seatModel, type Running } from '../status/statusline.ts';
-import { registerEnd, registerLaunch } from '../registry/sync.ts';
+import { ensureSeatLine, registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { watchLabel } from '../watch/pane.ts';
@@ -424,6 +424,33 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     else out.stdout(`team reload: ${said}\n`);
     logLine(dir, 'reload', who, said, now());
   };
+  // A seat already running what the file declares is not relaunched, but its hook settings file
+  // is still this run's to refresh: the command a launch would install today, written over the
+  // file its process already has, with the presence binding it was launched with and the
+  // declaration time kept when its inbound word did not change. The refresh itself refuses to
+  // name a runtime copy this run would be writing from (`refreshCliHooks`), and a seat with no
+  // file gains none its running process never loaded.
+  const refreshHookFile = (): void => {
+    const refresh = refreshCliHooks(dir, session, [{
+      name: seat.name,
+      cli: seat.cli,
+      launch: seat.launch,
+      ...(seat.inbound === undefined ? {} : { inbound: seat.inbound }),
+    }], home === undefined ? undefined : { project: team.project, root, home });
+    if (refresh.refused !== undefined) {
+      sayBrief(`${seat.name}: its hook settings file was not refreshed: ${refresh.refused}`);
+      return;
+    }
+    if (refresh.failed.includes(seat.name)) {
+      sayBrief(`${seat.name}: its hook settings file was not written`);
+      return;
+    }
+    if (refresh.rewritten.includes(seat.name)) {
+      sayBrief(refresh.kept.includes(seat.name)
+        ? `${seat.name}: its hook settings file was rewritten; its declaration time stands`
+        : `${seat.name}: its hook settings file was rewritten`);
+    }
+  };
   // The general seat brief goes to the seat on every path this command reaches it: the check
   // names `team reload <seat>` as a repair, so a reload must deliver the brief even when nothing
   // else drifts. A relaunch path attributes the seat and gets a fresh delivery lifetime. The two
@@ -467,6 +494,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       }
     }
     await deliverBrief(false);
+    refreshHookFile();
     const summary = `team reload: ${seat.name} is already running what the file declares`;
     if (json) {
       writeJson(io, 'team.reload', {
@@ -494,7 +522,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   if ('held' in runLock) {
     refuse(io, json, 'reload', {
       id: 'reload.run-lock',
-      message: runLockText(runLock.held, session, dir),
+      message: runLockText(runLock.held, session, dir, runLock.startedAt),
       repair: null,
     });
     // exit: reload.run-lock
@@ -512,6 +540,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       });
       const summary = `team reload: ${seat.name}: its launch record held no model; recorded ${mentioned(shown, compared, recorded)}; it is already running what the file declares`;
       await deliverBrief(false);
+      refreshHookFile();
       if (json) {
         writeJson(io, 'team.reload', {
           format: 1 as const,
@@ -577,8 +606,11 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       }
       // herdr's own status is the last word on a screen the profile cannot read: one it reports
       // idle or done is closed without typing into it, and the advice says so. A working seat
-      // was refused above; anything else unread stays the refusal it was.
-      if (!(unreadIdle(listed.status) && (kind === 'idle' || kind === 'unknown'))) {
+      // was refused above; anything else unread stays the refusal it is. A pane scrolled back
+      // over its transcript is at its prompt behind the scroll, and this close types nothing —
+      // the pane is killed — so herdr's quiet word frees it as the unread screen it reads to a
+      // close decision, with no unread advice: the profile reads the screen, it is only scrolled.
+      if (!(unreadIdle(listed.status) && (kind === 'idle' || kind === 'unknown' || kind === 'scroll back'))) {
         refuse(io, json, 'reload', { id: 'reload.not-idle', message: `${seat.name} is not at an idle prompt; nothing closed`, repair: null });
         // exit: reload.not-idle
         return 1;
@@ -695,7 +727,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       processInfo: (current, pane) => launch.processInfo?.(current, pane) ?? null,
       paneText: (current, pane) => launch.paneText(current, pane),
       classify(current, pane, cli) {
-        return readScreen(cli, launch.paneText(current, pane) ?? undefined).kind;
+        return launchKind(readScreen(cli, launch.paneText(current, pane) ?? undefined).kind);
       },
       foreground: (current, pane) => launch.foreground(current, pane),
       shellBack: (current, pane) => launch.shellBack?.(current, pane) ?? null,
@@ -816,9 +848,10 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
           const prior = current.seats[next] ?? { stage: patch.stage };
           const { waiting: written, effort, createdWorkspace: _created, ...rest } = patch;
           const stored: SeatState = { ...prior, ...rest };
-          // The record keeps the file's own launch line, never the executed one: the state hooks'
-          // `--settings` rides on the command the pane runs, not on what the seat declared.
-          const launch_line = (next === seat.name ? seat.launch : undefined) ?? prior.launch_line;
+          // The record keeps the file's own launch line (with the profile's pinned features the
+          // launch appends), never the executed one: the state hooks' `--settings` rides on the
+          // command the pane runs, not on what the seat declared.
+          const launch_line = patch.launch_line ?? (next === seat.name ? seat.launch : undefined) ?? prior.launch_line;
           if (launch_line) stored.launch_line = launch_line;
           if (written === null) delete stored.waiting;
           else if (written) stored.waiting = written;
@@ -866,6 +899,18 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         else logLine(dir, 'reload', who, `${seat.name}: ${driftDetail}`, now());
       },
     };
+    // The roster line this relaunch needs before its CLI starts when it starts from the
+    // registry's record: the inbox registration and the server it starts resolve the seat by it,
+    // before the run's own registerLaunch writes one. A launch that names a team file reads the
+    // seat from that file, and the completed launch's own record writes the line.
+    if (home !== undefined) {
+      for (const name of registryLaunches(steps)) {
+        const declared = team.seats.find((candidate) => candidate.name === name);
+        if (declared === undefined) continue;
+        const lined = ensureSeatLine({ home, team, root, by: who, session }, declared);
+        if ('note' in lined) logLine(dir, 'reload', who, lined.note, now());
+      }
+    }
     const report = await executePlan(steps, session, host);
     if (!report.dropped.includes(seat.name)) {
       const after = readState(dir).sessions[session]?.seats[seat.name];

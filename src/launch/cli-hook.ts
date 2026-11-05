@@ -485,6 +485,62 @@ function writeSettings(path: string, text: string): boolean {
   return true;
 }
 
+/** The top-level `crossSessionInbound` word one settings text declares: null for a document
+ *  that omits it, names a value the CLI does not accept, or does not parse — the send side's
+ *  reading of the same bytes. */
+function wordIn(text: string): CrossSessionInbound | null {
+  try {
+    return inboundPolicyOf(JSON.parse(text) as unknown);
+  } catch {
+    return null;
+  }
+}
+
+/** One settings file as a refresh may rewrite it: the bytes it holds, the word it declares,
+ *  and the times the declaration stands on. Null when there is no regular file of this user's,
+ *  or it cannot be read whole — a file the refresh cannot account for is left alone. */
+function settingsBefore(path: string): {
+  text: string;
+  word: CrossSessionInbound | null;
+  mode: number;
+  atime: Date;
+  mtime: Date;
+} | null {
+  const held = lstatOrNull(path);
+  if (held === null || !held.isFile() || !mine(held) || held.size > MAX_SETTINGS_BYTES) return null;
+  let fd;
+  try {
+    fd = openSync(path, constants.O_RDONLY | NOFOLLOW);
+  } catch {
+    return null;
+  }
+  let text: string;
+  try {
+    const buffer = Buffer.alloc(held.size);
+    const read = readSync(fd, buffer, 0, buffer.length, 0);
+    if (read !== buffer.length) return null;
+    text = buffer.toString('utf8');
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
+  return { text, word: wordIn(text), mode: held.mode & 0o777, atime: held.atime, mtime: held.mtime };
+}
+
+/** Whether one path lies inside a retained daemon runtime copy: a `daemon-runtime/<64-hex>`
+ *  folder. A command naming one is the command a later install may remove, so a refresh never
+ *  writes another one, and `team check` names the files that still hold one. */
+export function namesRuntimeCopy(path: string): boolean {
+  return /(^|[\\/])daemon-runtime[\\/][0-9a-f]{64}(?=[\\/]|$)/.test(path);
+}
+
+/** This build's CLI entry, the file a hook command this process writes would name. */
+function ownEntry(): string {
+  const here = fileURLToPath(import.meta.url);
+  return join(dirname(here), '..', here.endsWith('.ts') ? 'cli.ts' : 'cli.js');
+}
+
 /** The runtime epoch the seat's current claim names, when this run has written one. A state
  *  file that cannot be read has no claim to bind: the hook then reads the claim it serves. */
 function claimEpochAt(dir: string, session: string, seat: string): string | undefined {
@@ -613,6 +669,92 @@ export function installCliHooks(
     landed[seat] = settingsPath;
   }
   return landed;
+}
+
+/** What one no-restart refresh did, per seat it looked at. A seat is in exactly one list, and a
+ *  seat with no settings file is in none: a running session never reads a file created after its
+ *  launch, and the file's own appearance would declare a time newer than its socket. */
+export type CliHookRefresh = {
+  /** Seats whose settings file was rewritten. */
+  rewritten: string[];
+  /** Seats whose file already held the text and mode this install would write. */
+  unchanged: string[];
+  /** Seats whose file was there and could not be written. */
+  failed: string[];
+  /** Rewritten seats whose previous atime and mtime were put back, because the inbound word did
+   *  not change: the declaration time still answers the send walk's staleness question. */
+  kept: string[];
+  /** Why no seat was looked at, when this run's own CLI is itself a runtime copy: writing its
+   *  path into the files would name the very copy a later install may remove. */
+  refused?: string;
+};
+
+/**
+ * Rewrites the hook settings file of a running seat without launching or closing anything: the
+ * command a seat's launch line would install today, written over the file its process already
+ * has. The seat keeps the presence binding its process was launched with (`fresh` is forced
+ * false, so no successor incarnation is minted), and a seat with no settings file is left as it
+ * is rather than gaining one its running process never loaded.
+ *
+ * A file whose top-level `crossSessionInbound` word does not change keeps its atime and mtime:
+ * the send walk compares the file's time with the seat's socket, and a rewrite that only moved
+ * command paths must not make a live session look stale (`src/send/inbound.ts`). A file that was
+ * wider than 0600 is tightened and declared again, as the writer treats it; a word that changed
+ * is a new declaration and its time advances. This file puts the times back itself because this
+ * branch's writer does not; the declaration-time lane moves the same rule into `writeSettings`.
+ */
+export function refreshCliHooks(
+  dir: string,
+  session: string,
+  seats: readonly CliHookSeat[],
+  guard?: CommandGuardContext,
+  root: string = dirname(dir),
+): CliHookRefresh {
+  const result: CliHookRefresh = { rewritten: [], unchanged: [], failed: [], kept: [] };
+  if (namesRuntimeCopy(ownEntry())) {
+    result.refused = 'this run\'s own CLI is a retained runtime copy, which a later install may remove; run the refresh from the installed team';
+    return result;
+  }
+  const planned = plannedCliHooks(dir, session, seats);
+  const prior = new Map<string, NonNullable<ReturnType<typeof settingsBefore>>>();
+  for (const [seat, path] of Object.entries(planned)) {
+    const held = settingsBefore(path);
+    if (held !== null) prior.set(seat, held);
+  }
+  // Only seats with a file are installed for: `installCliHooks` writes every seat it plans, and
+  // a file this refresh created would declare a time newer than a running seat's socket.
+  const running = seats.filter((seat) => prior.has(seat.name));
+  if (running.length === 0) return result;
+  const landed = installCliHooks(dir, session, running.map((seat) => ({ ...seat, fresh: false })), guard, root);
+  for (const seat of running) {
+    const before = prior.get(seat.name)!;
+    const path = landed[seat.name];
+    if (path === undefined) {
+      result.failed.push(seat.name);
+      continue;
+    }
+    const now = settingsBefore(path);
+    if (now === null) {
+      result.failed.push(seat.name);
+      continue;
+    }
+    if (now.text === before.text && now.mode === before.mode) {
+      result.unchanged.push(seat.name);
+      continue;
+    }
+    result.rewritten.push(seat.name);
+    if (before.mode === 0o600 && before.word === now.word) {
+      try {
+        // The link form: a name swapped for a link between the write and here has its own times
+        // set, never the target's. A failed restore leaves the new text in place.
+        lutimesSync(path, before.atime, before.mtime);
+        result.kept.push(seat.name);
+      } catch {
+        // The file still holds the new text; only the declaration time moved.
+      }
+    }
+  }
+  return result;
 }
 
 /** Clears the state file of the seats a run is about to launch: a `working` left by a killed

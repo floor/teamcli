@@ -65,7 +65,8 @@ function world(screen: Screen = { kind: 'idle' }, status = 'idle'): {
   const closed: string[] = [];
   let sent = false;
   // What the pane shows: the empty idle box before any typing, the box with the typed text
-  // after one, as the CLI renders it.
+  // after one, as the CLI renders it — and the empty box again once the Enter has been
+  // delivered, for a delivered Enter sends the text out of the box.
   let box: string | undefined = claudeBox('');
   const agents: HerdrAgent[] = [];
   const running: boolean[] = [];
@@ -73,7 +74,7 @@ function world(screen: Screen = { kind: 'idle' }, status = 'idle'): {
   const launch: DownLaunch = {
     typeText: (_session, _pane, text) => { typed.push(text); box = claudeBox(text); return true; },
     sendKey: (_session, _pane, key) => { keys.push(key); box = claudeBox(''); return true; },
-    pressEnter: () => { sent = true; return true; },
+    pressEnter: () => { sent = true; box = claudeBox(''); return true; },
     agentPanes: () => agents.map((agent) => agent.pane),
     closeWorkspace: (_session, workspace) => { closed.push(workspace); return true; },
     stopSession: () => false,
@@ -604,6 +605,63 @@ describe('team remove', () => {
     const io = testIo(dir, lead);
     expect(await runRemove(['worker'], io, made.sources)).toBe(0);
     expect(made.typed).toEqual([]);
+    expect(readFileSync(file, 'utf8')).not.toContain('name: worker');
+  });
+
+  test('an antigravity seat takes its own user-level inbox entry with it', async () => {
+    // The entry is the name the launch registered, from the seat's own profile route: the
+    // removal is asked for that seat and that session, and nothing else is named.
+    writeFileSync(file, FILE.replace(
+      `    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+  # stays above lead`,
+      `    cli: antigravity
+    vendor: google
+    model: Gemini Flash
+    version: "3.8"
+    launch: agy
+  # stays above lead`,
+    ));
+    approveCurrent();
+    const made = world();
+    const removals: { cli: string; seat: string; session: string }[] = [];
+    made.sources.inboxRemove = (input) => {
+      removals.push(input);
+      return { ok: true, removed: true };
+    };
+    const io = testIo(dir, owner);
+    expect(await runRemove(['worker', '--file', file], io, made.sources)).toBe(0);
+    expect(removals).toEqual([{ cli: 'antigravity', seat: 'worker', session: 'acme' }]);
+    expect(io.err).toBe('');
+    expect(readFileSync(file, 'utf8')).not.toContain('name: worker');
+  });
+
+  test('an inbox entry that cannot be removed is said, and the seat still goes', async () => {
+    // Cleanup never fails the removal: the seat's record and the file edit are done, and the
+    // line names what was left in the CLI's own store.
+    writeFileSync(file, FILE.replace(
+      `    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+  # stays above lead`,
+      `    cli: antigravity
+    vendor: google
+    model: Gemini Flash
+    version: "3.8"
+    launch: agy
+  # stays above lead`,
+    ));
+    approveCurrent();
+    const made = world();
+    made.sources.inboxRemove = () => ({ ok: false, reason: '`agy mcp remove` exited 2' });
+    const io = testIo(dir, owner);
+    expect(await runRemove(['worker', '--file', file], io, made.sources)).toBe(0);
+    expect(io.err).toContain('team remove: worker: its team inbox entry was not removed: `agy mcp remove` exited 2\n');
     expect(readFileSync(file, 'utf8')).not.toContain('name: worker');
   });
 
@@ -1584,7 +1642,7 @@ describe('team remove, the session mutator lock', () => {
     const io = testIo(dir, owner);
     expect(await runRemove(['worker', '--file', file], io, made.sources)).toBe(1);
     expect(io.err).toBe(
-      `team remove: another session-mutating run is holding session acme (pid ${process.pid}); try again when it is done\n`,
+      `team remove: another session-mutating run is holding session acme (pid ${process.pid}, no start time recorded); try again when it is done\n`,
     );
     expect(io.out).toBe('');
     expect(made.typed).toEqual([]);

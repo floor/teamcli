@@ -66,5 +66,7 @@ Put the change's own findings first and pre-existing bugs after them.
   new evidence.
 - **Every finding is answered before merge**: fixed in the change, or declined with a reason in
   the pull request. Silence is not an answer, and neither is a thumbs-up with no words.
-- **A review is not an approval without a `bun run ci` on macOS on the exact head**, quoted with
-  its exit status and final line, as [CONTRIBUTING.md](CONTRIBUTING.md) sets out.
+- **On the external and release path, a review is not an approval without a `bun run ci` on macOS
+  on the exact head**, quoted with its exit status and final line, as
+  [CONTRIBUTING.md](CONTRIBUTING.md) sets out. The internal cycle is typecheck plus the touched
+  tests per merge.

@@ -3,6 +3,7 @@
 // `team check` and the daemon's own health answer read it through this module.
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { pidAlive } from '../state.ts';
+import { DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
 import type { HostedWatchState } from '../watch/hosted.ts';
 import { daemonStatePath, machineConfigDir } from './paths.ts';
 
@@ -72,6 +73,18 @@ export type DaemonRootPresenceHealth = {
  */
 export type DaemonRootPresence = { state: 'pending'; why: string } | DaemonRootPresenceHealth;
 
+/**
+ * How far the route's bus first reconcile pass has got. A daemon-hosted bus serves as soon as its
+ * listener is bound and answering, while the first pass over the store still runs; this is what
+ * keeps a reader from reading "serving" as "caught up". While the pass runs, `scanned` is live;
+ * once it settles, `scanned` is the pass total and `doneAt` is the instant it settled, and
+ * `errors` says whether the walk finished or stopped on a failure. A pass a closing bus aborted
+ * settles nothing and is never recorded here.
+ */
+export type DaemonRootFirstPass =
+  | { running: true; scanned: number; doneAt: null }
+  | { running: false; scanned: number; doneAt: string; errors: boolean };
+
 /** One checkout this process hosts, recorded so a later `team daemon status` can tell a running
  *  daemon from a running daemon that silently hosts nothing for a checkout. */
 export type DaemonRootState = {
@@ -81,7 +94,15 @@ export type DaemonRootState = {
    *  reader can see the root registered before its first attempt finishes. */
   send: 'starting' | 'serving' | 'already-running' | 'failed';
   bus: 'starting' | 'serving' | 'failed';
+  /** A row-level reason, for a failure that kept the whole route from being hosted (a team file
+   *  that cannot be read, a send start that threw). An endpoint's own failure reason lives in
+   *  `sendWhy` or `busWhy`, so one endpoint's recovery never erases the other's reason; a reader
+   *  falls back to this field, so records written before the split still show their reason. */
   why: string | null;
+  /** Why the send endpoint last failed. Cleared when it serves again; absent in older records. */
+  sendWhy?: string | null;
+  /** Why the bus endpoint last failed. Cleared when it serves again; absent in older records. */
+  busWhy?: string | null;
   /** When the endpoint was last marked failed. The age a reader prints is measured from this
    *  instant; an answer clears it. */
   sendFailedAt?: string | null;
@@ -100,6 +121,58 @@ export type DaemonRootState = {
    * answer, whose only proof is `state: 'serving'` with `healthy: true`.
    */
   presence?: DaemonRootPresence;
+  /**
+   * The bus's first pass over the route's store, present once this daemon started a bus that has
+   * one to report. A reader prints it beside `bus: serving` so "bound and answering" is never
+   * read as "caught up". Display data, not a hosting fact: a malformed one is left out.
+   */
+  firstPass?: DaemonRootFirstPass;
+  /**
+   * Where the route's heavy chores run, and how the child that runs them is doing. Present only
+   * when the daemon was started with a chores seam; a route without the field was never started
+   * with one, and its silence is not a failed child. `inline` is the rollback: the work runs on
+   * the daemon's own loop exactly as before the isolation.
+   */
+  chores?: DaemonChoresState;
+};
+
+/**
+ * One route's chores record: the mode in force, what the supervised child is doing, the resident
+ * size its own heartbeat reported, and the last completed pass. `missed` counts heartbeats the
+ * daemon has not heard, capped at the policy's own kill threshold; a record at that cap is about
+ * to be ended and restarted. The count starts once the child has been read beating twice since it
+ * started: before that its start is judged by a deadline instead and nothing is counted as
+ * missed. This is display evidence for an operator, never a hosting fact.
+ */
+export type DaemonChoresState = {
+  mode: 'per-root' | 'shared' | 'inline';
+  state: 'starting' | 'ok' | 'late' | 'restarting' | 'inline' | 'stopped';
+  pid: number | null;
+  startedAt: string | null;
+  heartbeatAt: string | null;
+  rssBytes: number | null;
+  /** What the child's last heartbeat said it was doing; null when it said nothing. */
+  busy: string | null;
+  /** How many times the supervisor has replaced this child since the daemon started. */
+  restarts: number;
+  missed: number;
+  /** The last completed pass's own clock, and the notes it carried. */
+  lastPassAt: string | null;
+  lastPass: string[] | null;
+  /** The last chore this root's child finished: the name its own frame carried, the instant it
+   *  reported, and how long it took. Null until the child reports one and after a replacement
+   *  starts, because a cold process has run nothing for the root yet. */
+  lastChore: { name: string; at: string; ms: number | null } | null;
+  /** The last presence pass this root's child answered: when, how long it took, and how many
+   *  declared seats it proved or missed. Null when no accepted pass has been answered. */
+  presence: { at: string; ms: number | null; proved: number; missed: number } | null;
+  /** The child's own marker-cache reading at its latest heartbeat: files read afresh, stamps
+   *  reused, and stamps held now. A shared child keeps one cache, so its roots' rows carry the
+   *  same reading. Null when the child has not reported one. */
+  markerCache: { read: number; reused: number; cached: number } | null;
+  /** While `state` says `restarting`, when the next start is due. */
+  nextStartAt: string | null;
+  why: string | null;
 };
 
 export type DaemonState = {
@@ -116,6 +189,10 @@ export type DaemonState = {
    *  changed neither. Older records carry no field and read as null. */
   gitHead?: string | null;
   heartbeatAt: string;
+  /** The whole seconds the `daemon.heartbeat` word resolved to when this record was written:
+   *  the beat the loop actually runs. A daemon on an injected test beat, and every older record,
+   *  carry no field and read as null. */
+  heartbeatSeconds?: number | null;
   socket: string;
   features: DaemonFeatures;
   stuck: DaemonStuckRequest[];
@@ -184,6 +261,13 @@ function stateOf(record: Record<string, unknown>): DaemonState | null {
     version: record.version as string,
     gitHead: typeof record.gitHead === 'string' && record.gitHead !== '' ? record.gitHead : null,
     heartbeatAt: record.heartbeatAt as string,
+    heartbeatSeconds:
+      typeof record.heartbeatSeconds === 'number'
+        && Number.isInteger(record.heartbeatSeconds)
+        && record.heartbeatSeconds >= DAEMON_HEARTBEAT_SECONDS.min
+        && record.heartbeatSeconds <= DAEMON_HEARTBEAT_SECONDS.max
+        ? record.heartbeatSeconds
+        : null,
     socket: record.socket as string,
     features: { broker: (features as Record<string, unknown>).broker as DaemonFeatures['broker'] },
     stuck: requests,
@@ -206,22 +290,32 @@ function rootsOf(raw: unknown): DaemonRootState[] | null {
     if (!['starting', 'serving', 'already-running', 'failed'].includes(entry.send as string)) return null;
     if (!['starting', 'serving', 'failed'].includes(entry.bus as string)) return null;
     if (!(entry.why === null || typeof entry.why === 'string')) return null;
+    for (const key of ['sendWhy', 'busWhy'] as const) {
+      const value = entry[key];
+      if (!(value === undefined || value === null || typeof value === 'string')) return null;
+    }
     for (const key of ['sendFailedAt', 'busFailedAt'] as const) {
       const value = entry[key];
       if (!(value === undefined || value === null || typeof value === 'string')) return null;
     }
     const watch = watchOf(entry.watch);
     const presence = presenceOf(entry.presence);
+    const firstPass = firstPassOf(entry.firstPass);
+    const chores = choresOf(entry.chores);
     roots.push({
       root: entry.root,
       team: entry.team as string | null,
       send: entry.send as DaemonRootState['send'],
       bus: entry.bus as DaemonRootState['bus'],
       why: entry.why as string | null,
+      ...(entry.sendWhy === undefined ? {} : { sendWhy: entry.sendWhy as string | null }),
+      ...(entry.busWhy === undefined ? {} : { busWhy: entry.busWhy as string | null }),
       ...(entry.sendFailedAt === undefined ? {} : { sendFailedAt: entry.sendFailedAt as string | null }),
       ...(entry.busFailedAt === undefined ? {} : { busFailedAt: entry.busFailedAt as string | null }),
       ...(watch === null ? {} : { watch }),
       ...(presence === null ? {} : { presence }),
+      ...(firstPass === null ? {} : { firstPass }),
+      ...(chores === null ? {} : { chores }),
     });
   }
   return roots;
@@ -269,6 +363,26 @@ function positiveInt(value: unknown): boolean {
   return typeof value === 'number' && Number.isInteger(value) && value > 0;
 }
 
+/** A bus first-pass record is display data, not a hosting fact: a malformed one is left out
+ *  rather than making the whole daemon record unreadable. A running record carries no settle
+ *  instant, and a settled one must name it and say whether the walk finished or stopped on a
+ *  failure — a "done" without either could not be printed honestly, so it is left out too. */
+function firstPassOf(raw: unknown): DaemonRootFirstPass | null {
+  if (raw === undefined) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const entry = raw as Record<string, unknown>;
+  if (typeof entry.running !== 'boolean') return null;
+  if (!Number.isInteger(entry.scanned) || (entry.scanned as number) < 0) return null;
+  if (entry.running) {
+    // A running pass carries no settle instant; one that names a time is self-contradicting.
+    if (!(entry.doneAt === null || entry.doneAt === undefined)) return null;
+    return { running: true, scanned: entry.scanned as number, doneAt: null };
+  }
+  if (typeof entry.doneAt !== 'string' || entry.doneAt === '') return null;
+  if (typeof entry.errors !== 'boolean') return null;
+  return { running: false, scanned: entry.scanned as number, doneAt: entry.doneAt, errors: entry.errors };
+}
+
 /** A presence lifecycle record is display evidence for an operator, not a hosting fact: a
  *  malformed one is left out rather than making the whole daemon record unreadable. */
 function presenceOf(raw: unknown): DaemonRootState['presence'] | null {
@@ -277,6 +391,115 @@ function presenceOf(raw: unknown): DaemonRootState['presence'] | null {
   if (entry.state !== 'pending') return null;
   if (typeof entry.why !== 'string' || entry.why === '') return null;
   return { state: 'pending', why: entry.why };
+}
+
+/** A field a chores row must not carry in a form this reader cannot trust. */
+const INVALID_CHORES_FIELD = Symbol('invalid chores field');
+
+/**
+ * One chores row's last-chore reading, or null when the record predates the field. A present
+ * field with a name, an instant and a whole non-negative duration is read whole; anything else
+ * makes the row unreadable rather than shown as a guess.
+ */
+function choreOf(raw: unknown): DaemonChoresState['lastChore'] | typeof INVALID_CHORES_FIELD {
+  if (raw === undefined || raw === null) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return INVALID_CHORES_FIELD;
+  const entry = raw as Record<string, unknown>;
+  if (typeof entry.name !== 'string' || entry.name === '') return INVALID_CHORES_FIELD;
+  if (typeof entry.at !== 'string' || entry.at === '') return INVALID_CHORES_FIELD;
+  if (!(entry.ms === null || (typeof entry.ms === 'number' && Number.isFinite(entry.ms) && entry.ms >= 0))) {
+    return INVALID_CHORES_FIELD;
+  }
+  return { name: entry.name, at: entry.at, ms: entry.ms as number | null };
+}
+
+/** One chores row's last presence answer, or null when the record predates the field. The seat
+ *  counts are whole numbers, and a row that claims more proved than were declared is unreadable. */
+function chorePresenceOf(raw: unknown): DaemonChoresState['presence'] | typeof INVALID_CHORES_FIELD {
+  if (raw === undefined || raw === null) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return INVALID_CHORES_FIELD;
+  const entry = raw as Record<string, unknown>;
+  if (typeof entry.at !== 'string' || entry.at === '') return INVALID_CHORES_FIELD;
+  if (!(entry.ms === null || (typeof entry.ms === 'number' && Number.isFinite(entry.ms) && entry.ms >= 0))) {
+    return INVALID_CHORES_FIELD;
+  }
+  if (!Number.isInteger(entry.proved) || (entry.proved as number) < 0) return INVALID_CHORES_FIELD;
+  if (!Number.isInteger(entry.missed) || (entry.missed as number) < 0) return INVALID_CHORES_FIELD;
+  return {
+    at: entry.at,
+    ms: entry.ms as number | null,
+    proved: entry.proved as number,
+    missed: entry.missed as number,
+  };
+}
+
+/** One chores row's marker-cache reading, or null when the child has not reported one. Every
+ *  count is a whole number that cannot be negative; a present malformed reading drops the row. */
+function choreCacheOf(raw: unknown): DaemonChoresState['markerCache'] | typeof INVALID_CHORES_FIELD {
+  if (raw === undefined || raw === null) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return INVALID_CHORES_FIELD;
+  const entry = raw as Record<string, unknown>;
+  for (const key of ['read', 'reused', 'cached'] as const) {
+    if (!Number.isInteger(entry[key]) || (entry[key] as number) < 0) return INVALID_CHORES_FIELD;
+  }
+  return {
+    read: entry.read as number,
+    reused: entry.reused as number,
+    cached: entry.cached as number,
+  };
+}
+
+/**
+ * A chores record is display data, not a hosting fact: a malformed one is left out rather than
+ * making the whole daemon record unreadable, and an absent one means the route was not started
+ * with a chores seam.
+ */
+function choresOf(raw: unknown): DaemonChoresState | null {
+  if (raw === undefined || raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const entry = raw as Record<string, unknown>;
+  if (!['per-root', 'shared', 'inline'].includes(entry.mode as string)) return null;
+  if (!['starting', 'ok', 'late', 'restarting', 'inline', 'stopped'].includes(entry.state as string)) return null;
+  if (!(entry.pid === null || positiveInt(entry.pid))) return null;
+  for (const key of ['startedAt', 'heartbeatAt', 'nextStartAt'] as const) {
+    if (!(entry[key] === null || typeof entry[key] === 'string')) return null;
+  }
+  if (!(entry.rssBytes === null || (typeof entry.rssBytes === 'number' && Number.isFinite(entry.rssBytes) && entry.rssBytes >= 0))) {
+    return null;
+  }
+  if (!(entry.busy === null || typeof entry.busy === 'string')) return null;
+  if (!Number.isInteger(entry.restarts) || (entry.restarts as number) < 0) return null;
+  if (!Number.isInteger(entry.missed) || (entry.missed as number) < 0) return null;
+  if (!(entry.lastPassAt === null || typeof entry.lastPassAt === 'string')) return null;
+  if (!(entry.lastPass === null || (Array.isArray(entry.lastPass) && entry.lastPass.every((note) => typeof note === 'string')))) {
+    return null;
+  }
+  if (!(entry.why === null || typeof entry.why === 'string')) return null;
+  // The step-5 readings are absent from a record written before them, which reads as "none
+  // reported"; a present field in a form this reader cannot trust drops the row.
+  const lastChore = choreOf(entry.lastChore);
+  const presence = chorePresenceOf(entry.presence);
+  const markerCache = choreCacheOf(entry.markerCache);
+  if (lastChore === INVALID_CHORES_FIELD || presence === INVALID_CHORES_FIELD || markerCache === INVALID_CHORES_FIELD) {
+    return null;
+  }
+  return {
+    mode: entry.mode as DaemonChoresState['mode'],
+    state: entry.state as DaemonChoresState['state'],
+    pid: entry.pid as number | null,
+    startedAt: entry.startedAt as string | null,
+    heartbeatAt: entry.heartbeatAt as string | null,
+    rssBytes: entry.rssBytes as number | null,
+    busy: entry.busy as string | null,
+    restarts: entry.restarts as number,
+    missed: entry.missed as number,
+    lastPassAt: entry.lastPassAt as string | null,
+    lastPass: entry.lastPass === null ? null : (entry.lastPass as string[]),
+    lastChore,
+    presence,
+    markerCache,
+    nextStartAt: entry.nextStartAt as string | null,
+    why: entry.why as string | null,
+  };
 }
 
 /** Writes the state record atomically, 0600, in a 0700 machine folder. */

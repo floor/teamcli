@@ -4,6 +4,7 @@ import { basename, dirname, resolve } from 'node:path';
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, logTag, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
+import { devModeLevelNote, devModeState, leadGatesAdmitOperator } from '../dev_mode.ts';
 import { canonicalLanding, folderOf, listFolder } from '../file/landing.ts';
 import { canonicalTeam, readTeamConfig } from '../file/team-config.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
@@ -241,8 +242,17 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
 
   const refused = (reason: Refusal): number => refuse(io, json, dir, who, seatName, host, reason, dialog);
 
-  const callerProblem = callerProblemOf(caller, team, seatName, standingOf(dir, session, caller));
-  if (callerProblem) return refused(callerProblem);
+  const standingAt = standingOf(dir, session, caller);
+  const callerProblem = callerProblemOf(caller, team, seatName, standingAt);
+  if (callerProblem) {
+    // Ruling D5 (owner answer A3): the file's own operator place answers too, while dev mode is
+    // on and the `lead-gates` policy includes it — with the same placement proof the
+    // orchestrator shows, its own warning, and its own audit line beside the answer's. Every
+    // other caller keeps the refusal, word for word.
+    const admitted = operatorAnswerAdmission(io, host, dir, root, team, caller, standingAt);
+    if (admitted === null) return refused(callerProblem);
+    io.stderr(`${admitted}\n`);
+  }
   // A pane the file marks as a human's never takes a dialog key or a rules line: this command
   // presses one and types the other, so it refuses before the seat's lock, state or screen is
   // read. The mark is the file's, the last word over any record a launch left behind.
@@ -493,6 +503,37 @@ function callerProblemOf(caller: Caller, team: TeamFile, seat: string, at: SeatS
   if (caller.kind === 'unplaced') return refusedClass('caller', caller.reason);
   if (caller.kind === 'pane') return refusedClass('caller', describeCaller(caller));
   return refusedClass('caller', `${seat}: only the owner, or the orchestrator from its own seat, can answer`);
+}
+
+/**
+ * The operator's admission to `team answer` (ruling D5, owner answer A3): while dev mode is `on`
+ * for the caller's place and the `lead-gates` policy reads `lead+operator` on a chain that
+ * loads, the file's own `operator:` seat — placed on the pane the judged session records for
+ * it, the same proof the orchestrator shows — may answer. The admission returns its warning
+ * line, printed to stderr by the caller, and writes its own audit line through the one sink
+ * every command logs through; the answered line `finish` writes beside it names the same caller.
+ * Everything else — an operator on another pane, in another session, of another team, a chain
+ * that cannot be read, the `lead` default, dev mode off — returns null and the refusal stands.
+ * A seat spelled both `operator:` and the lead is the lead, and never reaches here.
+ */
+function operatorAnswerAdmission(
+  io: Io,
+  host: AnswerHost,
+  dir: string,
+  root: string,
+  team: TeamFile,
+  caller: Caller,
+  at: SeatStanding,
+): string | null {
+  if (caller.kind !== 'seat' || team.operator === team.orchestrator) return null;
+  if (callerVerdict(caller, team.operator, at).kind !== 'ok') return null;
+  const now = host.now();
+  const state = devModeState(io, { home: host.home, team, root, now });
+  if (!state.on) return null;
+  if (!leadGatesAdmitOperator(io, { home: host.home, team, root, now })) return null;
+  const warning = `warning: only the owner, or the orchestrator from its own seat, can answer; dev mode continues${devModeLevelNote(state)}`;
+  logLine(dir, 'answer', logTag(caller), `${warning}; admitted as operator`, now);
+  return warning;
 }
 
 /**

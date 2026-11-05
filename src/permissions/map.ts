@@ -105,6 +105,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-or-leads',
       why: 'the `start` row for a running seat, as `restart`: closing and relaunching one seat is the same act',
     },
+    order: {
+      kind: 'owner-or-leads',
+      why: 'the `restart` row per out-of-order seat: reordering the sidebar closes and relaunches seats, one `restart` each',
+    },
     add: {
       kind: 'owner-only',
       why: 'adding a seat is the owner\'s in 0.5.0, where no `agree` or `grant` holders stand',
@@ -206,6 +210,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-only',
       why: 'removing the user service unit is the owner\'s act; the owner\'s dev-mode admission for a placed lead is the one other way',
     },
+    'daemon:chores': {
+      kind: 'owner-only',
+      why: 'the hidden child start is the daemon\'s own act: the daemon starts its chores children through their own program entry, and this verb is the same start with the whole command table loaded, so it runs only from the daemon\'s one-use token — never from a seat or a pane, and the owner\'s terminal is the one interactive caller the row admits while the token still decides inside',
+    },
     client: {
       kind: 'any-caller',
       why: 'its one verb writes a fresh app key pair and reads no team file, seat or terminal: the key is the caller\'s own, and only the owner\'s signed grant makes it authoritative',
@@ -296,7 +304,7 @@ function buildGates(): Record<string, Gate> {
     },
     mcp: {
       kind: 'any-caller',
-      why: 'status and doctor write nothing and ask for no caller; serve is the launch line\'s own invocation for a declared seat and asks for none either',
+      why: 'status and doctor write nothing and ask for no caller; serve is the launch line\'s own invocation for a declared seat, and its own row says who it admits',
     },
     pause: {
       kind: 'team-pause',
@@ -417,6 +425,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-only',
       why: 'the tempo word is the owner\'s, from a terminal outside herdr',
     },
+    trace: {
+      kind: 'seat-record',
+      why: 'a trace reads the team\'s own verified event log and changes nothing: any seat with a registry record reads one message\'s steps, as it reads the Runtime\'s read surfaces',
+    },
     unlock: {
       kind: 'any-caller',
       why: 'a lock is anyone\'s to take, and its release is the holder\'s alone: the caller the holder file names releases it, and anyone else is shown the holder',
@@ -443,8 +455,8 @@ function buildGates(): Record<string, Gate> {
       why: 'the report writes nothing and asks for no caller',
     },
     'mcp:serve': {
-      kind: 'any-caller',
-      why: 'the launch line names its seat and session; the server reads and receipts only that seat\'s inbox, and asks for no caller',
+      kind: 'seat-only',
+      why: 'the launch line starts it for its own seat: the process it starts must place as the seat --seat names, on the pane the state records for it in the team\'s own session, and never the owner; the seat\'s current claim, when there is one, must be the --epoch the server carries',
     },
     'mcp:status': {
       kind: 'any-caller',
@@ -475,6 +487,14 @@ function buildGates(): Record<string, Gate> {
     'agents:prune': {
       kind: 'any-caller',
       why: 'the only verb: the listing changes nothing and is any caller\'s, and --apply retires the records it lists and is the owner\'s, from a terminal outside herdr',
+    },
+    fallback: {
+      kind: 'any-caller',
+      why: 'the listing reads the project\'s fallback store and the signed retention word and changes nothing, so any caller reads it; --apply retires finished episodes and reclaims stale lock folders, and that write is the owner\'s, from a terminal outside herdr',
+    },
+    'fallback:prune': {
+      kind: 'any-caller',
+      why: 'the only verb: the listing changes nothing and is any caller\'s, and --apply retires the listed episodes and is the owner\'s, from a terminal outside herdr',
     },
     batch: {
       kind: 'any-caller',
@@ -562,6 +582,10 @@ function buildGates(): Record<string, Gate> {
     'worktree:new': {
       kind: 'team-change',
       why: 'the owner, the orchestrator\'s seat or the operator\'s seat creates a worktree; --session and --file are the owner\'s',
+    },
+    'worktree:pull': {
+      kind: 'team-change',
+      why: 'the owner, the orchestrator\'s seat or the operator\'s seat pulls a remote session\'s result into a worktree; --session and --file are the owner\'s',
     },
     'worktree:remove': {
       kind: 'team-change',

@@ -39,7 +39,8 @@ describe('Cursor launch and captured screens', () => {
     expect(versionVerdict('2026.10.14-0f9edde', cursor.tested)).toBe('tested');
     expect(versionVerdict('2026.10.16-e3cb207', cursor.tested)).toBe('tested');
     expect(versionVerdict('2026.10.19-6bbf2c4', cursor.tested)).toBe('tested');
-    expect(versionVerdict('2026.10.20', cursor.tested)).toBe('newer');
+    expect(versionVerdict('2026.10.22-27dcf5f', cursor.tested)).toBe('tested');
+    expect(versionVerdict('2026.10.23', cursor.tested)).toBe('newer');
     expect(versionVerdict('2026.09.30', cursor.tested)).toBe('older');
   });
 
@@ -63,7 +64,7 @@ describe('Cursor launch and captured screens', () => {
     expect(readScreen('cursor', current('permission')).kind).toBe('permission');
     expect(readScreen('cursor', current('exit')).kind).toBe('unknown');
     // The folder is the profile's ceiling, and the composer's status row is its model.
-    expect(profileFor('cursor')?.tested.to).toBe('2026.10.19');
+    expect(profileFor('cursor')?.tested.to).toBe('2026.10.22');
     expect(runningModel('cursor', current('idle'))).toEqual({ model: 'Grok', version: '4.7' });
   });
 
@@ -151,6 +152,44 @@ describe('Cursor launch and captured screens', () => {
     // The same dialog over the full ready frame reads idle: the status row is in its place,
     // the trust rule's none_after sees the composer, and the dialog is answered, not live.
     expect(readScreen('cursor', dialog.join('\n') + '\n' + ready).kind).toBe('idle');
+  });
+
+  test('the idle-after-edit frame reads idle: one edited file is the same status token', () => {
+    const after = readFileSync(new URL('../fixtures/cursor/2026.10.22/idle-after-edit.txt', import.meta.url), 'utf8');
+    const row = after.split('\n').find((line) => /^ {2}Grok /.test(line))?.trimEnd() ?? '';
+    // The captured singular `· 1 file edited`, in its bordered frame and its place under it.
+    expect(row).toContain('· 1 file edited');
+    expect(readScreen('cursor', after).kind).toBe('idle');
+    expect(classify('cursor', after.split('\n')).kind).toBe('idle');
+    expect(classifyComposer('cursor', after.split('\n')).kind).toBe('idle');
+    expect(statusRow('cursor', after)).toBe(row);
+    expect(runningModel('cursor', after)).toEqual({ model: 'Grok', version: '4.7' });
+    // Any count is the same token, singular or plural, on every family.
+    const line = (text: string) => `  ${text}${' '.repeat(24)}Run Everything`;
+    expect(statusOnLine('cursor', line('Gemini 4 Argon High · 93.8% · 1 file edited'))).toEqual({ model: 'Gemini Argon', version: '4' });
+    expect(statusOnLine('cursor', line('GPT-5.6 Sol 272K High · 0 file edited'))).toEqual({ model: 'GPT Sol', version: '5.6' });
+    expect(statusOnLine('cursor', line('Composer 2.5 · 12 files edited'))).toEqual({ model: 'Composer', version: '2.5' });
+    // A count that is not a closed digit run is still refused.
+    expect(statusOnLine('cursor', line('Composer 2.5 · 12. file edited'))).toBeNull();
+  });
+
+  test('the edited-file row leaves working and unsent exactly as they were', () => {
+    const after = readFileSync(new URL('../fixtures/cursor/2026.10.22/idle-after-edit.txt', import.meta.url), 'utf8');
+    // The captured running frame with the singular row: the turn still reads working.
+    const working = readFileSync(new URL('../fixtures/cursor/2026.10.22/working.txt', import.meta.url), 'utf8')
+      .replace('Gemini 4 Argon High', 'Grok 4.7 256K High · 33.7% · 1 file edited');
+    expect(readScreen('cursor', working).kind).toBe('working');
+    // The quiet follow-up queue carries the row as its own chrome, never as typed text.
+    const queue = readFileSync(new URL('../fixtures/cursor/2026.10.01/follow-up-queue-hint.txt', import.meta.url), 'utf8')
+      .split('\n')
+      .filter((line) => !/^\s*[⠀-⣿]/.test(line));
+    const at = queue.findIndex((line) => /^ {2}Grok /.test(line));
+    queue[at] = '  Grok 4.7 256K High · 33.7% · 1 file edited  Run Everything';
+    expect(readScreen('cursor', queue.join('\n')).kind).toBe('working');
+    // A person's own text in the box still reads unsent, never idle.
+    const typed = after.replace('  → Add a follow-up', '  → a sentence of my own');
+    expect(readScreen('cursor', typed).kind).toBe('unsent');
+    expect(classifyComposer('cursor', typed.split('\n')).kind).toBe('unsent');
   });
 
   test.each([

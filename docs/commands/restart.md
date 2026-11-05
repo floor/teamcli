@@ -29,9 +29,32 @@ refused, never replaced or followed — [`team brief rollout --apply`](brief.md)
 delivery at the claim's next attempt. A delivery that cannot be written is said and logged, and
 the restart goes on; [`team check`](check.md) names the seat.
 
+## After a restore
+
+The team a restart reads is proven by one of three authorities, in order: the team this session
+was launched from, when the record names one; the team this folder holds; and the team the
+registry records for this session. Only when none of them declares the seat is it refused as
+undeclared. A fallback says so once, naming the place it read:
+
+    note: <seat> is not in the team this session was launched from; reading the team this folder holds (<path>)
+    note: <seat> is not in the team this session was launched from; reading the team registered for session <session> (<root>)
+
+The note is on stderr in a real run, `! ` on stdout in a dry run, and `notes` in `--json`. A
+`--file` names one file and never falls back; a team that fails to load keeps the configuration
+refusal it always gave. For the registry authority, a `--session` must be carried by exactly one
+record: two records carrying it prove nothing and the seat is refused as before, while a lone
+record that cannot be read keeps the load refusal. With no session to name, the caller's own
+placement narrows the candidates, and the record alone never picks a team.
+
+A seat the terminal host restored is re-tied by [`team up`](up.md#a-seat-the-terminal-host-restored),
+not restarted; [`team check`](check.md#seats-the-terminal-host-restored) names that repair for
+the panes it finds. A pane whose name the host cleared is not restart's to take: restart treats a
+restored process as the same seat only while the host still names the seat on its recorded pane,
+and `--abandon` replaces what is in that pane only under the same name.
+
 ## Synopsis
 
-    team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>] [--json]
+    team restart <seat> [--abandon] [--fresh] [--dry-run] [--session <name>] [--file <path>] [--json]
     team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
 
 ## Flags
@@ -39,6 +62,7 @@ the restart goes on; [`team check`](check.md) names the seat.
 | Flag | Value | Effect |
 | --- | --- | --- |
 | `--abandon` | — | close the workspace of a stuck seat without typing into its pane, and replace a `replaced` pane herdr still names as the seat; a seat caller cannot abandon a `working` seat or a lead seat |
+| `--fresh` | — | start a new conversation instead of resuming the recorded one; a launch line that itself names a conversation is refused, and a seat mid-turn is left as it is |
 | `--dry-run` | — | check the seat and print the stop and launch plan without touching the session |
 | `--session` | `<name>` | the herdr session, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's alone |
@@ -54,7 +78,7 @@ A client with no terminal that the owner signed a **manager** bundle grant for (
 one team with `team restart <seat> --client <grant-file> --key <client-key>`. The grant is verified whole before
 any gate, and again under the grant lock before the first effect; it must carry `restart` and name exactly this
 team. The run is the second door past the placement and who-may-run-it gates, never the owner's: `--abandon`,
-`--file` and `--session` are refused with `--client` (exit 2), and the run is logged as
+`--fresh`, `--file` and `--session` are refused with `--client` (exit 2), and the run is logged as
 `client-restart-authorized: …`. A refusal is `restart.client-refused` (exit 1). Every other refusal of a restart
 (a seat that is not declared, signed off, working, a human's pane) stands.
 
@@ -65,11 +89,21 @@ team. The run is the second door past the placement and who-may-run-it gates, ne
 | the owner | run it, from a terminal outside herdr; `--session` and `--file` are the owner's own |
 | a run with no terminal | nothing: ``team restart: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane`` |
 | the orchestrator's seat — and any seat the record marks a lead: the map's `leads` | restart another declared seat; never its own recorded pane, never `--abandon` on the orchestrator's or the operator's seat, and never `--abandon` on a `working` seat |
+| the entity's main orchestrator: the lead seat of the team whose project is the entity itself | restart any declared seat of the entity's teams, as that team's own lead does — the proof is its head team's record, live file and recorded pane, never its seat name; it still never restarts a seat on the pane this call stands on |
 
 A seat the record stops (`stopped: true`, as `team remove --keep` leaves one) is signed off: `team up` keeps
-leaving it out, and the owner or a `leads` seat of that seat's own team brings it back with `team restart
-<seat>`, which clears the mark in the same write that records the launch, then relaunches it. A launch that
-does not reach ready puts the mark back, so a failed restart leaves the seat stopped.
+leaving it out, and the owner, a `leads` seat of that seat's own team, or the entity's main orchestrator
+standing as that team's lead brings it back with `team restart <seat>`, which clears the mark in the same
+write that records the launch, then relaunches it. A launch that does not reach ready puts the mark back, so
+a failed restart leaves the seat stopped.
+
+The main orchestrator's proof is read whole from its head team's own records: that team's registry record
+must name the entity as both its project and its entity, its live file must still name that entity and
+resolve its lead — the legacy `coordinator:` key or `leads: true` on the seat, either spelling — and the
+caller must be placed on that lead's recorded pane in that team's own session. A head team whose live file
+cannot be read, a record naming another entity, or a caller the placement does not put on that recorded pane
+proves nothing, and the run is judged by this team's map alone. This proof never falls back to a roster
+`leads` mark: send admission accepts one, a restart's reach does not.
 
 ## Output and exit codes
 
@@ -165,20 +199,28 @@ launch line — Claude Code as `--resume <id>`, Codex as its own subcommand, `co
 <id>`, Antigravity as `--conversation=<id>` appended to the seat's launch line, Grok as
 `-r <id>` appended to the seat's launch line. A line that runs the CLI inside a quoted script
 takes the resume inside that script, where the CLI reads it; a word after the closing quote
-never reaches it. A CLI with no measured resume form is left as it is unless the caller abandons
-the conversation with `--abandon`, a state that names another id is relaunched without one, and a
+never reaches it. A CLI with no measured resume form is left as it is unless the caller starts a new
+conversation with `--fresh` or abandons the recorded one with `--abandon`; a state that names
+another id is relaunched without one, and a
 conversation that differs or cannot be read remains refused (`<seat> has a process in its old
 pane that is not the signed seat; left as it is`, exit 1).
 
 The pre-close context line says what happens to that conversation: when the launch carries it, the
 line names the line the relaunch runs and says it resumes the recorded conversation `<id>`; when it
 carries none, the line says why — no recorded conversation, the refusal's own reason, a resume
-dropped before the launch, or the caller's `--abandon`.
+dropped before the launch, or the caller's `--fresh` or `--abandon`.
+
+`--fresh` asks for a new conversation: the recorded one is not resumed, the launch runs without a
+resume argument, and the id the new pane reports becomes the seat's recorded conversation, so the
+next default restart resumes it. A `leads` seat runs it as it runs any restart, and the caller is
+not asked anything first. It decides the conversation only: a working seat, a stuck pane and every
+other pane refusal stand exactly as they do for a plain restart, and `--abandon` remains the flag
+that replaces a stuck pane.
 
 A launch line that itself names a conversation — another id, `--last`, or a resume with no id —
-is never run: the repair is refused before the stop, and `--abandon` does not start it fresh
-either, because that line would run the same selection. Clear the selection from the seat's
-launch line for a fresh start.
+is never run: the repair is refused before the stop, and neither `--fresh` nor `--abandon` starts
+it fresh either, because that line would run the same selection. Clear the selection from the
+seat's launch line for a fresh start.
 
 That refusal's `--json` `repair` names `team restart <seat> --abandon` when herdr still names
 the seat on the recorded pane. With the flag the run closes that pane's workspace without typing

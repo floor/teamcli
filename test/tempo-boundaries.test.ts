@@ -76,6 +76,7 @@ describe('the scaling stays inside its bounds', () => {
     nudgeWait: 600,
     unsentAfter: 60,
     unreadAfter: 600,
+    stuckAfter: 900,
     quotaMarks: [],
     checks: [],
     ...over,
@@ -119,6 +120,9 @@ describe('the scaling stays inside its bounds', () => {
       const scaled = applyTempo(withChecks, word);
       expect(scaled.interval).toBe(withChecks.interval);
       expect(scaled.checks).toBe(checks);
+      // The stuck bound is read beside the tempo, never through it: a slow preset must not
+      // make a held seat look fresh for longer than the file says.
+      expect(scaled.stuckAfter).toBe(withChecks.stuckAfter);
     }
   });
 });

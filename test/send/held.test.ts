@@ -1,10 +1,12 @@
-import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../../src/send/no-pane-messaging.ts';
-// `team send` and the held frame: a socket write the receiving session's "Held message from
-// another session" dialog holds is `held (socket)`, never `delivered (socket)`, and no trigger
-// is typed into the blocked box — a shape the code keeps for the socket's return, unreachable
-// while SOCKET_SEND (src/send/uds.ts) is off. These scenes pin the gated state: the plain send
-// is the typed trigger, and a `--wait` is refused before any frame exists, so nothing can land
-// at a dialog. Flipping the constant back reddens them loudly.
+import { NO_PANE_MESSAGING, queuedLine } from '../../src/send/no-pane-messaging.ts';
+// `team send` with a receiving seat that declares no `crossSessionInbound: accept` on its launch:
+// no socket frame is dialed at all, so no frame can land at the box's "Held message from another
+// session" dialog. A `--wait` queues the message and waits on the thread; the plain send stages
+// its drop and types nothing. These scenes pin that gated state.
+//
+// A frame the socket does take is `delivered (socket)` at the frame, and a dialog is the daemon's
+// held step to see: those paths are pinned in send-socket-leg.test.ts, socket-read-receipt.test.ts
+// and daemon-presence-held.test.ts.
 //
 // Fixtures only: a fake seat, a fake sockets folder, and a pane this test scripts. No live
 // session is touched and no real pane is read.
@@ -19,6 +21,7 @@ import { readHistory } from '../../src/send/history.ts';
 import { type NativePane } from '../../src/send/native.ts';
 import type { SendOutcome } from '../../src/send/uds.ts';
 import { recordBody, testIo } from '../helpers.ts';
+import { withoutSendId } from '../helpers/output.ts';
 
 const NOW = new Date('2026-10-17T04:00:00.000Z');
 
@@ -151,7 +154,7 @@ function claudeHost(sockets: string, samples: string[], screens?: string[]): Fak
 const owner = (root: string) => testIo(root, { kind: 'owner' });
 
 describe('team send: a --wait frame cannot land at a dialog', () => {
-  test('--wait never sends a socket frame while SOCKET_SEND is off: it walks the typed leg and waits on the thread', async () => {
+  test('with no accept declaration, --wait walks the typed leg and waits on the thread', async () => {
     const { root, sockets, home } = world();
     writeFileSync(join(sockets, '222.sock'), '');
     const host = { ...claudeHost(sockets, ['idle', 'working'], [QUIET, QUIET]), waitMs: 0 };
@@ -161,7 +164,7 @@ describe('team send: a --wait frame cannot land at a dialog', () => {
 
     expect(code).toBe(1);
     expect(io.out).toBe('');
-    expect(io.err).toBe(queuedLine('lead', NO_EVENT_ADAPTER_TOOK_IT) + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
+    expect(withoutSendId(io.err)).toBe(queuedLine('lead', NO_PANE_MESSAGING) + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
     expect(host.frames.length).toBe(0);
     const read = readHistory('acme', root, home);
     expect(read.ok).toBe(true);
@@ -172,7 +175,7 @@ describe('team send: a --wait frame cannot land at a dialog', () => {
   });
 });
 
-describe('team send: the plain send is the typed trigger again', () => {
+describe('team send: the plain send with no accept declaration', () => {
   test('a live socket standing does not take the frame, and nothing on it is opened', async () => {
     const { root, dir, sockets } = world();
     writeFileSync(join(sockets, '222.sock'), '');
@@ -182,9 +185,9 @@ describe('team send: the plain send is the typed trigger again', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.err).toBe(queuedLine('lead', NO_EVENT_ADAPTER_TOOK_IT));
-    expect(io.out).toBe(
-      'team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n',
+    expect(io.err).toBe(queuedLine('lead', NO_PANE_MESSAGING));
+    expect(withoutSendId(io.out)).toBe(
+      'team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n',
     );
     expect(host.frames).toEqual([]);
     expect(host.socketsTried).toEqual([]);
@@ -200,7 +203,7 @@ describe('team send: the plain send is the typed trigger again', () => {
     if (!read.ok) return;
     expect(read.entries[0]).toMatchObject({
       to: 'lead',
-      outcome: 'sent (unconfirmed)',
+      outcome: 'queued, not woken',
       ms: 0,
       via: 'drop',
     });

@@ -225,6 +225,35 @@ describe('a signed field this version does not read is refused on its own ground
   });
 });
 
+describe('a known field with a value this version does not know', () => {
+  test('a message kind this version does not know is served as a plain message, never refused', () => {
+    const at = place();
+    try {
+      const key = messageKeyOf(at.home);
+      // A writer this version does not know signs a kind value it does know how to write, and a
+      // work item this version does read. The field is known; only the value is ahead of us.
+      const future = envelope(MESSAGE_DOMAIN, recordPayload(at, { message_kind: 'future-kind', work: '#9001' }), at.home);
+      writeRecordFile(at, future);
+      const auth = recordAuthOf(future, key);
+      expect(auth.kind).toBe('ok');
+      if (auth.kind !== 'ok') return;
+      // The value is not interpreted: the kind is dropped, so the record reads as the ordinary
+      // message it cannot be shown to be anything else than.
+      expect(auth.value.payload.message_kind).toBeUndefined();
+      expect(auth.value.payload.work).toBe('#9001');
+      // The inbox serves it, body and all, where an unsupported verdict refused it whole.
+      const got = readMessage({ dropDir: at.dropDir, root: at.root, seat: SEAT, session: SESSION }, ID, at.home);
+      expect(got).toEqual({ ok: true, body: BODY });
+      // A signed FIELD this version does not read is still refused on its own ground: the
+      // forward-compatible reading is for a known field's unknown value, not for an unknown field.
+      const unknownField = envelope(MESSAGE_DOMAIN, recordPayload(at, { future_display: 'amber' }), at.home);
+      expect(recordAuthOf(unknownField, key).kind).toBe('unsupported');
+    } finally {
+      at.cleanup();
+    }
+  });
+});
+
 describe('receipts and closes: the same order, and signed writer provenance', () => {
   function receipt(extra: Record<string, unknown> = {}): ReceiptPayload {
     return {

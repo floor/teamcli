@@ -75,17 +75,29 @@ delivery-only and is never asked to read. `team check` writes none of this: it h
 and no `--rollout`, and the only act it names is the seat's own read or a delivering command's.
 
 Unread work is named on the same pass. Each seat's drop folder is read the way the watch's
-unread wake reads it: a message with no signed read receipt past `watch.unread_after` — ten
-minutes when the file omits it — is one difference for the seat,
+unread wake reads it: a message with no signed read receipt past the seat's unread window —
+`watch.unread_after` when the file moved the section, else 30 s for a seat a message can wake
+while it is idle and 60 s for a typed or pull-only seat (ADR `zeus-message-path`, D2) — is one
+difference for the seat,
 `<seat>: a message from <from> has been unread for <n> min (id <id>)`, with
 `; <m> more unread` when other messages are due and the oldest named. The sender is the verified
 record's own `from`; a record that does not verify is named `an unverified message` and keeps
 its age, its id and its count, never the word beside it — that marker is unsigned and lends no
-sender, owner or seat. The repair is the seat's next turn, or `team drops --read --seat <seat>`
-when the seat's record says no turn-start reader is installed; the watch's unread wake types
-nothing into an idle seat in this build — its wake attempt is refused before the pane, and the
-reservation it took records the attempt — so a message still unread at twice the window is
-reported to its sender's mailbox and the team's lead instead. The general seat brief keeps its
+sender, owner or seat. The repair is the seat's delivery class, read on the check's own pass: for
+a seat whose record names a turn-start reader, `a wake route stands for <seat> and the message is
+still unread; team drops --read --seat <seat> reads it now` when something can wake the seat while
+it is idle, and otherwise `nothing gives <seat> a turn while it is idle; team drops --read --seat
+<seat> reads it now, or a person or a restart must give it a turn` — with `nothing wakes <seat>
+while it is idle except a send-time typed wake into an empty composer` in place of the first
+clause when the seat's profile declares the typed wake, and `nothing wakes <seat> while it is
+idle except a send-time typed wake, and the watch's typed retry has not delivered this message`
+when that profile's watch retry is on for the seat. A seat whose record says no turn-start
+reader is installed earns `team drops --read --seat <seat> reads it now; no turn-start reader is
+installed, so team reload <seat> installs the launch's hooks` instead. The watch's
+unread wake attempts the delivery and reaches no pane in this build, and an attempt that wrote
+nothing gives its reservation back, so the message keeps its one wake; a still-reserved marker at
+twice the window is reported as a wake that was attempted and whose outcome is unconfirmed, to its
+sender's mailbox and the team's lead. The general seat brief keeps its
 own read difference and is not counted twice. A person's drop is read by a person and is never asked for a receipt. The
 check writes nothing here either.
 
@@ -101,14 +113,33 @@ one existing line and gains none here. A team file that opts out (`inbound` hold
 person's pane, a seat its launch already wakes through the push channel, and a seat whose
 delivery class is between-turns are no finding. The line is
 `<seat>: sends go to its drop folder, not its socket: <why>`, one per seat, and it is a
-difference like an unread drop: exit 1. Three reasons are the team's to fix, each with the act
+difference like an unread drop: exit 1. Four reasons are the team's to fix, each with the act
 that fixes it: the launch's own settings declare accept while the team file's word is what is
-missing, repaired by `team config set seats.<seat>.inbound accept`; a frame the seat's box held,
-repaired by `team restart <seat>`, which re-confirms the declaration; and a socket older than
-the settings that declare it accepts, repaired by the same restart, which writes one that does
-not predate them. A socket that is nowhere is the ordinary state of its delivery class, whatever
-the gate would say — absence wins — and is not a broken promise: it is a note naming the class
-and what happens to its sends next, and it does not change the exit.
+missing, repaired by `team config set seats.<seat>.inbound accept`; a team file that accepts
+while the launch's effective settings do not, repaired by `team restart <seat>` when this
+build's generated file is what declares nothing, by declaring `crossSessionInbound: accept` in
+the settings the launch names (or dropping the launch's own `--settings` so the generated
+settings carry the team's word) and then restarting, and by `team restart <seat>` for a wrapper
+launch that carries no settings at all — this reason is read before the address, because a
+session whose settings never declared accept is why no socket serves it; a frame the seat's box
+held, repaired by `team restart <seat>`, which re-confirms the declaration; and a socket older
+than the settings that declare it accepts, repaired by the same restart, which writes one that
+does not predate them. Otherwise a socket that is nowhere is the ordinary state of its delivery
+class, whatever the gate would say — absence wins — and is not a broken promise: it is a note
+naming the class and what happens to its sends next, and it does not change the exit.
+
+The seat's last webhook delivery is one more note of that kind: when its recorded outcome is not
+delivered, one line says how the delivery ended — `<seat>: its last webhook delivery did not
+arrive: it failed after <n> attempts at <instant>: <reason>; the delivery left the drop record
+for the seat's own pull`, or the same sentence with the sent-unknown or refused words — and it
+never enters the total or the exit. A delivered record draws no line.
+
+A webhook post a send left in flight is the same kind of note. When a record's claim beside it
+is still `sent` — the request may have reached the routine and its answer was never read — and no
+bus is serving the root to finish it, one line says how many wait:
+`<n> webhook posts await a bus that isn't serving (<root>)` (`1 webhook post awaits` for one).
+A bus that serves the root draws no line: its own pass records the outcome. The line never
+reports a post as delivered, and it never enters the total or the exit.
 
 A seat held at a prompt is named on the same pass: one line per held seat, read from the pane the
 state records for it through the watch's own screen reader. A pane that no longer holds the
@@ -165,6 +196,14 @@ names that limit instead of a repair `up` will not make, and a standing-by hoste
 claim a live pane watch that its record no longer shows. These notes never enter the total and
 never change the exit.
 
+A general grant whose op list is the wildcard (`*`) reaches every op, including ops that shipped
+after the grant was signed. When such a grant reaches ops that first shipped after its signing, the
+check prints one note per grant — `wildcard general grant <id> signed <date> now reaches <ops>,
+which shipped in later releases; re-sign the grant to stop this note` — naming only the ops whose
+first release is later than that date, each dated from the release tags. Re-signing the grant on or
+after that release stops the note. A grant whose signing time cannot be read says `unknown` instead
+of claiming an op is new. Like every note here, it is information, never a difference.
+
 The state's leftovers are differences too. A record for a seat the file no longer declares — one
 an older file named and this one dropped — and a session the file does not name with no seat of
 the team in it are both named: `<seat>: left the team file but its record still claims pane <pane>` (its pane
@@ -191,6 +230,34 @@ a herdr that will not take a sidebar line says so as `team register` does, and i
 stands. Everything else keeps its advice — a model drift's relaunch, a blind seat's look at the
 pane — because those are decisions, not writes the file settles, and `--repair` never starts,
 stops or relaunches a seat.
+
+While dev mode is on for the team, a pending owner card is a difference of its own when it asks
+for anything but the two acts still carded there — a general grant change, or loosening the
+development-mode record itself: `owner card <id> asks for <actions> under dev mode: policy drift`,
+repaired by answering the card or letting it expire. Under the lift a seat, CLI or label change
+needs no card, so one still waiting means the card and the policy in force disagree.
+
+## Seats the terminal host restored
+
+A session the terminal host restored comes back with its panes and conversations but without the
+names the launch gave them. Each seat is read against its own recorded pane with the same proof
+[`team up`](up.md#a-seat-the-terminal-host-restored) adopts with, so the check and the repair
+cannot disagree about what "restored" means. A pane that holds a process team did not launch
+reads `restored, not launched by team` with `-` in the model column; a pane back at its shell
+reads `missing`. Each finding is a difference like any other, repair and who included:
+
+| What the pane holds | The difference | `repair:` |
+| --- | --- | --- |
+| the seat's own conversation | `<seat> was restored by the terminal host; its pane holds the seat's conversation — team up re-ties it` | `team up` (`who:` the team's lead) |
+| no conversation on either side: the declared CLI alone in its workspace, at an idle prompt | the same line with `declared CLI` in place of `conversation` | `team up` (`who:` the team's lead) |
+| another conversation, another CLI, another seat's name on the pane, a working pane, unsent text, or a workspace holding another pane | `<seat>: <the proof's reason>` (for example `its pane is named <name>; team never adopts a pane another seat owns`) | `look at the pane` |
+| no CLI — the CLI ended, or the host restored the pane without it | `<seat>: its pane runs no CLI (the CLI ended or the session was restored)` | `team up` (`who:` the team's lead) |
+| a process the record cannot tie to the launch | `<seat>: its pane holds a process this record cannot tie to the launch` | `look at the pane` |
+| the session came back without the seat at all | `<seat> was running and its CLI did not come back (the terminal host restored the session without it)` | `team up` (`who:` the team's lead) |
+
+A lead seat whose process a launcher started draws a note instead — `started by a launcher; team
+cannot tell its process from the one it launched` — and no repair: a lead's seat is never restarted
+or closed alone.
 
 ## A leftover team file
 
@@ -306,9 +373,9 @@ $ team check ; echo "exit $?"
 team beacon, session "lab-beacon"
 key isolation: enforced against team panes (key file still readable by same-user processes)
 note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
-note: claude-keeper: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn
-note: claude-beacon: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn
-note: worker: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn
+note: claude-keeper: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn — claude-keeper reads it at its next turn, and nothing here gives it one (pull-only)
+note: claude-beacon: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn — claude-beacon reads it at its next turn, and nothing here gives it one (pull-only)
+note: worker: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn — worker reads it at its next turn, and nothing here gives it one (pull-only)
 note: watch: the recorded process 4242 is gone; the daemon health cannot say whether a hosted watch owns the route
 no differences
 exit 0
@@ -325,9 +392,9 @@ $ team check ; echo "exit $?"
 team beacon, session "lab-beacon"
 key isolation: enforced against team panes (key file still readable by same-user processes)
 note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
-note: claude-keeper: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn
-note: claude-beacon: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn
-note: worker: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn
+note: claude-keeper: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn — claude-keeper reads it at its next turn, and nothing here gives it one (pull-only)
+note: claude-beacon: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn — claude-beacon reads it at its next turn, and nothing here gives it one (pull-only)
+note: worker: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn — worker reads it at its next turn, and nothing here gives it one (pull-only)
 note: watch: the recorded process 4242 is gone; the daemon health cannot say whether a hosted watch owns the route
 difference: claude-keeper: declares vendor anthropic, which the entity model rule *=!anthropic refuses; a swap to claude-code DeepSeek Flash 4.0 from beacon/worker is proposed
   repair: team swap queue claude-keeper

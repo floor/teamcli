@@ -187,7 +187,7 @@ export function codexEndpointSocket(
 /** The path a record names, when it is one this seat incarnation's own launch owns, and whether
  *  it is the runtime folder's. The whole path is recomputed from the record's binding and must
  *  equal what the record names: a record pointing anywhere else is never touched. */
-function ownedSocketPath(
+export function ownedSocketPath(
   dir: string,
   session: string,
   seat: string,
@@ -244,7 +244,7 @@ function pidAlive(pid: number): boolean {
 
 /** The recorded pid's command line, when the process is the Codex binary; null otherwise. This is
  *  the ownership proof a signal requires: a pid alone is never proof, because pids are reused. */
-function codexCommandOf(pid: number): string | null {
+export function codexCommandOf(pid: number): string | null {
   try {
     const comm = execFileSync('ps', ['-o', 'comm=', '-p', String(pid)], { encoding: 'utf8' }).trim();
     if (basename(comm) !== 'codex') return null;
@@ -259,7 +259,7 @@ function codexCommandOf(pid: number): string | null {
  *  `Tue Oct 20 05:19:15 2026` (one-second resolution, local time), which `Date.parse` reads as
  *  that instant. `ps` here has no `etimes` keyword; `etime` is formatted, so the start line is
  *  the field to read. */
-function processStartOf(pid: number): number | null {
+export function processStartOf(pid: number): number | null {
   try {
     const line = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' }).trim();
     const at = Date.parse(line);
@@ -545,13 +545,68 @@ function spawnAppServer(input: { url: string; cwd?: string; config?: string[]; e
   return child.pid === undefined ? null : { pid: child.pid };
 }
 
+/** Whether a live process's start instant sits in the window in which the launch wrote `record`. */
+export function recordStartMatches(record: CodexEndpointRecord, started: number): boolean {
+  const recordedAt = Date.parse(record.started_at);
+  if (!Number.isFinite(recordedAt)) return false;
+  return started <= recordedAt + START_SKEW_MS && started >= recordedAt - START_WINDOW_MS;
+}
+
+/** What the host's own readings say about the endpoint a seat's record names. `team check`
+ *  judges a seat's managed server by the same three places — the record for the seat's current
+ *  binding, the socket's liveness and the recorded pid's start — and a restore repair must ask
+ *  the same question the report answers. `live` needs every proof; `dead` is one of them
+ *  failing; `unknown` is a reading this build could not take, and nothing is repaired on an
+ *  unknown. The configuration the record carries is not judged here: a restore does not change
+ *  it, and this door only answers whether the recorded endpoint is running. */
+export type RecordedEndpointState =
+  | { kind: 'live' }
+  | { kind: 'dead'; why: string }
+  | { kind: 'unknown'; why: string };
+
+export function recordedEndpointState(input: {
+  dir: string;
+  session: string;
+  seat: string;
+  record: CodexEndpointRecord;
+  runtimeRoot?: string;
+  alive(pid: number): boolean;
+  startOf(pid: number): number | null;
+  isSocket(path: string): boolean;
+}): RecordedEndpointState {
+  const owned = ownedSocketPath(input.dir, input.session, input.seat, input.record, input.runtimeRoot);
+  if (owned === null) {
+    return { kind: 'dead', why: `its recorded endpoint ${input.record.url} is not this seat's owned socket` };
+  }
+  if (!input.isSocket(owned.path)) {
+    return { kind: 'dead', why: 'its recorded endpoint socket is not live' };
+  }
+  if (!input.alive(input.record.pid)) {
+    return { kind: 'dead', why: `its recorded app-server pid ${String(input.record.pid)} is not alive` };
+  }
+  const started = input.startOf(input.record.pid);
+  if (started === null || !Number.isFinite(Date.parse(input.record.started_at))) {
+    return {
+      kind: 'unknown',
+      why: `its recorded app-server pid ${String(input.record.pid)}'s start time cannot be read`,
+    };
+  }
+  if (!recordStartMatches(input.record, started)) {
+    return {
+      kind: 'dead',
+      why: `its recorded app-server pid ${String(input.record.pid)} started at another time than its endpoint record`,
+    };
+  }
+  return { kind: 'live' };
+}
+
 /** The one ownership proof both the stop and the reuse paths require: the live process at the
  *  recorded pid is the `codex` binary, its command line carries exactly this record's
  *  `app-server --listen <url>`, and its own start instant sits in the window in which the launch
  *  wrote the record. The start instant is what a reused pid fails: the process the OS handed the
  *  pid to started after the record was written, so it is never the one the record describes. The
  *  recorded `started_at` is quoted exactly as written; it is compared, never trusted as truth. */
-function provenOwner(
+export function provenOwner(
   record: CodexEndpointRecord,
   proof: {
     alive(pid: number): boolean;
@@ -563,19 +618,49 @@ function provenOwner(
   const command = proof.commandOf(record.pid);
   if (command === null || !command.includes(`app-server --listen ${record.url}`)) return false;
   const started = proof.startOf(record.pid);
-  if (started === null) return false;
-  const recordedAt = Date.parse(record.started_at);
-  if (!Number.isFinite(recordedAt)) return false;
-  return started <= recordedAt + START_SKEW_MS && started >= recordedAt - START_WINDOW_MS;
+  return started !== null && recordStartMatches(record, started);
 }
 
 /** Whether the configuration recorded beside an endpoint is the one this launch needs. A record
  *  that names none — one an older build wrote — is never this launch's, so its endpoint is
  *  stopped rather than reused. The words are compared as the launch passed them, order and
  *  quoting included, because that is what the server was started with. */
-function sameEndpointConfig(recorded: readonly string[] | undefined, needed: readonly string[]): boolean {
+export function sameEndpointConfig(recorded: readonly string[] | undefined, needed: readonly string[]): boolean {
   if (recorded === undefined || recorded.length !== needed.length) return false;
   return recorded.every((word, at) => word === needed[at]);
+}
+
+function stripOuterQuotes(token: string): string {
+  if (
+    token.length >= 2
+    && ((token.startsWith('"') && token.endsWith('"')) || (token.startsWith("'") && token.endsWith("'")))
+  ) {
+    return token.slice(1, -1);
+  }
+  return token;
+}
+
+/** Whether the live `codex app-server` command line carries the exact start flags planned for the
+ *  seat after `app-server --listen <url>`. */
+export function sameLiveEndpointFlags(
+  command: string | null,
+  url: string,
+  needed: readonly string[],
+): boolean {
+  if (command === null) return false;
+  const needle = `app-server --listen ${url}`;
+  const at = command.indexOf(needle);
+  if (at < 0) return false;
+  const after = command.slice(at + needle.length);
+  if (after !== '' && !/^\s/.test(after)) return false;
+  const tail = after.trim();
+  if (needed.length === 0) return tail === '';
+  if (tail === needed.join(' ')) return true;
+  const tokens = tail.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map(stripOuterQuotes);
+  if (tokens !== undefined && tokens.length === needed.length && tokens.every((word, idx) => word === needed[idx])) {
+    return true;
+  }
+  return false;
 }
 
 /** Stops the process a record names, only after proving it is the app-server the launch started:
@@ -755,6 +840,7 @@ export async function ensureCodexEndpoint(
   if (prior !== null && prior.binding === binding && prior.url === socketPath.url
     && socket(socketPath.path) && provenOwner(prior, { alive, commandOf, startOf })
     && sameEndpointConfig(prior.config, config)
+    && sameLiveEndpointFlags(commandOf(prior.pid), prior.url, config)
     // A reused runtime socket is narrowed again before it serves this launch: a server is
     // reused only while it is the one the launch started and only while it stays its owner's.
     && (!socketPath.runtime || lockDownSocket(socketPath.path) === null)) {

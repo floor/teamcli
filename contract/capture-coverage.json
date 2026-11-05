@@ -14,6 +14,7 @@
     "idle",
     "working",
     "unsent",
+    "scroll back",
     "permission",
     "question",
     "exit question",
@@ -28,17 +29,22 @@
   "cells": {
     "antigravity": {
       "idle": {
-        "real": 6,
+        "real": 8,
         "constructed": 0,
         "undocumented": 0
       },
       "working": {
         "real": 5,
-        "constructed": 0,
+        "constructed": 1,
         "undocumented": 0
       },
       "unsent": {
-        "real": 7,
+        "real": 8,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "scroll back": {
+        "real": 0,
         "constructed": 0,
         "undocumented": 0
       },
@@ -109,6 +115,11 @@
         "constructed": 3,
         "undocumented": 0
       },
+      "scroll back": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
       "permission": {
         "real": 8,
         "constructed": 0,
@@ -163,7 +174,7 @@
     "codex": {
       "idle": {
         "real": 6,
-        "constructed": 5,
+        "constructed": 7,
         "undocumented": 0
       },
       "working": {
@@ -173,7 +184,12 @@
       },
       "unsent": {
         "real": 18,
-        "constructed": 1,
+        "constructed": 2,
+        "undocumented": 0
+      },
+      "scroll back": {
+        "real": 0,
+        "constructed": 2,
         "undocumented": 0
       },
       "permission": {
@@ -229,17 +245,22 @@
     },
     "cursor": {
       "idle": {
-        "real": 14,
+        "real": 16,
         "constructed": 0,
         "undocumented": 0
       },
       "working": {
-        "real": 6,
+        "real": 7,
         "constructed": 5,
         "undocumented": 0
       },
       "unsent": {
-        "real": 26,
+        "real": 27,
+        "constructed": 2,
+        "undocumented": 0
+      },
+      "scroll back": {
+        "real": 0,
         "constructed": 0,
         "undocumented": 0
       },
@@ -310,6 +331,11 @@
         "constructed": 0,
         "undocumented": 0
       },
+      "scroll back": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
       "permission": {
         "real": 1,
         "constructed": 0,
@@ -363,7 +389,7 @@
     },
     "grok": {
       "idle": {
-        "real": 4,
+        "real": 5,
         "constructed": 0,
         "undocumented": 0
       },
@@ -374,6 +400,11 @@
       },
       "unsent": {
         "real": 6,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "scroll back": {
+        "real": 0,
         "constructed": 0,
         "undocumented": 0
       },
@@ -444,6 +475,11 @@
         "constructed": 0,
         "undocumented": 0
       },
+      "scroll back": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
       "permission": {
         "real": 0,
         "constructed": 0,
@@ -497,8 +533,8 @@
     },
     "muse": {
       "idle": {
-        "real": 5,
-        "constructed": 3,
+        "real": 10,
+        "constructed": 6,
         "undocumented": 0
       },
       "working": {
@@ -507,8 +543,13 @@
         "undocumented": 0
       },
       "unsent": {
-        "real": 3,
-        "constructed": 1,
+        "real": 8,
+        "constructed": 4,
+        "undocumented": 0
+      },
+      "scroll back": {
+        "real": 0,
+        "constructed": 0,
         "undocumented": 0
       },
       "permission": {
@@ -586,6 +627,11 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "scroll back": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "permission": {
             "real": 3,
             "constructed": 2,
@@ -650,6 +696,11 @@
           },
           "unsent": {
             "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "scroll back": {
+            "real": 0,
             "constructed": 0,
             "undocumented": 0
           },
@@ -720,6 +771,11 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "scroll back": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "permission": {
             "real": 1,
             "constructed": 0,
@@ -784,6 +840,11 @@
           },
           "unsent": {
             "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "scroll back": {
+            "real": 0,
             "constructed": 0,
             "undocumented": 0
           },
@@ -854,6 +915,11 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "scroll back": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "permission": {
             "real": 1,
             "constructed": 0,
@@ -904,6 +970,78 @@
             "constructed": 0,
             "undocumented": 0
           }
+        },
+        "1.4.12": {
+          "idle": {
+            "real": 2,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 0,
+            "constructed": 1,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "scroll back": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          }
         }
       }
     },
@@ -927,6 +1065,11 @@
           "unsent": {
             "real": 3,
             "constructed": 2,
+            "undocumented": 0
+          },
+          "scroll back": {
+            "real": 0,
+            "constructed": 0,
             "undocumented": 0
           },
           "permission": {
@@ -992,6 +1135,11 @@
             "undocumented": 0
           },
           "unsent": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "scroll back": {
             "real": 0,
             "constructed": 0,
             "undocumented": 0
@@ -1063,6 +1211,11 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "scroll back": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "permission": {
             "real": 1,
             "constructed": 0,
@@ -1127,6 +1280,11 @@
           },
           "unsent": {
             "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "scroll back": {
+            "real": 0,
             "constructed": 0,
             "undocumented": 0
           },
@@ -1205,6 +1363,11 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "scroll back": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "permission": {
             "real": 1,
             "constructed": 1,
@@ -1272,6 +1435,11 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "scroll back": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "permission": {
             "real": 0,
             "constructed": 0,
@@ -1326,7 +1494,7 @@
         "0.161.0": {
           "idle": {
             "real": 2,
-            "constructed": 3,
+            "constructed": 5,
             "undocumented": 0
           },
           "working": {
@@ -1336,7 +1504,12 @@
           },
           "unsent": {
             "real": 4,
-            "constructed": 1,
+            "constructed": 2,
+            "undocumented": 0
+          },
+          "scroll back": {
+            "real": 0,
+            "constructed": 2,
             "undocumented": 0
           },
           "permission": {
@@ -1395,7 +1568,7 @@
     "cursor": {
       "tested": {
         "from": "2026.10.01",
-        "to": "2026.10.19"
+        "to": "2026.10.22"
       },
       "byVersion": {
         "2026.10.01": {
@@ -1411,6 +1584,11 @@
           },
           "unsent": {
             "real": 22,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "scroll back": {
+            "real": 0,
             "constructed": 0,
             "undocumented": 0
           },
@@ -1481,6 +1659,11 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "scroll back": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "permission": {
             "real": 1,
             "constructed": 0,
@@ -1545,6 +1728,11 @@
           },
           "unsent": {
             "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "scroll back": {
+            "real": 0,
             "constructed": 0,
             "undocumented": 0
           },
@@ -1615,6 +1803,11 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "scroll back": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "permission": {
             "real": 0,
             "constructed": 0,
@@ -1668,17 +1861,22 @@
         },
         "2026.10.22": {
           "idle": {
-            "real": 0,
+            "real": 2,
             "constructed": 0,
             "undocumented": 0
           },
           "working": {
-            "real": 0,
+            "real": 1,
             "constructed": 0,
             "undocumented": 0
           },
           "unsent": {
-            "real": 1,
+            "real": 2,
+            "constructed": 2,
+            "undocumented": 0
+          },
+          "scroll back": {
+            "real": 0,
             "constructed": 0,
             "undocumented": 0
           },
@@ -1757,6 +1955,11 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "scroll back": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "permission": {
             "real": 1,
             "constructed": 0,
@@ -1832,6 +2035,11 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "scroll back": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "permission": {
             "real": 0,
             "constructed": 0,
@@ -1899,6 +2107,11 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "scroll back": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "permission": {
             "real": 0,
             "constructed": 0,
@@ -1949,6 +2162,78 @@
             "constructed": 0,
             "undocumented": 0
           }
+        },
+        "1.0.70": {
+          "idle": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "scroll back": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          }
         }
       }
     },
@@ -1970,6 +2255,11 @@
             "undocumented": 0
           },
           "unsent": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "scroll back": {
             "real": 0,
             "constructed": 0,
             "undocumented": 0
@@ -2030,7 +2320,7 @@
     "muse": {
       "tested": {
         "from": "1.4.9",
-        "to": "1.4.11"
+        "to": "1.4.14"
       },
       "byVersion": {
         "1.4.9": {
@@ -2046,6 +2336,11 @@
           },
           "unsent": {
             "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "scroll back": {
+            "real": 0,
             "constructed": 0,
             "undocumented": 0
           },
@@ -2102,8 +2397,8 @@
         },
         "1.4.11": {
           "idle": {
-            "real": 1,
-            "constructed": 1,
+            "real": 3,
+            "constructed": 4,
             "undocumented": 0
           },
           "working": {
@@ -2113,7 +2408,12 @@
           },
           "unsent": {
             "real": 2,
-            "constructed": 1,
+            "constructed": 4,
+            "undocumented": 0
+          },
+          "scroll back": {
+            "real": 0,
+            "constructed": 0,
             "undocumented": 0
           },
           "permission": {
@@ -2166,13 +2466,90 @@
             "constructed": 1,
             "undocumented": 0
           }
+        },
+        "1.4.14": {
+          "idle": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "scroll back": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          }
         }
       }
     }
   },
   "notProduced": {
     "antigravity": {
-      "unsent": "the installed binary 1.4.0 is newer than this folder's 1.3.5"
+      "working": "the working row is constructed in `working-synthetic.txt`",
+      "unsent": "the installed binary 1.4.0 is newer than this folder's 1.3.5",
+      "permission": "no permission dialog was drawn on 1.4.12 here",
+      "question": "no question dialog was drawn on 1.4.12 here",
+      "trust": "the panes were already trusted",
+      "unknown": "the folder holds no shell-return frame"
     },
     "claude-code": {
       "idle": "reason not stated",
@@ -2188,7 +2565,6 @@
       "confirmation": "reason not stated"
     },
     "cursor": {
-      "idle": "reason not stated",
       "working": "reason not stated",
       "unsent": "reason not stated",
       "permission": "reason not stated",
@@ -2198,8 +2574,12 @@
     },
     "gemini": {},
     "grok": {
+      "working": "the welcome frame is a ready box",
       "unsent": "the installed binary 1.0.60 is newer than this folder's 1.0.52",
-      "trust": "a fresh directory showed no trust dialog on this CLI"
+      "permission": "no permission dialog was drawn in this folder",
+      "question": "no question dialog was drawn in this folder",
+      "trust": "a fresh directory showed no trust dialog on this CLI",
+      "unknown": "the folder holds no shell-return frame"
     },
     "jules": {
       "unsent": "reason not stated",
@@ -2450,6 +2830,30 @@
       "cli": "antigravity",
       "kind": "working",
       "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.12/exit-completion-unsent.txt",
+      "cli": "antigravity",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.12/idle-compacted.txt",
+      "cli": "antigravity",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.12/idle.txt",
+      "cli": "antigravity",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.12/working-synthetic.txt",
+      "cli": "antigravity",
+      "kind": "working",
+      "provenance": "constructed"
     },
     {
       "file": "antigravity/1.4.2/exit.txt",
@@ -3052,6 +3456,12 @@
       "provenance": "capture"
     },
     {
+      "file": "codex/0.161.0/esc-hint.txt",
+      "cli": "codex",
+      "kind": "idle",
+      "provenance": "constructed"
+    },
+    {
       "file": "codex/0.161.0/exit-typed.txt",
       "cli": "codex",
       "kind": "unsent",
@@ -3080,6 +3490,12 @@
       "cli": "codex",
       "kind": "idle",
       "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/interrupted-idle.txt",
+      "cli": "codex",
+      "kind": "idle",
+      "provenance": "constructed"
     },
     {
       "file": "codex/0.161.0/near-context-used-follower.txt",
@@ -3154,6 +3570,18 @@
       "provenance": "capture"
     },
     {
+      "file": "codex/0.161.0/scroll-back-marker.txt",
+      "cli": "codex",
+      "kind": "scroll back",
+      "provenance": "constructed"
+    },
+    {
+      "file": "codex/0.161.0/scroll-back.txt",
+      "cli": "codex",
+      "kind": "scroll back",
+      "provenance": "constructed"
+    },
+    {
       "file": "codex/0.161.0/trust.txt",
       "cli": "codex",
       "kind": "trust",
@@ -3164,6 +3592,12 @@
       "cli": "codex",
       "kind": "unsent",
       "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/warning-row.txt",
+      "cli": "codex",
+      "kind": "unsent",
+      "provenance": "constructed"
     },
     {
       "file": "codex/0.161.0/working.txt",
@@ -3550,9 +3984,45 @@
       "provenance": "capture"
     },
     {
+      "file": "cursor/2026.10.22/drawing-settled.txt",
+      "cli": "cursor",
+      "kind": "unsent",
+      "provenance": "constructed"
+    },
+    {
+      "file": "cursor/2026.10.22/drawing.txt",
+      "cli": "cursor",
+      "kind": "unsent",
+      "provenance": "constructed"
+    },
+    {
+      "file": "cursor/2026.10.22/idle-after-edit.txt",
+      "cli": "cursor",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.22/idle.txt",
+      "cli": "cursor",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
       "file": "cursor/2026.10.22/rules-unsent-reviewer-agent.txt",
       "cli": "cursor",
       "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.22/unsent.txt",
+      "cli": "cursor",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.22/working.txt",
+      "cli": "cursor",
+      "kind": "working",
       "provenance": "capture"
     },
     {
@@ -3742,6 +4212,24 @@
       "provenance": "capture"
     },
     {
+      "file": "exit-typing/muse-idle-ansi.txt",
+      "cli": "muse",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "exit-typing/muse-unsent-ansi.txt",
+      "cli": "muse",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "exit-typing/muse-unsent-newline-ansi.txt",
+      "cli": "muse",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
       "file": "gemini/0.64.0/exit-typed.txt",
       "cli": "gemini",
       "kind": "unsent",
@@ -3916,6 +4404,12 @@
       "provenance": "capture"
     },
     {
+      "file": "grok/1.0.70/idle.txt",
+      "cli": "grok",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
       "file": "jules/0.1.42/done.txt",
       "cli": "jules",
       "kind": "idle",
@@ -3940,13 +4434,49 @@
       "provenance": "capture"
     },
     {
+      "file": "muse-exit-independent/muse-idle-ansi.txt",
+      "cli": "muse",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse-exit-independent/muse-unsent-ansi.txt",
+      "cli": "muse",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse-exit-independent/muse-unsent-newline-ansi.txt",
+      "cli": "muse",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
       "file": "muse/1.4.11/ambiguous-synthetic.txt",
       "cli": "muse",
       "kind": "unknown",
       "provenance": "constructed"
     },
     {
+      "file": "muse/1.4.11/goal-hint-dim.txt",
+      "cli": "muse",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.11/goal-hint-synthetic.txt",
+      "cli": "muse",
+      "kind": "idle",
+      "provenance": "constructed"
+    },
+    {
       "file": "muse/1.4.11/idle.txt",
+      "cli": "muse",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.11/loop-hint-dim.txt",
       "cli": "muse",
       "kind": "idle",
       "provenance": "capture"
@@ -3958,10 +4488,40 @@
       "provenance": "constructed"
     },
     {
+      "file": "muse/1.4.11/prose-hint-color.txt",
+      "cli": "muse",
+      "kind": "unsent",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.11/prose-hint-dim.txt",
+      "cli": "muse",
+      "kind": "idle",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.11/prose-hint-plain.txt",
+      "cli": "muse",
+      "kind": "unsent",
+      "provenance": "constructed"
+    },
+    {
       "file": "muse/1.4.11/rules-line-unsent.txt",
       "cli": "muse",
       "kind": "unsent",
       "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.11/slash-draft-synthetic.txt",
+      "cli": "muse",
+      "kind": "unsent",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.11/tasks-hint-dim.txt",
+      "cli": "muse",
+      "kind": "idle",
+      "provenance": "constructed"
     },
     {
       "file": "muse/1.4.11/typed-before-enter.txt",
@@ -3980,6 +4540,18 @@
       "cli": "muse",
       "kind": "working",
       "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.14/idle.txt",
+      "cli": "muse",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.14/unsent.txt",
+      "cli": "muse",
+      "kind": "unsent",
+      "provenance": "capture"
     },
     {
       "file": "muse/1.4.9/idle-footer.txt",

@@ -13,7 +13,9 @@ import type { DownLaunch, DownSources } from '../../src/commands/down.ts';
 import type { McpSources, PathStat } from '../../src/commands/mcp.ts';
 import type { RemoveSources } from '../../src/commands/remove.ts';
 import type { RegisterSources } from '../../src/commands/register.ts';
+import type { OrderSources } from '../../src/commands/order.ts';
 import type { RestartSources } from '../../src/commands/restart.ts';
+import { runRestart } from '../../src/commands/restart.ts';
 import type { ListSources } from '../../src/commands/list.ts';
 import type { ProjectSources } from '../../src/commands/projects.ts';
 import type { StatusSources } from '../../src/commands/status.ts';
@@ -266,6 +268,7 @@ export type World = {
   downSources(): DownSources;
   removeSources(): RemoveSources;
   restartSources(): RestartSources;
+  orderSources(): OrderSources;
   addSources(): AddSources;
   registerSources(): RegisterSources;
   checkSources(): CheckSources;
@@ -326,8 +329,22 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
 
   const chosen = (seat: Seat): boolean => spec.agents === 'all' || spec.agents.includes(seat.name);
   if (team) {
-    for (const seat of team.seats) {
-      if (!chosen(seat)) continue;
+    // A page declares the session's sidebar order with `sidebar:` — the creation order the pane
+    // host holds after a seat was re-added or restarted out of place. Every named seat must be a
+    // running declared seat, and every running declared seat must be named: the world seeds
+    // exactly the seats the roster runs, in the order the page says the sidebar holds them.
+    const running = team.seats.filter(chosen);
+    const seeded = spec.sidebar.length > 0 ? spec.sidebar : running.map((seat) => seat.name);
+    if (spec.sidebar.length > 0) {
+      const known = new Set(running.map((seat) => seat.name));
+      for (const name of spec.sidebar) {
+        if (!known.has(name)) throw new Error(`fixture: sidebar names "${name}", which is not a running seat of the file`);
+      }
+      if (spec.sidebar.length !== running.length) throw new Error('fixture: sidebar must name every running seat of the file');
+    }
+    for (const name of seeded) {
+      const seat = running.find((candidate) => candidate.name === name);
+      if (seat === undefined) continue;
       made++;
       const screen = spec.screens[seat.name] ?? 'idle';
       const names = paneNames(spec, made);
@@ -716,6 +733,19 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
         machine,
       };
     },
+    orderSources(): OrderSources {
+      return {
+        home,
+        now,
+        sessionState: () => (herdr === 'none' ? null : sessionState()),
+        workspaces: () => (herdr === 'running' ? workspaces() : []),
+        agents: () => (herdr === 'running' ? agents() : []),
+        state: () => readState(dir),
+        // One seat's move is one restart against this same world, so a page's reorder example
+        // exercises the real relaunch the command delegates to.
+        restart: (subArgv, subIo) => runRestart(subArgv, subIo, this.restartSources()),
+      };
+    },
     addSources(): AddSources {
       return {
         home,
@@ -763,6 +793,12 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
         // The fixture's process table, not the machine's: the proc notes a page shows are the
         // records the same page's `team proc` examples made, never the host's own pids.
         alive: alivePid,
+        gate: {
+          standing: standingSource(home),
+          state: (dir) => readState(dir),
+          agents: () => (herdr === 'running' ? agents() : []),
+          sessionRunning: () => (herdr === 'none' ? null : herdr === 'running'),
+        },
       };
     },
     listSources(): ListSources {

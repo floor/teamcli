@@ -11,8 +11,16 @@ import { runTeamCheck, type CheckSources } from '../src/check/team.ts';
 import { check } from '../src/commands/check.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import type { DaemonHealth } from '../src/daemon/health.ts';
-import type { DaemonRootState } from '../src/daemon/state.ts';
-import { daemonHealthy, daemonNotes, daemonProblemNotes, daemonReading } from '../src/daemon/health_display.ts';
+import { daemonStatePath } from '../src/daemon/paths.ts';
+import { readDaemonState, type DaemonChoresState, type DaemonRootState } from '../src/daemon/state.ts';
+import {
+  choresPhrase,
+  daemonHealthy,
+  daemonNotes,
+  daemonProblemNotes,
+  daemonReading,
+  firstPassPhrases,
+} from '../src/daemon/health_display.ts';
 import { hostedWatchCheckNotes, hostedWatchDifferences, hostedWatchNotes } from '../src/daemon/watch_display.ts';
 import { whoOfDifference } from '../src/output/text.ts';
 import type { HostedWatchState } from '../src/watch/hosted.ts';
@@ -41,6 +49,7 @@ function health(over: Partial<DaemonHealth> = {}): DaemonHealth {
     version: '0.5.4',
     gitHead: null,
     heartbeatAt: '2026-10-19T08:59:58.000Z',
+    heartbeatSeconds: null,
     features: { broker: 'absent' },
     stuck: [],
     roots: [],
@@ -52,6 +61,28 @@ function health(over: Partial<DaemonHealth> = {}): DaemonHealth {
 
 function root(over: Partial<DaemonRootState> = {}): DaemonRootState {
   return { root: '/work/acme', team: 'acme', send: 'serving', bus: 'serving', why: null, ...over };
+}
+
+function chores(over: Partial<DaemonChoresState> = {}): DaemonChoresState {
+  return {
+    mode: 'per-root',
+    state: 'ok',
+    pid: 4242,
+    startedAt: '2026-10-19T08:00:00.000Z',
+    heartbeatAt: '2026-10-19T08:59:58.000Z',
+    rssBytes: 48 * 1024 * 1024,
+    busy: null,
+    restarts: 0,
+    missed: 0,
+    lastPassAt: '2026-10-19T08:59:30.000Z',
+    lastPass: null,
+    lastChore: null,
+    presence: null,
+    markerCache: null,
+    nextStartAt: null,
+    why: null,
+    ...over,
+  };
 }
 
 function watch(over: Partial<HostedWatchState> = {}): HostedWatchState {
@@ -250,6 +281,114 @@ test('a running daemon says what it hosted, and a failed endpoint is never full 
   expect(daemonReading(failed).roots).toHaveLength(2);
 });
 
+test('a bus serving while its first pass runs says how far the scan got, then when it finished', () => {
+  // A daemon-hosted bus is serving once its listener is bound, while the first pass still scans:
+  // the row carries the pass's progress so "serving" is never read as caught up.
+  const running = health({
+    roots: [root({ firstPass: { running: true, scanned: 12_345, doneAt: null } })],
+  });
+  expect(daemonNotes(running)).toEqual([
+    `${HEALTHY_LINE}; roots 1 (send 1, bus 1); first pass running for /work/acme (12,345 files scanned)`,
+  ]);
+  expect(daemonHealthy(running)).toBe(true);
+  const done = health({
+    roots: [root({ firstPass: { running: false, scanned: 45_871, doneAt: '2026-11-03T19:14:37.449Z', errors: false } })],
+  });
+  expect(daemonNotes(done)).toEqual([
+    `${HEALTHY_LINE}; roots 1 (send 1, bus 1); first pass done at 2026-11-03T19:14:37.449Z for /work/acme`,
+  ]);
+  // A pass that stopped on a failure is never printed as a clean finish: it says so, keeps its
+  // partial count, and names its own checkout.
+  const ended = health({
+    roots: [root({ firstPass: { running: false, scanned: 45_871, doneAt: '2026-11-03T19:14:37.449Z', errors: true } })],
+  });
+  expect(daemonNotes(ended)).toEqual([
+    `${HEALTHY_LINE}; roots 1 (send 1, bus 1); first pass ended with errors at 2026-11-03T19:14:37.449Z for /work/acme (45,871 files scanned)`,
+  ]);
+  // Every checkout's pass is named by its own root, so a multi-root record is not ambiguous.
+  const both = health({
+    roots: [
+      root({ firstPass: { running: true, scanned: 3, doneAt: null } }),
+      root({
+        root: '/work/beta',
+        team: 'beta',
+        firstPass: { running: false, scanned: 10, doneAt: '2026-11-03T19:20:00.000Z', errors: false },
+      }),
+    ],
+  });
+  expect(daemonNotes(both)).toEqual([
+    `${HEALTHY_LINE}; roots 2 (send 2, bus 2); first pass running for /work/acme (3 files scanned); first pass done at 2026-11-03T19:20:00.000Z for /work/beta`,
+  ]);
+  // A starting endpoint is said once: it is not counted again as "not hosted here".
+  expect(daemonNotes(health({ roots: [root({ bus: 'starting' })] }))).toEqual([
+    `${HEALTHY_LINE}; roots 1 (send 1, bus 0); 1 endpoint starting`,
+  ]);
+});
+
+test('the chores rows name their children, and a late sweep names its last chore and cache', () => {
+  const HEAD = `${HEALTHY_LINE}; roots 1 (send 1, bus 1)`;
+  // A route with no chores row says nothing, and one row reading inline says the rollback once.
+  expect(choresPhrase([root()], AT)).toEqual([]);
+  expect(choresPhrase([root({ chores: chores({ mode: 'inline', state: 'inline', pid: null }) })], AT)).toEqual([
+    'chores inline',
+  ]);
+  expect(
+    choresPhrase([
+      root({ chores: chores({ mode: 'inline', state: 'inline', pid: null }) }),
+      root({ root: '/work/beta', team: 'beta', chores: chores({ mode: 'inline', state: 'inline', pid: null }) }),
+    ], AT),
+  ).toEqual(['chores inline on every root']);
+  expect(daemonNotes(health({ roots: [root({ chores: chores() })] }))).toEqual([
+    `${HEAD}; chores 1 root in children (1 ok)`,
+  ]);
+  // A late root names its own reason, the chore its child last finished and the child's own
+  // marker-cache reading: a night of re-reads reads as reads, never as a dead endpoint.
+  const late = health({
+    roots: [root({
+      chores: chores({
+        state: 'late',
+        missed: 2,
+        why: 'missed 2 heartbeats',
+        lastChore: { name: 'fallback', at: '2026-10-19T08:59:30.000Z', ms: 1200 },
+        markerCache: { read: 40, reused: 12, cached: 28 },
+      }),
+    })],
+  });
+  expect(daemonNotes(late)).toEqual([
+    `${HEAD}; chores 1 root in children (1 late); `
+    + `/work/acme: late (missed 2 heartbeats; last fallback 30s ago; marker cache 40 read, 12 reused, 28 held)`,
+  ]);
+  // A replacement in waiting names its reason and its last chore, with no cache: the process
+  // that held one is gone, and the row says so by staying silent about it.
+  const restarting = health({
+    roots: [root({
+      chores: chores({
+        state: 'restarting',
+        pid: null,
+        restarts: 2,
+        why: 'the child exited (SIGKILL)',
+        lastChore: { name: 'fallback', at: '2026-10-19T08:58:00.000Z', ms: null },
+        nextStartAt: '2026-10-19T09:00:03.000Z',
+      }),
+    })],
+  });
+  expect(daemonNotes(restarting)).toEqual([
+    `${HEAD}; chores 1 root in children (1 restarting); `
+    + '/work/acme: restarting (the child exited (SIGKILL); last fallback 2m ago)',
+  ]);
+  // A row that never reported a chore still names its reason rather than an empty detail list.
+  expect(choresPhrase([root({ chores: chores({ state: 'stopped', why: null }) })], AT)).toEqual([
+    'chores 1 root in children (1 stopped); /work/acme: stopped (no reason recorded)',
+  ]);
+  // A rollback beside a hosted route is counted apart, so neither reading hides the other.
+  expect(
+    choresPhrase([
+      root({ chores: chores({ mode: 'inline', state: 'inline', pid: null }) }),
+      root({ root: '/work/beta', team: 'beta', chores: chores() }),
+    ], AT),
+  ).toEqual(['chores 1 root in children (1 ok, 1 inline)']);
+});
+
 const TEXT = `format: 1
 project: acme
 coordinator: lead
@@ -378,6 +517,61 @@ test('status says an unreadable daemon as cannot tell, never as not running', as
   expect(doc.daemon.state).toBe('unknown');
   expect(doc.notes).toContain('machine daemon: cannot tell whether it is running (the daemon state record cannot be read)');
   expect(doc.notes.join('\n')).not.toContain('machine daemon: not running');
+});
+
+test('a watch record its daemon left behind never reads as the current watch', async () => {
+  const at = place();
+  // The state one daemon (pid 4242) wrote before it stopped: a hosted record carries the epoch
+  // fence, and this one is 90 minutes stale at the reading's instant.
+  updateState(at.dir, (state) => {
+    state.sessions.acme = {
+      ...state.sessions.acme!,
+      watch: { pid: 4242, epoch: 'watch_0123456789abcdef0123456789abcdef', heartbeat: '2026-10-19T07:30:00.000Z' },
+    };
+  });
+  const alive = (pid: number) => pid !== 4242;
+  const read = async (probe: () => Promise<DaemonHealth>): Promise<string[]> => {
+    const io = testIo(at.root, { kind: 'owner' });
+    const code = await runStatus(['--json'], io, { ...statusSources(at, async () => probe()), alive });
+    // The 90-minute heartbeat is its own difference; this scene reads the notes.
+    expect(code).toBe(1);
+    return (JSON.parse(io.out) as { notes: string[] }).notes;
+  };
+  // The live daemon has not reached this checkout yet and is still in a first pass over an
+  // earlier one: the note says what is happening now, and names the old process for what it is.
+  const notYet = await read(async () => health({
+    pid: 5151,
+    roots: [root({ root: '/work/demo', team: 'acme', firstPass: { running: true, scanned: 1234, doneAt: null } })],
+  }));
+  expect(notYet).toContain('root not yet hosted by daemon 5151 (first pass running)');
+  expect(notYet).toContain('watch record names a stopped daemon (pid 4242)');
+  expect(notYet.some((note) => note.includes('pid 4242, last heartbeat'))).toBe(false);
+  // The daemon hosts the checkout now, so nothing is said about a root on its way; the record is
+  // still a dead process and still says so. With no first pass running, the parenthetical is not
+  // claimed.
+  const hosted = await read(async () => health({ pid: 5151, roots: [root({ root: realpathSync(at.root) })] }));
+  expect(hosted).toContain('watch record names a stopped daemon (pid 4242)');
+  expect(hosted.some((note) => note.startsWith('root not yet hosted'))).toBe(false);
+  const behind = await read(async () => health({ pid: 5151, roots: [root({ root: '/work/demo', team: 'acme' })] }));
+  expect(behind).toContain('root not yet hosted by daemon 5151');
+  expect(behind.some((note) => note.includes('(first pass running)'))).toBe(false);
+  // The record names the live daemon, but that daemon has no row for this checkout: it is not
+  // the watch here either, and the process is alive, so nothing calls it stopped.
+  updateState(at.dir, (state) => {
+    state.sessions.acme = {
+      ...state.sessions.acme!,
+      watch: { pid: 5151, epoch: 'watch_0123456789abcdef0123456789abcdef', heartbeat: '2026-10-19T07:30:00.000Z' },
+    };
+  });
+  const otherRoots = await read(async () => health({ pid: 5151, roots: [root({ root: '/work/demo', team: 'acme' })] }));
+  expect(otherRoots).toContain('root not yet hosted by daemon 5151');
+  expect(otherRoots.some((note) => note.includes('stopped daemon'))).toBe(false);
+  // A pane watch record names a watch process, not a daemon's: its own line stands.
+  updateState(at.dir, (state) => {
+    state.sessions.acme = { ...state.sessions.acme!, watch: { pid: 4242, pane: 'lead-pane', heartbeat: '2026-10-19T07:30:00.000Z' } };
+  });
+  const pane = await read(async () => health({ pid: 5151, roots: [] }));
+  expect(pane).toContain('watch: pane lead-pane, pid 4242, last heartbeat 90 min ago');
 });
 
 test('the command wrapper probes once and the report only reads the snapshot', async () => {
@@ -675,3 +869,99 @@ test('a running watch whose last cycle failed is a note and changes no exit', ()
   expect(io.out).toContain('watch: the last cycle failed 3m ago');
   expect(io.out).toContain('no differences');
 });
+
+test('malformed firstPass state records are dropped at load and never print a false or timeless done phrase', () => {
+  const at = place();
+  const stateFile = daemonStatePath(at.home);
+  mkdirSync(join(at.home, '.config', 'team'), { recursive: true });
+  const rawRoots = [
+    { root: '/work/no-time', team: 'a', send: 'serving', bus: 'serving', why: null, firstPass: { running: false, scanned: 10, doneAt: null } },
+    { root: '/work/empty-time', team: 'b', send: 'serving', bus: 'serving', why: null, firstPass: { running: false, scanned: 10, doneAt: '' } },
+    { root: '/work/contradict', team: 'c', send: 'serving', bus: 'serving', why: null, firstPass: { running: true, scanned: 10, doneAt: AT } },
+    { root: '/work/negative', team: 'd', send: 'serving', bus: 'serving', why: null, firstPass: { running: true, scanned: -1, doneAt: null } },
+    { root: '/work/float', team: 'e', send: 'serving', bus: 'serving', why: null, firstPass: { running: true, scanned: 1.5, doneAt: null } },
+    { root: '/work/array', team: 'f', send: 'serving', bus: 'serving', why: null, firstPass: [] },
+    { root: '/work/valid-running', team: 'g', send: 'serving', bus: 'serving', why: null, firstPass: { running: true, scanned: 0, doneAt: null } },
+    { root: '/work/valid-done', team: 'h', send: 'serving', bus: 'serving', why: null, firstPass: { running: false, scanned: 1_000_000, doneAt: AT, errors: false } },
+  ];
+  writeFileSync(
+    stateFile,
+    `${JSON.stringify({
+      format: 1,
+      pid: 42,
+      uid: 501,
+      since: '2026-10-19T08:00:00.000Z',
+      startedBy: 'service-manager',
+      version: '0.5.4',
+      gitHead: null,
+      heartbeatAt: '2026-10-19T08:59:58.000Z',
+      socket: SOCKET,
+      features: { broker: 'absent' },
+      stuck: [],
+      roots: rawRoots,
+    })}\n`,
+  );
+  const parsed = readDaemonState(at.home);
+  expect(parsed.kind).toBe('ok');
+  if (parsed.kind !== 'ok') return;
+  expect(parsed.state.roots).toHaveLength(8);
+  for (let i = 0; i < 6; i += 1) {
+    expect(parsed.state.roots[i]?.firstPass).toBeUndefined();
+  }
+  expect(parsed.state.roots[6]?.firstPass).toEqual({ running: true, scanned: 0, doneAt: null });
+  expect(parsed.state.roots[7]?.firstPass).toEqual({ running: false, scanned: 1_000_000, doneAt: AT, errors: false });
+  expect(firstPassPhrases(parsed.state.roots)).toEqual([
+    'first pass running for /work/valid-running (0 files scanned)',
+    `first pass done at ${AT} for /work/valid-done`,
+  ]);
+});
+
+test('stale watch record with dead pid is never shown as current across plain-text status, stopped daemon, and live hosted watch', async () => {
+  const at = place();
+  updateState(at.dir, (state) => {
+    state.sessions.acme = {
+      ...state.sessions.acme!,
+      watch: { pid: 4242, epoch: 'watch_0123456789abcdef0123456789abcdef', heartbeat: '2026-10-19T08:59:50.000Z' },
+    };
+  });
+  const alive = (pid: number) => pid !== 4242;
+
+  // 1. Plain-text `team status` when daemon is not running (`state: 'not-running'`):
+  //    never prints `pid 4242, last heartbeat` and never prints `root not yet hosted by daemon null`.
+  const stoppedDaemonHealth: DaemonHealth = {
+    ...notRunning(),
+    pid: 4242,
+  };
+  const plainIo = testIo(at.root, { kind: 'owner' });
+  await runStatus([], plainIo, { ...statusSources(at, async () => stoppedDaemonHealth), alive });
+  expect(plainIo.out).toContain('watch record names a stopped daemon (pid 4242)');
+  expect(plainIo.out).not.toContain('pid 4242, last heartbeat');
+  expect(plainIo.out).not.toContain('root not yet hosted');
+
+  // 2. When the recorded pid IS alive (`pid: 5151`) and the live daemon hosts this root,
+  //    even if another root on the same daemon has `firstPass.running === true`, the current
+  //    watch note stands as-is.
+  updateState(at.dir, (state) => {
+    state.sessions.acme = {
+      ...state.sessions.acme!,
+      watch: { pid: 5151, epoch: 'watch_0123456789abcdef0123456789abcdef', heartbeat: '2026-10-19T08:59:50.000Z' },
+    };
+  });
+  const liveIo = testIo(at.root, { kind: 'owner' });
+  await runStatus([], liveIo, {
+    ...statusSources(at, async () =>
+      health({
+        pid: 5151,
+        roots: [
+          root({ root: realpathSync(at.root) }),
+          root({ root: '/work/demo', team: 'acme', firstPass: { running: true, scanned: 500, doneAt: null } }),
+        ],
+      }),
+    ),
+    alive,
+  });
+  expect(liveIo.out).toContain('watch: pane not recorded, pid 5151, last heartbeat 10s ago');
+  expect(liveIo.out).not.toContain('stopped daemon');
+  expect(liveIo.out).not.toContain('root not yet hosted');
+});
+

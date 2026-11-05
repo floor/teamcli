@@ -7,10 +7,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEADLINE, NOT_RUNNING, WRONG_ANSWER, type BrokerOutcome } from '../src/broker/client.ts';
 import type { BrokerRequest } from '../src/broker/protocol.ts';
-import { handleNext, type NextHandlerDeps, type NextHandlerInput, type NextClaim } from '../src/daemon/next.ts';
+import { handleNext, type NextAnswer, type NextHandlerDeps, type NextHandlerInput, type NextClaim } from '../src/daemon/next.ts';
 import { routeOf, type HostedRoute } from '../src/daemon/routes.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
+import { registerAgent } from '../src/registry/agents.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
+import { declaredInboundOf, heldSocketPath, recordHeldSocket } from '../src/send/inbound.ts';
 import { emptySession, readState, updateState, type State } from '../src/state.ts';
 import { enqueueSwap } from '../src/swap/queue.ts';
 
@@ -102,8 +105,19 @@ async function call(
   action: 'claim' | 'release' = 'claim',
   mine = false,
   deps: NextHandlerDeps = {},
+  home?: string,
+  processes?: NextHandlerInput['processes'],
 ): Promise<Awaited<ReturnType<typeof handleNext>>> {
-  const input: NextHandlerInput = { route, team, caller, action, mine, now };
+  const input: NextHandlerInput = {
+    route,
+    team,
+    caller,
+    action,
+    mine,
+    now,
+    ...(home === undefined ? {} : { home }),
+    ...(processes === undefined ? {} : { processes }),
+  };
   return handleNext(input, deps);
 }
 
@@ -154,6 +168,81 @@ describe('handleNext, file and local sources', () => {
       };
     });
     expect(await call(callerOf('worker'))).toEqual({ ok: true, kind: 'claimed', record: { id: 'urgent', title: 'the time-bound title', deadline: '2026-12-31T00:00:00Z' } });
+  });
+
+  /** The launch one socket seat leaves behind for the worker: generated settings that declare
+   *  accept, a registry record naming a standing socket, and — when `held` — the box's mark left
+   *  under the declaration now in force. Both folders are named the way the handler reads them:
+   *  the state folder under the canonical route root. A `pid` names the socket the way a session
+   *  does, so the processes a host reads for the pane can be made against it. */
+  function socketSeat(held: boolean, pid?: number): string {
+    const home = join(base, 'home');
+    mkdirSync(home, { recursive: true });
+    const dir = join(route.root, '.agents');
+    mkdirSync(join(dir, 'hooks', 'crew'), { recursive: true });
+    writeFileSync(join(dir, 'hooks', 'crew', 'worker.json'), '{"crossSessionInbound":"accept"}\n');
+    const socket = join(base, pid === undefined ? 'worker.sock' : `${String(pid)}.sock`);
+    writeFileSync(socket, '');
+    registerAgent(home, {
+      name: 'worker',
+      signing: { model: 'Test', version: '1', role: 'builder' },
+      lab: 'test-lab',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude',
+      reach: { team: teamIdOf(route.root), seat: 'worker', session: 'crew', pane: 'fixture-pane-worker', address: socket },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'team up',
+    });
+    if (held) {
+      recordHeldSocket(
+        heldSocketPath(dir, 'crew', 'worker'),
+        declaredInboundOf({ dir, root: route.root, session: 'crew', seat: 'worker', launch: 'claude' }),
+        new Date(now),
+      );
+    }
+    return home;
+  }
+
+  test('a socket seat whose box held the last frame is offered no time-bound record either', async () => {
+    const urgent = '- id: urgent\n  title: the time-bound title\n  deadline: 2026-12-31T00:00:00Z\n';
+    // Control: the recorded address stands, so the seat is push-class and takes the record.
+    project(FILE_TEAM, urgent);
+    const home = socketSeat(false);
+    expect(await call(callerOf('worker'), 'claim', false, {}, home)).toEqual({
+      ok: true,
+      kind: 'claimed',
+      record: { id: 'urgent', title: 'the time-bound title', deadline: '2026-12-31T00:00:00Z' },
+    });
+    // The same launch with the box's mark under the declaration in force: the walk would not
+    // dial again, so the seat is pull-on-turn and the record is not offered to it.
+    project(FILE_TEAM, urgent);
+    const heldHome = socketSeat(true);
+    expect(await call(callerOf('worker'), 'claim', false, {}, heldHome)).toEqual({ ok: true, kind: 'none', why: 'nothing-takeable' });
+    expect(leaseNames()).toEqual([]);
+  });
+
+  test('a recorded socket the pane’s processes no longer carry is offered no time-bound record either', async () => {
+    const urgent = '- id: urgent\n  title: the time-bound title\n  deadline: 2026-12-31T00:00:00Z\n';
+    const pid = 900101;
+    const expected: NextAnswer = {
+      ok: true, kind: 'claimed', record: { id: 'urgent', title: 'the time-bound title', deadline: '2026-12-31T00:00:00Z' },
+    };
+    // Control: the host's reading of the claimed pane carries the pid the record names, so the
+    // recorded socket is the pane's own and the seat is push-class.
+    project(FILE_TEAM, urgent);
+    const home = socketSeat(false, pid);
+    expect(await call(callerOf('worker'), 'claim', false, {}, home, { shell: pid + 1, foreground: [pid] })).toEqual(expected);
+    // The pane has been relaunched: the old file still stands, but the host's reading of the
+    // claimed pane proves the address is not its own, so the walk would not dial it, the class
+    // is pull-on-turn, and the time-bound record is not offered.
+    project(FILE_TEAM, urgent);
+    const staleHome = socketSeat(false, pid);
+    expect(await call(callerOf('worker'), 'claim', false, {}, staleHome, { shell: pid + 1, foreground: [pid + 7] }))
+      .toEqual({ ok: true, kind: 'none', why: 'nothing-takeable' });
+    expect(leaseNames()).toEqual([]);
   });
 
   test('another pane on a declared seat is refused and claims nothing', async () => {

@@ -1,0 +1,16 @@
+      ▄▀▀▄        Antigravity CLI 1.4.12
+     ▀▀▀▀▀▀       <account> (Google AI Ultra)
+    ▀▀▀▀▀▀▀▀      Gemini 4 Argon (High)
+   ▄▀▀    ▀▀▄     <workspace>
+  ▄▀▀      ▀▀▄
+
+────────────────────────────────────────────────────────────
+> Read rules/implementer.md (sha256 5e1d0a9c4b2f): your standing rules for this session; reply ready and wait for
+  your brief.
+
+● Explored 1 file (implementer.md) (ctrl+o to expand)
+⣾  Reading file...
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+esc to cancel                                                                                                  Gemini 4 Argon · high

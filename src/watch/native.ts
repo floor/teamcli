@@ -13,17 +13,15 @@ import { NO_PANE_MESSAGING } from '../send/no-pane-messaging.ts';
 //   appends one history line (`outcome: 'delivered'`, `via: 'drop'`, `failed`); a seat the file
 //   marks `human` walks this leg alone, whatever its fallback holds: every kept-out leg (`mcp-inbox`,
 //   `typed`) is recorded in `failed` with the same human reason the send gives;
-// - for `mcp-inbox`: writes the same 0600 drop file into the seat's own inbox when a live listener
-//   is there, marks it pending with `leg: 'mcp-inbox'` and appends one history line (`outcome:
-//   'sent (unconfirmed)'`, `via: 'mcp-inbox'`) — the watch's own inbox pass promotes a read and
-//   types the trigger once the fallback window ends; without a listener it records
-//   `mcp-inbox: no live inbox listener` and continues to the next leg;
+// - for `mcp-inbox`: no leg at all in this build (src/send/walk-cascade.ts): the MCP inbox is the
+//   store's reader and a push from an MCP server is not a wake. A record an older build wrote
+//   keeps the word; the pass records `mcp-inbox: <unavailable>` and continues to the next leg;
 // - for `typed`: writes the 0600 drop file, delivers the trigger when the seat is free (or marks
 //   the drop pending for `retryHeldDrops`), and appends the history line.
 import { chmodSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { readTeamConfig } from '../file/team-config.ts';
-import { claimBindingIn, inboxLive, receiptHeld } from '../mcp/inbox.ts';
+import { claimBindingIn, receiptHeld } from '../mcp/inbox.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import { seatProcessVerdict } from '../launch/identity.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
@@ -44,6 +42,7 @@ import {
   type PendingNativeFallbackLeg,
 } from '../send/pending.ts';
 import { markTaken } from '../send/taken.ts';
+import { MCP_INBOX_UNAVAILABLE } from '../send/walk-cascade.ts';
 import { readState } from '../state.ts';
 import type { RetryScene } from './retry.ts';
 import { readScreen } from './screen.ts';
@@ -140,7 +139,9 @@ async function expireOne(
   const taken = takePending(scene.team.project, scene.root, home, record.id);
   if (!taken.ok) return;
 
-  const declaredLegs: readonly PendingNativeFallbackLeg[] = record.fallback ?? ['mcp-inbox', 'typed', 'drop'];
+  // A new record names the cascade's legs; an `mcp-inbox` word only comes from a record an
+  // older build wrote, and is read as unavailable below.
+  const declaredLegs: readonly PendingNativeFallbackLeg[] = record.fallback ?? ['typed', 'drop'];
   // The bus inbox closes every expiry walk (src/send/no-pane-messaging.ts).
   const rawLegs: readonly PendingNativeFallbackLeg[] = declaredLegs.includes('drop') ? declaredLegs : [...declaredLegs, 'drop'];
   const human = isHumanSeat(scene, home, record);
@@ -151,7 +152,8 @@ async function expireOne(
   if (human) {
     for (const leg of rawLegs) {
       if (leg === 'mcp-inbox') {
-        failures.push("mcp-inbox: the pane is a human's, and the drop leg is the only one walked");
+        // No seat walks this name (ADR D1): the store's reader, never a spared pane leg.
+        failures.push(`mcp-inbox: ${MCP_INBOX_UNAVAILABLE}`);
       } else if (leg === 'typed') {
         failures.push("typed: the pane is a human's, and nothing is typed into it");
       }
@@ -167,60 +169,11 @@ async function expireOne(
 
   for (const leg of legs) {
     if (leg === 'mcp-inbox') {
-      // The seat's own inbox is a leg this build walks: a live listener beside the message means
-      // the handoff's body is written into it — the same 0600 drop the send's inbox leg leaves —
-      // and the watch's own passes take it from there, promoting a read or typing the trigger once
-      // the fallback window ends. No listener is a leg that definitely cannot take it.
-      const live = inboxLive(dropDir, record.root, record.session, record.to);
-      if (!live.live) {
-        failures.push(`mcp-inbox: ${live.reason}`);
-        continue;
-      }
-      const lock = acquireSeatLock(toDir, record.session, record.to);
-      if (!('release' in lock)) {
-        restoreTaken(taken.taken, scene.team.project, scene.root, home, record.id);
-        return;
-      }
-      try {
-        try {
-          writeRecordFile(record, home);
-        } catch {
-          restoreTaken(taken.taken, scene.team.project, scene.root, home, record.id);
-          return;
-        }
-        // The marker names the inbox leg, so the retry pass never mistakes this message for a
-        // held typed send: a receipt promotes it, and only the fallback window lets it be typed.
-        markPending(dropDir, {
-          id: record.id,
-          from: record.from,
-          to: record.to,
-          body: record.body,
-          ts: scene.now.toISOString(),
-          thread: record.thread ?? record.id,
-          leg: 'mcp-inbox',
-        });
-        appendHistory(record.project, record.root, home, {
-          ts: scene.now.toISOString(),
-          from: record.from,
-          to: record.to,
-          ...sentAs,
-          body: record.body,
-          id: record.id,
-          thread: record.thread ?? record.id,
-          outcome: 'sent (unconfirmed)',
-          ms: elapsedMs,
-          via: 'mcp-inbox',
-          failed: [...failures],
-        });
-        dropTaken(taken.taken);
-        scene.say(
-          `${record.to}: a native handoff from ${record.from} was unconfirmed after 10m; written to its MCP inbox`,
-          false,
-        );
-        return;
-      } finally {
-        lock.release();
-      }
+      // A name this build reads but never walks (src/send/walk-cascade.ts): the MCP inbox is the
+      // store's reader, and a push from an MCP server is not a wake. Only a record an older build
+      // wrote names it; the pass records the word and moves to the leg behind it.
+      failures.push(`mcp-inbox: ${MCP_INBOX_UNAVAILABLE}`);
+      continue;
     }
 
     if (leg === 'drop') {
@@ -333,7 +286,7 @@ async function expireOne(
         // not typed nameless: the record stays on disk and the message waits for the unread
         // report's words.
         const sender = wakeTrigger({ ...record, at: record.ts }, home, { root: scene.root, session: record.session, team: scene.team }, scene.now);
-        const line = sender === null ? null : readTriggerLine(record.to, record.session, sender);
+        const line = sender === null ? null : readTriggerLine(record.to, record.session, sender, record.cli);
         if (pane !== undefined && line !== null) {
           const status = scene.sources.status(pane, record.session);
           const screen = scene.sources.screen(pane, record.session);

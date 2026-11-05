@@ -131,8 +131,11 @@ test('a real bus announces the Codex drop once to its synthetic webhook', async 
   if (result.kind !== 'serving') throw new Error('synthetic bus did not start');
   bus = result.handle;
   const io = await send();
-  expect(io.out).toContain('woken through its event adapter');
-  expect(io.out).not.toContain('queued; its webhook fires');
+  // The bus takes the arrival and posts it. The send's own webhook post was tried first and
+  // provably failed (the fixture's closed port), so the released claim lets the bus carry it and
+  // the line keeps the queued words.
+  expect(io.out).toContain('queued; its webhook fires when the bus takes it');
+  expect(io.out).not.toContain('woken through its event adapter');
   expect(posts).toHaveLength(1);
   expect(posts[0]?.body).toEqual(expect.objectContaining({ event: expect.objectContaining({ payload: expect.objectContaining({ kind: 'message.arrived', to: 'native', record_id: id }) }) }));
   expect(calls()).toEqual([]);

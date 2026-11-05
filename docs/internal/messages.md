@@ -7,13 +7,23 @@ page.
 
 ## What the run does: the mailbox, the receipt, the key
 
-Shows a message that is already waiting and writes the receipt that says it was shown. Anyone in
-the checkout may run it. It verifies the record, publishes the signed read receipt with the same
+Shows a message that is already waiting in the caller's mailbox and writes the receipt that says
+it was shown. The run serves one mailbox: the owner's, or the seat its caller is placed as in the
+team's session, by the same placement `team send` and `team ack` judge. It verifies the record,
+publishes the signed read receipt with the same
 exclusive, no-clobber link the inbox uses, makes it durable, and then prints the body. The receipt
 is the per-id gate every reader shares, so a message another reader already served is skipped, and
 no body is shown without the receipt that proves the exposure. A record that does not verify
 prints no body and writes nothing. The older `.agents/messages` store keeps its own receipt shape
 and its original print-then-write order.
+
+The record stores are shared, so a run still sees records addressed to other seats. It lists one
+`waiting` row for each — the fields a key can verify — and writes no receipt for it: the receipt
+is the read that spends an id, and only the addressed mailbox's own reader may spend it. A seat's
+run carries no body on those rows. The owner's run is the whole session's read-only view: its
+waiting rows carry the verified body, and they still write no receipt, because the record is not
+the owner mailbox's to spend. A record that does not verify carries no body in either reading.
+A caller the placement cannot resolve reads nothing at all: no row, no body, no receipt, exit 1.
 
 `team send` writes the record: one signed message per send, into the recipient's folder
 `<root>/.agents/send-drops/<session>/<seat>/<id>`, before the leg that carries it runs. The
@@ -25,9 +35,9 @@ waits for the seat's turn-start read or a reader running `team messages`, and th
 writes one. A message a
 previous build left in `.agents/messages/<seat>/` is read the same way. The owner's mailbox is
 `.agents/messages/owner/`: the Runtime writes one signed record there for each event it delivers
-to the owner, its `from` is `runtime`, and the run lists it and writes its receipt like any other
-record (see [the event log and the bus](events.md)). A report to the owner still goes to the log,
-and also to the desktop notification.
+to the owner, its `from` is `runtime`, and the owner's run lists it and writes its receipt like any
+other record of that mailbox (see [the event log and the bus](events.md)). A report to the owner
+still goes to the log, and also to the desktop notification.
 
 The signature is integrity, not authenticity. Every seat runs as the owner-user, so a signature
 says the record was not rewritten after it was signed. It does not say which seat sent it. `from`
@@ -73,15 +83,17 @@ that happened, so it is preserved and the record is a `refused` row with no body
 difference tells the caller to inspect the file rather than remove it. A link, a FIFO or a folder
 at either name is refused the same way.
 
-A waiting general seat brief is not a message this mailbox serves. Its read is bound to the seat's
+A waiting general seat brief in the caller's own mailbox is not a message this run serves. Its read
+is bound to the seat's
 current claim — the incarnation, the delivered digest and the runtime epoch — so only the seat's
 own readers write that receipt, `team drops --read` and the inbox's `inbox_read`. The run verifies
 the record like any other, then skips it: no row, no body, no receipt, and no claim or state read.
 One note names each seat it skipped — `<seat>: the general seat brief is not shown here; the
 seat's own turn-start reader serves it.` — in the text reading and in `notes` under `--json`. The
 skip comes after verification, so a brief that does not verify is still a refused row with its
-difference and its `record.invalid` event. The counts stay `messages = shown + refused`: a skipped
-brief is in neither. A brief that already has a receipt is skipped by the waiting filter before
+difference and its `record.invalid` event. The counts stay `messages = shown + refused + waiting`:
+a skipped brief is in neither `shown` nor `refused`, and a brief waiting for another mailbox is a
+plain `waiting` row. A brief that already has a receipt is skipped by the waiting filter before
 this point, and no receipt is ever rewritten.
 
 The second run, once every waiting record has a receipt, prints the zero-message reading: the
@@ -89,22 +101,28 @@ table's headers and no rows, `note: nothing is waiting`, and `0 messages`.
 
 Under `--json` the reading is one `team.messages` v1 document on stdout, its `schema` tag first:
 `format`, `project`, `session`, every row as `{ id, from, to, sent, sent_display, status, body? }`
-— `sent` the exact ISO string `SENT` renders as an age, `body` only on a row that verified — then
+— `sent` the exact ISO string `SENT` renders as an age, `body` only on a row whose record
+verified (a `shown` row, or a `waiting` row in the owner's reading), the status `shown`, `refused`
+or `waiting` — then
 `notes`, `differences` (each `{ what, repair, who }`), `summary` (the `differences` and
 `owner_differences` counts every reading envelope carries) and `counts` (`messages`, `shown`,
-`refused`, the table's own closing figures). An empty mailbox's document carries no rows, the note
-`nothing is waiting`, and three zero counts. An invocation, root, team-file or key refusal
+`refused`, `waiting`, the table's own closing figures). An empty mailbox's document carries no
+rows, the note `nothing is waiting`, and four zero counts. An invocation, root, team-file, caller
+or key refusal
 under `--json` writes a `team.error` v1 document on stdout instead — `messages.invocation`,
-`messages.not-a-repo`, `messages.file` or `messages.key`, its `message` and a null `repair` — and
-stderr stays empty. The exit code is the same as without `--json`.
+`messages.not-a-repo`, `messages.file`, `messages.caller` or `messages.key`, its `message` and a
+null `repair` — and stderr stays empty. The exit code is the same as without `--json`.
 
 `team init` lists `.agents/messages/` in `.git/info/exclude`, the same way it lists the team file.
 
 ## Who may run it
 
-Anyone in the checkout. The watch asks the recipient's pane to run it. The command shows every
-waiting message in the checkout, not only the caller's: a seat runs as the owner-user, and the
-mailbox is not a wall between seats.
+The owner, or a seat of the team's session, placed by the caller rules `team send` and `team ack`
+use. The watch asks the recipient's pane to run it, so a seat reads only its own mailbox. There is
+no checkout-wide view that spends mail: a caller the placement cannot resolve reads nothing — no
+row, no body, no receipt — and records for other mailboxes list as `waiting` rows without
+receipts; a seat's reading carries no body for them, and the owner's reading carries the verified
+body read-only.
 
 ## Refusals
 
@@ -143,7 +161,9 @@ repair names the file the table already shows:
 The unsupported difference is a record the message key signed that this version cannot read: its
 signed fields are not all ones this version knows (`the signed record carries fields this version
 does not read: <names>`), or a known field is not the shape it writes. The signature holds, so it
-is refused on the schema's ground, not the key's — and its fields are never acted on.
+is refused on the schema's ground, not the key's — and its fields are never acted on. A known
+field carrying a value this version does not know is not this difference: a message kind from a
+newer writer is dropped, and the record is served as the plain message it is.
 
 A file in the older store prints the same differences with `.agents/messages/<seat>/<id>.json` in
 place of the record's path, and its shape refusal reads `the record is not a message`.

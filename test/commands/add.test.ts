@@ -409,18 +409,23 @@ describe('team add', () => {
     expect(made.creates).toEqual(['worker-tmp.2']);
   });
 
-  test('a dev-mode add records the mark and the caller it admitted', async () => {
+  test('a dev-mode add records the mark and the lead it admitted', async () => {
+    // The lift admits the team's own lead, placed on the pane its state records: the helper
+    // seat of the older scenes is refused, so the mark's scene is the lead's.
+    updateState(join(project, '.agents'), (state) => {
+      (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'synthetic-pane-lead' };
+    });
     const made = world();
-    const io = testIo(project, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
+    const io = testIo(project, { kind: 'seat', name: 'lead', pane: 'synthetic-pane-lead', session: 'acme' });
     io.env = { TEAMCLI_DEV_MODE: '1' };
     expect(await runAdd(['worker'], io, sources(made))).toBe(0);
-    expect(io.err).toContain('team add: warning: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is helper; dev mode continues\n');
+    expect(io.err).toContain('team add: warning: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is lead; dev mode continues\n');
     // The launch's write says the run was folded and who it admitted: the record a later
-    // `team check` reads names the helper, and the owner's own write is what takes it off.
+    // `team check` reads names the lead, and the owner's own write is what takes it off.
     const record = readAgents(home).find((agent) => agent.reach.seat === 'worker');
     expect(record?.provenance.dev_mode).toBe(true);
-    expect(record?.provenance.dev_mode_by).toBe('helper');
-    expect(record?.provenance.registered_by).toBe('helper');
+    expect(record?.provenance.dev_mode_by).toBe('lead');
+    expect(record?.provenance.registered_by).toBe('lead');
   });
 
   test('dev mode stands the live file in for the approval add asks for, and only dev mode does', async () => {
@@ -1159,7 +1164,7 @@ describe('team add', () => {
     expect(seats.worker).toMatchObject({ pane: 'w9:p1', launched: { shell: 900, cli: [901] }, agent_session: 'kept' });
   });
 
-  test('a shell in front is still closed without input and launched fresh', async () => {
+  test('a shell in front is launched again in its own pane', async () => {
     updateState(join(project, '.agents'), (state) => {
       const session = state.sessions.acme ?? emptySession();
       session.seats.worker = { stage: 'launched', workspace: 'w9', pane: 'w9:p1', launched: { shell: 400, cli: [401] }, agent_session: 'kept' };
@@ -1186,8 +1191,11 @@ describe('team add', () => {
     }));
     expect(code).toBe(0);
     expect(keys).toEqual([]);
-    expect(closes).toEqual(['w9']);
-    expect(io.err).toContain('  its pane held no CLI; closed without input and launched again\n');
+    // Its pane is still its own, at its shell: the line runs there again, and nothing is
+    // closed or made for it.
+    expect(closes).toEqual([]);
+    expect(made.creates).toEqual([]);
+    expect(io.err).toContain(`worker: its recorded pane ${listed.pane} was at its shell; launched in the same pane\n`);
   });
 
   describe('a replaced seat with no stored session is left before any close', () => {
@@ -1819,7 +1827,7 @@ describe('team add, the session mutator lock', () => {
     const io = testIo(project, owner);
     expect(await runAdd(['worker'], io, sources(made))).toBe(1);
     expect(io.err).toBe(
-      `team add: another session-mutating run is holding session acme (pid ${process.pid}); try again when it is done\n`,
+      `team add: another session-mutating run is holding session acme (pid ${process.pid}, no start time recorded); try again when it is done\n`,
     );
     expect(io.out).toBe('');
     expect(made.session).toBe('absent');

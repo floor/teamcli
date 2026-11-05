@@ -9,6 +9,7 @@ import { callerOf, isOwner, type Caller } from '../caller.ts';
 import { checkCommands, type ApprovedCheck } from '../budgets/checks.ts';
 import { parseOutput, runCommand, type CheckReading } from '../budgets/run.ts';
 import { shownTeamFile } from '../check/team.ts';
+import { widenedGrantNotes } from '../client/general-grant.ts';
 import { canonicalLanding as showLanding } from '../file/landing.ts';
 import { isParseError } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -22,12 +23,13 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import { verifyLobby } from '../lobby/gate.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
 import { launchBinary, launchLineFindings } from '../launch/line.ts';
+import { featureMismatch } from '../launch/features.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { lobbyFileOwners, profileFor, shippedLobbyFiles, shippedStartupReads } from '../profiles/index.ts';
 import { checkRulesFile, rulesFilePath } from '../launch/rules-file.ts';
 import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
 import { overridesInForceOf, quotaWith } from '../profiles/overrides.ts';
-import { versionVerdict, type Profile } from '../profiles/profile.ts';
+import { cliWordList, versionVerdict, type Profile } from '../profiles/profile.ts';
 import { extractFolder, isEligible, versionMatches } from '../profiles/trust-answer.ts';
 import { holdText, liveHold, readState, type SeatState } from '../state.ts';
 import { canShowModel, modelDiffers, seatModel } from '../status/statusline.ts';
@@ -564,6 +566,33 @@ function identityFindings(team: TeamFile, dir: string, session: string): Finding
   return findings;
 }
 
+// A seat recorded as running whose launch line does not carry the one feature set its profile
+// pins: the launch that wrote the record predates the pin, or the file names its own feature
+// words. Every seat of such a CLI joins one background server, and a front end whose settings
+// differ is refused until its owner chooses "run without daemon", which costs the seat the route
+// its drops arrive on. The repair is a relaunch, which records the pinned line. The reading is
+// the RECORDED launch line in team's own state, never a running process's command line; a
+// record that holds no line says unknown rather than a guess. A seat the state does not record
+// was not left running by this session and is not named.
+function featureFindings(team: TeamFile, dir: string, session: string): Finding[] {
+  const recorded = readState(dir).sessions[session]?.seats ?? {};
+  const findings: Finding[] = [];
+  for (const seat of team.seats) {
+    if (seat.stopped) continue;
+    const features = profileFor(seat.cli)?.features ?? [];
+    if (features.length === 0) continue;
+    const held = recorded[seat.name];
+    if (!held) continue;
+    // The line is read through the launch scope: a pin inside a quoted script that runs the CLI
+    // is one the CLI reads, and a line that scope cannot decode is reported as unreadable rather
+    // than as carrying a pin written after a script the CLI never receives.
+    const said = featureMismatch(held.launch_line, features, held.launch_line === undefined ? undefined : cliWordList(seat.cli, held.launch_line));
+    if (said === null) continue;
+    findings.push({ level: 'warn', text: `${seat.name}: ${said}; run \`team restart ${seat.name}\`` });
+  }
+  return findings;
+}
+
 // A lead `team remove <lead> --keep` stopped for a swap and nothing started again: the file still
 // names it the lead, the state no longer records it running. Said as the swap it is, with the one
 // command that ends it, so the gap never reads as a lost orchestrator. A record whose seat runs
@@ -711,6 +740,7 @@ export function doctorFindings(
   findings.push(...identityFindings(team, dir, session));
   findings.push(...swapFindings(team, dir, session));
   findings.push(...placeholderVersionFindings(team, dir, session, sources));
+  findings.push(...featureFindings(team, dir, session));
 
   findings.push(...watchFindings(watchInForceOf(standing, team), dir, session, running, sources.now(), sources));
   findings.push(...trustFindings(team, root, dir, session, sources));
@@ -995,6 +1025,9 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
           launchLineFindings(team, root, { onPath: (binary) => sources.onPath(binary), home: sources.home }),
           rulesOriginOf(loaded.source),
         ),
+        // A wildcard general grant signed before the release that first shipped an op reaches that
+        // op without a new approval: one `note` finding per grant, in neither count, blocking nothing.
+        ...widenedGrantNotes(sources.home, sources.now()).map((text): Finding => ({ level: 'note', text })),
         // The machine's own reading, last: the one check no machine can ever meet here.
         ...machineFindings(team, root, sources),
         // The team's hold, when one stands: the last line before the summary.

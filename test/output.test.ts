@@ -907,6 +907,40 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           }],
         }),
       ],
+      'team.trace': [
+        jsonEnvelope('team.trace', {
+          format: 1 as const,
+          project: 'beacon',
+          session: 'beacon',
+          id: '55555555-5555-4555-8555-555555555555',
+          steps: [
+            {
+              seq: 4,
+              ts: '2026-10-17T12:00:00.000Z',
+              kind: 'message.staged',
+              record_id: '55555555-5555-4555-8555-555555555555:staged',
+              from: 'lead',
+              to: 'worker',
+              thread: '55555555-5555-4555-8555-555555555555',
+              delta_ms: null,
+            },
+            {
+              seq: 5,
+              ts: '2026-10-17T12:00:00.012Z',
+              kind: 'leg.tried',
+              record_id: '55555555-5555-4555-8555-555555555555:leg.tried:drop',
+              from: 'lead',
+              to: 'worker',
+              via: 'drop',
+              outcome: 'delivered',
+              ms: 12,
+              delta_ms: 12,
+            },
+          ],
+          summary: '2 steps',
+          unverified: 0,
+        }),
+      ],
       'team.init': [
         jsonEnvelope('team.init', {
           format: 1 as const,
@@ -955,7 +989,7 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           notes: [],
           differences: [],
           summary: { differences: 0, owner_differences: 0 },
-          counts: { messages: 0, shown: 0, refused: 0 },
+          counts: { messages: 0, shown: 0, refused: 0, waiting: 0 },
         }),
       ],
       'team.messages.client': [

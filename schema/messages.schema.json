@@ -91,7 +91,8 @@
             "type": "string",
             "enum": [
               "shown",
-              "refused"
+              "refused",
+              "waiting"
             ]
           },
           "body": {
@@ -161,7 +162,8 @@
       "required": [
         "messages",
         "shown",
-        "refused"
+        "refused",
+        "waiting"
       ],
       "properties": {
         "messages": {
@@ -173,6 +175,10 @@
           "minimum": 0
         },
         "refused": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "waiting": {
           "type": "integer",
           "minimum": 0
         }

@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { StoredReading, StoredSpend } from './budgets/readings.ts';
 import { BRIEF_ID_PATTERN, isBriefEpoch, isBriefId, isBriefIncarnation } from './launch/brief-id.ts';
+import { folderProblem, heldAt } from './held.ts';
 import { validLockName } from './lock/name.ts';
 import type { CliWatcher } from './launch/cli-hook.ts';
 import type { LaunchedIdentity } from './launch/identity.ts';
@@ -12,6 +13,7 @@ import type { DialogKind } from './watch/dialog.ts';
 import { isWatchEpoch } from './watch/epoch.ts';
 import { isPresenceBinding } from './daemon/presence/contract.ts';
 import type { CodexEndpointRecord } from './daemon/presence/endpoint-record.ts';
+import type { WebhookOutcome } from './bus/webhook.ts';
 
 // What a team keeps: the live session's seats, worktrees and watch, and the project's last
 // readings, which outlive every session (§ 4.4). It lives beside the team file and is written by
@@ -163,6 +165,14 @@ export type SeatState = {
     offset: number;
   };
   /**
+   * The seat's last webhook delivery, as the bus recorded it. A later delivery replaces it, a
+   * delivered one clears the note it would draw. Written only by the bus, for a seat whose row
+   * exists; `team check` and `team status` note a seat whose last delivery did not arrive, and
+   * nothing reads it to route or gate. Absent on a seat no bus has delivered for and on every
+   * record an older build wrote.
+   */
+  webhook_delivery?: WebhookDeliveryRecord;
+  /**
    * What this launch declared, written when the idle prompt appears and left in place when a
    * later ready write merges onto the record. A skip of a seat that is already ready does not
    * set them: the file may have drifted, and the record has to stay the launch. Absent on a
@@ -273,6 +283,22 @@ export type QueuedSwap = {
  * hold at all (`liveHold`), so an expired record needs no writer to clear it.
  */
 export type HoldRecord = { reason: string; by: string; at: string; until?: string };
+
+/**
+ * A seat's last webhook delivery, as the bus recorded it after the attempt: what it ended as,
+ * how many attempts it made, the fixed-words reason the last attempt ended on, and the record it
+ * carried. `at` is the instant the delivery ended — the failure time a reader prints. Evidence
+ * only: no command routes, gates or repairs from it.
+ */
+export type WebhookDeliveryRecord = {
+  /** The signed record's id, as the arrival named it. */
+  record_id: string;
+  /** ISO 8601 instant the delivery ended. */
+  at: string;
+  outcome: WebhookOutcome;
+  attempts: number;
+  reason: string;
+};
 
 /**
  * One seat's place when the team was paused: the stage its record held, the branch and folder of
@@ -463,6 +489,20 @@ function isHoldRecord(value: unknown): value is HoldRecord {
   if (Number.isNaN(Date.parse(hold.at))) return false;
   if (hold.until !== undefined && (typeof hold.until !== 'string' || Number.isNaN(Date.parse(hold.until)))) return false;
   return true;
+}
+
+/** Whether a value from the state file is the record the bus writes for a webhook delivery: the
+ *  closed outcome list, a count of attempts, a fixed-words reason, a record id and a parseable
+ *  instant. Any other value is not evidence and is dropped at the read door. */
+function isWebhookDeliveryRecord(value: unknown): value is WebhookDeliveryRecord {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const one = value as Partial<WebhookDeliveryRecord>;
+  const outcomes: readonly string[] = ['delivered', 'failed', 'refused', 'sent-unknown'];
+  return typeof one.record_id === 'string' && one.record_id !== ''
+    && typeof one.at === 'string' && !Number.isNaN(Date.parse(one.at))
+    && typeof one.outcome === 'string' && outcomes.includes(one.outcome)
+    && Number.isInteger(one.attempts) && (one.attempts as number) >= 0
+    && typeof one.reason === 'string' && one.reason !== '';
 }
 
 /** The hold in force at `now`: the stored record, or null when none stands — none stored, or
@@ -704,6 +744,12 @@ export function readState(dir: string): State {  const path = join(dir, STATE_FI
       // model or launch line is.
       if (seat.agent_session !== undefined && (typeof seat.agent_session !== 'string' || seat.agent_session === '')) {
         delete seat.agent_session;
+      }
+      // A webhook delivery record enters from the file like every other value: one the bus wrote
+      // has the closed outcome, a count, a reason and a parseable instant, and anything else is
+      // dropped whole rather than printed as a failure the bus never reported.
+      if (seat.webhook_delivery !== undefined && !isWebhookDeliveryRecord(seat.webhook_delivery)) {
+        delete seat.webhook_delivery;
       }
       if (seat.waiting && typeof seat.waiting === 'object') {
         seat.waiting.classification = cleanClassification(seat.waiting.classification);
@@ -1035,23 +1081,68 @@ export class LockBusyError extends Error {
   }
 }
 
+/** What stands at the lock folder now, read with `lstat` and the ladder's own rule
+ *  (`folderProblem`, the rule `ensureFoldersBelow` in send/history.ts applies): a link, a FIFO,
+ *  anything that is not a folder, or another user's folder refuses. A missing folder is not a
+ *  problem — the lock makes it. A caller that must report a refusal reads the folder once. */
+function lockFolderAt(dir: string): { held: ReturnType<typeof heldAt>; problem: string | null } {
+  const held = heldAt(dir);
+  return { held, problem: folderProblem(held, 'lock') };
+}
+
 // One writer at a time. The lock file holds its holder's pid; a lock whose holder is dead is
 // taken over, and `onStale` is told. `waitMs: 0` tries once and throws `LockBusyError` at the
 // first held lock instead of pausing, so a caller on a scheduler tick can defer the same work to
 // a later tick without blocking its event loop.
 export function withLock<T>(dir: string, work: () => T, options: { waitMs?: number; onStale?: (pid: number) => void } = {}): T {
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
   const path = join(dir, LOCK_FILE);
   const waitMs = options.waitMs ?? 5000;
   const deadline = Date.now() + waitMs;
+  // A reclaimer may remove this folder while we still hold its key: the folder is recreated
+  // under us, the same way a missing one is made on the first pass. The count bounds the loop
+  // against a path that can never be created.
+  let recreated = 0;
   for (;;) {
+    // Before the first write, the lock folder is held to the same lstat rule as every folder
+    // below the state store (`folderProblem`): a link, a FIFO, anything that is not a folder,
+    // or another user's folder refuses and is never followed or written through.
+    const opening = lockFolderAt(dir);
+    if (opening.problem !== null) throw new Error(`${dir}: ${opening.problem}`);
+    try {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // A reclaimer can remove this folder in the instant the platform makes it, and the
+      // platform then reports EEXIST for a folder that is no longer there (measured: the sweep
+      // scene's acquirer failed 4 of 4 runs with "EEXIST: file already exists, mkdir '<lock
+      // folder>'" thrown at this call). A folder that is still there is what the open below
+      // wants; a folder now gone is made again, within the same bound as the open's retries.
+      // ENOENT is the same race one step earlier. What the platform reports for a node that
+      // stands and is not ours to use is a refusal, never a retry.
+      const after = lockFolderAt(dir);
+      if (after.problem !== null) {
+        throw new Error(`${dir}: ${after.problem}`);
+      } else if (code === 'EEXIST' && after.held.kind === 'folder') {
+        // The folder is there after all: fall through to the open, which takes the key or
+        // reports who holds it.
+      } else if ((code === 'ENOENT' || code === 'EEXIST') && recreated++ < 8) {
+        continue;
+      } else {
+        throw error;
+      }
+    }
     try {
       const fd = openSync(path, 'wx');
       writeFileSync(fd, `${process.pid}\n`);
       closeSync(fd);
       break;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const code = (error as NodeJS.ErrnoException).code;
+      // A create can meet a folder removed under it as ENOENT; the platform also reported EINVAL
+      // when the folder was recycled between the mkdir and the open (measured on macOS APFS). Both
+      // mean "the folder is not there now": recreate it and try again, at most eight times.
+      if ((code === 'ENOENT' || code === 'EINVAL') && recreated++ < 8) continue;
+      if (code !== 'EEXIST') throw error;
       let holder = NaN;
       try {
         holder = Number(readFileSync(path, 'utf8').trim());
@@ -1068,7 +1159,13 @@ export function withLock<T>(dir: string, work: () => T, options: { waitMs?: numb
       // process — so anything that is not a positive integer is young, not stale. Past the
       // one-second window a pid-less lock is stale by this age heuristic alone; that is not
       // proof its writer is dead, and no takeover pretends otherwise.
-      if (!(Number.isInteger(holder) && holder > 0) && Date.now() - statSync(path).mtimeMs < 1000) {
+      let fresh = false;
+      try {
+        fresh = Date.now() - statSync(path).mtimeMs < 1000;
+      } catch {
+        continue; // released, or the folder was reclaimed, between the read and the stat
+      }
+      if (!(Number.isInteger(holder) && holder > 0) && fresh) {
         if (waitMs === 0) throw new LockBusyError(path, null);
         pause(20);
         continue;
@@ -1082,5 +1179,56 @@ export function withLock<T>(dir: string, work: () => T, options: { waitMs?: numb
     try {
       unlinkSync(path);
     } catch {}
+  }
+}
+
+/** What a reclaim of one lock folder did: removed, kept (a holder is live, the lock is young,
+ *  or the folder is not empty), or already absent. */
+export type LockReclaim = 'removed' | 'kept' | 'absent';
+
+// Reclaims a lock folder whose work is over: no lock file at all, or one whose holder is gone.
+// A live holder keeps it, and so does a lock file too young to hold its pid yet — the same
+// one-second rule `withLock` uses. An empty folder is left for `youngMs` first: a live acquirer
+// may be between its `mkdir` and its `open`, and one that is reclaimed under it recreates it
+// (see `withLock`), but the grace keeps that from being the common case.
+export function reclaimLockDir(dir: string, options: { youngMs?: number } = {}): LockReclaim {
+  const youngMs = options.youngMs ?? 60_000;
+  const path = join(dir, LOCK_FILE);
+  let held = true;
+  let holder = NaN;
+  try {
+    holder = Number(readFileSync(path, 'utf8').trim());
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return 'kept';
+    held = false;
+  }
+  if (!held) {
+    try {
+      // A zero grace disables the wait outright: the age is computed from a millisecond clock and
+      // a sub-millisecond mtime can read as a hair in the future, which no grace should keep.
+      if (youngMs > 0 && Date.now() - statSync(dir).mtimeMs < youngMs) return 'kept';
+      rmdirSync(dir);
+      return 'removed';
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'kept';
+    }
+  }
+  if (Number.isInteger(holder) && holder > 0 && pidAlive(holder)) return 'kept';
+  if (!(Number.isInteger(holder) && holder > 0)) {
+    try {
+      if (Date.now() - statSync(path).mtimeMs < 1000) return 'kept';
+    } catch {
+      return 'kept'; // released while we read it; the folder is the next pass's to judge
+    }
+  }
+  if (!takeOver(path, holder)) return 'kept';
+  // `takeOver` restores the file when it found a different live holder in between; the folder
+  // then stays with that holder's key.
+  if (existsSync(path)) return 'kept';
+  try {
+    rmdirSync(dir);
+    return 'removed';
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'kept';
   }
 }

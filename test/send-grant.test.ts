@@ -3,7 +3,7 @@
 // does not name. Fake host, synthetic home, no live session and no pane touched.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
@@ -13,7 +13,8 @@ import type { NativePane } from '../src/send/native.ts';
 import { readSendGrants } from '../src/send/grants.ts';
 import { updateState } from '../src/state.ts';
 import { keyOf, signDomain } from '../src/store/keys.ts';
-import { recordBody, testIo } from './helpers.ts';
+import { dropNames, recordBody, testIo } from './helpers.ts';
+import { withoutSendId } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-16T12:00:00.000Z');
 const DOMAIN = 'team-send-grant-v1\n';
@@ -250,11 +251,11 @@ describe('team send: the owner-signed grant on the command path', () => {
     const { code, err, out } = helperSend(root, sockets);
     expect(await code).toBe(0);
     expect(err()).toContain('native: queued, no event adapter');
-    expect(out()).toBe(
-      'team other, session "else"\nnative: sent (unconfirmed) (drop, 0 ms); queued; native reads it at its next turn (pull-only)\n',
+    expect(withoutSendId(out())).toBe(
+      'team other, session "else"\nnative: queued, not woken (drop, 0 ms); queued; native reads it at its next turn, and nothing here gives it one (pull-only)\n',
     );
     const drops = join(otherDir, 'send-drops', 'else', 'native');
-    const names = readdirSync(drops).filter(
+    const names = dropNames(drops).filter(
       (name) => !name.endsWith('.pending') && !name.endsWith('.fallback.json') && !name.endsWith('.meta.json'),
     );
     expect(names).toHaveLength(1);

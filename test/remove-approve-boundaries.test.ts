@@ -483,7 +483,9 @@ describe('the everyday commands with an old approval record on disk', () => {
         return true;
       },
       pressEnter(_session: string, pane: string) {
+        // A delivered Enter sends the text out of the box, and the pane leaves with it.
         gone.add(pane);
+        boxes.set(pane, IDLE_BOX);
         return true;
       },
       agentPanes: () => people().map((one) => one.pane).filter((pane) => !gone.has(pane)),

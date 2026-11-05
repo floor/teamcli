@@ -9,11 +9,32 @@
       "trigger": "team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
     },
     {
+      "code": 0,
+      "command": "ack",
+      "id": "ack.scoped",
+      "meaning": "every record of the seat due by the window was marked read, or already was",
+      "trigger": "team ack --seat worker --older-than 7d"
+    },
+    {
       "code": 1,
       "command": "ack",
       "id": "ack.refused",
       "meaning": "the message can't be marked read, or the call is not the record's addressee",
       "trigger": "team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+    },
+    {
+      "code": 1,
+      "command": "ack",
+      "id": "ack.scoped-failed",
+      "meaning": "at least one record of the seat due by the window could not be marked read; the others were",
+      "trigger": "team ack --seat worker --older-than 7d"
+    },
+    {
+      "code": 1,
+      "command": "ack",
+      "id": "ack.scoped-refused",
+      "meaning": "the scoped ack is not the owner's or a seat this team marks `leads`, or no message key stands",
+      "trigger": "team ack --seat worker --older-than 7d"
     },
     {
       "code": 2,
@@ -257,7 +278,7 @@
       "code": 1,
       "command": "add",
       "id": "add.no-like",
-      "meaning": "the file has no seat to copy",
+      "meaning": "the team has no seat to copy",
       "trigger": "team add --temporary --like missing --until result:out.md"
     },
     {
@@ -271,7 +292,7 @@
       "code": 1,
       "command": "add",
       "id": "add.no-seat",
-      "meaning": "the file has no such seat",
+      "meaning": "the team has no such seat",
       "trigger": "team add missing"
     },
     {
@@ -786,6 +807,13 @@
       "trigger": "team archive --keep-running"
     },
     {
+      "code": 0,
+      "command": "archive",
+      "id": "archive.scoped",
+      "meaning": "every family of the seat due by the window was moved, or nothing was due",
+      "trigger": "team archive --seat worker --older-than 7d"
+    },
+    {
       "code": 1,
       "command": "archive",
       "id": "archive.detached",
@@ -812,6 +840,20 @@
       "id": "archive.out-owner",
       "meaning": "--out is the owner’s",
       "trigger": "team archive --out ~/archives"
+    },
+    {
+      "code": 1,
+      "command": "archive",
+      "id": "archive.scoped-failed",
+      "meaning": "at least one family of the seat due by the window could not be moved; the others were",
+      "trigger": "team archive --seat worker --older-than 7d"
+    },
+    {
+      "code": 1,
+      "command": "archive",
+      "id": "archive.scoped-refused",
+      "meaning": "the scoped archive is not the owner's or a seat this team marks `leads`, or no message key stands",
+      "trigger": "team archive --seat worker --older-than 7d"
     },
     {
       "code": 2,
@@ -1656,6 +1698,13 @@
     {
       "code": 0,
       "command": "daemon",
+      "id": "daemon.chores-ended",
+      "meaning": "the chores child served until its host ended its input, and left without error",
+      "trigger": "team daemon chores --inherited <token>"
+    },
+    {
+      "code": 0,
+      "command": "daemon",
       "id": "daemon.dry-run",
       "meaning": "the install plan was printed and nothing was written",
       "trigger": "team daemon install --dry-run"
@@ -1890,6 +1939,13 @@
       "id": "daemon.uninstall-failed",
       "meaning": "the system's service manager refused to stop or remove the unit",
       "trigger": "team daemon uninstall"
+    },
+    {
+      "code": 2,
+      "command": "daemon",
+      "id": "daemon.chores-refused",
+      "meaning": "a chores child was started without a readable one-use token, so it refused to run any work",
+      "trigger": "team daemon chores --inherited <token>"
     },
     {
       "code": 2,
@@ -2310,6 +2366,62 @@
       "id": "drops.not-a-repo",
       "meaning": "not inside a git repository",
       "trigger": "team drops"
+    },
+    {
+      "code": 0,
+      "command": "fallback",
+      "id": "fallback.plan",
+      "meaning": "the dry run found no finished episode to retire",
+      "trigger": "team fallback prune"
+    },
+    {
+      "code": 0,
+      "command": "fallback",
+      "id": "fallback.retired",
+      "meaning": "every listed episode that could be retired was retired",
+      "trigger": "team fallback prune --apply"
+    },
+    {
+      "code": 1,
+      "command": "fallback",
+      "id": "fallback.incomplete",
+      "meaning": "--apply left an episode unretired because its retirement did not complete",
+      "trigger": "team fallback prune --apply"
+    },
+    {
+      "code": 1,
+      "command": "fallback",
+      "id": "fallback.owner",
+      "meaning": "--apply was aimed by a caller who is not the owner",
+      "trigger": "team fallback prune --apply"
+    },
+    {
+      "code": 1,
+      "command": "fallback",
+      "id": "fallback.policy",
+      "meaning": "the event retention word cannot be read",
+      "trigger": "team fallback prune"
+    },
+    {
+      "code": 1,
+      "command": "fallback",
+      "id": "fallback.stale",
+      "meaning": "the dry run found finished episodes to retire",
+      "trigger": "team fallback prune"
+    },
+    {
+      "code": 2,
+      "command": "fallback",
+      "id": "fallback.configuration",
+      "meaning": "the team file cannot be read",
+      "trigger": "team fallback prune"
+    },
+    {
+      "code": 2,
+      "command": "fallback",
+      "id": "fallback.invocation",
+      "meaning": "the invocation cannot be read",
+      "trigger": "team fallback prune --nope"
     },
     {
       "code": 0,
@@ -2902,6 +3014,13 @@
     {
       "code": 1,
       "command": "messages",
+      "id": "messages.caller",
+      "meaning": "the caller is not placed as the owner or a seat of the team's session",
+      "trigger": "team messages"
+    },
+    {
+      "code": 1,
+      "command": "messages",
       "id": "messages.client-key",
       "meaning": "the client key is missing or unreadable, or the ack receipt could not be signed with it",
       "trigger": "team messages --client client-grant.json --key client.key --ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
@@ -3164,6 +3283,97 @@
       "id": "next.not-a-repo",
       "meaning": "not inside a git repository",
       "trigger": "team next"
+    },
+    {
+      "code": 0,
+      "command": "order",
+      "id": "order.done",
+      "meaning": "the sidebar was brought to roster order (the moving seats were closed and re-created through team restart)",
+      "trigger": "team order"
+    },
+    {
+      "code": 0,
+      "command": "order",
+      "id": "order.dry-run",
+      "meaning": "the moving set was printed; nothing was closed",
+      "trigger": "team order --dry-run"
+    },
+    {
+      "code": 0,
+      "command": "order",
+      "id": "order.match",
+      "meaning": "the sidebar already read in roster order; nothing was closed",
+      "trigger": "team order"
+    },
+    {
+      "code": 1,
+      "command": "order",
+      "id": "order.busy",
+      "meaning": "a seat of the moving set is working or blocked at a prompt; nothing was closed",
+      "trigger": "team order"
+    },
+    {
+      "code": 1,
+      "command": "order",
+      "id": "order.caller",
+      "meaning": "not the owner or `leads` for this team, or an owner-only flag from another caller",
+      "trigger": "team order"
+    },
+    {
+      "code": 1,
+      "command": "order",
+      "id": "order.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team order"
+    },
+    {
+      "code": 1,
+      "command": "order",
+      "id": "order.herdr",
+      "meaning": "the pane host did not answer",
+      "trigger": "team order"
+    },
+    {
+      "code": 1,
+      "command": "order",
+      "id": "order.no-session",
+      "meaning": "the session is not running",
+      "trigger": "team order"
+    },
+    {
+      "code": 1,
+      "command": "order",
+      "id": "order.self",
+      "meaning": "the run sits in a seat of the moving set, and closing it would end the pass",
+      "trigger": "team order"
+    },
+    {
+      "code": 1,
+      "command": "order",
+      "id": "order.stopped",
+      "meaning": "a team restart inside the pass exited nonzero; the pass stopped there",
+      "trigger": "team order"
+    },
+    {
+      "code": 1,
+      "command": "order",
+      "id": "order.unordered",
+      "meaning": "after the pass the sidebar still does not read in roster order",
+      "trigger": "team order"
+    },
+    {
+      "code": 2,
+      "command": "order",
+      "id": "order.configuration",
+      "meaning": "the team file or its state record can't be read",
+      "trigger": "team order"
+    },
+    {
+      "code": 2,
+      "command": "order",
+      "id": "order.usage",
+      "meaning": "the invocation can't be read",
+      "trigger": "team order"
     },
     {
       "code": 0,
@@ -4967,6 +5177,13 @@
     {
       "code": 0,
       "command": "send",
+      "id": "send.delivered-webhook",
+      "meaning": "the record is written and the seat's webhook adapter took the message",
+      "trigger": "team send worker hello"
+    },
+    {
+      "code": 0,
+      "command": "send",
       "id": "send.dry-run",
       "meaning": "the seat and channel were resolved and nothing was written",
       "trigger": "team send worker hello --dry-run"
@@ -5018,6 +5235,13 @@
       "command": "send",
       "id": "send.sent-unconfirmed",
       "meaning": "the record is written and left in the seat's own folder — its inbox on the mcp-inbox leg, its drop folder on the drop leg — and no signed read receipt has come back",
+      "trigger": "team send worker hello"
+    },
+    {
+      "code": 0,
+      "command": "send",
+      "id": "send.session-created",
+      "meaning": "the receiving CLI created a remote session from the message and printed its session line with an id; that id is the delivery, and no read receipt follows",
       "trigger": "team send worker hello"
     },
     {
@@ -5590,6 +5814,14 @@
     {
       "code": 1,
       "command": "team",
+      "id": "team.mcp-serve-replacement-ended",
+      "inherits": true,
+      "meaning": "the stale inbox server's fresh replacement ended, and the server left with that process's exit code (1 when a signal ended it)",
+      "trigger": "team mcp serve"
+    },
+    {
+      "code": 1,
+      "command": "team",
       "id": "team.mcp-serve-restart-failed",
       "meaning": "a stale inbox server could not start its fresh replacement, said why and left",
       "trigger": "team mcp serve"
@@ -5618,6 +5850,13 @@
     {
       "code": 2,
       "command": "team",
+      "id": "team.chores-entry-refused",
+      "meaning": "the machine daemon's chores child was started without a readable one-use token, so it served nothing",
+      "trigger": "the daemon starts its chores child entry"
+    },
+    {
+      "code": 2,
+      "command": "team",
       "id": "team.general-usage",
       "meaning": "--general is given where no grant can admit the run: without --key, on the grant-issuing command, beside an owner-seat option (--request, --approval, --approvals, --approve-as-owner-seat), or on a form that reads no team record (config keys, init --approval-modes)",
       "trigger": "team status --general <grant.json>, team init --request --general <grant.json> --key <client.key>, or team config keys --general <grant.json> --key <client.key>"
@@ -5628,6 +5867,13 @@
       "id": "team.no-command",
       "meaning": "no command was given",
       "trigger": "team"
+    },
+    {
+      "code": 2,
+      "command": "team",
+      "id": "team.restore-entry-refused",
+      "meaning": "the machine daemon's restore child was started without a readable one-use token, so it restored nothing",
+      "trigger": "the daemon starts its restore child entry"
     },
     {
       "code": 2,
@@ -5691,6 +5937,41 @@
       "id": "tempo.word",
       "meaning": "the word is not a tempo",
       "trigger": "team tempo faster"
+    },
+    {
+      "code": 0,
+      "command": "trace",
+      "id": "trace.shown",
+      "meaning": "the message's steps were printed",
+      "trigger": "team trace 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+    },
+    {
+      "code": 1,
+      "command": "trace",
+      "id": "trace.empty",
+      "meaning": "the event log holds no step under that id",
+      "trigger": "team trace 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+    },
+    {
+      "code": 1,
+      "command": "trace",
+      "id": "trace.unreadable",
+      "meaning": "the event log cannot be read",
+      "trigger": "team trace 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+    },
+    {
+      "code": 2,
+      "command": "trace",
+      "id": "trace.configuration",
+      "meaning": "the team file can't be read",
+      "trigger": "team trace 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+    },
+    {
+      "code": 2,
+      "command": "trace",
+      "id": "trace.usage",
+      "meaning": "the invocation can't be read",
+      "trigger": "team trace"
     },
     {
       "code": 0,
@@ -6044,6 +6325,34 @@
     },
     {
       "code": 0,
+      "command": "waits",
+      "id": "waits.ok",
+      "meaning": "the waits were listed",
+      "trigger": "team waits"
+    },
+    {
+      "code": 1,
+      "command": "waits",
+      "id": "waits.refused",
+      "meaning": "the caller is not a seat of this team",
+      "trigger": "team waits"
+    },
+    {
+      "code": 2,
+      "command": "waits",
+      "id": "waits.configuration",
+      "meaning": "the team file, the registry or the retention policy can't be read",
+      "trigger": "team waits"
+    },
+    {
+      "code": 2,
+      "command": "waits",
+      "id": "waits.usage",
+      "meaning": "the invocation can't be read",
+      "trigger": "team waits --all"
+    },
+    {
+      "code": 0,
       "command": "watch",
       "id": "watch.standby",
       "meaning": "a hosted watch stood down for a running watch",
@@ -6269,6 +6578,13 @@
     {
       "code": 0,
       "command": "worktree",
+      "id": "worktree.pulled",
+      "meaning": "the seat CLI's own pull call applied the remote session's patch in the worktree; nothing was committed, branched or pushed",
+      "trigger": "team worktree pull task --remote-session 123456"
+    },
+    {
+      "code": 0,
+      "command": "worktree",
       "id": "worktree.record-gone",
       "meaning": "the record was removed after the folder was already gone",
       "trigger": "team worktree remove task"
@@ -6465,6 +6781,48 @@
     {
       "code": 1,
       "command": "worktree",
+      "id": "worktree.pull-elsewhere",
+      "meaning": "the task is recorded in another session; nothing was pulled",
+      "trigger": "team worktree pull task --remote-session 123456"
+    },
+    {
+      "code": 1,
+      "command": "worktree",
+      "id": "worktree.pull-failed",
+      "meaning": "the seat CLI's pull call failed; no patch was applied",
+      "trigger": "team worktree pull task --remote-session 123456"
+    },
+    {
+      "code": 1,
+      "command": "worktree",
+      "id": "worktree.pull-gone",
+      "meaning": "the worktree is recorded but its folder is not on disk",
+      "trigger": "team worktree pull task --remote-session 123456"
+    },
+    {
+      "code": 1,
+      "command": "worktree",
+      "id": "worktree.pull-missing",
+      "meaning": "no worktree of that name is recorded; nothing was pulled",
+      "trigger": "team worktree pull task --remote-session 123456"
+    },
+    {
+      "code": 1,
+      "command": "worktree",
+      "id": "worktree.pull-seat",
+      "meaning": "no seat's CLI pull command resolves for the worktree, so no pull was run",
+      "trigger": "team worktree pull task --remote-session 123456"
+    },
+    {
+      "code": 1,
+      "command": "worktree",
+      "id": "worktree.pull-task",
+      "meaning": "the task name is not a single segment",
+      "trigger": "team worktree pull ../task --remote-session 123456"
+    },
+    {
+      "code": 1,
+      "command": "worktree",
       "id": "worktree.recorded",
       "meaning": "the task is already recorded",
       "trigger": "team worktree new task --kind fix"
@@ -6608,6 +6966,20 @@
       "id": "worktree.not-a-repo",
       "meaning": "not inside a git repository",
       "trigger": "team worktree new task"
+    },
+    {
+      "code": 2,
+      "command": "worktree",
+      "id": "worktree.pull-flags",
+      "meaning": "pull takes no --kind",
+      "trigger": "team worktree pull task --remote-session 123456 --kind fix"
+    },
+    {
+      "code": 2,
+      "command": "worktree",
+      "id": "worktree.pull-remote",
+      "meaning": "pull needs --remote-session, and no other subcommand takes it",
+      "trigger": "team worktree pull task"
     },
     {
       "code": 2,

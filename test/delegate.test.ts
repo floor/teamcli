@@ -1,15 +1,20 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf, notInForce } from '../src/approve/approval.ts';
 import { fingerprints } from '../src/approve/fingerprint.ts';
 import type { CallerSources, Process } from '../src/caller.ts';
-import { ADD_DELEGATE_EDIT, DELEGATE_EXIT_IDS, delegateGate, logDelegated, type DelegateVerdict } from '../src/delegate.ts';
+import { runBrief } from '../src/commands/brief.ts';
+import { runPolicy } from '../src/commands/policy.ts';
+import { runSwap } from '../src/commands/swap.ts';
+import { ADD_DELEGATE_EDIT, DELEGATE_EXIT_IDS, delegateGate, delegateReadGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../src/delegate.ts';
 import { ACTING_COMMANDS as DELEGATE_COMMANDS, type ActingCommand, type DelegateCommand } from '../src/delegate-types.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
+import type { Io } from '../src/io.ts';
 import type { State } from '../src/state.ts';
 import { approvalStanding, approvedCopy, LEGACY_LINE, storePath, writeApproval, type Standing } from '../src/store/store.ts';
 
@@ -589,5 +594,87 @@ describe('the swap word', () => {
 
   test('swap is a word of the section, never a command with exit ids of its own', () => {
     expect(DELEGATE_EXIT_IDS.some((id) => id.startsWith('swap.'))).toBe(false);
+  });
+});
+
+describe('delegateReadGate and command gate sources', () => {
+  test('delegateReadGate returns false at the top when the team has no delegates, before reading standing or terminal host', () => {
+    const withoutDelegates = parsed(yaml.replace(/delegates:\n[\s\S]*$/, ''));
+    let touched = false;
+    const allowed = delegateReadGate({
+      team: withoutDelegates,
+      root: '/proj',
+      dir: '/proj/.agents',
+      io: { env: {}, stdinIsTTY: false, caller: { kind: 'unplaced', reason: 'it is run by an agent (claude) outside herdr' } },
+      sources: {
+        standing: () => {
+          touched = true;
+          return verified(withoutDelegates, yaml);
+        },
+        agents: () => {
+          touched = true;
+          throw new Error('terminal host must not be read when no delegates are declared');
+        },
+        sessionRunning: () => {
+          touched = true;
+          throw new Error('terminal host must not be read when no delegates are declared');
+        },
+        state: () => {
+          touched = true;
+          return empty;
+        },
+      },
+    });
+    expect(allowed).toBe(false);
+    expect(touched).toBe(false);
+  });
+
+  test('runBrief, runPolicy and runSwap pass gate sources through to mayReadTeam without reaching the real terminal host', async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'team-delegate-gate-home-')));
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'team-delegate-gate-root-')));
+    made.push(home, root);
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    const dir = join(root, '.agents');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'team.yaml'), yaml);
+    const gateSources: DelegateSources = {
+      standing: () => verified(base, yaml),
+      state: () => empty,
+      agents: () => [],
+      sessionRunning: () => false,
+    };
+    const makeIo = (caller: Io['caller']): { io: Io; err: () => string } => {
+      let stderr = '';
+      return {
+        io: {
+          cwd: root,
+          env: {},
+          stdinIsTTY: false,
+          caller,
+          stdout: () => {},
+          stderr: (text) => {
+            stderr += text;
+          },
+        },
+        err: () => stderr,
+      };
+    };
+
+    // The caller is the pane the fixture's team file declares as a delegate, read from the file
+    // rather than repeated: a pane id literal added here would fail the private scan.
+    const delegatePane = yaml.split('\n').map((line) => line.trim()).find((line) => line.startsWith('- pane: '))?.slice('- pane: '.length) ?? '';
+    const [delegateSession, delegatePaneId] = delegatePane.split('/');
+    const delegateCaller: Io['caller'] = { kind: 'pane', pane: delegatePaneId ?? '', session: delegateSession ?? '' };
+    const briefDelegate = makeIo(delegateCaller);
+    expect(await runBrief(['rollout'], briefDelegate.io, { home, now: () => new Date('2026-10-06T00:00:00Z'), gate: gateSources })).toBe(0);
+    expect(briefDelegate.err()).toBe('');
+
+    const policyDelegate = makeIo(delegateCaller);
+    expect(await runPolicy([], policyDelegate.io, { home, now: () => new Date('2026-10-06T00:00:00Z'), gate: gateSources })).toBe(0);
+    expect(policyDelegate.err()).toBe('');
+
+    const swapDelegate = makeIo(delegateCaller);
+    expect(await runSwap([], swapDelegate.io, { home, now: () => new Date('2026-10-06T00:00:00Z'), gate: gateSources })).toBe(0);
+    expect(swapDelegate.err()).toBe('');
   });
 });

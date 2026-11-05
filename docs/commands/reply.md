@@ -11,12 +11,31 @@ A record that does not verify, or one addressed to another seat, is refused and 
 written. A message an earlier build left in `.agents/messages/` carries no thread: it is read,
 not answered.
 
+Answering is a read (ADR `zeus-message-path`, D3): once the reply record is written, the seat's
+signed `read` receipt for the answered id is published under its own name beside it,
+`<id>.read.json` with `read_by: reply`, and the `replied` receipt follows under `replied`'s name.
+The read is an annotation beside the reply, never a condition of it: a receipt that cannot be
+written changes no exit and hides no reply.
+
 A reply goes to the sender of the record it answers, never to a third seat, and the pair is
 judged by the same rules as a send's, with the reply rule (`reply-on-open-thread`) asked after
 the targeted and grant rules and before the declared-seat rule: a reply on an open thread is
 admitted by the reply rule even between two seats no earlier rule pairs. The rule reads the
 thread, not the invitation: it admits a reply on any open thread, and a thread is open until it
 is closed or the clock or the cap ends it.
+
+A seat's answer to the entity's main orchestrator is the one reply the main orchestrator's reach
+admits in return (OD-20261103-02), and it is bound to the record that reach wrote. The answered
+record must verify, sit in the caller's own folder and name the caller as its recipient, and it
+must have been sent by the lead of the entity's head team — the team whose project is the entity
+itself, the seat that team's live file names its orchestrator. The reply stays on that record's
+thread: the thread's opening record must verify and carry the same sender, and a closed thread is
+refused rather than reopened, because reopening it would be a new thread the seat opened. A
+forged or unsigned record, a thread another sender opened, and a record addressed to another seat
+are refused, and nothing is written. The reach is the `seats_cross_teams` setting, entity →
+project → team → seat, with the same default on and the same project loosening level as the send
+direction: a level that closes it closes this reply too, and a seat still opens no thread of its
+own to the main orchestrator — a plain `team send orchestrator@<entity>` stays refused.
 
 The folder is the one the answered seat's own reader reads. A record from a seat of another team
 is answered into that team's transport tree, bound to the root and session that team's live file
@@ -60,18 +79,25 @@ the new thread, and `in-reply-to` names the last record of the closed one. Closi
 closed thread is refused, naming what ended it, and nothing is written.
 
 The answered record moves to `replied`: the reply writes a signed receipt (`<id>.replied.json`)
-beside the message it answers, in the answering seat's own folder. The reply is delivered the way
-the drop leg delivers — the record is left in the target's folder, nothing is typed and no frame
-is sent — and the outcome line says `delivered (drop)` only after the written record passes the
-checks the recipient's own readers make: its name is the id, its `to`, `root` and `session` bind
-it to that seat and that tree, and its signature verifies. A write that cannot be confirmed says
-the folder it wrote to and that the recipient's reader was not confirmed. The receiving seat's own
-watch rings the message-display wake line: the rendered header and the fixed
-`Read it with: team drops --read.` hint. A
+beside the message it answers, in the answering seat's own folder. The record is then carried
+through the receiving seat's own cascade, exactly as a send of it would be: its channel-class legs
+(the development channel's push, the frame on a Claude session's cross-session socket, the seat's
+own runtime queue, a headless resume of its own session), the seat's sender-posted webhook, the
+profile-gated typed wake, and the bus inbox under all three. The outcome line names the leg that
+took it, in the same words a send prints — `delivered (socket)`, `sent (channel) (… ms)`,
+`delivered (webhook, … ms)`, `delivered (typed wake)`, `queued to its native runtime (…)`,
+`resumed headlessly (…)` — and `delivered (drop)` when the mailbox takes it, which the run confirms
+only after the written record passes the checks the recipient's own readers make: its name is the
+id, its `to`, `root` and `session` bind it to that seat and that tree, and its signature verifies. A
+queue or resume acceptance is transport only: the line says `queued to its native runtime` or
+`resumed headlessly` until a signed read receipt arrives, and `delivered (read)` when it does. A
+record whose delivery cannot be confirmed says the folder it wrote to and that the recipient's
+reader was not confirmed.
+The receiving seat's own watch rings the message-display wake line: the rendered header and the
+fixed `Read it with: team drops --read.` hint. A
 [team send --wait](send.md) waiting on that thread wakes on the reply record and returns
-`answered`. A reply's text is
-kept in the record, and the project's message history keeps one line for it, with `thread`,
-`in-reply-to` and `via: drop`.
+`answered`. A reply's text is kept in the record, and the project's message history keeps one line
+for it, with `thread`, `in-reply-to` and the leg's `via`.
 
 ## Synopsis
 
@@ -109,7 +135,7 @@ A reply that is refused writes nothing: no record, no receipt, no close, no hist
 
 ## Who may run it
 
-The owner, or a seat of the team, from a terminal outside herdr or its own pane. A run with no
+The owner, or a seat of the team, from a terminal outside the terminal host or its own pane. A run with no
 terminal is refused. The caller must be the record's addressee — the record's `to` names it, and
 the record sits in its own folder — and the reply reaches the seat the record's `from` names, in
 the team the record's registry id places it: a sender whose own file no longer declares the seat
@@ -133,7 +159,7 @@ then the outcome line. A refused run prints its line on stderr and has none.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| replied | `<seat>: delivered (drop)` on stdout — the seat the reply went to, once its reader's folder holds the verified record | 0 |
+| replied | `<seat>: delivered (socket)`, `<seat>: sent (channel) (… ms)`, `<seat>: delivered (webhook, … ms)`, `<seat>: delivered (typed wake)`, `<seat>: delivered (read) (… native queue receipt)`, `<seat>: queued to its native runtime (…); no receipt within … ms`, `<seat>: resumed headlessly (…); no receipt within … ms`, or `<seat>: delivered (drop)` on stdout — the seat the reply went to and the leg that took it; the drop is claimed once its reader's folder holds the verified record | 0 |
 | replied, reader unconfirmed | `<seat>: wrote to <folder>, and could not confirm the recipient's reader will read it` on stdout | 0 |
 | replied to a client | `client:<client id>: replied` on stdout | 0 |
 | closed | `<thread>: closed` on stdout | 0 |
@@ -161,6 +187,8 @@ Refusals name what stopped them, and nothing is written:
     team reply: the thread <thread> is already closed; nothing was written
     team reply: the thread <thread> ended: no record on it for 72h; nothing was written
     team reply: the thread <thread> ended at its 50-record cap; nothing was written
+    team reply: the thread <thread> is already closed; a seat answers the entity's main orchestrator only on the open thread that orchestrator opened, and never opens one; nothing was written
+    team reply: <sender>: the thread <thread> was not opened by the entity's main orchestrator; a seat replying to the entity's main orchestrator on its thread is the reach's only reply, and a seat never opens a thread to the main orchestrator; nothing was written
     team reply: refused: <reason>
 
 ## Example

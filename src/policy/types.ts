@@ -27,6 +27,7 @@ import {
 } from '../settings/message-display.ts';
 import { ownerReplyToValueProblem, parseOwnerReplyToValue } from '../settings/owner-reply.ts';
 import { parseSenderLineValue, senderLineValueProblem } from '../settings/sender-line.ts';
+import { WEBHOOK_SENDER_DEADLINE_MAX_MS, WEBHOOK_SENDER_DEADLINE_MIN_MS, WEBHOOK_SENDER_DEADLINE_MS } from '../settings/webhook-sender.ts';
 import { EVENT_THRESHOLDS } from './events.ts';
 import { formatModelRule, modelRuleProblem, parseModelRule } from './model-rule.ts';
 
@@ -96,6 +97,7 @@ export type DevModeOperation = (typeof DEV_MODE_OPERATIONS)[number];
 /** Canonical names of the closed enforced policy vocabulary in 0.5.0. */
 export const ENFORCED_POLICY_NAMES = [
   'dev-mode',
+  'lead-gates',
   'seats-cross-teams',
   'state-trace-window-seconds',
   'state-blind-after-seconds',
@@ -120,7 +122,17 @@ export const ENFORCED_POLICY_NAMES = [
   'owner-reply-to',
   'codex-daemon',
   'idle-threshold',
+  'watch-read-budget-ms',
+  'watch-read-timeout-ms',
+  'webhook-sender-deadline-ms',
   'daemon.broker',
+  'daemon.fallback-backlog-above',
+  'daemon.fallback-backlog-limit',
+  'daemon.heartbeat',
+  'daemon.chores',
+  'daemon.chores-slice-ms',
+  'daemon.chores-missed-beats',
+  'daemon.chores-backoff-cap-ms',
   'watch-rhythm',
   'grant-emission',
   'owner-signers',
@@ -128,6 +140,7 @@ export const ENFORCED_POLICY_NAMES = [
   'approval-rule-ttl',
   'client-bundles',
   'client-grant-max-duration',
+  'actions-commands',
 ] as const;
 
 export type EnforcedPolicyName = (typeof ENFORCED_POLICY_NAMES)[number];
@@ -144,6 +157,10 @@ export const ADVISED_POLICY_NAMES = [
   'landing-mode',
   'vault-root',
   'entity-orchestrator',
+  'entity.main-orchestrator.relays-owner',
+  'leads.pane-actions',
+  'leads.self-service',
+  'owner.reserved-scope',
 ] as const;
 
 export type AdvisedPolicyName = (typeof ADVISED_POLICY_NAMES)[number];
@@ -153,6 +170,7 @@ export type CataloguePolicyName = EnforcedPolicyName | AdvisedPolicyName;
 /** Snake-case aliases accepted at load and normalized to their canonical kebab-case policy name. */
 export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> = {
   dev_mode: 'dev-mode',
+  lead_gates: 'lead-gates',
   seats_cross_teams: 'seats-cross-teams',
   state_trace_window_seconds: 'state-trace-window-seconds',
   trace_window_seconds: 'state-trace-window-seconds',
@@ -177,6 +195,35 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   message_display: 'message-display',
   daemon_broker: 'daemon.broker',
   'daemon-broker': 'daemon.broker',
+  daemon_fallback_backlog_above: 'daemon.fallback-backlog-above',
+  'daemon-fallback-backlog-above': 'daemon.fallback-backlog-above',
+  fallback_backlog_above: 'daemon.fallback-backlog-above',
+  'fallback-backlog-above': 'daemon.fallback-backlog-above',
+  daemon_fallback_backlog_limit: 'daemon.fallback-backlog-limit',
+  'daemon-fallback-backlog-limit': 'daemon.fallback-backlog-limit',
+  fallback_backlog_limit: 'daemon.fallback-backlog-limit',
+  'fallback-backlog-limit': 'daemon.fallback-backlog-limit',
+  daemon_heartbeat: 'daemon.heartbeat',
+  'daemon-heartbeat': 'daemon.heartbeat',
+  daemon_heartbeat_seconds: 'daemon.heartbeat',
+  'daemon-heartbeat-seconds': 'daemon.heartbeat',
+  heartbeat_seconds: 'daemon.heartbeat',
+  'heartbeat-seconds': 'daemon.heartbeat',
+  daemon_chores: 'daemon.chores',
+  'daemon-chores': 'daemon.chores',
+  chores: 'daemon.chores',
+  daemon_chores_slice_ms: 'daemon.chores-slice-ms',
+  'daemon-chores-slice-ms': 'daemon.chores-slice-ms',
+  chores_slice_ms: 'daemon.chores-slice-ms',
+  'chores-slice-ms': 'daemon.chores-slice-ms',
+  daemon_chores_missed_beats: 'daemon.chores-missed-beats',
+  'daemon-chores-missed-beats': 'daemon.chores-missed-beats',
+  chores_missed_beats: 'daemon.chores-missed-beats',
+  'chores-missed-beats': 'daemon.chores-missed-beats',
+  daemon_chores_backoff_cap_ms: 'daemon.chores-backoff-cap-ms',
+  'daemon-chores-backoff-cap-ms': 'daemon.chores-backoff-cap-ms',
+  chores_backoff_cap_ms: 'daemon.chores-backoff-cap-ms',
+  'chores-backoff-cap-ms': 'daemon.chores-backoff-cap-ms',
   development_mode: 'development-mode',
   shared_checkout_hygiene: 'shared-checkout-hygiene',
   seat_numbering: 'seat-numbering',
@@ -187,6 +234,20 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   vault_root: 'vault-root',
   entity_orchestrator: 'entity-orchestrator',
   'chain.topology.entity.orchestrator': 'entity-orchestrator',
+  // The lead rules the owner decided on 2026-11-03 (OD-20261103-03), in the spellings a team
+  // writes them and the kebab-case canonical names of this catalogue.
+  entity_main_orchestrator_relays_owner: 'entity.main-orchestrator.relays-owner',
+  'entity.main_orchestrator.relays_owner': 'entity.main-orchestrator.relays-owner',
+  'entity.main-orchestrator.relays_owner': 'entity.main-orchestrator.relays-owner',
+  'entity.main_orchestrator.relays-owner': 'entity.main-orchestrator.relays-owner',
+  leads_pane_actions: 'leads.pane-actions',
+  'leads.pane_actions': 'leads.pane-actions',
+  leads_self_service: 'leads.self-service',
+  'leads.self_service': 'leads.self-service',
+  'lead-self-service': 'leads.self-service',
+  owner_reserved_scope: 'owner.reserved-scope',
+  'owner.reserved_scope': 'owner.reserved-scope',
+  'owner-reserved-scope': 'owner.reserved-scope',
   event_thread_ttl_seconds: 'event-thread-ttl-seconds',
   thread_ttl_seconds: 'event-thread-ttl-seconds',
   'thread-ttl': 'event-thread-ttl-seconds',
@@ -214,6 +275,16 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   owner_reply_to: 'owner-reply-to',
   codex_daemon: 'codex-daemon',
   idle_threshold: 'idle-threshold',
+  watch_read_budget_ms: 'watch-read-budget-ms',
+  'watch-read-budget': 'watch-read-budget-ms',
+  read_budget_ms: 'watch-read-budget-ms',
+  'read-budget': 'watch-read-budget-ms',
+  watch_read_timeout_ms: 'watch-read-timeout-ms',
+  'watch-read-timeout': 'watch-read-timeout-ms',
+  read_timeout_ms: 'watch-read-timeout-ms',
+  'read-timeout': 'watch-read-timeout-ms',
+  webhook_sender_deadline_ms: 'webhook-sender-deadline-ms',
+  webhook_sender_deadline: 'webhook-sender-deadline-ms',
   watch_rhythm: 'watch-rhythm',
   grant_emission: 'grant-emission',
   owner_signers: 'owner-signers',
@@ -221,6 +292,7 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   approval_rule_ttl: 'approval-rule-ttl',
   client_bundles: 'client-bundles',
   client_grant_max_duration: 'client-grant-max-duration',
+  actions_commands: 'actions-commands',
 };
 
 /** Normalizes a policy name, mapping known snake_case settings spellings to canonical kebab-case. */
@@ -275,6 +347,35 @@ function parseOnOff(raw: unknown): 'on' | 'off' | null {
   return null;
 }
 
+/** `lead-gates`: which placed roles dev mode admits to the owner-only gates (ruling D5, A3). */
+export type LeadGatesValue = 'lead' | 'lead+operator';
+
+/** `lead-gates` accepts exactly its two words; anything else is a load refusal. */
+function parseLeadGates(raw: unknown): LeadGatesValue | null {
+  return raw === 'lead' || raw === 'lead+operator' ? raw : null;
+}
+
+/** The Actions commands a caller may leave in the guard's allowlist. The release default is all
+ *  three: Floor's values, with no seat named. A lower level may only drop commands. */
+export const ACTIONS_COMMANDS = ['rerun-failed', 'deploy', 'ci-pr-head'] as const;
+
+export type ActionsCommand = (typeof ACTIONS_COMMANDS)[number];
+
+export const ACTIONS_COMMANDS_DEFAULT: readonly ActionsCommand[] = ACTIONS_COMMANDS;
+
+function parseActionsCommands(raw: unknown): ActionsCommand[] | null {
+  const items = typeof raw === 'string'
+    ? raw.split(',').map((item) => item.trim()).filter((item) => item !== '')
+    : raw;
+  if (!Array.isArray(items)) return null;
+  const out: ActionsCommand[] = [];
+  for (const name of ACTIONS_COMMANDS) {
+    if (items.includes(name)) out.push(name);
+  }
+  if (out.length !== items.length || new Set(items).size !== items.length) return null;
+  return out;
+}
+
 /** `owner-signers`: a list of signer names, or on the command line one comma-separated word (`phone,mac`). */
 function parseOwnerSigners(raw: unknown): string[] | null {
   const list = typeof raw === 'string' ? raw.split(',').map((n) => n.trim()) : raw;
@@ -287,6 +388,33 @@ function parseOwnerSigners(raw: unknown): string[] | null {
 function parseApprovalRuleTtlDays(raw: unknown): number | null {
   const n = typeof raw === 'string' && /^[1-9][0-9]*d?$/.test(raw.trim()) ? Number.parseInt(raw.trim(), 10) : raw;
   return typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 90 ? n : null;
+}
+
+/**
+ * One of the watch's read limits: a whole number of milliseconds from 100 to 30000, so a busy
+ * loop can bound a pass without letting a level switch the bound off.
+ */
+function parseReadMillis(raw: unknown): number | null {
+  const n = typeof raw === 'string' && /^[1-9][0-9]*$/.test(raw.trim()) ? Number.parseInt(raw.trim(), 10) : raw;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 100 && n <= 30_000 ? n : null;
+}
+
+function readMillisProblem(name: string, raw: unknown): string | null {
+  if (parseReadMillis(raw) !== null) return null;
+  return `policy "${name}" needs a whole number of milliseconds from 100 to 30000, such as 2000`;
+}
+
+/** One send's own webhook answer bound: a whole number of milliseconds from 500 to 10000. */
+function parseWebhookSenderDeadline(raw: unknown): number | null {
+  const n = typeof raw === 'string' && /^[0-9]+$/.test(raw.trim()) ? Number.parseInt(raw.trim(), 10) : raw;
+  return typeof n === 'number' && Number.isInteger(n) && n >= WEBHOOK_SENDER_DEADLINE_MIN_MS && n <= WEBHOOK_SENDER_DEADLINE_MAX_MS
+    ? n
+    : null;
+}
+
+function webhookSenderDeadlineProblem(name: string, raw: unknown): string | null {
+  if (parseWebhookSenderDeadline(raw) !== null) return null;
+  return `policy "${name}" needs a whole number of milliseconds from ${String(WEBHOOK_SENDER_DEADLINE_MIN_MS)} to ${String(WEBHOOK_SENDER_DEADLINE_MAX_MS)}, such as ${String(WEBHOOK_SENDER_DEADLINE_MS)}`;
 }
 
 function parsePositiveSeconds(raw: unknown): number | null {
@@ -438,6 +566,20 @@ function parsePositiveCount(raw: unknown): number | null {
   return null;
 }
 
+/** One daemon store backlog knob's accepted range, and the release default its message offers. */
+type BacklogRange = { min: number; max: number; release: number };
+
+/** A backlog knob's word: a whole count, written with digits, inside its own range. */
+function parseBacklogCount(raw: unknown, range: BacklogRange): number | null {
+  const n = typeof raw === 'string' && /^[0-9]+$/.test(raw.trim()) ? Number.parseInt(raw.trim(), 10) : raw;
+  return typeof n === 'number' && Number.isInteger(n) && n >= range.min && n <= range.max ? n : null;
+}
+
+function backlogCountProblem(name: string, raw: unknown, range: BacklogRange): string | null {
+  if (parseBacklogCount(raw, range) !== null) return null;
+  return `policy "${name}" needs a whole number from ${String(range.min)} to ${String(range.max)}, such as ${String(range.release)}`;
+}
+
 /**
  * A delay threshold: a positive whole number of seconds, never above its release default. The
  * ceiling is part of the spec's range, so every path that parses a word — `team policy set`
@@ -454,6 +596,20 @@ function shortenOnlyProblem(name: string, raw: unknown, ceiling: number): string
     return `policy "${name}" may only be shortened: ${String(n)}s exceeds the release default ${String(ceiling)}s`;
   }
   return null;
+}
+
+/** `owner.reserved-scope`: a list of what the owner reserves, or one `;`/`,`-separated word. */
+function parseScopeItems(raw: unknown): readonly string[] | null {
+  const items = typeof raw === 'string' ? raw.split(/[;,]/).map((part) => part.trim()) : raw;
+  if (!Array.isArray(items) || items.length === 0) return null;
+  const out: string[] = [];
+  for (const item of items) {
+    if (typeof item !== 'string') return null;
+    const text = item.trim().replace(/\s+/g, ' ');
+    if (text === '' || /[\x00-\x1f\x7f]/.test(text)) return null;
+    if (!out.includes(text)) out.push(text);
+  }
+  return out;
 }
 
 function rawDeliveryItems(raw: unknown): unknown[] | null {
@@ -599,9 +755,106 @@ export const DELIVERY_TIMEOUT_DEFAULTS: Readonly<Record<DeliveryTimeoutRoute, nu
 };
 
 /**
+ * The daemon's two fallback-store backlog knobs: the finished-episode count above which one pass
+ * drains a backlog, and how many it then takes. Both are bounded so one pass stays a bounded
+ * amount of work, never a whole history: the threshold ranges to a million episodes and the bulk
+ * limit to ten thousand, the same order as the steady limit's multiples. The release defaults
+ * are shared with the daemon's reader so the catalogue and the sweep cannot drift apart.
+ */
+export const DAEMON_BACKLOG_DEFAULTS = { above: 256, limit: 500 } as const;
+
+/** The machine daemon's loop heartbeat, in whole seconds: the release default and the bounds a
+ *  level's word may choose between. The default is the beat the daemon ran hard-coded before the
+ *  word existed (ADR D6, the message path). */
+export const DAEMON_HEARTBEAT_SECONDS = { min: 1, max: 60, release: 5 } as const;
+
+/** The heartbeat word: a whole number of seconds from 1 to 60, optionally with the `s` suffix
+ *  every seconds policy takes. */
+function parseHeartbeatSeconds(raw: unknown): number | null {
+  const n = typeof raw === 'string' && /^[1-9][0-9]*s?$/.test(raw.trim())
+    ? Number.parseInt(raw.trim().replace(/s$/, ''), 10)
+    : raw;
+  return typeof n === 'number' && Number.isInteger(n) && n >= DAEMON_HEARTBEAT_SECONDS.min && n <= DAEMON_HEARTBEAT_SECONDS.max ? n : null;
+}
+
+function heartbeatSecondsProblem(name: string, raw: unknown): string | null {
+  if (parseHeartbeatSeconds(raw) !== null) return null;
+  return `policy "${name}" needs a whole number of seconds from ${String(DAEMON_HEARTBEAT_SECONDS.min)} to ${String(DAEMON_HEARTBEAT_SECONDS.max)}, such as 5`;
+}
+
+/**
+ * The machine daemon's chore isolation: where the heavy per-root chores run, and the limits that
+ * bound one child. `per-root`, the default, gives every hosted root its own supervised child, so
+ * one root's work never shares a process with another's; `shared` runs one child for every root
+ * whose word is `shared` and gives each root its own FIFO and one slice per turn, so one root's
+ * backlog can delay another root's chores by a slice but never its socket; `inline` runs them
+ * on the daemon's own loop exactly as before the isolation, which is the rollback. The limits
+ * default to the values the isolation landed with.
+ */
+export const DAEMON_CHORES_MODES = ['inline', 'shared', 'per-root'] as const;
+export type DaemonChoresMode = (typeof DAEMON_CHORES_MODES)[number];
+export const DAEMON_CHORES_DEFAULTS = {
+  mode: 'per-root' as DaemonChoresMode,
+  sliceMs: 2000,
+  missedBeats: 2,
+  backoffCapMs: 30_000,
+} as const;
+
+const BACKLOG_ABOVE_RANGE: BacklogRange = { min: 1, max: 1_000_000, release: DAEMON_BACKLOG_DEFAULTS.above };
+const BACKLOG_LIMIT_RANGE: BacklogRange = { min: 1, max: 10_000, release: DAEMON_BACKLOG_DEFAULTS.limit };
+
+/** How a chores mode ranks for inheritance: a lower level may choose less isolation, never more. */
+const CHORE_MODE_RANK: Readonly<Record<DaemonChoresMode, number>> = { inline: 0, shared: 1, 'per-root': 2 };
+
+function parseChoreMode(raw: unknown): DaemonChoresMode | null {
+  return raw === 'inline' || raw === 'shared' || raw === 'per-root' ? raw : null;
+}
+
+function choreModeProblem(name: string, raw: unknown): string | null {
+  if (parseChoreMode(raw) !== null) return null;
+  return `policy "${name}" needs one of inline, shared or per-root`;
+}
+
+/** Whole beats from 1 to 60: how many missed child heartbeats end the child and restart it. */
+function parseMissedBeats(raw: unknown): number | null {
+  const n = typeof raw === 'string' && /^[1-9][0-9]*$/.test(raw.trim()) ? Number.parseInt(raw.trim(), 10) : raw;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 60 ? n : null;
+}
+
+/** Whole milliseconds from 1000 to 600000: the cap on a chores child's restart backoff. */
+function parseBackoffCapMs(raw: unknown): number | null {
+  const n = typeof raw === 'string' && /^[1-9][0-9]*$/.test(raw.trim()) ? Number.parseInt(raw.trim(), 10) : raw;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 1_000 && n <= 600_000 ? n : null;
+}
+
+function missedBeatsProblem(name: string, raw: unknown): string | null {
+  if (parseMissedBeats(raw) !== null) return null;
+  return `policy "${name}" needs a whole number of beats from 1 to 60`;
+}
+
+function backoffCapProblem(name: string, raw: unknown): string | null {
+  if (parseBackoffCapMs(raw) !== null) return null;
+  return `policy "${name}" needs a whole number of milliseconds from 1000 to 600000, such as 30000`;
+}
+
+/**
  * Catalogue of policies known to TeamCLI 0.5.0 (amendment 02 `catalogue.md`), with defaults
  * sourced directly from `src/settings/inherit.ts`.
  */
+/**
+ * The owner's reserved scope, in four words (OD-20261103-03(4)): public releases, spending,
+ * credentials, and the owner's machine. The machine's gloss names what it covers, so a rule
+ * that prints the list never leaves "the machine" to be read as "any act on it": it is the
+ * system's own settings and accounts, logins, keychain and hardware, never a checkout, a seat
+ * or the team's config.
+ */
+export const OWNER_RESERVED_SCOPE_DEFAULT = [
+  'public releases',
+  'spending',
+  'credentials',
+  "the owner's machine",
+] as const;
+
 export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<any>>> = {
   'dev-mode': {
     name: 'dev-mode',
@@ -618,6 +871,18 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
       if (!lowerExpiry) return false;
       return Date.parse(lowerExpiry) <= Date.parse(higherExpiry);
     },
+  },
+  'lead-gates': {
+    name: 'lead-gates',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'lead',
+    gateLifting: true,
+    parseValue: parseLeadGates,
+    // `lead` is within anything: it admits no operator, so no stricter reading can loosen it.
+    // `lead+operator` is only within `lead+operator`: a nearer level cannot widen the gates past
+    // a farther level that kept them the lead's.
+    isWithin: (lower: LeadGatesValue, higher: LeadGatesValue) => lower === 'lead' || lower === higher,
   },
   'seats-cross-teams': {
     name: 'seats-cross-teams',
@@ -693,15 +958,17 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: parseDeliveryOrder,
     valueProblem: deliveryOrderProblem,
-    // Dropping or reordering channels present in `higher` is within. `native`, `socket` and
-    // `headless-resume` are the legs a word may add: none is in the fallback order, and a level
-    // that names one is the sender choosing that channel — its own SendMessage, this build's
-    // frame on the receiver's socket, or a headless runtime's own turn, which no default order
-    // ever inserts. Every other leg absent from `higher` is still an addition, and the whole
-    // word is set aside.
+    // Dropping or reordering channels present in `higher` is within. `native`, `socket`,
+    // `headless-resume` and `session` are the legs a word may add: none is in the fallback order,
+    // and a level that names one is the sender choosing that channel — its own SendMessage, this
+    // build's frame on the receiver's socket, a headless runtime's own turn, or the receiving
+    // CLI's own session call, which no default order ever inserts. `mcp-inbox` is a name this
+    // build still reads: the word is kept rather than refused, and the walk reports it as
+    // unavailable (`src/send/walk-cascade.ts`). Every other leg absent from `higher` is still an
+    // addition, and the whole word is set aside.
     isWithin: (lower: readonly DeliveryLeg[], higher: readonly DeliveryLeg[]) =>
       lower.length > 0
-      && lower.every((leg, idx) => (leg === 'native' || leg === 'socket' || leg === 'headless-resume' || higher.includes(leg)) && lower.indexOf(leg) === idx),
+      && lower.every((leg, idx) => (leg === 'native' || leg === 'socket' || leg === 'headless-resume' || leg === 'session' || leg === 'mcp-inbox' || higher.includes(leg)) && lower.indexOf(leg) === idx),
   },
   // The attempt budget per route: one map, `route=<seconds>` entries separated by commas. It is
   // the TOTAL budget for one attempt at that route — probe, connect, write and any receipt the
@@ -950,6 +1217,56 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     // A shorter or equal window is tighter.
     isWithin: (lower: number, higher: number) => lower <= higher,
   },
+  // How long one watch pass may spend reading the terminal host and the machine before the rest
+  // of its panes wait for the next pass: whole milliseconds, 2000 when nothing declares it, and a
+  // shorter budget is the tighter one (the pass reads less and resumes sooner). The reader that
+  // consumes it (`watchReadLimits`) resolves the chain to `team`: one pass reads a whole session,
+  // so no seat sets this. This entry is only the name, its aliases and the value rule.
+  'watch-read-budget-ms': {
+    name: 'watch-read-budget-ms',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 2000,
+    gateLifting: false,
+    parseValue: parseReadMillis,
+    valueProblem: (raw: unknown) => readMillisProblem('watch-read-budget-ms', raw),
+    // A shorter or equal budget is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // The longest one read may take before its child is killed: whole milliseconds, 2000 when
+  // nothing declares it, a shorter call the tighter one. A pass's remaining budget may shorten
+  // a call below this value, never lengthen it. This entry is only the name, its aliases and
+  // the value rule.
+  'watch-read-timeout-ms': {
+    name: 'watch-read-timeout-ms',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 2000,
+    gateLifting: false,
+    parseValue: parseReadMillis,
+    valueProblem: (raw: unknown) => readMillisProblem('watch-read-timeout-ms', raw),
+    // A shorter or equal call is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // The longest a send's own arrival post waits on the receiving seat's routine: whole
+  // milliseconds from 500 to 10000, 3000 when nothing declares it, and a shorter bound is the
+  // tighter one. The post is a wake beside a record that is already durable and staged for the
+  // bus and the seat's pull, so a person's command never waits out the bus's budget; the release
+  // default leaves a routine that answers in one to two seconds its full answer instead of an
+  // `unknown` it never had. The bus delivery keeps its own budget (`WEBHOOK_POLICY`) and does not
+  // read this value. `webhookSenderDeadlineMs` in `src/settings/webhook-sender-policy.ts` reads
+  // it for the receiving team's chain.
+  'webhook-sender-deadline-ms': {
+    name: 'webhook-sender-deadline-ms',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: WEBHOOK_SENDER_DEADLINE_MS,
+    gateLifting: false,
+    parseValue: parseWebhookSenderDeadline,
+    valueProblem: (raw: unknown) => webhookSenderDeadlineProblem('webhook-sender-deadline-ms', raw),
+    // A shorter or equal bound is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
   // The machine daemon's broker feature: on keeps the broker handler serving `team next` over the
   // one machine socket, off stops it before any tracker credential is read. It is a feature gate,
   // not a start authority, so no level says who starts the daemon. Off is explicit and absolute:
@@ -967,6 +1284,120 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     parseValue: parseOnOff,
     // 'off' is tighter than 'on': off is within on, on is not within off.
     isWithin: (lower: 'on' | 'off', higher: 'on' | 'off') => !(higher === 'off' && lower === 'on'),
+  },
+  // The machine daemon's fallback-store retirement, for a store that was never retired before and
+  // carries its whole history. Above `daemon.fallback-backlog-above` eligible finished episodes,
+  // one pass retires up to `daemon.fallback-backlog-limit` instead of the steady 256: the first
+  // passes after an upgrade empty the backlog, then the steady limit returns as soon as the
+  // backlog is under the threshold. A higher threshold makes one pass do less and a smaller bulk
+  // limit retires fewer episodes, so those are the tighter words. Only the entity, project and
+  // team levels set them. The daemon reads them for each hosted root; a chain that cannot be read
+  // keeps the release defaults, because retirement is housekeeping and never stops the sweep.
+  'daemon.fallback-backlog-above': {
+    name: 'daemon.fallback-backlog-above',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: BACKLOG_ABOVE_RANGE.release,
+    gateLifting: false,
+    parseValue: (raw: unknown) => parseBacklogCount(raw, BACKLOG_ABOVE_RANGE),
+    valueProblem: (raw: unknown) => backlogCountProblem('daemon.fallback-backlog-above', raw, BACKLOG_ABOVE_RANGE),
+    // A higher threshold is tighter: bulk mode engages later, so one pass does less.
+    isWithin: (lower: number, higher: number) => lower >= higher,
+  },
+  'daemon.fallback-backlog-limit': {
+    name: 'daemon.fallback-backlog-limit',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: BACKLOG_LIMIT_RANGE.release,
+    gateLifting: false,
+    parseValue: (raw: unknown) => parseBacklogCount(raw, BACKLOG_LIMIT_RANGE),
+    valueProblem: (raw: unknown) => backlogCountProblem('daemon.fallback-backlog-limit', raw, BACKLOG_LIMIT_RANGE),
+    // A smaller bulk limit is tighter: one pass retires fewer episodes.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // The machine daemon's loop heartbeat, in whole seconds from 1 to 60: how often the daemon
+  // refreshes its state record, probes its hosted endpoints and runs the fallback sweep, which
+  // still rides the beat in this release. One process serves every hosted checkout, so the
+  // daemon resolves the word for each hosted root at start and again on its housekeeping pass,
+  // and runs the shortest effective word among them: no hosted team loosens another's beat, and
+  // a longer beat must be declared at a level every hosted checkout shares. A root whose chain
+  // cannot be read keeps the release default as its word, because the beat is liveness and never
+  // stops on a word no level could prove. While the sweep still rides the beat, a shorter beat
+  // makes a backlog stall more often, not less; the bounds keep a word inside 1 to 60 seconds.
+  'daemon.heartbeat': {
+    name: 'daemon.heartbeat',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: DAEMON_HEARTBEAT_SECONDS.release,
+    gateLifting: false,
+    parseValue: parseHeartbeatSeconds,
+    valueProblem: (raw: unknown) => heartbeatSecondsProblem('daemon.heartbeat', raw),
+    // A shorter or equal beat is tighter, the same direction as every interval policy.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // Where the machine daemon runs the heavy per-root chores — the fallback sweep and retirement,
+  // the reconcile scans, the presence history step and publisher, and the hosted watch's reads.
+  // `per-root`, the release default, gives every hosted root its own supervised child, so one
+  // root's work never shares a process with another's. `shared` runs one child for every root
+  // whose word is `shared`: each root has its own FIFO of passes and the child serves them
+  // round-robin, one slice per turn, so a root's backlog delays another root's chores by a slice
+  // and never the daemon's socket. `inline` runs the work on the daemon's own loop exactly as
+  // before the isolation, which is the rollback. A lower level may choose less isolation, never
+  // more: inline is within shared, and shared is within per-root. The daemon reads it for each
+  // hosted root; a chain that cannot be read keeps the release default, because the chores never
+  // stop the endpoint. A hosted route with no isolation seam (a plain `team bus`, a test
+  // harness) stays inline.
+  'daemon.chores': {
+    name: 'daemon.chores',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: DAEMON_CHORES_DEFAULTS.mode,
+    gateLifting: false,
+    parseValue: parseChoreMode,
+    valueProblem: (raw: unknown) => choreModeProblem('daemon.chores', raw),
+    isWithin: (lower: DaemonChoresMode, higher: DaemonChoresMode) => CHORE_MODE_RANK[lower] <= CHORE_MODE_RANK[higher],
+  },
+  // How long one slice of a chores child's pass may run before it yields: whole milliseconds,
+  // 2000 when nothing declares it, and a shorter slice is the tighter one (the child answers its
+  // heartbeat sooner). The child reads this together with the per-root sweep cadence.
+  'daemon.chores-slice-ms': {
+    name: 'daemon.chores-slice-ms',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: DAEMON_CHORES_DEFAULTS.sliceMs,
+    gateLifting: false,
+    parseValue: parseReadMillis,
+    valueProblem: (raw: unknown) => readMillisProblem('daemon.chores-slice-ms', raw),
+    // A shorter or equal slice is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // How many child heartbeats the supervisor may miss before it ends the child and restarts it:
+  // whole beats from 1 to 60, 2 when nothing declares it, and a smaller count is the tighter one
+  // (a stuck child is replaced sooner). The beat is the daemon's own heartbeat interval.
+  'daemon.chores-missed-beats': {
+    name: 'daemon.chores-missed-beats',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: DAEMON_CHORES_DEFAULTS.missedBeats,
+    gateLifting: false,
+    parseValue: parseMissedBeats,
+    valueProblem: (raw: unknown) => missedBeatsProblem('daemon.chores-missed-beats', raw),
+    // A smaller miss allowance is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // The longest wait before a replaced chores child is started again: whole milliseconds from
+  // 1000 to 600000, 30000 when nothing declares it. The wait doubles from one failure to the
+  // next and never passes this cap; a smaller cap is the tighter one (recovery is tried sooner).
+  'daemon.chores-backoff-cap-ms': {
+    name: 'daemon.chores-backoff-cap-ms',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: DAEMON_CHORES_DEFAULTS.backoffCapMs,
+    gateLifting: false,
+    parseValue: parseBackoffCapMs,
+    valueProblem: (raw: unknown) => backoffCapProblem('daemon.chores-backoff-cap-ms', raw),
+    // A smaller cap is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
   },
   // The watch's own pace: how often a pass sweeps and how long its six waits run. One value
   // names a preset (`urgent`, `normal`, `relaxed`, `night`, `dormant`), optionally with an
@@ -1061,6 +1492,19 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     },
     inherit: (higher: string, lower: string) => inheritDurationPolicy(higher, lower),
     isWithin: (lower: string, higher: string) => durationPolicyWithin(lower, higher),
+  },
+  // Which Actions commands the guard allows. The default is Floor's three; a caller sets a
+  // subset. A name outside the three is not a value, so the list cannot grow a fourth command,
+  // and no seat is named.
+  'actions-commands': {
+    name: 'actions-commands',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team', 'seat'],
+    defaultValue: ACTIONS_COMMANDS_DEFAULT,
+    gateLifting: false,
+    parseValue: parseActionsCommands,
+    isWithin: (lower: readonly ActionsCommand[], higher: readonly ActionsCommand[]) =>
+      lower.every((command) => higher.includes(command)),
   },
   'grant-emission': {
     name: 'grant-emission',
@@ -1203,6 +1647,57 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: (raw: unknown) => (raw === 'auto' || raw === 'dedicated' || raw === 'off' ? raw : null),
     valueProblem: (raw: unknown) => `entity-orchestrator is auto, dedicated or off, got ${JSON.stringify(raw)}`,
+    isWithin: () => true,
+  },
+  // Whether the entity's main orchestrator relays the owner's word: a relayed decision quotes
+  // the owner and cites its owner-decisions entry, and seats act on it without asking again.
+  // Off by default until sender claims are verified; an entity may turn it on.
+  'entity.main-orchestrator.relays-owner': {
+    name: 'entity.main-orchestrator.relays-owner',
+    kind: 'advised',
+    levels: ['entity'],
+    defaultValue: 'off',
+    gateLifting: false,
+    lowerLevelChooses: true,
+    parseValue: parseOnOff,
+    isWithin: () => true,
+  },
+  // Whether leads may type or choose in a seat's pane when `team send` cannot reach it or a
+  // dialog blocks it; they read the pane before and after, and never the owner's own pane.
+  'leads.pane-actions': {
+    name: 'leads.pane-actions',
+    kind: 'advised',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'on',
+    gateLifting: false,
+    lowerLevelChooses: true,
+    parseValue: parseOnOff,
+    isWithin: () => true,
+  },
+  // Whether a lead in dev mode may bring back a stopped seat and build when no watcher runs.
+  'leads.self-service': {
+    name: 'leads.self-service',
+    kind: 'advised',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'on',
+    gateLifting: false,
+    lowerLevelChooses: true,
+    parseValue: parseOnOff,
+    isWithin: () => true,
+  },
+  // What the owner keeps, in four words, printed in every seat's generated rules below the
+  // line that says what belongs to the teams (OD-20261103-03(4)). A list, `;`- or
+  // `,`-separated on the command line; set it to change the words, never to make the rule
+  // disappear.
+  'owner.reserved-scope': {
+    name: 'owner.reserved-scope',
+    kind: 'advised',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: OWNER_RESERVED_SCOPE_DEFAULT,
+    gateLifting: false,
+    lowerLevelChooses: true,
+    parseValue: parseScopeItems,
+    valueProblem: (raw: unknown) => `owner.reserved-scope is a list of reserved scopes, got ${JSON.stringify(raw)}`,
     isWithin: () => true,
   },
 };

@@ -5,8 +5,8 @@
 //
 // Observed on Claude Code 2.1.289 (test/fixtures/claude-code/2.1.289/README.md): a greyed
 // suggestion is `ESC[0m ESC[2m` … `ESC[0m` — faint — while typed text carries no styling at
-// all. Faint is the only placeholder style: a colour, however grey it renders, is a colour,
-// and reading one as a placeholder was a guess this module no longer makes.
+// all. Faint is still what `allDimAfter` answers. A listed placeholder drawn in a non-bold
+// colour is decided by the screen reader, not here.
 
 // A CSI sequence (an SGR ends in `m`), or an OSC title string. Visible output holds little
 // else, and what it does hold is not text.
@@ -15,31 +15,39 @@ const ESCAPES = /\x1b\[[0-9;:]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 // The pen one SGR sequence leaves: faint (`2`; `0` and `22` lift it) and inverse video (`7`; `0` and
 // `27` lift it). The extended colours — foreground, background (48), underline (58) — carry their
 // payload in sub-parameters (5;n or 2;r;g;b) whose numbers are never the faint or inverse switch.
-type Pen = { faint: boolean; inverse: boolean };
+type Pen = { faint: boolean; inverse: boolean; bold: boolean; fg: string };
 
 function sgrPen(sequence: string, pen: Pen): Pen {
   const params = sequence.slice(2, -1).split(';').map((part) => (part === '' ? '0' : part));
-  let { faint, inverse } = pen;
+  let { faint, inverse, bold, fg } = pen;
   for (let i = 0; i < params.length; i++) {
     const n = Number(params[i]);
     if (!Number.isInteger(n)) continue;
-    if (n === 0) { faint = false; inverse = false; }
-    if (n === 22) faint = false;
+    if (n === 0) { faint = false; inverse = false; bold = false; fg = 'default'; }
+    if (n === 22) { faint = false; bold = false; }
+    if (n === 1) bold = true;
     if (n === 2) faint = true;
     if (n === 27) inverse = false;
     if (n === 7) inverse = true;
+    if (n === 39) fg = 'default';
+    if ((n >= 30 && n <= 37) || (n >= 90 && n <= 97)) fg = String(n);
     if (n === 38 || n === 48 || n === 58) {
       const mode = Number(params[i + 1]);
-      if (mode === 5) i += 2;
-      else if (mode === 2) i += 4;
+      if (mode === 5) {
+        if (n === 38) fg = `38:5:${params[i + 2] ?? ''}`;
+        i += 2;
+      } else if (mode === 2) {
+        if (n === 38) fg = `38:2:${params[i + 2] ?? ''}:${params[i + 3] ?? ''}:${params[i + 4] ?? ''}`;
+        i += 4;
+      }
     }
   }
-  return { faint, inverse };
+  return { faint, inverse, bold, fg };
 }
 
 // The faint state one SGR sequence leaves the pen in.
 export function sgrDim(sequence: string, faint: boolean): boolean {
-  return sgrPen(sequence, { faint, inverse: false }).faint;
+  return sgrPen(sequence, { faint, inverse: false, bold: false, fg: 'default' }).faint;
 }
 
 /** The text of a styled pane read, without its escape sequences. */
@@ -66,7 +74,7 @@ export function hasSgr(text: string): boolean {
  */
 export function allDimAfter(styled: string, skip: number): boolean {
   let passed = 0;
-  let pen: Pen = { faint: false, inverse: false };
+  let pen: Pen = { faint: false, inverse: false, bold: false, fg: 'default' };
   let cursor = 0;
   // The characters before an escape, then the escape; then the rest after the last one.
   const read = (chunk: string): boolean => {
@@ -85,4 +93,33 @@ export function allDimAfter(styled: string, skip: number): boolean {
     cursor = match.index + match[0].length;
   }
   return read(styled.slice(cursor));
+}
+
+/** Whether the visible characters after the first `skip` ones are one non-bold colour.
+ *  Whitespace is not read. Every one of them shares a foreground, none is bold, and none is
+ *  inverse: a second colour, a bold word, or a cursor cell inside the text is not this row.
+ *  An empty remainder is not one colour. */
+export function oneColourAfter(styled: string, skip: number): boolean {
+  let passed = 0;
+  let pen: Pen = { faint: false, inverse: false, bold: false, fg: 'default' };
+  let cursor = 0;
+  let seen: string | null = null;
+  const read = (chunk: string): boolean => {
+    for (const ch of chunk) {
+      if (/\s/.test(ch)) continue;
+      passed++;
+      if (passed <= skip) continue;
+      if (pen.bold || pen.inverse) return false;
+      if (seen === null) seen = pen.fg;
+      else if (seen !== pen.fg) return false;
+    }
+    return true;
+  };
+  for (const match of styled.matchAll(ESCAPES)) {
+    if (!read(styled.slice(cursor, match.index))) return false;
+    if (match[0].endsWith('m')) pen = sgrPen(match[0], pen);
+    cursor = match.index + match[0].length;
+  }
+  if (!read(styled.slice(cursor))) return false;
+  return seen !== null;
 }

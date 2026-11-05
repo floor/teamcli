@@ -12,7 +12,7 @@ import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import type { Launch } from '../commands/up.ts';
 import { ADD_DELEGATE_EDIT, delegateGate, logDelegated } from '../delegate.ts';
-import { devModeCallerGate, devModeExpiryNote, devModeFileApproval, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { devModeExpiryNote, devModeFileApproval, devModeMark, devModeOwnerLift, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import type { ActingCommand } from '../delegate-types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
@@ -22,7 +22,8 @@ import { nextFreeSeatNumber, type SeatNumbering } from '../seat-names.ts';
 import { seatNumberingInForce } from '../settings/seat-numbering.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
 import { branchProblem, resultPathProblem } from '../end/until.ts';
-import { clearStopped, copySeat, hasSeat, seatIsStopped } from '../file/lines.ts';
+import { copySeat, hasSeat, seatIsStopped } from '../file/lines.ts';
+import { setSeatStopped } from '../file/stopped-mark.ts';
 import { findRoot, launchTeamFile, placedProblems } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
@@ -40,7 +41,7 @@ import {
   type HerdrAgent, type PaneProcesses,
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
-import { executePlan, type Host } from '../launch/execute.ts';
+import { executePlan, launchKind, type Host } from '../launch/execute.ts';
 import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
@@ -50,7 +51,7 @@ import { launchRefusal, readEntityModelRule } from '../launch/model-guard.ts';
 import { lobbyPretrustLine, projectRootPretrust } from '../launch/pretrust.ts';
 import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
-import { formatPlan, upPlan, type UpSeat } from '../launch/plan.ts';
+import { formatPlan, registryLaunches, upPlan, type UpSeat } from '../launch/plan.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
@@ -60,7 +61,7 @@ import { gateVerdict } from '../permissions/who.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { resolveEffortOverride, resolveModelOverride, shellQuote, supportsEffortLaunch, withLaunchOverrides } from '../profiles/profile.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
-import { registerEnd, registerLaunch } from '../registry/sync.ts';
+import { ensureSeatLine, registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
@@ -185,7 +186,7 @@ type Until = { kind: 'result'; path: string } | { kind: 'merged'; branch: string
 /** What a builder hands the run: the seat to start and the file its entry is written into.
  *  `copiedFrom` names the source of a declared copy; `temporary` the end a temporary seat runs to. */
 type Built = { name: string; seat: Seat; edited: string; temporary?: SeatState['temporary']; copiedFrom?: string };
-type BuildRefusal = { error: string; id: string };
+type BuildRefusal = { error: string; id: string; repair?: string };
 
 export const add: Command = (argv, io) => runAdd(argv, io, realSources);
 export default add;
@@ -422,7 +423,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const leadSeat = !temporary && isLeadSeat(team, args.rest[0] ?? '');
   // An owner-seat approval for this run, or a signed always rule asked only where the ordinary
   // rule refused, admits it the way a create-grant does.
-  const createGranted = clientRun !== null || seatApproved || (mayChange.kind !== 'ok' && !leadSeat && ownerSeatRuleAdmits('team-add', root, dry, sources)) || (mayChange.kind !== 'ok'
+  const createGranted = clientRun !== null || seatApproved || (mayChange.kind !== 'ok' && !leadSeat && ownerSeatRuleAdmits('team-add', root, dry, io, sources)) || (mayChange.kind !== 'ok'
     && !leadSeat
     && readEntityCreateGrants(sources.home).length > 0
     && entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: io.cwd }));
@@ -463,24 +464,36 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     }
   }
   // The who-may-run-it gate: the map's `add` row, the owner's alone, with the standing grant the
-  // delegate gate above may have answered read as its opening. Set to exactly `1`, dev mode says
-  // this gate once, as a warning, and the edit continues — exactly as `up` does. Every other
-  // refusal stays a refusal: the target placement, the CLI, the records, the approvals and
-  // trust. The warning is logged where this call runs; a dry run says it beside the dry answer
-  // and decides nothing.
+  // delegate gate above may have answered read as its opening. Dev mode's owner admission is the
+  // one the sibling record writers use (`config`, `settings`): the target team's own lead or its
+  // entity's main orchestrator, each placed by the walk, continues with the warning; a plain
+  // seat, a lead of another team and another entity's orchestrator keep this refusal byte for
+  // byte. The audit waits for the write below: this gate answers before the change is validated,
+  // and a refused, dry or unchanged run writes no record line. Every other refusal stays a
+  // refusal: the target placement, the CLI, the records, the approvals and trust.
   const mayRun = mayChange.kind === 'refused' && delegatePane === null && !createGranted
     ? `only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is ${plainLine(describeCaller(shown))}${devModeExpiryNote(dev)}`
     : null;
+  let liftAudit: (() => void) | null = null;
   if (mayRun !== null) {
-    const folded = devModeCallerGate(dev, mayRun);
-    if (folded !== null) {
+    const lift = devModeOwnerLift(io, {
+      command: 'add',
+      refusal: mayRun,
+      home: sources.home,
+      team,
+      root,
+      dir,
+      now: sources.now(),
+      audit: 'later',
+    });
+    if (lift.lifted) {
       devFolded = true;
+      if (!dry) liftAudit = lift.audit;
       // The document's note is the sentence itself; only the terminal's line carries the
       // dry run's `! ` and the command's name in front.
-      if (json) (dry ? finalRecords : jsonNotes).push(folded);
-      else if (dry) out.stdout(`! ${folded}\n`);
-      else out.stderr(`team add: ${plainText(folded)}\n`);
-      if (!dry) logDevMode(dir, 'add', describeCaller(caller), folded, sources.now());
+      if (json) (dry ? finalRecords : jsonNotes).push(lift.warning!);
+      else if (dry) out.stdout(`! ${lift.warning}\n`);
+      else out.stderr(`team add: ${plainText(lift.warning!)}\n`);
     } else {
       if (json) {
         refuse(io, true, 'add', {
@@ -558,16 +571,21 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const recorded = readState(dir).sessions[session] ?? emptySession();
 
   const original = readTeamText(path, { home: sources.home ?? homedir() });
+  // The place the refusals below name: the file this run read, or the registry's record when that
+  // is the team's source — a seat the team does not declare is absent from that, not from a file
+  // a registry team need not have.
+  const place = teamPlace(path, { home: sources.home ?? homedir() }, 'the file');
   const asked = args.rest[0] ?? '';
   const built = temporary
-    ? temporarySeat(args.values, original, team, recorded, agents, root, team.workspace.base, sources.home, sources.now())
+    ? temporarySeat(args.values, original, team, recorded, agents, root, team.workspace.base, sources.home, sources.now(), place)
     : args.values.like !== undefined
-      ? copiedSeat(asked, args.values.like, original, team, sources.home, sources.fs)
-      : declaredSeat(asked, original, team, sources.home, sources.fs);
+      ? copiedSeat(asked, args.values.like, original, team, sources.home, sources.fs, place)
+      : declaredSeat(asked, original, team, sources.home, sources.fs, place);
   if ('error' in built) {
     // The builder names the row its refusal is (`add.no-seat`, `add.until`, `add.branch-missing`,
-    // …); the plain line is the sentence it always printed.
-    refuse(io, json, 'add', { id: built.id, message: built.error, repair: null });
+    // …); the plain line is the sentence it always printed, and the repair, when the builder has
+    // one, is the form that declares the seat the refusal is about.
+    refuse(io, json, 'add', { id: built.id, message: built.error, repair: built.repair ?? null });
     // exit: add.no-seat
     // exit: add.human
     // exit: add.not-restored
@@ -583,11 +601,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     return 1;
   }
   // The pane is the seat only while the process team launched is still in it. A recorded seat
-  // whose pane runs no CLI, or a process team did not launch, is not "already running": its
-  // workspace is closed without input and the seat is launched fresh, exactly as `up` does.
-  // A seat with no record, or a herdr that can't tell, keeps today's reading. The close itself
-  // reads herdr again, immediately before it (`execute.ts`), so this reading only decides that
-  // the seat needs repair, never that its recorded workspace is still its own.
+  // whose pane runs no CLI is not "already running": its own pane is launched in again, and
+  // nothing is created or closed, exactly as `up` does. A pane holding a process team did not
+  // launch is left, and the add is refused. A seat with no record, or a herdr that can't tell,
+  // keeps today's reading. The launch itself reads the pane and its workspace again, immediately
+  // before it (`execute.ts`), so this reading only decides that the seat needs repair, never
+  // that its recorded pane is still its own.
   const held = recorded.seats[built.name];
   const proc = held?.launched && held.pane && sources.launch.processInfo ? sources.launch.processInfo(session, held.pane) : null;
   const verdict = seatProcessVerdict(held?.launched, proc);
@@ -622,9 +641,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.session-doubt
     return 1;
   }
-  // The shell is in front. The seat is not already running: close and launch fresh.
+  // The shell is in front. The seat is not already running, and its pane is still its own: the
+  // launch line runs there again, with nothing created and nothing closed (`up` does the same
+  // through the same plan). The run re-reads the pane and its workspace immediately before the
+  // launch, and a changed reading leaves the seat out with nothing launched.
   const repair = verdict === 'gone' && held?.workspace && held.pane && held.launched
-    ? { pane: held.pane, workspace: held.workspace, launched: held.launched, cli: built.seat.cli }
+    ? { pane: held.pane, workspace: held.workspace, launched: held.launched, cli: built.seat.cli, reuse: true as const }
     : undefined;
   const runningNow = !repair ? agents.find((agent) => agent.name === built.name) : undefined;
   if (runningNow) {
@@ -1044,7 +1066,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   if ('held' in runLock) {
     refuse(io, json, 'add', {
       id: 'add.run-lock',
-      message: runLockText(runLock.held, session, dir),
+      message: runLockText(runLock.held, session, dir, runLock.startedAt),
       repair: null,
     });
     // exit: add.run-lock
@@ -1124,6 +1146,10 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
         if (projectionNote) logLine(dir, 'add', describeCaller(caller), projectionNote, sources.now());
       }
     }
+    // The lead's dev-mode admission leaves its audit line only now: the record is on disk, or
+    // the seat was already in it and this run only launches. Every refusal above — the changed
+    // file, the invalid edit, the pretrust question — returned with the folder as it was.
+    if (liftAudit !== null) liftAudit();
 
     const planSeat = verifiedLobby && seatForPlan.lobby ? { ...seatForPlan, cwd: verifiedLobby } : seatForPlan;
     const who = clientText ?? describeCaller(caller);
@@ -1187,6 +1213,16 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
         return lobbySeen ? recheckLobby(sources.home, lobbySeen, { getuid: sources.getuid, fs: sources.fs, reads: startupReads, lobby }) : null;
       },
     });
+    // The roster line this launch needs before its CLI starts when it starts from the registry's
+    // record: the inbox registration and the server it starts resolve the seat by it, before the
+    // run's own registerLaunch writes one. A launch that names a team file reads the seat from
+    // that file, and the completed launch's own record writes the line.
+    for (const name of registryLaunches(plan)) {
+      const declared = prepared.team.seats.find((candidate) => candidate.name === name);
+      if (declared === undefined) continue;
+      const lined = ensureSeatLine({ home: sources.home, team: prepared.team, root, by: who, session }, declared);
+      if ('note' in lined) logLine(dir, 'add', who, lined.note, sources.now());
+    }
     const report = await executePlan(plan, session, host);
     // A binding is minted for a launch this run is about to type. A refusal that leaves the
     // seat before its line runs never gave the new settings file to a process, so the seat
@@ -1257,19 +1293,29 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
 }
 
+/** The repair for a seat the team does not declare: declare it by copying one the team does
+ *  hold. Which seat to copy is the owner's to choose, so that word stays a placeholder. */
+function declaringForm(name: string): string {
+  return `team add ${name === '' ? '<name>' : name} --like <seat>`;
+}
+
 function declaredSeat(
-  name: string, current: string, team: TeamFile, home: string, fs?: FsReader,
+  name: string, current: string, team: TeamFile, home: string, fs: FsReader | undefined, place: string,
 ): Built | BuildRefusal {
   const seat = team.seats.find((item) => item.name === name);
-  if (!seat) return { id: 'add.no-seat', error: `the file has no seat ${JSON.stringify(name)}` };
+  if (!seat) return { id: 'add.no-seat', error: `${place} has no seat ${JSON.stringify(name)}`, repair: declaringForm(name) };
   // A human's pane is never launched into or typed into. `add` names one seat, so it refuses
   // with the reason rather than walk a plan that would skip the only seat it was asked to add.
   if (seat.human) return { id: 'add.human', error: `${name} is a human's pane: nothing is typed into it or launched over it; left as it is` };
   let edited = current;
-  if (seat.stopped || seatIsStopped(edited, name)) edited = clearStopped(edited, name);
+  if (seat.stopped || seatIsStopped(edited, name)) {
+    const cleared = setSeatStopped(edited, name, false);
+    if (!cleared.ok) return { id: 'add.not-restored', error: `couldn't clear the stopped mark on ${name} in ${place}: ${cleared.why}` };
+    edited = cleared.text;
+  }
   const again = validateTeamFile(edited, { home, fs });
   const restored = again.ok ? again.team.seats.find((item) => item.name === name) : undefined;
-  if (!restored) return { id: 'add.not-restored', error: `couldn't put ${name} back into the file` };
+  if (!restored) return { id: 'add.not-restored', error: `couldn't put ${name} back into ${place}` };
   return { name, seat: { ...restored, stopped: false }, edited, temporary: undefined };
 }
 
@@ -1280,17 +1326,17 @@ function declaredSeat(
  * any declared seat. A source that is a human's pane is refused: nothing is launched over it.
  */
 function copiedSeat(
-  name: string, like: string, current: string, team: TeamFile, home: string, fs?: FsReader,
+  name: string, like: string, current: string, team: TeamFile, home: string, fs: FsReader | undefined, place: string,
 ): Built | BuildRefusal {
   const source = team.seats.find((item) => item.name === like);
-  if (!source) return { id: 'add.no-like', error: `the file has no seat ${JSON.stringify(like)}` };
+  if (!source) return { id: 'add.no-like', error: `${place} has no seat ${JSON.stringify(like)}`, repair: declaringForm(name) };
   if (team.seats.some((item) => item.name === name)) {
-    return { id: 'add.like-exists', error: `the file already declares ${JSON.stringify(name)}; --like adds a copy under a new name` };
+    return { id: 'add.like-exists', error: `${place} already declares ${JSON.stringify(name)}; --like adds a copy under a new name` };
   }
   if (source.human) return { id: 'add.human', error: `${like} is a human's pane: nothing is typed into it or launched over it; left as it is` };
   const edited = copySeat(current, like, name);
   if (edited === current || !hasSeat(edited, name)) {
-    return { id: 'add.not-restored', error: `couldn't copy ${like} into the file as ${name}` };
+    return { id: 'add.not-restored', error: `couldn't copy ${like} into ${place} as ${name}` };
   }
   // A copy the file refuses — a second `leads`, `assistant` or nickname — is read here so the
   // seat carries what the file would say; the validation before the write then refuses it by
@@ -1308,10 +1354,10 @@ function copiedSeat(
 
 function temporarySeat(
   values: Record<string, string>, current: string, approved: TeamFile, state: SessionState, agents: readonly HerdrAgent[],
-  root: string, base: string | null, home: string, now: Date,
+  root: string, base: string | null, home: string, now: Date, place: string,
 ): Built | BuildRefusal {
   const like = approved.seats.find((item) => item.name === values.like);
-  if (!like) return { id: 'add.no-like', error: `the file has no seat ${JSON.stringify(values.like)}` };
+  if (!like) return { id: 'add.no-like', error: `${place} has no seat ${JSON.stringify(values.like)}` };
   const until = parseUntil(values.until ?? '');
   if (!until) return { id: 'add.until', error: '--until is result:<path> or merged:<branch>' };
   let own: boolean | undefined;
@@ -1571,15 +1617,17 @@ function hostOf(input: {
      */
     dialog: { mode: 'keep' },
     recordWaiting(name, waiting, pane, workspace) {
+      // The terminal host is read before the state lock: its 10 s timeout must not hold team.lock
+      // while another command waits to write. The identity goes in the same write as the waiting
+      // record, so the owner's later `team up` — and `team answer` — can tell a pane that is
+      // still the seat's from one that is not.
+      const identity = launchedIdentity(launch.processInfo?.(session, pane) ?? null);
       updateState(dir, (file) => {
         const current = (file.sessions[session] ??= emptySession());
         const prior = current.seats[name] ?? { stage: 'launched' as const };
         const retained = current.retained_seats?.[name];
         if (current.retained_seats?.[name]) delete current.retained_seats[name];
         const id = prior.id ?? retained?.id ?? mintSeatId();
-        // The process identity goes in the same write, so the owner's later `team up` — and
-        // `team answer` — can tell a pane that is still the seat's from one that is not.
-        const identity = launchedIdentity(launch.processInfo?.(session, pane) ?? null);
         current.seats[name] = {
           ...prior,
           id,
@@ -1594,7 +1642,7 @@ function hostOf(input: {
     agentPanes: launch.agentPanes,
     agentList: launch.agents,
     workspacePanes: launch.workspacePanes ? (session, workspace) => launch.workspacePanes!(session, workspace) : undefined,
-    classify: (_name, pane, cli) => readScreen(cli, launch.paneText(session, pane) ?? undefined).kind,
+    classify: (_name, pane, cli) => launchKind(readScreen(cli, launch.paneText(session, pane) ?? undefined).kind),
     paneText: (_name, pane) => launch.paneText(session, pane),
     foreground: (_name, pane) => launch.foreground(session, pane),
     shellBack: (_name, pane) => launch.shellBack?.(session, pane) ?? null,
@@ -1629,7 +1677,9 @@ function hostOf(input: {
         const model = (isTarget ? seat.model : undefined) ?? prior.model;
         const version = (isTarget ? seat.version : undefined) ?? prior.version;
         const effort = (isTarget ? seat.effort : undefined) ?? prior.effort;
-        const launch_line = (isTarget ? seat.launch : undefined) ?? prior.launch_line;
+        // The line this run launched the target with, pins included when its profile has them;
+        // any other seat keeps the line its own record holds.
+        const launch_line = patch.launch_line ?? (isTarget ? seat.launch : undefined) ?? prior.launch_line;
         const last_active = patch.stage === 'ready'
           ? input.now().toISOString()
           : (prior.last_active ?? retained?.last_active);

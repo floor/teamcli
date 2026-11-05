@@ -395,7 +395,8 @@ describe('team rename <seat> <new-seat> and --renumber', () => {
     expect(listUnacked(fx.root, 'acme', fx.home).filter((drop) => drop.id === 'm-001')).toEqual([
       { id: 'm-001', to: 'builder-01', at: NOW.toISOString() },
     ]);
-    const msgIo = testIo(fx.root, owner);
+    // The renamed seat reads its own mailbox: the record moved with it.
+    const msgIo = testIo(fx.root, { kind: 'seat', name: 'builder-01', pane: 'pane-renamed', session: 'acme' });
     expect(await runMessages([], msgIo, { home: fx.home, now: () => NOW })).toBe(0);
     expect(msgIo.out).toContain('hello mailbox');
 

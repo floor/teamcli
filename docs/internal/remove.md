@@ -53,7 +53,10 @@ Writes the team file (the seat's entry taken out, or `stopped: true` added to it
 `.agents/team.state.json` (the seat's record is dropped), `.agents/team.log`, and, through herdr:
 the exit typed into the pane, the wait for its shell, and the workspace closed — or, on the leave
 of a caller other than the owner (below), no typing and no close at all, and the
-pane's agent renamed out of the seat's name, best effort. A name the approved copy carries is
+pane's agent renamed out of the seat's name, best effort. A seat whose CLI keeps its inbox entry in
+a user-level store has exactly that entry removed as the record goes — one name, the seat's own, so
+no other entry in the shared store is touched — and a removal that cannot be made is said and does
+not fail the run. A name the approved copy carries is
 a declared seat, even when the state still marks it temporary, and its rules file stays. A name
 the copy does not carry is left as it is for the owner, for a temporary record, when the live
 file declares it, and when no single live agent of that name is idle or done; a caller other

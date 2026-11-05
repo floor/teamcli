@@ -123,6 +123,7 @@ export function refreshFixture(realWait = false, inPlace = false, baseDir = tmpd
         daemon: 'teamcli', socket: join(base, 'synthetic.sock'), state: running === null ? 'not-running' : 'running',
         running: running !== null, pid: running === null ? null : 4242, uid: 4242, since: null, startedBy: 'synthetic-service-manager',
         version: 'synthetic', gitHead: null, heartbeatAt: null, features: null, stuck: [], roots: [],
+        heartbeatSeconds: null,
         probe: answered ? { state: 'answered', at: new Date(0).toISOString() } : { state: 'unanswered', at: new Date(0).toISOString(), reason: 'closed' }, why: null,
       };
     },

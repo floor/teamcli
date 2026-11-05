@@ -28,31 +28,37 @@ import { projectIdOfTeam } from '../dev_mode.ts';
 import { launchTeamFile } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
-import { paneProcesses } from '../herdr.ts';
-import { eventThresholdsInForce } from '../policy/index.ts';
+import { paneProcessesAsync, type PaneProcesses } from '../herdr.ts';
+import { eventThresholdsInForce, DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
-import { runRestoreSweepForRoute, type RestoreSweepResult } from '../launch/restore-sweep.ts';
-import { isSeatId, pidAlive, readState } from '../state.ts';
+import type { RestoreSweepResult } from '../launch/restore-sweep.ts';
+import { runRestoreSweepInChild } from './restore/spawn.ts';
+import { pidAlive } from '../state.ts';
 import { probeDaemonSocket, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
 import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot, type DaemonRequest, type DaemonResponse, type DaemonRootHealthSnapshot } from './protocol.ts';
 import { probeDaemonHealth } from './health.ts';
-import { sweepFallbackEscalations, type SweepRoot } from './fallback-sweep.ts';
+import { choresPolicyFor } from './chores/policy.ts';
+import { createChoresFleet, type ChoresFleet } from './chores/supervisor.ts';
+import type { ChoresChild, SpawnChoresInput } from './chores/spawn.ts';
+import type { ChoresPresenceProof, ChoresPresenceReading, ChoresPresenceStatus } from './chores/protocol.ts';
+import { FALLBACK_STORE_PASS_LIMIT, FALLBACK_STORE_PASS_MS, storeBacklogLimits, sweepFallbackEscalationsSliced, type FallbackSweepResult, type SweepRoot } from './fallback-sweep.ts';
+import { createHeartbeatPolicy } from './heartbeat.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath } from './paths.ts';
 import { createHostServer } from '../../packages/relay/host/server.js';
 import { canonicalRoot, duplicateRoute, resolveScope, routeOf, type HostedRoute } from './routes.ts';
 import type { NextAnswer, NextClaim, NextHandlerInput } from './next.ts';
 import { createFaultInbox } from './fault.ts';
-import { createHostedWatch, type HostedEffects, type HostedWatch } from './watch.ts';
+import { createHostedBeat, createHostedWatch, type HostedEffects, type HostedWatch } from './watch.ts';
 import { hostedWatchAuthority } from './watch-authority.ts';
 import { createPresenceIngester, type PresenceIngester } from './presence/ingest.ts';
 import { createPresenceActivity, type PresenceActivityStep } from './presence/activity.ts';
 import { createPresencePublisher, type PresencePublisherStep } from './presence/publish.ts';
-import { isPresenceBinding, readPresenceReading } from './presence/contract.ts';
-import { presencePaths } from './presence/spool.ts';
+import { createPresenceHeld, type PresenceHeldStep } from './presence/held.ts';
+import { canonicalSeatOf, currentPresenceBinding } from './presence/reconcile.ts';
 import { codexPresenceFor, codexPresenceTarget } from './presence/codex-source.ts';
 import {
   PRESENCE_HEALTH_GRACE_MS, adoptPresenceSource, createPresenceChannelHealth, presenceStepHealth,
-  reconcilePresenceProof, reconciledProofHolds, unprovenSource, type PresenceCanonicalPosition,
+  reconcilePresenceProof, reconciledProofHolds, unprovenSource,
   type PresenceChannelHealth, type PresenceReconciledProof, type PresenceSource,
   type PresenceSourceRuntime, type PresenceSourceStatus,
 } from './presence/health.ts';
@@ -158,8 +164,12 @@ export type StartMachineDaemonInput = {
   sendRestart?: { giveUp?: number; backoffMs?: (failures: number) => number };
   /** Starts one root's bus server when the heartbeat finds it stopped. The default starts the
    *  real server; a test injects its own to hold or observe a revive. It is never the start that
-   *  hosts the bus beside send: that one is `startBus` itself. */
+   *  hosts the bus beside send: that one is `initialBusStart`'s. */
   busStart?: (input: StartBusInput) => Promise<StartBusResult>;
+  /** Starts one root's bus server when the roots loop first hosts it. The default starts the
+   *  real server; a test injects its own to read the start input and the first-pass progress
+   *  without binding a socket. It never covers a revive; that one is `busStart`'s. */
+  initialBusStart?: (input: StartBusInput) => Promise<StartBusResult>;
   /**
    * Whether each hosted route carries a watch on the daemon's heartbeat. Off by default: the
    * quiet foundation lands before any activation, and a daemon started only to host endpoints
@@ -195,6 +205,10 @@ export type StartMachineDaemonInput = {
   /** Builds one route's presence publisher step. The default appends through the bus event log;
    *  a test injects its own to observe what is published and when. */
   presencePublish?: (route: HostedRoute, stateDir: string) => PresencePublisherStep;
+  /** Builds one route's held-frame step, which reads a seat's pane after a socket delivery and
+   *  raises `held` when the frame sat at its dialog. The default reads the pane host; a test
+   *  injects its own so a scene never reaches a pane. */
+  presenceHeld?: (route: HostedRoute, stateDir: string) => PresenceHeldStep;
   /**
    * Builds one canonical route's subscribed per-seat read-only runtime sources. The default is
    * the production wiring: for every declared seat it resolves an explicit Codex target under the
@@ -237,6 +251,13 @@ export type StartMachineDaemonInput = {
    * with no verifier, so the two seams are only ever open together.
    */
   nextHandler?: NextDispatchHandler;
+  /**
+   * The verified pane's process identity for a `next` request's delivery class: the proof that
+   * a recorded socket is the pane's own. The default asks the terminal host, awaited so the
+   * read never holds the beat; a test injects its own so a synthetic listener scene makes no
+   * terminal-host call. A reader that cannot answer returns null, the conservative rule.
+   */
+  paneProcesses?: (pane: string, session: string) => PaneProcesses | null | Promise<PaneProcesses | null>;
   /** The presence pass interval; 250 ms in production. A test shortens it. */
   presenceEveryMs?: number;
   /**
@@ -248,6 +269,27 @@ export type StartMachineDaemonInput = {
    * is skipped, and the sweep never cold-starts a team.
    */
   restoreSweep?: boolean | ((root: string, teamFile: string | undefined) => Promise<RestoreSweepResult>);
+  /**
+   * The growing-gap retry schedule when a canonical route's session is not yet running in the
+   * terminal host at daemon start: `restoreRetryInitialDelayMs` (5 s default) doubles each retry
+   * up to `restoreRetryMaxDelayMs` (60 s default) over a total bound of `restoreRetryBudgetMs`
+   * (315 s / 5m 15s default). A test shortens these to observe the retry schedule without
+   * waiting the production window.
+   */
+  restoreRetryInitialDelayMs?: number;
+  restoreRetryMaxDelayMs?: number;
+  restoreRetryBudgetMs?: number;
+  /**
+   * Whether the daemon isolates the heavy per-root chores in supervised children. Off by
+   * default, like the other hosting seams: a daemon started without it runs exactly the inline
+   * path, and a test harness that never opted in behaves as it always did. The mode per route is
+   * `daemon.chores` (`per-root`, `shared` or `inline`), so this seam only asks whether the daemon
+   * may use children at all; a route whose policy says `inline` keeps the inline path either way.
+   */
+  choresHosting?: boolean;
+  /** Starts one chores child. The default writes a one-use token and spawns this program's hidden
+   *  child verb; a test injects a fixture child to observe the protocol and the supervision. */
+  choresFactory?: (input: SpawnChoresInput) => ChoresChild;
 };
 
 export type StartMachineDaemonResult =
@@ -256,8 +298,17 @@ export type StartMachineDaemonResult =
   | { kind: 'locked'; pid: number | null }
   | { kind: 'bind-failed'; reason: string };
 
-const HEARTBEAT_MS = 5_000;
+/** The beat the daemon runs when no injected seam and no policy word names one: the release
+ *  default of `daemon.heartbeat` (ADR D6), the beat the daemon ran hard-coded before the word. */
+const HEARTBEAT_MS = DAEMON_HEARTBEAT_SECONDS.release * 1000;
 const STUCK_MS = 10_000;
+/** The longest the beat's fallback pass may hold the event loop before yielding to it: the
+ *  product's own health probe answers within 500 ms (health.ts's `options.timeoutMs ?? 500`), and
+ *  a probe's request needs a few loop turns of its own (accept, read, answer), so the slice stays
+ *  small enough that those turns land every few milliseconds rather than at the budget's edge.
+ *  The pass checks the boundary before each item, so a slice is one item long at most past this
+ *  mark. */
+const FALLBACK_BEAT_SLICE_MS = 10;
 const PRESENCE_EVERY_MS = 250;
 /** Failed restarts of one send endpoint in a row before the daemon gives up and exits. */
 const SEND_RESTART_GIVE_UP = 5;
@@ -360,6 +411,8 @@ function snapshotOf(fields: {
   version: string;
   gitHead?: string | null;
   heartbeatAt: string;
+  /** The whole seconds the loop's policy word runs at; absent while a test seam owns the beat. */
+  heartbeatSeconds?: number | null;
   features: DaemonFeatures;
   stuck: DaemonStuckRequest[];
   roots?: DaemonRootHealthSnapshot[];
@@ -372,6 +425,7 @@ function snapshotOf(fields: {
     version: fields.version,
     ...(fields.gitHead === undefined ? {} : { gitHead: fields.gitHead }),
     heartbeatAt: fields.heartbeatAt,
+    ...(fields.heartbeatSeconds === undefined ? {} : { heartbeatSeconds: fields.heartbeatSeconds }),
     stuck: fields.stuck,
     features: fields.features,
     ...(fields.roots === undefined ? {} : { roots: fields.roots }),
@@ -396,6 +450,8 @@ type EndpointWatch = {
   sendStart: (() => Promise<Awaited<ReturnType<typeof startSendDaemon>>>) | null;
   /** The send handle this daemon owns, so a failed endpoint can be closed before a restart. */
   sendHandle: SendDaemonHandle | null;
+  /** The bus handle this daemon owns, so a state write can read the first pass's progress. */
+  busHandle: BusHandle | null;
   /** The restart's own backoff and single-flight flag. */
   sendState: BusWatch;
   /** Whether this root's send start attempt has returned; a probe waits for it. */
@@ -437,7 +493,6 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const now = input.now ?? (() => new Date());
   const startedBy = input.startedBy ?? 'manual';
   const features: DaemonFeatures = input.features ?? { broker: 'absent' };
-  const heartbeatMs = input.heartbeatMs ?? HEARTBEAT_MS;
   const stuckMs = input.stuckMs ?? STUCK_MS;
   const refreshCloseBoundMs = input.refreshCloseBoundMs ?? REFRESH_CLOSE_BOUND_MS;
   const pid = process.pid;
@@ -488,7 +543,18 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
 
   const inFlight = new Map<string, InFlight>();
   const roots: MachineRootStatus[] = [];
+  /** Each hosted bus whose first pass is still worth reading on a state write: the row carries
+   *  how far the scan has got, so a bus that serves while its first pass runs says so. */
+  const passRefreshers: (() => void)[] = [];
   const routes: HostedRoute[] = [];
+  /** The validated team file per accepted route, by canonical root: the chores policy chain and
+   *  the child's own config are read from what the daemon accepted, never from a re-read that
+   *  could name another team. */
+  const teams = new Map<string, TeamFile>();
+  /** The supervised chores children, built after the roots loop; null until then and whenever
+   *  the daemon was not started with the isolation seam. The state writer reads it every time,
+   *  so a beat's record carries what each child said on this beat. */
+  let choresFleet: ChoresFleet | null = null;
   /** What each route must re-read, by canonical root. The route remembers the loader's root and
    *  the file a `team-file` route launched from; a registry route names no file, so it is resolved
    *  from its root again the way every writer resolves it. `handle` is the path the loader
@@ -506,6 +572,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     ingester: PresenceIngester;
     activity: PresenceActivityStep;
     publisher: PresencePublisherStep;
+    /** The held-frame step: the one place a socket frame is seen at a held-message dialog. */
+    held: PresenceHeldStep;
     /** One read-only runtime source per managed seat; empty for a hook-only route. */
     sources: PresenceSource[];
     /** One in-flight pump per source, so a slow source holds only its own seat's answer. */
@@ -524,6 +592,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   /** The one-flight daemon-start restore sweep. `closeOnce` drains it beside the presence
    *  passes; the sweep reads the daemon's closing flag to stop between seat steps. */
   let restoreSweepRun: Promise<void> | null = null;
+  /** Ends a restore child whose pass is still running when the daemon closes: the child's own
+   *  flag stops the pass between seat steps, and the spawner bounds the step it is inside. */
+  const restoreAbort = new AbortController();
   // The hosted send server may take a delivery while this start is still wiring the presence
   // answers. Until the verdict helper below exists the per-seat answer is false, which holds
   // typing instead of reading a helper that is not initialised yet.
@@ -542,6 +613,33 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (closed && !afterClose) return;
     appendDaemonLog(home, line, now());
   };
+
+  // The loop's beat: an injected seam owns it whole (a test that must not wait the release beat),
+  // and otherwise the `daemon.heartbeat` word the hosted roots' chains declare — resolved once
+  // here at start, then re-read on the housekeeping pass, where a changed word re-arms the timer
+  // below. `heartbeatSeconds` is the word the state record and the health answer carry; null
+  // while the seam owns the beat.
+  const heartbeatPolicy = createHeartbeatPolicy({
+    seamMs: input.heartbeatMs ?? null,
+    initialRoots: input.roots,
+    roots: () => (sweepRoots.length > 0 ? sweepRoots : input.roots),
+    home,
+    now,
+    log: (text) => logLine(text),
+  });
+  let heartbeatMs = heartbeatPolicy.ms();
+  let heartbeatSeconds = heartbeatPolicy.seconds();
+
+  // The beat between hosted routes: the interval owns it, and a hosted pass that holds the event
+  // loop carries the due beats it displaces to every other route. It never touches the calling
+  // route's state — that pass may hold the state lock — and it writes no daemon record: the
+  // interval's own beat does that when it next runs.
+  const hostedBeat = createHostedBeat({
+    intervalMs: () => heartbeatMs,
+    watches: () => hostedWatches.map((one) => one.watch),
+    log: (text) => logLine(text),
+    now,
+  });
 
   const stuckNow = (): DaemonStuckRequest[] => {
     const at = now().getTime();
@@ -636,6 +734,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       heartbeatAt,
       features,
       stuck: stuckNow(),
+      ...(heartbeatSeconds === null ? {} : { heartbeatSeconds }),
       ...(routes.length > 0 ? { roots: rootsSnapshot(at) } : {}),
     });
   };
@@ -643,6 +742,15 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const writeState = (afterClose = false): void => {
     if (closed && !afterClose) return;
     for (const one of hostedWatches) one.status.watch = one.watch.state();
+    for (const refresh of passRefreshers) refresh();
+    // Each route's chores record is this beat's reading, never a stored word: the supervisor
+    // reports what its child last said, and a route the fleet does not know keeps no field.
+    if (choresFleet !== null) {
+      for (const status of roots) {
+        const chores = choresFleet.stateFor(status.root);
+        if (chores !== undefined) status.chores = chores;
+      }
+    }
     try {
       writeDaemonState(home, {
         format: 1,
@@ -657,6 +765,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         features,
         stuck: stuckNow(),
         roots: [...roots],
+        ...(heartbeatSeconds === null ? {} : { heartbeatSeconds }),
       });
     } catch {
       // The next heartbeat tries again; an unwritable record is reported as unknown, never healthy.
@@ -732,6 +841,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       return nextRefusal('next: the verified principal does not match the seat and pane the request claimed; nothing was done');
     }
     try {
+      // The verified pane's process identity, read the way this host reads a pane for a watch
+      // authority: the handler's class then knows whether the recorded socket is the pane's
+      // own. A pane the terminal host cannot answer for reads null, the conservative rule.
+      // The read is awaited, never taken on the loop: the daemon's timer keeps beating while
+      // a terminal host is slow to answer.
+      const readProcesses = input.paneProcesses
+        ?? ((pane: string, session: string) => paneProcessesAsync(pane, session, { timeoutMs: 10_000 }));
+      const processes = await readProcesses(verdict.pane, route.session);
       const answer = await handler({
         route,
         team: loaded.team,
@@ -742,6 +859,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         // The registry home this daemon was started with: the one the route's team was read in,
         // and the one the handler reads the seat's agent record from.
         home,
+        processes,
       });
       return { v: request.v, id: request.id, ok: true, next: answer };
     } catch (error) {
@@ -826,12 +944,25 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // ticks, endpoint probes, fallback sweep) is attached once that wiring exists; until then a
   // tick refreshes the heartbeat and the record alone.
   let beat: (() => void) | null = null;
-  const timer = setInterval(() => {
+  const beatTick = (): void => {
     heartbeatAt = now().toISOString();
     writeState();
     beat?.();
-  }, heartbeatMs);
+  };
+  let timer = setInterval(beatTick, heartbeatMs);
   timer.unref();
+  /** The reload half of the heartbeat word: the housekeeping pass re-reads it, and a changed
+   *  word re-arms the timer here, so the next tick is the first on the new beat. The state
+   *  record this tick writes already carries the word. */
+  const rearmHeartbeat = (): void => {
+    heartbeatPolicy.refresh();
+    if (heartbeatPolicy.ms() === heartbeatMs) return;
+    heartbeatMs = heartbeatPolicy.ms();
+    heartbeatSeconds = heartbeatPolicy.seconds();
+    clearInterval(timer);
+    timer = setInterval(beatTick, heartbeatMs);
+    timer.unref();
+  };
 
   // Staged limitation, and the exact block the extraction replaces: the machine protocol
   // socket is the daemon's own endpoint, but send and bus still have no machine route, so this
@@ -839,7 +970,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // therefore mean 2N+1 endpoints in one process until the machine endpoint serves route
   // delivery and a shared per-seat queue behind the relay package boundary.
   for (const rootArg of input.roots) {
-    const status: MachineRootStatus = { root: rootArg, team: null, send: 'starting', bus: 'starting', why: null };
+    const status: MachineRootStatus = {
+      root: rootArg, team: null, send: 'starting', bus: 'starting', why: null, sendWhy: null, busWhy: null,
+    };
     // A root with no hosted endpoint keeps both sockets null and the refresh skips it.
     const watch: EndpointWatch = {
       status,
@@ -850,6 +983,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       sendMisses: 0,
       sendStart: null,
       sendHandle: null,
+      busHandle: null,
       sendState: freshBusWatch(),
       sendStarted: false,
       busStarted: false,
@@ -896,6 +1030,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     status.team = loaded.team.project;
     watch.busRoot = canonical;
     sweepRoots.push({ root: loaded.root, team: loaded.team });
+    teams.set(canonical, loaded.team);
     // Registered before any endpoint is started: status can name the root, and a heartbeat
     // keeps its record fresh, while a large store or a slow start below is still in progress.
     register();
@@ -1017,6 +1152,15 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             root: canonical,
             home,
           }),
+        held: input.presenceHeld?.(route, stateDir)
+          ?? createPresenceHeld({
+            stateDir,
+            project: loaded.team.project,
+            root: canonical,
+            session: loaded.team.session,
+            home,
+            seats: loaded.team.seats.map((seat) => ({ name: seat.name, launch: seat.launch })),
+          }),
         sources,
         sourceRuns: sources.map(() => null),
         health,
@@ -1068,7 +1212,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     } else {
       status.send = 'failed';
       status.sendFailedAt = now().toISOString();
-      status.why = send.kind === 'locked' ? 'another send server holds the project socket' : send.reason;
+      status.sendWhy = send.kind === 'locked' ? 'another send server holds the project socket' : send.reason;
     }
 
     const thresholds = eventThresholdsInForce({
@@ -1084,118 +1228,118 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       watch.busStarted = true;
       status.bus = 'failed';
       status.busFailedAt = now().toISOString();
-      if (status.why === null) status.why = thresholds.refusals.map((refusal) => refusal.message).join('; ');
+      status.busWhy ??= thresholds.refusals.map((refusal) => refusal.message).join('; ');
       register();
-      logLine(`root ${rootArg}: bus not hosted: ${status.why}`);
+      logLine(`root ${rootArg}: bus not hosted: ${status.busWhy}`);
       continue;
     }
     let bus: Awaited<ReturnType<typeof startBus>>;
     try {
-      bus = await startBus({
+      // The first pass runs in the background: the bus serves as soon as its listener is bound,
+      // so one store's scan never holds the next root back. The root's row carries the pass's
+      // progress until it settles, so serving is not read as caught up.
+      bus = await (input.initialBusStart ?? startBus)({
         root: canonical,
         team: loaded.team,
+        stateDir: dirname(loaded.path),
         home,
         stderr: (text) => logLine(text),
         heldThresholdSeconds: thresholds.thresholds.held_threshold_seconds,
         now,
+        initialReconcile: 'background',
       });
     } catch (error) {
       watch.busStarted = true;
       status.bus = 'failed';
       status.busFailedAt = now().toISOString();
-      if (status.why === null) status.why = `the bus server could not start: ${error instanceof Error ? error.message : 'unknown error'}`;
+      status.busWhy ??= `the bus server could not start: ${error instanceof Error ? error.message : 'unknown error'}`;
       register();
-      logLine(`root ${rootArg}: ${status.why}`);
+      logLine(`root ${rootArg}: ${status.busWhy}`);
       continue;
     }
     watch.busStarted = true;
     if (bus.kind === 'serving') {
-      busHandles.push(bus.handle);
+      const handle = bus.handle;
+      busHandles.push(handle);
+      watch.busHandle = handle;
       status.bus = 'serving';
       watch.busSocket = busSocket(canonical);
+      // Read on every state write, so the row's first-pass progress follows the scan: the start
+      // returned once the listener was bound, and this is how a reader knows the store is not
+      // caught up yet. A settle instant, once written, is not overwritten by a later pass. The
+      // handle is read through the watch: a revive replaces it, and a failure clears it so an
+      // endpoint that is gone never keeps the last bus's pass on its row.
+      passRefreshers.push(() => {
+        const current = watch.busHandle;
+        if (current !== null) status.firstPass = current.firstPass();
+      });
     } else {
       status.bus = 'failed';
       status.busFailedAt = now().toISOString();
-      if (status.why === null) {
-        status.why =
-          bus.kind === 'busy'
-            ? 'another bus server holds the project socket'
-            : bus.kind === 'locked'
-              ? 'another bus server is starting'
-              : 'the bus socket could not be bound';
-      }
+      status.busWhy ??=
+        bus.kind === 'busy'
+          ? 'another bus server holds the project socket'
+          : bus.kind === 'locked'
+            ? 'another bus server is starting'
+            : 'the bus socket could not be bound';
     }
     register();
     logLine(`root ${rootArg}: send ${status.send}, bus ${status.bus}`);
   }
 
-  /** The seat's current managed binding, read at the moment of use. A missing seat record, an
-   *  absent binding or an unreadable team state means no continuity may be granted: the source's
-   *  own binding is then fenced against nothing. */
-  const currentBindingOf = (stateDir: string, session: string, seat: string): string | null => {
-    try {
-      const record = readState(stateDir).sessions[session]?.seats?.[seat];
-      return record !== undefined && isPresenceBinding(record.presence_binding)
-        ? record.presence_binding
-        : null;
-    } catch {
-      return null;
-    }
-  };
-
-  /** The exact canonical position for one seat: the applied projection (`current.json`) and the
-   *  activity reconciler's applied fence, read together from the same state door. Both must name
-   *  the same applied line; a projection the ingester wrote but activity has not fenced yet is
-   *  deliberately not enough. */
-  const canonicalSeatOf = (
-    stateDir: string,
-    session: string,
-    seat: string,
-  ): { canonical: PresenceCanonicalPosition | null; why: string | null } => {
-    let record;
-    try {
-      record = readState(stateDir).sessions[session]?.seats?.[seat];
-    } catch {
-      return { canonical: null, why: 'the team state could not be read' };
-    }
-    if (record === undefined) return { canonical: null, why: 'the seat has no state record' };
-    if (!isSeatId(record.id)) return { canonical: null, why: 'the seat record names no seat id' };
-    if (!isPresenceBinding(record.presence_binding)) {
-      return { canonical: null, why: 'the seat records no valid presence binding' };
-    }
-    const fence = record.presence_applied;
-    if (fence === undefined) return { canonical: null, why: 'the seat records no applied presence fence' };
-    if (fence.seat_id !== record.id || !isPresenceBinding(fence.binding)
-      || !Number.isInteger(fence.seq) || fence.seq < 1) {
-      return { canonical: null, why: 'the applied presence fence is not readable' };
-    }
-    const paths = presencePaths(stateDir, session, seat);
-    if (paths === null) return { canonical: null, why: 'the seat cannot name a presence folder' };
-    let text: string;
-    try {
-      text = readFileSync(paths.current, 'utf8');
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      return {
-        canonical: null,
-        why: code === 'ENOENT'
-          ? 'the seat has no canonical presence projection yet'
-          : 'the canonical presence projection could not be read',
-      };
-    }
-    const read = readPresenceReading(text);
-    if (read.kind !== 'ok') return { canonical: null, why: read.why };
-    return {
-      canonical: {
-        id: read.reading.id,
-        binding: read.reading.binding,
-        seq: read.reading.seq,
-        seatId: record.id,
-        fence: { seat_id: fence.seat_id, binding: fence.binding, seq: fence.seq },
+  // The chores fleet: one supervised child per group of roots, for a daemon started with the
+  // isolation seam. Each accepted route reads its own policy chain to the team level; a chain
+  // that cannot be read keeps the release defaults and says so in the daemon log. A root that
+  // failed to load has no route and no team, so it gets no chores entry: there is no work to
+  // isolate and no policy to read.
+  if (input.choresHosting === true && routes.length > 0) {
+    choresFleet = createChoresFleet({
+      home,
+      beatMs: heartbeatMs,
+      since,
+      now,
+      routes: routes.flatMap((route) => {
+        const team = teams.get(route.root);
+        const entry = routeTeams.get(route.root);
+        return team === undefined || entry === undefined
+          ? []
+          : [{
+              route,
+              team,
+              policy: choresPolicyFor(team, route.root, home, now()),
+              // The loader's own handle names the team file; its folder is the state door and
+              // the presence spool the child's presence steps read, exactly as this daemon does.
+              stateDir: dirname(entry.handle),
+              // A watched route runs its watch in the child that serves it: the child is then the
+              // process that holds the epoch and performs the sends, and this daemon keeps the
+              // record, the diagnostic's request file and the status row. The presence flag says
+              // whether this daemon measures the route's seats and relays them with each beat.
+              // A route whose policy is inline never reaches a child, so its watch stays here.
+              ...(input.watchHosting === true
+                ? {
+                    watch: {
+                      teamFile: entry.handle,
+                      presence: presenceWork.some((one) => one.route.root === route.root),
+                    },
+                  }
+                : {}),
+            }];
+      }),
+      log: (text) => logLine(text),
+      ...(input.choresFactory === undefined ? {} : { factory: input.choresFactory }),
+      // A hosted pass that yields between seats asks for the daemon's cross-route beat. The
+      // child's frame names the root; this daemon's own beat machinery decides which other
+      // routes the beat renews, exactly as it does for a pass on its own loop.
+      watchPulse: (root, at) => {
+        const route = routes.find((candidate) => candidate.root === root);
+        if (route !== undefined) hostedBeat.midPass(route);
       },
-      why: null,
-    };
-  };
+    });
+  }
+
+  // The per-seat binding and canonical-position reads live in `presence/reconcile.ts`, shared
+  // with the chores child, so the daemon's live re-check and a child's presence pass read the
+  // same state door and apply the same rules.
 
   /** The exact per-seat runtime answer a fresh health snapshot and a hosted watch's dispatcher
    *  both use. A seat with a source is qualified only while its cached reconciled proof still
@@ -1221,7 +1365,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     const verdict = reconciledProofHolds({
       proof: one.proofs.get(seat),
       source: reading,
-      currentBinding: currentBindingOf(one.stateDir, one.route.session, seat),
+      currentBinding: currentPresenceBinding(one.stateDir, one.route.session, seat),
       epoch: since,
       at,
     });
@@ -1253,7 +1397,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     // standing in for an answer that was never sampled); a hook seat has no sample, so its
     // current state binding is the only incarnation to show.
     const binding = source === undefined
-      ? currentBindingOf(one.stateDir, one.route.session, seat)
+      ? currentPresenceBinding(one.stateDir, one.route.session, seat)
       : one.health.seatBinding(seat);
     if (closed) return { source: kind, binding, appliedEventId: null, why: 'the daemon is closing' };
     if (source === undefined) {
@@ -1309,6 +1453,27 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // socket and a tracker team's idle reading stays explicitly unknown.
       const brokerWork = features.broker === 'on' ? input.brokerWork?.(route) : undefined;
       const extras: HostedWatchExtras = brokerWork === undefined ? {} : { brokerWork };
+      // A route whose watch this daemon asked a chores child to host answers with the child's
+      // remote handle: its state mirrors the child's frames, its tick carries this beat over the
+      // pipe, and its fault is the diagnostic's one entry. The daemon then builds no second
+      // watch for the route, and no second epoch for it exists. The presence closure is read on
+      // every beat the fleet sends, and only when the token told the child to install one.
+      const remote = choresFleet === null
+        ? null
+        : choresFleet.watchFor(route.root, () => (presence === undefined
+            ? null
+            : route.seats.map((seat) => {
+                const verdict = seatVerdict(presence, seat, now());
+                return {
+                  seat,
+                  healthy: verdict.why === null,
+                  ...(verdict.why === null ? {} : { reason: verdict.why }),
+                };
+              })));
+      if (remote !== null) {
+        hostedWatches.push({ status, watch: remote });
+        continue;
+      }
       const build = input.hostedWatch?.(route, log, extras)
         ?? hostedWatchAuthority({
           route,
@@ -1318,9 +1483,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           teamFile: entry.handle,
           log,
           // Proving a recorded pane watch is the process in its own pane needs this route's
-          // session; a pane the terminal host cannot read stays `unproven` and is never asked
-          // to hand over.
-          processInfo: (pane) => paneProcesses(pane, route.session),
+          // session; the read is awaited so a slow terminal host holds the watch acquisition,
+          // never the daemon's beat. A pane the terminal host cannot read stays `unproven` and
+          // is never asked to hand over.
+          processInfo: (pane) => paneProcessesAsync(pane, route.session, { timeoutMs: 10_000 }),
           ...(presence === undefined
             ? {}
             : {
@@ -1329,6 +1495,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
                 // its own current sample, and a missing or false answer holds the projection.
                 presenceChannelHealthy: (seat: string) =>
                   seatQualified(presence, seat, now()),
+                // The measured detail behind a false answer, for the stuck report's notice only.
+                presenceChannelReason: (seat: string) =>
+                  seatVerdict(presence, seat, now()).why,
               }),
           ...(brokerWork === undefined ? {} : { brokerWork }),
           // The shared verifier judges the captured identity against the record under its own
@@ -1352,6 +1521,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           required: build.required,
           standby: build.standby,
           ...(build.tick === undefined ? {} : { onTick: build.tick }),
+          // A due beat landing inside this route's pass renews the other routes, never this one:
+          // the pass can hold this route's state lock in its fold.
+          onBeat: () => hostedBeat.midPass(route),
           now,
         }),
       });
@@ -1402,7 +1574,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         };
     one.health.seatObserved({
       source: sampled,
-      currentBinding: currentBindingOf(one.stateDir, one.route.session, source.seat),
+      currentBinding: currentPresenceBinding(one.stateDir, one.route.session, source.seat),
       epoch: since,
     }, at);
     if (!one.health.seatHealthy(source.seat, at)) {
@@ -1469,7 +1641,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         source: reading,
         canonical: canonical.canonical,
         canonicalWhy: canonical.why,
-        currentBinding: currentBindingOf(one.stateDir, one.route.session, source.seat),
+        currentBinding: currentPresenceBinding(one.stateDir, one.route.session, source.seat),
         at,
       });
       if (verdict.ok) {
@@ -1487,6 +1659,54 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
   };
 
+  /** The JSON-safe fields of one source reading, as the chores child receives them: the source's
+   *  own measured words, never a host verdict. */
+  const presenceStatusOf = (reading: PresenceSourceStatus): ChoresPresenceStatus => ({
+    seat: reading.seat,
+    binding: reading.binding,
+    threadId: reading.threadId,
+    channel: reading.channel,
+    stream: reading.stream,
+    baseline: reading.baseline,
+    evidenceAt: reading.evidenceAt,
+    ...(reading.stagedEventId === undefined ? {} : { stagedEventId: reading.stagedEventId }),
+    ...(reading.why === undefined ? {} : { why: reading.why }),
+    ...(reading.reason === undefined ? {} : { reason: reading.reason }),
+  });
+
+  /** Mirrors a child's proof rows into the route's cache. A seat the child did not answer for is
+   *  held rather than left with an older proof: the child owns the pass's whole answer. */
+  const applyPresenceProofs = (
+    one: (typeof presenceWork)[number],
+    proofs: readonly ChoresPresenceProof[],
+  ): void => {
+    const answered = new Set<string>();
+    for (const proof of proofs) {
+      answered.add(proof.seat);
+      if ('id' in proof) {
+        one.proofs.set(proof.seat, { id: proof.id, binding: proof.binding, epoch: since });
+        one.proofMiss.delete(proof.seat);
+      } else {
+        one.proofs.delete(proof.seat);
+        one.proofMiss.set(proof.seat, proof.miss);
+      }
+    }
+    for (const source of one.sources) {
+      if (answered.has(source.seat)) continue;
+      one.proofs.delete(source.seat);
+      one.proofMiss.set(source.seat, 'the presence pass did not answer for this seat');
+    }
+  };
+
+  /** Holds every source seat with one reason, for a pass the child could not answer: a proof
+   *  from an older pass is never kept trusted behind a child that left. */
+  const holdPresenceSeats = (one: (typeof presenceWork)[number], why: string): void => {
+    for (const source of one.sources) {
+      one.proofs.delete(source.seat);
+      one.proofMiss.set(source.seat, why);
+    }
+  };
+
   /**
    * One presence pass for one route: the ingester's bounded step, then each source's own
    * independent sample, the activity reconciler over what the step appended, the per-seat
@@ -1496,6 +1716,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
    * same synchronous read-modify-write under the zero-wait lock every state writer uses. A slow
    * or broken spool therefore holds only its own route, and the beat that starts it never awaits
    * it.
+   *
+   * The daemon keeps the live half — the ingest step, each source's sample, the channel health
+   * answer and the final re-check — and sends the measured readings to the root's chores child,
+   * which runs the durable half. A root with no ready child runs both halves here.
    */
   const runPresence = (one: (typeof presenceWork)[number]): Promise<void> => {
     let run: Promise<void>;
@@ -1524,6 +1748,37 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // sibling source, never wait for one source's step. A seat's answer never changes the
       // route's ingest answer.
       for (let index = 0; index < one.sources.length; index += 1) pumpSource(one, index);
+      // The readings cross to the child exactly as this daemon sampled them. A source that cannot
+      // answer, or answers for another seat, is sent as that reason, so the child holds the seat
+      // with the same words the inline steps would have used.
+      const at = now();
+      const readings: ChoresPresenceReading[] = [];
+      for (const source of one.sources) {
+        try {
+          const reading = source.status(at);
+          readings.push(reading.seat === source.seat
+            ? { seat: source.seat, status: presenceStatusOf(reading) }
+            : { seat: source.seat, failed: 'the runtime source answered for another seat' });
+        } catch (error) {
+          readings.push({ seat: source.seat, failed: `the runtime source status failed: ${messageOf(error)}` });
+        }
+      }
+      const hosted = choresFleet === null
+        ? null
+        : choresFleet.presence({ root: one.route.root, at, readings });
+      if (hosted !== null) {
+        const answer = await hosted;
+        // A close stopped the child before it answered: the close's own record names this route
+        // pending, and no step is run behind the child that may already have advanced a cursor.
+        if (closed) return;
+        if (answer.kind === 'answered') {
+          for (const note of answer.notes) logPresenceOnce(one.route, note);
+          applyPresenceProofs(one, answer.proofs);
+        } else {
+          holdPresenceSeats(one, answer.why);
+        }
+        return;
+      }
       try {
         // The transitions are consumed under the state lock only after the step that appended
         // them resolved, so the projection is at least as new as the lines read.
@@ -1549,6 +1804,16 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         }
       } catch (error) {
         logPresenceOnce(one.route, `the publish step failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      try {
+        // The held-frame step runs last and belongs to the receiver, never to the sender: it looks
+        // at a seat's pane only after a socket delivery of this route's history, and raises `held`
+        // when the frame sat at its dialog. A look that cannot answer is retried by a later pass.
+        const held = await one.held(now());
+        if (held.failed !== null) logPresenceOnce(one.route, `the held step failed: ${held.failed}`);
+        for (const id of held.raised) logPresenceOnce(one.route, `a socket frame was held at its seat's dialog: ${id}`);
+      } catch (error) {
+        logPresenceOnce(one.route, `the held step failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     })().finally(() => {
       if (presenceRuns.get(one.route.root) === run) presenceRuns.delete(one.route.root);
@@ -1609,6 +1874,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     const revived = await reviveBus({
       root: loaded.root,
       team: loaded.team,
+      stateDir: dirname(loaded.path),
       home,
       stderr: (text) => logLine(text),
       heldThresholdSeconds: thresholds.thresholds.held_threshold_seconds,
@@ -1630,16 +1896,22 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
     if (revived.kind === 'serving') {
       busHandles.push(revived.handle);
+      // The revived start is the awaited one, so its first pass has settled by now; the row
+      // reads this handle's pass from here on.
+      watch.busHandle = revived.handle;
       watch.status.bus = 'serving';
       watch.status.busFailedAt = null;
       watch.busSocket = busSocket(loaded.root);
-      if (watch.status.why === 'the hosted bus endpoint stopped answering') watch.status.why = null;
+      watch.status.busWhy = null;
       logLine(`root ${root}: bus restarted`);
     } else if (revived.kind === 'busy' || revived.kind === 'listening') {
+      // Another process serves the bus here: this daemon owns no handle and has no pass to report.
+      watch.busHandle = null;
+      delete watch.status.firstPass;
       watch.status.bus = 'serving';
       watch.status.busFailedAt = null;
       watch.busSocket = busSocket(loaded.root);
-      if (watch.status.why === 'the hosted bus endpoint stopped answering') watch.status.why = null;
+      watch.status.busWhy = null;
     } else if (revived.kind === 'failed') {
       logLine(`root ${root}: bus restart failed (${revived.why})`);
     }
@@ -1691,7 +1963,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         watch.sendSocket = send.handle.socketPath;
         watch.status.send = 'serving';
         watch.status.sendFailedAt = null;
-        watch.status.why = null;
+        watch.status.sendWhy = null;
         watch.sendMisses = 0;
         watch.sendState.failures = 0;
         watch.sendState.nextAt = 0;
@@ -1700,7 +1972,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         watch.sendSocket = send.socketPath;
         watch.status.send = 'already-running';
         watch.status.sendFailedAt = null;
-        watch.status.why = null;
+        watch.status.sendWhy = null;
         watch.sendMisses = 0;
         watch.sendState.failures = 0;
         watch.sendState.nextAt = 0;
@@ -1708,18 +1980,18 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       } else {
         watch.sendState.failures += 1;
         watch.sendState.nextAt = now().getTime() + sendBackoff(watch.sendState.failures);
-        watch.status.why = send.kind === 'locked' ? 'another send server holds the project socket' : send.reason;
+        watch.status.sendWhy = send.kind === 'locked' ? 'another send server holds the project socket' : send.reason;
         watch.status.sendFailedAt = watch.status.sendFailedAt ?? now().toISOString();
-        logLine(`root ${watch.status.root}: send restart failed (${watch.status.why})`);
-        if (watch.sendState.failures >= sendGiveUp) fatalSend(watch, watch.status.why);
+        logLine(`root ${watch.status.root}: send restart failed (${watch.status.sendWhy})`);
+        if (watch.sendState.failures >= sendGiveUp) fatalSend(watch, watch.status.sendWhy);
       }
     } catch (error) {
       watch.sendState.failures += 1;
       watch.sendState.nextAt = now().getTime() + sendBackoff(watch.sendState.failures);
-      watch.status.why = `the send server could not be restarted: ${messageOf(error)}`;
+      watch.status.sendWhy = `the send server could not be restarted: ${messageOf(error)}`;
       watch.status.sendFailedAt = watch.status.sendFailedAt ?? now().toISOString();
-      logLine(`root ${watch.status.root}: ${watch.status.why}`);
-      if (watch.sendState.failures >= sendGiveUp) fatalSend(watch, watch.status.why);
+      logLine(`root ${watch.status.root}: ${watch.status.sendWhy}`);
+      if (watch.sendState.failures >= sendGiveUp) fatalSend(watch, watch.status.sendWhy);
     } finally {
       watch.sendState.starting = false;
     }
@@ -1743,7 +2015,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
                 watch.sendMisses += 1;
                 if (watch.sendMisses >= SEND_PROBE_MISSES) {
                   watch.sendMisses = 0;
-                  status.why ??=
+                  status.sendWhy ??=
                     status.send === 'serving'
                       ? 'the hosted send endpoint stopped answering'
                       : 'the send server that was already running stopped answering';
@@ -1763,15 +2035,23 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             if (up) {
               watch.busState.failures = 0;
               watch.busState.nextAt = 0;
-              if (status.bus === 'serving') {
-                watch.busSocket = socket;
-                status.busFailedAt = null;
-              }
+              // A live socket is a serving bus whatever the last row said: another process may
+              // have started one after this daemon's own start failed (a start still holding
+              // its lock answers a live socket too). The row follows the socket, and its reason
+              // is cleared with it — the revive path never runs while the socket answers.
+              watch.busSocket = socket;
+              status.bus = 'serving';
+              status.busFailedAt = null;
+              status.busWhy = null;
             } else {
               if (status.bus === 'serving') {
-                status.why ??= 'the hosted bus endpoint stopped answering';
+                status.busWhy = status.busWhy ?? 'the hosted bus endpoint stopped answering';
                 status.bus = 'failed';
                 status.busFailedAt = now().toISOString();
+                // The bus whose pass this row carried is gone: a later revive sets its own handle,
+                // and until then the row must not keep reading a pass nobody is running.
+                watch.busHandle = null;
+                delete status.firstPass;
                 logLine(`root ${status.root}: bus endpoint stopped answering`);
               }
               await reviveHostedBus(watch);
@@ -1817,6 +2097,46 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // timer itself started before the roots loop; this attaches the rest of the beat to it.
   writeState();
 
+  // The first retirement pass waits one full interval after the daemon started: a restart's first
+  // ticks never rewrite history a caller may still be reading, and the clock a test pins at a
+  // due instant never advances into a store pass.
+  let lastStorePassAt = now().getTime();
+  /** The fallback pass in flight, if any: one walk at a time, so two beats never read the same
+   *  store side by side. A pass reads the durable markers itself, so the beat after it settles
+   *  starts the next pass and nothing a skipped beat would have escalated is lost. */
+  let sweepRun: Promise<void> | null = null;
+  /** Writes the lines a finished pass has to say. A pass stopped by the close reports nothing:
+   *  the log is already silent past admission, and the durable markers keep what is left. */
+  const logSweep = (swept: FallbackSweepResult): void => {
+    for (const entry of swept.roots) {
+      if (entry.note !== null) logLine(`fallback sweep ${entry.root}: ${entry.note}`);
+      if (entry.why !== null) {
+        logLine(`fallback sweep ${entry.root}: ${entry.why}`);
+        continue;
+      }
+      const notes = entry.notes;
+      if (notes !== null && (notes.drained.length > 0 || notes.refused.length > 0 || notes.unreadable.length > 0)) {
+        logLine(
+          `fallback sweep ${entry.root}: notes recorded ${String(notes.drained.length)}, refused ${String(notes.refused.length)}, unreadable ${String(notes.unreadable.length)}`,
+        );
+      }
+      const report = entry.report;
+      if (report !== null && (report.escalated.length > 0 || report.refused.length > 0 || report.unreadable.length > 0)) {
+        logLine(
+          `fallback sweep ${entry.root}: escalated ${String(report.escalated.length)}, refused ${String(report.refused.length)}, unreadable ${String(report.unreadable.length)}`,
+        );
+      }
+      const retired = entry.retirement;
+      if (retired === null) continue;
+      const reclaimed = entry.reclaim?.reclaimed ?? 0;
+      if (retired.retired.length === 0 && retired.refused.length === 0 && retired.unreadable.length === 0 && reclaimed === 0) {
+        continue;
+      }
+      logLine(
+        `fallback store ${entry.root}: retired ${String(retired.retired.length)}, reclaimed ${String(reclaimed)}, refused ${String(retired.refused.length)}, unreadable ${String(retired.unreadable.length)}`,
+      );
+    }
+  };
   beat = () => {
     try {
       faultInbox.consume(faultTargets);
@@ -1825,33 +2145,86 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
     // A tick releases only the waits whose own due instant has passed and returns at once: a
     // pass that is still running is never awaited here, so one slow or hanging route cannot
-    // stop the daemon's liveness or another route's cycles. Each route is isolated.
-    for (const one of hostedWatches) {
-      try {
-        one.watch.tick(now());
-      } catch (error) {
-        logLine(`root ${one.watch.route.root}: the hosted watch tick failed: ${(error as Error).message}`);
-      }
-    }
+    // stop the daemon's liveness or another route's cycles. Each route is isolated, and the beat
+    // is marked so a pass that displaced this one carries the next due beat itself.
+    hostedBeat.tick();
+    // The chores fleet is a nudge and a check, never a wait: a stuck child is signalled here and
+    // its replacement starts on a later beat, so this tick returns at once whatever it is doing.
+    choresFleet?.tick(now());
     writeState();
     void refreshHostedEndpoints();
     // One fallback sweep rides the existing heartbeat: no second timer, process or socket. Each
     // hosted root reads its own validated team file and its markers' durable due instants; the
-    // pass keeps no state of its own, and close stops it with this timer.
+    // pass keeps no state of its own, and close stops it with this timer. A root a chores fleet
+    // hosts is swept in that child instead, so this beat keeps only the roots the fleet leaves
+    // inline, plus any root it does not host at all: a root never handed to a child must never
+    // go unswept here. With none left, the beat does nothing at this point.
     if (closed) return;
-    const swept = sweepFallbackEscalations({ home, roots: sweepRoots, now });
-    for (const entry of swept.roots) {
-      if (entry.why !== null) {
-        logLine(`fallback sweep ${entry.root}: ${entry.why}`);
-        continue;
-      }
-      const report = entry.report;
-      if (report === null) continue;
-      if (report.escalated.length === 0 && report.refused.length === 0 && report.unreadable.length === 0) continue;
-      logLine(
-        `fallback sweep ${entry.root}: escalated ${String(report.escalated.length)}, refused ${String(report.refused.length)}, unreadable ${String(report.unreadable.length)}`,
-      );
+    const fleet = choresFleet;
+    const inlineRoots = fleet === null
+      ? sweepRoots
+      : sweepRoots.filter((entry) => {
+          const row = fleet.stateFor(entry.root);
+          return row === undefined || row.mode === 'inline';
+        });
+    if (inlineRoots.length === 0) return;
+    if (sweepRun !== null) return;
+    const beatAt = now().getTime();
+    const housekeeping = beatAt - lastStorePassAt >= FALLBACK_STORE_PASS_MS;
+    if (housekeeping) {
+      lastStorePassAt = beatAt;
+      // The daemon re-reads its own knobs on the housekeeping pass; the heartbeat word re-arms
+      // the timer when it changed, beside the sweep's backlog reads below.
+      rearmHeartbeat();
     }
+    // The pass walks a slice at a time on the daemon's own loop: the health probe answers within
+    // its 500 ms budget only when no single turn holds the loop through a store-wide backlog, so
+    // the beat yields between markers, retirement candidates and lock folders. The rest of the
+    // beat, and the heartbeat itself, keep their cadence while it runs; the close ends the walk
+    // at its next slice boundary and drains it before ownership is released.
+    const run = sweepFallbackEscalationsSliced({
+      home,
+      roots: inlineRoots,
+      now,
+      ...(housekeeping
+        ? {
+            retire: {
+              limit: FALLBACK_STORE_PASS_LIMIT,
+              // The backlog knobs are the team's word, read for each hosted root: above the
+              // threshold one pass takes the bulk limit instead of the steady one, so a store
+              // that was never retired before empties over a few passes. A root whose chain
+              // cannot be read keeps the release defaults and says why below.
+              backlogLimitsFor: (entry: SweepRoot) => storeBacklogLimits(entry.team, entry.root, home, now()),
+              lockWaitMs: 0,
+            },
+          }
+        : {}),
+      slices: {
+        sliceMs: FALLBACK_BEAT_SLICE_MS,
+        stopping: () => closed,
+        yield: () => new Promise<boolean>((resolve) => {
+          if (closed) {
+            resolve(false);
+            return;
+          }
+          setImmediate(() => resolve(!closed));
+        }),
+      },
+    })
+      .then(logSweep)
+      .catch((error: unknown) => {
+        // Each root's own failure is reported inside the pass; this one is the walk itself, and
+        // it must never leave an unhandled rejection on the daemon's loop.
+        try {
+          logLine(`fallback sweep: ${messageOf(error)}`);
+        } catch {
+          // The log is unavailable too; there is nowhere left to say it.
+        }
+      })
+      .finally(() => {
+        if (sweepRun === run) sweepRun = null;
+      });
+    sweepRun = run;
   };
 
   let admissionClosed = false;
@@ -1958,6 +2331,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (!admissionClosed) {
       admissionClosed = true;
       closed = true;
+      // A restore child still running is ended with the daemon: its pass stops between seat
+      // steps, and the spawner forces the one terminal-host read it may be inside.
+      restoreAbort.abort();
       clearInterval(timer);
       if (presenceTimer !== null) clearInterval(presenceTimer);
       // Admission first, and every stop is started before the first await: a watch pass that is
@@ -1996,6 +2372,12 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         } catch {
           // A synchronous throw is a handle that was already closed.
         }
+      }
+      // The chores children stop with the endpoints, before any drain: a child that could still
+      // run a pass must not write one behind the close. The stop is bounded by its own kill
+      // grace, so a child that never leaves cannot hold the daemon's ownership.
+      if (choresFleet !== null) {
+        admissions.push(choresFleet.stop('the daemon is closing').catch(() => undefined));
       }
       // The endpoint refresh is joined below, after this admission block, so its wait is bounded
       // and a retry joins a run that outlived the first answer. It is not part of `admissions`:
@@ -2039,6 +2421,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     await Promise.allSettled([
       ...presenceRuns.values(),
       ...(restoreSweepRun === null ? [] : [restoreSweepRun]),
+      // A fallback pass mid-walk ends at its next slice boundary once `closed` is set; the
+      // drain keeps its durable writes from landing after ownership is released.
+      ...(sweepRun === null ? [] : [sweepRun]),
     ]);
     // Source pumps are part of the same drain: their steps were already cancelled in the
     // admission block, and no new pump starts once `closed` is set. A pump that still cannot
@@ -2117,15 +2502,24 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // The daemon-start restore sweep: after the sockets, canonical routes, state
   // record and shutdown machinery are wired, one guarded pass per accepted route repairs the
   // seats its recorded session lost. It is never awaited here, so readiness does not wait on a
-  // launch; `closeOnce` drains the tracked run, and the run's own `isClosing` stops it between
-  // seat steps. Only canonical routes are swept: raw input roots can repeat, name a folder with
-  // no accepted route, or differ in spelling from the route's own root.
+  // launch; `closeOnce` drains the tracked run, and the closing signal ends the child's pass
+  // between seat steps. Each pass runs in a child of its own (`./restore/spawn.ts`), so the
+  // pass's synchronous terminal-host reads hold that process alone and the daemon's heartbeat
+  // keeps its cadence while a route restores. Only canonical routes are swept: raw input roots
+  // can repeat, name a folder with no accepted route, or differ in spelling from the route's own
+  // root.
   if (input.restoreSweep !== false && routes.length > 0) {
     const runner = typeof input.restoreSweep === 'function'
       ? input.restoreSweep
       : (root: string, teamFile: string | undefined) =>
-          runRestoreSweepForRoute({ home, root, ...(teamFile === undefined ? {} : { teamFile }), now, isClosing: () => closed });
+          runRestoreSweepInChild({
+            home,
+            root,
+            ...(teamFile === undefined ? {} : { teamFile }),
+            signal: restoreAbort.signal,
+          });
     restoreSweepRun = (async (): Promise<void> => {
+      let pendingRoutes: HostedRoute[] = [];
       for (const route of routes) {
         if (closed) return;
         const entry = routeTeams.get(route.root);
@@ -2138,6 +2532,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             logLine(`restore ${route.root}: another session-mutating run holds the session; skipped`);
           } else if (result.kind === 'not-running') {
             logLine(`restore ${route.root}: the session is ${result.state ?? 'unreadable'}; skipped`);
+            pendingRoutes.push(route);
           } else if (result.kind === 'unreadable') {
             logLine(`restore ${route.root}: ${result.reason}`);
           } else if (result.kind === 'refused') {
@@ -2147,6 +2542,78 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         } catch (error) {
           logLine(`restore ${route.root}: ${messageOf(error)}`);
         }
+      }
+      if (pendingRoutes.length === 0 || closed || restoreAbort.signal.aborted) return;
+
+      const initialDelayMs = Math.max(1, input.restoreRetryInitialDelayMs ?? 5_000);
+      const maxDelayMs = Math.max(initialDelayMs, input.restoreRetryMaxDelayMs ?? 60_000);
+      const budgetMs = Math.max(0, input.restoreRetryBudgetMs ?? 315_000);
+      let currentDelayMs = initialDelayMs;
+      let elapsedMs = 0;
+      let attempt = 1;
+
+      const formatWait = (ms: number): string =>
+        ms >= 1_000 && ms % 1_000 === 0 ? `${ms / 1_000}s` : `${ms}ms`;
+
+      const waitAbortable = (ms: number): Promise<boolean> =>
+        new Promise((resolveWait) => {
+          if (closed || restoreAbort.signal.aborted) {
+            resolveWait(false);
+            return;
+          }
+          const onAbort = (): void => {
+            clearTimeout(waitTimer);
+            resolveWait(false);
+          };
+          const waitTimer = setTimeout(() => {
+            restoreAbort.signal.removeEventListener('abort', onAbort);
+            resolveWait(!closed && !restoreAbort.signal.aborted);
+          }, ms);
+          restoreAbort.signal.addEventListener('abort', onAbort, { once: true });
+        });
+
+      while (pendingRoutes.length > 0 && elapsedMs < budgetMs && !closed && !restoreAbort.signal.aborted) {
+        const delayMs = Math.min(currentDelayMs, maxDelayMs, budgetMs - elapsedMs);
+        if (delayMs <= 0) break;
+        logLine(
+          `restore: waiting ${formatWait(delayMs)} for the terminal host to restore ${pendingRoutes.length} session${pendingRoutes.length === 1 ? '' : 's'} (attempt ${attempt}, elapsed ${formatWait(elapsedMs)}/${formatWait(budgetMs)})`,
+        );
+        const waited = await waitAbortable(delayMs);
+        if (!waited || closed || restoreAbort.signal.aborted) return;
+        elapsedMs += delayMs;
+        currentDelayMs = Math.min(currentDelayMs * 2, maxDelayMs);
+        attempt += 1;
+
+        const stillPending: HostedRoute[] = [];
+        for (const route of pendingRoutes) {
+          if (closed || restoreAbort.signal.aborted) return;
+          const entry = routeTeams.get(route.root);
+          if (entry === undefined) continue;
+          try {
+            const result = await runner(route.root, entry.file);
+            if (result.kind === 'ran') {
+              logLine(`restore ${route.root}: ${result.summary.line}`);
+            } else if (result.kind === 'lock-held') {
+              logLine(`restore ${route.root}: another session-mutating run holds the session; skipped`);
+            } else if (result.kind === 'not-running') {
+              stillPending.push(route);
+            } else if (result.kind === 'unreadable') {
+              logLine(`restore ${route.root}: ${result.reason}`);
+            } else if (result.kind === 'refused') {
+              const detail = result.detail === undefined ? '' : `: ${result.detail}`;
+              logLine(`restore ${route.root}: the run exited ${String(result.exit)} before it planned a seat${detail}`);
+            }
+          } catch (error) {
+            logLine(`restore ${route.root}: ${messageOf(error)}`);
+          }
+        }
+        pendingRoutes = stillPending;
+      }
+
+      if (pendingRoutes.length > 0 && !closed && !restoreAbort.signal.aborted) {
+        logLine(
+          `restore: pending (${pendingRoutes.length} session${pendingRoutes.length === 1 ? '' : 's'} still restoring in the terminal host after ${formatWait(elapsedMs)}; run "team up --all" once the terminal host finishes restoring)`,
+        );
       }
     })().catch((error: unknown) => {
       // The loop above already logs each route's failure; this catches the log write itself (or

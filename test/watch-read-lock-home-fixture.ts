@@ -53,7 +53,10 @@ export async function independentHomeSuite(suite: string, loadCases: () => Promi
       const oldMask = process.umask(0);
       try { mkdirSync(home, { mode: 0o700 }); } finally { process.umask(oldMask); }
       expect(readdirSync(home)).toEqual([]); expect(home).not.toBe(parentHome);
-      const child = Bun.spawn([process.execPath, 'test', suite], {
+      // Every case settles in about a second alone — the slowest, two concurrent hosted
+      // watches, measured 1.16 s, its trash cleanup included — so the child's default 5 s
+      // per-test limit is replaced with one sized to that cost, for every scene at once.
+      const child = Bun.spawn([process.execPath, 'test', '--timeout=30000', suite], {
         cwd: new URL('..', import.meta.url).pathname,
         env: { ...process.env, HOME: home, [CHILD]: suite, [BASE]: base, [NONCE]: nonce, [PARENT]: String(process.pid) },
         stdout: 'pipe', stderr: 'pipe',

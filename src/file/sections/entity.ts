@@ -2,11 +2,16 @@ import type { Section } from './section.ts';
 
 // An entity name is one path segment: the same shape as a project name, so lower-casing it
 // (`lobbySlug`) is the whole slug and never yields "", "." or "..". The slug is the folder the
-// team's lobby lives in, under `~/.config/team/lobbies/`. Exported so the writer of an entity's
-// own word (`team config set <entity>.names.unique …`) holds a name to the same shape.
-export const ENTITY_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+// team's lobby lives in, under `~/.config/team/lobbies/`. The name also becomes a
+// `config.changed` record id's target (`config:<level>:<target>:<key>:<generation>[:unset]`),
+// which is refused past 200 characters; at 128 the longest level and key still leave 35
+// characters for the generation count, so the id stays inside the record id rule. Exported so
+// the writer of an entity's own word (`team config set <entity>.names.unique …`) holds a name
+// to the same shape.
+export const ENTITY_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
-/** Whether `name` is an entity name: one path segment, letters, digits, ".", "_" and "-". */
+/** Whether `name` is an entity name: one path segment of 128 characters at most, letters,
+ *  digits, ".", "_" and "-". */
 export function isEntityName(name: string): boolean {
   return ENTITY_NAME.test(name);
 }
@@ -29,7 +34,7 @@ export const entity: Section = {
     if (!isEntityName(value)) {
       ctx.check.fail(
         entry?.line ?? 1,
-        'entity must be a short name: letters, digits, ".", "_" and "-", starting with a letter or a digit',
+        'entity must be a short name: letters, digits, ".", "_" and "-", starting with a letter or a digit, 128 at most',
       );
       return null;
     }
@@ -38,7 +43,8 @@ export const entity: Section = {
   schema: {
     type: 'string',
     minLength: 1,
-    pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$',
+    maxLength: 128,
+    pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$',
     $comment: 'the entity the team belongs to; its lobby is ~/.config/team/lobbies/<entity>',
   },
 };

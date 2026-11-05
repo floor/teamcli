@@ -6,9 +6,10 @@
 // this team server, and the server then declares `experimental["claude/channel"]` and pushes one
 // `notifications/claude/channel` per message that arrives after it starts. The body and the
 // meta travel together; the signed record stays in the inbox for `inbox_read` and for every later
-// reader, untouched. The push itself proves only that the notification was written — the client
-// acknowledges nothing — so the server leaves a `<id>.channel-push.json` marker beside the record
-// and the sender reads that marker to end its walk as `sent (channel)`.
+// reader, untouched. The push is the show, so the server writes the seat-signed read receipt as
+// it hands the notification to its client (`read_by: channel-push`), and it leaves a
+// `<id>.channel-push.json` marker beside the record, which the sender reads to end its walk as
+// `sent (channel)`.
 //
 // A pushed message with no signed `read` receipt after the confirmation window is the one case
 // the watch redelivers. It redelivers exactly once (`redelivered: channel unconfirmed`), and only
@@ -25,7 +26,8 @@ export const CHANNEL_CAPABILITY = 'claude/channel';
 export const CHANNEL_METHOD = 'notifications/claude/channel';
 
 /** The server's marker beside a pushed record. It is not a read receipt: only the signed
- *  `<id>.read.json` proves a read. */
+ *  `<id>.read.json` proves a read, and the push writes that receipt itself when it shows the
+ *  message. */
 export const CHANNEL_PUSH_RECEIPT = 'channel-push';
 export const CHANNEL_PUSH_STATUS = 'sent (channel)';
 
@@ -61,6 +63,10 @@ export const CHANNEL_UNCONFIRMED_REASON = `redelivered: ${CHANNEL_UNCONFIRMED}`;
 
 /** The read receipt's `read_by` for an acknowledgement made through the channel tool. */
 export const CHANNEL_READ_BY = 'channel';
+
+/** The read receipt's `read_by` for the read the push itself records: the message was handed to
+ *  the seat's client by its own inbox server, which runs as the seat. */
+export const CHANNEL_PUSH_READ_BY = 'channel-push';
 
 /** The one sentence the server gives its client when the channel is on. The model acknowledges
  *  the id from the notification's meta in the same turn, before it reads or acts on anything. */

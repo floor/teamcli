@@ -20,6 +20,11 @@
       }
     },
     "unattended": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "features": {
+      "type": "array", "minItems": 1,
+      "description": "optional: the one feature set every seat's launch pins, as name=true or name=false; each pair rides the launch as a trailing -c features.<pair>, so the CLI's last-wins config rule makes it the seat's effective value",
+      "items": { "type": "string", "pattern": "^[A-Za-z0-9_]+=(true|false)$" }
+    },
     "rules": {
       "oneOf": [
         { "const": "first-message" },
@@ -70,6 +75,40 @@
       "description": "the keys that exit the CLI from its idle screen, in order, for a CLI that takes no exit text; a profile carries this or exit, never both"
     },
     "compose_module": { "$ref": "#/$defs/screenModule" },
+    "session_cli": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["argv", "created", "pull"],
+      "description": "optional: the CLI's own session-creating and session-pulling calls, as a run measured them — the whole body rides the creating call as one argument; absent, its seats have no session leg",
+      "properties": {
+        "argv": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "description": "the binary and its own subcommand words; the task argument follows them"
+        },
+        "repo_flag": {
+          "type": "string",
+          "minLength": 1,
+          "description": "the option a repository is passed as, before the task; absent when the CLI takes none and chooses from its working folder"
+        },
+        "created": {
+          "type": "string",
+          "minLength": 1,
+          "description": "the line prefix the CLI prints once a session exists; the session id follows it"
+        },
+        "pull": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "description": "the binary and its own subcommand words for pulling one session's result; --session <id> --apply follow them"
+        }
+      }
+    },
+    "public_only": {
+      "type": "boolean",
+      "description": "optional: whether every seat of this CLI is public-only — the team's rules are never prepended to its briefs, and a send scans the whole body against the machine's private lists before the CLI's session call, refusing a body that matches one; absent reads as false, and a hosted CLI whose sessions run on another service sets true"
+    },
     "exit_clear": {
       "type": "string",
       "enum": ["ctrl+c", "ctrl+u", "escape", "backspace"],
@@ -79,6 +118,10 @@
       "type": "string",
       "enum": ["enter"],
       "description": "optional: the one key that confirms the CLI's own exit question, sent by a stop on a screen the profile reads as an exit question; absent, a seat that asks the question cannot be stopped by asking"
+    },
+    "exit_completion": {
+      "type": "boolean",
+      "description": "optional: the CLI draws its own completion row for the exit text inside the box, so an Enter pressed before the row settles is drawn as a typed newline instead of running the command; the composer declares that row in own_rows. True: the exit typing waits the measured settle after the box reads back, presses Enter once more on the text-plus-one-empty-row frame an early Enter leaves, and clears an exit text the CLI never ran with exit_clear. Absent (false) where no capture shows a completion row."
     },
     "input": {
       "type": "object",
@@ -134,6 +177,25 @@
       "description": "optional: prompts team down --abandon answers so the seat closes fully; keys are only escape, ctrl+c or ctrl+u, never a menu option",
       "items": { "type": "object", "additionalProperties": false, "required": ["all", "keys"], "properties": { "all": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }, "keys": { "type": "array", "minItems": 1, "items": { "enum": ["escape", "ctrl+c", "ctrl+u"] } } } }
     },
+    "typed_wake": {
+      "enum": ["screen"],
+      "description": "optional: the one wake a send may type into this CLI's pane; screen types one trigger line into an empty idle box seen on two reads and calls the send delivered only when the profile's working screen shows; absent, the typed leg never runs for this CLI"
+    },
+    "read_hint": {
+      "type": "string", "minLength": 1, "maxLength": 60,
+      "pattern": "^\\S(?:[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*\\S)?$",
+      "description": "optional: the one sentence a typed wake appends after the message's header so the seat takes its fastest read path; absent, the shipped 'Read it with: team drops --read.'"
+    },
+    "watch_wake": {
+      "enum": ["on", "off"],
+      "description": "optional: whether the watch's unread pass may type the same wake a send types when a message has gone unread past its window; on by default exactly where typed_wake is declared, and it cannot be turned on without one"
+    },
+    "watch_wake_tries": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10,
+      "description": "optional: how many typed wake attempts one message gets from the watch's unread pass, the first at the window and each later after a backoff; default 3; refused unless watch_wake is on"
+    },
     "mcp_inbox": {
       "type": "object",
       "additionalProperties": false,
@@ -149,17 +211,23 @@
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "minItems": 1,
-          "description": "the CLI's own project-scope mcp add subcommand arguments, run in the seat's folder at launch; {seat}, {session}, {command} and {entry} are filled from the launch, and a whole {file} word is the launch's --file pair when it names the team file, nothing otherwise"
+          "description": "the CLI's own mcp add subcommand arguments, run in the seat's folder at launch; {inbox}, {seat}, {session}, {command} and {entry} are filled from the launch, and a whole {file} word is the launch's --file pair when it names the team file, nothing otherwise; with a target the add writes that project file, without one it writes the CLI's own user-level store"
         },
         "target": {
           "type": "string",
           "minLength": 1,
-          "description": "the file add writes, relative to the seat's folder"
+          "description": "the file add writes inside the seat's folder, relative to it; absent, the add writes the CLI's own user-level store"
         },
         "file": {
           "type": "string",
           "minLength": 1,
           "description": "a config file team writes itself, relative to the seat's folder"
+        },
+        "remove": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "description": "the CLI's own command that removes this seat's user-level entry, run by team down and team remove for a seat they close; {inbox} is the entry name, team-inbox-<session>-<seat>-<hash>; it needs add and no target"
         }
       },
       "anyOf": [
@@ -169,9 +237,19 @@
       ],
       "allOf": [
         { "not": { "required": ["add", "file"] } },
-        { "if": { "required": ["add"] }, "then": { "required": ["target"] } },
-        { "if": { "required": ["target"] }, "then": { "required": ["add"] } }
+        { "if": { "required": ["target"] }, "then": { "required": ["add"] } },
+        { "if": { "required": ["remove"] }, "then": { "required": ["add"], "not": { "required": ["target"] } } }
       ]
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["option", "value"],
+      "description": "optional: a session-settings option the launch carries; {cwd} in the value is the seat's absolute launch folder, escaped as the inside of a JSON string",
+      "properties": {
+        "option": { "type": "string", "minLength": 1 },
+        "value": { "type": "string", "minLength": 1 }
+      }
     },
     "timeouts": {
       "type": "object",
@@ -183,6 +261,57 @@
       }
     },
     "models": { "$ref": "#/$defs/models" },
+    "vendors": {
+      "type": "array",
+      "minItems": 1,
+      "description": "optional: the vendors this CLI can run for with no launcher script — each vendor's env words ({credential} and {model} fill them), the credential item this machine must hold, and the model ids it offers; declared together with credentials",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "credential", "env", "models"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "credential": { "type": "string", "minLength": 1, "description": "the item this machine's credential store must hold before a seat may move to this vendor" },
+          "env": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "minItems": 1,
+            "description": "the shell words the launch line sets before the CLI: each sets one variable, and {model} is the model id and {credential} the item"
+          },
+          "models": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "model", "version", "display"],
+              "properties": {
+                "id": { "type": "string", "minLength": 1 },
+                "model": { "type": "string", "minLength": 1 },
+                "version": { "type": "string", "minLength": 1 },
+                "display": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "credentials": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check", "add", "missing_status"],
+      "description": "optional: how this machine's store is asked whether it holds a vendor's item — the attribute-only lookup, the one-time add command a refusal prints, and the status the store answers for an absent item; declared together with vendors",
+      "properties": {
+        "check": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "description": "the lookup, without the secret: nothing here asks for the item's value"
+        },
+        "add": { "type": "string", "minLength": 1, "pattern": "\\{item\\}", "description": "the one-time command that adds a missing item; {item} is its name, and the command asks the store for the secret itself" },
+        "missing_status": { "type": "integer", "description": "the exit status that means the store holds no such item" }
+      }
+    },
     "status_model": { "type": "array", "items": { "$ref": "#/$defs/statusModelRule" }, "minItems": 1, "description": "optional: absent, the CLI's screen doesn't show its model" },
     "last_used_model": { "type": "boolean", "description": "optional: the CLI starts on its last-used model when a launch names none" },
     "unread_model": { "type": "string", "enum": ["launch"], "description": "optional: launch names no model read from the screen but the launch line's own, labelled (from launch)" },
@@ -206,7 +335,9 @@
     }
   ],
   "allOf": [
-    { "oneOf": [{ "required": ["exit"] }, { "required": ["exit_keys"] }] }
+    { "oneOf": [{ "required": ["exit"] }, { "required": ["exit_keys"] }] },
+    { "if": { "required": ["vendors"] }, "then": { "required": ["credentials"] } },
+    { "if": { "required": ["credentials"] }, "then": { "required": ["vendors"] } }
   ],
   "$defs": {
     "questionAnswer": {
@@ -292,9 +423,25 @@
         "provider_error": { "$ref": "#/$defs/stage" },
         "rate_limit": { "$ref": "#/$defs/rateLimitStage" },
         "working": { "$ref": "#/$defs/stage" },
+        "scroll_back": { "$ref": "#/$defs/scrollBack" },
         "question_text": { "$ref": "#/$defs/questionText" },
         "composer": { "$ref": "#/$defs/composer" },
         "screen_module": { "$ref": "#/$defs/screenModule" }
+      }
+    },
+    "scrollBack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["return_key"],
+      "anyOf": [
+        { "required": ["footer"] },
+        { "required": ["marker", "status_footer"] }
+      ],
+      "properties": {
+        "footer": { "type": "string", "minLength": 1, "description": "The first reported layout: the CLI's scroll-back footer as the whole row it draws, \"^…$\", on the pane's last non-blank row with the composer hidden. Read only where the composer cannot be read, after every caution stage." },
+        "marker": { "type": "string", "minLength": 1, "description": "The second reported layout: the whole row of the CLI's return marker, \"^…$\", as the nearest non-blank row above the drawn composer. Read only together with \"status_footer\", where the composer cannot be read." },
+        "status_footer": { "type": "string", "minLength": 1, "description": "The whole row of the CLI's scroll-back status footer, \"^…$\", on the pane's last non-blank row beneath the marker and the drawn composer. Read only together with \"marker\"." },
+        "return_key": { "enum": ["escape"], "description": "The key the CLI's own row names for returning to the prompt. Only a key a run established at this screen." }
       }
     },
     "questionText": {
@@ -513,12 +660,14 @@
         "type": "object",
         "additionalProperties": false,
         "oneOf": [
-          { "required": ["equals"], "not": { "required": ["prefix"] } },
-          { "required": ["prefix"], "not": { "required": ["equals"] } }
+          { "required": ["equals"], "not": { "anyOf": [{ "required": ["prefix"] }, { "required": ["shape"] }] } },
+          { "required": ["prefix"], "not": { "anyOf": [{ "required": ["equals"] }, { "required": ["shape"] }] } },
+          { "required": ["shape"], "not": { "anyOf": [{ "required": ["equals"] }, { "required": ["prefix"] }] } }
         ],
         "properties": {
           "equals": { "type": "string" },
-          "prefix": { "type": "string", "minLength": 1 }
+          "prefix": { "type": "string", "minLength": 1 },
+          "shape": { "const": "slash-hint" }
         }
       }
     },
@@ -634,7 +783,7 @@
           "type": "array",
           "items": { "$ref": "#/$defs/patternString" },
           "minItems": 1,
-          "description": "Rows the pane draws of its own between the input row and the status row, declared only where a capture shows them. A matching row is not text in the box. Only status-then-one reads the key."
+          "description": "Rows the pane draws of its own inside the composer's box — between the input row and the status row, or between the input row and the closing rule — declared only where a capture shows them (Muse's completion row for the text being typed). A matching row is not text in the box. status-then-one and box-to-rule read the key."
         },
         "chrome": {
           "description": "The pane's own chrome row under the status line: one string, or a list read as the union, each matching the whole line. Only status-then-one reads the key. Declared, a line under the status row is chrome only when it matches — any other line there leaves the row unread, so text the seat prints can never stand in for the pane's row and feed a quota figure. A composer that declares none keeps the trailing rule it had.",
@@ -680,7 +829,7 @@
         { "if": { "required": ["status_below"] }, "then": { "properties": { "mode": { "enum": ["status-last", "status-then-one"] } } } },
         { "if": { "required": ["status"] }, "then": { "properties": { "mode": { "const": "box-to-rule" } } } },
         { "if": { "required": ["border"] }, "then": { "properties": { "mode": { "enum": ["status-last", "status-then-one"] } } } },
-        { "if": { "required": ["own_rows"] }, "then": { "properties": { "mode": { "const": "status-then-one" } } } },
+        { "if": { "required": ["own_rows"] }, "then": { "properties": { "mode": { "enum": ["status-then-one", "box-to-rule"] } } } },
         { "if": { "required": ["chrome"] }, "then": { "properties": { "mode": { "const": "status-then-one" } } } }
       ]
     }

@@ -15,11 +15,12 @@
 //
 // The hook names the command class, never the command: a command line may hold a secret, and a
 // refusal is raised as `security.refused` with the class as its rule and the seat as its object.
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { shellQuote } from '../profiles/profile.ts';
 import { stableHookPath } from '../daemon/runtime-entry.ts';
+import { ACTIONS_COMMANDS_DEFAULT, type ActionsCommand } from '../policy/types.ts';
 
 /** The command classes the guard denies. One rule name and one line of guidance each. */
 export type GuardRule =
@@ -37,7 +38,9 @@ export type GuardRule =
   | 'git-reset-hard'
   | 'git-clean'
   | 'git-branch-force-delete'
-  | 'npm-publish';
+  | 'npm-publish'
+  | 'github-actions'
+  | 'github-comment-delete';
 
 /** What a denied command is and what the model is told instead. */
 export type GuardMatch = { rule: GuardRule; guidance: string };
@@ -47,17 +50,19 @@ const GUIDANCE: Record<GuardRule, string> = {
   chown: 'refused in team seats: ownership changes wait for the owner',
   sudo: 'refused in team seats: a seat runs as its own user',
   'rm-recursive': 'refused in team seats: delete with `trash <path>`, never a recursive rm',
-  kill: 'refused in team seats: stop a seat with `team stop <seat>`',
-  'kill-hard': 'refused in team seats: stop a seat with `team stop <seat>`, never a hard kill',
+  kill: 'refused in team seats: stop a seat with `team restart <seat>`; stop the team with `team down --session <name>`; stop a process this seat started with `kill <pid>`',
+  'kill-hard': 'refused in team seats: stop a seat with `team restart <seat>` or the team with `team down --session <name>`, never a hard kill',
   'disk-write': 'refused in team seats: a raw disk write can lose the machine — ask the owner',
   'system-power': 'refused in team seats: the owner restarts the machine',
   'persistent-job': 'refused in team seats: a job that outlives the seat waits for the owner',
   'pipe-to-shell': 'refused in team seats: save the download, read it, then run it',
   'git-push-force': 'refused in team seats: push a branch and open a pull request',
-  'git-reset-hard': 'refused in team seats: use `git stash` or `git checkout -- <path>`',
+  'git-reset-hard': 'refused in team seats: use `git restore --source=<sha> -- <path>`',
   'git-clean': 'refused in team seats: delete only the paths you created, never the untracked tree',
   'git-branch-force-delete': 'refused in team seats: delete a merged branch with `git branch -d`',
-  'npm-publish': 'refused in team seats: the release moves only by the orchestrator',
+  'npm-publish': 'refused in team seats: the release moves only on the owner\'s word',
+  'github-actions': 'refused in team seats: the actions-commands policy does not allow that Actions command',
+  'github-comment-delete': 'refused in team seats: post a superseding comment instead',
 };
 
 /** One segment of a shell command line: its words, and whether a `|` put it after another. */
@@ -454,7 +459,246 @@ function gitSubcommand(args: readonly string[]): { sub: string | null; rest: str
   return { sub: null, rest: [] };
 }
 
-function matchSegment(words: readonly string[]): GuardMatch | null {
+/** The `launchctl` questions a seat may ask. Anything else, including `print-disabled`, changes
+ *  or dumps a job that outlives the seat. */
+const LAUNCHCTL_READ = new Set(['list', 'print', 'blame']);
+
+function launchctlReadOnly(args: readonly string[]): boolean {
+  for (const arg of args) {
+    if (arg === '--') return false;
+    if (arg.startsWith('-')) continue;
+    return LAUNCHCTL_READ.has(arg);
+  }
+  return false;
+}
+
+const GH_TAKES_VALUE = new Set([
+  '-R', '--repo', '--hostname', '-H', '--ref', '-f', '--field', '-F', '--raw-field', '--json', '--jq', '--job',
+  '-X', '--method', '--input',
+]);
+
+const GH_WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+/** The last explicit verb, or null when the line names none. `-X` and `--method` take the next word.
+ *  A later verb replaces an earlier one, the way the flag parser keeps the last. */
+function ghExplicitMethod(args: readonly string[]): string | null {
+  let method: string | null = null;
+  for (let at = 0; at < args.length; at += 1) {
+    const arg = args[at]!;
+    if (arg === '-X' || arg === '--method') {
+      const verb = args[at + 1];
+      if (verb !== undefined && verb !== '') method = verb.toUpperCase();
+      continue;
+    }
+    if (arg.startsWith('--method=')) {
+      const verb = arg.slice('--method='.length);
+      if (verb !== '') method = verb.toUpperCase();
+      continue;
+    }
+    // pflag accepts `-X=VERB` for a shorthand flag. `-XVERB` is the glued form without the equals.
+    if (arg.startsWith('-X=')) {
+      const verb = arg.slice(3);
+      if (verb !== '') method = verb.toUpperCase();
+      continue;
+    }
+    if (/^-X[A-Za-z]+$/.test(arg)) method = arg.slice(2).toUpperCase();
+  }
+  return method;
+}
+
+/** The verb `gh api` sends, read once for every fence. The last explicit spelling wins:
+ *  `-X VERB`, `-X=VERB`, `-XVERB`, `--method VERB`, `--method=VERB`, any case. With no explicit
+ *  verb, a field or `--input` is POST. A graphql call is not that implied POST — its query is
+ *  judged on its own. An explicit GET stays GET beside a field. */
+function ghMethod(
+  args: readonly string[],
+  call: { sub: string | null; positionals: readonly string[] },
+): string {
+  const explicit = ghExplicitMethod(args);
+  if (explicit !== null) return explicit;
+  if (ghGraphql(call)) return 'GET';
+  if (ghHasRequestParameters(args)) return 'POST';
+  return 'GET';
+}
+
+/** A flag as its own word or glued to a value (`--delete-last`, `--delete-last=true`). */
+function ghFlag(args: readonly string[], name: string): boolean {
+  return args.some((arg) => arg === name || arg.startsWith(`${name}=`));
+}
+
+/** Deleting or dismissing a GitHub comment. An HTTP DELETE is refused on every path, not only
+ *  Actions: the comment, the review and the record stay, and the seat posts a later comment.
+ *  Adding and editing stay allowed. */
+function githubCommentDelete(args: readonly string[]): boolean {
+  const call = ghCall(args);
+  if (call === null) return false;
+  if (call.group === 'api') return ghMethod(args, call) === 'DELETE';
+  if ((call.group === 'pr' || call.group === 'issue') && call.sub === 'comment' && ghFlag(args, '--delete-last')) {
+    return true;
+  }
+  return call.group === 'pr' && call.sub === 'review' && ghFlag(args, '--dismiss');
+}
+
+/** `-fquery=…` and `-Fquery=…`: the short flag glued to its value. Null for `-f`, `-f=`, and other words. */
+function gluedFieldBody(arg: string): string | null {
+  if ((arg.startsWith('-f') && arg !== '-f' && !arg.startsWith('-f='))
+    || (arg.startsWith('-F') && arg !== '-F' && !arg.startsWith('-F='))) {
+    return arg.slice(2);
+  }
+  return null;
+}
+
+/** A parameter gh turns into a POST when the line names no GET. `--input` counts with the fields. */
+function ghHasRequestParameters(args: readonly string[]): boolean {
+  for (const arg of args) {
+    if (arg === '-f' || arg === '--field' || arg === '-F' || arg === '--raw-field' || arg === '--input') return true;
+    if (
+      arg.startsWith('--field=') || arg.startsWith('--raw-field=') || arg.startsWith('--input=')
+      || arg.startsWith('-f=') || arg.startsWith('-F=')
+    ) return true;
+    if (gluedFieldBody(arg) !== null) return true;
+  }
+  return false;
+}
+
+/** `graphql` as its own word, or a path whose last segment is `graphql`. */
+function ghGraphql(call: { sub: string | null; positionals: readonly string[] }): boolean {
+  const words = call.sub === null ? call.positionals : [call.sub, ...call.positionals];
+  return words.some((word) => {
+    if (word === 'graphql') return true;
+    const path = word.split('?')[0] ?? word;
+    return path.endsWith('/graphql');
+  });
+}
+
+const GH_FIELD_FLAGS = ['-f', '--field', '-F', '--raw-field'];
+
+/** The query texts a graphql call carries, files included. Null when one of them cannot be read. */
+function graphqlQueries(args: readonly string[]): string[] | null {
+  const texts: string[] = [];
+  const take = (body: string | undefined): boolean => {
+    if (body === undefined) return true;
+    const value = body.startsWith('query=') ? body.slice('query='.length) : body;
+    const text = value.startsWith('@') ? readQueryFile(value.slice(1)) : value;
+    if (text === null) return false;
+    texts.push(text);
+    return true;
+  };
+  for (let at = 0; at < args.length; at += 1) {
+    const arg = args[at]!;
+    for (const flag of GH_FIELD_FLAGS) {
+      if (!arg.startsWith(`${flag}=`)) continue;
+      const body = arg.slice(flag.length + 1);
+      if (body === 'query' || body.startsWith('query=')) {
+        if (!take(body === 'query' ? args[at + 1] : body)) return null;
+      }
+    }
+    if (GH_FIELD_FLAGS.includes(arg)) {
+      const body = args[at + 1];
+      if (body === 'query' || (body !== undefined && body.startsWith('query='))) {
+        if (!take(body === 'query' ? args[at + 2] : body)) return null;
+      }
+    }
+    const glued = gluedFieldBody(arg);
+    if (glued !== null && (glued === 'query' || glued.startsWith('query='))) {
+      if (!take(glued)) return null;
+    }
+    if (arg === '--input') {
+      const text = readQueryFile(args[at + 1] ?? '');
+      if (text === null) return null;
+      texts.push(text);
+    } else if (arg.startsWith('--input=')) {
+      const text = readQueryFile(arg.slice('--input='.length));
+      if (text === null) return null;
+      texts.push(text);
+    }
+  }
+  return texts;
+}
+
+function readQueryFile(path: string): string | null {
+  if (path === '') return null;
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/** `gh` once its global flags are set aside: the command group, the subcommand, the remaining
+ *  positionals, and whether `--ref` names a non-empty head. */
+function ghCall(args: readonly string[]): { group: string; sub: string | null; positionals: string[]; ref: string | null } | null {
+  const positionals: string[] = [];
+  let ref: string | null = null;
+  for (let at = 0; at < args.length; at += 1) {
+    const arg = args[at]!;
+    if (arg === '--') {
+      positionals.push(...args.slice(at + 1));
+      break;
+    }
+    if (arg === '--ref') {
+      ref = args[at + 1] ?? '';
+      at += 1;
+      continue;
+    }
+    if (arg.startsWith('--ref=')) {
+      ref = arg.slice('--ref='.length);
+      continue;
+    }
+    if (GH_TAKES_VALUE.has(arg)) {
+      at += 1;
+      continue;
+    }
+    if (arg.startsWith('-')) continue;
+    positionals.push(arg);
+  }
+  const group = positionals[0];
+  if (group === undefined) return null;
+  return { group, sub: positionals[1] ?? null, positionals: positionals.slice(2), ref: ref === '' ? null : ref };
+}
+
+const GH_READ_RUN = new Set(['list', 'view', 'watch']);
+const GH_READ_WORKFLOW = new Set(['list', 'view']);
+
+/** True when this `gh` line is an Actions read, or one of the three writes the policy still holds.
+ *  A read is `run list|view|watch`, `workflow list|view`, `pr checks`, or `gh api` with GET,
+ *  including a path under `/actions`. `/dispatches` is a write on every verb. */
+function actionsAllowed(args: readonly string[], actions: readonly ActionsCommand[]): boolean {
+  const call = ghCall(args);
+  if (call === null) return true;
+  if (call.group === 'api') {
+    // One verb for the write fence and the comment fence: explicit spellings, then the implied POST.
+    if (GH_WRITE_METHODS.has(ghMethod(args, call))) return false;
+    if (args.some((arg) => arg.includes('/dispatches'))) return false;
+    if (ghGraphql(call)) {
+      const queries = graphqlQueries(args);
+      if (queries === null || queries.length === 0) return false;
+      if (queries.some((query) => /mutation/i.test(query))) return false;
+      return true;
+    }
+    return true;
+  }
+  if (call.group === 'run' && call.sub !== null && GH_READ_RUN.has(call.sub)) return true;
+  if (call.group === 'pr' && call.sub === 'checks') return true;
+  if (call.group === 'workflow' && call.sub !== null && GH_READ_WORKFLOW.has(call.sub)) return true;
+  if (call.group === 'run' && call.sub === 'rerun') {
+    return actions.includes('rerun-failed')
+      && args.includes('--failed')
+      && call.positionals.every((word) => /^[0-9]+$/.test(word));
+  }
+  if (call.group === 'workflow' && call.sub === 'run') {
+    const workflow = call.positionals[0];
+    const rest = call.positionals.slice(1);
+    if (workflow === undefined || rest.length > 0) return false;
+    if ((workflow === 'deploy.yml' || workflow === 'deploy') && actions.includes('deploy')) return true;
+    if ((workflow === 'ci.yml' || workflow === 'ci') && actions.includes('ci-pr-head') && call.ref !== null) return true;
+    return false;
+  }
+  if (call.group === 'run' || call.group === 'workflow') return false;
+  return true;
+}
+
+function matchSegment(words: readonly string[], actions: readonly ActionsCommand[]): GuardMatch | null {
   const command = commandOf(words);
   if (command.length === 0) return null;
   const word = base(command[0]!);
@@ -470,7 +714,13 @@ function matchSegment(words: readonly string[]): GuardMatch | null {
   if (word === 'shutdown' || word === 'reboot') {
     return { rule: 'system-power', guidance: GUIDANCE['system-power'] };
   }
-  if (word === 'launchctl' || word === 'crontab') {
+  if (word === 'launchctl') {
+    // Read-only questions are the seat's own diagnosis. Every other subcommand, and a bare
+    // `launchctl`, installs or changes a job that outlives the seat.
+    if (launchctlReadOnly(args)) return null;
+    return { rule: 'persistent-job', guidance: GUIDANCE['persistent-job'] };
+  }
+  if (word === 'crontab') {
     return { rule: 'persistent-job', guidance: GUIDANCE['persistent-job'] };
   }
   if (word === 'rm' && recursiveRm(args)) return { rule: 'rm-recursive', guidance: GUIDANCE['rm-recursive'] };
@@ -496,22 +746,28 @@ function matchSegment(words: readonly string[]): GuardMatch | null {
   if (word === 'npm' && npmPublishes(args)) {
     return { rule: 'npm-publish', guidance: GUIDANCE['npm-publish'] };
   }
+  if (word === 'gh' && githubCommentDelete(args)) {
+    return { rule: 'github-comment-delete', guidance: GUIDANCE['github-comment-delete'] };
+  }
+  if (word === 'gh' && !actionsAllowed(args, actions)) {
+    return { rule: 'github-actions', guidance: GUIDANCE['github-actions'] };
+  }
   if (word === 'xargs') {
     // `find … | xargs chmod +x`: the command xargs runs is the first word that is not its option.
     const at = args.findIndex((arg) => !arg.startsWith('-'));
-    if (at !== -1) return matchSegment(args.slice(at));
+    if (at !== -1) return matchSegment(args.slice(at), actions);
   }
   if (word === 'find') {
     // Every `-exec`, `-execdir`, `-ok` and `-okdir` runs the words that follow it, up to the
     // action's `;` or `+`.
-    const actions = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+    const findActions = new Set(['-exec', '-execdir', '-ok', '-okdir']);
     let scan = 0;
     while (scan < args.length) {
-      const action = args.findIndex((arg, index) => index >= scan && actions.has(arg));
+      const action = args.findIndex((arg, index) => index >= scan && findActions.has(arg));
       if (action === -1) break;
       const command = args.slice(action + 1);
       const end = command.findIndex((arg) => arg === ';' || arg === '+');
-      const match = matchSegment(end === -1 ? command : command.slice(0, end));
+      const match = matchSegment(end === -1 ? command : command.slice(0, end), actions);
       if (match !== null) return match;
       scan = end === -1 ? args.length : action + end + 2;
     }
@@ -519,21 +775,38 @@ function matchSegment(words: readonly string[]): GuardMatch | null {
   return null;
 }
 
+/** True when the parsed command word of any segment is `gh`, quotes and a leading backslash included. */
+export function lineRunsGh(line: string): boolean {
+  const parsed = segments(withoutHeredocBodies(line));
+  for (const segment of parsed) {
+    const command = commandOf(segment.words);
+    if (command.length > 0 && base(command[0]!) === 'gh') return true;
+  }
+  return false;
+}
+
 /**
  * What the guard says about one shell command line: null when it is allowed, or the class it
  * belongs to and the one line the model is told instead. A conservative set — chmod, chown,
  * sudo, a recursive rm, pkill and killall, a hard `kill`, dd and mkfs, shutdown and reboot,
- * launchctl and crontab, a download piped into a shell, `git push --force` (and `-f`),
- * `git reset --hard`, a destructive `git clean`, `git branch -D` and `npm publish`.
+ * launchctl other than `list`, `print` and `blame`, crontab, a download piped into a shell,
+ * `git push --force` (and `-f`),
+ * `git reset --hard`, a destructive `git clean`, `git branch -D`, `npm publish`, an
+ * Actions write outside the `actions-commands` policy, and deleting or dismissing a GitHub
+ * comment (`gh api` DELETE on any path, `gh pr comment --delete-last`,
+ * `gh issue comment --delete-last`, `gh pr review --dismiss`).
  *
  * It matches commands, never words: a sentence in a quote, a heredoc body or a `team send` body
  * only ever sits in the arguments of the command that carries it.
  */
-export function refusedByGuard(line: string): GuardMatch | null {
+export function refusedByGuard(
+  line: string,
+  actions: readonly ActionsCommand[] = ACTIONS_COMMANDS_DEFAULT,
+): GuardMatch | null {
   const parsed = segments(withoutHeredocBodies(line));
   for (let at = 0; at < parsed.length; at++) {
     const segment = parsed[at]!;
-    const match = matchSegment(segment.words);
+    const match = matchSegment(segment.words, actions);
     if (match !== null) return match;
     if (segment.piped && at > 0) {
       const left = commandOf(parsed[at - 1]!.words);

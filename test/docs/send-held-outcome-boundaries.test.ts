@@ -6,10 +6,12 @@ import { readFileSync } from 'node:fs';
 // not page prose: it is the binary's own history union, and the page must carry exactly it — no
 // outcome the binary never writes down, and none it does write down missing. `refused` is the
 // edge: a refusal writes no history, and the day an append sneaks into the refusal path is the
-// day this page quietly lies.
+// day this page quietly lies. The messaging spec carries the same list in its history field
+// table, and is held to the same union.
 
 const FEED = readFileSync(new URL('../../docs/commands/feed.md', import.meta.url), 'utf8').replace(/\s+/g, ' ');
 const SEND_PAGE = readFileSync(new URL('../../docs/commands/send.md', import.meta.url), 'utf8').replace(/\s+/g, ' ');
+const MESSAGING_SPEC = readFileSync(new URL('../../docs/specs/messaging.md', import.meta.url), 'utf8');
 const HISTORY_SRC = readFileSync(new URL('../../src/send/history.ts', import.meta.url), 'utf8');
 const SEND_SRC = readFileSync(new URL('../../src/commands/send.ts', import.meta.url), 'utf8');
 
@@ -31,6 +33,18 @@ describe('the feed page’s outcome list', () => {
     }
     const pageOnes = [...listed.matchAll(/`([^`]+)`/g)].map((one) => one[1]);
     expect(pageOnes.length, 'feed.md names an outcome the history union does not have').toBe(written.length);
+  });
+
+  test('the messaging spec names the binary’s history union, every outcome and no other', () => {
+    const row = MESSAGING_SPEC.split('\n').find((line) => line.startsWith('| `outcome` |')) ?? '';
+    expect(row, 'the messaging spec lost its history outcome row').not.toBe('');
+    // The meaning column is the sixth cell; the outcome words are its code spans.
+    const meaning = row.split('|')[6] ?? '';
+    const listed = [...meaning.matchAll(/`([^`]+)`/g)].map((one) => one[1]);
+    for (const outcome of written) {
+      expect(listed.includes(outcome), `messaging.md does not name ${outcome}, which the binary writes down`).toBe(true);
+    }
+    expect(listed.length, 'messaging.md names an outcome the history union does not have').toBe(written.length);
   });
 
   test('the line the page shows is the entry the binary writes, field for field', () => {
@@ -58,7 +72,7 @@ describe('the feed page’s outcome list', () => {
   test('the send page carries the outcomes the feed list belongs to', () => {
     // The README's `team send` row names no outcome; this page is where the full list lives, so
     // the list is held here.
-    const outcomes = '`delivered` (or `delivered (read)`), `sent (unconfirmed)`, `answered`, `held`, `queued (receiver busy)`, `not-submitted`, `timeout`, `unreachable` or `refused`';
+    const outcomes = '`delivered` (or `delivered (read)`, or `delivered (typed wake)`), `sent (unconfirmed)`, `queued, not woken`, `answered`, `held`, `queued (receiver busy)`, `not-submitted`, `timeout`, `unreachable` or `refused`';
     expect(SEND_PAGE.includes(`one of ${outcomes}`), 'send.md lost the outcome sentence').toBe(true);
   });
 });

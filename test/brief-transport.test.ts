@@ -179,7 +179,7 @@ describe('the brief-transport reading', () => {
 });
 
 describe('the message walk', () => {
-  test('the seat\'s own mcp-inbox leg takes the brief and the history records it', async () => {
+  test('the seat\'s own inbox is the store\'s reader: the brief ends on the drop, and the history records it', async () => {
     const w = world();
     setTransport(w, 'message');
     const report = deliver(w, { cli: 'codex' });
@@ -189,7 +189,8 @@ describe('the message walk', () => {
     expect(report.walks?.[0]?.payload.id).toBe(delivery.id);
     expect(claimOf(w)).toMatchObject({ id: delivery.id, stage: 'ready' });
 
-    // The listener the seat's own server leaves, live: the inbox leg is the one that takes it.
+    // The listener the seat's own server leaves, live: it is the store's reader, not a delivery
+    // leg (ADR D1), so the walk neither splices it in nor changes the ending.
     writeListener(dropDir(w), {
       v: 1,
       seat: SEAT,
@@ -202,13 +203,13 @@ describe('the message walk', () => {
 
     await walkBriefDeliveries(report, { dir: w.dir, home: w.home, sendHost: fake(w) });
 
-    expect(delivery.message).toMatchObject({ via: 'mcp-inbox', walked: true, exit: 0 });
+    expect(delivery.message).toMatchObject({ via: 'drop', walked: true, exit: 0 });
     expect(readdirSync(dropDir(w))).toContain(delivery.id);
     const history = readHistory(PROJECT, w.root, w.home);
     expect(history.ok).toBe(true);
     if (history.ok) {
       const last = history.entries.at(-1);
-      expect(last).toMatchObject({ to: SEAT, id: delivery.id, via: 'mcp-inbox', outcome: 'sent (unconfirmed)' });
+      expect(last).toMatchObject({ to: SEAT, id: delivery.id, via: 'drop', outcome: 'sent (unconfirmed)' });
     }
   });
 
@@ -303,9 +304,8 @@ describe('the message walk', () => {
     const delivery = report.deliveries[0];
     if (delivery === undefined || !delivery.ok) throw new Error(JSON.stringify(report));
 
-    // Another command holds the seat: the inbox is not live, no pane answers the typed leg, and
-    // the drop leg queues the brief with its pending marker for the seat's watcher instead of
-    // refusing at the lock.
+    // Another command holds the seat: no pane answers the typed leg, and the drop leg queues the
+    // brief with its pending marker for the seat's watcher instead of refusing at the lock.
     const lock = acquireSeatLock(w.dir, SESSION, SEAT);
     if (!('release' in lock)) throw new Error(`the seat lock was not taken (pid ${String(lock.held)})`);
     try {
@@ -318,7 +318,6 @@ describe('the message walk', () => {
     if (ended === undefined || !ended.ok) throw new Error(JSON.stringify(report));
     expect(ended.ok).toBe(true);
     expect(ended.message).toMatchObject({ via: 'drop', walked: true, exit: 0 });
-    expect(ended.message?.failures.join(' ')).toContain('mcp-inbox:');
     expect(ended.message?.failures.join(' ')).toContain('typed:');
     expect(ended.message?.text).toContain('queued (receiver busy)');
     expect(readdirSync(dropDir(w))).toContain(`${delivery.id}.pending`);
@@ -341,9 +340,9 @@ describe('the message walk', () => {
     if (delivery === undefined || !delivery.ok) throw new Error(JSON.stringify(report));
 
     // The launch's claim and signed record already stand on disk; when the message key is
-    // damaged before the walk runs, the inbox is not live, no pane answers the typed leg, and
-    // the drop leg refuses at signing. The walk's ending is the caller's failure, with the
-    // legs' own reasons, not an `ok` delivery that says nothing.
+    // damaged before the walk runs, no pane answers the typed leg, and the drop leg refuses at
+    // signing. The walk's ending is the caller's failure, with the legs' own reasons, not an
+    // `ok` delivery that says nothing.
     writeFileSync(messageKeyPath(w.home), 'not json\n');
     await walkBriefDeliveries(report, { dir: w.dir, home: w.home, sendHost: fake(w) });
 
@@ -353,7 +352,6 @@ describe('the message walk', () => {
     expect(ended.reason).toContain('the signed record stands, but no delivery leg took the brief');
     expect(ended.reason).toContain('the record could not be written (the record could not be signed)');
     expect(ended.message).toMatchObject({ walked: true, exit: 1 });
-    expect(ended.message?.failures.join(' ')).toContain('mcp-inbox:');
     expect(ended.message?.failures.join(' ')).toContain('typed:');
     // The leg that ended the walk said its own reason only to the capture sink; the caller's
     // failure line carries it too, so the reason for the ending is never swallowed.

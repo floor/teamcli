@@ -20,6 +20,13 @@ export type Screen =
   | { kind: 'idle' }                 // the idle prompt, with an empty input box
   | { kind: 'working' }              // a turn is running: herdr's status would already be stale
   | { kind: 'unsent' }               // text left in the input box
+  | { kind: 'scroll back' }          // the pane scrolled back over its transcript: the CLI's own
+                                     // rows stand at the bottom — a footer in the composer's
+                                     // place, or a marker above a drawn composer with a status
+                                     // footer under it. Read only where the composer cannot be
+                                     // read; the seat is at its prompt behind the scroll, so it
+                                     // reads idle, and only a wake that may press the profile's
+                                     // return key acts
   | { kind: 'permission' }           // a permission dialog: its owner's to answer
   | { kind: 'plan approval' }        // a plan the agent wrote, waiting to execute: read before
                                      // `permission`, whose generic numbered choice it draws too;
@@ -55,7 +62,7 @@ export type Screen =
  *  one no profile reads is `unknown`. The four words are the ones a herdr status can carry, so a
  *  profile herdr cannot report can be read with them in place of its word. */
 export function screenWord(screen: Screen): 'idle' | 'working' | 'blocked' | 'unknown' {
-  if (screen.kind === 'idle' || screen.kind === 'unsent') return 'idle';
+  if (screen.kind === 'idle' || screen.kind === 'unsent' || screen.kind === 'scroll back') return 'idle';
   if (screen.kind === 'working') return 'working';
   if (screen.kind === 'unknown') return 'unknown';
   return 'blocked';
@@ -177,6 +184,18 @@ export function readFoldMark(cli: string, screen: string | undefined): boolean {
 /** The input box the composer draws for its current text, or null when it does not read `unsent`.
  *  The box's rows are the rows the pane drew for the text; the caller compares them to the text
  *  it typed before any Enter. */
+/** The profile's `equals` placeholders, other than the empty row. An extra box row is one of
+ *  these only when its text is that whole row. A prefix is not, and the empty equals is the
+ *  input row itself, not a row drawn under typed text. */
+export function listedPlaceholderEquals(cli: string): readonly string[] {
+  const placeholders = DATA[cli]?.composer?.placeholders ?? [];
+  const listed: string[] = [];
+  for (const entry of placeholders) {
+    if ('equals' in entry && entry.equals !== '') listed.push(entry.equals);
+  }
+  return listed;
+}
+
 export function readBox(cli: string, screen: string | undefined, options?: ScreenOptions): Box | null {
   const data = DATA[cli];
   if (data === undefined || screen === undefined) return null;

@@ -42,7 +42,11 @@
 //
 // A call takes a lock on the episode's canonical key (a directory under the store's `locks/`,
 // held by `withLock`), so attempts, a due escalation and a delivery cannot interleave their
-// read-modify-write. The event is emitted through an outbox intent written to the marker first:
+// read-modify-write. A caller that must not wait — the send whose record is already durable —
+// calls `noteTransportSoon`; a busy key then defers the fact whole to a note beside the record,
+// and `drainDeferredNotes` records it on a later pass under the same lock. The note carries the
+// sender tag too, so a note that is the episode's first fact creates the same marker a locked
+// call would have. The event is emitted through an outbox intent written to the marker first:
 // a crash between the intent and the append leaves the intent for the next pass, and
 // `appendEvent`'s deterministic record id makes the retry a duplicate rather than a second event.
 // A delivery arriving in that window cancels the intent: the message is not undelivered.
@@ -67,8 +71,8 @@
 // episodes. Routing and delay are TeamCLI's, resolved from the signed chain; the transport
 // receives neither.
 import { createHash } from 'node:crypto';
-import { readdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { lstatSync, mkdirSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, sep } from 'node:path';
 import { logTag, type Caller } from '../caller.ts';
 import { appendEvent, verifySignedEvent, type EventAppendInput, type SignedEventRecord } from '../bus/log.ts';
 import { writeRuntimeMailboxRecord } from '../bus/owner.ts';
@@ -77,10 +81,13 @@ import { recordDir } from '../commands/messages.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
 import type { TeamFile } from '../file/types.ts';
 import { deliveryEscalationDelay, type DeliveryEscalationSource } from '../policy/delivery.ts';
+import { eventThresholdsInForce } from '../policy/thresholds.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { LockBusyError, withLock } from '../state.ts';
-import { appendStoreLine, ensureStoreLadder, historyPath, readNoFollow } from './history.ts';
+import { LockBusyError, reclaimLockDir, withLock } from '../state.ts';
+import { messageKeyState } from '../store/keys.ts';
+import { appendStoreLine, ensureFoldersBelow, ensureStoreLadder, historyPath, readNoFollow } from './history.ts';
 import { dropMessage } from './native.ts';
+import { readSealedRecord, recordAuthOfSealed, recordFile, sameFolder } from './record.ts';
 
 /** The receiver as TeamCLI verified it: the registry team and seat, the seat's registry id when
  *  one exists, the session the seat stands in, and the checkout the record is written under. */
@@ -264,10 +271,31 @@ export function attemptLedgerFileName(recipient: CanonicalRecipient, messageId: 
   return `fallback-attempts-${episodeHash(recipient, messageId)}.jsonl`;
 }
 
+/** A note deferred beside the record when the episode's key was busy: the fact a caller would
+ *  have recorded, named by its own digest so a retried fact rewrites one file, not two. */
+export function deferredNotePathOf(recipient: CanonicalRecipient, messageId: string, factId: string): string {
+  return join(recordDir(recipient.root, recipient.session, recipient.seat), `${messageId}.fallback-note-${factId}.json`);
+}
+
+/** How a deferred note names itself: the marker's own folder, and only these files. */
+const DEFERRED_NOTE_NAME = /\.fallback-note-[0-9a-f]{16}\.json$/;
+
 /** The episode's publication ledger: each event confirmed appended is recorded here with its
  *  signed record, so replay dedup outlives the event log's retention. Append-only, never rotated. */
 export function publicationLedgerFileName(recipient: CanonicalRecipient, messageId: string): string {
   return `fallback-published-${episodeHash(recipient, messageId)}.jsonl`;
+}
+
+/** Where the store keeps a retired episode's marker and attempt ledger. The publication ledger is
+ *  never archived: replay dedup must outlive the episode. */
+export const FALLBACK_ARCHIVE_DIR = 'fallback-archive';
+
+function episodeArchiveMarkerPath(storeDir: string, recipient: CanonicalRecipient, messageId: string): string {
+  return join(storeDir, FALLBACK_ARCHIVE_DIR, 'markers', `${episodeHash(recipient, messageId)}.json`);
+}
+
+function episodeArchiveAttemptsPath(storeDir: string, recipient: CanonicalRecipient, messageId: string): string {
+  return join(storeDir, FALLBACK_ARCHIVE_DIR, 'attempts', attemptLedgerFileName(recipient, messageId));
 }
 
 /** The event record id of the immediate all-failed event: deterministic per episode, and derived
@@ -352,13 +380,71 @@ export function noteTransport(ctx: FallbackContext, fact: TransportFact): Fallba
   const problem = factProblem(fact);
   if (problem !== null) return { ok: false, kind: 'marker', reason: problem };
   try {
-    return withKeyLock(ctx, fact.recipient, fact.messageId, () => noteLocked(ctx, fact));
+    return withKeyLock(ctx, fact.recipient, fact.messageId, () => noteLocked(ctx, fact, logTag(ctx.caller)));
   } catch (error) {
     return { ok: false, kind: 'marker', reason: errorMessage(error) };
   }
 }
 
-function noteLocked(ctx: FallbackContext, fact: TransportFact): FallbackNote {
+/** A fact written beside the record because the episode's key was busy: the send may return, and
+ *  the next `drainDeferredNotes` pass records it under the same lock, exactly once. */
+export type DeferredNote = { ok: true; state: 'deferred'; notePath: string };
+
+/**
+ * Record one transport fact without waiting on the episode's key. A free key records it exactly
+ * as `noteTransport` does and answers the recorder's own result; a key another live holder keeps
+ * writes the fact whole to a note beside the record and answers `deferred` at once, so a caller
+ * whose record is already durable — a send — never blocks its own line on a busy episode. The
+ * drain pass records the note under the same lock; the sender tag rides along so a note that is
+ * the episode's first fact creates the same marker a locked call would have fixed.
+ *
+ * The bus append inside the note is taken with `lockWaitMs: 0` too: a first exhaustion writes its
+ * intent into the marker, and a log another live holder keeps leaves that intent for the next
+ * pass instead of pausing the send on a busy event lock for the lock's whole budget.
+ *
+ * A refusal that is not contention (a conflict, a ledger that cannot be written) answers exactly
+ * as `noteTransport` would; only contention defers.
+ */
+export function noteTransportSoon(ctx: FallbackContext, fact: TransportFact): FallbackNote | DeferredNote {
+  const problem = factProblem(fact);
+  if (problem !== null) return { ok: false, kind: 'marker', reason: problem };
+  try {
+    return withKeyLock(ctx, fact.recipient, fact.messageId, () => noteLocked(ctx, fact, logTag(ctx.caller), { lockWaitMs: 0 }), 0);
+  } catch (error) {
+    if (!(error instanceof LockBusyError)) return { ok: false, kind: 'marker', reason: errorMessage(error) };
+    // The fact is durable on disk before this returns, so nothing is lost by deferring it.
+    try {
+      return deferNote(ctx, fact);
+    } catch (writeError) {
+      return { ok: false, kind: 'marker', reason: errorMessage(writeError) };
+    }
+  }
+}
+
+/** Write the fact whole beside the record, for the next drain pass. A same-fact rewrite lands on
+ *  the same name; the file is swapped in whole, so a reader never sees half a fact. */
+function deferNote(ctx: FallbackContext, fact: TransportFact): DeferredNote {
+  const text = JSON.stringify({ format: 1, sender: logTag(ctx.caller), fact });
+  const factId = createHash('sha256').update(text).digest('hex').slice(0, 16);
+  const path = deferredNotePathOf(fact.recipient, fact.messageId, factId);
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const tmp = `${path}.${String(process.pid)}.tmp`;
+  writeFileSync(tmp, `${text}\n`, { mode: 0o600 });
+  renameSync(tmp, path);
+  return { ok: true, state: 'deferred', notePath: path };
+}
+
+/** `dedupe` makes a replayed fact a no-op: an attempt with the same route and instant is already
+ *  in the marker, so a note whose earlier drain landed but did not unlink records nothing twice.
+ *  `lockWaitMs` bounds this call's bus append: a send passes 0 so a live event-lock holder can
+ *  never hold its line, and the intent the marker carries is emitted by the next pass. */
+function noteLocked(
+  ctx: EscalationContext,
+  fact: TransportFact,
+  senderTag: string,
+  options: { dedupe?: boolean; lockWaitMs?: number } = {},
+): FallbackNote {
+  const waits = options.lockWaitMs === undefined ? {} : { lockWaitMs: options.lockWaitMs };
   const path = markerPathOf(fact.recipient, fact.messageId);
   const read = markerAt(path);
   if (read.kind === 'unreadable') return { ok: false, kind: 'marker', reason: read.reason };
@@ -380,17 +466,54 @@ function noteLocked(ctx: FallbackContext, fact: TransportFact): FallbackNote {
       };
     }
   } else {
-    marker = {
-      format: 1,
-      messageId: fact.messageId,
-      recipient: fact.recipient,
-      recordDigest: fact.recordDigest,
-      sender: logTag(ctx.caller),
-      status: 'trying',
-      attempts: [],
-      receipt: { kind: 'unknown' },
-      updatedAt: fact.at,
-    };
+    // A retired episode is still the same episode. Its archived marker answers a fact after
+    // retirement: a delivered or refused one is a duplicate that writes nothing, an expired one
+    // reopens because the walk evidently was not finished, and another digest or recipient is
+    // the same conflict a live marker would give.
+    const archived = markerAt(
+      episodeArchiveMarkerPath(storeDirOf(ctx, fact.recipient), fact.recipient, fact.messageId),
+    );
+    if (archived.kind === 'unreadable') return { ok: false, kind: 'marker', reason: archived.reason };
+    const archivedKind = archived.kind === 'ok' ? finishedKind(archived.marker) : null;
+    if (archived.kind === 'ok' && archivedKind !== null) {
+      if (!sameRecipient(archived.marker.recipient, fact.recipient)) {
+        return {
+          ok: false,
+          kind: 'conflict',
+          reason: `fallback: ${fact.messageId} already names another recipient than ${fact.recipient.seat}`,
+        };
+      }
+      if (archived.marker.recordDigest !== fact.recordDigest) {
+        return {
+          ok: false,
+          kind: 'conflict',
+          reason: `fallback: ${fact.messageId} already records another digest than this record`,
+        };
+      }
+      if (archivedKind === 'delivered' || archivedKind === 'refused') {
+        return { ok: true, state: 'duplicate', marker: archived.marker, eventDuplicate: false, dueAt: null };
+      }
+      marker = { ...archived.marker };
+    } else {
+      marker = {
+        format: 1,
+        messageId: fact.messageId,
+        recipient: fact.recipient,
+        recordDigest: fact.recordDigest,
+        sender: senderTag,
+        status: 'trying',
+        attempts: [],
+        receipt: { kind: 'unknown' },
+        updatedAt: fact.at,
+      };
+    }
+  }
+
+  // A replayed deferred fact: the attempt already stands, so the ledger keeps one line and no
+  // state moves. The instant is the fact's own, fixed when the send built it, so it is the same
+  // on the replay as on the call that landed it.
+  if (options.dedupe === true && marker.attempts.some((seen) => seen.route === fact.route && seen.at === fact.at)) {
+    return { ok: true, state: 'duplicate', marker, eventDuplicate: false, dueAt: marker.dueAt ?? null };
   }
 
   const receipt = normalizeReceipt(fact.receipt);
@@ -444,19 +567,22 @@ function noteLocked(ctx: FallbackContext, fact: TransportFact): FallbackNote {
     if (marker.outbox?.kind === 'escalated') delete marker.outbox;
     let flushed: FlushResult;
     try {
-      flushed = flushOutbox(ctx, marker, path);
+      flushed = flushOutbox(ctx, marker, path, waits);
     } catch (error) {
       return { ok: false, kind: 'marker', reason: errorMessage(error) };
     }
-    if (!flushed.ok) return { ok: false, kind: 'marker', reason: flushed.reason };
+    // A busy log leaves the intent standing: the delivery is recorded now and a later pass emits
+    // the pending event, exactly as it would after a crash between the intent and the append.
+    if (!flushed.ok && flushed.busy !== true) return { ok: false, kind: 'marker', reason: flushed.reason };
+    const emitted = flushed.ok ? flushed : null;
     const wrote = writeMarker(path, marker);
     if (!wrote.ok) return { ok: false, kind: 'marker', reason: wrote.reason };
     return {
       ok: true,
       state: wasDelivered ? 'duplicate' : 'delivered',
       marker,
-      ...(flushed.event !== null ? { event: flushed.event } : {}),
-      eventDuplicate: flushed.duplicate,
+      ...(emitted !== null && emitted.event !== null ? { event: emitted.event } : {}),
+      eventDuplicate: emitted?.duplicate ?? false,
       dueAt: marker.dueAt ?? null,
     };
   }
@@ -465,12 +591,13 @@ function noteLocked(ctx: FallbackContext, fact: TransportFact): FallbackNote {
   // lock. A delivery above cancelled one instead.
   let drained: FlushResult;
   try {
-    drained = flushOutbox(ctx, marker, path);
+    drained = flushOutbox(ctx, marker, path, waits);
   } catch (error) {
     return { ok: false, kind: 'marker', reason: errorMessage(error) };
   }
-  if (!drained.ok) return { ok: false, kind: 'marker', reason: drained.reason };
-  const eventFields = drained.event === null ? {} : { event: drained.event };
+  if (!drained.ok && drained.busy !== true) return { ok: false, kind: 'marker', reason: drained.reason };
+  const emitted = drained.ok ? drained : null;
+  const eventFields = emitted !== null && emitted.event !== null ? { event: emitted.event } : {};
 
   if (wasDelivered) {
     const wrote = writeMarker(path, marker);
@@ -479,7 +606,7 @@ function noteLocked(ctx: FallbackContext, fact: TransportFact): FallbackNote {
       ok: true,
       state: 'duplicate',
       marker,
-      eventDuplicate: drained.duplicate,
+      eventDuplicate: emitted?.duplicate ?? false,
       dueAt: marker.dueAt ?? null,
       ...eventFields,
     };
@@ -493,7 +620,7 @@ function noteLocked(ctx: FallbackContext, fact: TransportFact): FallbackNote {
       ok: true,
       state: 'duplicate',
       marker,
-      eventDuplicate: drained.duplicate,
+      eventDuplicate: emitted?.duplicate ?? false,
       dueAt: marker.dueAt ?? null,
       ...eventFields,
     };
@@ -507,7 +634,7 @@ function noteLocked(ctx: FallbackContext, fact: TransportFact): FallbackNote {
       ok: true,
       state: 'continued',
       marker,
-      eventDuplicate: drained.duplicate,
+      eventDuplicate: emitted?.duplicate ?? false,
       dueAt: marker.dueAt ?? null,
       ...eventFields,
     };
@@ -531,20 +658,230 @@ function noteLocked(ctx: FallbackContext, fact: TransportFact): FallbackNote {
 
   let flushed: FlushResult;
   try {
-    flushed = flushOutbox(ctx, marker, path);
+    flushed = flushOutbox(ctx, marker, path, waits);
   } catch (error) {
     return { ok: false, kind: 'marker', reason: errorMessage(error) };
   }
-  if (!flushed.ok) return { ok: false, kind: 'marker', reason: flushed.reason };
+  // A busy log is not a failed note: the intent above is durable, so the episode is all-failed
+  // and the next pass emits the event. A caller on an event loop passes 0 and never waits here.
+  if (!flushed.ok && flushed.busy !== true) return { ok: false, kind: 'marker', reason: flushed.reason };
+  const sent = flushed.ok ? flushed : null;
   return {
     ok: true,
     state: 'all-failed',
     marker,
-    ...(flushed.event !== null ? { event: flushed.event } : {}),
-    eventDuplicate: flushed.duplicate,
+    ...(sent !== null && sent.event !== null ? { event: sent.event } : {}),
+    eventDuplicate: sent?.duplicate ?? false,
     dueAt: marker.dueAt ?? null,
     ...(delay.refusal !== undefined ? { policyRefusal: delay.refusal } : {}),
   };
+}
+
+/** What one drain pass did with the facts a busy episode key deferred. */
+export type DeferredNoteDrainReport = {
+  at: string;
+  /** Facts recorded this pass, with the state the recorder answered. */
+  drained: {
+    messageId: string;
+    recipient: CanonicalRecipient;
+    state: 'continued' | 'delivered' | 'duplicate' | 'all-failed';
+  }[];
+  /** Notes a refused write, an unreadable episode or a record that does not vouch for the note
+   *  kept in place; the next pass sees them again. */
+  refused: { path: string; reason: string }[];
+  /** Notes whose key another live holder kept: ordinary contention, left to the next pass. */
+  deferred: { messageId: string; recipient: CanonicalRecipient; path: string }[];
+  /** Files that do not read as a note; never deleted from a guess. */
+  unreadable: string[];
+  scanned: number;
+};
+
+/**
+ * Record the facts a non-blocking `noteTransportSoon` deferred, then remove their notes. Each note is
+ * processed under its episode's key lock with `waitMs: 0`: a key another live holder keeps is
+ * deferred to the next pass, so the drain never waits on a busy message either. With
+ * `lockWaitMs: 0` the note's bus append is taken the same way: a first exhaustion keeps its intent
+ * in the marker for the next pass instead of pausing the drain on a busy event log. The lock makes
+ * the landed note and the note's removal one step against a retry, and the recorder's own dedupe
+ * by `(route, at)` makes a note whose drain landed but whose removal did not record nothing twice.
+ *
+ * A note is unsigned text, so nothing in it is believed: the signed record the note names — the
+ * file beside it in the recipient's own folder — is read through the bus's rule first, and its
+ * signed fields decide which message, seat, session and checkout the fact is about, which record
+ * bytes it carries, who sent it, and when the attempt can have happened. A note the record does
+ * not vouch for is refused and left where it stands: this pass creates nothing and appends
+ * nothing for it. A note this pass does accept takes its sender tag from that record, never from
+ * the note. An honest note always has its record: a send stages the record before it walks any
+ * route, and only a busy episode key defers the fact beside it.
+ */
+export function drainDeferredNotes(
+  ctx: EscalationContext,
+  options: { at?: Date; limit?: number; lockWaitMs?: number } = {},
+): DeferredNoteDrainReport {
+  const at = options.at ?? ctx.now();
+  const limit = options.limit ?? 64;
+  const noteOptions = { dedupe: true, ...(options.lockWaitMs === undefined ? {} : { lockWaitMs: options.lockWaitMs }) };
+  const report: DeferredNoteDrainReport = {
+    at: at.toISOString(),
+    drained: [],
+    refused: [],
+    deferred: [],
+    unreadable: [],
+    scanned: 0,
+  };
+  for (const found of notesUnder(ctx.root)) {
+    if (report.drained.length + report.refused.length + report.deferred.length + report.unreadable.length >= limit) break;
+    report.scanned += 1;
+    const note = found.text === null || found.text === '' ? null : deferredNoteOf(found.text);
+    if (note === null) {
+      report.unreadable.push(found.path);
+      continue;
+    }
+    const { fact } = note;
+    if (fact.recipient.root !== ctx.root) {
+      report.refused.push({ path: found.path, reason: `${found.path}: the note names another root than this pass reads` });
+      continue;
+    }
+    const record = noteRecordOf(ctx, fact, at.getTime());
+    if (!record.ok) {
+      report.refused.push({ path: found.path, reason: `${found.path}: ${record.reason}` });
+      continue;
+    }
+    let step: { kind: 'landed'; state: 'continued' | 'delivered' | 'duplicate' | 'all-failed' } | { kind: 'refused'; reason: string };
+    try {
+      step = withKeyLock(
+        ctx,
+        fact.recipient,
+        fact.messageId,
+        () => {
+          const noted = noteLocked(ctx, fact, record.from, noteOptions);
+          if (!noted.ok) return { kind: 'refused' as const, reason: noted.reason };
+          return { kind: 'landed' as const, state: noted.state };
+        },
+        0,
+      );
+    } catch (error) {
+      if (error instanceof LockBusyError) {
+        report.deferred.push({ messageId: fact.messageId, recipient: fact.recipient, path: found.path });
+        continue;
+      }
+      report.refused.push({ path: found.path, reason: errorMessage(error) });
+      continue;
+    }
+    if (step.kind === 'refused') {
+      report.refused.push({ path: found.path, reason: step.reason });
+      continue;
+    }
+    // The fact stands in the episode now; the note's work is done. A failed removal leaves a
+    // note the next pass replays into the dedupe above, which records nothing new.
+    try {
+      unlinkSync(found.path);
+    } catch {}
+    report.drained.push({ messageId: fact.messageId, recipient: fact.recipient, state: step.state });
+  }
+  return report;
+}
+
+/** Every deferred note under a root's transport tree, sessions and seats sorted so a pass is
+ *  ordered. `text` is null when the file cannot be read at all. */
+function notesUnder(root: string): { path: string; text: string | null }[] {
+  const found: { path: string; text: string | null }[] = [];
+  const base = join(root, '.agents', 'send-drops');
+  for (const session of folderNames(base)) {
+    const sessionDir = join(base, session);
+    for (const seat of folderNames(sessionDir)) {
+      const seatDir = join(sessionDir, seat);
+      for (const name of fileNames(seatDir)) {
+        if (!DEFERRED_NOTE_NAME.test(name)) continue;
+        const path = join(seatDir, name);
+        found.push({ path, text: readNoFollow(path) });
+      }
+    }
+  }
+  return found;
+}
+
+/** A deferred note as this module wrote it: the fact and the sender tag beside it. Anything else
+ *  is not trusted, and the file is left where it stands for a person to read. */
+function deferredNoteOf(text: string): { sender: string; fact: TransportFact } | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== 'object') return null;
+  const raw = parsed as { format?: unknown; sender?: unknown; fact?: unknown };
+  if (raw.format !== 1 || typeof raw.sender !== 'string' || raw.sender === '') return null;
+  if (raw.fact === null || typeof raw.fact !== 'object') return null;
+  const fact = raw.fact as TransportFact;
+  if (fact.recipient === null || typeof fact.recipient !== 'object') return null;
+  if (fact.reason !== undefined && typeof fact.reason !== 'string') return null;
+  if (factProblem(fact) !== null) return null;
+  return { sender: raw.sender, fact };
+}
+
+/** How far past the pass's own clock a note's instant may stand: the send and the pass run in
+ *  different processes, and the note's fact is stamped at the send while the pass reads it a
+ *  heartbeat later, so the two readings may sit a little apart. A wider claim is not a fact this
+ *  checkout recorded. */
+const NOTE_FUTURE_SKEW_MS = 60_000;
+
+/**
+ * What the signed record beside one deferred note vouches for, or why the note is not believed.
+ * The record is the file the send staged before it walked any route — at the note's own message
+ * id in the recipient's drop folder — read through the bus's rule: a regular file this user
+ * owns, reached without following a link, whose signature covers the payload as parsed, and
+ * whose signed id, addressee, session and checkout answer the fact's claim. Not until that holds
+ * is anything taken from it, and what is taken is only what the signature covered: the record's
+ * bytes are hashed and must be the note's digest, the sender is the record's own `from`, and the
+ * note's instant may not stand before the record that answers it nor past the pass that reads
+ * it.
+ */
+function noteRecordOf(
+  ctx: EscalationContext,
+  fact: TransportFact,
+  passAtMs: number,
+): { ok: true; from: string } | { ok: false; reason: string } {
+  const path = recordFile(recordDir(ctx.root, fact.recipient.session, fact.recipient.seat), fact.messageId);
+  const read = readSealedRecord(path);
+  if (!read.ok) return { ok: false, reason: `the record beside the note cannot be read: ${read.reason}` };
+  if (read.sealed === null) return { ok: false, reason: 'the record beside the note is missing' };
+  const key = messageKeyState(ctx.home);
+  if (key.kind === 'missing') return { ok: false, reason: 'the record beside the note cannot be verified: this checkout has no message key' };
+  if (key.kind === 'unreadable') {
+    return { ok: false, reason: `the record beside the note cannot be verified: the message key cannot be read (${key.why})` };
+  }
+  const auth = recordAuthOfSealed(read.sealed, key.key);
+  if (auth.kind !== 'ok') {
+    // A tampered or unsupported envelope is refused on its own ground, exactly as the bus
+    // refuses it before raising anything from a record.
+    return {
+      ok: false,
+      reason: auth.kind === 'unsupported' ? auth.reason : 'the record beside the note is not signed with this checkout\'s message key',
+    };
+  }
+  const record = auth.value.payload;
+  if (record.id !== fact.messageId) return { ok: false, reason: 'the signed record names another id than the note' };
+  if (record.to !== fact.recipient.seat || record.session !== fact.recipient.session) {
+    return { ok: false, reason: 'the signed record is addressed to another seat or session than the note' };
+  }
+  if (record.to_id !== fact.recipient.toId) return { ok: false, reason: 'the signed record names another recipient id than the note' };
+  if (!sameFolder(record.root, ctx.root)) return { ok: false, reason: 'the signed record belongs to another checkout' };
+  // The digest is over the record's bytes as the send staged them; a note that names another
+  // digest names another episode's record, and the episode key would be checked against a value
+  // the file does not carry.
+  const text = readNoFollow(path);
+  if (text === null) return { ok: false, reason: 'the record beside the note could not be read' };
+  if (createHash('sha256').update(text).digest('hex') !== fact.recordDigest) {
+    return { ok: false, reason: 'the note\'s digest is not the digest of the record beside it' };
+  }
+  // The record is staged before any route is walked, so an attempt cannot precede the record it
+  // is about; and a fact cannot have happened after the pass that reads it.
+  const notedAt = Date.parse(fact.at);
+  if (notedAt < Date.parse(record.at)) return { ok: false, reason: 'the note is older than the record it names' };
+  if (notedAt > passAtMs + NOTE_FUTURE_SKEW_MS) return { ok: false, reason: 'the note is dated past the pass that reads it' };
+  return { ok: true, from: record.from };
 }
 
 /**
@@ -561,18 +898,36 @@ function noteLocked(ctx: FallbackContext, fact: TransportFact): FallbackNote {
  * is reported; a later pass under a readable chain schedules it from the original failure time.
  *
  * `lockWaitMs: 0` makes the pass non-blocking: a key another live holder keeps is reported as
- * `deferred` and left to a later pass, so a scheduler tick never waits on a busy message.
+ * `deferred` and left to a later pass, so a scheduler tick never waits on a busy message. The
+ * same budget reaches the pass's bus append, so a busy event log is deferred as well.
  */
 export function escalateDue(
   ctx: EscalationContext,
   options: { at?: Date; lockWaitMs?: number } = {},
 ): EscalationReport {
+  const steps = escalationSteps(ctx, options);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  if (!step.done) throw new Error('the pass did not run to its end');
+  return step.value;
+}
+
+/**
+ * The escalation pass one work item at a time: it yields before each marker, so a caller that
+ * must answer its own heartbeat between items can drive it a slice at a time. `escalateDue`
+ * remains the one-shot form every direct caller uses; the chores child is the sliced one.
+ */
+export function* escalationSteps(
+  ctx: EscalationContext,
+  options: { at?: Date; lockWaitMs?: number } = {},
+): Generator<void, EscalationReport> {
   const at = options.at ?? ctx.now();
   const atIso = at.toISOString();
   const lockWaitMs = options.lockWaitMs ?? 10_000;
   const report: EscalationReport = { escalated: [], refused: [], deferred: [], unreadable: [], scanned: 0 };
 
   for (const found of markersUnder(ctx.root)) {
+    yield;
     if (found.kind === 'unreadable') {
       report.unreadable.push(found.path);
       continue;
@@ -588,7 +943,7 @@ export function escalateDue(
     }
     let step: EscalationStep;
     try {
-      step = withKeyLock(ctx, recipient, messageId, () => escalateOne(ctx, recipient, messageId, at, atIso), lockWaitMs);
+      step = withKeyLock(ctx, recipient, messageId, () => escalateOne(ctx, recipient, messageId, at, atIso, lockWaitMs), lockWaitMs);
     } catch (error) {
       if (error instanceof LockBusyError) {
         // A live holder is working this episode: ordinary contention. Leave it to the next pass,
@@ -599,6 +954,12 @@ export function escalateDue(
       step = { kind: 'refused', reason: errorMessage(error) };
     }
     if (step.kind === 'none') continue;
+    if (step.kind === 'deferred') {
+      // The episode is this pass's, but the bus append met another live holder. Its intent
+      // stands in the marker, so the next tick emits it; other markers keep moving.
+      report.deferred.push({ messageId, recipient });
+      continue;
+    }
     report.scanned += 1;
     if (step.kind === 'unreadable') report.unreadable.push(step.path);
     else if (step.kind === 'refused') report.refused.push({ messageId, recipient, reason: step.reason });
@@ -621,9 +982,408 @@ function settledAt(marker: FallbackMarker, at: Date): boolean {
 type EscalationStep =
   | { kind: 'none' }
   | { kind: 'idle' }
+  /** The pass had work, but the bus append met another live holder; the intent stands for the
+   *  next tick. */
+  | { kind: 'deferred'; reason: string }
   | { kind: 'unreadable'; path: string }
   | { kind: 'refused'; reason: string }
   | { kind: 'escalated'; entry: EscalationEntry };
+
+/** How a finished episode ended: its message arrived, its escalation went out after every live
+ *  route failed, or the walk was never finished and its last fact is past retention. */
+export type FinishedKind = 'delivered' | 'refused' | 'expired';
+
+/**
+ * Classify an episode as finished, or null while it still has work: a pending event intent (the
+ * escalation pass must flush it first), an exhaustion no escalation has been decided for yet.
+ * A `trying` episode is `expired` by kind; whether it is old enough to retire is the retention
+ * word's question, not this one's.
+ */
+export function finishedKind(marker: FallbackMarker): FinishedKind | null {
+  if (marker.outbox !== undefined) return null;
+  if (marker.status === 'delivered') return 'delivered';
+  if (marker.status === 'all-failed') return marker.escalatedAt !== undefined ? 'refused' : null;
+  return 'expired';
+}
+
+/** The retention word in force for a receiver, in seconds, or why it could not be read. */
+export type FallbackRetention = { seconds: number | null; refusal: string | null };
+
+/**
+ * Resolve how long an unfinished episode's marker may stand from the receiver's own signed chain:
+ * the canonical `event-retention-days` in days, through the same reader every event threshold
+ * uses. The team is the receiver's, selected exactly as the escalation delay selects it, so a
+ * cross-root episode without its receiver's file in hand reads no chain and retires nothing
+ * expired. An unreadable chain fails closed: the refusal is reported and the episode stays.
+ */
+export function fallbackRetentionOf(
+  ctx: EscalationContext,
+  recipient: CanonicalRecipient,
+  at: Date,
+): FallbackRetention {
+  const team = ctx.recipientTeam ?? (recipient.root === ctx.root ? ctx.team : null);
+  if (team === null) {
+    return {
+      seconds: null,
+      refusal: `no team file is in hand for the receiver's root ${recipient.root}: the sender's chain is never read for another team`,
+    };
+  }
+  const inForce = eventThresholdsInForce({
+    home: ctx.home,
+    entity: team.entity ?? '',
+    projectId: projectIdOfTeam(ctx.home, team, recipient.root) ?? '',
+    root: recipient.root,
+    team,
+    seat: team.seats.find((seat) => seat.name === recipient.seat) ?? null,
+    agentId: recipient.toId ?? null,
+    now: at,
+    upToLevel: 'team',
+  });
+  if (!inForce.ok) {
+    const said = inForce.refusals.map((refusal) => refusal.message).join('; ');
+    return { seconds: null, refusal: said === '' ? 'the event retention word could not be read' : said };
+  }
+  return { seconds: inForce.thresholds.retention_days * 86_400, refusal: null };
+}
+
+/** One finished episode the store could retire, with the age that decides an expired one. */
+export type RetirementCandidate = {
+  messageId: string;
+  recipient: CanonicalRecipient;
+  kind: FinishedKind;
+  /** Seconds from the marker's last update to the planning instant. */
+  ageSeconds: number;
+  /** Whether a retirement pass at this instant would retire it now. */
+  eligible: boolean;
+  /** An expired but not yet eligible episode's earliest retire instant; null when the retention
+   *  word is unreadable and no instant can be named. */
+  until: string | null;
+};
+
+export type RetirementPlan = {
+  at: string;
+  /** Finished episodes, oldest first. */
+  candidates: RetirementCandidate[];
+  /** Markers a pass found but could not trust; never rewritten. */
+  unreadable: string[];
+  /** Trusted markers the pass read, finished or not. */
+  scanned: number;
+  /** The first receiver chain the plan resolved, when an expired episode needed one. */
+  retention: FallbackRetention | null;
+};
+
+/** Everything a retirement pass did, per root, for a sweep to add to its own report. */
+export type RetirementReport = {
+  at: string;
+  retired: { messageId: string; recipient: CanonicalRecipient; kind: FinishedKind; at: string; archive: string }[];
+  /** Expired episodes inside the retention window, and expired ones whose word is unreadable. */
+  waiting: { messageId: string; recipient: CanonicalRecipient; ageSeconds: number; until: string | null }[];
+  /** Episodes another live holder kept: ordinary contention, left to the next pass. */
+  deferred: { messageId: string; recipient: CanonicalRecipient }[];
+  /** Episodes that were eligible but whose retirement did not complete; the live marker stays. */
+  refused: { messageId: string; recipient: CanonicalRecipient; reason: string }[];
+  unreadable: string[];
+  scanned: number;
+  retention: FallbackRetention | null;
+};
+
+/**
+ * List the store's finished episodes by age without writing anything. Delivered and refused
+ * episodes are eligible at once; an expired one is eligible once its last update is at least the
+ * receiver's signed `event-retention-days` old. The chain is read only when an expired episode is
+ * there to judge, so a store of delivered and escalated episodes costs no policy read.
+ */
+export function planRetirement(ctx: EscalationContext, options: { at?: Date } = {}): RetirementPlan {
+  const at = options.at ?? ctx.now();
+  const plan: RetirementPlan = { at: at.toISOString(), candidates: [], unreadable: [], scanned: 0, retention: null };
+  const words = new Map<string, FallbackRetention>();
+  const ordered: { order: string; candidate: RetirementCandidate }[] = [];
+  for (const found of markersUnder(ctx.root)) {
+    if (found.kind === 'unreadable') {
+      plan.unreadable.push(found.path);
+      continue;
+    }
+    plan.scanned += 1;
+    const kind = finishedKind(found.marker);
+    if (kind === null) continue;
+    const { recipient, messageId } = found.marker;
+    const ageSeconds = Math.max(0, Math.round((at.getTime() - Date.parse(found.marker.updatedAt)) / 1000));
+    let eligible = kind !== 'expired';
+    let until: string | null = null;
+    if (kind === 'expired') {
+      const key = fallbackKeyOf(recipient, '');
+      let word = words.get(key);
+      if (word === undefined) {
+        word = fallbackRetentionOf(ctx, recipient, at);
+        words.set(key, word);
+      }
+      if (plan.retention === null) plan.retention = word;
+      if (word.seconds !== null) {
+        until = new Date(Date.parse(found.marker.updatedAt) + word.seconds * 1000).toISOString();
+        eligible = at.getTime() >= Date.parse(until);
+      }
+      // With an unreadable word, `until` stays null and the episode stays: fail closed.
+    }
+    ordered.push({
+      order: `${found.marker.updatedAt}\u0000${messageId}\u0000${fallbackKeyOf(recipient, messageId)}`,
+      candidate: { messageId, recipient, kind, ageSeconds, eligible, until },
+    });
+  }
+  ordered.sort((a, b) => (a.order < b.order ? -1 : a.order > b.order ? 1 : 0));
+  plan.candidates = ordered.map((entry) => entry.candidate);
+  return plan;
+}
+
+/**
+ * Retire finished episodes: move each eligible marker and its attempt ledger into the store's
+ * archive, then remove the live marker. The publication ledger stays where it is — replay dedup
+ * outlives the episode. Each episode is retired under its own key lock and re-read inside it, so
+ * a fact or a due escalation running beside the pass is neither lost nor archived mid-write: it
+ * lands first and the pass sees the new state, or it waits for the pass. Only the first `limit`
+ * eligible episodes, oldest first, are retired per pass, except that a store carrying more than
+ * `backlogAbove` eligible episodes takes up to `backlogLimit` instead: a store never retired before
+ * carries its whole history, and the steady limit would need hours to clear it. The backlog is
+ * counted among finished episodes only, so a pending or unsettled marker is never a candidate
+ * whatever the limit. A retirement that does not complete leaves the live marker in place and is
+ * reported; the next pass tries again.
+ */
+export function retireFinished(
+  ctx: EscalationContext,
+  options: {
+    at?: Date;
+    lockWaitMs?: number;
+    limit?: number;
+    /** Above this many eligible finished episodes, one pass retires up to `backlogLimit`. */
+    backlogAbove?: number;
+    backlogLimit?: number;
+  } = {},
+): RetirementReport {
+  const steps = retirementSteps(ctx, options);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  if (!step.done) throw new Error('the pass did not run to its end');
+  return step.value;
+}
+
+/**
+ * The retirement pass one candidate at a time: it yields before each, so a caller that must
+ * answer its own heartbeat between candidates can drive it a slice at a time. `retireFinished`
+ * remains the one-shot form.
+ */
+export function* retirementSteps(
+  ctx: EscalationContext,
+  options: {
+    at?: Date;
+    lockWaitMs?: number;
+    limit?: number;
+    /** Above this many eligible finished episodes, one pass retires up to `backlogLimit`. */
+    backlogAbove?: number;
+    backlogLimit?: number;
+  } = {},
+): Generator<void, RetirementReport> {
+  const at = options.at ?? ctx.now();
+  const lockWaitMs = options.lockWaitMs ?? 10_000;
+  const limit = options.limit ?? Number.POSITIVE_INFINITY;
+  const plan = planRetirement(ctx, { at });
+  const backlog = plan.candidates.reduce((count, candidate) => count + (candidate.eligible ? 1 : 0), 0);
+  const passLimit =
+    options.backlogAbove !== undefined && options.backlogLimit !== undefined && backlog > options.backlogAbove
+      ? Math.max(limit, options.backlogLimit)
+      : limit;
+  const report: RetirementReport = {
+    at: at.toISOString(),
+    retired: [],
+    waiting: [],
+    deferred: [],
+    refused: [],
+    unreadable: plan.unreadable,
+    scanned: plan.scanned,
+    retention: plan.retention,
+  };
+  for (const candidate of plan.candidates) {
+    yield;
+    if (report.retired.length >= passLimit) break;
+    if (!candidate.eligible) {
+      report.waiting.push({
+        messageId: candidate.messageId,
+        recipient: candidate.recipient,
+        ageSeconds: candidate.ageSeconds,
+        until: candidate.until,
+      });
+      continue;
+    }
+    let step: RetireStep;
+    try {
+      step = withKeyLock(
+        ctx,
+        candidate.recipient,
+        candidate.messageId,
+        () => retireOne(ctx, candidate.recipient, candidate.messageId, at),
+        lockWaitMs,
+      );
+    } catch (error) {
+      if (error instanceof LockBusyError) {
+        report.deferred.push({ messageId: candidate.messageId, recipient: candidate.recipient });
+        continue;
+      }
+      step = { kind: 'refused', reason: errorMessage(error) };
+    }
+    if (step.kind === 'retired') {
+      report.retired.push(step.entry);
+      // The key lock's folder is what the next pass would otherwise walk forever. A folder a
+      // live holder took after the pass released the key stays; the reclaim pass judges it.
+      try {
+        rmdirSync(join(storeDirOf(ctx, candidate.recipient), 'locks', `fallback-${episodeHash(candidate.recipient, candidate.messageId)}`));
+      } catch {}
+    } else if (step.kind === 'refused') {
+      report.refused.push({ messageId: candidate.messageId, recipient: candidate.recipient, reason: step.reason });
+    } else if (step.kind === 'waiting') {
+      report.waiting.push(step.waiting);
+    }
+  }
+  return report;
+}
+
+type RetireStep =
+  | { kind: 'gone' }
+  | { kind: 'retired'; entry: RetirementReport['retired'][number] }
+  | { kind: 'waiting'; waiting: RetirementReport['waiting'][number] }
+  | { kind: 'refused'; reason: string };
+
+function retireOne(
+  ctx: EscalationContext,
+  recipient: CanonicalRecipient,
+  messageId: string,
+  at: Date,
+): RetireStep {
+  const path = markerPathOf(recipient, messageId);
+  const read = markerAt(path);
+  if (read.kind === 'unreadable') return { kind: 'refused', reason: read.reason };
+  if (read.kind === 'none') return { kind: 'gone' };
+  const marker = read.marker;
+  if (!sameRecipient(marker.recipient, recipient) || marker.messageId !== messageId) {
+    return { kind: 'refused', reason: `${path}: the marker names another episode` };
+  }
+  const kind = finishedKind(marker);
+  if (kind === null) return { kind: 'gone' };
+  if (kind === 'expired') {
+    // Re-checked under the lock against the marker as it stands now, not the scan's copy.
+    const word = fallbackRetentionOf(ctx, recipient, at);
+    const ageSeconds = Math.max(0, Math.round((at.getTime() - Date.parse(marker.updatedAt)) / 1000));
+    if (word.seconds === null) {
+      return { kind: 'waiting', waiting: { messageId, recipient, ageSeconds, until: null } };
+    }
+    const until = new Date(Date.parse(marker.updatedAt) + word.seconds * 1000).toISOString();
+    if (at.getTime() < Date.parse(until)) {
+      return { kind: 'waiting', waiting: { messageId, recipient, ageSeconds, until } };
+    }
+  }
+  const storeDir = storeDirOf(ctx, recipient);
+  // The archive tree is checked before the first write, not left to a recursive mkdir: each
+  // folder below the store must be a real directory of this user's, and a link anywhere in the
+  // ladder refuses the whole retirement with the live marker untouched.
+  const folderProblem = ensureFoldersBelow(storeDir, [
+    FALLBACK_ARCHIVE_DIR,
+    join(FALLBACK_ARCHIVE_DIR, 'markers'),
+    join(FALLBACK_ARCHIVE_DIR, 'attempts'),
+  ]);
+  if (folderProblem !== null) return { kind: 'refused', reason: folderProblem };
+  const archive = episodeArchiveMarkerPath(storeDir, recipient, messageId);
+  try {
+    dropMessage(dirname(archive), basename(archive), `${JSON.stringify(marker, null, 2)}\n`);
+  } catch (error) {
+    return { kind: 'refused', reason: `${archive}: the marker was not archived: ${errorMessage(error)}` };
+  }
+  const moved = moveAttemptLedger(storeDir, recipient, messageId);
+  if (moved !== null) return { kind: 'refused', reason: moved };
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      return { kind: 'refused', reason: `${path}: the retired marker was not removed: ${errorMessage(error)}` };
+    }
+  }
+  return { kind: 'retired', entry: { messageId, recipient, kind, at: at.toISOString(), archive } };
+}
+
+/** Move one episode's attempt ledger beside its archived marker, merging when an earlier
+ *  retirement already archived one. The merge is idempotent: a source whose exact text already
+ *  ends the archive was appended by a pass that then failed to remove it, so this pass only
+ *  removes the source (the merge would add the same bytes again). Any other archive is rewritten
+ *  atomically through the store's tmp-and-rename write. A ledger that cannot be read or written
+ *  names why and leaves the episode to the next pass; the live marker is removed only after. */
+function moveAttemptLedger(storeDir: string, recipient: CanonicalRecipient, messageId: string): string | null {
+  const source = join(storeDir, attemptLedgerFileName(recipient, messageId));
+  const text = readNoFollow(source);
+  if (text === null) return `${source}: the attempt ledger could not be read; the episode stays`;
+  if (text === '') return null;
+  const dest = episodeArchiveAttemptsPath(storeDir, recipient, messageId);
+  try {
+    const existing = readNoFollow(dest);
+    if (existing === null) return `${dest}: the archived attempt ledger could not be read; the episode stays`;
+    if (existing === '') {
+      renameSync(source, dest);
+      return null;
+    }
+    if (!existing.endsWith(text)) {
+      dropMessage(dirname(dest), basename(dest), existing + text);
+    }
+    unlinkSync(source);
+    return null;
+  } catch (error) {
+    return `${source}: the attempt ledger was not archived: ${errorMessage(error)}`;
+  }
+}
+
+const FALLBACK_LOCK_DIR = /^fallback-[0-9a-f]{16}$/;
+
+/**
+ * Reclaim the key-lock folders of `ctx.root`'s store whose owner is gone: an empty folder past
+ * the grace (`youngMs`, 60 s by default, for an acquirer between its `mkdir` and its `open`), a
+ * folder whose lock names a dead holder, and a lock file too old to be a writer still starting
+ * up. A live holder's folder, a younger lock and a folder whose name is not an episode's are left
+ * alone. A pass that loses an empty folder under it recreates it (`withLock`), so a reclaim never
+ * breaks a sweep in flight.
+ */
+export function reclaimFallbackLocks(
+  ctx: EscalationContext,
+  options: { limit?: number; youngMs?: number } = {},
+): { reclaimed: number; kept: number; scanned: number } {
+  const steps = reclaimSteps(ctx, options);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  if (!step.done) throw new Error('the pass did not run to its end');
+  return step.value;
+}
+
+/**
+ * The lock-reclaim pass one lock folder at a time: it yields before each, so a caller that must
+ * answer its own heartbeat between folders can drive it a slice at a time.
+ */
+export function* reclaimSteps(
+  ctx: EscalationContext,
+  options: { limit?: number; youngMs?: number } = {},
+): Generator<void, { reclaimed: number; kept: number; scanned: number }> {
+  const locksDir = join(dirname(historyPath(ctx.team.project, ctx.root, ctx.home)), 'locks');
+  const limit = options.limit ?? 64;
+  const names = folderNames(locksDir).filter((name) => FALLBACK_LOCK_DIR.test(name));
+  let reclaimed = 0;
+  let kept = 0;
+  let scanned = 0;
+  for (const name of names.slice(0, limit)) {
+    yield;
+    scanned += 1;
+    const result = reclaimLockDir(join(locksDir, name), { youngMs: options.youngMs });
+    if (result === 'removed') reclaimed += 1;
+    else if (result === 'kept') kept += 1;
+  }
+  return { reclaimed, kept, scanned };
+}
+
+/** The store of episodes whose record lives under `recipient.root`. */
+function storeDirOf(ctx: EscalationContext, recipient: CanonicalRecipient): string {
+  return dirname(historyPath(ctx.team.project, recipient.root, ctx.home));
+}
 
 function escalateOne(
   ctx: EscalationContext,
@@ -631,6 +1391,7 @@ function escalateOne(
   messageId: string,
   at: Date,
   atIso: string,
+  lockWaitMs: number,
 ): EscalationStep {
   const path = markerPathOf(recipient, messageId);
   const read = markerAt(path);
@@ -649,8 +1410,11 @@ function escalateOne(
     const cancelled = writeMarker(path, marker);
     if (!cancelled.ok) return { kind: 'refused', reason: cancelled.reason };
   }
-  const drained = flushOutbox(ctx, marker, path);
-  if (!drained.ok) return { kind: 'refused', reason: drained.reason };
+  const drained = flushOutbox(ctx, marker, path, { lockWaitMs });
+  if (!drained.ok) {
+    if (drained.busy === true) return { kind: 'deferred', reason: drained.reason };
+    return { kind: 'refused', reason: drained.reason };
+  }
   if (drained.kind === 'escalated' && drained.event !== null) {
     return {
       kind: 'escalated',
@@ -702,8 +1466,11 @@ function escalateOne(
   const intent = writeMarker(path, marker);
   if (!intent.ok) return { kind: 'refused', reason: intent.reason };
 
-  const flushed = flushOutbox(ctx, marker, path);
-  if (!flushed.ok) return { kind: 'refused', reason: flushed.reason };
+  const flushed = flushOutbox(ctx, marker, path, { lockWaitMs });
+  if (!flushed.ok) {
+    if (flushed.busy === true) return { kind: 'deferred', reason: flushed.reason };
+    return { kind: 'refused', reason: flushed.reason };
+  }
   if (flushed.event === null) return { kind: 'refused', reason: `${path}: the escalation intent emitted no event` };
   return {
     kind: 'escalated',
@@ -713,7 +1480,9 @@ function escalateOne(
 
 type FlushResult =
   | { ok: true; kind: EventIntent['kind'] | null; event: SignedEventRecord | null; duplicate: boolean; mailbox: string | null }
-  | { ok: false; reason: string };
+  /** `busy` marks an append a live event-lock holder kept: the intent is still in the marker, so
+   *  a caller that may not wait leaves it for the next pass rather than failing the note. */
+  | { ok: false; reason: string; busy?: true };
 
 /**
  * Emit the marker's pending intent, then clear it. Called under the episode's key lock. A
@@ -723,8 +1492,16 @@ type FlushResult =
  * history an `appendEvent` duplicate; the mailbox is `once`, so a retry after a mailbox failure
  * finds the first record. The intent stays in the marker until both writes return, so a crash in
  * this function is retried next pass.
+ *
+ * `lockWaitMs` reaches the bus append: a caller on an event loop passes 0, and a log another live
+ * holder keeps answers `busy` with the intent still in the marker, for the next pass to emit.
  */
-function flushOutbox(ctx: EscalationContext, marker: FallbackMarker, path: string): FlushResult {
+function flushOutbox(
+  ctx: EscalationContext,
+  marker: FallbackMarker,
+  path: string,
+  options: { lockWaitMs?: number } = {},
+): FlushResult {
   const intent = marker.outbox;
   if (intent === undefined) return { ok: true, kind: null, event: null, duplicate: false, mailbox: null };
 
@@ -773,8 +1550,16 @@ function flushOutbox(ctx: EscalationContext, marker: FallbackMarker, path: strin
     appendedRecord = published.record;
     duplicate = true;
   } else {
-    const result = appendEvent(ctx.team.project, marker.recipient.root, ctx.home, input);
-    if (!result.ok) return { ok: false, reason: result.reason };
+    const result = appendEvent(
+      ctx.team.project,
+      marker.recipient.root,
+      ctx.home,
+      input,
+      options.lockWaitMs === undefined ? {} : { lockWaitMs: options.lockWaitMs },
+    );
+    if (!result.ok) {
+      return { ok: false, reason: result.reason, ...(result.busy === true ? { busy: true } : {}) };
+    }
     appendedRecord = result.record;
     duplicate = result.duplicate;
     const recorded = recordPublication(ctx, marker, intent, result.record);
@@ -899,7 +1684,7 @@ function withKeyLock<T>(
   work: () => T,
   waitMs = 10_000,
 ): T {
-  const storeDir = dirname(historyPath(ctx.team.project, recipient.root, ctx.home));
+  const storeDir = storeDirOf(ctx, recipient);
   const ladder = ensureStoreLadder(storeDir, ctx.home);
   if (ladder !== null) throw new Error(ladder);
   return withLock(join(storeDir, 'locks', `fallback-${episodeHash(recipient, messageId)}`), work, { waitMs });
@@ -938,11 +1723,54 @@ function writeMarker(path: string, marker: FallbackMarker): { ok: true } | { ok:
   }
 }
 
+/**
+ * A marker file's stamp and the read it produced. The daemon's sweep walks every hosted root on
+ * each heartbeat, and most of what it finds is settled: an unchanged file is worth one stat, not a
+ * read and a parse. The stamp is the file's own modification time and size, so even an in-place
+ * write of the same length is caught. The cached copy only pre-filters — an episode that looks due
+ * is re-read under its key lock inside `escalateOne` — so a stale stamp can never mint an event;
+ * losing the stamp to a clock too coarse to move would cost at most that one re-read.
+ */
+type CachedMarkerRead = { mtimeMs: number; size: number; read: MarkerRead };
+
+const markerReads = { read: 0, reused: 0 };
+const markerCache = new Map<string, CachedMarkerRead>();
+
+/** What this process's passes have read afresh, answered from a stamp, and how many stamps they
+ *  hold now. A per-process diagnostic: the cache is memory, never a file. */
+export function markerCacheStats(): { read: number; reused: number; cached: number } {
+  return { read: markerReads.read, reused: markerReads.reused, cached: markerCache.size };
+}
+
+function markerAtCached(path: string): MarkerRead {
+  let stamp: { mtimeMs: number; size: number } | null = null;
+  try {
+    const stat = lstatSync(path);
+    // A symlink is never cached: `readNoFollow` refuses it, and a fresh read keeps saying so.
+    if (stat.isFile()) stamp = { mtimeMs: stat.mtimeMs, size: stat.size };
+  } catch {
+    stamp = null;
+  }
+  if (stamp !== null) {
+    const cached = markerCache.get(path);
+    if (cached !== undefined && cached.mtimeMs === stamp.mtimeMs && cached.size === stamp.size) {
+      markerReads.reused += 1;
+      return cached.read;
+    }
+  }
+  const read = markerAt(path);
+  markerReads.read += 1;
+  if (stamp === null) markerCache.delete(path);
+  else markerCache.set(path, { ...stamp, read });
+  return read;
+}
+
 /** All markers under a root's transport tree, sessions and seats sorted so a pass is ordered. A
  *  marker that cannot be trusted is returned as its path, never rewritten from a guess. */
 function markersUnder(root: string): ({ kind: 'ok'; path: string; marker: FallbackMarker } | { kind: 'unreadable'; path: string })[] {
   const found: ({ kind: 'ok'; path: string; marker: FallbackMarker } | { kind: 'unreadable'; path: string })[] = [];
   const base = join(root, '.agents', 'send-drops');
+  const seen = new Set<string>();
   for (const session of folderNames(base)) {
     const sessionDir = join(base, session);
     for (const seat of folderNames(sessionDir)) {
@@ -950,11 +1778,18 @@ function markersUnder(root: string): ({ kind: 'ok'; path: string; marker: Fallba
       for (const name of fileNames(seatDir)) {
         if (!name.endsWith('.fallback.json')) continue;
         const path = join(seatDir, name);
-        const read = markerAt(path);
+        seen.add(path);
+        const read = markerAtCached(path);
         if (read.kind === 'ok') found.push({ kind: 'ok', path, marker: read.marker });
         else if (read.kind === 'unreadable') found.push({ kind: 'unreadable', path });
       }
     }
+  }
+  // A marker that vanished from this root leaves the cache with it, so a long-lived daemon holds
+  // stamps for the tree it just walked and nothing older.
+  const prefix = `${base}${sep}`;
+  for (const path of markerCache.keys()) {
+    if (path.startsWith(prefix) && !seen.has(path)) markerCache.delete(path);
   }
   return found;
 }

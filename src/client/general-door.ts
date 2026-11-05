@@ -66,12 +66,12 @@ function take(argv: string[], name: string): { value: string | undefined; presen
  * test/general-door-narrow.test.ts holds this table to contract/cli.json.
  */
 export const VALUED: Readonly<Record<string, readonly string[]>> = {
-  ack: [],
+  ack: ['older-than', 'seat'],
   add: ['approval', 'client', 'effort', 'file', 'like', 'model', 'reason', 'session', 'team', 'until', 'worktree'],
   agents: [],
   answer: ['file', 'session'],
   approvals: ['approval', 'reason'],
-  archive: ['file', 'out', 'session'],
+  archive: ['file', 'older-than', 'out', 'seat', 'session'],
   'ask-show': ['ask', 'marker'],
   batch: ['approval', 'do'],
   brief: ['file', 'seat', 'session'],
@@ -81,12 +81,13 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   client: ['approval', 'days', 'entities', 'ops', 'out', 'public-key', 'reason', 'to', 'via'],
   commits: ['file', 'since'],
   config: ['approval', 'reason'],
-  daemon: ['root', 'route', 'started-by'],
+  daemon: ['inherited', 'root', 'route', 'started-by'],
   delegate: ['commands'],
   'development-mode': ['approval', 'reason'],
   doctor: ['file', 'session'],
   down: ['approval', 'client', 'file', 'reason', 'session', 'team'],
   drops: ['epoch', 'seat', 'session'],
+  fallback: [],
   feed: ['audit', 'briefs', 'limit', 'seat'],
   forget: ['approval', 'reason'],
   grant: ['answer', 'approve-as-owner-seat', 'approve', 'assertion', 'at', 'bundle', 'capabilities', 'client', 'code', 'credential-id', 'deny', 'entity', 'execute', 'expires', 'from', 'grant-entity', 'grant-project', 'grant-team', 'name', 'public-key', 'revoke-approval', 'rp-id', 'scope', 'seat', 'signer-public-key', 'signer', 'team', 'to', 'type', 'via'],
@@ -100,6 +101,7 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   messages: ['ack', 'client', 'limit', 'request-id', 'since'],
   migrate: ['approval', 'reason'],
   next: [],
+  order: ['file', 'session'],
   'owner-seat': ['days', 'entity', 'grant-emission', 'owner-signers', 'policy-entity', 'port', 'reason', 'signer', 'team'],
   pause: ['client', 'reason', 'seat', 'team'],
   peek: ['lines'],
@@ -129,12 +131,14 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   status: ['client', 'file', 'project', 'session', 'team'],
   swap: ['file', 'to'],
   tempo: [],
+  trace: [],
   unlock: [],
   up: ['approval', 'client', 'file', 'reason', 'session', 'team'],
   usage: [],
+  waits: [],
   watch: ['file', 'session'],
   workflow: ['evidence', 'script'],
-  worktree: ['branch', 'file', 'kind', 'seat', 'session'],
+  worktree: ['branch', 'file', 'kind', 'remote-session', 'seat', 'session'],
 };
 
 /** What one command line carries once it is read the way its own parser reads it. */

@@ -56,7 +56,10 @@ test('an overlapping send leaves the first drop whole and writes no second body'
   expect(bodies[0]).not.toContain('BETA-TWO');
   expect(bodies[1]).not.toContain('ALPHA-ONE');
   expect(second).toBe(0);
-  expect(secondIo.out).toMatch(/native: sent \(unconfirmed\) \(drop, \d+ ms\); queued; native reads it at its next turn \(pull-only\)\n$/);
+  // The seat is a Codex seat, whose profile declares `typed_wake: screen`: the typed leg is
+  // walked, this fake host binds no pane writer, and that missing binding is the wake's refusal.
+  // The drop leg that ends the walk wakes nothing, so the ending is `queued, not woken`.
+  expect(secondIo.out).toMatch(/native: queued, not woken \(drop, \d+ ms\); queued; the typed wake failed \(the send host binds no pane writer; nothing was typed\); native reads it at its next turn, and nothing here gives it one \(pull-only\)(?: \(id [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\))?\n$/);
   release();
   expect(await first).toBe(0);
   const afterRecords = readdirSync(drops).filter((name) => !name.includes('.'));

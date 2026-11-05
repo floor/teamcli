@@ -103,7 +103,9 @@ function passes(w: World) {
 }
 function drop(w: World, id: string, from = 'lead') {
   const path = join(w.drops, id);
-  fs.writeFileSync(path, JSON.stringify({ from, ts: NOW.toISOString(), thread: id, body: 'synthetic ' + id }));
+  const signed = signRecord({ kind: 'message', id, to: 'lead', to_id: null, root: w.root, session: SESSION,
+    at: NOW.toISOString(), body: 'synthetic ' + id, from, from_id: null, rule: 'synthetic scene', thread: id }, w.home);
+  fs.writeFileSync(path, JSON.stringify(signed));
   return path;
 }
 function signedMessage(w: World, id: string) {
@@ -117,12 +119,13 @@ function events(w: World): SignedEventRecord[] {
   return read.ok ? read.events : [];
 }
 function recordReads(w: World) {
-  const original = fs.readFileSync;
+  // A record's bytes are read through one no-follow open; the path it names is what this records.
+  const original = fs.openSync;
   const paths: string[] = [];
-  const spy = spyOn(fs, 'readFileSync').mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
+  const spy = spyOn(fs, 'openSync').mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
     if (typeof args[0] === 'string' && (args[0].startsWith(w.drops + '/') || args[0].startsWith(w.signed + '/'))) paths.push(args[0]);
     return Reflect.apply(original, fs, args);
-  }) as typeof fs.readFileSync);
+  }) as typeof fs.openSync);
   return { paths, restore: () => spy.mockRestore() };
 }
 async function until(predicate: () => boolean, milliseconds = 1000) {
@@ -144,16 +147,28 @@ async function machine(w: World, extra: Partial<Parameters<typeof startMachineDa
 test('the persisted heartbeat advances during the initial reconciliation of 2200 records', async () => {
   const w = world();
   for (let n = 0; n < 2200; n += 1) drop(w, 'bulk-' + String(n).padStart(4, '0'));
-  let startFinished = false;
+  // The start returns once the socket is bound, and the initial pass runs behind the serving
+  // bus; every beat it runs under refreshes the record. Count the beats over the pass itself:
+  // the window opens on the row's live pass and ends when the row reports it settled. The
+  // pass must actually be observed running, so a start that swallowed the scan wholesale
+  // cannot pass this scene.
+  let passSeen = false;
+  let passSettled = false;
   const beats = new Set<string>();
   const observer = setInterval(() => {
-    if (startFinished) return;
+    if (passSettled) return;
     const state = readDaemonState(w.home);
-    if (state.kind === 'ok' && state.state.roots.some(root => root.root === w.root)) beats.add(state.state.heartbeatAt);
+    if (state.kind !== 'ok') return;
+    const entry = state.state.roots.find(root => root.root === w.root);
+    if (entry === undefined) return;
+    beats.add(state.state.heartbeatAt);
+    if (entry.firstPass?.running === true) passSeen = true;
+    if (entry.firstPass?.running === false) passSettled = true;
   }, 2);
   try {
     await machine(w, { sendStart: async () => ({ kind: 'already-running', socketPath: join(w.base, 'unused-send.sock'), pid: process.pid }) });
-    startFinished = true;
+    await until(() => passSettled, 10_000);
+    expect(passSeen).toBe(true);
     expect(beats.size).toBeGreaterThanOrEqual(2);
     expect(events(w).filter(event => event.payload.kind === 'message.arrived' && event.payload.record_id.startsWith('bulk-'))).toHaveLength(2200);
     expect(w.paneEffects()).toBe(0);
@@ -324,6 +339,7 @@ function health(w: World, endpoint: 'send' | 'bus', failedAt: string | undefined
     daemon: 'teamcli', socket: join(w.home, 'unused.sock'), state: 'running', running: true,
     pid: 123456789, uid: 12345, since: new Date(NOW.getTime() - 600_000).toISOString(), startedBy: 'service-manager',
     version: 'fixture', gitHead: null, heartbeatAt: NOW.toISOString(), features: { broker: 'absent' },
+    heartbeatSeconds: null,
     roots: [root], stuck: [], probe: { state: 'answered', at: NOW.toISOString() }, why: null,
   };
 }

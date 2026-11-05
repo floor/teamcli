@@ -701,6 +701,13 @@
       "provenance": "capture"
     },
     {
+      "file": "codex/0.161.0/interrupted-idle.txt",
+      "cli": "codex",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "constructed"
+    },
+    {
       "file": "codex/0.161.0/near-context-used-follower.txt",
       "cli": "codex",
       "classify": "unknown",
@@ -1492,6 +1499,13 @@
       "provenance": "capture"
     },
     {
+      "file": "grok/1.0.70/idle.txt",
+      "cli": "grok",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
       "file": "antigravity/1.3.5/exit.txt",
       "cli": "antigravity",
       "classify": "unknown",
@@ -1688,6 +1702,34 @@
       "provenance": "capture"
     },
     {
+      "file": "antigravity/1.4.12/exit-completion-unsent.txt",
+      "cli": "antigravity",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.12/idle.txt",
+      "cli": "antigravity",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.12/idle-compacted.txt",
+      "cli": "antigravity",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.12/working-synthetic.txt",
+      "cli": "antigravity",
+      "classify": "working",
+      "composer": "idle",
+      "provenance": "constructed"
+    },
+    {
       "file": "cursor/2026.10.14/exit.txt",
       "cli": "cursor",
       "classify": "unknown",
@@ -1789,6 +1831,27 @@
       "file": "cursor/2026.10.19/idle.txt",
       "cli": "cursor",
       "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.22/idle.txt",
+      "cli": "cursor",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.22/unsent.txt",
+      "cli": "cursor",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.22/working.txt",
+      "cli": "cursor",
+      "classify": "working",
       "composer": "idle",
       "provenance": "capture"
     },
@@ -2038,6 +2101,48 @@
       "provenance": "constructed"
     },
     {
+      "file": "muse/1.4.11/goal-hint-dim.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.11/goal-hint-synthetic.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.11/loop-hint-dim.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.11/slash-draft-synthetic.txt",
+      "cli": "muse",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.14/idle.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.14/unsent.txt",
+      "cli": "muse",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
       "file": "claude-code/2.1.302/exit.txt",
       "cli": "claude-code",
       "classify": "unknown",
@@ -2148,6 +2253,125 @@
       "classify": "unsent",
       "composer": "unsent",
       "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.22/idle-after-edit.txt",
+      "cli": "cursor",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "exit-typing/muse-idle-ansi.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "exit-typing/muse-unsent-ansi.txt",
+      "cli": "muse",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "exit-typing/muse-unsent-newline-ansi.txt",
+      "cli": "muse",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse-exit-independent/muse-idle-ansi.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse-exit-independent/muse-unsent-ansi.txt",
+      "cli": "muse",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse-exit-independent/muse-unsent-newline-ansi.txt",
+      "cli": "muse",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/esc-hint.txt",
+      "cli": "codex",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "constructed"
+    },
+    {
+      "file": "codex/0.161.0/scroll-back-marker.txt",
+      "cli": "codex",
+      "classify": "scroll back",
+      "composer": "unknown",
+      "provenance": "constructed"
+    },
+    {
+      "file": "codex/0.161.0/scroll-back.txt",
+      "cli": "codex",
+      "classify": "scroll back",
+      "composer": "unknown",
+      "provenance": "constructed"
+    },
+    {
+      "file": "codex/0.161.0/warning-row.txt",
+      "cli": "codex",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "constructed"
+    },
+    {
+      "file": "cursor/2026.10.22/drawing-settled.txt",
+      "cli": "cursor",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "constructed"
+    },
+    {
+      "file": "cursor/2026.10.22/drawing.txt",
+      "cli": "cursor",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.11/prose-hint-color.txt",
+      "cli": "muse",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.11/prose-hint-dim.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.11/prose-hint-plain.txt",
+      "cli": "muse",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.11/tasks-hint-dim.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "constructed"
     }
   ],
   "yaml": [

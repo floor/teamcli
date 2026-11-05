@@ -50,6 +50,7 @@ const RULE = {
   briefs: 'an orchestrator or operator to a seat of its own team',
   operators: 'an operator to another operator of its own team',
   assistant: "an assistant seat to its entity's coordinator",
+  mainOrchestrator: "the entity's main orchestrator to any seat of the entity's teams",
   seat: "a seat to its own team's orchestrator",
   grant: 'an owner-signed grant naming send',
   declaredSeat: 'a seat to a declared seat of its own team',
@@ -263,7 +264,8 @@ describe('the same-team role matrix', () => {
     for (const caller of grid) {
       const sameTeam = grid.map((target) => admitSend(caller.side, target.side, teams));
       expect({ role: caller.id, admitted: sameTeam.some((verdict) => verdict.ok) }).toEqual({ role: caller.id, admitted: true });
-      const crossing = admitSend(caller.side, cliWriter, teams);
+      // Another entity's seat: refused for every role, the main orchestrator included.
+      const crossing = admitSend(caller.side, radioWriter, teams);
       expect({ role: caller.id, refused: crossing.ok }).toEqual({ role: caller.id, refused: false });
     }
   });
@@ -374,11 +376,12 @@ describe('team relations: what crosses an edge', () => {
     { id: 'other-entity-writer', side: radioWriter },
     { id: 'unregistered', side: stray },
   ];
-  // In the cross grid one crossing pair is admitted: the lead pair of one entity. Every other
-  // role pair crossing a team edge is refused, same entity or not. The documented assistant
-  // reach is the one further exception, and it needs its own edge fixture below.
+  // In the cross grid two crossing pairs are admitted: the lead pair of one entity, and the
+  // entity's main orchestrator to a worker seat of another of its teams. Every other role pair
+  // crossing a team edge is refused, same entity or not. The documented assistant reach is the
+  // one further exception, and it needs its own edge fixture below.
   const admittedCrossing: Record<string, Partial<Record<string, string>>> = {
-    lead: { 'entity-lead': RULE.leads },
+    lead: { 'entity-lead': RULE.leads, 'entity-writer': RULE.mainOrchestrator },
   };
 
   test('a role crosses only as a lead of the entity, and only to the entity\'s lead', () => {
@@ -506,10 +509,11 @@ describe('the three refused role cases of 2026-10-18 and 2026-10-19', () => {
       },
     };
     expect(admitSend(floorLead, materialCoordinator, stale, undefined, { projects: {} })).toEqual({ ok: true, rule: RULE.leads });
-    // The renamed seat is not the lead place yet, so the pair is refused at the lead test.
+    // The renamed seat is not the lead place yet, so the lead test refuses it; the entity's main
+    // orchestrator reaches it as any seat of the entity's teams (OD-20261103-02).
     expect(admitSend(floorLead, materialLead, stale, undefined, { projects: {} })).toEqual({
-      ok: false,
-      why: refusalWhy('orchestrator@floor', 'orchestrator@material', { projects: {} }),
+      ok: true,
+      rule: RULE.mainOrchestrator,
     });
 
     // The file's mark on the renamed seat and the shared entity: the lead pair both ways.

@@ -1,9 +1,13 @@
 // How a team works, resolved from the signed policy chain (entity -> project -> team) with the
 // team file and the seat on top: where a seat works (`workspace-mode`), how changes land
-// (`landing-mode`), where memory lives (`vault-root`), and whether the entity has its own
-// orchestrator (`entity-orchestrator`). These are advised settings: they shape the work and the
-// rules a seat reads, they never lift a gate or grant a power. A chain that cannot be read or
-// verified gives the release defaults, which are today's behaviour.
+// (`landing-mode`), where memory lives (`vault-root`), whether the entity has its own
+// orchestrator (`entity-orchestrator`), and the lead rules the owner decided on 2026-11-03
+// (OD-20261103-03): the main orchestrator's relay of the owner's word
+// (`entity.main-orchestrator.relays-owner`), pane actions and self-service for leads
+// (`leads.pane-actions`, `leads.self-service`), and the owner's reserved scope
+// (`owner.reserved-scope`). These are advised settings: they shape the work and the rules a
+// seat reads, they never lift a gate or grant a power. A chain that cannot be read or verified
+// gives the release defaults, which are today's behaviour.
 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -11,10 +15,11 @@ import type { Mode, TeamFile } from '../file/types.ts';
 import { parseYaml, type YamlNode } from '../yaml.ts';
 import { resolvePolicyChain, type PolicyChainResult, type ResolvePolicyOptions } from './resolve.ts';
 import type { PolicyChainSources } from './resolve.ts';
-import type { PolicyLevel } from './types.ts';
+import { OWNER_RESERVED_SCOPE_DEFAULT, type PolicyLevel } from './types.ts';
 
 export type LandingMode = 'pr-per-change' | 'batch' | 'direct';
 export type EntityOrchestrator = 'auto' | 'dedicated' | 'off';
+export type OnOff = 'on' | 'off';
 export type SettingFrom = PolicyLevel | 'default' | 'team-file' | 'seat';
 
 export type WorkSettings = {
@@ -22,6 +27,10 @@ export type WorkSettings = {
   landingMode: { value: LandingMode; from: SettingFrom };
   vaultRoot: { value: string | null; from: SettingFrom };
   entityOrchestrator: { value: EntityOrchestrator; from: SettingFrom };
+  relaysOwner: { value: OnOff; from: SettingFrom };
+  paneActions: { value: OnOff; from: SettingFrom };
+  leadSelfService: { value: OnOff; from: SettingFrom };
+  ownerReservedScope: { value: readonly string[]; from: SettingFrom };
   /** Why the chain could not be used, when it could not: the values are then the defaults. */
   unreadable?: string;
 };
@@ -61,6 +70,10 @@ export function resolveWorkSettings(
     landingMode: effective<LandingMode>(chain, 'landing-mode', 'batch'),
     vaultRoot: vault.value === '' ? { value: null, from: vault.from } : { value: expandVaultRoot(vault.value, options.home), from: vault.from },
     entityOrchestrator: effective<EntityOrchestrator>(chain, 'entity-orchestrator', 'auto'),
+    relaysOwner: effective<OnOff>(chain, 'entity.main-orchestrator.relays-owner', 'off'),
+    paneActions: effective<OnOff>(chain, 'leads.pane-actions', 'on'),
+    leadSelfService: effective<OnOff>(chain, 'leads.self-service', 'on'),
+    ownerReservedScope: effective<readonly string[]>(chain, 'owner.reserved-scope', OWNER_RESERVED_SCOPE_DEFAULT),
     ...(chain.ok ? {} : { unreadable: chain.refusals.map((r) => r.message).join('; ') }),
   };
 }
@@ -93,6 +106,43 @@ export function landingRule(mode: LandingMode): string {
 /** The rule line a seat reads for memory when a vault root is set. */
 export function vaultRule(vaultRoot: string, project: string): string {
   return `Memory: keep notes and memory in the docs vault at ${memoryFolder(vaultRoot, project)}, not in your CLI's own session memory.`;
+}
+
+/** What the rules line says the owner's machine covers, so "the machine" is never read as any
+ *  act on it (OD-20261103-03(4); ruling B4). */
+const MACHINE_SCOPE = "the owner's machine";
+const MACHINE_GLOSS = 'OS and system settings, accounts and logins, keychain, hardware';
+
+/** Which lines a seat's rules carry: `lead` for a lead seat, `entity` when the team belongs to
+ *  an entity that sets a main orchestrator. */
+export type RulesAudience = { lead: boolean; entity: boolean };
+
+function scopeText(item: string): string {
+  return item === MACHINE_SCOPE ? `${item} (${MACHINE_GLOSS})` : item;
+}
+
+/**
+ * The lines the lead rules print. Unlike `workLines`, these print at their release defaults
+ * too: they are the rules a seat acts by, not a record of an override, so an unset setting
+ * prints its default and every launch carries them (OD-20261103-03(1)-(4)). A setting turned
+ * `off` drops its line; the owner's reserved scope is always printed, because the team-owned
+ * sentence under it is the rule, not a record of a choice.
+ */
+export function policyRuleLines(work: WorkSettings | null, audience: RulesAudience): string[] {
+  const lines: string[] = [];
+  const orchestrator = work?.entityOrchestrator.value ?? 'auto';
+  if (audience.entity && orchestrator !== 'off' && (work?.relaysOwner.value ?? 'off') === 'on') {
+    lines.push("A decision the entity's main orchestrator relays from the owner quotes the owner and cites its owner-decisions entry: act on it without asking again.");
+  }
+  if (audience.lead && (work?.paneActions.value ?? 'on') === 'on') {
+    lines.push("A lead may type or choose in a seat's pane when `team send` cannot reach it or a dialog blocks it: read the pane before and after, and never type into the owner's own pane.");
+  }
+  if (audience.lead && (work?.leadSelfService.value ?? 'on') === 'on') {
+    lines.push('A lead in dev mode may bring back a stopped seat, and build when no watcher runs.');
+  }
+  const scope = work?.ownerReservedScope.value ?? OWNER_RESERVED_SCOPE_DEFAULT;
+  lines.push(`The owner's reserved scope: ${scope.map(scopeText).join(', ')}. Checkouts, seats and team config belong to the teams.`);
+  return lines;
 }
 
 export type { TeamFile };

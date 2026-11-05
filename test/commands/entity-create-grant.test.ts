@@ -20,6 +20,7 @@ import { readState } from '../../src/state.ts';
 import { storePath } from '../../src/store/store.ts';
 import type { Machine } from '../../src/watch/machine.ts';
 import { CLAUDE_IDLE, gitEnv, testIo } from '../helpers.ts';
+import { withoutSendId } from '../helpers/output.ts';
 
 const NOW = new Date('2026-10-16T10:00:00Z');
 const FUTURE = '2026-12-31T23:59:59Z';
@@ -303,10 +304,10 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       };
       mkdirSync(sendHost.socketsDir, { recursive: true });
       expect(await runSend(['builder-1', 'first brief'], sendIo, sendHost)).toBe(0);
-      // No socket file under the host's sockets folder: a plain send is the typed trigger, and
-      // the outcome names the trigger sent, never a read.
-      expect(sendIo.out).toBe(
-        'team acme-v4, session "acme-v4"\nbuilder-1: sent (unconfirmed) (drop, 0 ms); queued; builder-1 reads it at its next turn (pull-only)\n',
+      // No socket file under the host's sockets folder: a plain send is the drop, and the
+      // outcome names the seat queued, not woken, never a read.
+      expect(withoutSendId(sendIo.out)).toBe(
+        'team acme-v4, session "acme-v4"\nbuilder-1: queued, not woken (drop, 0 ms); queued; builder-1 reads it at its next turn, and nothing here gives it one (pull-only)\n',
       );
 
       // 2. Under ~/Code/acme-lab/archive: also admitted by the same record.

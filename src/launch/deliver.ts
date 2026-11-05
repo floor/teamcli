@@ -3,7 +3,7 @@ import { reportedLiveAgent } from './agent.ts';
 import { herdrUnreliable, profileFor } from '../profiles/index.ts';
 import type { RulesFileWrite } from './rules-file.ts';
 import {
-  classifyComposer, readBox, readFoldMark, readScreen, type Box, type Screen, type ScreenOptions,
+  classifyComposer, listedPlaceholderEquals, readBox, readFoldMark, readScreen, type Box, type Screen, type ScreenOptions,
 } from '../watch/screen.ts';
 
 /** Why a delivery stopped. Each one is a reading the owner can act on.
@@ -141,8 +141,17 @@ function readsBack(text: string, box: Box): { row: string | null; short: boolean
 
 /** Whether the box shows exactly `text`. A box that is not the text waits and is refused at the
  *  deadline, never entered on trust. */
-function holdsBox(text: string, box: Box): boolean {
-  const read = readsBack(text, box);
+/** An extra row whose text is exactly one listed placeholder. The empty row is not one: a blank
+ *  row under typed text is still not the line. A row that only starts with the placeholder stays. */
+function withoutListedPlaceholders(cli: string, box: Box): Box {
+  const listed = listedPlaceholderEquals(cli);
+  if (listed.length === 0) return box;
+  const rows = box.rows.filter((row) => !listed.includes(row.trim()));
+  return rows.length === box.rows.length ? box : { ...box, rows };
+}
+
+function holdsBox(text: string, box: Box, cli?: string): boolean {
+  const read = readsBack(text, cli === undefined ? box : withoutListedPlaceholders(cli, box));
   return read.row === null && !read.short;
 }
 
@@ -155,7 +164,7 @@ function boxState(cli: string, text: string, screen: string | undefined, options
   const kind = readScreen(cli, screen, options).kind;
   if (kind === 'unsent') {
     const box = readBox(cli, screen, options);
-    return box !== null && holdsBox(text, box) ? 'ready' : 'wait';
+    return box !== null && holdsBox(text, box, cli) ? 'ready' : 'wait';
   }
   return kind === 'idle' ? 'wait' : 'no';
 }
@@ -173,7 +182,7 @@ export function boxHoldsText(cli: string, text: string, screen: string | undefin
     || (read.kind === 'working' && classifyComposer(cli, screen.split('\n'), options).kind === 'unsent');
   if (!unsent) return false;
   const box = readBox(cli, screen, options);
-  return box !== null && holdsBox(text, box);
+  return box !== null && holdsBox(text, box, cli);
 }
 
 /** The first row of the box that is not `text`'s own — what the box holds that the text does
@@ -183,8 +192,30 @@ export function boxHoldsOther(cli: string, text: string, screen: string | undefi
   if (readScreen(cli, screen, options).kind !== 'unsent') return null;
   const box = readBox(cli, screen, options);
   if (box === null) return null;
-  return holdsBox(text, box) ? null : (readsBack(text, box).row ?? '');
+  const held = withoutListedPlaceholders(cli, box);
+  return holdsBox(text, held) ? null : (readsBack(text, held).row ?? '');
 }
+
+/** Whether the box shows exactly `text` on its input row and then one empty row under it — the
+ *  frame Muse Code 1.4.14 leaves when the Enter lands before its completion row has settled: the
+ *  text stays on the input row, the Enter is drawn as a typed newline, one empty row inside the
+ *  box, and the completion row is gone. Measured on 1.4.14 (echo provider, a scratch pane): an
+ *  Enter pressed on the newline frame runs the text (10/10 runs), while ctrl+u does nothing there.
+ *  False for anything else, a box that is not readable included. */
+export function boxHoldsTextAndEmptyRow(cli: string, text: string, screen: string | undefined, options?: ScreenOptions): boolean {
+  if (screen === undefined) return false;
+  if (readScreen(cli, screen, options).kind !== 'unsent') return false;
+  const box = readBox(cli, screen, options);
+  return box !== null && box.first === text && box.rows.length === 1 && box.rows[0] === '';
+}
+
+/** How long an exit typing waits, on a profile that declares `exit_completion`, between the box
+ *  reading back as the exit text and the Enter, so the CLI's own completion row has settled.
+ *  Muse Code 1.4.14, measured on a scratch pane (echo provider): the row appears about 21 ms
+ *  after the text is typed, and an Enter pressed 0 ms or 50 ms after the row appeared typed a
+ *  newline in 2/2 runs each, while 100 ms, 150 ms and 250 ms ran the command in 2/2 runs each.
+ *  250 ms is the longest measured delay, with its margin. */
+export const EXIT_COMPLETION_SETTLE_MS = 250;
 
 /** How long a reading waits for the pane to draw what a send left. `send-text` returns before
  *  the pane renders — a capture taken the instant after a typing still read the idle screen,

@@ -30,7 +30,7 @@ import type { SendOutcome } from '../src/send/uds.ts';
 import { LOG_FILE, updateState } from '../src/state.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import { storePath } from '../src/store/store.ts';
-import { testIo } from './helpers.ts';
+import { dropNames, testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 type FeedDoc = {
@@ -217,17 +217,16 @@ describe('team send history log & team feed', () => {
       from_team: teamIdOf(root),
       body: `${seatHeader}${secret}`,
       id: sentDoc.ids.sent,
-      outcome: 'sent (unconfirmed)',
+      outcome: 'queued, not woken',
       // The thread is the first message's id; a first message is its own thread's id.
       thread: sentDoc.ids.sent,
       ms: 0,
       via: 'drop',
-      // The walk passed the declared typed word, set aside with the ruling's reason, and the
-      // inbox ahead of the drop: no server was listening. The drop is what took the send, so
-      // nothing is claimed beyond the stored copy.
+      // The walk passed the declared typed word, set aside with the ruling's reason: a name the
+      // order keeps (`mcp-inbox`) is the store's reader and no leg, so the drop is what took the
+      // send, and nothing is claimed beyond the stored copy.
       failed: [
         `typed: ${NO_PANE_MESSAGING}`,
-        'mcp-inbox: no live inbox listener',
       ],
     });
 
@@ -237,7 +236,7 @@ describe('team send history log & team feed', () => {
     const dropDir = join(dir, 'send-drops', 'acme', 'lead');
     const recordPath = join(dropDir, sentDoc.ids.sent);
     expect(statSync(dropDir).mode & 0o777).toBe(0o700);
-    expect(readdirSync(dropDir).sort()).toEqual([
+    expect(dropNames(dropDir).sort()).toEqual([
       sentDoc.ids.sent,
       `${sentDoc.ids.sent}.fallback.json`,
       `${sentDoc.ids.sent}.pending`,
@@ -274,8 +273,8 @@ describe('team send history log & team feed', () => {
     expect(await runFeed([], feedIo, { home })).toBe(0);
     expect(feedIo.out).toBe(
       'team acme, session "acme"\n' +
-        '  TIME      KIND                                   SEAT            DETAIL\n' +
-        `  15:30:00  sent (unconfirmed) (via drop in 0 ms)  helper -> lead  ${seatHeader.split('\n')[0] ?? ''} ${secret}\n` +
+        '  TIME      KIND                                  SEAT            DETAIL\n' +
+        `  15:30:00  queued, not woken (via drop in 0 ms)  helper -> lead  ${seatHeader.split('\n')[0] ?? ''} ${secret}\n` +
         '1 event\n',
     );
 
@@ -291,13 +290,12 @@ describe('team send history log & team feed', () => {
       from: 'helper',
       to: 'lead',
       id: sentDoc.ids.sent,
-      outcome: 'sent (unconfirmed)',
+      outcome: 'queued, not woken',
       ms: 0,
       via: 'drop',
     });
     expect(doc.events[0]?.failed).toEqual([
       `typed: ${NO_PANE_MESSAGING}`,
-      'mcp-inbox: no live inbox listener',
     ]);
   });
 
@@ -522,8 +520,8 @@ describe('team send history log & team feed', () => {
     expect(read.ok).toBe(true);
     if (!read.ok) return;
     expect(read.entries.map((e) => ({ from: e.from, to: e.to, body: e.body, outcome: e.outcome, via: e.via }))).toEqual([
-      { from: 'owner', to: 'native', body: `${OWNER_HEADER}msg-dropped`, outcome: 'sent (unconfirmed)', via: 'drop' },
-      { from: 'owner', to: 'native', body: `${OWNER_HEADER}msg-no-agent`, outcome: 'sent (unconfirmed)', via: 'drop' },
+      { from: 'owner', to: 'native', body: `${OWNER_HEADER}msg-dropped`, outcome: 'queued, not woken', via: 'drop' },
+      { from: 'owner', to: 'native', body: `${OWNER_HEADER}msg-no-agent`, outcome: 'queued, not woken', via: 'drop' },
       { from: 'owner', to: 'lead', body: `${OWNER_HEADER}msg-answered`, outcome: 'answered', via: 'socket' },
       { from: 'owner', to: 'lead', body: `${OWNER_HEADER}msg-timeout`, outcome: 'timeout', via: 'drop' },
     ]);

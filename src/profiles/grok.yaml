@@ -24,10 +24,28 @@ process_names:
 tested:
   from: '1.0.50'
   to: '1.0.52'
-# From a run: `grok --help` lists `--always-approve` as "Auto-approve all tool executions". The
-# same text launched the pane every capture under test/fixtures/grok/1.0.50 was taken from.
+# From runs on Grok CLI 1.0.70 (f50904eaee6c): `grok --help` lists `--allow <RULE>` as
+# "Permission allow rule", `--permission-mode <MODE>` with `auto` among its values, and
+# `--sandbox <PROFILE>` as "Sandbox profile for filesystem and network access". `--trust` is not
+# listed but is taken: `grok --trust --version` printed `grok 1.0.70 (f50904eaee6c) [stable]`,
+# exit 0, and a fresh folder drew its trust dialog without it. A scratch TUI run with
+# `--permission-mode auto` ran `mv` and a shell redirection unattended; `dontAsk` left the CLI
+# asking with the widget up. The same run's line, `--trust --permission-mode auto --allow
+# 'Bash(bun *)' --allow 'Bash(team *)' --allow 'Bash(git *)' --version`, exited 0 — the three
+# rules name the commands an unattended seat runs. The sandbox profile is named per launch
+# (`--sandbox team-seat-<project>`): TeamCLI writes it under `$GROK_HOME/sandbox.toml` before the
+# pane starts (src/launch/grok-sandbox.ts). `--always-approve` is still taken when a file names
+# it, and it is the footer the 1.0.50–1.0.52 captures under test/fixtures/grok/ were taken with.
 unattended:
-  - --always-approve
+  - --trust
+  - --permission-mode
+  - auto
+  - --allow
+  - 'Bash(bun *)'
+  - --allow
+  - 'Bash(team *)'
+  - --allow
+  - 'Bash(git *)'
 # The rules ride the launch line: `grok --help` lists `--rules <RULES>` as "Extra rules to
 # append to the system prompt", and `grok --rules 'Reply only RULES_RECEIVED.' --version`
 # exited 0 — the same command with `AGENT_UNATTENDED=1` set exited 0 too. So no box read-back
@@ -37,6 +55,14 @@ rules:
 # The delivery class a run measured: the seat reads its registered MCP inbox when it takes a
 # turn; this CLI has no event adapter that reaches it while idle.
 delivery: pull-on-turn
+# The typed wake, granted on the sanitized 1.0.70 welcome frame in
+# test/fixtures/grok/1.0.70/ and the shipped 1.0.52 frames: a send may type one trigger line
+# into a composer two reads showed as the empty idle prompt, presses Enter only while the box
+# still holds exactly that line, and calls itself delivered only when the `working` screen
+# shows. A working turn, a box that holds text, and the answer widget refuse before a key.
+# Nothing else is typed, and a wake that cannot deliver leaves the message in the bus inbox.
+# See src/send/typed-wake.ts.
+typed_wake: screen
 login:
   check:
     - models

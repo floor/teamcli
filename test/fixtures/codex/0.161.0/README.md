@@ -99,6 +99,34 @@ rows changed, as a seat's own screen draws them.
   not the status row.
 - `near-context-used-nostatus.txt`: the idle hint with no status row. Not a composer:
   the profile declares no fallback.
+- `interrupted-idle.txt`: the interrupted banner, a blank row, `› Ask Codex to do anything`,
+  and the status row `GPT-6.1-Sol high · Context 64% left · weekly 5% left` with
+  `⚠ 3 warnings · f2 to view` on that same row. The transcript above the banner is not
+  in the file. The banner sits above the blank frame, so the box stays the empty prompt.
+- `scroll-back.txt`: a pane scrolled back over its transcript, with the composer hidden and
+  the footer `New activity · ↓ Back to bottom · esc` on the last row. The footer row was
+  reported from a live seat that sat in this view with the prompt out of sight; no pane of
+  that view was captured, so the transcript rows above it are this file's own. Read `unknown`
+  before the profile declared the footer, and `scroll back` after.
+- `scroll-back-marker.txt`: the second reported scroll-back layout, where the composer stays
+  drawn: the marker `↓ Back to bottom · esc` sits directly above the input row and the status
+  footer `Earlier messages available.  enter/esc latest · ? shortcuts … ⚠ 1 warning · f2 to
+  view` is the last row. The bottom region was reported from a live seat's saved screen; the
+  transcript rows above it are this file's own, in `scroll-back.txt`'s voice. Read `unknown`
+  before the profile declared the marker and the status footer, and `scroll back` after.
+- `esc-hint.txt`: the screen the same seat drew after the scroll-back return key: the composer
+  is back with its empty placeholder, the status row is above it, and the hint `esc again to
+  edit previous message` is the last non-blank row. The hint row was reported from that saved
+  screen (it stands until the next keypress); the transcript above it is this file's own, in
+  `scroll-back.txt`'s voice. Read `unknown` before the profile declared the hint as the one
+  chrome row under the status line, and `idle` after.
+- `warning-row.txt`: the same seat's screen with a message line in the box: the shortcuts row is
+  hidden and the account's warning `⚠ 1 warning · f2 to view` stands alone on the pane's last
+  row, right-aligned under the status row. The bottom region was reported from that saved
+  screen; the transcript above it is this file's own, in `scroll-back.txt`'s voice. The same
+  bottom region over the empty prompt reads `idle` — the test draws it by putting the
+  placeholder back in the box. Read `unknown` before the profile declared the warning row as
+  the one chrome row under the status line, `unsent` (and `idle` over the empty box) after.
 
 The used variant is Codex's own: `strings` on the installed `codex-cli 0.161.0` prints
 `Context `, `% left`, `Context `, `% used` beside the status-surface ids

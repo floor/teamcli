@@ -13,8 +13,9 @@ import {
   unlinkSync,
   writeSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
+import { folderProblemAt } from '../held.ts';
 import { storePath, storesFolder } from '../store/store.ts';
 
 /** `O_NOFOLLOW` is POSIX: 0 on platforms without it, while `heldAt` (`lstat`) still guards every open. */
@@ -30,7 +31,10 @@ export const HISTORY_KEPT = 3;
 export type HistoryOutcome =
   | 'delivered'
   | 'delivered (read)'
+  | 'delivered (late)'
+  | 'delivered (typed wake)'
   | 'sent (unconfirmed)'
+  | 'queued, not woken'
   | 'sent (channel)'
   | 'held'
   | 'queued (receiver busy)'
@@ -58,6 +62,8 @@ export function statusOfOutcome(outcome: string): MessageStatus {
     case 'delivered (read)':
       return 'read';
     case 'delivered':
+    case 'delivered (late)':
+    case 'delivered-but-blocked':
       return 'delivered';
     case 'held':
       return 'held';
@@ -92,6 +98,9 @@ export type HistoryEntry = {
   ms?: number;
   /** The path the message travelled: `typed` (a composer trigger) or `socket` (a frame); absent when it never left the sender. */
   via?: string;
+  /** On a line the `session` leg carried: the id the receiving CLI printed on its own session
+   *  line, so a reader can pull that session's result. Absent on every other line. */
+  session?: string;
   /** The legs of the delivery order that did not take the send, each `<leg>: <reason>`, in the
    *  order they were tried; absent when the walk had none to pass on — the leg that carried the
    *  send was reached without a failure behind it, or there was no walk at all. */
@@ -123,17 +132,12 @@ export function historyPath(project: string, root: string, home: string): string
 }
 
 /**
- * Checks a directory in the state-folder ladder without following a symbolic link.
+ * Checks a directory in the state-folder ladder without following a symbolic link: the shared
+ * rule `folderProblemAt` (see src/held.ts), also used for every lock-path folder in `withLock`.
  * Missing levels are created by the caller one level at a time at mode 0700.
  */
 function ladderProblem(at: string): string | null {
-  const held = heldAt(at);
-  if (held.kind === 'missing') return null;
-  if (held.kind === 'link') return 'a symbolic link was found and not followed';
-  if (held.kind === 'fifo') return 'a FIFO was found and not followed';
-  if (held.kind !== 'folder') return 'the state folder path is not a directory';
-  if (process.getuid !== undefined && held.uid !== process.getuid()) return "another user's folder";
-  return null;
+  return folderProblemAt(at);
 }
 
 /**
@@ -153,8 +157,10 @@ function fileProblem(at: string, label = 'history log'): string | null {
 
 /**
  * Ensures `<home>/.config`, `<home>/.config/team`, and `<storeDir>` exist as real directories
- * of this user's, with `<storeDir>` at mode 0700. Never walks through a symbolic link. Shared
- * with the pending records (`pending.ts`), which live in the same store beside the history.
+ * of this user's, with `<storeDir>` at mode 0700. Never walks through a symbolic link. Several
+ * writers may start in a brand-new empty home at once: only one process can win the `mkdir` for
+ * a level, and the others accept the winner's folder instead of failing the write. Shared with
+ * the pending records (`pending.ts`), which live in the same store beside the history.
  */
 export function ensureStoreLadder(storeDir: string, home: string): string | null {
   const stateRoot = storesFolder(home);
@@ -167,21 +173,17 @@ export function ensureStoreLadder(storeDir: string, home: string): string | null
   for (const level of levels) {
     const held = heldAt(level.at);
     if (held.kind === 'missing') {
+      const made = createDir0700(level.at);
+      if (made !== null) return made;
+      continue;
+    }
+    const problem = ladderProblem(level.at);
+    if (problem !== null) return problem;
+    if (level.seal && held.kind === 'folder' && held.mode !== 0o700) {
       try {
-        // Import mkdirSync lazily or use node:fs; created one level at a time so no parent link is traversed.
-        createDir0700(level.at);
+        chmodSync(level.at, 0o700);
       } catch {
-        return 'the state folder could not be created';
-      }
-    } else {
-      const problem = ladderProblem(level.at);
-      if (problem !== null) return problem;
-      if (level.seal && held.kind === 'folder' && held.mode !== 0o700) {
-        try {
-          chmodSync(level.at, 0o700);
-        } catch {
-          return 'the state folder permissions could not be set to 0700';
-        }
+        return 'the state folder permissions could not be set to 0700';
       }
     }
   }
@@ -190,9 +192,60 @@ export function ensureStoreLadder(storeDir: string, home: string): string | null
 
 import { mkdirSync } from 'node:fs';
 
-function createDir0700(path: string): void {
-  mkdirSync(path, { mode: 0o700 });
-  chmodSync(path, 0o700);
+/**
+ * Creates `path` as a real folder of this user's at mode 0700, one level at a time so no parent
+ * link is traversed. Only one writer can win the `mkdir` for a level; `EEXIST` is then success
+ * only when what stands there is a real folder of this user's, judged by the same no-link rule
+ * every level gets, and anything else is a refusal rather than a folder to write into. `what` is
+ * the folder's name in the refusal's words — the state folder here, and the pending folder at
+ * the one other site that adopts a race's winner (`src/send/pending.ts`).
+ */
+export function createDir0700(path: string, what = 'the state folder'): string | null {
+  try {
+    mkdirSync(path, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return `${what} could not be created`;
+    const problem = ladderProblem(path);
+    if (problem !== null) return problem;
+    if (heldAt(path).kind !== 'folder') return `${what} could not be created`;
+  }
+  try {
+    chmodSync(path, 0o700);
+  } catch {
+    return `${what} permissions could not be set to 0700`;
+  }
+  return null;
+}
+
+/**
+ * Ensures each folder, relative to `storeDir`, exists as a real directory of this user's.
+ * Every component is checked with the ladder's `lstat` rule and missing levels are created one
+ * at a time at mode 0700, never recursively: a symbolic link anywhere below the store is
+ * refused and never followed, so a write beneath the store cannot land outside it. Returns
+ * null when every folder is ready, or the offending path and reason.
+ */
+export function ensureFoldersBelow(storeDir: string, folders: readonly string[]): string | null {
+  const base = ladderProblem(storeDir);
+  if (base !== null) return `${storeDir}: ${base}`;
+  const ready = new Set<string>();
+  for (const folder of folders) {
+    let at = storeDir;
+    for (const part of folder.split(sep)) {
+      if (part === '' || part === '.') continue;
+      at = join(at, part);
+      if (ready.has(at)) continue;
+      const held = heldAt(at);
+      if (held.kind === 'missing') {
+        const made = createDir0700(at);
+        if (made !== null) return `${at}: ${made}`;
+      } else {
+        const problem = ladderProblem(at);
+        if (problem !== null) return `${at}: ${problem}`;
+      }
+      ready.add(at);
+    }
+  }
+  return null;
 }
 
 /**
@@ -241,6 +294,7 @@ export function appendHistory(project: string, root: string, home: string, entry
   if (entry.resolved !== undefined) record.resolved = entry.resolved;
   if (entry.ms !== undefined) record.ms = entry.ms;
   if (entry.via !== undefined) record.via = entry.via;
+  if (entry.session !== undefined) record.session = entry.session;
   if (entry.failed !== undefined && entry.failed.length > 0) record.failed = entry.failed;
   if (entry.note !== undefined) record.note = entry.note;
   if (entry.thread !== undefined) record.thread = entry.thread;
@@ -363,7 +417,7 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
     id: obj.id,
     outcome: obj.outcome,
   };
-  // `from_team`, `spec`, `resolved`, `ms`, `via`, `failed` and `note` are optional: a line with a wrong-typed one keeps its other fields.
+  // `from_team`, `spec`, `resolved`, `ms`, `via`, `session`, `failed` and `note` are optional: a line with a wrong-typed one keeps its other fields.
   if (typeof obj.from_team === 'string' && obj.from_team !== '') {
     entry.from_team = obj.from_team;
   }
@@ -378,6 +432,9 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
   }
   if (typeof obj.via === 'string' && obj.via !== '') {
     entry.via = obj.via;
+  }
+  if (typeof obj.session === 'string' && obj.session !== '') {
+    entry.session = obj.session;
   }
   if (Array.isArray(obj.failed) && obj.failed.length > 0 && obj.failed.every((one) => typeof one === 'string')) {
     entry.failed = obj.failed as string[];

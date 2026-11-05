@@ -76,10 +76,10 @@ The status words:
 | Status | Meaning |
 |---|---|
 | `sent` | the record exists and a transport took it |
-| `delivered` | the transport confirmed the seat's program has it (the inbox fetched it, the drop watcher receipted it, the socket frame was written, or a typed trigger's own `team drops --read` signed the receipt; a typed trigger taken with no receipt is only sent, never this) |
+| `delivered` | the transport took it (the inbox fetched it, the drop watcher receipted it, the socket frame was taken, or a typed trigger's own `team drops --read` signed the receipt; a typed trigger taken with no receipt is only sent, never this) — a delivery, never a read: only the seat's own signed receipt makes it `read` |
 | `read` | the seat's own tool showed the body |
 | `replied` | a record on the thread answers it |
-| `held` | the record waits: a dialog, unsent text in the box, or an unreachable seat; the side and reason named |
+| `held` | the record waits: a dialog (a socket frame the daemon's presence pass saw at the receiver's box, or one the sender saw), unsent text in the box, or an unreachable seat; the side and reason named |
 
 `held` is one word on two records: an attempt's outcome, and the message's status while no later
 attempt has. `not-submitted`, `timeout`, `unreachable` and `refused` stay outcomes of an attempt,
@@ -128,6 +128,29 @@ defaults are the table.
 The prompt kinds on `seat.at-prompt` whose default routing includes the owner: `permission`,
 `trust`, `login`, `vendor notice`, `rate limit` (`OWNER_PROMPT_KINDS`).
 
+### Step events
+
+One message's path is written down: the send, the bus, the seat and the watch each append signed
+steps for it to the receiving team's event log, so the whole story of one id can be read in
+order. Six kinds carry those steps — `message.staged` (the signed record reached the receiving
+drop folder), `message.arrived` (the bus's own verified arrival; this is the delivery),
+`webhook.posted` (a post to the seat's adapter, with its outcome and its cost), `leg.tried` (one
+leg of the walk: `via` names it, `outcome` is the walk's word, `ms` the cost), `wake.retried`
+(the watch woke a seat for a record already left behind, `via` the leg and the try number) and
+`message.read` (the seat's own read receipt). The four that are not in the table above join its
+closed list after the pinned ref; the table's own thirty stay each cited to its line. They carry
+no routing default, like `message.arrived` and `message.read`: they are records, not
+notifications, so no seat is told and no subscriber receives them.
+
+A step's record id is the message id plus the step's tail: `<id>:staged`, `<id>:webhook.posted`,
+`<id>:leg.tried:<route>`, `<id>:wake.retried:<try>:<via>`; the receipt kinds use `<id>:read`,
+`<id>:replied` and `<id>:held`, and the arrival is the bare `<id>`. A step's payload carries two
+fields the other kinds do not: `outcome`, the step's own machine word (`posted`, `delivered`,
+`refused`, `unreachable`, …), and `ms`, the whole milliseconds the step took, zero included. A
+step appended twice is one event: the log's own key (kind, record id, session) reports the second
+append as a duplicate. A step that cannot be appended is dropped with its reason; it never fails
+the step it records.
+
 ## 4. Commands and operations
 
 ### `team bus`
@@ -141,11 +164,17 @@ project's event log and reconciling durable message and seat records. Only the o
 a terminal outside the pane manager. Ctrl-C stops it. Exit codes: `bus.started` (0), `bus.stopped`
 (0), `bus.refused` (1), `bus.configuration` / `bus.usage` (2).
 
-The bus's two operations on the socket: `subscribe` (a seat by registry id, its pane, a cursor — a
-sequence number) and `publish` (a runtime tool handing it a record that changed). Each subscriber
-gets a bounded buffer; one that was away reads from its cursor. When records between the cursor and
-the oldest retained sequence are missing, the answer is `gap` with `oldest_seq`, and the subscriber
-resyncs from the underlying records before following on.
+The bus's three operations on the socket: `subscribe` (a seat by registry id, its pane, a cursor —
+a sequence number), `publish` (a runtime tool handing it a record that changed), and `nudge` (a
+sender naming one record it has just written to a seat's drop folder). A `nudge` carries no event:
+the bus resolves the drop folder, re-reads and verifies the signed record itself, and raises the
+arrival only when the record is this seat's, this session's and this root's; a missing, unsigned
+or misaddressed record delivers nothing. A `publish` of a `message.arrived` is held to the same
+check, and its event is built from the signed record rather than from the fields the caller sent;
+the other kinds are appended as published. Each subscriber gets a bounded buffer; one that was away
+reads from its cursor. When records between the cursor and the oldest retained sequence are
+missing, the answer is `gap` with `oldest_seq`, and the subscriber resyncs from the underlying
+records before following on.
 
 ### `team reply`
 
@@ -171,21 +200,27 @@ reply tool writes the reply record. Nothing is typed into the pane.
 
 ### The delivery order, with `drop`
 
-`DELIVERY_LEGS` at the tip: `native`, `mcp-inbox`, `typed`, `drop`. The fallback order
-(`src/settings/inherit.ts`): `mcp-inbox`, then `typed`, then `drop`.
+`DELIVERY_LEGS` at the tip: `socket`, `native`, `mcp-inbox`, `typed`, `drop`, `headless-resume`,
+`session`; `channel` is the seat's own server push, implied by its launch rather than named by an
+order. The fallback order (`src/settings/inherit.ts`): `typed`, then `drop`. The walk that uses the
+order is the owner's cascade (ADR `zeus-message-path`, D1): channel-class legs first — a serving
+`channel` ahead of them, then the ones the chain names, in its own order — then the sender-posted
+webhook where the seat declares an adapter row, then the typed leg, then the mailbox.
 
-- `mcp-inbox` takes a send only while the seat's own inbox server is listening, and writes the
-  message to that inbox without typing; otherwise it is skipped as `no live inbox listener`.
-- `typed` is the leg that wakes an idle seat: one trigger line, the seat's own drop read, whose
-  signed receipt is what makes the send `delivered (read)`; without a receipt the line is
+- `mcp-inbox` is not a delivery leg in this build: the MCP inbox is the store's reader, and the
+  walk reports the word `unavailable` rather than attempting it.
+- `typed` is the leg that wakes an idle seat, and only a profile that declares a typed wake has
+  it: one trigger line into a box the wake read twice as the empty idle prompt, then the seat's
+  own drop read. The profile's working screen after that Enter is `delivered (typed wake)`; the
+  signed receipt the drop read leaves is `delivered (read)`; without either the line is
   `sent (unconfirmed)`.
 - `drop` writes the same 0600 file and types nothing at all: a receiver that watches its folder —
   the inbox server where its CLI has an MCP front, the launch's start-of-turn read where it has a
   hook — takes the message there, and a seat that watches nothing never walks this leg. Nothing
   on this leg wakes an idle seat.
 - `native` is not in the default: a level that names it is the sender choosing its own
-  cross-session channel and recording the delivery itself; it is the one leg a declared word may
-  add.
+  cross-session channel and recording the delivery itself; it is one of the legs a declared word
+  may add (`native`, `socket`, `headless-resume`, `session`).
 
 ## 5. Rules
 
@@ -234,8 +269,11 @@ reply tool writes the reply record. Nothing is typed into the pane.
 10. **Admission is checked when each record is written, replies included.** The thread adds one
     rule, `reply-on-open-thread`: a reply to the sender of a record on an open thread is admitted
     while the thread is open, neither seat has been removed, and no revocation or deny applies to
-    the pair; the rule is named on the record, and the owner may switch it off per team. A thread
-    admits nothing by itself.
+    the pair; the rule is named on the record, and the owner may switch it off per team. A
+    seat's answer to the entity's main orchestrator is the reach's own reply direction
+    (OD-20261103-02): admitted only on the thread that orchestrator opened, under the same
+    `seats_cross_teams` setting as the reach, named on the record, and never by reopening a
+    closed thread. A thread admits nothing by itself.
 11. **No typing into a pane a human types in.** A typed line is refused for the owner's own seat
     and for any pane the owner launched by hand; the leg is recorded unavailable with the reason
     and the next leg runs.

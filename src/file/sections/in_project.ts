@@ -1,8 +1,10 @@
 import type { Section } from './section.ts';
 
-// A project name is one path segment: the same shape as the team's own `project:` name and as an
-// entity name, so the three levels of entity → project → team read alike and a name is never "".
-const PROJECT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+// A project name is one path segment: the same character shape as the team's own `project:` name
+// and as an entity name, so the three levels of entity → project → team read alike and a name is
+// never "". 128 characters at most, the same bound as an entity name: the name becomes a
+// `config.changed` record id's target too, and that id is refused past 200 characters.
+const PROJECT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 /**
  * The project this team sits in, by name, or null when the file names none. `project:` above
@@ -21,7 +23,7 @@ export const inProject: Section = {
     if (!PROJECT_NAME.test(value)) {
       ctx.check.fail(
         entry?.line ?? 1,
-        'in_project must be a short name: letters, digits, ".", "_" and "-", starting with a letter or a digit',
+        'in_project must be a short name: letters, digits, ".", "_" and "-", starting with a letter or a digit, 128 at most',
       );
       return null;
     }
@@ -30,7 +32,8 @@ export const inProject: Section = {
   schema: {
     type: 'string',
     minLength: 1,
-    pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$',
+    maxLength: 128,
+    pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$',
     $comment: 'the project this team belongs to, by name; absent, the team is its own project',
   },
 };

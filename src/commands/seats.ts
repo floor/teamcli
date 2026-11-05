@@ -599,7 +599,14 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
       seats: team.seats,
       states: state.seats,
     });
-    const comparison = compare(team, session, state, live, now, watchInForceOf(standing, team), undefined, false, undefined, continuityIds);
+    // The registry's signing triple is the seat's declared model where a record exists, read the
+    // same way `status` reads it, so the model column compares like for like with the record the
+    // launch wrote — never a file edited after the launch. A seat with no record keeps the file's.
+    const signing = sources.home === undefined ? undefined : new Map(team.seats.flatMap((seat) => {
+      const agent = findAgent(sources.home!, { team: teamIdOf(root), seat: seat.name });
+      return agent ? [[seat.name, { ...agent.signing, cli: agent.cli, launch: agent.launch }] as const] : [];
+    }));
+    const comparison = compare(team, session, state, live, now, watchInForceOf(standing, team), undefined, false, signing, continuityIds);
     // One fresh daemon health probe per pass: the same answer decides whether this session's
     // presence projections are live. No persisted status word is consulted — an absent
     // verdict leaves every projection last known, never dropped.

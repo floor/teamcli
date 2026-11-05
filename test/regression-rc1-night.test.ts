@@ -1,4 +1,4 @@
-import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messaging.ts';
+import { NO_PANE_MESSAGING, queuedLine } from '../src/send/no-pane-messaging.ts';
 // Five failures the RC1 night run found, pinned so they never return: a pane whose session
 // holds a cross-session frame is never a delivered send; no send path dials a session's socket;
 // a provider error the pane has scrolled past does not make an idle seat unreachable; a failed
@@ -22,6 +22,7 @@ import { updateState } from '../src/state.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { claudeBox, testIo } from './helpers.ts';
+import { withoutSendId } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-17T05:00:00.000Z');
 const LOST = 'API Error: Connection lost mid-response. The response above may be incomplete.';
@@ -214,7 +215,7 @@ describe('a pane the session holds at its cross-session frame is never a deliver
     const read = readHistory('acme', w.root, w.home);
     if (!read.ok) throw new Error(`the history file is unreadable: ${read.reason}`);
     expect(read.entries).toHaveLength(1);
-    expect(read.entries[0]?.outcome).toBe('sent (unconfirmed)');
+    expect(read.entries[0]?.outcome).toBe('queued, not woken');
     expect(read.entries[0]?.via).toBe('drop');
     expect(lastOutcome(w, 'lead')).not.toBe('delivered');
   });
@@ -270,7 +271,11 @@ describe('no send path dials a session socket', () => {
     const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
 
     expect(code).toBe(1);
-    expect(io.err).toBe(queuedLine('lead', NO_EVENT_ADAPTER_TOOK_IT) + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
+    // The fixture order names only legs the cascade never walks as event legs (the inbox
+    // word it reads as unavailable, and the typed leg set aside), so the walk had no event
+    // adapter at all: the reason is the no-pane-messaging word, not the took-it word a walk
+    // with event legs ends with.
+    expect(withoutSendId(io.err)).toBe(queuedLine('lead', NO_PANE_MESSAGING) + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
     expect(host.dials()).toBe(0);
     expect(host.frames).toEqual([]);
     expect(host.typed).toHaveLength(0);
@@ -414,6 +419,6 @@ describe('a registry record binds a caller only where the call stands as it', ()
     // The trigger is the message-display line — sender, the body's first line as the summary,
     // the fixed read hint — never the signed body and never a path the composer names.
     expect(host.typed).toEqual([]);
-    expect(lastOutcome(w, 'helper')).toBe('sent (unconfirmed)');
+    expect(lastOutcome(w, 'helper')).toBe('queued, not woken');
   });
 });

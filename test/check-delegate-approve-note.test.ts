@@ -167,14 +167,18 @@ describe('a delegate entry naming approve', () => {
     expect(code).toBe(1);
   });
 
-  test("a set-aside delivery_order in team config is reported as the lead's difference (D4) and validates under --json", () => {
-    const withSetAside = [
+  test("a delivery_order naming mcp-inbox is read, not set aside: a note names it and validates under --json", () => {
+    // ADR D1: the inbox is the store's reader, not a delivery leg, so a word naming it is kept in
+    // force (a word may add it) and the walk reports it unavailable. The check names the word in
+    // a note above its findings — not a difference: the walk travels the same legs either way,
+    // so neither the total nor the exit changes.
+    const withInboxSeat = [
       ...HEAD.trimEnd().split('\n'),
       '    delivery_order: [mcp-inbox, typed]',
       'delivery_order: [typed]',
       '',
     ].join('\n');
-    const root = place(withSetAside);
+    const root = place(withInboxSeat);
     const io = testIo(root, { kind: 'owner' });
     const code = runTeamCheck({}, io, {
       live: () => live(TITLE),
@@ -182,20 +186,18 @@ describe('a delegate entry naming approve', () => {
       standing: () => ({ kind: 'none' }),
       now: () => NOW,
     });
-    expect(code).toBe(1);
-    expect(io.out).toContain('difference: lead: delivery_order [mcp-inbox, typed] in team config is set aside; [typed] stands\n');
-    expect(io.out).toContain('  repair: drop the 1 leg not in the inherited delivery_order for lead in team config\n');
-    expect(io.out).toContain("  who: the team's lead\n");
-    expect(io.out).toContain('1 difference\n');
-    expect(io.out).not.toContain('(s)');
+    expect(code).toBe(0);
+    expect(io.out).toContain("note: lead: delivery_order [mcp-inbox, typed] in team config names mcp-inbox, which is not a delivery leg in this build — the inbox is the store's reader, so the walk skips the word; drop it from the seat's row when the file is next edited\n");
+    expect(io.out).toContain('no differences');
+    expect(io.out).not.toContain('is set aside');
+    expect(io.out).not.toContain('difference: lead: delivery_order');
 
-    const withTwoExtraLegs = [
+    const withInboxTeam = [
       ...HEAD.trimEnd().split('\n'),
-      '    delivery_order: [native, mcp-inbox, typed]',
-      'delivery_order: [typed]',
+      'delivery_order: [mcp-inbox, typed]',
       '',
     ].join('\n');
-    const root2 = place(withTwoExtraLegs);
+    const root2 = place(withInboxTeam);
     const io2 = testIo(root2, { kind: 'owner' });
     const code2 = runTeamCheck({}, io2, {
       live: () => live(TITLE),
@@ -203,9 +205,9 @@ describe('a delegate entry naming approve', () => {
       standing: () => ({ kind: 'none' }),
       now: () => NOW,
     });
-    expect(code2).toBe(1);
-    expect(io2.out).toContain('  repair: drop the 2 legs not in the inherited delivery_order for lead in team config\n');
-    expect(io2.out).not.toContain('(s)');
+    expect(code2).toBe(0);
+    expect(io2.out).toContain("note: delivery_order [mcp-inbox, typed] in team config names mcp-inbox, which is not a delivery leg in this build — the inbox is the store's reader, so the walk skips the word; drop it when the file is next edited\n");
+    expect(io2.out).toContain('no differences');
 
     const jsonIo = testIo(root, { kind: 'owner' });
     const jsonCode = runTeamCheck({ json: true }, jsonIo, {
@@ -214,7 +216,7 @@ describe('a delegate entry naming approve', () => {
       standing: () => ({ kind: 'none' }),
       now: () => NOW,
     });
-    expect(jsonCode).toBe(1);
+    expect(jsonCode).toBe(0);
     const doc = assertMatchesOutputSchema<{
       schema: { name: string; version: number };
       format: number;
@@ -230,9 +232,34 @@ describe('a delegate entry naming approve', () => {
     expect(doc.format).toBe(1);
     expect(doc.project).toBe('acme');
     expect(doc.session).toBe('acme');
-    expect(doc.differences).toHaveLength(1);
-    expect(doc.differences[0]?.who).toBe("the team's lead");
-    expect(doc.summary).toEqual({ differences: 1, owner_differences: 0 });
+    expect(doc.differences).toHaveLength(0);
+    expect(doc.summary).toEqual({ differences: 0, owner_differences: 0 });
+    expect(doc.notes.some((note) => note.startsWith('lead: delivery_order [mcp-inbox, typed] in team config names mcp-inbox'))).toBe(true);
+  });
+
+  test("a delivery_order adding a leg no word may add is set aside, and the lead's difference (D4) names the repair", () => {
+    // `drop` is not a leg a word may add (`native`, `socket`, `headless-resume` and `session`
+    // are), so a seat word naming it over a typed-only inherited order is set aside.
+    const withDrop = [
+      ...HEAD.trimEnd().split('\n'),
+      '    delivery_order: [typed, drop]',
+      'delivery_order: [typed]',
+      '',
+    ].join('\n');
+    const root = place(withDrop);
+    const io = testIo(root, { kind: 'owner' });
+    const code = runTeamCheck({}, io, {
+      live: () => live(TITLE),
+      branch: () => 'main',
+      standing: () => ({ kind: 'none' }),
+      now: () => NOW,
+    });
+    expect(code).toBe(1);
+    expect(io.out).toContain('difference: lead: delivery_order [typed, drop] in team config is set aside; [typed] stands\n');
+    expect(io.out).toContain('  repair: drop the 1 leg not in the inherited delivery_order for lead in team config\n');
+    expect(io.out).toContain("  who: the team's lead\n");
+    expect(io.out).toContain('1 difference\n');
+    expect(io.out).not.toContain('(s)');
   });
 
   test('a seat word that adds only the native leg is no difference: the walk may declare it', () => {
