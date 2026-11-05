@@ -265,34 +265,54 @@ describe('a cut pass', () => {
     await hosted.host.stop('test end');
   });
 
-  test('comes back in five seconds three times, then at the interval; its line prints once per episode', async () => {
+  test('backs off from five seconds by doubling to the interval when a live reader always cuts', async () => {
+    const world = makeWorld('always-cut');
+    const clock = { at: NOW };
+    const baseFor = baseSources(world, clock, {
+      liveAsync: async () => {
+        clock.at += 2000;
+        return { live: fullLive(), next: 0, cut: true } satisfies AsyncLiveRead;
+      },
+    });
+    const hosted = hostedOf(world, clock, baseFor);
+    await until(() => hosted.asked.length >= 1);
+
+    for (let index = 0; index < 6; index += 1) await oneMorePass(hosted, clock);
+    expect(hosted.asked).toEqual([5000, 10_000, 20_000, 40_000, 80_000, 120_000, 120_000]);
+    expect(linesMatching(hosted.log, 'the read pass ran out of its 2000 ms budget')).toHaveLength(1);
+
+    await hosted.host.stop('test end');
+  });
+
+  test('backs off by doubling on consecutive cuts and resets to five seconds after a read completes; its line prints once per episode', async () => {
     const world = makeWorld('retry');
     const clock = { at: NOW };
     let pass = 0;
     const baseFor = baseSources(world, clock, {
       liveAsync: async () => {
         pass += 1;
-        // Every pass but the fifth ends at the read's own cut.
-        return { live: fullLive(), next: 0, cut: pass !== 5 } satisfies AsyncLiveRead;
+        // Every pass but the seventh ends at the read's own cut.
+        const cut = pass !== 7;
+        if (cut) clock.at += 2000;
+        return { live: fullLive(), next: 0, cut } satisfies AsyncLiveRead;
       },
     });
     const hosted = hostedOf(world, clock, baseFor);
     await until(() => hosted.asked.length >= 1);
 
-    // The first pass has cut; three more make four cut passes in a row.
-    for (let index = 0; index < 3; index += 1) await oneMorePass(hosted, clock);
-    // Three short retries, then the watch's own 120 s interval.
-    expect(hosted.asked).toEqual([5000, 5000, 5000, 120_000]);
+    // The first pass has cut; five more make six cut passes in a row, doubling from 5 s up to the 120 s interval.
+    for (let index = 0; index < 5; index += 1) await oneMorePass(hosted, clock);
+    expect(hosted.asked).toEqual([5000, 10_000, 20_000, 40_000, 80_000, 120_000]);
     expect(linesMatching(hosted.log, 'the read pass ran out of its 2000 ms budget')).toHaveLength(1);
 
-    // The fifth pass read every pane: the count and the line are cleared together.
+    // The seventh pass read every pane: the count and the line are cleared together.
     await oneMorePass(hosted, clock);
-    expect(hosted.asked).toEqual([5000, 5000, 5000, 120_000, 120_000]);
+    expect(hosted.asked).toEqual([5000, 10_000, 20_000, 40_000, 80_000, 120_000, 120_000]);
     expect(linesMatching(hosted.log, 'the read pass ran out of its 2000 ms budget')).toHaveLength(1);
 
-    // A cut after a full pass is a new episode, and it is said again.
+    // A cut after a full pass is a new episode: the wait resets to 5 s and the line is said again.
     await oneMorePass(hosted, clock);
-    expect(hosted.asked).toEqual([5000, 5000, 5000, 120_000, 120_000, 5000]);
+    expect(hosted.asked).toEqual([5000, 10_000, 20_000, 40_000, 80_000, 120_000, 120_000, 5000]);
     expect(linesMatching(hosted.log, 'the read pass ran out of its 2000 ms budget')).toHaveLength(2);
 
     await hosted.host.stop('test end');

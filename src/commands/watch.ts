@@ -284,9 +284,7 @@ async function prefetchBrokerWork(
   }
 }
 
-/** How many consecutive cut passes get the short retry before the loop goes back to its interval. */
-const CUT_RETRY_PASSES = 3;
-/** The short retry's ceiling, in seconds: never longer than the watch's own interval. */
+/** The initial retry after a cut pass, in seconds: doubles on each consecutive cut up to the watch's own interval. */
 const CUT_RETRY_SECONDS = 5;
 
 /**
@@ -338,9 +336,11 @@ function readGate(clock: () => number, limits: ReadLimits, signal: AbortSignal |
   };
 }
 
-/** The wait after a pass: the short retry while the cuts are young, the interval after. */
+/** The wait after a pass: a cut pass backs off from five seconds, doubling on each consecutive cut up to the interval. */
 function readWait(interval: number, cut: boolean, cutPasses: number): number {
-  return cut && cutPasses >= 1 && cutPasses <= CUT_RETRY_PASSES ? Math.min(CUT_RETRY_SECONDS, interval) : interval;
+  if (!cut || cutPasses < 1 || interval <= CUT_RETRY_SECONDS) return interval;
+  const shift = Math.min(cutPasses - 1, 30);
+  return Math.min(CUT_RETRY_SECONDS * (2 ** shift), interval);
 }
 
 /** One extra screen read inside the pass, bounded by what is left of its budget. */
@@ -770,8 +770,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   // Where the awaited whole-session read resumes its pane rotation after a cut: one cursor per
   // watch process, so one per root. A read that took every pane leaves it at the start.
   let readCursor = 0;
-  // Consecutive passes whose read phase was cut short by its budget: the short retry counts up
-  // to the cap, then the watch goes back to its interval.
+  // Consecutive passes whose read phase was cut short by its budget: the retry backs off by
+  // doubling from five seconds up to the watch's interval, and resets when a read completes.
   let cutPasses = 0;
   let statusEngine: SeatStatusEngine | undefined;
   /** The current pass's native hold, replaced before the status engine, the pass and every
@@ -1599,8 +1599,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         paneGoneOnce = place === 'end';
         beatWatch(dir, session, sources.pid, sources.now().toISOString(), place === 'end' ? 'keep' : place, watchStartedAt);
       }
-      // The pass's read outcome: a cut pass retries shortly (up to the cap), then the watch goes
-      // back to its interval; a pass that read every pane it meant to clears both the count and
+      // The pass's read outcome: consecutive cut passes back off by doubling from five seconds up
+      // to the watch's interval; a pass that read every pane it meant to clears both the count and
       // the line, so a later cut is a new episode. The retry repeats no report: every line a
       // pass prints is deduplicated by `told`, and the cut line is one of them.
       if (gate.cut) {
