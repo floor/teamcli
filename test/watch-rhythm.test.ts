@@ -188,11 +188,15 @@ describe('the pace in force', () => {
         nudgeWait: 600,
         unsentAfter: 1,
         unreadAfter: 86_400,
+        stuckAfter: 900,
         quotaMarks: [50, 75, 90],
         checks: [],
       };
       const paced = applyWatchPace(base, { preset, sweepSeconds: 500 });
       expect(paced.interval).toBe(500);
+      // The stuck bound is not one of the six paced waits: a slow sweep must not let a held
+      // seat's presence look fresh for longer.
+      expect(paced.stuckAfter).toBe(900);
       expect(paced.idleFirst).toBe(Math.min(86_400, Math.max(1, Math.round(300 * WATCH_RHYTHM_FACTOR[preset]))));
       expect(paced.idleOwner).toBe(900);
       expect(paced.blindAfter).toBe(300);

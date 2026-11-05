@@ -1018,7 +1018,8 @@ function reportBlockedScreenToLead(
   if (!('release' in lock)) return;
   try {
     if (isBareShellPane(scene.dir, scene.session, seat.name, scene.sources.processes?.(pane, scene.session) ?? null)) return;
-    const unreadNow = new Set(listUnread(dropDir, context, home).map((one) => one.id));
+    const unreadListing = listUnread(dropDir, context, home);
+    const unreadNow = new Set(unreadListing.map((one) => one.id));
     const eligible: { message: { id: string; ts: string }; payload: RecordPayload; age: number }[] = [];
     for (const message of typedDue) {
       if (!unreadNow.has(message.id)) continue;
@@ -1051,22 +1052,30 @@ function reportBlockedScreenToLead(
     if (reserved.length === 0) return;
 
     const ids = reserved.map((one) => one.message.id);
-    const noticeId = activeReportId ?? blockedDropId(scene.session, seat.name, kind, ids);
+    // A stuck episode this pass (or the report before it) already opened for the seat is the one
+    // lead notice: the per-message artifacts below still land, but the lead is not told a second
+    // time about a stall whose words it has. The episode ends only when the seat reads one of the
+    // messages it names, after which the next blocked pass speaks again with a fresh count.
+    const open = stuckEpisodeOf(dropDir);
+    const cover = stuckCoverOf(open, unreadNow);
+    const noticeId = cover?.notice ?? activeReportId ?? blockedDropId(scene.session, seat.name, kind, ids);
     const lines = reserved.map((one) => {
       const minutes = Math.max(1, Math.round(one.age / 60_000));
       const where = `the drop is at ${join(dropDir, one.message.id)}`;
       return `${seat.name}: blocked by a dialog (${kind}) — a message from ${one.payload.from} is delivered-but-blocked after ${String(minutes)} min (id ${one.message.id}); no wake line was typed; ${where}`;
     });
-    const header = reserved.length === 1
+    const header = unreadListing.length === 1
       ? `1 message on ${seat.name} is blocked by a dialog (${kind}):`
-      : `${String(reserved.length)} messages on ${seat.name} are blocked by a dialog (${kind}):`;
+      : `${String(unreadListing.length)} messages on ${seat.name} are blocked by a dialog (${kind}):`;
     const body = [header, ...lines.map((line) => `- ${line}`)].join('\n');
-    const leadOutcome = writeLeadBlockedDrop(lead, home, noticeId, body, at);
+    const leadOutcome = cover !== null
+      ? { ok: true as const, path: '', id: cover.notice, existing: true as const }
+      : writeLeadBlockedDrop(lead, home, noticeId, body, at);
     if (!leadOutcome.ok) {
       for (const one of reserved) release(wakePath(dropDir, one.message.id));
       return;
     }
-    const alreadyTold = activeReportId !== null || leadOutcome.existing === true;
+    const alreadyTold = cover !== null || activeReportId !== null || leadOutcome.existing === true;
 
     const historyRead = readHistory(scene.team.project, scene.root, home);
     const alreadyRecorded = new Set(
@@ -1102,6 +1111,21 @@ function reportBlockedScreenToLead(
     if (recorded.length === 0) {
       if (leadOutcome.existing !== true) release(leadOutcome.path);
       return;
+    }
+
+    // The episode is opened only once the notice and its per-message lines stand: a pass whose
+    // history write failed gave its lead drop back, and a seat it never told is not marked told.
+    // An older episode whose messages changed is given back first, so the new claim takes.
+    if (cover === null) {
+      if (open !== null) closeStuckEpisode(dropDir);
+      reserve(stuckEpisodePath(dropDir), {
+        v: 1,
+        at,
+        class: 'screen',
+        kind,
+        ids: [...unreadNow],
+        notice: noticeId,
+      });
     }
 
     const recordedIds = recorded.map(({ one }) => one.message.id);
@@ -1145,6 +1169,165 @@ function reportBlockedScreenToLead(
     }
   } finally {
     lock.release();
+  }
+}
+
+/** The marker beside a seat's drop folder while one stuck episode is open: the messages the lead
+ *  was told about and the notice that told it. Dot-named, so no inbox scan takes it for mail. */
+function stuckEpisodePath(dropDir: string): string {
+  return join(dropDir, '.stuck');
+}
+
+type StuckEpisode = {
+  at: string;
+  class: 'screen' | 'presence';
+  kind: string;
+  ids: readonly string[];
+  notice: string;
+};
+
+/** The open episode, or null when there is none (or its marker cannot be read). */
+function stuckEpisodeOf(dropDir: string): StuckEpisode | null {
+  let parsed: { at?: unknown; class?: unknown; kind?: unknown; ids?: unknown; notice?: unknown };
+  try {
+    parsed = JSON.parse(readFileSync(stuckEpisodePath(dropDir), 'utf8')) as typeof parsed;
+  } catch {
+    return null;
+  }
+  if (typeof parsed.at !== 'string' || typeof parsed.notice !== 'string') return null;
+  const cls = parsed.class === 'screen' ? 'screen' : parsed.class === 'presence' ? 'presence' : null;
+  if (cls === null) return null;
+  if (typeof parsed.kind !== 'string') return null;
+  if (!Array.isArray(parsed.ids) || !parsed.ids.every((one): one is string => typeof one === 'string')) return null;
+  return { at: parsed.at, class: cls, kind: parsed.kind, ids: parsed.ids, notice: parsed.notice };
+}
+
+/** The episode still covers this folder only while every message it named is still unread: one
+ *  verified receipt is the seat reading its mail, and the next stall is a new episode. */
+function stuckCoverOf(episode: StuckEpisode | null, unread: ReadonlySet<string>): StuckEpisode | null {
+  if (episode === null || episode.ids.length === 0) return null;
+  return episode.ids.every((id) => unread.has(id)) ? episode : null;
+}
+
+/** Gives an open episode back, after a read or a recognised state ended it. */
+function closeStuckEpisode(dropDir: string): void {
+  release(stuckEpisodePath(dropDir));
+}
+
+/** What the stuck report reads, once per pass: the seats whose proven presence says a turn is
+ *  running (with the instant the word began) and the age past which that word is no longer a
+ *  live turn. */
+export type StuckReading = {
+  workingSince: ReadonlyMap<string, string>;
+  stuckAfterSeconds: number;
+};
+
+/**
+ * The stuck-episode report. A seat whose unread drops have waited past twice its window while
+ * the watch is not waking it is named to the lead, with the reason the wake is held: a screen
+ * this build does not recognise, or a presence that has said "working" for longer than the
+ * configured bound (`watch.stuck_after`, 15 minutes by default). It runs for every non-human,
+ * non-stopped seat regardless of pending markers and of the native hold, because those are
+ * exactly the states that keep the wake path from ever looking: the pending retry owns the
+ * message and the held seat is skipped before its folder is read.
+ *
+ * It is a report and nothing else: it types no line, takes no seat lock, and leaves every
+ * pending marker, receipt and `.wake` reservation as it found them. The notice is one per
+ * episode: a `.stuck` marker names the messages the lead was told about, further passes inside
+ * the episode say nothing, and the episode ends when the seat reads one of those messages or
+ * its state is recognised and fresh again. A fresh working presence (younger than the bound)
+ * is a live turn and gets no notice at all — the report never guesses at a screen while the
+ * runtime itself says a turn runs.
+ */
+export function reportStuckSeats(scene: RetryScene, window: UnreadWindow, reading: StuckReading): void {
+  const home = scene.home;
+  if (home === undefined) return;
+  const key = messageKeyState(home);
+  if (key.kind !== 'key') return;
+  const mail = scene.mail ?? new MailPass({ dir: scene.dir, root: scene.root, session: scene.session, home });
+  const leadName = scene.team.orchestrator !== '' ? scene.team.orchestrator : scene.team.operator;
+  const lead: ReportTarget | null = leadName === ''
+    ? null
+    : { root: scene.root, session: scene.session, to: leadName, label: leadName };
+  const nowMs = scene.now.getTime();
+  const at = scene.now.toISOString();
+  for (const seat of scene.team.seats) {
+    // A person reads their own mail; a stopped seat keeps it until its next start, and the
+    // generic report already names the queue its absence leaves.
+    if (seat.human === true || seat.stopped === true) continue;
+    const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
+    const unread = mail.unread(seat.name);
+    if (unread.length === 0) {
+      closeStuckEpisode(dropDir);
+      continue;
+    }
+    // The reason the wake is held, in the order the watch itself decides it: a proven presence
+    // word first (a fresh one is a live turn, never stuck), then the screen kind.
+    const since = reading.workingSince.get(seat.name);
+    let reason: { class: 'screen' | 'presence'; kind: string; word: string; ageMin?: number } | null = null;
+    if (since !== undefined) {
+      const ageMs = nowMs - Date.parse(since);
+      if (ageMs >= reading.stuckAfterSeconds * 1000) {
+        reason = {
+          class: 'presence',
+          kind: 'working',
+          word: `presence says working since ${since}`,
+          ageMin: Math.max(1, Math.round(ageMs / 60_000)),
+        };
+      }
+    } else {
+      const agents = scene.live.agents.filter((agent) => agent.name === seat.name);
+      const found = agents.length === 1 ? agents[0]?.pane : undefined;
+      const pane = found === scene.ownPane ? undefined : found;
+      if (pane !== undefined) {
+        const screen = scene.sources.screen(pane, scene.session);
+        if (screen !== null && readScreen(seat.cli, screen).kind === 'unknown') {
+          reason = { class: 'screen', kind: 'unknown', word: 'screen not recognised' };
+        }
+      }
+    }
+    const episode = stuckEpisodeOf(dropDir);
+    if (reason === null) {
+      // The seat's state is recognised and fresh again: the episode is over, though the mail
+      // still waits and the generic report will speak for it.
+      if (episode !== null) closeStuckEpisode(dropDir);
+      continue;
+    }
+    const unreadIds = new Set(unread.map((one) => one.id));
+    if (stuckCoverOf(episode, unreadIds) !== null) continue;
+    // Twice this seat's own window, as the generic report reads it: the stall the lead is owed.
+    const threshold = windowForSeat(window, seat) * 1000 * 2;
+    const oldest = unread.reduce((one, other) => (Date.parse(one.ts) <= Date.parse(other.ts) ? one : other));
+    const oldestAge = nowMs - Date.parse(oldest.ts);
+    if (!(oldestAge >= threshold)) continue;
+    if (lead === null) continue;
+    const count = unread.length;
+    const minutes = Math.max(1, Math.round(oldestAge / 60_000));
+    const waits = `${String(count)} message${count === 1 ? '' : 's'} wait, oldest ${String(minutes)} min`;
+    const where = `the drop is at ${join(dropDir, oldest.id)}`;
+    const body = reason.class === 'presence'
+      ? `${seat.name}: ${reason.word} while ${waits} - the word has stood for ${String(reason.ageMin)} min; no wake line was typed, ${where}`
+      : `${seat.name}: ${reason.word} while ${waits} - no wake line was typed; ${where}`;
+    // An episode whose messages changed (one was read, or new mail joined) is over: its marker is
+    // given back before the new claim, so this pass owns the new one. The claim comes before the
+    // notice it covers, so a crash between the two leaves a marker with nothing said rather than
+    // a notice said twice.
+    if (episode !== null) closeStuckEpisode(dropDir);
+    const noticeId = blockedDropId(scene.session, seat.name, `${reason.class}@${at}`, [oldest.id]);
+    if (!reserve(stuckEpisodePath(dropDir), {
+      v: 1,
+      at,
+      class: reason.class,
+      kind: reason.kind,
+      ids: [...unreadIds],
+      notice: noticeId,
+    })) continue;
+    const outcome = writeLeadBlockedDrop(lead, home, noticeId, body, at);
+    if (!outcome.ok) {
+      closeStuckEpisode(dropDir);
+      continue;
+    }
+    scene.say(body, true);
   }
 }
 
@@ -1360,6 +1543,9 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void
     // The seat's class is read only for a seat something waits at, as the wake pass reads it.
     const unread = mail.unread(seat.name);
     if (unread.length === 0) continue;
+    // A seat inside an open stuck episode has its one lead notice already: the generic line
+    // would be a second word about the same stall. It speaks again after the episode closes.
+    if (stuckEpisodeOf(dropDir) !== null) continue;
     // Twice this seat's own window: the wake at N and the report at 2N read one value.
     const threshold = windowForSeat(window, seat) * 1000 * 2;
     for (const message of unread) {

@@ -164,8 +164,10 @@ switch off.
 A file switches a check off under `watch.checks`; the four always-on checks ignore that switch.
 
 The shipped watch defaults, as `defaultWatch()` carries them: a pass every 120 s, `team_idle`
-600 s, `unsent_after` 60 s, `nudge_wait` 600 s and `unread_after` 600 s
-(`src/file/sections/watch.ts`). The `unread_after` figure is the section's: the unread window in
+600 s, `unsent_after` 60 s, `nudge_wait` 600 s, `unread_after` 600 s and `stuck_after` 900 s
+(`src/file/sections/watch.ts`). `stuck_after` is how long a proven "working" presence may stand,
+with mail waiting, before the lead is told the seat is stuck; the tempo never scales it.
+The `unread_after` figure is the section's: the unread window in
 force for a seat is the file's word when it moved the section, else the seat's delivery-class
 default — 30 s for a seat a message can wake while it is idle, 60 s for a typed or pull-only
 seat (ADR `zeus-message-path`, D2). The machine's
