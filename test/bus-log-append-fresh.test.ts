@@ -135,4 +135,67 @@ describe('the append index a fresh process builds', () => {
     expect(again.duplicate).toBe(true);
     expect(again.record.payload.seq).toBe(1);
   });
+
+  test('walks past earlier unrelated lines that mention the record id in their payload and finds the real duplicate later', async () => {
+    const { root, home } = makeScratch();
+    // 1. An earlier unrelated event whose payload mentions the target id both bare and quoted as `"record_id":"..."`.
+    const decoyPayload = appendEvent('acme', root, home, {
+      ts: TS,
+      kind: 'message.arrived',
+      session: 'acme',
+      record_id: 'unrelated-1',
+      reason: 'earlier note quoting "record_id":"decoy-id-1" and bare decoy-id-1 in payload',
+    });
+    expect(decoyPayload.ok).toBe(true);
+
+    // 2. An earlier verified event with the same record_id under a different kind (`message.arrived`).
+    const decoyKind = appendEvent('acme', root, home, {
+      ts: TS,
+      kind: 'message.arrived',
+      session: 'acme',
+      record_id: 'decoy-id-1',
+    });
+    expect(decoyKind.ok).toBe(true);
+
+    // 3. An earlier forged line claiming the exact target key (`message.delivered`, `decoy-id-1`).
+    const path = eventLogPath('acme', root, home);
+    appendFileSync(
+      path,
+      `${JSON.stringify({
+        payload: { v: 1, seq: 999, ts: TS, kind: 'message.delivered', session: 'acme', record_id: 'decoy-id-1' },
+        signature: '00'.repeat(64),
+      })}\n`,
+    );
+
+    seed(root, home, 'message.arrived', 'middle', 20);
+
+    // 4. The real verified duplicate comes later in the file.
+    const real = appendEvent('acme', root, home, {
+      ts: TS,
+      kind: 'message.delivered',
+      session: 'acme',
+      record_id: 'decoy-id-1',
+    });
+    expect(real.ok).toBe(true);
+    if (!real.ok) return;
+    expect(real.duplicate).toBe(false);
+
+    seed(root, home, 'message.arrived', 'tail', 10);
+    const before = readFileSync(path, 'utf8');
+
+    // A fresh cold process must not stop at any of the earlier decoy lines: it walks every
+    // occurrence and returns the real verified duplicate.
+    const answer = await freshAppend(root, home, 'message.delivered', 'decoy-id-1');
+    expect(answer.ok).toBe(true);
+    expect(answer.duplicate).toBe(true);
+    expect(answer.seq).toBe(real.record.payload.seq);
+    expect(readFileSync(path, 'utf8')).toBe(before);
+
+    // And when a fresh cold process appends a third kind (`message.replied`) for the same id that
+    // has NO verified match, it walks past all occurrences and writes the new record.
+    const freshKind = await freshAppend(root, home, 'message.replied', 'decoy-id-1');
+    expect(freshKind.ok).toBe(true);
+    expect(freshKind.duplicate).toBe(false);
+    expect(freshKind.seq).toBe(real.record.payload.seq + 11);
+  });
 });

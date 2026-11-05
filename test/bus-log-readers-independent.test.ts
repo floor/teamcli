@@ -258,11 +258,11 @@ describe('feat/bus-log-rotation-readers independent verification', () => {
     expect(baseline.out).not.toContain('retained-size cap');
     expect(baseline.out).toContain('no differences');
 
-    // One byte under 4/5 (79,999,999 bytes split across live, .1, and .2) + 30 MB in out-of-bound slot .13
+    // One byte under 4/5 (79,999,999 bytes split across live, .1, and .2) + 30 MB in out-of-bound slot .51
     writeSparseSlot(w, 0, 30_000_000);
     const slot1 = writeSparseSlot(w, 1, 25_000_000);
     writeSparseSlot(w, 2, 24_999_999);
-    writeSparseSlot(w, 13, 30_000_000); // outside default kept=13 (slots 0..12)
+    writeSparseSlot(w, 51, 30_000_000); // outside default kept=51 (slots 0..50)
 
     // Make slot .1 unreadable (0o000) to prove `retainedLogBytes` only stats and never opens segment bytes
     chmodSync(slot1, 0o000);

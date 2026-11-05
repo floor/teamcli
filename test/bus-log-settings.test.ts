@@ -132,14 +132,14 @@ function appendLarge(fx: TeamScratch, id: string, bytes: number): void {
 }
 
 describe('the bus log settings', () => {
-  test('the segment size is a catalogue policy at the event levels, its fallback the shipped 8 MB', () => {
+  test('the segment size is a catalogue policy at the event levels, its fallback the shipped 2 MB', () => {
     const spec = getPolicySpec('bus.segment_mb');
     expect(spec?.name).toBe('event-segment-mb');
     expect(spec?.kind).toBe('enforced');
     expect(spec?.levels).toEqual(['entity', 'project', 'team', 'seat']);
     expect(spec?.defaultValue).toBe(EVENT_SEGMENT_MB);
-    expect(EVENT_SEGMENT_MB).toBe(8);
-    expect(EVENT_SEGMENT_BYTES).toBe(8_000_000);
+    expect(EVENT_SEGMENT_MB).toBe(2);
+    expect(EVENT_SEGMENT_BYTES).toBe(2_000_000);
     // The upper bound is half the retained-size cap: a full live segment and its predecessor
     // must both fit, or every sealed segment would be dropped as soon as it was written.
     expect(EVENT_SEGMENT_MB_MAX * 2_000_000).toBe(EVENT_LOG_TOTAL_BYTES);
@@ -259,7 +259,7 @@ describe('the segment size in force', () => {
     expect(idsRead(fx.root, fx.home)).toEqual(['big-1', 'big-2']);
   });
 
-  test('without a word the shipped 8 MB bounds the live segment, not 1 MB', () => {
+  test('without a word the shipped 2 MB bounds the live segment, not 1 MB', () => {
     const fx = makeTeamScratch();
     appendLarge(fx, 'big-1', 600_000);
     appendLarge(fx, 'big-2', 600_000);
