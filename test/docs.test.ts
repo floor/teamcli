@@ -32,10 +32,7 @@ function capture(): { io: Io; out(): string } {
 
 describe('the command reference', () => {
   for (const page of pages) {
-    // Known: on Linux the brief page never returns in this check (issue #738), so the page is
-    // skipped there and runs everywhere else. Remove this when the hang is fixed.
-    const check = page === 'brief.md' && process.platform !== 'darwin' ? test.skip : test;
-    check(`${page}`, async () => {
+    test(`${page}`, async () => {
       const markdown = readFileSync(join(DIR, page), 'utf8');
       const failures = await runPage(page, markdown);
       expect(failures.map((failure) => `${failure.page}:${failure.line}: ${failure.message}`).join('\n\n')).toBe('');
