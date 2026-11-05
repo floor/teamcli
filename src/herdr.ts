@@ -37,6 +37,9 @@ let customRun: HerdrRun | null = null;
 export function setHerdrRun(exec: HerdrRun | null): void {
   customRun = exec;
 }
+export function hasCustomHerdrRun(): boolean {
+  return customRun !== null;
+}
 
 function run(args: string[], session?: string): unknown {
   if (customRun) return customRun(args, session);
