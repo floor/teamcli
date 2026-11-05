@@ -26,7 +26,7 @@ import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState, type SeatState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-11-05T09:30:00Z');
 const SESSION = 'acme';
@@ -42,7 +42,7 @@ const NEW_PANE = 'fixture-pane-new';
 const NEW_SPACE = 'fixture-space-new';
 const OTHER_PANE = 'fixture-pane-other';
 const RECORDED = { shell: 100, cli: [200] };
-const A = { model: 'Claude Sonnet', version: '5.2', launch: 'claude --model claude-sonnet-5-2' };
+const A = { model: 'Claude Sonnet', version: '5.5', launch: 'claude --model claude-sonnet-5-5' };
 
 let base: string;
 let root: string;
@@ -75,8 +75,8 @@ seats:
     cli: claude-code
     vendor: anthropic
     model: Claude Sonnet
-    version: "5.2"
-    launch: claude --model claude-sonnet-5-2
+    version: "5.5"
+    launch: claude --model claude-sonnet-5-5
     human: true
   - role: implementer
     name: ${WORKER}
@@ -84,8 +84,8 @@ seats:
     cli: claude-code
     vendor: anthropic
     model: Claude Sonnet
-    version: "5.2"
-    launch: claude --model claude-sonnet-5-2
+    version: "5.5"
+    launch: claude --model claude-sonnet-5-5
 `;
 }
 
@@ -116,7 +116,11 @@ function recordReady(): void {
     launch_line: A.launch,
   };
   updateState(dir, (file) => {
-    (file.sessions[SESSION] ??= emptySession()).seats[WORKER] = held;
+    const session = (file.sessions[SESSION] ??= emptySession());
+    session.seats[WORKER] = held;
+    // A live pane watch already carries this route: these scenes are about the seat's own
+    // workspace, and this run must start no watch of its own beside it.
+    session.watch = { heartbeat: NOW.toISOString(), pane: 'fixture-watch-pane' };
   });
   registerAgent(home, {
     name: WORKER,
@@ -136,14 +140,11 @@ function recordReady(): void {
 
 const seatState = (): SeatState | undefined => readState(dir).sessions[SESSION]?.seats[WORKER];
 
-/** A captured idle screen whose banner names the model the line asked for. */
-const IDLE = (model: string): string =>
-  `⏺ ready\n\n  ${model} 5.5 · Claude Code 2.1.289\n❯ `;
+/** The captured Claude Code idle screen, its banner naming the model the line asked for. */
 const idleFor = (command: string): string => {
   const model = /--model(?:=|\s+)['"]?([A-Za-z0-9._-]+)/.exec(command)?.[1] ?? '';
-  if (model.includes('sonnet')) return IDLE('Sonnet');
-  if (model.includes('haiku')) return IDLE('Haiku');
-  return IDLE('Opus');
+  const family = model.includes('sonnet') ? 'Sonnet' : model.includes('haiku') ? 'Haiku' : 'Opus';
+  return CLAUDE_IDLE.replaceAll('Opus 5.5', `${family} 5.5`);
 };
 const sessionFor = (command: string): string | null =>
   /(?:--resume|--session-id)(?:=|\s+)['"]?([A-Za-z0-9][A-Za-z0-9._:-]*)/.exec(command)?.[1] ?? null;
