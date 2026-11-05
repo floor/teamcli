@@ -47,11 +47,34 @@ describe('the caller is placed by its parent processes', () => {
     const env = { HERDR_PANE_ID: 'pane2' };
     expect(placeCaller(sources(underEndpoint, { env, managedEndpointSeat: served }), 'main'))
       .toEqual({ kind: 'seat', name: 'codex-acme', pane: 'pane2', session: 'main' });
-    // Another session, or a pane herdr lists under another name, places nobody.
+    // At launch (before `rename` runs) or right after a restore, herdr lists the pane with `name: null`,
+    // or has not listed the agent yet while `paneRootPid` vouches that the pane exists in the session.
+    expect(placeCaller(sources(underEndpoint, {
+      env: { HERDR_PANE_ID: 'pane3' },
+      managedEndpointSeat: (pid) => (pid === 900 ? { session: 'main', seat: 'codex-acme', pane: 'pane3' } : null),
+    }), 'main')).toEqual({ kind: 'seat', name: 'codex-acme', pane: 'pane3', session: 'main' });
+    expect(placeCaller(sources(underEndpoint, {
+      agents: () => [],
+      paneRootPid: (pane) => (pane === 'pane2' ? 200 : null),
+      env,
+      managedEndpointSeat: served,
+    }), 'main')).toEqual({ kind: 'seat', name: 'codex-acme', pane: 'pane2', session: 'main' });
+    // Another session, a pane herdr lists under another name, a pane herdr does not know, or a silent herdr places nobody.
     expect(placeCaller(sources(underEndpoint, { env, managedEndpointSeat: served }), 'other'))
       .toMatchObject({ kind: 'unplaced' });
     expect(placeCaller(sources(underEndpoint, { env, managedEndpointSeat: () => ({ session: 'main', seat: 'codex-acme', pane: 'pane1' }) }), 'main'))
       .toMatchObject({ kind: 'unplaced' });
+    expect(placeCaller(sources(underEndpoint, {
+      agents: () => [],
+      paneRootPid: () => null,
+      env,
+      managedEndpointSeat: served,
+    }), 'main')).toMatchObject({ kind: 'unplaced', reason: expect.stringMatching(/detached from that pane/) });
+    expect(placeCaller(sources(underEndpoint, {
+      agents: () => null,
+      env,
+      managedEndpointSeat: served,
+    }), 'main')).toMatchObject({ kind: 'unplaced', reason: expect.stringMatching(/detached from that pane/) });
     // A Codex process that is no recorded endpoint stays the detached refusal.
     expect(placeCaller(sources(underEndpoint, { env, managedEndpointSeat: () => null }), 'main'))
       .toMatchObject({ kind: 'unplaced', reason: expect.stringMatching(/detached from that pane/) });
