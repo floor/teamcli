@@ -4,7 +4,7 @@
 // this writes nothing, runs nothing and opens no pane.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseYaml, type YamlNode } from '../yaml.ts';
+import { parseYaml, type YamlNode, type YamlScalar } from '../yaml.ts';
 
 /** The owner's subscriptions, one file for the machine: `<home>/.config/team/accounts.yaml`, an
  *  `accounts:` list of account names — or, since entities, a map from entity to the accounts it
@@ -112,6 +112,62 @@ export function machinePlansOf(home: string): Map<string, string> {
     if (plan !== '') plans.set(entry.key, plan);
   }
   return plans;
+}
+
+/** One account's credit figures, as the owner writes them down: the money available to pay usage
+ *  past the plan's limit, its currency, and — when the owner wrote them — the monthly overage cap
+ *  the credits may be spent to and whether the account reloads its credit automatically. No CLI
+ *  prints these figures, so the machine file is the one source; a console page the owner read
+ *  them from is never opened by this tool. */
+export type MachineCredit = {
+  available: number;
+  currency: string;
+  cap?: number;
+  autoReload?: boolean;
+};
+
+/** The credits the owner wrote down: an optional top-level `credits:` map in the same machine
+ *  file, keyed by account name, each entry a map of `available` (required), `currency` (required,
+ *  three letters) and optionally `cap` and `autoReload`
+ *  (`credits: { anthropic: { available: 260.50, currency: EUR, cap: 300, autoReload: false } }`).
+ *  The map is empty when the file is absent, does not parse or carries no `credits:` map; an
+ *  entry that names no available amount or no currency is skipped, never guessed, and an optional
+ *  field that is no figure is left out while the rest of the entry still reads. */
+export function machineCreditsOf(home: string): Map<string, MachineCredit> {
+  const credits = new Map<string, MachineCredit>();
+  let text: string;
+  try {
+    text = readFileSync(machineAccountsPath(home), 'utf8');
+  } catch {
+    return credits;
+  }
+  let root: YamlNode;
+  try {
+    root = parseYaml(text);
+  } catch {
+    return credits;
+  }
+  if (root.kind !== 'map') return credits;
+  const node = root.entries.find((entry) => entry.key === 'credits')?.value;
+  if (node === undefined || node.kind !== 'map') return credits;
+  for (const entry of node.entries) {
+    if (entry.key === '' || entry.value.kind !== 'map') continue;
+    const fields = new Map<string, YamlScalar>();
+    for (const field of entry.value.entries) {
+      if (field.value.kind === 'scalar') fields.set(field.key, field.value.value);
+    }
+    const available = fields.get('available');
+    const currency = fields.get('currency');
+    if (typeof available !== 'number' || !Number.isFinite(available) || available < 0) continue;
+    if (typeof currency !== 'string' || !/^[A-Za-z]{3}$/.test(currency.trim())) continue;
+    const one: MachineCredit = { available, currency: currency.trim().toUpperCase() };
+    const cap = fields.get('cap');
+    if (typeof cap === 'number' && Number.isFinite(cap) && cap > 0) one.cap = cap;
+    const autoReload = fields.get('autoReload');
+    if (typeof autoReload === 'boolean') one.autoReload = autoReload;
+    credits.set(entry.key, one);
+  }
+  return credits;
 }
 
 /** Which entity owns each account, the file's own order deciding a name two entities claim: the

@@ -2388,6 +2388,57 @@ describe('team usage', () => {
     expect(plain.out).not.toContain('(gemini)');
   });
 
+  test('the credits the owner wrote down print beside the account, with whether they cover the overage', async () => {
+    // Item 9 (the owner's run, 2026-11-05): the anthropic console showed €260.50 of credits
+    // available against a €300 monthly cap with auto-reload off, and the report showed none of
+    // it. No CLI prints these figures, so they come from the owner's own `credits:` entry in the
+    // machine file — never a credential, a session file or a CLI config folder.
+    withoutReadings();
+    withState();
+    writeFileSync(machineAccountsPath(home), 'accounts:\n  - anthropic\ncredits:\n  anthropic:\n    available: 260.50\n    currency: EUR\n    cap: 300\n    autoReload: false\n');
+    const withWeekly = (used: number, left: number, resetsAt: string): void => {
+      updateState(join(root, '.agents'), (state) => {
+        state.budgets = {
+          ...READINGS,
+          'anthropic/weekly/lead': { account: 'anthropic', window: 'weekly', left, used, changedAt: '2026-10-04T08:59:00Z', resetsAt, seat: 'lead', source: 'status_line', confirmed: true },
+        } as never;
+        state.sessions['acme-web'] = { ...emptySession() } as never;
+      });
+    };
+    const read = (used: number, left: number, resetsAt: number) => ({
+      account: 'anthropic', window: 'weekly' as const, left, used, resetsAt, resetText: null,
+      observedAt: NOW.getTime() - 60_000, source: 'status line' as const, seat: 'lead', margin: null, wall: false,
+    });
+
+    // Far ahead of its clock: the window is expected to run out before its reset, so the credits
+    // are what pays the overage — and €260.50 stops €39.50 short of the cap they may be spent to.
+    withWeekly(47.1, 52.9, '2026-10-10T15:00:00Z');
+    const io = testIo(root, OWNER);
+    expect(await runUsage([], io, { home, now: () => NOW, observe: () => ({ observations: [read(47.1, 52.9, NOW.getTime() + 150 * 3_600_000)], costs: [], notes: [] }) })).toBe(0);
+    expect(io.out).toContain('  anthropic  credits  €260.50 available  €300.00 monthly cap  auto-reload off  overage is expected before the reset; the credits cover it until they are spent, €39.50 short of the cap');
+
+    // The same figures reach a script, under the account they belong to.
+    const json = testIo(root, OWNER);
+    expect(await runUsage(['--json'], json, { home, now: () => NOW, observe: () => ({ observations: [read(47.1, 52.9, NOW.getTime() + 150 * 3_600_000)], costs: [], notes: [] }) })).toBe(0);
+    const doc = JSON.parse(json.out) as { credits?: Record<string, unknown> };
+    expect(doc.credits).toEqual({ anthropic: { available: 260.5, currency: 'EUR', cap: 300, autoReload: false } });
+
+    // On pace, there is no overage to cover before the reset, and the line says so.
+    withWeekly(96, 4, '2026-10-04T18:00:00Z');
+    const quiet = testIo(root, OWNER);
+    expect(await runUsage([], quiet, { home, now: () => NOW, observe: () => ({ observations: [read(96, 4, NOW.getTime() + 9 * 3_600_000)], costs: [], notes: [] }) })).toBe(0);
+    expect(quiet.out).toContain('auto-reload off  no overage is expected before the reset');
+
+    // With no credits entry the line is absent, and JSON carries no credits key at all.
+    writeFileSync(machineAccountsPath(home), 'accounts:\n  - anthropic\n');
+    const plain = testIo(root, OWNER);
+    expect(await runUsage([], plain, { home, now: () => NOW, observe: () => ({ observations: [read(96, 4, NOW.getTime() + 9 * 3_600_000)], costs: [], notes: [] }) })).toBe(0);
+    expect(plain.out).not.toContain('credits');
+    const plainJson = testIo(root, OWNER);
+    expect(await runUsage(['--json'], plainJson, { home, now: () => NOW })).toBe(0);
+    expect(JSON.parse(plainJson.out) as Record<string, unknown>).not.toHaveProperty('credits');
+  });
+
   test('a spend a seat’s own row printed is measured for that seat and its run, and never for another run', async () => {
     // The live case the owner asked for: the seat's row prints `S: $5.8`, and the report records
     // it per seat and per run — measured, with the screen it came from — while a seat the screen

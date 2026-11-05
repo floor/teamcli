@@ -18,7 +18,7 @@ import type { BudgetAccount, Seat, TeamFile } from '../file/types.ts';
 import { defaultBudgets } from '../file/validate.ts';
 import type { Io } from '../io.ts';
 import { collapseNotes, renderTable } from '../output/index.ts';
-import { labOfSeat, machineAccountsByEntityOf, machineAccountsOf, machinePlansOf, ownerEntityOf, payingAccountOf, payingPoolOf } from './machine-accounts.ts';
+import { labOfSeat, machineAccountsByEntityOf, machineAccountsOf, machineCreditsOf, machinePlansOf, ownerEntityOf, payingAccountOf, payingPoolOf, type MachineCredit } from './machine-accounts.ts';
 import { readMachineReadings, type MachineReading } from './machine-readings.ts';
 import { overridesInForceOf, quotaWith, type ProfileOverride } from '../profiles/overrides.ts';
 import { shippedQuotaAccounts } from '../profiles/profile.ts';
@@ -609,6 +609,9 @@ export type MachineUsage = {
   /** Each account's plan, in the owner's words, from the machine file's `plans:` map. An account
    *  with no entry has none, and its labels stay its own name. */
   plans: Map<string, string>;
+  /** Each account's credit figures, in the owner's words, from the machine file's `credits:` map.
+   *  An account with no entry has none and prints no credits line. */
+  credits: Map<string, MachineCredit>;
   readings: MachineReading[];
   /** Every team the walk read, in walk order. */
   teams: TeamEntry[];
@@ -689,6 +692,7 @@ function approvedSessionOf(text: string, root: string, home: string): string | n
 export function machineUsage(home: string, now: number, view: UsageView, sessions?: SessionLiveness, running?: RunningModels): MachineUsage {
   const machineAccounts = machineAccountsOf(home);
   const plans = machinePlansOf(home);
+  const credits = machineCreditsOf(home);
   const readings = readMachineReadings(home);
   const folder = storesFolder(home);
   let names: string[];
@@ -826,7 +830,7 @@ export function machineUsage(home: string, now: number, view: UsageView, session
   }
   return {
     home,
-    machineAccounts, plans, readings,
+    machineAccounts, plans, credits, readings,
     teams,
     stores: entries.filter((entry): entry is StoreEntry => entry.kind === 'store').map((entry) => entry.text),
     counts: { teams: entries.length, labs: labs.size, accounts: accountNames.size },
@@ -1141,6 +1145,10 @@ export type UsageReport = {
    *  states, seats and the one advice line. Built from observations the caller handed in and the
    *  machine's own reading store; never from a team the view hides. */
   quota: ReportQuota;
+  /** The credit figures the machine file writes down, keyed by the account they belong to and
+   *  copied field by field (never the owner's map by reference, the `ReportRow` rule). Present
+   *  only for a declared account this view prints a row for; absent when the owner wrote none. */
+  credits?: Record<string, MachineCredit>;
   unknown: ReportWhy[];
   notes: ReportNote[];
   /** The per-team seat breakdowns this view prints: the caller's own team by default, every
@@ -1671,6 +1679,25 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
       : [])))];
   const quota = quotaOf({ labs: quotaLabs, observations: synthesized.observations, accountsFile: ACCOUNTS_FILE, now, ...(expired.length > 0 ? { expired } : {}) });
 
+  // The owner's credit figures, for the accounts whose rows this view prints: a subscription's
+  // credits pay usage past the plan's limit, and an account this view hides gets no entry here,
+  // exactly like its rows. Copied field by field, so the owner's map never rides the JSON by
+  // reference.
+  const credits: Record<string, MachineCredit> = {};
+  for (const lab of labs) {
+    for (const entry of lab.accounts) {
+      if (entry.kind !== 'subscription' || credits[entry.account] !== undefined) continue;
+      const credit = machine.credits.get(entry.account);
+      if (credit === undefined) continue;
+      credits[entry.account] = {
+        available: credit.available,
+        currency: credit.currency,
+        ...(credit.cap === undefined ? {} : { cap: credit.cap }),
+        ...(credit.autoReload === undefined ? {} : { autoReload: credit.autoReload }),
+      };
+    }
+  }
+
   // Every why-line, the caller's own first, then by the words and the account: the order holds
   // in both views, so hiding a name cannot reshuffle the lines around it. A team that is not
   // running explains nothing about this machine: its why-lines are the same history its notes
@@ -1785,6 +1812,7 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
     },
     labs,
     quota,
+    ...(Object.keys(credits).length === 0 ? {} : { credits }),
     unknown,
     notes,
     teams: breakdowns,
@@ -2094,6 +2122,13 @@ export function reportText(report: UsageReport, tree = false): string {
           for (const row of entry.teams) extras.push(teamRowText(row));
         }
       }
+      // The owner's credit figures print once under the account they belong to, with the one
+      // answer the figures allow about the overage. They are the owner's words in the machine
+      // file, not a reading: no CLI prints them, so the line carries no age.
+      if (first.kind === 'subscription') {
+        const credit = report.credits?.[first.account];
+        if (credit !== undefined) extras.push(creditText(first, credit, quotaAccountOn(report.quota, first.account, first.pool)));
+      }
       // A not-readable account's `no pattern can read this account` why is the same fact the
       // machine row above it just said, machine-wide; every other why still prints, named by its
       // account now that the line no longer sits directly under it.
@@ -2152,6 +2187,42 @@ export function reportText(report: UsageReport, tree = false): string {
   lines.push('');
   lines.push(`usage on this machine, ${count(report.counts.teams, 'team')}, ${count(report.counts.labs, 'lab')}, ${count(report.counts.accounts, 'account')}`);
   return `${lines.join('\n')}\n`;
+}
+
+/** The sign a currency prints with where this tool knows one: the owner's credit figures are
+ *  read from a console that writes `€`, and a currency this table does not know keeps the figure
+ *  and its code (`260.50 CHF`), never a guessed sign. */
+const CURRENCY_SIGNS: Record<string, string> = { EUR: '€', USD: '$', GBP: '£', JPY: '¥' };
+
+function amountText(amount: number, currency: string): string {
+  const sign = CURRENCY_SIGNS[currency];
+  return sign === undefined ? `${money(amount)} ${currency}` : `${sign}${money(amount)}`;
+}
+
+/** The credits line under an account's rows: the money the owner wrote down, its monthly cap and
+ *  the reload state, then the one answer these figures allow about the overage. Overage is
+ *  expected when the account's own state is `walled` or `near cap` — a window past its cap or on
+ *  course to empty before it resets. The expected overage in money is a figure no CLI prints and
+ *  no plan price would give, so the line answers with the limit the credits are spent to: the
+ *  whole cap when the credit reaches it, else how far short of the cap the credit stops. A state
+ *  no reading can say prints neither answer, rather than a claim the figures do not hold. */
+function creditText(entry: { account: string; plan?: string }, credit: MachineCredit, account: ReportQuotaAccount | null): string {
+  const parts = [`${amountText(credit.available, credit.currency)} available`];
+  if (credit.cap !== undefined) parts.push(`${amountText(credit.cap, credit.currency)} monthly cap`);
+  if (credit.autoReload !== undefined) parts.push(credit.autoReload ? 'auto-reload on' : 'auto-reload off');
+  const state = account?.state ?? 'unknown';
+  if (state === 'walled' || state === 'near cap') {
+    const head = 'overage is expected before the reset';
+    if (credit.cap === undefined) parts.push(`${head}; the credits cover it until they are spent`);
+    else if (credit.available >= credit.cap) parts.push(`${head}; the credits cover the whole cap`);
+    else parts.push(`${head}; the credits cover it until they are spent, ${amountText(credit.cap - credit.available, credit.currency)} short of the cap`);
+  } else if (state === 'ok') {
+    parts.push('no overage is expected before the reset');
+  } else {
+    parts.push('no fresh reading, so overage cannot be expected or ruled out');
+  }
+  const label = accountLabel({ account: entry.account, ...(entry.plan === undefined ? {} : { plan: entry.plan }) });
+  return `  ${label}  credits  ${parts.join('  ')}`;
 }
 
 /** One team's per-seat figures, under its seat table in the tree: the run the seats belong to,
