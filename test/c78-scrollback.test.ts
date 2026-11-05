@@ -32,6 +32,10 @@ const EXIT = readFileSync(join(FIXTURES, 'exit.txt'), 'utf8');
 const FOOTER = 'New activity · ↓ Back to bottom · esc';
 // The same pane without the footer: no composer, no footer, no shape this profile reads.
 const NO_FOOTER = SCROLL_BACK.split('\n').filter((line) => !line.startsWith('New activity')).join('\n');
+// The second reported layout: the composer stays drawn, its marker above it, and codex's own
+// status footer on the last row.
+const SCROLL_BACK_MARKER = readFileSync(join(FIXTURES, 'scroll-back-marker.txt'), 'utf8');
+const MARKER = '↓ Back to bottom · esc';
 
 const NOW = new Date('2026-11-04T15:00:00.000Z');
 const N = 600;
@@ -49,6 +53,14 @@ const DELIVERED: TypedWakeResult = {
 /** The idle frame with `text` drawn in place of the grey suggestion. */
 function holding(text: string): string {
   return IDLE.replace('› Ask Codex to do anything', `› ${text}`);
+}
+
+/** The marker frame with its marker row replaced by `row`: the transcript above and the bottom
+ *  region below stay the fixture's own, and one row is changed. */
+function markerReplaced(row: string): string {
+  return SCROLL_BACK_MARKER.split('\n')
+    .map((line) => (line.trim() === MARKER ? row : line))
+    .join('\n');
 }
 
 /** A pane scripted by how many reads and Enters it has seen, and by the lines typed into it.
@@ -252,9 +264,54 @@ describe('the Codex scroll-back screen reads idle-but-scrolled', () => {
   });
 });
 
+describe('the second reported scroll-back layout reads from its bottom region', () => {
+  test('the marker above the composer and the status footer on the last row read scroll back', () => {
+    expect(readScreen('codex', SCROLL_BACK_MARKER).kind).toBe('scroll back');
+    expect(screenWord(readScreen('codex', SCROLL_BACK_MARKER))).toBe('idle');
+    // The C7.8 layout still reads the same way: two reported layouts, one reading.
+    expect(readScreen('codex', SCROLL_BACK).kind).toBe('scroll back');
+    // The composer alone still reads nothing here: the status footer takes the row's place.
+    expect(classifyComposer('codex', SCROLL_BACK_MARKER.split('\n')).kind).toBe('unknown');
+  });
+
+  test('only the bottom region reads it: a transcript row is never the marker or the footer', () => {
+    // A transcript line that merely contains the marker's words is not the marker row.
+    expect(readScreen('codex', markerReplaced('  The log printed ↓ Back to bottom · esc before the merge.')).kind).toBe('unknown');
+    // An exact marker row is the marker only directly above the composer: one printed row
+    // between it and the box, with the same row higher up, is transcript.
+    const displaced = markerReplaced('• a row the seat printed').replace(
+      '• Merged into the release branch.',
+      `• Merged into the release branch.\n\n                                                    ${MARKER}`,
+    );
+    expect(readScreen('codex', displaced).kind).toBe('unknown');
+    // A footer-shaped row is the footer only on the last non-blank row.
+    expect(readScreen('codex', `${SCROLL_BACK_MARKER}\n• a row the seat printed\n`).kind).toBe('unknown');
+    // ...and only as the whole row: a near miss is no reading.
+    expect(readScreen('codex', SCROLL_BACK_MARKER.replace('Earlier messages available.', 'Earlier messages are available.')).kind).toBe('unknown');
+    expect(readScreen('codex', SCROLL_BACK_MARKER.replace('? shortcuts', '? shortcuts now')).kind).toBe('unknown');
+  });
+
+  test('a working turn above the marker keeps its caution reading', () => {
+    // The turn's own row sits in the pane's last rows, where the window reads it: the caution
+    // stage wins before the bottom region is asked.
+    const working = markerReplaced(`• Working (0s • esc to interrupt)\n\n                                                    ${MARKER}`);
+    expect(readScreen('codex', working).kind).toBe('working');
+  });
+});
+
 describe('the typed wake returns to the prompt, then keeps every guard', () => {
   test('the scroll-back footer is escaped once, then two idle reads and the guarded Enter deliver', async () => {
     const screens = [SCROLL_BACK, IDLE, IDLE, holding(LINE), holding(LINE), WORKING];
+    const wake = wakeFake((read) => screens[Math.min(read, screens.length - 1)] ?? null);
+    const out = await deliverTypedWake(wake.host, 'pane-1', LINE, 'codex', FAST);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(wake.keys).toEqual(['escape']);
+    expect(wake.typed).toEqual([LINE]);
+    expect(wake.enters).toBe(1);
+  });
+
+  test('the marker layout is escaped once, then two idle reads and the guarded Enter deliver', async () => {
+    const screens = [SCROLL_BACK_MARKER, IDLE, IDLE, holding(LINE), holding(LINE), WORKING];
     const wake = wakeFake((read) => screens[Math.min(read, screens.length - 1)] ?? null);
     const out = await deliverTypedWake(wake.host, 'pane-1', LINE, 'codex', FAST);
     expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
@@ -408,6 +465,48 @@ describe('an unrecognised screen for a due message tells the lead', () => {
     const { made, team } = world();
     const dropDir = seed(made, 11);
     const one = pane(SCROLL_BACK, null);
+    const calls: { pane: string; line: string }[] = [];
+    const said: string[] = [];
+    await wakeUnreadDrops(scene(made, team, said, typedSources(one, calls), NOW, 'unknown'), { unreadAfter: N });
+    expect(calls).toHaveLength(1);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('typed wake');
+    expect(leadDrops(made.dir)).toEqual([]);
+    expect(existsSync(wakePath(dropDir, UNREAD))).toBe(true);
+  });
+
+  test('the marker layout behind a due message is woken, not reported', async () => {
+    const { made, team } = world();
+    const dropDir = seed(made, 11);
+    const one = pane(SCROLL_BACK_MARKER, 'idle');
+    const calls: { pane: string; line: string }[] = [];
+    const said: string[] = [];
+    await wakeUnreadDrops(scene(made, team, said, typedSources(one, calls), NOW, 'idle'), { unreadAfter: N });
+    expect(calls).toHaveLength(1);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('typed wake');
+    expect(leadDrops(made.dir)).toEqual([]);
+    expect(existsSync(wakePath(dropDir, UNREAD))).toBe(true);
+  });
+
+  test('the marker layout whose host word is unknown is woken, not dropped', async () => {
+    const { made, team } = world();
+    const dropDir = seed(made, 11);
+    const one = pane(SCROLL_BACK_MARKER, 'unknown');
+    const calls: { pane: string; line: string }[] = [];
+    const said: string[] = [];
+    await wakeUnreadDrops(scene(made, team, said, typedSources(one, calls), NOW, 'unknown'), { unreadAfter: N });
+    expect(calls).toHaveLength(1);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('typed wake');
+    expect(leadDrops(made.dir)).toEqual([]);
+    expect(existsSync(wakePath(dropDir, UNREAD))).toBe(true);
+  });
+
+  test('the marker layout whose host word is null is woken, not dropped', async () => {
+    const { made, team } = world();
+    const dropDir = seed(made, 11);
+    const one = pane(SCROLL_BACK_MARKER, null);
     const calls: { pane: string; line: string }[] = [];
     const said: string[] = [];
     await wakeUnreadDrops(scene(made, team, said, typedSources(one, calls), NOW, 'unknown'), { unreadAfter: N });

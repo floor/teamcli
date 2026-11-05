@@ -108,6 +108,12 @@ rows changed, as a seat's own screen draws them.
   reported from a live seat that sat in this view with the prompt out of sight; no pane of
   that view was captured, so the transcript rows above it are this file's own. Read `unknown`
   before the profile declared the footer, and `scroll back` after.
+- `scroll-back-marker.txt`: the second reported scroll-back layout, where the composer stays
+  drawn: the marker `↓ Back to bottom · esc` sits directly above the input row and the status
+  footer `Earlier messages available.  enter/esc latest · ? shortcuts … ⚠ 1 warning · f2 to
+  view` is the last row. The bottom region was reported from a live seat's saved screen; the
+  transcript rows above it are this file's own, in `scroll-back.txt`'s voice. Read `unknown`
+  before the profile declared the marker and the status footer, and `scroll back` after.
 
 The used variant is Codex's own: `strings` on the installed `codex-cli 0.161.0` prints
 `Context `, `% left`, `Context `, `% used` beside the status-surface ids

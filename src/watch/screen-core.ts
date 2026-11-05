@@ -1611,20 +1611,51 @@ function failedComposer(data: ScreenData, plain: string[], tick: () => boolean):
   return floorScreen(floorLast(plain, data.chrome, tick));
 }
 
-/** The pane is scrolled back over its transcript: the composer cannot be read, and the profile's
- *  declared footer is the pane's last non-blank row. Asked only when a composer read came back
- *  unknown, after every caution stage, so a turn still running, a draft, or a dialog that draws
- *  itself keeps its own reading and the footer never hides one. False when the profile declares
- *  no footer, when that row is anything else, or when the budget runs out — a row read out of
- *  time grounds nothing. */
+/** The pane is scrolled back over its transcript: the composer cannot be read, and the
+ *  profile's declared bottom region is the pane's own. Two layouts are declared, each read as
+ *  whole rows from the pane's bottom region only, never from a transcript row higher up that
+ *  quotes them:
+ *
+ *  - `footer` — the composer is hidden and the footer is the pane's last non-blank row.
+ *  - `marker` with `statusFooter` — the composer stays drawn; its marker is the nearest
+ *    non-blank row above the last prompt row, and the status footer is the pane's last non-blank
+ *    row. Read here because that footer leaves the status row above the composer unread, so the
+ *    composer alone is unknown while the pane is still behind the scroll.
+ *
+ *  Asked only when a composer read came back unknown, after every caution stage, so a turn still
+ *  running, a draft, or a dialog that draws itself keeps its own reading and the bottom region
+ *  never hides one. False when the profile declares neither layout, when a row of the region is
+ *  anything else, or when the budget runs out — a row read out of time grounds nothing. */
 function scrolledBack(data: ScreenData, plain: string[], tick: () => boolean): boolean {
-  const footer = data.scrollBack?.footer;
-  if (footer === undefined) return false;
+  const spec = data.scrollBack;
+  if (spec === undefined) return false;
+  let last = -1;
   for (let i = plain.length - 1; i >= 0; i--) {
+    if (tick()) return false;
+    if ((plain[i] ?? '').trim() === '') continue;
+    last = i;
+    break;
+  }
+  if (last < 0) return false;
+  const bottom = plain[last] ?? '';
+  if (spec.footer !== undefined && spec.footer.test(bottom)) return true;
+  if (spec.marker === undefined || spec.statusFooter === undefined) return false;
+  if (!spec.statusFooter.test(bottom)) return false;
+  const prompt = 'prompt' in data.composer ? data.composer.prompt : null;
+  if (prompt === null) return false;
+  let box = -1;
+  for (let i = last - 1; i >= 0; i--) {
+    if (tick()) return false;
+    if (!prompt.test(plain[i] ?? '')) continue;
+    box = i;
+    break;
+  }
+  if (box < 0) return false;
+  for (let i = box - 1; i >= 0; i--) {
     if (tick()) return false;
     const line = plain[i] ?? '';
     if (line.trim() === '') continue;
-    return footer.test(line);
+    return spec.marker.test(line);
   }
   return false;
 }

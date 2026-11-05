@@ -432,10 +432,16 @@
     "scrollBack": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["footer", "return_key"],
+      "required": ["return_key"],
+      "anyOf": [
+        { "required": ["footer"] },
+        { "required": ["marker", "status_footer"] }
+      ],
       "properties": {
-        "footer": { "type": "string", "minLength": 1, "description": "The CLI's scroll-back footer as the whole row it draws, \"^…$\": the pane's last non-blank row when it is scrolled back, where the composer would be. Read only where the composer cannot be read, after every caution stage." },
-        "return_key": { "enum": ["escape"], "description": "The key the footer itself names for returning to the prompt. Only a key a run established at this screen." }
+        "footer": { "type": "string", "minLength": 1, "description": "The first reported layout: the CLI's scroll-back footer as the whole row it draws, \"^…$\", on the pane's last non-blank row with the composer hidden. Read only where the composer cannot be read, after every caution stage." },
+        "marker": { "type": "string", "minLength": 1, "description": "The second reported layout: the whole row of the CLI's return marker, \"^…$\", as the nearest non-blank row above the drawn composer. Read only together with \"status_footer\", where the composer cannot be read." },
+        "status_footer": { "type": "string", "minLength": 1, "description": "The whole row of the CLI's scroll-back status footer, \"^…$\", on the pane's last non-blank row beneath the marker and the drawn composer. Read only together with \"marker\"." },
+        "return_key": { "enum": ["escape"], "description": "The key the CLI's own row names for returning to the prompt. Only a key a run established at this screen." }
       }
     },
     "questionText": {

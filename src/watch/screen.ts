@@ -20,11 +20,13 @@ export type Screen =
   | { kind: 'idle' }                 // the idle prompt, with an empty input box
   | { kind: 'working' }              // a turn is running: herdr's status would already be stale
   | { kind: 'unsent' }               // text left in the input box
-  | { kind: 'scroll back' }          // the pane scrolled back over its transcript: the composer
-                                     // is hidden and the CLI's own footer stands in its place.
-                                     // Read only where the composer cannot be read; the seat is
-                                     // at its prompt behind the scroll, so it reads idle, and
-                                     // only a wake that may press the profile's return key acts
+  | { kind: 'scroll back' }          // the pane scrolled back over its transcript: the CLI's own
+                                     // rows stand at the bottom — a footer in the composer's
+                                     // place, or a marker above a drawn composer with a status
+                                     // footer under it. Read only where the composer cannot be
+                                     // read; the seat is at its prompt behind the scroll, so it
+                                     // reads idle, and only a wake that may press the profile's
+                                     // return key acts
   | { kind: 'permission' }           // a permission dialog: its owner's to answer
   | { kind: 'plan approval' }        // a plan the agent wrote, waiting to execute: read before
                                      // `permission`, whose generic numbered choice it draws too;
