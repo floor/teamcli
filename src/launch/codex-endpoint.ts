@@ -259,7 +259,7 @@ export function codexCommandOf(pid: number): string | null {
  *  `Tue Oct 20 05:19:15 2026` (one-second resolution, local time), which `Date.parse` reads as
  *  that instant. `ps` here has no `etimes` keyword; `etime` is formatted, so the start line is
  *  the field to read. */
-function processStartOf(pid: number): number | null {
+export function processStartOf(pid: number): number | null {
   try {
     const line = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' }).trim();
     const at = Date.parse(line);

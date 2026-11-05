@@ -19,6 +19,7 @@ import { readRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts
 import {
   isSocketFile,
   ownedSocketPath,
+  processStartOf,
   recordStartMatches,
   unmanagedEndpointNotes,
 } from '../launch/codex-endpoint.ts';
@@ -1506,14 +1507,8 @@ function unmanagedCodexServerDifferences(
   if (live !== null && !live.running) return out;
   const endpointSources = sources.codexEndpoint;
   const aliveFn = endpointSources?.alive
-    ?? sources.closeOrphans?.alive
     ?? sources.alive;
-  const startOfFn = endpointSources?.startOf
-    ?? sources.closeOrphans?.startOf
-    ?? (sources.orphans !== undefined
-      ? (pid: number): number | null =>
-          sources.orphans?.table()?.find((row) => row.pid === pid)?.startedAtMs ?? null
-      : undefined);
+  const startOfFn = endpointSources?.startOf;
 
   for (const seat of team.seats) {
     if (seat.stopped || seat.human === true || seat.cli !== 'codex') continue;
