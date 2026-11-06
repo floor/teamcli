@@ -191,8 +191,8 @@ function isReceiptName(name: string): boolean {
   return name.endsWith('.json') && PRESENCE_ID.test(name.slice(0, -5));
 }
 
-/** The atomic writer's exact staging form. Its own mtime, rather than its receipt id's
- *  timestamp, sets the sweep's five-minute retention window. */
+/** The atomic writer's exact staging form. Its inode ctime, rather than its mtime or its
+ *  receipt id's timestamp, sets the sweep's five-minute retention window. */
 function isReceiptStagingName(name: string): boolean {
   const suffix = /\.new\.[a-f0-9]{16}$/.exec(name);
   return suffix !== null && suffix.index + suffix[0].length === name.length
@@ -204,7 +204,7 @@ function isReceiptStagingName(name: string): boolean {
  *  starve later junk. Receipts and recent writer staging names are preserved. Listing/sorting
  *  still scales with the directory size. No payload is read and no directory is followed
  *  or recursively removed. */
-export function sweepNonId(root: string, directory: string): number {
+export function sweepNonId(root: string, directory: string, now = Date.now()): number {
   let names: string[];
   try { names = readdirSync(directory).sort(); }
   catch { spoolSweepResume.delete(directory); return readRejectedDropped(root) ?? 0; }
@@ -225,7 +225,7 @@ export function sweepNonId(root: string, directory: string): number {
     }
     start = low === names.length ? 0 : low;
   }
-  const stagingCutoff = Date.now() - STATUS_STAGING_KEEP_MS;
+  const stagingCutoff = now - STATUS_STAGING_KEEP_MS;
   let removed = 0;
   for (let scanned = 0; scanned < Math.min(STATUS_SPOOL_SWEEP_CAP, names.length); scanned += 1) {
     const name = names[(start + scanned) % names.length]!;
@@ -233,8 +233,8 @@ export function sweepNonId(root: string, directory: string): number {
     if (isReceiptName(name)) continue;
     const path = join(directory, name);
     if (isReceiptStagingName(name)) {
-      // Age the name itself, never a link target. Unknown or future ages retain the name.
-      try { if (!(lstatSync(path).mtimeMs < stagingCutoff)) continue; }
+      // Age the inode itself, never a link target. An unknown age retains the name.
+      try { if (!(lstatSync(path).ctimeMs < stagingCutoff)) continue; }
       catch { continue; }
     }
     try { unlinkSync(path); removed += 1; }
