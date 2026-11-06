@@ -102,6 +102,12 @@ function body(text: string, block: SeatBlock): string[] {
   return text.split('\n').slice(block.start, block.end);
 }
 
+/** Bare only when a YAML 1.1 read would keep the same text. A digit-leading id (`12e45`, all digits) is quoted. */
+function yamlWord(text: string): string {
+  const bare = /^[A-Za-z_/~][A-Za-z0-9_./@~-]*$/.test(text) && !/^(~|null|true|false)$/i.test(text);
+  return bare ? text : JSON.stringify(text);
+}
+
 function setValue(line: string, value: string): string {
   const match = /^(\s*(?:-\s+)?[A-Za-z0-9_-]+:\s*)(.*)$/.exec(line);
   if (!match) return line;
@@ -111,11 +117,12 @@ function setValue(line: string, value: string): string {
   // The value keeps the line's own quoting style, so the quote characters inside it have to be
   // escaped for that style: a shell word may carry `"$USER"` or a quoted argument, and writing
   // those raw into a double-quoted scalar ended the string early and left the file unparseable.
+  // A bare line that would not round-trip (a float-shaped or all-digit id) is quoted instead.
   const quoted = raw.startsWith('"')
     ? `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
     : raw.startsWith("'")
       ? `'${value.replaceAll("'", "''")}'`
-      : value;
+      : yamlWord(value);
   return `${match[1]}${quoted}${comment}`;
 }
 
@@ -491,14 +498,14 @@ export function renameTeamIdentity(
 
   if (opts.inProject !== undefined && inProjectIdx < 0) {
     const after = entityIdx >= 0 ? entityIdx : projectIdx >= 0 ? projectIdx : 0;
-    lines.splice(after + 1, 0, `in_project: ${opts.inProject}`);
+    lines.splice(after + 1, 0, `in_project: ${yamlWord(opts.inProject)}`);
     if (sessionIdx > after) sessionIdx++;
     inProjectIdx = after + 1;
   }
 
   if (opts.session !== undefined && sessionIdx < 0) {
     const after = inProjectIdx >= 0 ? inProjectIdx : entityIdx >= 0 ? entityIdx : projectIdx >= 0 ? projectIdx : 0;
-    lines.splice(after + 1, 0, `session: ${opts.session}`);
+    lines.splice(after + 1, 0, `session: ${yamlWord(opts.session)}`);
   }
 
   return lines.join('\n');

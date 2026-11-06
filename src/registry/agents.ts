@@ -165,7 +165,7 @@ function cloneAgents(agents: readonly Agent[]): Agent[] {
   return agents.map(cloneAgent);
 }
 
-/** Every valid agent record, by id. A file that does not parse or validate is skipped, never fatal. */
+/** Every valid agent record, by id. Invalid files are skipped; a numeric reach id refuses with a quoting repair. */
 export function readAgents(home: string): Agent[] {
   const memo = currentRunMemo();
   if (memo !== null) {
@@ -443,6 +443,13 @@ function readAgentFile(path: string, id: string): Agent | null {
   } catch {
     return null;
   }
+  if (isObj(value) && isObj(value.reach)) {
+    for (const field of ['team', 'seat', 'session'] as const) {
+      if (typeof value.reach[field] === 'number') {
+        throw new Error(`${path}: reach.${field} must be text: quote it`);
+      }
+    }
+  }
   const agent = fromValue(value);
   // The file name is the id: a file whose body says otherwise is not trusted. A record the writer
   // would refuse is not handed out either.
@@ -482,9 +489,9 @@ function strings(value: YamlValue | undefined): string[] | null {
   return out;
 }
 
-// A scalar the emitter wrote quoted always comes back a string; a plain number-looking value in a
-// hand-edited file (a version `5.5`) is read as a string too, since these fields are text.
-function text(value: YamlValue | undefined): string | null {
+// Model and version display fields retain compatibility with finite numbers in hand-edited files.
+// Identity fields use str instead, so a numeric scalar cannot become another identifier.
+function displayText(value: YamlValue | undefined): string | null {
   if (typeof value === 'string') return value;
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   return null;
@@ -518,15 +525,15 @@ function fromValue(value: YamlValue): Agent | null {
   const orphanedAt = strOrNull(value.orphaned_at);
   const id = str(value.id);
   const name = str(value.name);
-  const model = text(signing.model);
-  const version = text(signing.version);
-  const role = text(signing.role);
+  const model = displayText(signing.model);
+  const version = displayText(signing.version);
+  const role = str(signing.role);
   const lab = str(value.lab);
   const cli = str(value.cli);
   const launch = value.launch === undefined || value.launch === null ? '' : str(value.launch);
-  const team = text(reach.team);
-  const seat = text(reach.seat);
-  const session = text(reach.session);
+  const team = str(reach.team);
+  const seat = str(reach.seat);
+  const session = str(reach.session);
   const registeredBy = str(provenance.registered_by);
   const registeredAt = str(provenance.registered_at);
   const updatedAt = str(provenance.updated_at);
@@ -642,7 +649,7 @@ function emitPolicies(policies: Record<string, YamlValue>): string[] {
     if (isObj(entry)) {
       lines.push(`  ${quote(name)}:`);
       for (const [k, v] of Object.entries(entry)) {
-        lines.push(`    ${k}: ${emitYamlValue(v ?? null)}`);
+        lines.push(`    ${quote(k)}: ${emitYamlValue(v ?? null)}`);
       }
     } else {
       lines.push(`  ${quote(name)}: ${emitYamlValue(entry ?? null)}`);
@@ -660,7 +667,7 @@ function emitSettings(settings: Record<string, YamlValue>): string[] {
     if (isObj(entry)) {
       lines.push(`  ${quote(name)}:`);
       for (const [k, v] of Object.entries(entry)) {
-        lines.push(`    ${k}: ${emitYamlValue(v ?? null)}`);
+        lines.push(`    ${quote(k)}: ${emitYamlValue(v ?? null)}`);
       }
     } else {
       lines.push(`  ${quote(name)}: ${emitYamlValue(entry ?? null)}`);
