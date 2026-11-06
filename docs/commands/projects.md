@@ -134,6 +134,43 @@ projects:
     provenance: { registered_by: team, registered_at: "2026-10-05T04:00:00.000Z", updated_at: "2026-10-05T04:00:00.000Z" }
 ```
 
+```yaml file=../../.config/team/teams.yaml
+teams:
+  7a8b9c0d1e2f:
+    project: beacon
+    project_id: beacon
+    entity: acme
+    session: beacon
+    root: /work/beacon
+    lobby: /home/lobby
+    roster:
+      - { agent: agt_0123456789ab, seat: seat-a, role: coordinator }
+    lifecycle: defined
+    provenance: { registered_by: owner, registered_at: "2026-10-05T04:00:00.000Z", updated_at: "2026-10-05T04:00:00.000Z" }
+  1a2b3c4d5e6f:
+    project: teamcli
+    project_id: teamcli
+    entity: floor
+    session: teamcli
+    root: /work/teamcli
+    lobby: /home/lobby
+    roster:
+      - { agent: agt_ba9876543210, seat: seat-b, role: coordinator }
+    lifecycle: defined
+    provenance: { registered_by: owner, registered_at: "2026-10-05T04:00:00.000Z", updated_at: "2026-10-05T04:00:00.000Z" }
+  6f5e4d3c2b1a:
+    project: teamcli-lab
+    project_id: teamcli
+    entity: floor
+    session: teamcli-lab
+    root: /work/teamcli-lab
+    lobby: /home/lobby
+    roster:
+      - { agent: agt_cd9876543210, seat: seat-c, role: implementer }
+    lifecycle: defined
+    provenance: { registered_by: owner, registered_at: "2026-10-05T04:00:00.000Z", updated_at: "2026-10-05T04:00:00.000Z" }
+```
+
 ```console
 $ team projects ; echo "exit $?"
 ID       NAME     ENTITY  LEAD      TEAMS
