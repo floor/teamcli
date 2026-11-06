@@ -249,18 +249,22 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
     expect(pane.enters).toBe(0);
   });
 
-  test('an idle box under the shortcuts line is typed; a turn footer is not', async () => {
+  test('an idle box under the shortcuts line is prompted once; a turn footer is not', async () => {
     const shortcuts = IDLE.replace(/\? for shortcuts[\s\S]*$/, 'Press ? to see keyboard shortcuts.\n');
     expect(readScreen('antigravity', shortcuts).kind).toBe('idle');
     const idlePane = wakeFake(() => shortcuts);
-    const typed = await deliverTypedWake(idlePane.host, 'pane-1', LINE, 'antigravity', FAST);
-    expect(typed.typed).toBe(true);
-    expect(idlePane.typed).toEqual([LINE]);
+    const woken = await deliverTypedWake(idlePane.host, 'pane-1', LINE, 'antigravity', FAST);
+    expect(woken.delivered).toBe(false);
+    expect(woken.reason).toBe('no working screen showed after the agent prompt');
+    expect(idlePane.prompts).toEqual([LINE]);
+    expect(idlePane.typed).toEqual([]);
+    expect(idlePane.enters).toBe(0);
     const interrupt = IDLE.replace(/\? for shortcuts[\s\S]*$/, 'Press esc to interrupt generation.\n');
     expect(readScreen('antigravity', interrupt).kind).toBe('working');
     const livePane = wakeFake(() => interrupt);
     const refused = await deliverTypedWake(livePane.host, 'pane-1', LINE, 'antigravity', FAST);
     expect(refused).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed working, not an empty idle prompt; nothing was typed' });
+    expect(livePane.prompts).toEqual([]);
     expect(livePane.typed).toEqual([]);
     expect(livePane.enters).toBe(0);
     expect(readScreen('antigravity', WORKING).kind).toBe('working');

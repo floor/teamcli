@@ -158,20 +158,24 @@ describe('the Grok typed wake: the profile’s own screens gate the keys', () =>
     expect(pane.enters).toBe(0);
   });
 
-  test('an idle prompt with a stale spinner above it is typed; a live working pane is not', async () => {
+  test('an idle prompt with a stale spinner above it is prompted once; a live working pane is not', async () => {
     const lines = IDLE.split('\n');
     const frame = lines.findLastIndex((line) => line.includes('╭'));
     lines[frame - 12] = '   ⠸ Waiting for response…        16s ⇣20.7k [stop]';
     const stale = lines.join('\n');
     expect(readScreen('grok', stale).kind).toBe('idle');
     const idlePane = wakeFake(() => stale);
-    const typed = await deliverTypedWake(idlePane.host, 'pane-1', LINE, 'grok', FAST);
-    expect(typed.typed).toBe(true);
-    expect(idlePane.typed).toEqual([LINE]);
+    const woken = await deliverTypedWake(idlePane.host, 'pane-1', LINE, 'grok', FAST);
+    expect(woken.delivered).toBe(false);
+    expect(woken.reason).toBe('no working screen showed after the agent prompt');
+    expect(idlePane.prompts).toEqual([LINE]);
+    expect(idlePane.typed).toEqual([]);
+    expect(idlePane.enters).toBe(0);
     expect(readScreen('grok', WORKING).kind).toBe('working');
     const livePane = wakeFake(() => WORKING);
     const refused = await deliverTypedWake(livePane.host, 'pane-1', LINE, 'grok', FAST);
     expect(refused).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed working, not an empty idle prompt; nothing was typed' });
+    expect(livePane.prompts).toEqual([]);
     expect(livePane.typed).toEqual([]);
     expect(livePane.enters).toBe(0);
   });
