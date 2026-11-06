@@ -189,6 +189,21 @@ function setWord(
   if (!written.ok) throw new Error(written.why);
 }
 
+/** Register one more team in the fixture's home, so an address naming it passes the write-time
+ *  registry check and the load-time entity/team rule is what refuses it. */
+function addOtherTeam(fx: { base: string; home: string }, project: string): void {
+  const root = join(fx.base, project);
+  mkdirSync(root, { recursive: true });
+  upsertTeam(fx.home, teamIdOf(root), {
+    project,
+    session: project,
+    entity: 'other-org',
+    root,
+    roster: [],
+    at: NOW.toISOString(),
+  });
+}
+
 describe('independent verification of feat/router-policies', () => {
   test('probe 1: a team cannot retarget an entity alias or touch its fallback; with no entity word it may add its own', () => {
     // 1a. The release ships no alias, so a team word for an alias no entity placed is an add:
@@ -513,6 +528,7 @@ describe('independent verification of feat/router-policies', () => {
     for (const outsideTarget of ['outsider@other-team', 'outsider@foreign-entity', 'ghost@beacon']) {
       const subAlias = makeFixture();
       try {
+        for (const word of ['other-team', 'foreign-entity']) addOtherTeam(subAlias, word);
         setWord(subAlias, 'team', 'router.aliases', `helper=${outsideTarget}`);
         expect(readMailboxRouterPolicy(subAlias.root, subAlias.home, NOW)).toEqual({
           ok: false,
@@ -524,6 +540,7 @@ describe('independent verification of feat/router-policies', () => {
 
       const subFallback = makeFixture();
       try {
+        for (const word of ['other-team', 'foreign-entity']) addOtherTeam(subFallback, word);
         setWord(subFallback, 'team', 'router.aliases', 'mirror=lead@beacon');
         setWord(subFallback, 'team', 'router.fallback', `mirror=${outsideTarget}`);
         expect(readMailboxRouterPolicy(subFallback.root, subFallback.home, NOW)).toEqual({
@@ -538,6 +555,7 @@ describe('independent verification of feat/router-policies', () => {
     // 4c. Team check surfaces broken router words with per-level unset repairs:
     const fxCheck = makeFixture();
     try {
+      addOtherTeam(fxCheck, 'foreign-entity');
       setWord(fxCheck, 'entity', 'router.aliases', 'lead=lead@beacon');
       setWord(fxCheck, 'team', 'router.aliases', 'helper=outsider@foreign-entity');
       setWord(fxCheck, 'team', 'router.fallback', 'lead=worker@beacon');

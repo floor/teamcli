@@ -216,6 +216,22 @@ function planWord(
   return plan.ok ? { ok: true } : { ok: false, why: plan.why };
 }
 
+/** Register one more team in the fixture's home, so a scene can write an address whose team word
+ *  resolves and still prove the load-time rule — the team is another entity's, or has no seat to
+ *  name. Without the record the write itself is refused, which is a different scene. */
+function addOtherTeam(fx: { base: string; home: string }, project: string): void {
+  const root = join(fx.base, project);
+  mkdirSync(root, { recursive: true });
+  upsertTeam(fx.home, teamIdOf(root), {
+    project,
+    session: project,
+    entity: 'other-org',
+    root,
+    roster: [],
+    at: NOW.toISOString(),
+  });
+}
+
 describe('the mailbox router policy words', () => {
   test('a fresh install declares no word, so the map is empty', () => {
     const fx = makeFixture();
@@ -264,6 +280,7 @@ describe('the mailbox router policy words', () => {
   test('an entity word names a team of the entity, never one outside it', () => {
     const fx = makeFixture();
     try {
+      addOtherTeam(fx, 'foreign');
       setWord(fx, 'entity', 'router.aliases', 'pal=helper@foreign');
       const read = readMailboxRouterPolicy(fx.root, fx.home, NOW);
       expect(read.ok).toBe(false);
@@ -274,6 +291,7 @@ describe('the mailbox router policy words', () => {
     }
     const fx2 = makeFixture();
     try {
+      addOtherTeam(fx2, 'foreign');
       setWord(fx2, 'entity', 'router.fallback', 'lead=helper@foreign');
       const moved = readMailboxRouterPolicy(fx2.root, fx2.home, NOW);
       expect(moved.ok).toBe(false);
@@ -372,6 +390,7 @@ describe('the mailbox router policy words', () => {
   test('a team alias may only name a seat of its own team', () => {
     const fx = makeFixture();
     try {
+      addOtherTeam(fx, 'elsewhere');
       setWord(fx, 'team', 'router.aliases', 'pal=pal@elsewhere');
       const read = readMailboxRouterPolicy(fx.root, fx.home, NOW);
       expect(read.ok).toBe(false);
@@ -545,6 +564,7 @@ describe('the mailbox router policy words', () => {
   test('a team fallback for its own alias names a seat of the same team', () => {
     const fx = makeFixture();
     try {
+      addOtherTeam(fx, 'other');
       setWord(fx, 'team', 'router.aliases', 'mirror=lead@beacon');
       setWord(fx, 'team', 'router.fallback', 'mirror=outside@other');
       const read = readMailboxRouterPolicy(fx.root, fx.home, NOW);
