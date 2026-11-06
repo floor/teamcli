@@ -59,6 +59,11 @@ function isStringList(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((one) => typeof one === 'string');
 }
 
+/** Fixed identities are opaque literals, never paths or templates. */
+export function isFixedResumeSession(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== '' && !/[\x00-\x1f\x7f-\x9f{}]/.test(value);
+}
+
 type Sink = Diagnostic[];
 type Ctx = { file?: string; level?: string; launcher?: string };
 
@@ -358,7 +363,13 @@ export function validateDefinition(
           if (resume.mode === 'state_file' && (typeof resume.path !== 'string' || resume.path === '')) {
             fail(diagnostics, ctxN, 'E_RESUME_SHAPE', 'resume.path', 'state_file needs the path of the resume state');
           }
-          if (resume.path !== undefined && typeof resume.path === 'string') checkPlaceholders(diagnostics, ctxN, resume.path, 'resume.path');
+          if (resume.mode === 'fixed') {
+            if (!isFixedResumeSession(resume.path)) {
+              fail(diagnostics, ctxN, 'E_RESUME_SHAPE', 'resume.path', 'fixed needs a nonblank literal session identity without controls or braces');
+            }
+          } else if (resume.path !== undefined && typeof resume.path === 'string') {
+            checkPlaceholders(diagnostics, ctxN, resume.path, 'resume.path');
+          }
           if (resume.precedence !== undefined && resume.precedence !== 'teamcli_wins' && resume.precedence !== 'preset_wins') {
             fail(diagnostics, ctxN, 'E_RESUME_SHAPE', 'resume.precedence', 'precedence is teamcli_wins or preset_wins');
           }

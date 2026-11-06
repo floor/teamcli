@@ -60,7 +60,8 @@ export type ProviderBlock = {
 
 export type ResumeBlock = {
   mode: ResumeMode;
-  /** state_file: where the preset keeps its resume word. fixed: the word itself. */
+  /** state_file: where the preset keeps its resume word. fixed: the literal identity
+   *  itself, nonblank with no controls or braces; never placeholder-expanded. */
   path?: string;
   precedence: ResumePrecedence;
 };
@@ -135,7 +136,7 @@ export type ResolvedEnv = { name: string; value: string } | { name: string; secr
 export type ResolvedResume =
   | { kind: 'teamcli'; session: string }
   | { kind: 'preset_state_file'; path: string }
-  | { kind: 'preset_fixed' }
+  | { kind: 'preset_fixed'; session: string }
   | { kind: 'preset_inline' }
   | { kind: 'none' };
 

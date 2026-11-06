@@ -6,7 +6,7 @@
 // here executes a launch, reads a credential store or inspects process.env.
 import { checkSandbox, SANDBOX_CAPABILITIES } from './sandbox.ts';
 import { mergeSettingsObject, readSettingsObject, settingsSpans, type SettingsIssue, type SettingsSpan } from './settings.ts';
-import { validateDefinition } from './validate.ts';
+import { isFixedResumeSession, validateDefinition } from './validate.ts';
 import type {
   ArgClass,
   ArgPolicy,
@@ -505,6 +505,10 @@ export function resolveLaunch(
   // Resume: teamcli_wins beats the preset's resume state whenever TeamCLI passes a session.
   let resume: ResolvedResume = { kind: 'none' };
   const resumeBlock = terminal.kind === 'preset' ? terminal.resume : undefined;
+  // Also guard explicit Discovery inputs before caller precedence can mask invalid data.
+  if (resumeBlock?.mode === 'fixed' && !isFixedResumeSession(resumeBlock.path)) {
+    return fail('fixed needs a nonblank literal session identity without controls or braces', 'E_RESUME_SHAPE');
+  }
   if (ctx.sessionArg !== undefined && (resumeBlock?.precedence ?? 'teamcli_wins') === 'teamcli_wins') {
     resume = { kind: 'teamcli', session: ctx.sessionArg };
   } else if (resumeBlock !== undefined) {
@@ -516,7 +520,7 @@ export function resolveLaunch(
         resume = { kind: 'preset_inline' };
         break;
       case 'fixed':
-        resume = { kind: 'preset_fixed' };
+        resume = { kind: 'preset_fixed', session: resumeBlock.path as string };
         break;
       case 'state_file': {
         const path = expand(resumeBlock.path ?? '', ctx);

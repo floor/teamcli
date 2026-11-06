@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { parseYaml, toValue } from '../src/yaml.ts';
 import { discover, resolveLaunch, type LauncherHome, type ResolveContext } from '../src/launchers/resolve.ts';
 import { checkSandbox } from '../src/launchers/sandbox.ts';
+import { validateDefinition } from '../src/launchers/validate.ts';
 import type { Diagnostic } from '../src/launchers/types.ts';
 
 const FIXTURES = join(import.meta.dir, 'fixtures', 'launchers');
@@ -291,6 +292,64 @@ describe('resume precedence and restore behavior', () => {
     expect(resumed.resume).toEqual({ kind: 'preset_state_file', path: '/srv/example/team-home/lead-session' });
     expect(codes(resumed.diagnostics)).toContain('W_RESUME_STATE_UNVERIFIED');
     expect(codes(resumed.diagnostics)).not.toContain('W_RESUME_STATE_MISSING');
+  });
+});
+
+describe('fixed resume identity', () => {
+  const identity = 'example conversation Ω; $(literal)';
+  function definition(path: unknown, precedence?: string) {
+    return {
+      format: 1, name: 'fixed-example', kind: 'preset', harness: 'claude-code',
+      writable_folders: [{ path: '{root}' }], args: ['--model', 'example-model'],
+      resume: { mode: 'fixed', ...(path === undefined ? {} : { path }),
+        ...(precedence === undefined ? {} : { precedence }) },
+    };
+  }
+  function run(path: unknown, precedence?: string, sessionArg?: string) {
+    return resolveLaunch({ launcher: 'fixed-example', args: ['--effort', 'high'] },
+      discover([{ level: 'team', files: { 'fixed-example.yaml': definition(path, precedence) } }]),
+      { ...CTX, ...(sessionArg === undefined ? {} : { sessionArg }) });
+  }
+
+  for (const precedence of [undefined, 'teamcli_wins', 'preset_wins']) {
+    for (const caller of [undefined, 'example-caller']) {
+      test(`fixed identity and argv: ${precedence ?? 'default'}, caller ${caller === undefined ? 'absent' : 'present'}`, () => {
+        const out = run(identity, precedence, caller);
+        expect(out.ok).toBe(true);
+        expect(out.resume).toEqual(caller !== undefined && precedence !== 'preset_wins'
+          ? { kind: 'teamcli', session: caller }
+          : { kind: 'preset_fixed', session: identity });
+        expect(out.argv).toEqual(['claude-code', '--model', 'example-model', '--effort', 'high']);
+        expect(JSON.stringify(out.diagnostics)).not.toContain(identity);
+      });
+    }
+  }
+
+  for (const path of [undefined, '', '   ', 42, null, false, [], {}, 'example\u0000word',
+    '{session}', '{root}', '{inbox}', 'example-{unknown-private-word}', 'example-{unfinished']) {
+    test(`invalid fixed identity refuses before caller precedence: case ${JSON.stringify(path)?.length ?? 0}/${typeof path}`, () => {
+      const checked = validateDefinition(definition(path, 'teamcli_wins'));
+      expect(checked.def).toBeNull();
+      expect(codes(checked.diagnostics)).toContain('E_RESUME_SHAPE');
+      const out = run(path, 'teamcli_wins', 'example-caller');
+      expect(out.ok).toBe(false);
+      expect(out.resume).toEqual({ kind: 'none' });
+      if (typeof path === 'string' && path.trim() !== '') {
+        expect(JSON.stringify(checked.diagnostics)).not.toContain(path);
+        expect(JSON.stringify(out.diagnostics)).not.toContain(path);
+      }
+    });
+  }
+
+  test('other literal resume modes retain their decisions without argv synthesis', () => {
+    for (const [mode, expected] of [['none', { kind: 'none' }], ['inline', { kind: 'preset_inline' }]] as const) {
+      const raw = { ...definition(undefined, 'preset_wins'), resume: { mode, precedence: 'preset_wins' } };
+      const out = resolveLaunch({ launcher: 'fixed-example' },
+        discover([{ level: 'team', files: { 'fixed-example.yaml': raw } }]), CTX);
+      expect(out.ok).toBe(true);
+      expect(out.resume).toEqual(expected);
+      expect(out.argv).toEqual(['claude-code', '--model', 'example-model']);
+    }
   });
 });
 
