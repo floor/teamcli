@@ -794,6 +794,7 @@
     "test/provider-error-live-region.test.ts": 1,
     "test/provider-error-screens.test.ts": 4,
     "test/provider-prompt-coverage.test.ts": 0,
+    "test/publication-gate-null-recipient-independent.test.ts": 4,
     "test/public-name-policy.test.ts": 1,
     "test/public-names-check.test.ts": 1,
     "test/public-only.test.ts": 2,
