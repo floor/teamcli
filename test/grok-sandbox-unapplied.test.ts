@@ -15,7 +15,9 @@ const FRAME = [
 
 test('a synthetic frame that carries the sandbox refusal is recognised', () => {
   expect(grokSandboxUnapplied(FRAME)).toBe(true);
-  expect(grokSandboxUnapplied(`stderr: ${GROK_SANDBOX_UNAPPLIED}\n`)).toBe(true);
+  expect(grokSandboxUnapplied(`stderr: ${GROK_SANDBOX_UNAPPLIED}\n`)).toBe(false);
+  expect(grokSandboxUnapplied(`before\n \twarning: ${GROK_SANDBOX_UNAPPLIED}: missing profile\n`)).toBe(true);
+  expect(grokSandboxUnapplied(`warning: ${GROK_SANDBOX_UNAPPLIED}ness`)).toBe(false);
   expect(grokSandboxUnapplied('idle prompt\n› ')).toBe(false);
 });
 
@@ -26,6 +28,50 @@ test('team status names the stopped seat from the record, not from a stored sent
   );
   expect(notes).toEqual([`worker: stopped: ${GROK_SANDBOX_UNAPPLIED}`]);
 });
+
+const IDLE = readFileSync(new URL('./fixtures/grok/1.0.70/idle.txt', import.meta.url), 'utf8');
+for (const [name, text] of [
+  ['an echoed launch line', `grok --trust --rules 'If your pane shows ${GROK_SANDBOX_UNAPPLIED}, stop.'`],
+  ['a quoted first answer', `The pane never said "${GROK_SANDBOX_UNAPPLIED}".`],
+] as const) {
+  test(`${name} does not stop a Grok seat during its launch wait`, async () => {
+    const frame = `${text}\n${IDLE}`;
+    const recorded: unknown[] = [];
+    const closed: string[] = [];
+    const host: Host = {
+      startServer: () => true,
+      sessionUp: () => true,
+      createWorkspace: () => ({ pane: 'owned-pane', workspace: 'owned-space' }),
+      paneRun: () => true,
+      typeLine: () => { throw new Error('unexpected terminal typing'); },
+      renameAgent: () => true,
+      closeWorkspace: (_session, workspace) => { closed.push(workspace); return true; },
+      markStopped: () => { throw new Error('unexpected team-file stop'); },
+      stopSession: () => true,
+      kill: () => { throw new Error('unexpected process signal'); },
+      agentPanes: () => [],
+      classify: () => 'idle',
+      foreground: () => ['grok'],
+      paneText: () => frame,
+      sleep: async () => {},
+      now: () => 0,
+      allow: () => null,
+      record: (_seat, patch) => { recorded.push(patch); },
+      running: () => {}, drop: () => {}, say: () => {}, log: () => {},
+    };
+    const steps: Step[] = [{
+      kind: 'wait', text: 'until worker shows its idle prompt',
+      do: { do: 'idle', seat: 'worker', label: 'worker', cli: 'grok', seconds: 5,
+        command: 'grok', pane: 'owned-pane', workspace: 'owned-space', repairLine: 'synthetic repair' },
+    }];
+    const result = await executePlan(steps, 'orbit-scene', host);
+    expect(result.dropped).toEqual([]);
+    expect(result.held).toBe(false);
+    expect(closed).toEqual([]);
+    expect(recorded).not.toContainEqual({ stage: 'launched', sandbox_unapplied: { why: GROK_SANDBOX_UNAPPLIED } });
+    expect(grokSandboxUnapplied(frame)).toBe(false);
+  });
+}
 
 test('a sandbox warning leaves the team file bytes unchanged', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'sandbox-stop-'));

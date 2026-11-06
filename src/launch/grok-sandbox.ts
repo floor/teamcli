@@ -263,10 +263,10 @@ export function writeGrokSandbox(sandbox: GrokSandbox): { ok: true } | { ok: fal
 /** The words Grok prints when it did not apply the sandbox it was asked for. */
 export const GROK_SANDBOX_UNAPPLIED = 'sandbox could not be applied';
 
-/** Whether stderr or a pane's frames contain Grok's own sandbox refusal. The match is the
- *  phrase itself, so a synthetic frame is enough and no CLI is started. */
+/** Grok's own warning line, never a phrase in an echoed launch or a model answer. Synthetic
+ *  frames exercise the same line match without starting a CLI. */
 export function grokSandboxUnapplied(text: string): boolean {
-  return text.includes(GROK_SANDBOX_UNAPPLIED);
+  return /^\s*warning: sandbox could not be applied\b/m.test(text);
 }
 
 /** The line `team status` and `team check` show for a seat stopped on that refusal. The words
