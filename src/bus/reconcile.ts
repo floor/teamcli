@@ -917,18 +917,27 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
         }
         let entry = cachedEntry(state, seatDir, file, stamp);
         if (entry === null || entry.kind !== 'receipt') {
+          // A `.read.json` receipt is a signed envelope in this build, and its name alone proves
+          // nothing. A pass that cannot read the message key cannot check it: that is unchecked,
+          // not unverified, so the file is left for a pass that holds the key — the drop scan
+          // beside it leaves an unverifiable record the same way, storing nothing.
+          if (receipt.receipt === 'read' && file.endsWith('.read.json') && keyState.kind !== 'key') {
+            yield;
+            continue;
+          }
           const fresh = fileStampOf(fullPath);
           if (fresh === null) {
             yield;
             continue;
           }
-          // A `.read.json` receipt is a signed envelope in this build, and its name alone proves
-          // nothing. Verify it exactly as the settle side does before reading `read_by`: a file
+          // Verify the receipt exactly as the settle side does before reading `read_by`: a file
           // this checkout's key never signed is no read, so it raises no step and no clearance.
-          const signed = receipt.receipt === 'read' && file.endsWith('.read.json') && keyState.kind === 'key'
-            ? readVerifiedReceipt(fullPath, receipt.id, 'read', { to: seat, root, session }, keyState.key)
+          const readJson = receipt.receipt === 'read' && file.endsWith('.read.json');
+          const key = keyState.kind === 'key' ? keyState.key : null;
+          const signed = readJson && key !== null
+            ? readVerifiedReceipt(fullPath, receipt.id, 'read', { to: seat, root, session }, key)
             : null;
-          const unverified = receipt.receipt === 'read' && file.endsWith('.read.json') && signed === null;
+          const unverified = readJson && signed === null;
           const clearedBy = signed === null ? null : leadAckActorOf(signed.payload.read_by);
           entry = {
             kind: 'receipt',

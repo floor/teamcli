@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendEvent, readEvents, type EventPayload } from '../src/bus/log.ts';
@@ -12,7 +12,7 @@ import { dropMessage } from '../src/send/native.ts';
 import { markPending } from '../src/send/pending.ts';
 import { signReceiptPayload, signRecord, type RecordPayload } from '../src/send/record.ts';
 import { emptySession, updateState } from '../src/state.ts';
-import { messageKeyOf, RECEIPT_DOMAIN, signDomain } from '../src/store/keys.ts';
+import { messageKeyOf, messageKeyPath, RECEIPT_DOMAIN, signDomain } from '../src/store/keys.ts';
 
 const dirs: string[] = [];
 
@@ -278,6 +278,71 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     // `op-1` is a listed seat, not the coordinator: nothing settled, so nothing is raised for it.
     const reads = pass.raised.filter((record) => record.payload.kind === 'message.read');
     expect(reads.map((record) => record.payload.record_id)).not.toContain('drop-11:read');
+  });
+
+  test('a key-blind pass stores no verdict, so a keyed pass raises the signed read', () => {
+    // A pass that cannot read the message key cannot tell a signed receipt from a plant. It must
+    // leave the file for the next pass: storing an `unverified` verdict by stamp would keep a
+    // receipt this checkout signed unraised for the bus's whole lifetime.
+    const { root, home } = makeScratch();
+    const seatDir = join(root, '.agents', 'send-drops', 'acme', 'worker-1');
+    mkdirSync(seatDir, { recursive: true });
+    dropRecord({ root, home }, 'worker-1', 'drop-14');
+    const read = signReceiptPayload({
+      kind: 'receipt',
+      status: 'read',
+      id: 'drop-14',
+      to: 'worker-1',
+      root,
+      session: 'acme',
+      at: '2026-10-18T12:05:00.000Z',
+    }, home);
+    writeFileSync(join(seatDir, 'drop-14.read.json'), `${JSON.stringify(read, null, 2)}\n`);
+
+    const keyPath = messageKeyPath(home);
+    const hidden = `${keyPath}.hidden`;
+    const state = createReconcileState();
+    renameSync(keyPath, hidden);
+    try {
+      const blind = reconcilePass({
+        project: 'acme',
+        root,
+        session: 'acme',
+        home,
+        state,
+        now: new Date('2026-10-18T12:10:00.000Z'),
+      });
+      expect(blind.ok).toBe(true);
+      if (!blind.ok) return;
+      expect(blind.raised.filter((record) => record.payload.kind === 'message.read')).toHaveLength(0);
+    } finally {
+      renameSync(hidden, keyPath);
+    }
+
+    const keyed = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      state,
+      now: new Date('2026-10-18T12:11:00.000Z'),
+    });
+    expect(keyed.ok).toBe(true);
+    if (!keyed.ok) return;
+    expect(keyed.raised.filter((record) => record.payload.kind === 'message.read').map((record) => record.payload.record_id))
+      .toEqual(['drop-14:read']);
+
+    const again = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      state,
+      now: new Date('2026-10-18T12:12:00.000Z'),
+    });
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.raised.filter((record) => record.payload.kind === 'message.read')).toHaveLength(0);
   });
 
   test('an unsigned receipt raises no read step, least of all a clearance', () => {
