@@ -561,7 +561,11 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
   const ceilings = ceilingsOf(team);
 
-  const live = sources.sessionState(session);
+  // A request records the add and starts nothing, so a session the host cannot read is not a
+  // refusal. The approval run reads the session when it adds. Until then the session counts as
+  // absent: no live agents, and no launch.
+  const read = sources.sessionState(session);
+  const live = read === null && requesting ? 'absent' : read;
   if (live === null) {
     refuse(io, json, 'add', { id: 'add.herdr', message: 'herdr doesn\'t answer', repair: null });
     // exit: add.herdr
@@ -913,6 +917,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       : []),
   ]) {
     if (blocksLaunch(finding)) {
+      // A request records the add and starts nothing, so a launch miss does not refuse it.
+      // The approval run reads those misses when it adds.
+      if (requesting) continue;
       // A missing approval record is the live file, the same way `up` reads it. The doctor's
       // never-approved miss is that record's absence, and it does not stop this add.
       if (finding.text.includes('team approve') || finding.text.includes('never approved')) continue;
