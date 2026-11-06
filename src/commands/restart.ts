@@ -86,7 +86,7 @@ import { dropMessage } from '../send/native.ts';
 import { nativePushBindingFor } from '../send/push.ts';
 import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
-import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
+import { emptySession, mintSeatId, readState, updateState, worktreeOf, type SeatState, type SessionState } from '../state.ts';
 import { recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
 import { ensureSeatLine, registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
@@ -915,6 +915,8 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
 
   const liveRules = standing.kind !== 'verified' || owner;
   const planSeat = buildUpSeat(standing, team, next, start, root, home, liveRules, input.rulesOrigin ?? 'file');
+  const tree = worktreeOf(recordedSession, next.name);
+  if (tree !== undefined) planSeat.worktree = tree.path;
   if (input.registryLaunch) planSeat.launch = input.registryLaunch;
   const declaredLaunch = planSeat.launch;
   // The recorded conversation, resumed on the new declaration. The profile decides whether the

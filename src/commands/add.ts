@@ -66,7 +66,7 @@ import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { emptySession, mintSeatId, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
+import { emptySession, mintSeatId, readState, updateState, withLock, worktreeOf, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { watchLabel } from '../watch/pane.ts';
@@ -1152,6 +1152,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (liftAudit !== null) liftAudit();
 
     const planSeat = verifiedLobby && seatForPlan.lobby ? { ...seatForPlan, cwd: verifiedLobby } : seatForPlan;
+    const tree = worktreeOf(readState(dir).sessions[session], planSeat.name);
+    if (tree !== undefined) planSeat.worktree = tree.path;
     const who = clientText ?? describeCaller(caller);
     if (clientRun !== null && built.edited !== original) {
       const said = clientRosterText('add', built.name, clientRun);

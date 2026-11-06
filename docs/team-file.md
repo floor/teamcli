@@ -249,9 +249,37 @@ idle, a running turn is working, and only a screen the profile cannot read is un
 The Grok profile is tested with CLI 1.0.50 to 1.0.52 (`grok`). It adds `--trust
 --permission-mode auto` and three `--allow` rules naming the commands an unattended seat runs,
 and checks login with `grok models`. Rules ride the launch line as `--rules`. Each launch also
-starts the seat inside a sandbox profile TeamCLI writes first: `--sandbox team-seat-<project>`,
-kept in the user-level `sandbox.toml` under Grok's own home, granting read-write on the team's
-state folder and the project's `.agents` while everything else stays the workspace's own grant.
+starts the seat inside a sandbox profile TeamCLI writes first: `--sandbox team-seat-<project>-<seat>`,
+kept in the user-level `sandbox.toml` under Grok's own home. The profile grants read-write on the
+seat's worktree, its start folder, and only these paths of its own: under the git common dir,
+`objects/`, `refs/`, `logs/` and `worktrees/<that worktree>`; under `.agents`,
+`send-drops/<session>/<seat>`, `messages/<seat>` and `seat-state/<session>/<seat>/`.
+The session's seat-state folder is not granted. The hook writes `state.json` inside the seat's
+folder, and its temporary file is renamed there. A seat launched before this layout keeps writing
+`seat-state/<session>/<seat>.json` until it restarts. Readers take the newer of that file and
+`state.json`; nothing is moved or deleted. The flat path is dropped in the next minor, once every
+seat has restarted on the new hook. A file kept from before the session keying is still claimed
+into the seat's folder when neither of those two is present. `packed-refs` is never granted.
+A fetch or `git pack-refs` that must rewrite packed refs is refused at `packed-refs.lock` (EPERM)
+and fails loudly; commits and loose-ref fetches work. The common dir's config and hooks remain
+outside the grants. Before the profile is written, the launch creates the seat's drop folder,
+`messages/<seat>` and `seat-state/<session>/<seat>/`. It also creates a missing `objects/`, `refs/`
+or `logs/` as a directory, because commit and fetch write there. A path is named only when it
+exists as a directory. Any surviving grant of another type refuses the launch; the repair is to
+fix that path and launch the seat again.
+The launcher writes `hooks/<session>/<seat>.json` before the pane starts; that file is not granted,
+so the seat cannot rewrite the commands its CLI runs. It grants nothing under `~/.config/team`,
+not the `.agents` folder, and not the common dir's `hooks/`, `config` or `info/`. A Grok seat
+still starts in its lobby. That lobby is under `~/.config/team` and is shared, so the start folder
+is not a sandbox grant when it lies there; the seat is not moved to another folder. A start folder
+that is the shared project root is refused: that grant would cover `.agents` and the checkout's
+git directory, and the repair is to give the seat its own worktree or clone. The launch also
+removes a leftover `[profiles.team-seat-<project>]` table when it writes the per-seat profile.
+A profile that cannot be written refuses the seat: nothing is launched without the sandbox, and
+the repair is to fix the sandbox file and launch the seat again. If Grok cannot apply its sandbox
+for a reason outside these grants, it may still run unsandboxed; the launch does not yet refuse
+that warning on screen.
+`extends = "workspace"` is written; what that preset itself grants is unmeasured.
 
 The Cursor profile is tested with CLI 2026.10.01 to 2026.10.22 (`cursor-agent`). The 2026.10.22
 captures are its ready, unsent and working screens; its dialog shapes are those captured at

@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { selfRunner } from '../mcp/register.ts';
@@ -16,6 +17,17 @@ import type { TeamFile } from '../file/types.ts';
 /** The pace the idle wait polls a pane at — and the one a pause re-reads an opened pane at, and
  *  reads a trust prompt's terminal with, when `team answer` may be racing it. */
 export const IDLE_POLL_MS = 2000;
+
+function samePlace(a: string, b: string): boolean {
+  const place = (folder: string): string => {
+    try {
+      return realpathSync(folder);
+    } catch {
+      return resolve(folder);
+    }
+  };
+  return place(a) === place(b);
+}
 
 /** How long a replacement waits for a signalled watch to be confirmed gone. A watch stopped by a
  *  signal ends its wait and returns well inside this; a process still alive at the deadline is
@@ -82,8 +94,8 @@ export type Op =
       codexEndpoint?: { dir: string };
       /**
        * A Grok seat's sandbox profile, written at launch before the pane's command runs. Set
-       * only when this plan named the profile on the line, so a failure can take the same
-       * `--sandbox` off again instead of launching a line Grok would refuse.
+       * only when this plan named the profile on the line. A file that cannot be written
+       * refuses the seat; the line is not launched without the profile.
        */
       grokSandbox?: GrokSandbox }
   /** `why` is the reason the record and the log carry; `detail`, when the reason has a fuller
@@ -336,6 +348,8 @@ export interface UpSeat {
   launch: string;
   /** Relative to the root. */
   cwd: string;
+  /** The seat's recorded worktree, relative to the root or absolute. */
+  worktree?: string;
   label: string;
   /** Sidebar line 2, set on the pane after launch. Absent: the plan does not report one. */
   displayAgent?: string;
@@ -1205,13 +1219,24 @@ export function upPlan(input: UpInput): Step[] {
     // before the command runs from this decision, never by searching the built command's text,
     // which is shell-quoted there.
     const rulesLine = profile.rulesMode === 'message' && !seat.rulesRefusal ? seat.rulesFile?.line : undefined;
-    // A Grok seat runs inside the sandbox profile this run writes for it: the workspace's own
-    // grant plus the two folders the seat's state lives in. The profile belongs to the team's
-    // project, and a launch line that names its own `--sandbox` keeps it — nothing is written
-    // for a profile this run did not name. A plan with no home or no team file cannot place the
-    // file, and names no profile rather than one Grok could not find.
+    // A Grok seat runs inside the sandbox profile this run writes for it: its worktree, its
+    // start folder, and only that seat's own paths under the git common dir and under `.agents`.
+    // The profile belongs to the seat. A launch line that names its own `--sandbox` keeps it —
+    // nothing is written for a profile this run did not name. A plan with no home or no team
+    // file cannot place the file, and names no profile rather than one Grok could not find.
+    const sandboxWorktree = seat.worktree === undefined
+      ? undefined
+      : isAbsolute(seat.worktree) ? seat.worktree : resolve(input.root, seat.worktree);
     const grokSandbox = profile.cli === 'grok' && input.home !== undefined && input.team !== undefined
-      ? grokSandboxOf({ home: input.home, root: input.root, project: input.team.project })
+      ? grokSandboxOf({
+        home: input.home,
+        root: input.root,
+        project: input.team.project,
+        seat: seat.name,
+        session,
+        cwd,
+        ...(sandboxWorktree === undefined ? {} : { worktree: sandboxWorktree }),
+      })
       : undefined;
     // The line's own `--sandbox` keeps the file's choice. Asked of the CLI's decoded words,
     // exactly as the launch command asks every "does the line already set this": a flag inside a
@@ -1225,6 +1250,18 @@ export function upPlan(input: UpInput): Step[] {
     const plannedSandbox = grokSandbox !== undefined && !lineNamesSandbox
       ? grokSandbox
       : undefined;
+    // A start folder that is the shared project root would grant that whole checkout, including
+    // `.agents` and the checkout's git directory. The launch refuses it. The repair is a worktree
+    // or a clone of the seat's own, not a grant of the root.
+    if (grokSandbox !== undefined && wouldLaunch && samePlace(cwd, input.root)) {
+      const why = 'its start folder is the shared project root, which would grant the whole checkout; give the seat its own worktree or clone';
+      steps.push({
+        kind: 'skip',
+        text: `${seat.name}: would refuse: ${why}`,
+        do: { do: 'refuse', seat: seat.name, why },
+      });
+      continue;
+    }
     // The line is built before the steps that create or close a workspace: a refusal must come
     // before any of them, and the warnings it produces are said on the launch step where they
     // have always been said.

@@ -130,14 +130,15 @@ describe('writing is atomic', () => {
   test('no temporary file is left behind, and the lock is released', () => {
     const agent = registerAgent(home, init());
     updateAgent(home, agent.id, { name: 'Other' });
-    expect(readdirSync(agentsDir(home)).sort()).toEqual([`${agent.id}.yaml`]);
+    // `seq` is the folder's write count, kept beside the record. It is not a temporary file.
+    expect(readdirSync(agentsDir(home)).sort()).toEqual([`${agent.id}.yaml`, 'seq']);
   });
 
   test('a failed write leaves the old record intact', () => {
     const agent = registerAgent(home, init());
     expect(() => updateAgent(home, agent.id, { lifecycle: 'bogus' as never })).toThrow(/lifecycle/);
     expect(getAgent(home, agent.id)).toEqual(agent);
-    expect(readdirSync(agentsDir(home)).sort()).toEqual([`${agent.id}.yaml`]);
+    expect(readdirSync(agentsDir(home)).sort()).toEqual([`${agent.id}.yaml`, 'seq']);
   });
 
   test('a stray temporary file or foreign file is not an agent', () => {

@@ -60,6 +60,10 @@ export type AgentProvenance = {
   registered_by: string;
   registered_at: string;
   updated_at: string;
+  /** A count of writes in this folder, increasing by one under the folder lock. A tie on
+   *  `updated_at` uses it after the conversation mark. An older file has none. The agent id is
+   *  random and is never this count. */
+  seq?: number;
   /** The mark of a record a dev-mode run wrote. `registered_by` is the registrant's and never
    *  changes, so the caller that run admitted — and when it wrote — is kept beside the mark: a
    *  record registered by the owner and re-written under dev mode by another caller names that
@@ -182,6 +186,7 @@ export function registerAgent(home: string, init: AgentInit): Agent {
         registered_by: by,
         registered_at: now,
         updated_at: now,
+        seq: takeSeq(dir),
         ...(devMode === true ? { dev_mode: true, dev_mode_by: by, dev_mode_at: now } : {}),
         ...(delegated !== undefined ? { delegated } : {}),
       },
@@ -251,6 +256,7 @@ export function updateAgent(home: string, id: string, patch: AgentPatch): Agent 
     const current = readAgentFile(file, id);
     if (!current) throw new Error(`no agent ${id} in ${agentsDir(home)}`);
     const next = patchedAgent(current, patch);
+    next.provenance.seq = takeSeq(agentsDir(home));
     const problem = invalid(next);
     if (problem) throw new Error(`cannot update ${id}: ${problem}`);
     writeAgentFile(file, next);
@@ -296,6 +302,7 @@ export function recordAgentSessionWhen(
     const verdict = accept(current);
     if (verdict !== true) return { kind: 'refused', why: verdict };
     const next = patchedAgent(current, { reach: { agent_session: agentSession } });
+    next.provenance.seq = takeSeq(agentsDir(home));
     const problem = invalid(next);
     if (problem) throw new Error(`cannot update ${id}: ${problem}`);
     writeAgentFile(file, next);
@@ -303,9 +310,11 @@ export function recordAgentSessionWhen(
   });
 }
 
-/** The agent that holds a seat of a team. A retired agent no longer holds it; if more than one
- *  does, the most recently updated wins. When `(team, seat)` finds none, an optional
- *  `seatHandle` match in the same team keeps the same agent id across a seat rename. */
+/** The agent that holds a seat of a team. A retired agent no longer holds it. A newer
+ *  `updated_at` wins. When two records share that millisecond, the one that names a conversation
+ *  wins, and then the higher monotonic `seq`. The id is random and is not a tie-break. When
+ *  `(team, seat)` finds none, an optional `seatHandle` match in the same team keeps the same
+ *  agent id across a seat rename. */
 export function findAgent(
   home: string,
   query: { team: string; seat: string; seatHandle?: string | null },
@@ -315,15 +324,49 @@ export function findAgent(
   for (const agent of agents) {
     if (agent.lifecycle === 'retired') continue;
     if (agent.reach.team !== query.team || agent.reach.seat !== query.seat) continue;
-    if (!found || agent.provenance.updated_at >= found.provenance.updated_at) found = agent;
+    if (!found || replaces(agent, found)) found = agent;
   }
   if (found || !query.seatHandle) return found;
   for (const agent of agents) {
     if (agent.lifecycle === 'retired' || agent.reach.team !== query.team) continue;
     if (agent.seat_handle !== query.seatHandle) continue;
-    if (!found || agent.provenance.updated_at >= found.provenance.updated_at) found = agent;
+    if (!found || replaces(agent, found)) found = agent;
   }
   return found;
+}
+
+/** Whether `candidate` is the record to keep. A newer timestamp wins. On one millisecond the
+ *  record that names a conversation wins, then the later `seq`. An equal pair keeps the record
+ *  already chosen, so the random id never decides. */
+function replaces(candidate: Agent, current: Agent): boolean {
+  if (candidate.provenance.updated_at !== current.provenance.updated_at) {
+    return candidate.provenance.updated_at > current.provenance.updated_at;
+  }
+  const candidateNames = namesSession(candidate);
+  const currentNames = namesSession(current);
+  if (candidateNames !== currentNames) return candidateNames;
+  return (candidate.provenance.seq ?? 0) > (current.provenance.seq ?? 0);
+}
+
+function namesSession(agent: Agent): boolean {
+  const named = agent.reach.agent_session;
+  return typeof named === 'string' && named.trim() !== '';
+}
+
+/** The next write count for this folder. Called only under the folder lock. A missing or
+ *  unreadable counter starts at 1. */
+function takeSeq(dir: string): number {
+  const path = join(dir, 'seq');
+  let current = 0;
+  try {
+    const parsed = Number(readFileSync(path, 'utf8').trim());
+    if (Number.isSafeInteger(parsed) && parsed >= 1) current = parsed;
+  } catch {
+    // The first write in the folder starts the sequence.
+  }
+  const next = current + 1;
+  writeFileSync(path, `${String(next)}\n`);
+  return next;
 }
 
 function mintAgentId(): string {
@@ -382,6 +425,11 @@ function isObj(value: YamlValue | undefined): value is Obj {
 
 function str(value: YamlValue | undefined): string | null {
   return typeof value === 'string' ? value : null;
+}
+
+function seqOf(value: YamlValue | undefined): number | undefined {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' && /^[0-9]+$/.test(value) ? Number(value) : undefined;
+  return parsed !== undefined && Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : undefined;
 }
 
 function strOrNull(value: YamlValue | undefined): string | null | undefined {
@@ -447,6 +495,7 @@ function fromValue(value: YamlValue): Agent | null {
   const registeredBy = str(provenance.registered_by);
   const registeredAt = str(provenance.registered_at);
   const updatedAt = str(provenance.updated_at);
+  const seq = seqOf(provenance.seq);
   const delegated = delegationOf(provenance.delegated);
   const lifecycle = value.lifecycle;
   if (
@@ -479,6 +528,7 @@ function fromValue(value: YamlValue): Agent | null {
       registered_by: registeredBy,
       registered_at: registeredAt,
       updated_at: updatedAt,
+      ...(seq === undefined ? {} : { seq }),
       // Only the writer's own `true` counts: any other value reads as no mark at all, and the
       // caller and time are the mark's own — a file without them is an older record.
       ...(provenance.dev_mode === true
@@ -516,6 +566,9 @@ function invalid(agent: Agent): string | null {
   if (agent.seat_handle != null && !isSeatId(agent.seat_handle)) return 'seat_handle is not seat_ plus 12 hex';
   if (agent.orphaned_at != null && !Number.isFinite(Date.parse(agent.orphaned_at))) {
     return 'orphaned_at is not a readable timestamp';
+  }
+  if (agent.provenance.seq !== undefined && (!Number.isSafeInteger(agent.provenance.seq) || agent.provenance.seq < 1)) {
+    return 'provenance.seq is not a write count';
   }
   if (agent.settings !== undefined && !isObj(agent.settings)) return '"settings" must be a map';
   return null;
@@ -608,6 +661,7 @@ function emit(agent: Agent): string {
     `  registered_at: ${quote(agent.provenance.registered_at)}`,
     `  updated_at: ${quote(agent.provenance.updated_at)}`,
   ];
+  if (agent.provenance.seq !== undefined) lines.push(`  seq: ${String(agent.provenance.seq)}`);
   // Written only when it holds: a record with no mark does not carry a `dev_mode: false` line,
   // so the files an ordinary launch writes read exactly as they always did. The caller the
   // dev-mode run admitted, and when, sit under the mark.
