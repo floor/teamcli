@@ -415,7 +415,10 @@ describe('a message-transport full brief sent end to end', () => {
     const readIo = testIo(w.root, { kind: 'owner' });
     const read = await runDrops(['--read', '--seat', SEAT, '--session', SESSION], readIo, { home: w.home });
     expect(read, readIo.err).toBe(0);
-    expect(readIo.out).toBe(`${HEADER}\n\n${text}\n`);
+    // The read opens with the compact sender header. The owner's stored opening is `the owner`,
+    // which the owner claim does not fold into, so both lines stand: the header, then the body
+    // with the stored opening it already carried.
+    expect(readIo.out).toBe(`from owner (owner):\n\n${HEADER}\n\n${text}\n`);
     expect(readIo.err).toBe('');
     const at = receiptPath(dropDir, rec.id);
     const receipt = signedReceiptOf(JSON.parse(readFileSync(at, 'utf8')));
