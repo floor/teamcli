@@ -15,6 +15,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -41,12 +42,14 @@ import {
   sealDigestOf,
   sealPathOf,
   sealPayloadOf,
+  SEAL_SUFFIX,
   type SealFields,
   type StoredSeal,
 } from '../src/bus/seal.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
-import { messageKeyOf, signDomain, verifyDomain, type Json } from '../src/store/keys.ts';
+import { LOG_FILE } from '../src/state.ts';
+import { messageKeyOf, messageKeyPath, signDomain, verifyDomain, type Json } from '../src/store/keys.ts';
 
 const PROJECT = 'acme';
 const NOW = new Date('2026-10-19T12:00:00.000Z');
@@ -589,5 +592,124 @@ describe('bus-log rotation independent security and retention probes', () => {
     expect(fields.keyPrint).toBe(keyPrintOfKey(key));
     expect(sealDigestOf(fields)).toBe(shiftedSealAt3.sealDigest);
     expect(signDomain(SEAL_DOMAIN, sealPayloadOf(fields), key)).toBe(shiftedSealAt3.signature);
+  });
+});
+
+const EARLY = { maxBytes: 800, kept: 3, retentionSeconds: 0, maxTotalBytes: 50_000_000, padBytes: 280 };
+
+/** A live file already at the segment bound, and an oldest slot the next append's rotation removes. */
+function parkOldest(world: World): { path: string; text: string; newestSeq: number } {
+  let n = 1;
+  while (!existsSync(`${livePath(world)}.2`)) {
+    appendPadded(world, `park-${String(n)}`, EARLY);
+    n += 1;
+    if (n > 40) throw new Error('the oldest slot never appeared');
+  }
+  if (statSync(livePath(world)).size < EARLY.maxBytes) {
+    appendPadded(world, `park-${String(n)}`, { ...EARLY, padBytes: 900 });
+  }
+  const path = `${livePath(world)}.2`;
+  const text = readFileSync(path, 'utf8');
+  let newestSeq = 0;
+  for (const line of text.split('\n')) {
+    const parsed = parseSignedEventLine(line);
+    if (parsed !== null) newestSeq = Math.max(newestSeq, parsed.payload.seq);
+  }
+  return { path, text, newestSeq };
+}
+
+const DROP_KIND = ['team', 'event-log-dropped'].join('.');
+
+function declaresRange(world: World, seq: number): boolean {
+  const read = readEvents(PROJECT, world.root, world.home, { kept: EARLY.kept });
+  if (!read.ok) return false;
+  return read.events.some(
+    (event) =>
+      event.payload.kind === DROP_KIND &&
+      (event.payload.dropped_oldest_seq ?? seq + 1) <= seq &&
+      (event.payload.dropped_newest_seq ?? 0) >= seq,
+  );
+}
+
+describe('a rotation declares the slot it already removed', () => {
+  test('an invalid payload still declares the slot the rotation removed', () => {
+    const world = makeWorld('invalid-payload');
+    const oldest = parkOldest(world);
+    const result = appendEvent(
+      PROJECT,
+      world.root,
+      world.home,
+      {
+        ts: 'not-a-time',
+        kind: 'message.arrived',
+        session: 'acme',
+        record_id: 'invalid-payload',
+        from: 'lead',
+        to: 'builder',
+        seat: 'lead',
+      },
+      EARLY,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('the event payload is invalid');
+    expect(readFileSync(oldest.path, 'utf8')).not.toBe(oldest.text);
+    expect(declaresRange(world, oldest.newestSeq)).toBe(true);
+  });
+
+  test('a key that cannot sign still declares the slot the rotation removed', () => {
+    const world = makeWorld('unreadable-key');
+    const oldest = parkOldest(world);
+    const logPath = join(world.root, '.agents', LOG_FILE);
+    const before = existsSync(logPath) ? readFileSync(logPath, 'utf8') : '';
+    writeFileSync(messageKeyPath(world.home), 'not a key\n');
+    const result = appendEvent(
+      PROJECT,
+      world.root,
+      world.home,
+      {
+        ts: NOW.toISOString(),
+        kind: 'message.arrived',
+        session: 'acme',
+        record_id: 'unreadable-key',
+        from: 'lead',
+        to: 'builder',
+        seat: 'lead',
+      },
+      EARLY,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('the event could not be signed with the message key');
+    expect(readFileSync(oldest.path, 'utf8')).not.toBe(oldest.text);
+    const added = readFileSync(logPath, 'utf8').slice(before.length);
+    expect(added).toContain('retention dropped events.jsonl.2');
+  });
+
+  test('a throw after the unlink still declares the slot the rotation removed', () => {
+    const world = makeWorld('rotation-throw');
+    const oldest = parkOldest(world);
+    const seal = `${oldest.path}${SEAL_SUFFIX}`;
+    rmSync(seal);
+    mkdirSync(seal);
+    const result = appendEvent(
+      PROJECT,
+      world.root,
+      world.home,
+      {
+        ts: NOW.toISOString(),
+        kind: 'message.arrived',
+        session: 'acme',
+        record_id: 'rotation-throw',
+        from: 'lead',
+        to: 'builder',
+        seat: 'lead',
+        reason: 'r'.repeat(280),
+      },
+      EARLY,
+    );
+    expect(result.ok).toBe(false);
+    expect(readFileSync(oldest.path, 'utf8')).not.toBe(oldest.text);
+    expect(declaresRange(world, oldest.newestSeq)).toBe(true);
   });
 });
