@@ -695,7 +695,14 @@ describe('a bus can host its first pass in the background', () => {
     }
     try {
       // Bound and answering, with the first pass still scanning: the start did not wait for it.
-      const running = handle.firstPass();
+      // The resolved start need not have reached the pass's first slice yet, so give the
+      // background walk a turn to scan before reading the live counters. The held event lock
+      // keeps it from settling however many turns that takes.
+      let running = handle.firstPass();
+      for (let turn = 0; turn < 100 && running.scanned === 0; turn += 1) {
+        await sleep(1);
+        running = handle.firstPass();
+      }
       expect(running.running).toBe(true);
       if (running.running) expect(running.scanned).toBeGreaterThanOrEqual(1);
       expect(appended()).toBe(0);
