@@ -96,6 +96,14 @@ if (input.action === 'config') {
   const code = await runInit(['--from-archive', archive.dir, '--json'], io, home, undefined, { loggedIn: () => false, registryHome: home, now: () => now });
   finish({ ...result(code, io), created: readStoredTeamConfig(home, teamIdOf(target))?.text ?? '', fileWritten: existsSync(join(target, '.agents', 'team.yaml')) });
 } else if (input.action === 'check') {
+  const { writePolicySet } = await import('../../src/policy/sources.ts');
+  const declared = writePolicySet(home, {
+    level: 'entity',
+    target: 'atelier',
+    name: 'owner-reply-to',
+    value: 'chief@consumer',
+  }, { now });
+  if (!declared.ok) throw new Error(declared.why);
   const { runTeamCheck } = await import('../../src/check/team.ts');
   const { emptySession, updateState } = await import('../../src/state.ts');
   const { displayAgent, workspaceLabel } = await import('../../src/file/sections/seats.ts');
