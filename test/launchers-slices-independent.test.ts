@@ -1,6 +1,8 @@
 // Independent scenes for the launcher composition: settings fold from the
 // lowest layer to the caller, a fixed resume holds or yields by precedence,
-// an empty session is not a resume, and argv keeps chain order.
+// an empty caller session is refused before a resume is built, a whitespace-only
+// session is kept as supplied, and argv is the executable, the endpoint's
+// fixed words, the preset's fixed words, then the caller.
 // Synthetic fixtures only: nothing executes a launch or reads the environment.
 import { expect, test } from 'bun:test';
 import { discover, resolveLaunch, type LauncherHome, type ResolveContext } from '../src/launchers/resolve.ts';
@@ -134,7 +136,7 @@ test('an empty session is refused as a resume and as an argument word', () => {
   expect(blank.resume).toEqual({ kind: 'none' });
   expect(codes(blank.diagnostics)).toContain('E_RESUME_SHAPE');
 
-  const out = resolve(
+  const empty = resolve(
     [endpoint(), preset({
       args: ['--resume', '{session}'],
       resume: { mode: 'fixed', path: 'example-session', precedence: 'teamcli_wins' },
@@ -142,13 +144,28 @@ test('an empty session is refused as a resume and as an argument word', () => {
     [],
     { sessionArg: '' },
   );
-  expect(out.ok).toBe(false);
-  expect(out.resume).toEqual({ kind: 'none' });
-  expect(out.argv).not.toContain('');
-  expect(codes(out.diagnostics)).toContain('E_PLACEHOLDER_CONTEXT');
+  expect(empty.ok).toBe(false);
+  expect(empty.resume).toEqual({ kind: 'none' });
+  expect(empty.argv).toEqual([]);
+  expect(codes(empty.diagnostics)).toContain('E_RESUME_SESSION');
+  expect(empty.diagnostics.some((d) => d.message === 'a supplied caller session must be a nonempty string')).toBe(true);
+
+  for (const sessionArg of ['   ', '\t']) {
+    const out = resolve(
+      [endpoint(), preset({
+        args: ['--resume', '{session}'],
+        resume: { mode: 'fixed', path: 'example-session', precedence: 'teamcli_wins' },
+      })],
+      [],
+      { sessionArg },
+    );
+    expect(out.ok).toBe(true);
+    expect(out.resume).toEqual({ kind: 'teamcli', session: sessionArg });
+    expect(out.argv).toEqual(['claude-code', '--resume', sessionArg]);
+  }
 });
 
-test('argument order is the executable, the terminal fixed words, the base fixed words, then the caller', () => {
+test('argument order is the executable, the endpoint fixed words, the preset fixed words, then the caller', () => {
   const out = resolve(
     [
       endpoint({ args: ['--endpoint-flag', 'e-value', '--settings', '{"from":"endpoint"}', '--between', 'kept'] }),
@@ -159,8 +176,8 @@ test('argument order is the executable, the terminal fixed words, the base fixed
   expect(out.ok).toBe(true);
   expect(out.argv).toEqual([
     'claude-code',
-    '--preset-flag', 'p-value', '--model', 'fixed-model', '--after', 'preset',
     '--endpoint-flag', 'e-value', '--between', 'kept',
+    '--preset-flag', 'p-value', '--model', 'fixed-model', '--after', 'preset',
     '--caller-flag', 'c-value',
   ]);
   expect(out.settings).toEqual({ from: 'endpoint' });

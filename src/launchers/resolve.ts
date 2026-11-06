@@ -138,7 +138,7 @@ export type ResolveContext = {
   teamHome: string;
   cwd: string;
   inbox?: string;
-  /** The TeamCLI session argument, when `team up` passes one. */
+  /** Undefined means absent; supplied sessions must be nonempty opaque strings. */
   sessionArg?: string;
   /** The parent process environment, as explicit input (never read from process.env). */
   parentEnv?: Record<string, string>;
@@ -211,6 +211,9 @@ export function resolveLaunch(
       chain: [], diagnostics,
     };
   };
+  if (ctx.sessionArg !== undefined && (typeof ctx.sessionArg !== 'string' || ctx.sessionArg === '')) {
+    return fail('a supplied caller session must be a nonempty string', 'E_RESUME_SESSION');
+  }
   let missingContext = false;
   const expandWord = (word: string): string => {
     const value = expand(word, ctx);
@@ -467,15 +470,16 @@ export function resolveLaunch(
     });
   }
 
-  // argv: executable + fixed args (chain order, terminal first) + admitted caller args.
+  // argv: executable + endpoint fixed args + preset fixed args + admitted caller args.
   // Folded settings spans and, under D6 override, the whole settings class are absent; every
-  // other word keeps its position and its bytes.
+  // other word keeps its position and its bytes. The chain trace stays terminal-first;
+  // only this copied walk is base-first, so a preset's words follow the endpoint's.
   const argv: string[] = [executable];
   const overriddenClasses = new Set<ArgClass>();
   for (const cls of ['model', 'settings', 'resume', 'mcp', 'effort'] as const) {
     if (policyFor(terminal, cls) === 'override' && caller.some((arg) => arg.cls === cls)) overriddenClasses.add(cls);
   }
-  for (const def of chain) {
+  for (const def of [...chain].reverse()) {
     if (def.kind === 'custom') {
       for (const entry of classifyArgs((def.argv ?? []).slice(1))) argv.push(expandWord(entry.word));
       continue;

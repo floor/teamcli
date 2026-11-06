@@ -10,7 +10,7 @@ import { parseYaml, toValue } from '../src/yaml.ts';
 import { discover, resolveLaunch, type LauncherHome, type ResolveContext } from '../src/launchers/resolve.ts';
 import { checkSandbox } from '../src/launchers/sandbox.ts';
 import { validateDefinition } from '../src/launchers/validate.ts';
-import type { Diagnostic } from '../src/launchers/types.ts';
+import type { Diagnostic, LauncherDefinition, ResumeBlock } from '../src/launchers/types.ts';
 
 const FIXTURES = join(import.meta.dir, 'fixtures', 'launchers');
 
@@ -258,6 +258,20 @@ describe('resume precedence and restore behavior', () => {
   const { launchers } = discover([VALID]);
   const discovery = { launchers, diagnostics: [] as Diagnostic[] };
 
+  test('typed omitted precedence defaults to caller wins without mutating the input', () => {
+    const resume: ResumeBlock = { mode: 'state_file', path: '{team-home}/lead-session' };
+    const def: LauncherDefinition = { format: 1, name: 'default-example', kind: 'preset',
+      harness: 'claude-code', writable_folders: [{ path: '{root}' }], resume };
+    const found = discover([{ level: 'team', files: { 'default-example.yaml': def } }]);
+    const caller = resolveLaunch({ launcher: 'default-example' }, found, { ...CTX, sessionArg: 'example-caller' });
+    expect(caller.ok).toBe(true);
+    expect(caller.resume).toEqual({ kind: 'teamcli', session: 'example-caller' });
+    const absent = resolveLaunch({ launcher: 'default-example' }, found, CTX);
+    expect(absent.ok).toBe(true);
+    expect(absent.resume).toEqual({ kind: 'preset_state_file', path: '/srv/example/team-home/lead-session' });
+    expect(resume).toEqual({ mode: 'state_file', path: '{team-home}/lead-session' });
+  });
+
   test('teamcli_wins: a TeamCLI session argument beats the preset state file', () => {
     const out = resolveLaunch({ launcher: 'lead-preset' }, discovery, { ...CTX, sessionArg: 'sess-123' });
     expect(out.resume).toEqual({ kind: 'teamcli', session: 'sess-123' });
@@ -383,12 +397,14 @@ describe('consumed optional placeholder context', () => {
         for (const value of [undefined, null, '', 42, false, {}]) {
           const out = run(raw, { [key]: value }, args);
           expect(out.ok).toBe(false);
-          expect(codes(out.diagnostics)).toContain('E_PLACEHOLDER_CONTEXT');
+          // A supplied session that is not a nonempty string is the session-input refusal.
+          // Undefined is still a missing consumed placeholder.
+          const code = key === 'sessionArg' && value !== undefined ? 'E_RESUME_SESSION' : 'E_PLACEHOLDER_CONTEXT';
+          expect(codes(out.diagnostics)).toContain(code);
           expect(out).toMatchObject({ harness: '', executable: '', argv: [], env: [], chain: [],
             resume: { kind: 'none' }, sandbox: { harness: '', mechanism: '', folders: [] } });
-          const contextError = out.diagnostics.find((d) => d.code === 'E_PLACEHOLDER_CONTEXT');
-          expect(JSON.stringify(contextError)).not.toContain('/srv/example/');
-          expect(JSON.stringify(contextError)).not.toContain(token);
+          expect(JSON.stringify(out.diagnostics)).not.toContain('/srv/example/');
+          expect(JSON.stringify(out.diagnostics)).not.toContain(token);
         }
       });
       test(`${token} valid bytes at ${site} resolve without mutation`, () => {
@@ -456,6 +472,160 @@ describe('consumed optional placeholder context', () => {
     expect(out.argv).toEqual(['claude-code', '--model', 'example-model', '--effort', 'high']);
     expect(out.env).toContainEqual({ name: 'EXAMPLE_LITERAL', value: '{inbox}' });
     expect(out.resume).toEqual({ kind: 'preset_fixed', session: 'example-literal' });
+  });
+});
+
+describe('explicit caller-session input boundary', () => {
+  const modes = ['none', 'inline', 'fixed', 'state_file'] as const;
+  function definition(mode: typeof modes[number], precedence?: string) {
+    return { format: 1, name: 'input-example', kind: 'preset', harness: 'claude-code',
+      args: ['--model', 'example-model'], writable_folders: [{ path: '{root}' }],
+      resume: { mode, ...(mode === 'fixed' ? { path: 'example-fixed' } : {}),
+        ...(mode === 'state_file' ? { path: '{team-home}/lead-session' } : {}),
+        ...(precedence === undefined ? {} : { precedence }) } };
+  }
+  function run(raw: unknown, optional: Record<string, unknown> = {}) {
+    const ctx = Object.freeze({ ...CTX, ...optional }) as ResolveContext;
+    return resolveLaunch({ launcher: 'input-example', args: ['--effort', 'high'] },
+      discover([{ level: 'team', files: { 'input-example.yaml': raw } }]), ctx);
+  }
+  const invalid = ['', null, false, 0, 42, [], {}, () => 'example', Symbol('example')];
+  for (const precedence of [undefined, 'teamcli_wins', 'preset_wins']) {
+    for (const mode of modes) {
+      test(`invalid direct session refuses ${mode}/${precedence ?? 'default'} without a template`, () => {
+        const raw = definition(mode, precedence), before = JSON.stringify(raw);
+        for (const sessionArg of invalid) {
+          const out = run(raw, { sessionArg });
+          expect(out.ok).toBe(false);
+          expect(codes(out.diagnostics)).toContain('E_RESUME_SESSION');
+          expect(out).toMatchObject({ harness: '', executable: '', argv: [], env: [], chain: [],
+            resume: { kind: 'none' }, sandbox: { harness: '', mechanism: '', folders: [] } });
+          expect(out.diagnostics).toContainEqual({ code: 'E_RESUME_SESSION', severity: 'error',
+            launcher: 'input-example', message: 'a supplied caller session must be a nonempty string' });
+          expect(JSON.stringify(raw)).toBe(before);
+        }
+      });
+      test(`valid opaque direct session preserves ${mode}/${precedence ?? 'default'} selection and argv`, () => {
+        for (const sessionArg of ['example-session', '   ', 'Ω {inbox} {session} $& $$ $(literal);']) {
+          const out = run(definition(mode, precedence), { sessionArg });
+          expect(out.ok).toBe(true);
+          if (precedence !== 'preset_wins') expect(out.resume).toEqual({ kind: 'teamcli', session: sessionArg });
+          else expect(out.resume).toMatchObject(mode === 'state_file'
+            ? { kind: 'preset_state_file', path: '/srv/example/team-home/lead-session' }
+            : { kind: mode === 'none' ? 'none' : mode === 'inline' ? 'preset_inline' : 'preset_fixed' });
+          expect(out.argv).toEqual(['claude-code', '--model', 'example-model', '--effort', 'high']);
+        }
+      });
+      test(`omitted and explicit undefined agree for ${mode}/${precedence ?? 'default'}`, () => {
+        const raw = definition(mode, precedence);
+        expect(run(raw, { sessionArg: undefined })).toEqual(run(raw));
+        expect(run(raw).ok).toBe(true);
+      });
+    }
+  }
+  test('non-preset terminal rejects invalid session; absent and valid remain unchanged', () => {
+    const raw = { format: 1, name: 'input-example', kind: 'custom', argv: ['/bin/example'] };
+    for (const sessionArg of invalid) {
+      const out = run(raw, { sessionArg });
+      expect(out.ok).toBe(false);
+      expect(codes(out.diagnostics)).toContain('E_RESUME_SESSION');
+      expect(out.argv).toEqual([]);
+    }
+    expect(run(raw).resume).toEqual({ kind: 'none' });
+    expect(run(raw, { sessionArg: undefined })).toEqual(run(raw));
+    expect(run(raw, { sessionArg: 'Ω {inbox} $&' }).resume).toEqual({ kind: 'teamcli', session: 'Ω {inbox} $&' });
+  });
+  test('invalid supplied input is refused before reference resolution or coercion', () => {
+    const value = Object.freeze({ toString() { throw new Error('must not coerce example input'); } });
+    const out = resolveLaunch({ launcher: 'missing-example', args: ['example-private-argument'] },
+      { launchers: new Map(), diagnostics: [] }, { ...CTX, sessionArg: value } as unknown as ResolveContext);
+    expect(codes(out.diagnostics)).toEqual(['E_RESUME_SESSION']);
+    expect(out.argv).toEqual([]);
+    expect(JSON.stringify(out.diagnostics)).not.toContain('example-private-argument');
+  });
+});
+
+describe('fixed argument layer order', () => {
+  const endpointArgs = Object.freeze(['--model', 'endpoint-one', 'endpoint positional Ω', '--model', 'endpoint-two',
+    '--settings', '/srv/example/endpoint.json', '--effort', 'low', 'endpoint-tail $&']);
+  const presetArgs = Object.freeze(['--model', 'preset-one', 'preset positional "quoted";', '--model', 'preset-two',
+    '--settings', '/srv/example/preset.json', '--effort', 'high', 'preset-tail literal']);
+  const endpointRest = ['endpoint positional Ω', '--settings', '/srv/example/endpoint.json', '--effort', 'low', 'endpoint-tail $&'];
+  const presetRest = ['preset positional "quoted";', '--settings', '/srv/example/preset.json', '--effort', 'high', 'preset-tail literal'];
+  const ctx: ResolveContext = { ...CTX, existingPaths: ['/opt/example/preset-cli', '/opt/example/endpoint-cli'] };
+  function home(policy = 'pass_through', base: string | undefined = 'order-endpoint'): LauncherHome {
+    return { level: 'team', files: Object.freeze({
+      'order-identity.yaml': Object.freeze({ format: 1, name: 'order-identity', kind: 'identity', env: { EXAMPLE_IDENTITY: 'example-value' } }),
+      'order-endpoint.yaml': Object.freeze({ format: 1, name: 'order-endpoint', kind: 'endpoint', harness: 'claude-code',
+        prefix: 'order-identity', executable: '/opt/example/endpoint-cli', args: endpointArgs,
+        writable_folders: [{ path: '{root}' }],
+        provider: { name: 'example-provider', base_url: 'https://api.example.invalid', token: { store: 'example-store', item: 'example-item' }, models: { default: 'example-model' } } }),
+      'order-preset.yaml': Object.freeze({ format: 1, name: 'order-preset', kind: 'preset', harness: 'claude-code',
+        ...(base === '' ? {} : { base }), executable: '/opt/example/preset-cli', args: presetArgs,
+        writable_folders: [{ path: '{root}' }], arg_policy: { model: policy } }),
+    }) };
+  }
+  function run(policy: string, caller: string[]) {
+    const input = home(policy), before = JSON.stringify(input), callerBefore = [...caller];
+    Object.freeze(caller);
+    const discovered = discover([input]);
+    const out = resolveLaunch({ launcher: 'order-preset', args: caller }, discovered, ctx);
+    expect(JSON.stringify(input)).toBe(before);
+    expect(caller).toEqual(callerBefore);
+    expect([...discovered.launchers.keys()].sort()).toEqual(['order-endpoint', 'order-identity', 'order-preset']);
+    if (out.ok) {
+      expect(out.chain).toEqual(['order-preset', 'order-endpoint', 'order-identity']);
+      expect(out.harness).toBe('claude-code');
+      expect(out.executable).toBe('/opt/example/preset-cli');
+    }
+    return out;
+  }
+  test('endpoint fixed then preset fixed then admitted caller, with internal order and duplicates intact', () => {
+    const out = run('pass_through', ['--model', 'caller-model', 'caller tail Ω']);
+    expect(out.ok).toBe(true);
+    expect(out.argv).toEqual(['/opt/example/preset-cli', ...endpointArgs, ...presetArgs, '--model', 'caller-model', 'caller tail Ω']);
+  });
+  test('caller override removes both layers model flags/values while retaining other word order', () => {
+    const out = run('override', ['--model', 'caller-model', 'caller-tail']);
+    expect(out.ok).toBe(true);
+    expect(out.argv).toEqual(['/opt/example/preset-cli', ...endpointRest, ...presetRest, '--model', 'caller-model', 'caller-tail']);
+  });
+  test('caller strip leaves both fixed layers and appends only admitted words', () => {
+    const out = run('strip', ['--model', 'caller-model', 'caller-tail']);
+    expect(out.ok).toBe(true);
+    expect(out.argv).toEqual(['/opt/example/preset-cli', ...endpointArgs, ...presetArgs, 'caller-tail']);
+    expect(codes(out.diagnostics)).toContain('W_ARG_STRIPPED');
+  });
+  test('refusal stays closed and no-caller override retains both fixed layers', () => {
+    const refused = run('refuse', ['--model', 'caller-model']);
+    expect(refused.ok).toBe(false);
+    expect(refused.argv).toEqual([]);
+    expect(codes(refused.diagnostics)).toContain('E_ARG_REFUSED');
+    const bare = run('override', []);
+    expect(bare.ok).toBe(true);
+    expect(bare.argv).toEqual(['/opt/example/preset-cli', ...endpointArgs, ...presetArgs]);
+  });
+  test('single endpoint, standalone preset and identity-base preset keep their word sequences', () => {
+    const endpoint = resolveLaunch({ launcher: 'order-endpoint', args: ['caller-tail'] }, discover([home()]), ctx);
+    expect(endpoint.ok).toBe(true);
+    expect(endpoint.argv).toEqual(['/opt/example/endpoint-cli', ...endpointArgs, 'caller-tail']);
+    expect(endpoint.chain).toEqual(['order-endpoint', 'order-identity']);
+    for (const base of ['', 'order-identity']) {
+      const out = resolveLaunch({ launcher: 'order-preset', args: ['caller-tail'] }, discover([home('pass_through', base)]), ctx);
+      expect(out.ok).toBe(true);
+      expect(out.argv).toEqual(['/opt/example/preset-cli', ...presetArgs, 'caller-tail']);
+      expect(out.chain).toEqual(base === '' ? ['order-preset'] : ['order-preset', 'order-identity']);
+    }
+  });
+  test('custom argv is not reversed or reclassified into a new layer order', () => {
+    const argv = ['/bin/example', '--model', 'custom-one', 'custom positional Ω', '--model', 'custom-two'];
+    Object.freeze(argv);
+    const raw = Object.freeze({ format: 1, name: 'custom-example', kind: 'custom', argv });
+    const out = resolveLaunch({ launcher: 'custom-example', args: ['caller-tail'] },
+      discover([{ level: 'team', files: { 'custom-example.yaml': raw } }]), ctx);
+    expect(out.ok).toBe(true);
+    expect(out.argv).toEqual([...argv, 'caller-tail']);
+    expect(out.chain).toEqual(['custom-example']);
   });
 });
 
