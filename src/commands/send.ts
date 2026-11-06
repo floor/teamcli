@@ -2134,12 +2134,22 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
             ? `${miss}; the notification was started and its completion was not recorded, so no later leg was started`
             : `${miss}; the push name could not be reserved, so no later leg was started`;
           failures.push(`channel: ${why}`);
+          setLegState(report, 'channel', 'skipped', why);
+          note(walkAttempt('channel', 'unreachable', false, host.now(), startedAt, { reason: why }));
+          // The record is already in the drop and no later leg starts. That is the reply walk's
+          // ending for this same claim: the drop holds it, and the history names the drop.
           const ms = host.now().getTime() - startedAt;
+          const notWoken = dropNotWoken(report);
           const entry = { ts: host.now().toISOString(), from, to: to.seat, ...(to.sentAs === null ? {} : to.sentAs), body, id: msgId, thread: record.thread };
-          // The record stays in the inbox without a read receipt. A later inbox read can recover
-          // it. The history line is the trace that no later leg was started.
-          appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'unreachable', ms, via: 'channel', failed: [...failures] });
-          return unreachable(io, dir, who, to.seat, why, host, report);
+          appendHistory(to.project, to.root, host.home, {
+            ...entry,
+            ...historySender(report),
+            outcome: notWoken ? 'queued, not woken' : 'sent (unconfirmed)',
+            ms,
+            via: 'drop',
+            failed: [...failures],
+          });
+          return sentUnconfirmed(io, label, report, ms, 'drop');
         }
       }
       if (miss !== null) {
