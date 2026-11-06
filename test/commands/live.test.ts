@@ -13,6 +13,7 @@ import { upFingerprint, OWNER_APPROVAL_ENV } from '../../src/approve/owner-token
 import { approvalStanding, readApproval, storePath, writeApproval } from '../../src/store/store.ts';
 import { readState } from '../../src/state.ts';
 import { writeGrant } from '../../src/permissions/grants.ts';
+import { findAgent } from '../../src/registry/agents.ts';
 import { teamIdOf } from '../../src/registry/teams.ts';
 import { parseMemoryPressure, parseSwapUsage, type Machine } from '../../src/watch/machine.ts';
 import type { Key } from '../../src/launch/terminal.ts';
@@ -6653,6 +6654,56 @@ describe('team up, a ready seat whose model drifted', () => {
 
   test('a working seat is left ready and names the owner\'s way', async () => {
     const screen = terra().replace('To get started', 'esc to interrupt\n\n  To get started');
+    const ran = await dry(screen);
+    expect(ran.code).toBe(0);
+    expect(ran.out).toContain('skip codex-acme: its model drifted; left as it is (team remove codex-acme --abandon)');
+    expect(ran.out).not.toContain('workspace close w92');
+  });
+
+  test('a working seat whose agent record ties another is never closed', async () => {
+    // Same millisecond. The file that sorts last names no conversation, which is the tie a
+    // filename used to win. The record that names the conversation is the current one.
+    const when = '2026-11-06T10:00:00.000Z';
+    const dir = join(home, '.config', 'team', 'agents');
+    mkdirSync(dir, { recursive: true });
+    const team = teamIdOf(root);
+    const write = (id: string, agentSession: string | null, seq: number) => {
+      const lines = [
+        `id: ${JSON.stringify(id)}`,
+        'name: "codex-acme"',
+        'signing:',
+        '  model: "GPT Sol"',
+        '  version: "6"',
+        '  role: "implementer"',
+        'lab: "acme"',
+        'cli: "codex"',
+        'launcher: null',
+        'launch: "codex -m gpt-6-sol"',
+        'reach:',
+        `  team: ${JSON.stringify(team)}`,
+        '  seat: "codex-acme"',
+        '  session: "acme-web"',
+        `  agent_session: ${agentSession === null ? 'null' : JSON.stringify(agentSession)}`,
+        '  pane: "w92:p1"',
+        '  address: null',
+        'mcp: []',
+        'skills: []',
+        'lifecycle: "running"',
+        'provenance:',
+        '  registered_by: "owner"',
+        `  registered_at: ${JSON.stringify(when)}`,
+        `  updated_at: ${JSON.stringify(when)}`,
+        `  seq: ${String(seq)}`,
+      ];
+      writeFileSync(join(dir, `${id}.yaml`), `${lines.join('\n')}\n`);
+    };
+    write('agt_000000000001', 'ses_live_tie', 1);
+    write('agt_ffffffffffff', null, 9);
+    expect(findAgent(home, { team, seat: 'codex-acme' })?.id).toBe('agt_000000000001');
+    const screen = terra().replace(
+      '\n\n› Ask Codex to do anything',
+      '\n• Working (0s • esc to interrupt)\n\n› Ask Codex to do anything',
+    );
     const ran = await dry(screen);
     expect(ran.code).toBe(0);
     expect(ran.out).toContain('skip codex-acme: its model drifted; left as it is (team remove codex-acme --abandon)');

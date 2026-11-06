@@ -18,6 +18,8 @@ import { approvalOf } from '../src/approve/approval.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { loadTeamFile } from '../src/file/load.ts';
+import { findAgent } from '../src/registry/agents.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
 import type { HerdrAgent, PaneProcesses } from '../src/herdr.ts';
 import { UP_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { readState, updateState } from '../src/state.ts';
@@ -507,6 +509,60 @@ describe('canonical restore-summary line in plain, --json, and team.log', () => 
     expect(world.closes).toEqual([]);
     expect(world.runs).toEqual([]);
     expect(io.err).toContain('0 seats repaired, 2 skipped (working), 0 refused\n');
+  });
+
+  test('a working seat whose agent record ties another is never closed', async () => {
+    const place = makePlace();
+    const when = '2026-11-06T10:00:00.000Z';
+    const dir = join(place.home, '.config', 'team', 'agents');
+    mkdirSync(dir, { recursive: true });
+    const team = teamIdOf(place.root);
+    const write = (id: string, agentSession: string | null, seq: number) => {
+      const lines = [
+        `id: ${JSON.stringify(id)}`,
+        'name: "builder-2"',
+        'signing:',
+        '  model: "Claude Sonnet"',
+        '  version: "5.5"',
+        '  role: "implementer"',
+        'lab: "acme"',
+        'cli: "claude-code"',
+        'launcher: null',
+        'launch: "claude --model claude-sonnet-5-5"',
+        'reach:',
+        `  team: ${JSON.stringify(team)}`,
+        '  seat: "builder-2"',
+        '  session: "acme-restore"',
+        `  agent_session: ${agentSession === null ? 'null' : JSON.stringify(agentSession)}`,
+        '  pane: "w4:p1"',
+        '  address: null',
+        'mcp: []',
+        'skills: []',
+        'lifecycle: "running"',
+        'provenance:',
+        '  registered_by: "owner"',
+        `  registered_at: ${JSON.stringify(when)}`,
+        `  updated_at: ${JSON.stringify(when)}`,
+        `  seq: ${String(seq)}`,
+      ];
+      writeFileSync(join(dir, `${id}.yaml`), `${lines.join('\n')}\n`);
+    };
+    // The session-less file sorts last. The tie keeps the record that names the conversation.
+    write('agt_000000000001', 'ses-b2', 1);
+    write('agt_ffffffffffff', null, 9);
+    expect(findAgent(place.home, { team, seat: 'builder-2' })?.id).toBe('agt_000000000001');
+    const seeds = healthySeeds(place.home, place.root).map((s) => {
+      if (s.seat === 'builder-2') return { ...s, liveStatus: 'idle' as const, liveScreen: OPUS_WORKING };
+      return s;
+    });
+    const world = buildWorld(place, seeds, {
+      preCloseScreenOverride: { 'w4:p1': OPUS_WORKING },
+    });
+    const io = testIo(place.root, { kind: 'owner' });
+    const exit = await runUp([], io, world.sources);
+    expect(exit).toBe(0);
+    expect(world.closes).toEqual([]);
+    expect(world.runs).toEqual([]);
   });
 
   test('partial failure: an attempted relaunch that times out before finishReady lands in K refused, never N repaired, and exits 1', async () => {
