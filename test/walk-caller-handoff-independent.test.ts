@@ -325,7 +325,7 @@ describe('2. end-to-end dev-mode lead lift and refusal preservation across confi
     );
     expect(readFileSync(fx.file, 'utf8')).toContain('    model: Claude Sonnet\n');
     expect(readLog(fx.root)).toContain(
-      "config [lead] warning: only the owner edits the team's record, from a terminal outside herdr; this call is lead; dev mode continues (dev-mode on at machine level); admitted as orchestrator\n",
+      "config [lead] warning: only the owner edits the team's record, from a terminal outside herdr; this call is lead; dev mode continues (dev-mode on at machine level); admitted as lead\n",
     );
 
     // 3. End-to-end `team settings set` (which uses `walkCaller` directly before `devModeOwnerLiftAtCwd`)
