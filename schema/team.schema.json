@@ -557,6 +557,11 @@
             "type": "string",
             "minLength": 1
           },
+          "launcher": {
+            "type": "string",
+            "minLength": 1,
+            "$comment": "the declarative launcher whose argv this seat runs when the launch is asked to resolve one; omitted, the launch line is unchanged and the digest is unchanged"
+          },
           "cwd": {
             "type": "string",
             "$comment": "relative to the project, or a trust path"
