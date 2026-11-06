@@ -614,6 +614,7 @@
     "test/launched-team-writers-independent.test.ts": 4,
     "test/launchers-resolve.test.ts": 3,
     "test/launchers-settings.test.ts": 0,
+    "test/launchers-slices-independent.test.ts": 1,
     "test/launchers-validate.test.ts": 5,
     "test/lead-clear-actor-independent.test.ts": 5,
     "test/lead-clear-independent.test.ts": 0,
