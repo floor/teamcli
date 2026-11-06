@@ -483,7 +483,7 @@ describe('resolveTarget by @nickname', () => {
     const id = teamIdOf(w.root);
     const atlas = agent(w.home, { name: 'atlas', role: 'coordinator', cli: 'claude-code', team: id, seat: 'atlas', session: 'alpha', pane: 'pane-alpha-atlas' });
     team(w.home, id, 'alpha', 'alpha', w.root, [{ agent: atlas.id, seat: 'atlas', role: 'coordinator', leads: true }]);
-    const [, betaBuilder] = secondTeam(w, 'beta', [{ seat: 'atlas', nickname: 'hera', leads: true }, { seat: 'builder-1', nickname: 'worker' }], 'alpha');
+    const [, betaBuilder] = secondTeam(w, 'beta', [{ seat: 'lead', nickname: 'guide', leads: true }, { seat: 'builder-1', nickname: 'worker' }], 'alpha');
     secondTeam(w, 'gamma', [{ seat: 'atlas', nickname: 'ares', leads: true }], 'other');
 
     const entitySibling = resolveTarget(w.home, '@worker', { cwd: w.root });
@@ -931,7 +931,7 @@ describe('the whole command on a registry-resolved spec', () => {
 });
 
 describe('the whole command from a folder that is no team', () => {
-  /** A team whose lead is `atlas` and whose builder carries the nickname `worker`. */
+  /** A team whose lead is the coordinator seat and whose builder carries the nickname `worker`. */
   function teamWorld(): { w: World; lead: Agent; builder: Agent } {
     const w = world('alpha', 'alpha', 'atlas', [seatBlock('coordinator', 'atlas', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
     const id = teamIdOf(w.root);
