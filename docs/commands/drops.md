@@ -77,7 +77,7 @@ refusal, its body is not printed, and the file is left in place — only
 
 | Flag | Value | Effect |
 | --- | --- | --- |
-| `--follow` | — | keep reading the folder and print one line per new drop, `from <sender> — <path>` (`<sender>` carries `(attributed)`, or `(unattributed)` when no key could vouch for the file), flushed as each is read; Ctrl-C stops it and exits 0 |
+| `--follow` | — | keep reading the folder and print one line per new drop, `from <sender> — <path>` (`<sender>` carries `(unverified claim)` for a shared-key record, `(attributed)` for the launch brief, or `(unattributed)` when no key could vouch for the file), flushed as each is read; Ctrl-C stops it and exits 0 |
 | `--json` | — | print one `team.drops` document (`format: 1`, `project`, `session`, `seat`, `drops`, `counts`) |
 | `--read` | — | hand the seat's waiting messages to the launch's turn: verify each record, write its signed `<id>.read.json` receipt, then print its body; at most ten a run, newest first. `--seat` is required. Only the seat itself receipts; the owner and a lead are served the same bodies as a peek — nothing is written or marked read, and the peek is logged |
 | `--seat` | a seat name | the seat whose folder `--read` serves; only with `--read` |
@@ -135,14 +135,14 @@ with one row per waiting drop, then one summary line, `<n> drop` or `<n> drops`.
 sender the record names — `the owner`, a seat's name, or a registered name — or, in a raw body
 file an earlier build wrote, the sender its first line names. It reads `unknown` when there is
 neither, and when a record does not verify against the message key. A named sender carries
-`(attributed)` when the shared checkout key verified the record, and `(unattributed)` otherwise:
-a raw drop's first line is only the file's word, and a record this key cannot vouch for is no
-one's. The launch's current general seat brief is attributed too, on the seat's own claim; the
-text mark is the same so its absence never reads as verification. `PATH` is the file's absolute path.
+`(unverified claim)` when only the shared checkout key verified the record, `(attributed)` when
+the launch's current general seat brief is bound to the seat's own claim, and `(unattributed)`
+otherwise: a raw drop's first line is only the file's word, and a record this key cannot vouch
+for is no one's. `PATH` is the file's absolute path.
 
 A follow prints nothing at start: the drops already on disk are waiting, not new. Then it prints
 one line, `from <sender> — <path>`, for each drop that appears, with `<sender>` marked
-`(attributed)` or `(unattributed)` as in the table, and Ctrl-C stops it with exit 0.
+`(unverified claim)`, `(attributed)`, or `(unattributed)` as in the table, and Ctrl-C stops it with exit 0.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |

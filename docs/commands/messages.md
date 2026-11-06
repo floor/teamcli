@@ -76,10 +76,11 @@ body prints under
 its own `<seat>/<id>:` heading, then the notes and the differences print, and one summary line
 (`<n> message` or `<n> messages`) closes it. `SENT` is the record's own timestamp read as its age; `--json` also
 carries the exact ISO string as `sent`. The `FROM` cell reads the sender as the project's
-[`sender_name`](../team-file.md#sender_name) word asks, followed by `(attributed)` — every
-displayed sender is attributed, never verified: the shared checkout key every seat can read
-proves a record was not changed after signing, not who wrote it — or `(unattributed)` when no key
-could vouch for the file. A printed body is rendered the same way [`team drops --read`](drops.md)
+[`sender_name`](../team-file.md#sender_name) word asks, followed by `(unverified claim)` when the
+shared checkout key is all that vouches for the record — every seat can read that key, so it
+proves the bytes were not changed after signing, not who wrote them — `(attributed)` when the
+launch brief is bound to the seat's current claim, or `(unattributed)` when no key could vouch
+for the file. A printed body is rendered the same way [`team drops --read`](drops.md)
 renders one: its `from … — admitted by: …` line is folded into the compact header (`from <name> (<short rule>):`, `Client <Display> (owner relay):`, or `<Kind> seat <name> (<short rule>):` for a non-Claude seat), and a
 body with no such line folds its record sender and rule into the same compact header (`from <sender> (<short rule>):` or `from <sender>:`), the message's own words
 untouched. `--json` carries the record's own `from` with `sender_attribution` beside it

@@ -42,14 +42,15 @@ still goes to the log, and also to the desktop notification.
 
 The signature is integrity, not authenticity. Every seat runs as the owner-user, so a signature
 says the record was not rewritten after it was signed. It does not say which seat sent it. `from`
-is a name the writer put on the record. A reader therefore attributes a sender, and never calls
-it verified: `team messages` appends `(attributed)` to the cell and marks the served body's
-attribution line, `team drops` appends `(attributed)` or `(unattributed)`, and `inbox_check`
-reports `sender_attribution`. The word **verified** is kept for an owner's own device-signed
-action. A record on the shared checkout key is attributed on that key alone; the launch's own
-general seat brief, bound to the seat's current claim, is attributed as `launch-brief` and marked
-the same in text, because a mark that only sometimes appears would make its absence read as
-proof. A raw drop, or a record no key could vouch for, is `none`, shown `(unattributed)`. The
+is a name the writer put on the record. A text reader says what that name rests on: `team
+messages` and `team drops` append `(unverified claim)` when the shared checkout key is the only
+binding, `(attributed)` when the launch brief is bound to the seat's current claim, and
+`(unattributed)` when no key could vouch for the file. `inbox_check` reports
+`sender_attribution`. The word **verified** is kept for an owner's own device-signed
+action. A record on the shared checkout key is an unverified claim in the text reading; the
+launch's own general seat brief, bound to the seat's current claim, is `launch-brief` in JSON
+and `(attributed)` in text. A raw drop, or a record no key could vouch for, is `none`, shown
+`(unattributed)`. The
 receipt says a process was shown the body, not that the recipient acted on it.
 
 The signature covers the complete payload exactly as it was parsed, and it is checked before any

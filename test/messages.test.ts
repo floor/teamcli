@@ -55,8 +55,8 @@ const WORKER: Caller = { kind: 'seat', name: 'worker', pane: 'pane-messages-work
 
 /** The one waiting record of the fixture, at the pinned instant, as the reading prints it. */
 const SHOWN = `team acme, session "acme"
-  ID  FROM                  TO    SENT    STATUS
-  m1  harness (attributed)  lead  0s ago  shown
+  ID  FROM                        TO    SENT    STATUS
+  m1  harness (unverified claim)  lead  0s ago  shown
 
 lead/m1:
 from harness:
@@ -372,10 +372,10 @@ difference: lead/m1 does not verify: the record is not a message
     expect(result.err).toBe('');
     const seats = ['builder', 'builder-2', 'builder-9', 'builder-10', 'builder-100'];
     const rows = seats
-      .map((seat) => `  m1  harness (attributed)  ${seat.padEnd(11)}  0s ago  ${seat === 'builder' ? 'shown' : 'waiting'}`)
+      .map((seat) => `  m1  harness (unverified claim)  ${seat.padEnd(11)}  0s ago  ${seat === 'builder' ? 'shown' : 'waiting'}`)
       .join('\n');
     expect(result.out).toBe(
-      `team acme, session "acme"\n  ID  FROM                  TO           SENT    STATUS\n${rows}\n\nbuilder/m1:\nfrom harness:\n\nbody from builder\n\n` +
+      `team acme, session "acme"\n  ID  FROM                        TO           SENT    STATUS\n${rows}\n\nbuilder/m1:\nfrom harness:\n\nbody from builder\n\n` +
         'note: 4 messages addressed to another mailbox are waiting; they are listed without their bodies, and no receipts are written for them.\n\n' +
         '5 messages\n',
     );

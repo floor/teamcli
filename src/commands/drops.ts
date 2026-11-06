@@ -49,7 +49,7 @@ import { heldAt } from '../launch/rules-file.ts';
 import { logLine } from '../log.ts';
 import { currentClaimIn, listUnread, peekMessage, readMessage, type BriefRead } from '../mcp/inbox.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { attributeSenderClaim, type SenderAttribution } from '../send/sender-claim.ts';
+import { attributeSenderClaim, senderReading, type SenderAttribution } from '../send/sender-claim.ts';
 import { readState } from '../state.ts';
 import {
   contextLine,
@@ -392,12 +392,12 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
 }
 
 /** The row's sender as the project's `sender_name` asks for. A record's `from` is the seat, and
- *  its registry id lets the name resolve; a raw drop's first line is already a headline. An
- *  unattributed sender is marked: the name is what the drop says, not who it is. */
+ *  its registry id lets the name resolve; a raw drop's first line is already a headline. A
+ *  shared-key record reads as an unverified claim; a name no key vouches for is unattributed. */
 function readableFrom(row: DropRow, naming: SenderNaming): string | null {
   if (row.from === null) return null;
   const name = senderDisplayName({ seat: row.from, id: row.from_id }, naming);
-  return row.sender_attribution === 'none' ? `${name} (unattributed)` : `${name} (attributed)`;
+  return `${name} ${senderReading(row.sender_attribution)}`;
 }
 
 /** `from <sender> — <path>`, the one line `--follow` prints per new drop. */

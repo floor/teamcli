@@ -71,7 +71,7 @@ import {
 } from '../send/record.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
 import { noteUnread } from '../send/unread-hint.ts';
-import { attributedBody, attributeSenderClaim, type SenderAttribution } from '../send/sender-claim.ts';
+import { attributedBody, attributeSenderClaim, senderReading, type SenderAttribution } from '../send/sender-claim.ts';
 
 export const USAGE = `Usage: team messages [--json]
 Usage: team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--follow] [--json]
@@ -1130,7 +1130,7 @@ function renderMailbox(
   const readableFrom = (row: MailboxRow): string | null => {
     if (row.from === null) return null;
     const name = senderDisplayName({ seat: row.from, id: row.from_id }, naming);
-    return row.sender_attribution === 'none' ? `${name} (unattributed)` : `${name} (attributed)`;
+    return `${name} ${senderReading(row.sender_attribution)}`;
   };
   lines.push(
     ...renderTable({
