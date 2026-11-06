@@ -17,6 +17,19 @@ A listed Muse hint is the empty box only when it is faint or drawn in the colour
 - The CI timing recorder counts a test file once. A nested describe suite is not a second unit, and a report that has only describe rows keeps the sum of those rows under the file.
 - The daemon answers health and status requests without re-reading the team state for every seat.
 
+### Security
+
+- **`team drops --read` now checks the caller (affected: 0.5.1 through 0.5.13).** Before this
+  release, `team drops --read --seat <seat>` served any seat's waiting messages to any process run
+  inside that team's folder, and wrote their signed read receipts. One seat could therefore read
+  another seat's messages and mark them read, so the real recipient never saw them. `--read` now
+  serves a seat's messages only to that seat itself, as the turn-start hook runs it, or to the
+  owner or a lead (the orchestrator or the operator). Every other caller is refused, the
+  refusal is logged, and nothing is receipted. This was local only: the caller had to run on the
+  same machine, as the same user, inside a folder holding that team's file. Nothing was reachable
+  over the network, and no key or credential was exposed. Upgrade to 0.5.14; no configuration
+  change is needed.
+
 ## [0.5.13] - 2026-11-06
 
 Message delivery now reports only the leg that ran, a seat behind a launcher wrapper can
