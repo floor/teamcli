@@ -4,6 +4,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../../src/approve/approval.ts';
+import { legacyApprovalRecord } from '../legacy-approval.ts';
 import { runAdd, type AddSources } from '../../src/commands/add.ts';
 import { runApprove, type ApproveSources } from '../../src/approve/command.ts';
 import { loadConfig } from '../../src/commands/check.ts';
@@ -2220,14 +2221,17 @@ describe('the upgrade from 0.2.1', () => {
     return yaml.replace(/trust:\n(?:  - .*\n)+/, `trust:\n${entries.map((entry) => `  - ${entry}\n`).join('')}`);
   }
 
-  // The store 0.2.1 left: a format-1 approval nobody signed.
+  // The store 0.2.1 left: a format-1 approval nobody signed, and no lead. lead is a
+  // signed format-2 field. Today's approval carries it, so the fixture drops it: a
+  // format-1 record that includes lead is refused as a field that version does not know.
   function legacyApproval(text: string): void {
     writeFileSync(join(root, '.agents', 'team.yaml'), text);
     const loaded = loadTeamFile(root, { home });
     if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
     const store = storePath(loaded.team.project, loaded.root, home);
     mkdirSync(store, { recursive: true });
-    writeFileSync(join(store, 'approval.json'), JSON.stringify({ ...approvalOf(loaded.team, loaded.root), format: 1, file: text }));
+    const record = legacyApprovalRecord(loaded.team, loaded.root, text);
+    writeFileSync(join(store, 'approval.json'), JSON.stringify(record));
   }
 
   test('the block up prints takes the file past validation for every starting shape it met', async () => {

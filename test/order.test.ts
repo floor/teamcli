@@ -8,7 +8,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { approvalOf } from '../src/approve/approval.ts';
+import { legacyApprovalRecord } from './legacy-approval.ts';
 import { runOrder, type OrderSources } from '../src/commands/order.ts';
 import { readTeamConfig } from '../src/file/team-config.ts';
 import { LEGACY_LINE, storePath } from '../src/store/store.ts';
@@ -419,7 +419,7 @@ function plantLegacy(fixture: Fixture): void {
   if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
   const store = storePath(loaded.team.project, loaded.root, fixture.home);
   mkdirSync(store, { recursive: true });
-  const record = { ...approvalOf(loaded.team, loaded.root, NOW), format: 1 as const, file: TEAM_YAML };
+  const record = legacyApprovalRecord(loaded.team, loaded.root, TEAM_YAML, NOW);
   writeFileSync(join(store, 'approval.json'), `${JSON.stringify(record, null, 2)}\n`);
 }
 

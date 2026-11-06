@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { approvalOf } from '../src/approve/approval.ts';
+import { legacyApprovalRecord } from './legacy-approval.ts';
 import { readTeamConfig } from '../src/file/team-config.ts';
 import { runWorktree } from '../src/commands/worktree.ts';
 import { LEGACY_LINE, storePath } from '../src/store/store.ts';
@@ -51,7 +51,7 @@ function fixture(): { root: string; home: string } {
   if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
   const store = storePath(loaded.team.project, loaded.root, home);
   mkdirSync(store, { recursive: true });
-  const record = { ...approvalOf(loaded.team, loaded.root, NOW), format: 1 as const, file: YAML };
+  const record = legacyApprovalRecord(loaded.team, loaded.root, YAML, NOW);
   writeFileSync(join(store, 'approval.json'), `${JSON.stringify(record, null, 2)}\n`);
   return { root, home };
 }

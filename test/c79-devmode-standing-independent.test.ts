@@ -18,6 +18,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
+import { legacyApprovalRecord } from './legacy-approval.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import type { DownLaunch } from '../src/commands/down.ts';
 import { runOrder, type OrderSources } from '../src/commands/order.ts';
@@ -123,7 +124,7 @@ function storeBytes(store: string): string {
 function plantLegacy(fixture: Fixture): { store: string; approval: string; bytes: string } {
   const read = loaded(fixture);
   const store = storeOf(fixture);
-  const record = { ...approvalOf(read.team, read.root, NOW), format: 1 as const, file: STORED_COPY };
+  const record = legacyApprovalRecord(read.team, read.root, STORED_COPY, NOW);
   const bytes = `${JSON.stringify(record, null, 2)}\n`;
   const approval = join(store, 'approval.json');
   writeFileSync(approval, bytes);
