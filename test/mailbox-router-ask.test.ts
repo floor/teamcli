@@ -1,8 +1,16 @@
 import { describe, expect, test } from 'bun:test';
 import { askMailbox, type MailboxAskInput, type MailboxAskLedger, type MailboxReplyRead, type MailboxSendResult } from '../src/daemon/mailbox/ask.ts';
-import { MAILBOX_ROUTER_DEFAULTS, type MailboxRouterPolicy } from '../src/daemon/mailbox/policy.ts';
+import type { MailboxRouterPolicy } from '../src/daemon/mailbox/policy.ts';
 
 type Sent = { principal: string; to: string; body: string };
+
+const POLICY: MailboxRouterPolicy = {
+  routes: [
+    { alias: 'lead', address: 'lead@acme', fallback: 'helper@acme' },
+    { alias: 'backup', address: 'helper@acme', fallback: null },
+  ],
+  replyBoundSeconds: null,
+};
 
 function scene(over: {
   alias?: string;
@@ -26,11 +34,11 @@ function scene(over: {
   });
   const input: MailboxAskInput = {
     askId: over.askId ?? 'ask-1',
-    alias: over.alias ?? 'iris',
+    alias: over.alias ?? 'lead',
     body: 'hello',
     principal: over.principal ?? 'grok-bot',
     caller: over.caller ?? 'client',
-    policy: over.policy ?? MAILBOX_ROUTER_DEFAULTS,
+    policy: over.policy ?? POLICY,
     unreadWindowSeconds: over.unreadWindowSeconds ?? 30,
     now: () => clock.at,
     sleep: async (ms) => {
@@ -53,27 +61,27 @@ function scene(over: {
 }
 
 describe('an alias ask', () => {
-  test('iris writes one drop to iris@floor and types nothing', async () => {
+  test('lead writes one drop to lead@acme and types nothing', async () => {
     const ledger: MailboxAskLedger = new Map();
     const world = scene();
     const result = await askMailbox(ledger, world.input);
-    expect(world.sends).toEqual([{ principal: 'grok-bot', to: 'iris@floor', body: 'hello' }]);
+    expect(world.sends).toEqual([{ principal: 'grok-bot', to: 'lead@acme', body: 'hello' }]);
     expect(result.sync).toEqual({ kind: 'reply', bytes: 'the answer', messageId: 'm-1' });
     expect(result.mailbox).toEqual({ messageId: 'm-1', bytes: 'the answer' });
     expect(world.typed.n).toBe(0);
     expect(result.wakeTaken).toBe(true);
   });
 
-  test('atlas writes one drop to orchestrator@floor', async () => {
-    const world = scene({ alias: 'atlas', principal: 'owner' });
+  test('a backup alias writes one drop to the seat its route names', async () => {
+    const world = scene({ alias: 'backup', principal: 'owner' });
     await askMailbox(new Map(), world.input);
-    expect(world.sends).toEqual([{ principal: 'owner', to: 'orchestrator@floor', body: 'hello' }]);
+    expect(world.sends).toEqual([{ principal: 'owner', to: 'helper@acme', body: 'hello' }]);
   });
 
   test('a definite miss follows the fallback once, and a taken wake does not', async () => {
     const missed: Sent[] = [];
     const miss = scene({
-      alias: 'atlas',
+      alias: 'lead',
       askId: 'miss',
       send: async (item) => {
         missed.push(item);
@@ -81,13 +89,13 @@ describe('an alias ask', () => {
       },
     });
     const missedResult = await askMailbox(new Map(), miss.input);
-    expect(missed.map((item) => item.to)).toEqual(['orchestrator@floor', 'iris@floor']);
-    expect(missedResult.seat).toBe('iris@floor');
+    expect(missed.map((item) => item.to)).toEqual(['lead@acme', 'helper@acme']);
+    expect(missedResult.seat).toBe('helper@acme');
     expect(missedResult.sync).toMatchObject({ kind: 'reply', messageId: 'm-2' });
 
     const taken: Sent[] = [];
     const held = scene({
-      alias: 'atlas',
+      alias: 'lead',
       askId: 'taken',
       send: async (item) => {
         taken.push(item);
@@ -95,7 +103,7 @@ describe('an alias ask', () => {
       },
     });
     await askMailbox(new Map(), held.input);
-    expect(taken.map((item) => item.to)).toEqual(['orchestrator@floor']);
+    expect(taken.map((item) => item.to)).toEqual(['lead@acme']);
   });
 
   test('a verified reply is returned and recorded; a failed one returns nothing and is not retried', async () => {
@@ -136,14 +144,14 @@ describe('an alias ask', () => {
 
   test('a desk target is refused before a send', async () => {
     const policy: MailboxRouterPolicy = {
-      routes: [{ alias: 'iris', address: 'desk@floor', fallback: null }],
+      routes: [{ alias: 'lead', address: 'desk@acme', fallback: null }],
       replyBoundSeconds: null,
     };
     const world = scene({ policy });
     const result = await askMailbox(new Map(), world.input);
     expect(result.sync).toEqual({
       kind: 'refused',
-      why: 'iris names the desk seat, which is not a route',
+      why: 'lead names the desk seat, which is not a route',
     });
     expect(world.sends).toHaveLength(0);
   });

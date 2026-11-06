@@ -899,17 +899,13 @@ export const DELIVERY_TIMEOUT_DEFAULTS: Readonly<Record<DeliveryTimeoutRoute, nu
 // `readMailboxRouterPolicy` in `src/policy/router.ts` reads them back into the shape the child
 // consumes and refuses a word that broke its rules at load, with a named error.
 
-/** The release's router alias map, in the order `team policy view` lists it. */
-export const ROUTER_ALIAS_DEFAULTS: Readonly<Record<string, string>> = {
-  iris: 'iris@floor',
-  atlas: 'orchestrator@floor',
-  zeus: 'architect@floor',
-};
+/** The release's router alias map: empty. A fresh install ships no alias; the entity or team
+ *  policy record places every word, and only those levels may move one. */
+export const ROUTER_ALIAS_DEFAULTS: Readonly<Record<string, string>> = {};
 
-/** The release's fallback map; iris and zeus have none. Only the entity level may move these. */
-export const ROUTER_FALLBACK_DEFAULTS: Readonly<Record<string, string>> = {
-  atlas: 'iris@floor',
-};
+/** The release's fallback map: empty, for the same reason. Only the entity level may move a
+ *  fallback the entity placed. */
+export const ROUTER_FALLBACK_DEFAULTS: Readonly<Record<string, string>> = {};
 
 /** A `seat@team` address: one `@`, a name each side of it. */
 export function parseSeatTeamAddress(text: string): { seat: string; team: string } | null {
@@ -2326,8 +2322,9 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     isWithin: () => true,
   },
   // The mailbox router's alias map: each entry places an alias at a `seat@team` address. The
-  // release places iris, atlas and zeus; the entity may move them or add names, and a team may add
-  // an alias for its own seats — never retarget one the entity places. `readMailboxRouterPolicy`
+  // release places none — a fresh install's map is empty, and a word exists only when an entity or
+  // team policy record places it. The entity may place or move any name, and a team may add an
+  // alias for its own seats — never retarget one the entity places. `readMailboxRouterPolicy`
   // in `src/policy/router.ts` judges that split at load, naming the alias; the resolver's own
   // ordering refuses a team word that moves an entity-placed alias against an entity declaration.
   'router.aliases': {
@@ -2346,9 +2343,9 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     isWithin: routerAliasesWithin,
   },
   // Where an alias's ask goes on a definite miss: another alias's route is a `seat@team` address,
-  // `none` clears it. The release falls atlas back to iris; iris and zeus have none. An entity
-  // alias's fallback belongs to the entity alone — a team may set the fallback only of an alias it
-  // added, which `readMailboxRouterPolicy` judges at load, naming the alias.
+  // `none` clears it. The release ships none, so a fallback exists only where a record places one.
+  // An entity alias's fallback belongs to the entity alone — a team may set the fallback only of
+  // an alias it added, which `readMailboxRouterPolicy` judges at load, naming the alias.
   'router.fallback': {
     name: 'router.fallback',
     kind: 'advised',

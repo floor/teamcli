@@ -29,7 +29,7 @@ function makeFixtureWorld(): { base: string; root: string; home: string } {
   cleanupDirs.push(base);
   const root = join(base, 'acme');
   const home = join(base, 'home');
-  mkdirSync(join(root, '.agents', 'send-drops', 'acme', 'iris'), { recursive: true });
+  mkdirSync(join(root, '.agents', 'send-drops', 'acme', 'helper'), { recursive: true });
   mkdirSync(home, { recursive: true });
   return { base, root, home };
 }
@@ -38,7 +38,7 @@ function makePayload(root: string, id: string, from = 'lead'): RecordPayload {
   return {
     kind: 'message',
     id,
-    to: 'iris',
+    to: 'helper',
     to_id: null,
     root,
     session: 'acme',
@@ -99,7 +99,7 @@ describe('node build compilation and Bun/Node relative-read parity (independent 
 
   test('compiled bus/relative-read.js executes under the real node runtime and matches Bun FFI and nodeFolderChain across valid, missing, and all refusal cases', () => {
     const { base, root, home } = makeFixtureWorld();
-    const folders = ['.agents', 'send-drops', 'acme', 'iris'] as const;
+    const folders = ['.agents', 'send-drops', 'acme', 'helper'] as const;
 
     // 1. Valid signed record
     const validId = 'rec-valid';
@@ -150,7 +150,7 @@ describe('node build compilation and Bun/Node relative-read parity (independent 
       {
         label: 'missing intermediate folder',
         rootPath: root,
-        folders: ['.agents', 'send-drops', 'no-such-session', 'iris'],
+        folders: ['.agents', 'send-drops', 'no-such-session', 'helper'],
         name: validId,
       },
       { label: 'symlinked leaf record', rootPath: root, folders, name: 'rec-symlink-leaf' },
@@ -177,7 +177,7 @@ describe('node build compilation and Bun/Node relative-read parity (independent 
       {
         label: 'dot-dot in intermediate folder segment',
         rootPath: root,
-        folders: ['.agents', '..', 'acme', 'iris'],
+        folders: ['.agents', '..', 'acme', 'helper'],
         name: validId,
       },
       {

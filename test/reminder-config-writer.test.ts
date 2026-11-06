@@ -185,10 +185,10 @@ describe('the door is the entity’s own', () => {
   test('a wildcard general grant admitting config writes the list', async () => {
     const world = place();
     const pair = newClientKeyPair();
-    const keys = writeClientKeyFiles(join(world.home, '.config', 'team-client', 'iris'), pair);
+    const keys = writeClientKeyFiles(join(world.home, '.config', 'team-client', 'helper'), pair);
     if (!keys.ok) throw new Error(keys.why);
     const grant = issueOwnerGeneralGrant(world.home, {
-      clientId: 'iris',
+      clientId: 'helper',
       publicKey: pair.publicKey,
       entities: ['*'],
       ops: ['config'],
@@ -207,10 +207,10 @@ describe('the door is the entity’s own', () => {
     const world = place();
     const before = readFileSync(world.file, 'utf8');
     const pair = newClientKeyPair();
-    const keys = writeClientKeyFiles(join(world.home, '.config', 'team-client', 'iris'), pair);
+    const keys = writeClientKeyFiles(join(world.home, '.config', 'team-client', 'helper'), pair);
     if (!keys.ok) throw new Error(keys.why);
     const grant = issueOwnerGeneralGrant(world.home, {
-      clientId: 'iris',
+      clientId: 'helper',
       publicKey: pair.publicKey,
       entities: ['floor'],
       ops: ['config'],

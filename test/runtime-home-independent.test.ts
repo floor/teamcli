@@ -124,17 +124,17 @@ describe('runtime-home migration independent security and recovery probes', () =
     {
       const { sandbox, home } = makeSandbox('link-dot-config');
       const outsideConfig = join(sandbox, 'outside-config');
-      mkdirSync(join(outsideConfig, 'team', 'lobby', 'atlas-810'), { recursive: true });
-      writeFileSync(join(outsideConfig, 'team', 'lobby', 'atlas-810', 'a.txt'), 'keep-a\n');
+      mkdirSync(join(outsideConfig, 'team', 'lobby', 'lead-810'), { recursive: true });
+      writeFileSync(join(outsideConfig, 'team', 'lobby', 'lead-810', 'a.txt'), 'keep-a\n');
       symlinkSync(outsideConfig, join(home, '.config'));
 
       const res = migrateRuntimeHome(home, quietSources);
       expect(res.moved).toEqual([]);
       expect(res.complete).toBe(false);
-      expect(res.refused.map((r) => r.name)).toEqual(['atlas-810']);
+      expect(res.refused.map((r) => r.name)).toEqual(['lead-810']);
       expect(res.refused[0]!.why).toContain('is a link');
       expect(existsSync(join(outsideConfig, 'team', 'runtime'))).toBe(false);
-      expect(readFileSync(join(outsideConfig, 'team', 'lobby', 'atlas-810', 'a.txt'), 'utf8')).toBe('keep-a\n');
+      expect(readFileSync(join(outsideConfig, 'team', 'lobby', 'lead-810', 'a.txt'), 'utf8')).toBe('keep-a\n');
     }
 
     // Subcase B: `.config/team` (`machineConfigDir`) is a symlink to an outside directory.
@@ -159,18 +159,18 @@ describe('runtime-home migration independent security and recovery probes', () =
     {
       const { sandbox, home } = makeSandbox('link-lobby-dir');
       const outsideLobby = join(sandbox, 'outside-lobby');
-      mkdirSync(join(outsideLobby, 'iris-810'), { recursive: true });
-      writeFileSync(join(outsideLobby, 'iris-810', 'c.txt'), 'keep-c\n');
+      mkdirSync(join(outsideLobby, 'helper-810'), { recursive: true });
+      writeFileSync(join(outsideLobby, 'helper-810', 'c.txt'), 'keep-c\n');
       mkdirSync(machineConfigDir(home), { recursive: true });
       symlinkSync(outsideLobby, lobbyDir(home));
 
       const res = migrateRuntimeHome(home, quietSources);
       expect(res.moved).toEqual([]);
       expect(res.complete).toBe(false);
-      expect(res.refused.map((r) => r.name)).toEqual(['iris-810']);
+      expect(res.refused.map((r) => r.name)).toEqual(['helper-810']);
       expect(res.refused[0]!.why).toContain('is a link');
       expect(existsSync(runtimeKitsDir(home))).toBe(false);
-      expect(readFileSync(join(outsideLobby, 'iris-810', 'c.txt'), 'utf8')).toBe('keep-c\n');
+      expect(readFileSync(join(outsideLobby, 'helper-810', 'c.txt'), 'utf8')).toBe('keep-c\n');
     }
 
     // Subcase D: `.config/team/runtime` (`runtimeDir`) is a symlink.
@@ -221,40 +221,40 @@ describe('runtime-home migration independent security and recovery probes', () =
     // Subcase F: Undo also refuses when `lobbyDir` or `runtimeKitsDir` is replaced by a symlink after migration.
     {
       const { sandbox, home } = makeSandbox('link-on-undo');
-      populateKit(lobbyDir(home), 'atlas-810', {
+      populateKit(lobbyDir(home), 'lead-810', {
         'state.json': { bytes: Buffer.from('{"v":1}\n'), mode: 0o600 },
       });
       const fwd = migrateRuntimeHome(home, quietSources);
-      expect(fwd.moved).toEqual(['atlas-810']);
+      expect(fwd.moved).toEqual(['lead-810']);
 
       // Replace `lobbyDir(home)` with a symlink to `outsideLobby` containing a `.moving-` temp sentinel.
       rmSync(lobbyDir(home), { recursive: true, force: true });
       const outsideLobby = join(sandbox, 'outside-undo-lobby');
       mkdirSync(outsideLobby, { recursive: true });
-      const undoSentinel = join(outsideLobby, '.atlas-810.moving-123456abcdef');
+      const undoSentinel = join(outsideLobby, '.lead-810.moving-123456abcdef');
       mkdirSync(undoSentinel, { recursive: true });
       symlinkSync(outsideLobby, lobbyDir(home));
 
       const undone = undoRuntimeHomeMigration(home, quietSources);
       expect(undone.movedBack).toEqual([]);
-      expect(undone.refused.map((r) => r.name)).toEqual(['atlas-810']);
+      expect(undone.refused.map((r) => r.name)).toEqual(['lead-810']);
       expect(undone.refused[0]!.why).toContain('is a link');
-      // Sentinel in `outsideLobby` was NOT swept through the symlink, and `atlas-810` remains in `runtime/kits`.
+      // Sentinel in `outsideLobby` was NOT swept through the symlink, and `lead-810` remains in `runtime/kits`.
       expect(existsSync(undoSentinel)).toBe(true);
-      expect(existsSync(join(outsideLobby, 'atlas-810'))).toBe(false);
-      expect(readFileSync(join(runtimeKitsDir(home), 'atlas-810', 'state.json'), 'utf8')).toBe('{"v":1}\n');
+      expect(existsSync(join(outsideLobby, 'lead-810'))).toBe(false);
+      expect(readFileSync(join(runtimeKitsDir(home), 'lead-810', 'state.json'), 'utf8')).toBe('{"v":1}\n');
     }
   });
 
   test('2. a migration.json whose from or to is not the pinned path for that kit is refused with nothing moved', () => {
     const { sandbox, home } = makeSandbox('forged-note');
-    for (const name of ['atlas-810', 'desk-810', 'iris-810', 'front-810', 'mailbox-router']) {
+    for (const name of ['lead-810', 'desk-810', 'helper-810', 'front-810', 'mailbox-router']) {
       populateKit(lobbyDir(home), name, {
         'data.txt': { bytes: Buffer.from(`payload-${name}\n`), mode: 0o600 },
       });
     }
     const fwd = migrateRuntimeHome(home, quietSources);
-    expect(fwd.moved).toEqual(['atlas-810', 'desk-810', 'iris-810', 'front-810', 'mailbox-router']);
+    expect(fwd.moved).toEqual(['lead-810', 'desk-810', 'helper-810', 'front-810', 'mailbox-router']);
 
     const outsideTarget = join(sandbox, 'outside-target');
     const outsideSource = join(sandbox, 'outside-source');
@@ -267,9 +267,9 @@ describe('runtime-home migration independent security and recovery probes', () =
       moved: [
         // 1. `from` points outside the lobby:
         {
-          name: 'atlas-810',
+          name: 'lead-810',
           from: outsideTarget,
-          to: join(runtimeKitsDir(home), 'atlas-810'),
+          to: join(runtimeKitsDir(home), 'lead-810'),
           at: NOW.toISOString(),
         },
         // 2. `to` points outside `runtime/kits`:
@@ -281,9 +281,9 @@ describe('runtime-home migration independent security and recovery probes', () =
         },
         // 3. `from` and `to` are swapped:
         {
-          name: 'iris-810',
-          from: join(runtimeKitsDir(home), 'iris-810'),
-          to: join(lobbyDir(home), 'iris-810'),
+          name: 'helper-810',
+          from: join(runtimeKitsDir(home), 'helper-810'),
+          to: join(lobbyDir(home), 'helper-810'),
           at: NOW.toISOString(),
         },
         // 4. `from` and `to` name a different valid kit (`front-810` paths under `mailbox-router` entry):
@@ -315,9 +315,9 @@ describe('runtime-home migration independent security and recovery probes', () =
     const undone = undoRuntimeHomeMigration(home, quietSources);
     expect(undone.movedBack).toEqual([]);
     expect(undone.refused.map((r) => r.name)).toEqual([
-      'atlas-810',
+      'lead-810',
       'desk-810',
-      'iris-810',
+      'helper-810',
       'front-810',
       'mailbox-router',
     ]);
@@ -326,11 +326,11 @@ describe('runtime-home migration independent security and recovery probes', () =
     }
     const plainLines = runtimeMigrationUndoLines(undone);
     expect(plainLines.length).toBe(5);
-    expect(plainLines[0]).toContain('runtime home: refused atlas-810:');
+    expect(plainLines[0]).toContain('runtime home: refused lead-810:');
 
     // Nothing was moved out of `runtime/kits`, nothing was written to `lobbyDir` or `outsideTarget`,
     // and `outsideSource` was untouched.
-    for (const name of ['atlas-810', 'desk-810', 'iris-810', 'front-810', 'mailbox-router']) {
+    for (const name of ['lead-810', 'desk-810', 'helper-810', 'front-810', 'mailbox-router']) {
       expect(readFileSync(join(runtimeKitsDir(home), name, 'data.txt'), 'utf8')).toBe(`payload-${name}\n`);
       expect(existsSync(join(lobbyDir(home), name))).toBe(false);
     }
@@ -346,7 +346,7 @@ describe('runtime-home migration independent security and recovery probes', () =
       'nested/deep/bravo.bin': { bytes: Buffer.from([0x00, 0x01, 0x7f, 0x80, 0xfe, 0xff]), mode: 0o640 },
       'nested/charlie.txt': { bytes: Buffer.from('charlie-content\n'.repeat(50)), mode: 0o644 },
     };
-    const lobbyKitPath = populateKit(lobbyDir(home), 'atlas-810', files, 0o755);
+    const lobbyKitPath = populateKit(lobbyDir(home), 'lead-810', files, 0o755);
     const expectedSnapshot = snapshotTree(lobbyKitPath);
 
     const makeExdevSources = (failOnCopyCall?: number): RuntimeMigrationSources => {
@@ -379,22 +379,22 @@ describe('runtime-home migration independent security and recovery probes', () =
     const crashedFwd = migrateRuntimeHome(home, makeExdevSources(3));
     expect(crashedFwd.moved).toEqual([]);
     expect(crashedFwd.complete).toBe(false);
-    expect(crashedFwd.refused.map((r) => r.name)).toEqual(['atlas-810']);
+    expect(crashedFwd.refused.map((r) => r.name)).toEqual(['lead-810']);
     // Source in lobby is still 100% intact; target does not exist; `.moving-` temp exists in `runtime/kits`.
     assertSnapshotsEqual(snapshotTree(lobbyKitPath), expectedSnapshot);
-    expect(existsSync(join(runtimeKitsDir(home), 'atlas-810'))).toBe(false);
-    expect(readdirSync(runtimeKitsDir(home)).some((entry) => entry.startsWith('.atlas-810.moving-'))).toBe(true);
+    expect(existsSync(join(runtimeKitsDir(home), 'lead-810'))).toBe(false);
+    expect(readdirSync(runtimeKitsDir(home)).some((entry) => entry.startsWith('.lead-810.moving-'))).toBe(true);
 
     // 2. Re-run forward migration: sweeps `.moving-` temp, copies and verifies whole kit, removes lobby source.
     const recoveredFwd = migrateRuntimeHome(home, makeExdevSources());
-    expect(recoveredFwd.moved).toEqual(['atlas-810']);
+    expect(recoveredFwd.moved).toEqual(['lead-810']);
     expect(recoveredFwd.refused).toEqual([]);
     expect(recoveredFwd.complete).toBe(true);
-    expect(readdirSync(runtimeKitsDir(home))).toEqual(['atlas-810']);
+    expect(readdirSync(runtimeKitsDir(home))).toEqual(['lead-810']);
     expect(existsSync(lobbyKitPath)).toBe(false);
-    const movedKitPath = join(runtimeKitsDir(home), 'atlas-810');
+    const movedKitPath = join(runtimeKitsDir(home), 'lead-810');
     assertSnapshotsEqual(snapshotTree(movedKitPath), expectedSnapshot);
-    // All directories in `runtime/kits/atlas-810` are narrowed to 0700.
+    // All directories in `runtime/kits/lead-810` are narrowed to 0700.
     expect(lstatSync(movedKitPath).mode & 0o777).toBe(0o700);
     expect(lstatSync(join(movedKitPath, 'nested')).mode & 0o777).toBe(0o700);
     expect(lstatSync(join(movedKitPath, 'nested', 'deep')).mode & 0o777).toBe(0o700);
@@ -402,17 +402,17 @@ describe('runtime-home migration independent security and recovery probes', () =
     // 3. Crash on the 2nd file during undo EXDEV migration:
     const crashedUndo = undoRuntimeHomeMigration(home, makeExdevSources(2));
     expect(crashedUndo.movedBack).toEqual([]);
-    expect(crashedUndo.refused.map((r) => r.name)).toEqual(['atlas-810']);
-    // `runtime/kits/atlas-810` is still 100% intact; `lobby/atlas-810` does not exist; `.moving-` temp exists in `lobby`.
+    expect(crashedUndo.refused.map((r) => r.name)).toEqual(['lead-810']);
+    // `runtime/kits/lead-810` is still 100% intact; `lobby/lead-810` does not exist; `.moving-` temp exists in `lobby`.
     assertSnapshotsEqual(snapshotTree(movedKitPath), expectedSnapshot);
     expect(existsSync(lobbyKitPath)).toBe(false);
-    expect(readdirSync(lobbyDir(home)).some((entry) => entry.startsWith('.atlas-810.moving-'))).toBe(true);
+    expect(readdirSync(lobbyDir(home)).some((entry) => entry.startsWith('.lead-810.moving-'))).toBe(true);
 
-    // 4. Re-run undo migration: sweeps `.moving-` temp in lobby, restores `lobby/atlas-810` whole, removes `runtime/kits/atlas-810`.
+    // 4. Re-run undo migration: sweeps `.moving-` temp in lobby, restores `lobby/lead-810` whole, removes `runtime/kits/lead-810`.
     const recoveredUndo = undoRuntimeHomeMigration(home, makeExdevSources());
-    expect(recoveredUndo.movedBack).toEqual(['atlas-810']);
+    expect(recoveredUndo.movedBack).toEqual(['lead-810']);
     expect(recoveredUndo.refused).toEqual([]);
-    expect(readdirSync(lobbyDir(home))).toEqual(['atlas-810']);
+    expect(readdirSync(lobbyDir(home))).toEqual(['lead-810']);
     expect(existsSync(movedKitPath)).toBe(false);
     assertSnapshotsEqual(snapshotTree(lobbyKitPath), expectedSnapshot);
   });
@@ -421,7 +421,7 @@ describe('runtime-home migration independent security and recovery probes', () =
     const { home } = makeSandbox('byte-for-byte-undo');
 
     const kitSpecs: Record<string, Record<string, FileSpec>> = {
-      'atlas-810': {
+      'lead-810': {
         'config.json': { bytes: Buffer.from('{"port":8100,"mode":"strict"}\n'), mode: 0o600 },
         'keys/pub.bin': { bytes: Buffer.from([0xde, 0xad, 0xbe, 0xef, 0x00, 0x42]), mode: 0o600 },
       },
@@ -429,10 +429,10 @@ describe('runtime-home migration independent security and recovery probes', () =
         'server.js': { bytes: Buffer.from('console.log("desk");\n'), mode: 0o755 },
         'assets/style.css': { bytes: Buffer.from('body { margin: 0; }\n'), mode: 0o644 },
       },
-      'iris-810': {
-        'iris.toml': { bytes: Buffer.from('[iris]\nenabled = true\n'), mode: 0o640 },
+      'helper-810': {
+        'helper.toml': { bytes: Buffer.from('[helper]\nenabled = true\n'), mode: 0o640 },
       },
-      'guard-floor-iris': {
+      'guard-floor-helper': {
         'guard.json': { bytes: Buffer.from('{"allow":["read"]}\n'), mode: 0o600 },
       },
       'guard-pilot-wk': {
@@ -466,7 +466,7 @@ describe('runtime-home migration independent security and recovery probes', () =
     });
 
     // Forward migration: moves all 7 `RUNTIME_KIT_FOLDERS` in order, reports both `LATER_KIT_FOLDERS`.
-    const guardLobbyPath = join(lobbyDir(home), 'guard-floor-iris');
+    const guardLobbyPath = join(lobbyDir(home), 'guard-floor-helper');
     const sourcesBeforeReapproval: RuntimeMigrationSources = {
       ...quietSources,
       guardDirsNamed: () => [guardLobbyPath],
@@ -476,7 +476,7 @@ describe('runtime-home migration independent security and recovery probes', () =
     expect(fwd.moved).toEqual([...RUNTIME_KIT_FOLDERS]);
     expect(fwd.later).toEqual([...LATER_KIT_FOLDERS]);
     expect(fwd.refused).toEqual([]);
-    expect(fwd.guardLines).toEqual([`guard_dir: ${join(runtimeKitsDir(home), 'guard-floor-iris')}`]);
+    expect(fwd.guardLines).toEqual([`guard_dir: ${join(runtimeKitsDir(home), 'guard-floor-helper')}`]);
     expect(fwd.complete).toBe(false);
     expect(runtimeMigrationLines(fwd)).toContain(
       'runtime home: moved, not complete — the migration closes when team check shows the new guard path',

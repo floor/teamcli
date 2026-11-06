@@ -7,7 +7,7 @@ import { daemonSocketPath } from '../src/daemon/paths.ts';
 import { writeDaemonState } from '../src/daemon/state.ts';
 
 describe('retiring the shuttle units', () => {
-  test('a fresh heartbeat removes the three units and leaves the child up', () => {
+  test('a fresh heartbeat removes the unit and leaves the child up', () => {
     const asked: string[] = [];
     const result = retireShuttles({
       heartbeatFresh: true,
@@ -37,13 +37,13 @@ describe('retiring the shuttle units', () => {
     const result = retireShuttles({
       heartbeatFresh: true,
       retire(label) {
-        if (label === 'io.teamcli.atlas-shuttle') return { ok: false, why: 'the unit is still held' };
+        if (label === 'io.teamcli.desk-shuttle') return { ok: false, why: 'the unit is still held' };
         return { ok: true };
       },
     });
     expect(result.child).toBe('up');
-    expect(result.retired).toEqual(['io.teamcli.iris-shuttle', 'io.teamcli.desk-shuttle']);
-    expect(result.failed).toEqual([{ label: 'io.teamcli.atlas-shuttle', why: 'the unit is still held' }]);
+    expect(result.retired).toEqual([]);
+    expect(result.failed).toEqual([{ label: 'io.teamcli.desk-shuttle', why: 'the unit is still held' }]);
   });
 });
 

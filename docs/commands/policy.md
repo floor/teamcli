@@ -150,27 +150,27 @@ back to nothing. `message` is within `file`; `memory` is comparable only to itse
 entity, project and team levels.
 
 The three `router.*` policies place the mailbox router's map. `router.aliases` places each alias
-at a `seat@team` address, as a comma list (`atlas=zeus@floor`); the release places
-`iris=iris@floor`, `atlas=orchestrator@floor` and `zeus=architect@floor`. A word names only what
-it moves: every alias a word leaves out keeps the address in force above it. The entity may move
-an alias or add names, and an entity word's target names a team of the entity — one its own
-record or a project record of the entity places there — never one outside it. A team may add an
-alias for its own seats — the team spelled by its registry id, its name or its session, the forms
-a send accepts — and never retarget one the entity places: a word that tries is refused at load,
-naming the alias, and so is one naming an address that is not a seat of the team. An alias with
-no address, an address that is not `seat@team`, a seat named `desk`, and an alias named twice in
-one word are refused at write and at load, each with its own named error. `router.fallback`
-places where an ask goes when its route is a definite miss: another alias's address, or `none`
-to clear it. The release falls `atlas` back to `iris@floor`; `iris` and `zeus` have none. An
-entity alias's fallback belongs to the entity alone — a team may set the fallback only of an
-alias it added, and it names a seat of that same team — and a fallback naming its own alias or
-its own route is refused. `router.reply-bound` bounds how long the router waits for a verified
-reply: a whole number of seconds from 1 to 86400 (`600`, `600s`), the nearest level choosing.
-Unset means twice the seat's unread window; the bridge's synchronous cap of 120 seconds is the
-router's own constant, not a value here. All three words take the entity and team levels only.
-A team file that cannot be read refuses the whole read — the router never answers the release
-defaults over a team it could not read — and `team check` names the rule a word broke, with the
-`team policy unset` repair that clears it.
+at a `seat@team` address, as a comma list (`lead=helper@acme`). The release ships no alias: a
+fresh install's map is empty, and a routing word exists only when an entity or team policy record
+places it. A word names only what it moves: every alias a word leaves out keeps the address in
+force above it. The entity may move an alias or add names, and an entity word's target names a
+team of the entity — one its own record or a project record of the entity places there — never
+one outside it. A team may add an alias for its own seats — the team spelled by its registry id,
+its name or its session, the forms a send accepts — and never retarget one the entity places: a
+word that tries is refused at load, naming the alias, and so is one naming an address that is
+not a seat of the team. An alias with no address, an address that is not `seat@team`, a seat
+named `desk`, and an alias named twice in one word are refused at write and at load, each with
+its own named error. `router.fallback` places where an ask goes when its route is a definite
+miss: another alias's address, or `none` to clear it. The release ships none; a fallback exists
+only where a record places one. An entity alias's fallback belongs to the entity alone — a team
+may set the fallback only of an alias it added, and it names a seat of that same team — and a
+fallback naming its own alias or its own route is refused. `router.reply-bound` bounds how long
+the router waits for a verified reply: a whole number of seconds from 1 to 86400 (`600`,
+`600s`), the nearest level choosing. Unset means twice the seat's unread window; the bridge's
+synchronous cap of 120 seconds is the router's own constant, not a value here. All three words
+take the entity and team levels only. A team file that cannot be read refuses the whole read —
+the router never answers an empty map over a team it could not read — and `team check` names the
+rule a word broke, with the `team policy unset` repair that clears it.
 
 Five words govern the terminal host's sidebar; all five take the entity, project and team
 levels, and a chain that cannot be read leaves the release defaults in force — the sidebar is

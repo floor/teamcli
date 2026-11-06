@@ -19,7 +19,7 @@ test('a pending marker reuses the record stamp on the next pass', () => {
   made.push(base);
   const root = join(base, 'acme');
   const home = join(base, 'home');
-  const seat = join(root, '.agents', 'send-drops', 'acme', 'iris');
+  const seat = join(root, '.agents', 'send-drops', 'acme', 'helper');
   mkdirSync(seat, { recursive: true });
   mkdirSync(home, { recursive: true });
   messageKeyOf(home);
@@ -27,7 +27,7 @@ test('a pending marker reuses the record stamp on the next pass', () => {
   const payload: RecordPayload = {
     kind: 'message',
     id,
-    to: 'iris',
+    to: 'helper',
     to_id: null,
     root,
     session: 'acme',
@@ -39,7 +39,7 @@ test('a pending marker reuses the record stamp on the next pass', () => {
     thread: id,
   };
   writeFileSync(join(seat, id), JSON.stringify(signRecord(payload, home)));
-  markPending(seat, { id, from: 'lead', to: 'iris', body: 'fixture', ts: '2026-11-03T00:00:00.000Z', leg: 'drop' });
+  markPending(seat, { id, from: 'lead', to: 'helper', body: 'fixture', ts: '2026-11-03T00:00:00.000Z', leg: 'drop' });
   const state = createReconcileState();
   const pass = () => reconcilePass({ project: 'acme', root, session: 'acme', home, state, now: new Date('2026-11-03T00:01:00.000Z') });
   const first = pass();
@@ -59,7 +59,7 @@ test('a pending marker on a symbolic link takes its refusal reason from the rela
   made.push(base);
   const root = join(base, 'acme');
   const home = join(base, 'home');
-  const seat = join(root, '.agents', 'send-drops', 'acme', 'iris');
+  const seat = join(root, '.agents', 'send-drops', 'acme', 'helper');
   mkdirSync(seat, { recursive: true });
   mkdirSync(home, { recursive: true });
   messageKeyOf(home);
@@ -68,7 +68,7 @@ test('a pending marker on a symbolic link takes its refusal reason from the rela
   const payload: RecordPayload = {
     kind: 'message',
     id,
-    to: 'iris',
+    to: 'helper',
     to_id: null,
     root,
     session: 'acme',
@@ -82,7 +82,7 @@ test('a pending marker on a symbolic link takes its refusal reason from the rela
   const target = join(base, 'outside-record');
   writeFileSync(target, JSON.stringify(signRecord(payload, home)));
   symlinkSync(target, join(seat, id));
-  markPending(seat, { id, from: 'lead', to: 'iris', body: 'fixture', ts: '2026-11-03T00:00:00.000Z', leg: 'drop' });
+  markPending(seat, { id, from: 'lead', to: 'helper', body: 'fixture', ts: '2026-11-03T00:00:00.000Z', leg: 'drop' });
 
   const state = createReconcileState();
   const refusals: { where: string; reason: string }[] = [];
@@ -104,8 +104,8 @@ test('a pending marker on a symbolic link takes its refusal reason from the rela
   expect(first.ok).toBe(true);
   if (first.ok) expect(first.raised).toHaveLength(0);
   expect(refusals).toEqual([
-    { where: `iris/${id}`, reason: 'the record is a symbolic link' },
-    { where: `iris/${id}`, reason: 'a symbolic link was found and not followed' },
+    { where: `helper/${id}`, reason: 'the record is a symbolic link' },
+    { where: `helper/${id}`, reason: 'a symbolic link was found and not followed' },
   ]);
 
   // Pass 2: while the symlink stands, both refusal keys stay in `state.refused` and are not repeated.

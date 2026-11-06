@@ -48,14 +48,11 @@ const LEVELS: readonly MailboxAliasWord['level'][] = ['entity', 'project', 'team
 /** The seat a route must not name. The desk shuttle is retired and nothing routes there. */
 const DESK_SEAT = 'desk';
 
-/** The release map, used when the chain sets nothing. Entity-owned: a nearer level may add an
- *  alias and may not retarget these. */
+/** The release map, used when the chain sets nothing: empty. A fresh install ships no alias, so a
+ *  routing word exists only when an entity or team policy record places it. Entity-owned words
+ *  are seeded from the chain, never from this constant. */
 export const MAILBOX_ROUTER_DEFAULTS: MailboxRouterPolicy = {
-  routes: [
-    { alias: 'iris', address: 'iris@floor', fallback: null },
-    { alias: 'atlas', address: 'orchestrator@floor', fallback: 'iris@floor' },
-    { alias: 'zeus', address: 'architect@floor', fallback: null },
-  ],
+  routes: [],
   replyBoundSeconds: null,
 };
 

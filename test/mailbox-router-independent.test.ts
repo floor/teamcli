@@ -35,11 +35,20 @@ function makeTempDir(prefix: string): string {
   return dir;
 }
 
+/** The route set these scenes use: one alias with a fallback, one without. */
+const POLICY: MailboxRouterPolicy = {
+  routes: [
+    { alias: 'lead', address: 'lead@acme', fallback: 'helper@acme' },
+    { alias: 'backup', address: 'helper@acme', fallback: null },
+  ],
+  replyBoundSeconds: null,
+};
+
 function makeRecordPayload(id: string, over: Partial<RecordPayload> = {}): RecordPayload {
   return {
     kind: 'message',
     id,
-    to: 'iris',
+    to: 'lead',
     to_id: null,
     root: '/fixture/root',
     session: 'fixture',
@@ -111,19 +120,19 @@ describe('mailbox router 0.5.13 (independent verification)', () => {
     expect(readdirSync(dropDir)).toEqual([]);
     expect(readdirSync(noteHome)).toEqual([]);
 
-    // (c) Wired through askMailbox on an alias with a fallback ('atlas' -> primary + fallback):
+    // (c) Wired through askMailbox on an alias with a fallback ('lead' -> primary + fallback):
     // wrong-key refusal stops on the first send, writes nothing, and never attempts the fallback.
     const attemptedTargets: string[] = [];
     const mailboxWrites: unknown[] = [];
     let replyReads = 0;
     const askRes = await askMailbox(new Map(), {
       askId: 'ask-wrong-key',
-      alias: 'atlas',
+      alias: 'lead',
       body: 'ask payload body\n',
       principal: 'client-alpha',
       signed: signedByStranger,
       caller: 'client',
-      policy: MAILBOX_ROUTER_DEFAULTS,
+      policy: POLICY,
       unreadWindowSeconds: 30,
       now: () => 0,
       sleep: async () => {},
@@ -151,7 +160,7 @@ describe('mailbox router 0.5.13 (independent verification)', () => {
       },
     });
 
-    expect(attemptedTargets).toEqual(['orchestrator@floor']);
+    expect(attemptedTargets).toEqual(['lead@acme']);
     expect(askRes).toEqual({
       seat: null,
       wakeTaken: false,
@@ -192,11 +201,11 @@ describe('mailbox router 0.5.13 (independent verification)', () => {
 
     const makeInput = (over: Partial<MailboxAskInput> = {}): MailboxAskInput => ({
       askId: 'idempotent-ask-1',
-      alias: 'iris',
+      alias: 'lead',
       body: 'original body',
       principal: 'client-alpha',
       caller: 'client',
-      policy: MAILBOX_ROUTER_DEFAULTS,
+      policy: POLICY,
       unreadWindowSeconds: 30,
       now: () => clock,
       sleep: async (ms) => {
@@ -218,7 +227,7 @@ describe('mailbox router 0.5.13 (independent verification)', () => {
 
     // Launch two concurrent calls with the same askId (second has different body and alias)
     const p1 = askMailbox(ledger, makeInput());
-    const p2 = askMailbox(ledger, makeInput({ alias: 'atlas', body: 'duplicate concurrent body' }));
+    const p2 = askMailbox(ledger, makeInput({ alias: 'backup', body: 'duplicate concurrent body' }));
     expect(p1).toBe(p2);
 
     const [r1, r2] = await Promise.all([p1, p2]);
@@ -229,7 +238,7 @@ describe('mailbox router 0.5.13 (independent verification)', () => {
     expect(r3).toEqual(r1);
 
     // Only one send, one mailbox write, and one onSync notification occurred
-    expect(sends).toEqual([{ principal: 'client-alpha', to: 'iris@floor', body: 'original body' }]);
+    expect(sends).toEqual([{ principal: 'client-alpha', to: 'lead@acme', body: 'original body' }]);
     expect(mailboxWrites).toEqual([
       { principal: 'client-alpha', messageId: 'm-1', bytes: 'verified-answer-1' },
     ]);
@@ -252,11 +261,11 @@ describe('mailbox router 0.5.13 (independent verification)', () => {
 
     const resA = await askMailbox(new Map(), {
       askId: 'verify-ok',
-      alias: 'iris',
+      alias: 'lead',
       body: 'check status',
       principal: 'client-alpha',
       caller: 'client',
-      policy: MAILBOX_ROUTER_DEFAULTS,
+      policy: POLICY,
       unreadWindowSeconds: 10,
       now: () => clockA,
       sleep: async (ms) => {
@@ -282,7 +291,7 @@ describe('mailbox router 0.5.13 (independent verification)', () => {
       { principal: 'client-alpha', messageId: 'm-verify-ok', bytes: 'signed-verified-payload' },
     ]);
     expect(resA).toEqual({
-      seat: 'iris@floor',
+      seat: 'lead@acme',
       wakeTaken: true,
       replyVerified: true,
       sync: { kind: 'reply', bytes: 'signed-verified-payload', messageId: 'm-verify-ok' },
@@ -299,11 +308,11 @@ describe('mailbox router 0.5.13 (independent verification)', () => {
     const writesB: unknown[] = [];
     const resB = await askMailbox(new Map(), {
       askId: 'verify-fail',
-      alias: 'iris',
+      alias: 'lead',
       body: 'check status',
       principal: 'client-alpha',
       caller: 'client',
-      policy: MAILBOX_ROUTER_DEFAULTS,
+      policy: POLICY,
       unreadWindowSeconds: 30,
       now: () => clockB,
       sleep: async (ms) => {
@@ -319,7 +328,7 @@ describe('mailbox router 0.5.13 (independent verification)', () => {
     expect(clockB).toBe(2_000);
     expect(writesB).toEqual([]);
     expect(resB).toEqual({
-      seat: 'iris@floor',
+      seat: 'lead@acme',
       wakeTaken: true,
       replyVerified: false,
       sync: { kind: 'unanswered', messageId: 'm-verify-fail' },
@@ -333,11 +342,11 @@ describe('mailbox router 0.5.13 (independent verification)', () => {
     const syncsC: Array<{ at: number; sync: MailboxAskSync }> = [];
     const resC = await askMailbox(new Map(), {
       askId: 'bridge-late-unverified',
-      alias: 'iris',
+      alias: 'lead',
       body: 'check bridge',
       principal: 'client-alpha',
       caller: 'bridge',
-      policy: MAILBOX_ROUTER_DEFAULTS,
+      policy: POLICY,
       unreadWindowSeconds: 90,
       now: () => clockC,
       sleep: async (ms) => {
@@ -364,16 +373,16 @@ describe('mailbox router 0.5.13 (independent verification)', () => {
 
   test('4. fallback runs on a definite miss (ok: true, woken: false) only — never on a taken wake that times out or fails verification, and never on a send refusal', async () => {
     // (a) Primary wake is taken (`woken: true`), but reply never arrives before bound:
-    // fallback ('iris@floor') is NEVER called.
+    // fallback ('helper@acme') is NEVER called.
     let clockTimeout = 0;
     const timeoutTargets: string[] = [];
     const resTimeout = await askMailbox(new Map(), {
       askId: 'woken-then-timeout',
-      alias: 'atlas',
-      body: 'question for atlas',
+      alias: 'lead',
+      body: 'question for lead',
       principal: 'owner',
       caller: 'client',
-      policy: MAILBOX_ROUTER_DEFAULTS,
+      policy: POLICY,
       unreadWindowSeconds: 5,
       now: () => clockTimeout,
       sleep: async (ms) => {
@@ -387,10 +396,10 @@ describe('mailbox router 0.5.13 (independent verification)', () => {
       writeMailbox: () => {},
     });
 
-    expect(timeoutTargets).toEqual(['orchestrator@floor']);
+    expect(timeoutTargets).toEqual(['lead@acme']);
     expect(clockTimeout).toBe(10_000);
     expect(resTimeout).toEqual({
-      seat: 'orchestrator@floor',
+      seat: 'lead@acme',
       wakeTaken: true,
       replyVerified: false,
       sync: { kind: 'not-woken', messageId: 'm-primary-timeout', line: 'queued, not woken' },
@@ -398,15 +407,15 @@ describe('mailbox router 0.5.13 (independent verification)', () => {
     });
 
     // (b) Primary wake is taken (`woken: true`), and reply fails verification (`verified: false`):
-    // fallback ('iris@floor') is NEVER called.
+    // fallback ('helper@acme') is NEVER called.
     const unverifiedTargets: string[] = [];
     const resUnverified = await askMailbox(new Map(), {
       askId: 'woken-then-unverified',
-      alias: 'atlas',
-      body: 'question for atlas',
+      alias: 'lead',
+      body: 'question for lead',
       principal: 'owner',
       caller: 'client',
-      policy: MAILBOX_ROUTER_DEFAULTS,
+      policy: POLICY,
       unreadWindowSeconds: 5,
       now: () => 0,
       sleep: async () => {},
@@ -418,8 +427,8 @@ describe('mailbox router 0.5.13 (independent verification)', () => {
       writeMailbox: () => {},
     });
 
-    expect(unverifiedTargets).toEqual(['orchestrator@floor']);
-    expect(resUnverified.seat).toBe('orchestrator@floor');
+    expect(unverifiedTargets).toEqual(['lead@acme']);
+    expect(resUnverified.seat).toBe('lead@acme');
     expect(resUnverified.sync).toEqual({ kind: 'unanswered', messageId: 'm-primary-unverified' });
 
     // (c) Definite miss on primary (`woken: false`), fallback is tried ONCE and also misses (`woken: false`):
@@ -427,11 +436,11 @@ describe('mailbox router 0.5.13 (independent verification)', () => {
     const doubleMissTargets: string[] = [];
     const resDoubleMiss = await askMailbox(new Map(), {
       askId: 'double-miss',
-      alias: 'atlas',
-      body: 'question for atlas',
+      alias: 'lead',
+      body: 'question for lead',
       principal: 'owner',
       caller: 'client',
-      policy: MAILBOX_ROUTER_DEFAULTS,
+      policy: POLICY,
       unreadWindowSeconds: 5,
       now: () => 0,
       sleep: async () => {},
@@ -443,49 +452,55 @@ describe('mailbox router 0.5.13 (independent verification)', () => {
       writeMailbox: () => {},
     });
 
-    expect(doubleMissTargets).toEqual(['orchestrator@floor', 'iris@floor']);
+    expect(doubleMissTargets).toEqual(['lead@acme', 'helper@acme']);
     expect(resDoubleMiss).toEqual({
-      seat: 'iris@floor',
+      seat: 'helper@acme',
       wakeTaken: false,
       replyVerified: false,
       sync: { kind: 'not-woken', messageId: 'm-miss-2', line: 'queued, not woken' },
       mailbox: null,
     });
 
-    // (d) Definite miss on an alias with no fallback (`iris` has `fallback: null`):
-    // sends once to `iris@floor` and returns not-woken immediately.
+    // (d) Definite miss on an alias with no fallback (`backup` has `fallback: null`):
+    // sends once to `helper@acme` and returns not-woken immediately.
     const noFallbackTargets: string[] = [];
     const resNoFallback = await askMailbox(new Map(), {
       askId: 'miss-no-fallback',
-      alias: 'iris',
-      body: 'question for iris',
+      alias: 'backup',
+      body: 'question for backup',
       principal: 'owner',
       caller: 'client',
-      policy: MAILBOX_ROUTER_DEFAULTS,
+      policy: POLICY,
       unreadWindowSeconds: 5,
       now: () => 0,
       sleep: async () => {},
       send: async (item) => {
         noFallbackTargets.push(item.to);
-        return { ok: true, messageId: 'm-iris-miss', woken: false };
+        return { ok: true, messageId: 'm-backup-miss', woken: false };
       },
       readReply: () => ({ verified: true, bytes: 'unreachable' }),
       writeMailbox: () => {},
     });
 
-    expect(noFallbackTargets).toEqual(['iris@floor']);
+    expect(noFallbackTargets).toEqual(['helper@acme']);
     expect(resNoFallback).toEqual({
-      seat: 'iris@floor',
+      seat: 'helper@acme',
       wakeTaken: false,
       replyVerified: false,
-      sync: { kind: 'not-woken', messageId: 'm-iris-miss', line: 'queued, not woken' },
+      sync: { kind: 'not-woken', messageId: 'm-backup-miss', line: 'queued, not woken' },
       mailbox: null,
     });
 
-    // (e) Policy resolution and unreadable root refusal via readMailboxRouterPolicy
+    // (e) A fresh install resolves to an empty map; a placed word resolves, and a project word
+    // may not retarget an alias the entity placed.
+    expect(MAILBOX_ROUTER_DEFAULTS).toEqual({ routes: [], replyBoundSeconds: null });
+    expect(resolveMailboxRouterPolicy()).toEqual({
+      ok: true,
+      policy: { routes: [], replyBoundSeconds: null },
+    });
     const resolvedCustom = resolveMailboxRouterPolicy({
       aliases: [
-        { level: 'entity', alias: 'atlas', address: 'lead@acme', fallback: 'backup@acme' },
+        { level: 'entity', alias: 'lead', address: 'lead@acme', fallback: 'backup@acme' },
         { level: 'project', alias: 'helper', address: 'helper@acme', fallback: null },
       ],
       replyBounds: [{ level: 'project', seconds: 45 }],
@@ -493,8 +508,8 @@ describe('mailbox router 0.5.13 (independent verification)', () => {
     expect(resolvedCustom.ok).toBe(true);
     if (resolvedCustom.ok) {
       expect(resolvedCustom.policy.replyBoundSeconds).toBe(45);
-      expect(resolvedCustom.policy.routes.find((r) => r.alias === 'atlas')).toEqual({
-        alias: 'atlas',
+      expect(resolvedCustom.policy.routes.find((r) => r.alias === 'lead')).toEqual({
+        alias: 'lead',
         address: 'lead@acme',
         fallback: 'backup@acme',
       });
@@ -506,11 +521,14 @@ describe('mailbox router 0.5.13 (independent verification)', () => {
     }
 
     const illegalRetarget = resolveMailboxRouterPolicy({
-      aliases: [{ level: 'project', alias: 'atlas', address: 'other@acme' }],
+      aliases: [
+        { level: 'entity', alias: 'lead', address: 'lead@acme', fallback: null },
+        { level: 'project', alias: 'lead', address: 'other@acme' },
+      ],
     });
     expect(illegalRetarget).toEqual({
       ok: false,
-      why: 'the project level cannot retarget the entity alias atlas',
+      why: 'the project level cannot retarget the entity alias lead',
     });
 
     const emptyRoot = makeTempDir('mb-ind-empty-root-');

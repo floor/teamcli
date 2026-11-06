@@ -44,10 +44,10 @@ import { runtimeDir, runtimeKitsDir, runtimeMigrationNotePath } from './paths.ts
 
 /** The kit folders this step moves, in the order it moves them. */
 export const RUNTIME_KIT_FOLDERS: readonly string[] = [
-  'atlas-810',
+  'lead-810',
   'desk-810',
-  'iris-810',
-  'guard-floor-iris',
+  'helper-810',
+  'guard-floor-helper',
   'guard-pilot-wk',
   'front-810',
   'mailbox-router',
@@ -56,7 +56,7 @@ export const RUNTIME_KIT_FOLDERS: readonly string[] = [
 /** Known kit folders a later lane owns; reported, never moved by this step. */
 export const LATER_KIT_FOLDERS: readonly string[] = ['bridge-810', 'signer-810'];
 
-const GUARD_FOLDERS: ReadonlySet<string> = new Set(['guard-floor-iris', 'guard-pilot-wk']);
+const GUARD_FOLDERS: ReadonlySet<string> = new Set(['guard-floor-helper', 'guard-pilot-wk']);
 
 export type LoadedProgram = { label: string; program: readonly string[] };
 

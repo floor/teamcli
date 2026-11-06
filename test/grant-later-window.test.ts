@@ -54,8 +54,8 @@ function world() {
   mkdirSync(join(root, '.agents'), { recursive: true });
   execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
   mkdirSync(join(home, '.config', 'team'), { recursive: true });
-  writeFileSync(join(home, '.config', 'team', 'entities.yaml'), 'floor:\n  clients:\n    grok-bot:\n      seats: [orchestrator, zeus]\n');
-  const text = `format: 1\nproject: floor\noperator: steward\nworkspace:\n  mode: shared\nseats:\n${seat('orchestrator', '    leads: true\n')}${seat('zeus')}${seat('steward')}`;
+  writeFileSync(join(home, '.config', 'team', 'entities.yaml'), 'floor:\n  clients:\n    grok-bot:\n      seats: [orchestrator, architect]\n');
+  const text = `format: 1\nproject: floor\noperator: steward\nworkspace:\n  mode: shared\nseats:\n${seat('orchestrator', '    leads: true\n')}${seat('architect')}${seat('steward')}`;
   writeFileSync(join(root, '.agents', 'team.yaml'), text);
   keyOf(home);
   const agent = (name: string) => registerAgent(home, {
@@ -66,7 +66,7 @@ function world() {
     mcp: [], skills: [], lifecycle: 'running', by: 'test',
   });
   const orch = agent('orchestrator');
-  const zeus = agent('zeus');
+  const architect = agent('architect');
   const steward = agent('steward');
   writeFileSync(join(home, '.config', 'team', 'teams.yaml'), `teams:
   "${TEAM_ID}":
@@ -78,7 +78,7 @@ function world() {
     lobby: ${join(base, 'lobby')}
     roster:
       - { agent: ${orch.id}, seat: orchestrator, role: orchestrator, leads: true }
-      - { agent: ${zeus.id}, seat: zeus, role: builder }
+      - { agent: ${architect.id}, seat: architect, role: builder }
       - { agent: ${steward.id}, seat: steward, role: builder }
     lifecycle: running
     provenance: { registered_by: test, registered_at: "2026-10-19T00:00:00.000Z", updated_at: "2026-10-19T00:00:00.000Z" }

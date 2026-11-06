@@ -10,7 +10,7 @@ function payload(id: string): RecordPayload {
   return {
     kind: 'message',
     id,
-    to: 'iris',
+    to: 'helper',
     to_id: null,
     root: '/fixture/root',
     session: 'fixture',
