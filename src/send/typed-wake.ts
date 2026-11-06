@@ -206,12 +206,12 @@ export async function deliverTypedWake(
       if (skipKey === undefined || host.key === undefined) {
         return { delivered: false, typed: false, tries: 0, reason: 'the screen is at a feedback survey and no skip key is bound; nothing was typed' };
       }
-      if (!host.key(pane, skipKey)) {
+      if (!(await host.key(pane, skipKey))) {
         return { delivered: false, typed: false, tries: 0, reason: 'the pane did not take the skip key; nothing was typed' };
       }
       keyedReturn = true;
       await host.wait(enterSettleMs);
-      const returned = seenOf(cli, host.read(pane));
+      const returned = seenOf(cli, await host.read(pane));
       if (returned !== 'idle') {
         return { delivered: false, typed: keyedReturn, tries: 0, reason: `the screen read ${returned} after the skip key, not an empty idle prompt; no wake line was typed` };
       }

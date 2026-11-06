@@ -1854,7 +1854,12 @@ function markerAtCached(path: string): MarkerRead {
 }
 
 /** Entries read from a directory or marker list before yielding to the slice clock. */
-const DIR_SCAN_CHUNK = 64;
+export const FALLBACK_STEP_CHUNK_ENTRIES = 64;
+
+/** The wall-clock turn cap shared with the sliced fallback driver. */
+export const FALLBACK_STEP_CHUNK_MS = 50;
+
+const DIR_SCAN_CHUNK = FALLBACK_STEP_CHUNK_ENTRIES;
 
 /** All markers under a root's transport tree, sessions and seats sorted so a pass is ordered. A
  *  marker that cannot be trusted is returned as its path, never rewritten from a guess. */

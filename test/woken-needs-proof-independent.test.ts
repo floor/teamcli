@@ -40,7 +40,6 @@ import { teamIdOf } from '../src/registry/teams.ts';
 import { readHistory } from '../src/send/history.ts';
 import { defaultNaming } from '../src/send/names.ts';
 import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
-import { MCP_INBOX_UNAVAILABLE } from '../src/send/walk-cascade.ts';
 import { markPending, readPending } from '../src/send/pending.ts';
 import { publishRecordRead } from '../src/send/read-receipt.ts';
 import { isRead, signRecord, verifyReceipt, type SignedReceipt } from '../src/send/record.ts';
@@ -363,7 +362,6 @@ describe('woken-needs-proof independent scenes', () => {
     expect(doc.action_summary).not.toContain('sent (unconfirmed)');
     assertNeverClaimsWoken(doc.action_summary);
     expect(doc.delivery).toEqual([
-      { leg: 'mcp-inbox', state: 'skipped', reason: MCP_INBOX_UNAVAILABLE },
       { leg: 'drop', state: 'attempted' },
     ]);
 
