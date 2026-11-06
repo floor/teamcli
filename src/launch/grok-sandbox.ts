@@ -31,7 +31,7 @@ export interface GrokSandbox {
   /** The absolute folders the profile grants `read_write`, in file order. */
   readWrite: readonly string[];
   /** Paths the launch creates when they are missing, before it writes the profile: the seat's
-   *  drop folder, messages folder and seat-state file, and the checkout's `objects/`, `refs/`
+   *  drop folder, messages folder and seat-state folder, and the checkout's `objects/`, `refs/`
    *  and `logs/` directories. */
   prepare: readonly string[];
   /** The project-wide profile a 0.5.12–0.5.14 launch wrote, when it is a different table.
@@ -61,15 +61,16 @@ export function grokSandboxProfileName(project: string, seat: string): string {
 /** What a Grok seat's launch writes and names. The grant is that seat's worktree, its start
  *  folder, and only these paths of its own: under the git common dir, `objects/`, `refs/`,
  *  `logs/`, `packed-refs` when that file already exists, and `worktrees/<that worktree>`; under `.agents`,
- *  `send-drops/<session>/<seat>`, `messages/<seat>` and `seat-state/<session>/<seat>.json`.
- *  `hooks/<session>/<seat>.json` is written by the launcher and is not granted. The team config
- *  directory is never granted, nor is the lobby or any other start folder or worktree inside it
- *  (the seat is not moved), nor the `.agents` folder, nor the common dir, nor that dir's
- *  `hooks/`, `config` or `info/`. A path is resolved when it or an ancestor exists, because the
- *  sandbox takes the path literally and a grant to a link's own name would not cover its target.
- *  Before the profile is written, the launch creates the seat's drop folder, `messages/<seat>`
- *  and an empty seat-state file, then names a path only when it exists as the type the grant
- *  needs. A path of the wrong type refuses the launch. */
+ *  `send-drops/<session>/<seat>`, `messages/<seat>` and `seat-state/<session>/<seat>/`.
+ *  The session's seat-state folder is not granted. `hooks/<session>/<seat>.json` is written by
+ *  the launcher and is not granted. The team config directory is never granted, nor is the lobby
+ *  or any other start folder or worktree inside it (the seat is not moved), nor the `.agents`
+ *  folder, nor the common dir, nor that dir's `hooks/`, `config` or `info/`. A path is resolved
+ *  when it or an ancestor exists, because the sandbox takes the path literally and a grant to a
+ *  link's own name would not cover its target. Before the profile is written, the launch creates
+ *  the seat's drop folder, `messages/<seat>` and `seat-state/<session>/<seat>/`, then names a
+ *  path only when it exists as the type the grant needs. A path of the wrong type refuses the
+ *  launch. */
 export function grokSandboxOf(input: {
   home: string;
   root: string;
@@ -143,7 +144,7 @@ function agentGrants(root: string, session: string, seat: string): string[] {
     grants.push(realFolder(join(agents, 'messages', seat)));
   }
   const state = cliHookStatePath(agents, session, seat);
-  if (state !== null) grants.push(realFolder(state));
+  if (state !== null) grants.push(realFolder(dirname(state)));
   return grants;
 }
 
@@ -192,11 +193,11 @@ function realFolder(folder: string): string {
   }
 }
 
-/** The profile this launch can write. The seat's drop folder, `messages/<seat>` and an empty
- *  seat-state file are created first, at 0700 and 0600, and so are a missing `objects/`, `refs/`
- *  or `logs/`. A path that is still not there is left out of the list, so a missing `packed-refs`
- *  is not granted and `git gc` or `git pack-refs` from the seat fails closed. A path that is
- *  there as the wrong type refuses the launch. */
+/** The profile this launch can write. The seat's drop folder, `messages/<seat>` and seat-state
+ *  folder are created first, at 0700, and so are a missing `objects/`, `refs/` or `logs/`. A path
+ *  that is still not there is left out of the list, so a missing `packed-refs` is not granted and
+ *  `git gc` or `git pack-refs` from the seat fails closed. A path that is there as the wrong type
+ *  refuses the launch. */
 export function settleGrokSandbox(sandbox: GrokSandbox): { ok: true; sandbox: GrokSandbox } | { ok: false; why: string } {
   const readWrite: string[] = [];
   for (const path of sandbox.readWrite) {

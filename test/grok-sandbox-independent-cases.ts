@@ -95,7 +95,7 @@ function expectGrants(w: World) {
       realpathSync(w.start),
       join(w.root, '.agents', 'send-drops', 'orbit-scene', 'scout'),
       join(w.root, '.agents', 'messages', 'scout'),
-      join(w.root, '.agents', 'seat-state', 'orbit-scene', 'scout.json'),
+      join(w.root, '.agents', 'seat-state', 'orbit-scene', 'scout'),
     ],
   });
   for (const wider of [realpathSync(join(w.home, '.config/team')), realpathSync(join(w.root, '.agents')), join(w.root, '.agents', 'hooks', 'orbit-scene', 'scout.json')]) {
@@ -183,7 +183,7 @@ test('linked grant directories are named by their actual targets', async () => {
   await launch(changed);
   const grants = ownProfile(changed).read_write as string[];
   expect(grants).toContain(realpathSync(linkedStart));
-  for (const tail of ['send-drops/orbit-scene/scout', 'messages/scout', 'seat-state/orbit-scene/scout.json']) {
+  for (const tail of ['send-drops/orbit-scene/scout', 'messages/scout', 'seat-state/orbit-scene/scout']) {
     expect(grants).toContain(join(realpathSync(actual), ...tail.split('/')));
   }
   expect(grants).not.toContain(join(realpathSync(actual), 'hooks', 'orbit-scene', 'scout.json'));

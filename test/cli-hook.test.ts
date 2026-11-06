@@ -26,7 +26,7 @@ import { readRecord, signRecord, signReceiptPayload, signedReceiptOf, verifyRece
 import { DEFAULT_STATE_THRESHOLDS } from '../src/settings/inherit.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import {
-  cliHookSettings, cliHookSettingsPath, cliHookStatePath, dropReadRunner, hookRunnerFor, installCliHooks,
+  cliHookSettings, cliHookSettingsPath, cliHookStatePath, dropReadRunner, hookCommand, hookRunnerFor, installCliHooks,
   namesRuntimeCopy, plannedCliHooks, readCliHook, refreshCliHooks, resetCliHookState,
 } from '../src/launch/cli-hook.ts';
 import { recordInstalledProgram, stableHookPath } from '../src/daemon/runtime-entry.ts';
@@ -102,7 +102,7 @@ describe('what a run plans and what it installs', () => {
   test('the install writes one settings file, 0600 in 0700 folders, aiming two hooks at its state file', () => {
     const landed = installCliHooks(dir, SESSION, [seat('worker')]);
     expect(landed).toEqual({ worker: join(dir, 'hooks', SESSION, 'worker.json') });
-    for (const folder of [join(dir, 'hooks'), join(dir, 'seat-state'), join(dir, 'hooks', SESSION), join(dir, 'seat-state', SESSION)]) {
+    for (const folder of [join(dir, 'hooks'), join(dir, 'seat-state'), join(dir, 'hooks', SESSION), join(dir, 'seat-state', SESSION), join(dir, 'seat-state', SESSION, 'worker')]) {
       expect(statSync(folder).mode & 0o777).toBe(0o700);
     }
     expect(statSync(landed.worker!).mode & 0o777).toBe(0o600);
@@ -114,7 +114,7 @@ describe('what a run plans and what it installs', () => {
     const stop = settings.hooks.Stop?.[0]?.hooks[0]?.command ?? '';
     expect(start).toContain('"state":"working"');
     expect(stop).toContain('"state":"idle"');
-    expect(start).toContain(join(dir, 'seat-state', SESSION, 'worker.json'));
+    expect(start).toContain(join(dir, 'seat-state', SESSION, 'worker', 'state.json'));
     expect(start).toContain('date -u');
     // The hook's own umask keeps the state file private, and nothing reads the CLI's stdin.
     expect(start).toContain('umask 077');
@@ -622,17 +622,17 @@ seats:
 
 describe('the state file a hook writes', () => {
   const SESSION = 'teamcli';
-  const statePath = (session: string, seat: string): string => join(dir, 'seat-state', session, `${seat}.json`);
+  const statePath = (session: string, seat: string): string => join(dir, 'seat-state', session, seat, 'state.json');
 
   test('is read back as the word and the instant it holds', () => {
-    mkdirSync(join(dir, 'seat-state', SESSION), { recursive: true, mode: 0o700 });
+    mkdirSync(dirname(statePath(SESSION, 'worker')), { recursive: true, mode: 0o700 });
     writeFileSync(statePath(SESSION, 'worker'), '{"state":"idle","since":"2026-10-17T12:00:00Z"}\n');
     expect(readCliHook(dir, SESSION, 'worker')).toEqual({ state: 'idle', since: '2026-10-17T12:00:00Z' });
   });
 
   test('two sessions with the same seat name read their own files, never each other’s', () => {
     // The scene of the shared-file fault: one seat name in two sessions must read two words.
-    for (const session of ['alpha', 'beta']) mkdirSync(join(dir, 'seat-state', session), { recursive: true, mode: 0o700 });
+    for (const session of ['alpha', 'beta']) mkdirSync(dirname(statePath(session, 'worker')), { recursive: true, mode: 0o700 });
     writeFileSync(statePath('alpha', 'worker'), '{"state":"working","since":"2026-10-17T12:00:00Z"}\n');
     writeFileSync(statePath('beta', 'worker'), '{"state":"idle","since":"2026-10-17T11:00:00Z"}\n');
     expect(readCliHook(dir, 'alpha', 'worker')).toEqual({ state: 'working', since: '2026-10-17T12:00:00Z' });
@@ -651,7 +651,7 @@ describe('the state file a hook writes', () => {
   });
 
   test('anything this version cannot trust reads as nothing', () => {
-    mkdirSync(join(dir, 'seat-state', SESSION), { recursive: true, mode: 0o700 });
+    mkdirSync(dirname(statePath(SESSION, 'worker')), { recursive: true, mode: 0o700 });
     const path = statePath(SESSION, 'worker');
     for (const text of ['not json', '{}', '{"state":"busy","since":"2026-10-17T12:00:00Z"}', '{"state":"working"}']) {
       writeFileSync(path, text);
@@ -688,10 +688,10 @@ describe('the state file a hook writes', () => {
   });
 
   test('the hook replaces a link planted at the state path instead of writing through it', () => {
-    mkdirSync(join(dir, 'seat-state', SESSION), { recursive: true, mode: 0o700 });
+    const path = join(dir, 'seat-state', SESSION, 'worker', 'state.json');
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     const target = join(base, 'elsewhere.json');
     writeFileSync(target, '{"keep":true}\n');
-    const path = join(dir, 'seat-state', SESSION, 'worker.json');
     symlinkSync(target, path);
     const landed = installCliHooks(dir, SESSION, [{ name: 'worker', cli: 'claude-code', launch: CLAUDE }]);
     const settings = JSON.parse(readFileSync(landed.worker!, 'utf8')) as {
@@ -704,23 +704,51 @@ describe('the state file a hook writes', () => {
     expect(readFileSync(target, 'utf8')).toBe('{"keep":true}\n');
     expect(lstatSync(path).isFile()).toBe(true);
     expect(readCliHook(dir, SESSION, 'worker')).toMatchObject({ state: 'working' });
-    expect(readdirSync(join(dir, 'seat-state', SESSION))).toEqual(['worker.json']);
+    expect(readdirSync(dirname(path))).toEqual(['state.json']);
     // The writer's own umask keeps the state file private.
     expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 
   test('the paths are the two this module names', () => {
     expect(cliHookSettingsPath(dir, SESSION, 'worker')).toBe(join(dir, 'hooks', SESSION, 'worker.json'));
-    expect(cliHookStatePath(dir, SESSION, 'worker')).toBe(join(dir, 'seat-state', SESSION, 'worker.json'));
+    expect(cliHookStatePath(dir, SESSION, 'worker')).toBe(join(dir, 'seat-state', SESSION, 'worker', 'state.json'));
     // Two sessions never share a folder, whatever the session name holds: the name is one path
     // segment by construction, its bytes that are not `[A-Za-z0-9_-]` written `%XX`.
     expect(cliHookStatePath(dir, 'alpha', 'worker')).not.toBe(cliHookStatePath(dir, 'beta', 'worker'));
-    expect(cliHookStatePath(dir, 'a/b', 'worker')).toBe(join(dir, 'seat-state', 'a%2Fb', 'worker.json'));
-    expect(cliHookStatePath(dir, '..', 'worker')).toBe(join(dir, 'seat-state', '%2E%2E', 'worker.json'));
-    expect(cliHookStatePath(dir, 'a%2Fb', 'worker')).toBe(join(dir, 'seat-state', 'a%252Fb', 'worker.json'));
+    expect(cliHookStatePath(dir, 'a/b', 'worker')).toBe(join(dir, 'seat-state', 'a%2Fb', 'worker', 'state.json'));
+    expect(cliHookStatePath(dir, '..', 'worker')).toBe(join(dir, 'seat-state', '%2E%2E', 'worker', 'state.json'));
+    expect(cliHookStatePath(dir, 'a%2Fb', 'worker')).toBe(join(dir, 'seat-state', 'a%252Fb', 'worker', 'state.json'));
     expect(cliHookStatePath(dir, '', 'worker')).toBeNull();
     expect(cliHookSettingsPath(dir, SESSION, 'a/b')).toBeNull();
     expect(cliHookStatePath(dir, SESSION, 'a/b')).toBeNull();
+  });
+
+  test('a flat session file is read once and moved into the seat folder', () => {
+    mkdirSync(join(dir, 'seat-state', SESSION), { recursive: true, mode: 0o700 });
+    writeFileSync(join(dir, 'seat-state', SESSION, 'worker.json'), '{"state":"working","since":"2026-10-17T12:00:00Z"}\n');
+    expect(readCliHook(dir, SESSION, 'worker')).toEqual({ state: 'working', since: '2026-10-17T12:00:00Z' });
+    expect(existsSync(join(dir, 'seat-state', SESSION, 'worker.json'))).toBe(false);
+    expect(readFileSync(statePath(SESSION, 'worker'), 'utf8')).toContain('"working"');
+  });
+
+  test('the hook command renames inside the seat folder and cannot in the session folder', () => {
+    const landed = installCliHooks(dir, SESSION, [{ name: 'worker', cli: 'claude-code', launch: CLAUDE }]);
+    const settings = JSON.parse(readFileSync(landed.worker!, 'utf8')) as {
+      hooks: Record<string, { hooks: { type: string; command: string }[] }[]>;
+    };
+    const command = settings.hooks.UserPromptSubmit?.[0]?.hooks[0]?.command ?? '';
+    const seatDir = join(dir, 'seat-state', SESSION, 'worker');
+    const sessionDir = join(dir, 'seat-state', SESSION);
+    chmodSync(sessionDir, 0o555);
+    try {
+      execFileSync('/bin/sh', ['-c', command], { stdio: 'ignore' });
+      expect(lstatSync(join(seatDir, 'state.json')).isFile()).toBe(true);
+      expect(readdirSync(seatDir).filter((name) => name !== 'state.json')).toEqual([]);
+      expect(() => execFileSync('/bin/sh', ['-c', hookCommand(join(sessionDir, 'worker.json'), 'working')], { stdio: 'ignore' })).toThrow();
+      expect(existsSync(join(sessionDir, 'worker.json'))).toBe(false);
+    } finally {
+      chmodSync(sessionDir, 0o700);
+    }
   });
 });
 
@@ -878,8 +906,9 @@ describe('a registry row reads the state file', () => {
   }
 
   function writeState(text: string, session = SESSION): void {
-    mkdirSync(join(dir, 'seat-state', session), { recursive: true, mode: 0o700 });
-    writeFileSync(join(dir, 'seat-state', session, 'worker.json'), text);
+    const path = join(dir, 'seat-state', session, 'worker', 'state.json');
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    writeFileSync(path, text);
   }
 
   function writePresence(binding: string, state: 'working' | 'idle'): string {

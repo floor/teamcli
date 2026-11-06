@@ -255,7 +255,7 @@ describe('presence paths', () => {
       const folder = presenceSessionFolder(name);
       const hook = cliHookStatePath('/state', name, 'builder-4');
       expect(hook).not.toBeNull();
-      expect(folder).toBe(basename(dirname(hook!)));
+      expect(folder).toBe(basename(dirname(dirname(hook!))));
     }
   });
 

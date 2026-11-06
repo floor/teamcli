@@ -66,7 +66,7 @@ function seatGrants(root: string, start: string): string[] {
     realpathSync(start),
     join(root, '.agents', 'send-drops', 'acme', 'grok-seat'),
     join(root, '.agents', 'messages', 'grok-seat'),
-    join(root, '.agents', 'seat-state', 'acme', 'grok-seat.json'),
+    join(root, '.agents', 'seat-state', 'acme', 'grok-seat'),
   ];
 }
 
@@ -583,10 +583,11 @@ describe('the plan and the launch', () => {
       expect(held.isSymbolicLink()).toBe(false);
       expect(grant.endsWith('.json') ? held.isFile() : held.isDirectory()).toBe(true);
     }
-    const state = join(root, '.agents', 'seat-state', 'acme', 'grok-seat.json');
-    expect(lstatSync(state).isFile()).toBe(true);
-    expect(lstatSync(state).mode & 0o777).toBe(0o600);
-    expect(JSON.parse(readFileSync(state, 'utf8'))).toMatchObject({ state: 'idle' });
+    const state = join(root, '.agents', 'seat-state', 'acme', 'grok-seat');
+    expect(lstatSync(state).isDirectory()).toBe(true);
+    expect(lstatSync(state).mode & 0o777).toBe(0o700);
+    expect(written.profiles['team-seat-acme-grok-seat']!.read_write).not.toContain(join(root, '.agents', 'seat-state', 'acme'));
+    expect(existsSync(join(state, 'state.json'))).toBe(false);
   });
 
   test('a profile that cannot be written refuses the seat and launches nothing', async () => {
@@ -667,16 +668,17 @@ describe('the plan and the launch', () => {
     expect(lstatSync(packed).isDirectory()).toBe(true);
   });
 
-  test('a directory at the seat-state file refuses the launch', async () => {
+  test('a file at the seat-state folder refuses the launch', async () => {
     const { root, sandbox } = world();
-    const state = join(root, '.agents', 'seat-state', 'acme', 'grok-seat.json');
-    mkdirSync(state, { recursive: true });
+    const state = join(root, '.agents', 'seat-state', 'acme', 'grok-seat');
+    mkdirSync(dirname(state), { recursive: true });
+    writeFileSync(state, 'not a folder\n');
     const scene = execute(sandbox);
     await scene.done;
     expect(scene.runs).toEqual([]);
     const said = scene.said.join('');
-    expect(said).toContain(`${state} is a directory, and the launch needs a file`);
+    expect(said).toContain(`${state} is a file, and the launch needs a directory`);
     expect(said).toContain('Repair that path and launch the seat again');
-    expect(lstatSync(state).isDirectory()).toBe(true);
+    expect(lstatSync(state).isFile()).toBe(true);
   });
 });
