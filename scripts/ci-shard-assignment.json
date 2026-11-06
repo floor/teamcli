@@ -1025,6 +1025,7 @@
     "test/settings-swap.test.ts": 3,
     "test/settings.test.ts": 3,
     "test/shared-label.test.ts": 0,
+    "test/shuttle-hold-independent.test.ts": 0,
     "test/sidebar-check.test.ts": 3,
     "test/sidebar-chores.test.ts": 0,
     "test/sidebar-layout.test.ts": 1,
