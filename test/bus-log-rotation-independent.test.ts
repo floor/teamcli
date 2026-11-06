@@ -19,6 +19,7 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   EVENT_DOMAIN,
@@ -86,7 +87,7 @@ seats:
 type World = { root: string; home: string };
 
 function makeWorld(label: string): World {
-  const base = realpathSync(mkdtempSync(`/private/tmp/bus-rot-ind-${label}-`));
+  const base = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), `bus-rot-ind-${label}-`)));
   dirs.push(base);
   const home = join(base, 'home');
   const root = join(base, 'acme');

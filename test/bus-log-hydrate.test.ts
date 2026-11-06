@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendEvent, eventLogPath, hydrateEventLog, readEvents, type EventBrief } from '../src/bus/log.ts';
 import { reconcilePass } from '../src/bus/reconcile.ts';
@@ -46,7 +47,7 @@ seats:
 type World = { root: string; home: string };
 
 function makeWorld(name: string): World {
-  const base = realpathSync(mkdtempSync(`/private/tmp/bus-seal-hydrate-${name}-`));
+  const base = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), `bus-seal-hydrate-${name}-`)));
   dirs.push(base);
   const home = join(base, 'home');
   const root = join(base, 'acme');

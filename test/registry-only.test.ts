@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { approvalDifferences, approvalOf } from '../src/approve/approval.ts';
 import { runConfig } from '../src/commands/config.ts';
 import { runMigrate } from '../src/commands/migrate.ts';
+import { runtimeTrashFolder } from '../src/file/runtime-trash.ts';
 import { leftoverNote, readTeamConfig } from '../src/file/team-config.ts';
 import { importForUp } from '../src/file/team-import.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -76,9 +77,11 @@ test('team migrate imports, reads back, and retires the file without deleting it
   const ran = await migrate(at);
   expect(ran.code, ran.err).toBe(0);
   expect(ran.out).toContain('read back and verified');
-  expect(ran.out).toContain(`renamed to ${at.file}.migrated`);
+  const parked = join(runtimeTrashFolder(at.home, NOW), 'team.yaml');
+  expect(ran.out).toContain(`moved to ${parked}`);
+  expect(ran.out).toContain(`empty it by removing the dated folder ${runtimeTrashFolder(at.home, NOW)}`);
   expect(existsSync(at.file)).toBe(false);
-  expect(readFileSync(`${at.file}.migrated`, 'utf8')).toBe(TEAM);
+  expect(readFileSync(parked, 'utf8')).toBe(TEAM);
   expect(storedTeam(at.root, at.home)?.text).toBe(TEAM);
   // A second run has nothing to do, and says so.
   const again = await migrate(at);
@@ -98,7 +101,7 @@ test('--keep-file leaves the file, the leftover is named by one line, and a late
   const later = await migrate(at);
   expect(later.code).toBe(0);
   expect(existsSync(at.file)).toBe(false);
-  expect(existsSync(`${at.file}.migrated`)).toBe(true);
+  expect(existsSync(join(runtimeTrashFolder(at.home, NOW), 'team.yaml'))).toBe(true);
 });
 
 test('a dry run writes nothing and moves nothing', async () => {

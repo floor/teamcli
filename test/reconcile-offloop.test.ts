@@ -18,8 +18,8 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { shortSocketBase } from './helpers.ts';
 import { appendEvent, eventLogPath, EVENT_DOMAIN, readEvents, type SignedEventRecord } from '../src/bus/log.ts';
 import { createReconcileState, reconcilePass, reconcilePassAsync, type ReconcileResult } from '../src/bus/reconcile.ts';
 import { nudgeBus, startBus } from '../src/bus/server.ts';
@@ -64,7 +64,7 @@ const bases: string[] = [];
 function scratch(): { root: string; home: string } {
   // A short base keeps the bus and send socket paths under the platform's limit; the OS temp
   // folder itself can be long on a desktop.
-  const short = existsSync('/private/tmp') ? '/private/tmp' : tmpdir();
+  const short = shortSocketBase();
   const base = realpathSync(mkdtempSync(join(short, 'team-offloop-')));
   bases.push(base);
   const root = join(base, 'repo');

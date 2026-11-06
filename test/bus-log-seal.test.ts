@@ -10,6 +10,7 @@ import {
   appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync,
   writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendEvent, EVENT_DOMAIN, eventLogPath } from '../src/bus/log.ts';
 import {
@@ -67,7 +68,7 @@ seats:
 type World = { root: string; home: string; teamId: string };
 
 function makeWorld(name: string): World {
-  const base = realpathSync(mkdtempSync(`/private/tmp/bus-seal-${name}-`));
+  const base = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), `bus-seal-${name}-`)));
   dirs.push(base);
   const home = join(base, 'home');
   const root = join(base, 'acme');

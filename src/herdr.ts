@@ -193,7 +193,7 @@ export function paneForeground(pane: string, session?: string): string[] | null 
 // when herdr can't be reached or does not report one. Captured from herdr 0.7.1 in a scratch
 // session: a pane whose CLI was started in a folder reports that folder byte for byte, a
 // trailing space included; the field follows the program's live folder (one that chdir'd to
-// /tmp reported /private/tmp) where the pane's `cwd` keeps the folder it was started in.
+// the temp folder and reported that folder's real path) where the pane's `cwd` keeps the folder it was started in.
 export function paneForegroundCwd(pane: string, session?: string): string | null {
   try {
     const result = run(['pane', 'get', pane], session) as { pane?: { foreground_cwd?: unknown } };
@@ -372,7 +372,7 @@ export type HerdrSession = {
 // `herdr session stop list-probe-b1` leaves that object listed with `"running":false`.
 // `herdr session delete list-probe-b1` prints `deleted session list-probe-b1\n` and the name is then
 // absent. While the session exists, `<session_dir>/session.json` holds `workspaces[].identity_cwd`,
-// the workspace folder's real path (`/tmp` was `/private/tmp` for a workspace created `--cwd /tmp`).
+// the workspace folder's real path (a folder created in the temp folder is stored as that folder's real path).
 // `herdr --session list-probe-b1 agent list` prints
 // `{"id":"cli:agent:list","result":{"agents":[],"type":"agent_list"}}` before any seat is named;
 // after `agent rename` the one agent carried `name`, `agent_status` (`unknown` for that new seat),

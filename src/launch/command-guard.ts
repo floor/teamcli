@@ -49,7 +49,7 @@ const GUIDANCE: Record<GuardRule, string> = {
   chmod: 'refused in team seats: run the script with `bash file.sh`',
   chown: 'refused in team seats: ownership changes wait for the owner',
   sudo: 'refused in team seats: a seat runs as its own user',
-  'rm-recursive': 'refused in team seats: delete with `trash <path>`, never a recursive rm',
+  'rm-recursive': 'refused in team seats: delete with `trash <path>`; when that command is absent, move the path into the runtime trash dated folder and remove that dated folder to empty it, never a recursive rm',
   kill: 'refused in team seats: stop a seat with `team restart <seat>`; stop the team with `team down --session <name>`; stop a process this seat started with `kill <pid>`',
   'kill-hard': 'refused in team seats: stop a seat with `team restart <seat>` or the team with `team down --session <name>`, never a hard kill',
   'disk-write': 'refused in team seats: a raw disk write can lose the machine — ask the owner',

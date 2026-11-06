@@ -1,12 +1,13 @@
 // Fixture folders are removed through the platform's own trash command when it is on PATH, the
 // way every suite here has always removed them. A machine without one — the hosted CI runners
-// carry no `trash` — falls back to a direct removal, strictly bounded to the temporary folder
-// (and, where a suite names it, that suite's own scratch root): a fallback that could remove an
-// arbitrary path is worse than the leak it prevents.
+// carry no `trash` — moves each folder into the dated runtime trash beside its parent. A path
+// outside the temporary folder and the suite's declared scratch roots is refused. Nothing is
+// unlinked.
 import { execFileSync } from 'node:child_process';
-import { lstatSync, realpathSync, rmSync } from 'node:fs';
+import { lstatSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { parkInRuntimeTrash } from '../src/file/runtime-trash.ts';
 
 /** Whether `path` really stands inside `base`, read through any symlink on either side: a link
  *  that leads out of the base is refused rather than followed. */
@@ -44,11 +45,11 @@ function stands(path: string): boolean {
 }
 
 /** Remove fixture folders after a test: one trash call for the whole list when the command is
- *  on PATH, otherwise one guarded removal per folder. `quiet` keeps a trash that ran but refused
- *  a folder from failing a cleanup that never failed the test before. `roots` names the suite's
- *  own scratch folders for fixtures that deliberately live outside the temporary folder (the
- *  fixture worlds hold client keys, which the product refuses inside os.tmpdir()). A folder that
- *  is already gone is nothing to remove. */
+ *  on PATH, otherwise one guarded move into the dated runtime trash per folder. `quiet` keeps a
+ *  trash that ran but refused a folder from failing a cleanup that never failed the test before.
+ *  `roots` names the suite's own scratch folders for fixtures that deliberately live outside the
+ *  temporary folder (the fixture worlds hold client keys, which the product refuses inside
+ *  os.tmpdir()). A folder that is already gone is nothing to remove. */
 export function discardFixtures(
   paths: readonly string[],
   options: { quiet?: boolean; roots?: readonly string[] } = {},
@@ -70,6 +71,6 @@ export function discardFixtures(
     if (!allowed(path, options.roots ?? [])) {
       throw new Error(`refusing to remove ${path}: it is not inside the temporary folder ${tmpdir()} or a declared fixture root`);
     }
-    rmSync(path, { recursive: true, force: true });
+    parkInRuntimeTrash(path, dirname(path), new Date());
   }
 }

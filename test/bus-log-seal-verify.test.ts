@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendEvent, EVENT_LOG_FILE, eventLogPath, verifyEventLogSeals } from '../src/bus/log.ts';
 import {
@@ -55,7 +56,7 @@ seats:
 type World = { root: string; home: string; teamId: string };
 
 function makeWorld(name: string): World {
-  const base = realpathSync(mkdtempSync(`/private/tmp/bus-seal-verify-${name}-`));
+  const base = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), `bus-seal-verify-${name}-`)));
   dirs.push(base);
   const home = join(base, 'home');
   const root = join(base, 'acme');

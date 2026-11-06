@@ -4,6 +4,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendEvent, eventLogPath, pruneEventLog, sweepOrphanedSidecars } from '../src/bus/log.ts';
 import { indexPathOf, sealPathOf } from '../src/bus/seal.ts';
@@ -43,7 +44,7 @@ seats:
 type World = { root: string; home: string };
 
 function makeWorld(name: string): World {
-  const base = realpathSync(mkdtempSync(`/private/tmp/bus-seal-orphans-${name}-`));
+  const base = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), `bus-seal-orphans-${name}-`)));
   dirs.push(base);
   const home = join(base, 'home');
   const root = join(base, 'acme');

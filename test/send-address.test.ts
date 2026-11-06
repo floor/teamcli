@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { setHerdrRun } from '../src/herdr.ts';
 import { getAgent, registerAgent, type AgentInit } from '../src/registry/agents.ts';
 import {
@@ -262,9 +262,17 @@ describe('defaultSocketsDir', () => {
 describe('defaultSocketsDirs', () => {
   test('the temp folder\'s own and the fallback the sessions were seen in, each once', () => {
     const dirs = defaultSocketsDirs();
+    const same = (a: string, b: string): boolean => {
+      if (a === b) return true;
+      try {
+        return realpathSync(dirname(a)) === realpathSync(dirname(b)) && basename(a) === basename(b);
+      } catch {
+        return false;
+      }
+    };
     expect(dirs[0]).toBe(defaultSocketsDir());
-    expect(dirs).toContain('/tmp/cc-socks');
-    expect(dirs).toContain(defaultSocketsDirAlt());
+    expect(dirs.some((dir) => same(dir, '/tmp/cc-socks'))).toBe(true);
+    expect(dirs.some((dir) => same(dir, defaultSocketsDirAlt()))).toBe(true);
     expect(new Set(dirs).size).toBe(dirs.length);
   });
 });

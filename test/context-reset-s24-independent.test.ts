@@ -10,7 +10,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { generalDoor } from '../src/client/general-door.ts';
 import {
@@ -48,8 +48,10 @@ const EXPIRES = new Date('2027-01-01T00:00:00.000Z');
 const OWNER: Caller = { kind: 'owner' };
 
 const owned: string[] = [];
+const roots: string[] = [];
 afterEach(() => {
-  for (const path of owned.splice(0)) discardFixtures([path]);
+  for (const path of owned.splice(0)) discardFixtures([path], { roots });
+  roots.length = 0;
 });
 
 function temp(prefix: string): string {
@@ -62,6 +64,7 @@ function temp(prefix: string): string {
 function scratch(prefix: string): string {
   const base = fixtureBase(prefix);
   owned.push(base);
+  roots.push(dirname(base));
   return base;
 }
 

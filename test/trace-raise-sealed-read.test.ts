@@ -8,6 +8,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import type { EventKind } from '../src/bus/kinds.ts';
@@ -60,7 +61,7 @@ afterEach(() => {
 });
 
 function makeWorld(name: string): World {
-  const base = realpathSync(mkdtempSync(`/private/tmp/trace-raise-sealed-${name}-`));
+  const base = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), `trace-raise-sealed-${name}-`)));
   dirs.push(base);
   const home = join(base, 'home');
   const root = join(base, 'acme');

@@ -20,8 +20,8 @@ import {
   appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync,
   utimesSync, writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { shortSocketBase } from './helpers.ts';
 import { fileURLToPath } from 'node:url';
 import { appendEvent, EVENT_DOMAIN, eventLogPath, readEvents, type EventReadResult } from '../src/bus/log.ts';
 import { startMachineDaemon, type MachineDaemon } from '../src/daemon/host.ts';
@@ -83,7 +83,7 @@ afterEach(async () => {
 });
 
 function makeWorld(lineCounts: number[], name: string): World {
-  const short = existsSync('/private/tmp') ? '/private/tmp' : tmpdir();
+  const short = shortSocketBase();
   const base = realpathSync(mkdtempSync(join(short, `talos-${name}-`)));
   bases.push(base);
   const home = join(base, 'home');

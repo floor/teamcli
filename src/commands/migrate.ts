@@ -24,8 +24,9 @@ export const USAGE = `Usage: team migrate [--keep-file] [--dry-run] [--json]
 
 Moves this team's definition from .agents/team.yaml into the registry, once. The team
 is imported, read back from the registry and compared with the file by canonical record;
-only then is .agents/team.yaml moved to the system Trash (or renamed to
-.agents/team.yaml.migrated when no Trash can be reached; it is never deleted). Every
+only then is .agents/team.yaml moved to the system Trash (or, when no Trash
+can be reached, into the team's runtime trash, a dated folder runtime/trash/<date>;
+empty it by removing that dated folder; it is never deleted). Every
 command then reads the team from the registry, and team config edits it. The approval
 stays in force: it is signed over the canonical record, not the file.
 
@@ -374,7 +375,9 @@ export async function runTeamImport(
   let retired: Retired | null = null;
   // A non-owner retires the file only after the owner seat (or the charter) admitted this run.
   const mayRetire = mode !== 'migrate' || ownerTerminal || charterAdmitted || doorAdmitted;
-  if (mayRetire && !keepFile && !dryRun && outcome.verified && existsSync(teamFile)) retired = retireTeamFile(teamFile);
+  if (mayRetire && !keepFile && !dryRun && outcome.verified && existsSync(teamFile)) {
+    retired = retireTeamFile(teamFile, { home, now: now() });
+  }
   const afterStanding = approvalStanding(root, home);
   const after = afterStanding.kind;
   if (json) {
@@ -388,7 +391,12 @@ export async function runTeamImport(
       replaced: outcome.replaced,
       verified: outcome.verified,
       record_sha256: outcome.record,
-      ...(mode === 'migrate' ? { file: retired === null ? (existsSync(teamFile) ? 'kept' : 'absent') : retired.how, file_moved_to: retired?.to ?? null, approval: after } : {}),
+      ...(mode === 'migrate' ? {
+        file: retired === null ? (existsSync(teamFile) ? 'kept' : 'absent') : retired.how,
+        file_moved_to: retired?.to ?? null,
+        ...(retired?.empty !== undefined ? { empty: retired.empty } : {}),
+        approval: after,
+      } : {}),
     });
     return 'done';
   }
@@ -405,7 +413,7 @@ export async function runTeamImport(
   if (mode === 'import') {
     io.stdout('the team is read from the registry; the file is not read\n');
   } else if (retired !== null) {
-    io.stdout(`${TEAM_FILE} ${retired.how === 'trash' ? 'was moved to the Trash' : `was renamed to ${retired.to} (no Trash could be reached)`}; edit the team with team config\n`);
+    io.stdout(`${TEAM_FILE} ${retired.how === 'trash' ? 'was moved to the Trash' : `was moved to ${retired.to} (no Trash could be reached); ${retired.empty}`}; edit the team with team config\n`);
   } else if (existsSync(teamFile)) {
     io.stdout(`${TEAM_FILE} was kept (--keep-file); it is no longer read, and team migrate moves it later\n`);
   }

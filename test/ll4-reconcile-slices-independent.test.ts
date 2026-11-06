@@ -8,9 +8,9 @@
 // in the registry without a declaration must be marked on the pass that sees it.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { shortSocketBase } from './helpers.ts';
 import { appendEvent, readEvents, type SignedEventRecord } from '../src/bus/log.ts';
 import {
   createReconcileState,
@@ -80,7 +80,7 @@ afterEach(() => {
 });
 
 function world(withWorker = true): World {
-  const short = existsSync('/private/tmp') ? '/private/tmp' : tmpdir();
+  const short = shortSocketBase();
   const base = realpathSync(mkdtempSync(join(short, 'team-ll4-independent-')));
   bases.push(base);
   const root = join(base, 'repo');

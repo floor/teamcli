@@ -9,8 +9,8 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { shortSocketBase } from './helpers.ts';
 import {
   appendEvent,
   EVENT_DOMAIN,
@@ -71,7 +71,7 @@ const TS = '2026-11-05T00:00:00.000Z';
 const bases: string[] = [];
 
 function makeWorld(project = 'acme'): { base: string; root: string; home: string } {
-  const short = existsSync('/private/tmp') ? '/private/tmp' : tmpdir();
+  const short = shortSocketBase();
   const base = realpathSync(mkdtempSync(join(short, 'team-ll4-')));
   bases.push(base);
   const root = join(base, 'repo');
