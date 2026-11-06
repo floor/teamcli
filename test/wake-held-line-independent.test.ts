@@ -121,6 +121,8 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
       typed: true,
       tries: 1,
       reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
     });
     expect(agyScene.typed).toEqual([]);
     expect(agyScene.enters).toBe(1);
@@ -144,6 +146,8 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
       typed: true,
       tries: 1,
       reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
     });
     expect(agyTranscriptChanged.typed).toEqual([]);
     expect(agyTranscriptChanged.enters).toBe(1);
@@ -167,6 +171,8 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
       typed: true,
       tries: 1,
       reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
     });
     expect(cursorScene.typed).toEqual([]);
     expect(cursorScene.enters).toBe(1);
@@ -195,6 +201,8 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
       typed: true,
       tries: 1,
       reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
     });
     expect(cursorWrappedScene.typed).toEqual([]);
     expect(cursorWrappedScene.enters).toBe(1);
@@ -212,6 +220,8 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
         typed: true,
         tries: 2,
         reason: 'the working screen showed after 2 Enters',
+        submittedAt: expect.any(Number),
+        workingAt: expect.any(Number),
       });
       expect(retryScene.typed).toEqual([]);
       expect(retryScene.enters).toBe(2);
@@ -253,6 +263,8 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
         typed: true,
         tries: 1,
         reason: 'the working screen showed after 1 Enter',
+        submittedAt: expect.any(Number),
+        workingAt: expect.any(Number),
       });
       expect(sittingScene.typed).toEqual([]);
       expect(sittingScene.enters).toBe(1);
@@ -273,6 +285,8 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
         typed: true,
         tries: 1,
         reason: 'the working screen showed after 1 Enter',
+        submittedAt: expect.any(Number),
+        workingAt: expect.any(Number),
       });
       expect(typedScene.typed).toEqual([WAKE_LINE]);
       expect(typedScene.enters).toBe(1);
@@ -300,6 +314,8 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
         typed: true,
         tries: 1,
         reason: 'the working screen showed after 1 Enter',
+        submittedAt: expect.any(Number),
+        workingAt: expect.any(Number),
       });
       expect(sittingScene.typed).toEqual([]);
       expect(sittingScene.enters).toBe(1);
@@ -350,7 +366,7 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
         delivered: false,
         typed: false,
         tries: 0,
-        reason: 'the box held text other than the line; no Enter was pressed',
+        reason: 'the box held text other than the line between the two looks; no Enter was pressed',
       });
       expect(secondScene.typed).toEqual([]);
       expect(secondScene.enters).toBe(0);
@@ -415,7 +431,7 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
         delivered: false,
         typed: false,
         tries: 0,
-        reason: 'the box held text other than the line; no Enter was pressed',
+        reason: 'the box held text other than the line between the two looks; no Enter was pressed',
       });
       expect(secondScene.typed).toEqual([]);
       expect(secondScene.enters).toBe(0);
@@ -484,7 +500,7 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
           delivered: false,
           typed: false,
           tries: 0,
-          reason: 'the box held text other than the line; no Enter was pressed',
+          reason: 'the box held text other than the line between the two looks; no Enter was pressed',
         });
         expect(replacedBeforeEnter.typed).toEqual([]);
         expect(replacedBeforeEnter.enters).toBe(0);
@@ -566,7 +582,7 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
           delivered: false,
           typed: false,
           tries: 0,
-          reason: 'the box held text other than the line; no Enter was pressed',
+          reason: 'the box held text other than the line between the two looks; no Enter was pressed',
         });
         expect(secondScene.typed).toEqual([]);
         expect(secondScene.enters).toBe(0);
@@ -648,6 +664,7 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
         typed: true,
         tries: 1,
         reason: 'the screen read idle and no working screen showed',
+        submittedAt: expect.any(Number),
       });
       expect(goesIdle.typed).toEqual([]);
       expect(goesIdle.enters).toBe(1);
@@ -695,6 +712,8 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
         typed: true,
         tries: 1,
         reason: 'the working screen showed after 1 Enter',
+        submittedAt: expect.any(Number),
+        workingAt: expect.any(Number),
       });
       expect(workingThenEmpties.typed).toEqual([]);
       expect(workingThenEmpties.enters).toBe(1);
