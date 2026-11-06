@@ -334,6 +334,8 @@
     "test/cross-send-grant-independent.test.ts": 4,
     "test/cross-team-send-grant.test.ts": 5,
     "test/cross-team-sends.test.ts": 4,
+    "test/cursor-busy-placeholder-wake.test.ts": 5,
+    "test/cursor-follow-up-busy.test.ts": 2,
     "test/cursor-typed-wake.test.ts": 0,
     "test/daemon-chores-isolation.test.ts": 5,
     "test/daemon-chores-kill-guard.test.ts": 2,
