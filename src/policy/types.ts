@@ -161,6 +161,7 @@ export const ENFORCED_POLICY_NAMES = [
   'seat-health.watchdog.after',
   'seat-health.watchdog.auto-restart',
   'pretrust',
+  'first-run-admission',
 ] as const;
 
 export type EnforcedPolicyName = (typeof ENFORCED_POLICY_NAMES)[number];
@@ -356,6 +357,7 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   'seat-dialog-answer': 'seat.dialog.answer',
   seat_dialog_answer: 'seat.dialog.answer',
   'seat-health.watchdog.auto_restart': 'seat-health.watchdog.auto-restart',
+  first_run_admission: 'first-run-admission',
 };
 
 /** Normalizes a policy name, mapping known snake_case settings spellings to canonical kebab-case. */
@@ -2417,6 +2419,19 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     parseValue: (raw: unknown) => (raw === 'off' || raw === 'project' ? raw : null),
     valueProblem: () => 'policy "pretrust" is off or project',
     isWithin: (lower: 'off' | 'project', higher: 'off' | 'project') => lower === higher || lower === 'off',
+  },
+  // The empty-account door. `empty-account` admits once, only when every durable record is
+  // absent. `off` admits never. A lower level may turn it off; it may not turn it back on.
+  'first-run-admission': {
+    name: 'first-run-admission',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'empty-account',
+    gateLifting: false,
+    parseValue: (raw: unknown) => (raw === 'off' || raw === 'empty-account' ? raw : null),
+    valueProblem: () => 'policy "first-run-admission" is off or empty-account',
+    isWithin: (lower: 'off' | 'empty-account', higher: 'off' | 'empty-account') =>
+      lower === higher || lower === 'off',
   },
 };
 
