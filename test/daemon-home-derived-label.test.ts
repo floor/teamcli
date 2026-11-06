@@ -235,7 +235,7 @@ describe('home-derived daemon label and --home install/uninstall', () => {
       if (args[0] === 'print') {
         return {
           status: 0,
-          stdout: `\tstate = running\n\tpid = 9191\n\tprogram = ${program.execPath}\n`,
+          stdout: `\tstate = running\n\tpid = 9191\n\tprogram = ${program.execPath}\n\tpath = ${join(scratchHome, 'Library', 'LaunchAgents', `${derived}.plist`)}\n`,
           stderr: '',
         };
       }
@@ -316,7 +316,7 @@ describe('home-derived daemon label and --home install/uninstall', () => {
       if (command === 'launchctl' && args[0] === 'print' && args[1] === `gui/${String(UID)}/${expectedServiceLabel}`) {
         return {
           status: 0,
-          stdout: `\tstate = running\n\tpid = ${String(process.pid)}\n\tprogram = ${process.execPath}\n`,
+          stdout: `\tstate = running\n\tpid = ${String(process.pid)}\n\tprogram = ${process.execPath}\n\tpath = ${join(scratchHome, 'Library', 'LaunchAgents', `${expectedServiceLabel}.plist`)}\n`,
           stderr: '',
         };
       }
