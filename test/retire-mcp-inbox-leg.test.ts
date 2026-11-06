@@ -381,12 +381,13 @@ seats:
       now: AT,
     });
     // Both project and team signed records are alias-only: they shadow the unsigned `[drop]`
-    // declarations at their own levels while leaving `project` and `team` undefined in the chain.
+    // declarations, and the walk reads those levels as the mailbox, never as an absent word
+    // the typed fallback would fill.
     expect(dChain.entity).toBeUndefined();
-    expect(dChain.project).toBeUndefined();
-    expect(dChain.team).toBeUndefined();
-    expect(dChain.seat).toBeUndefined();
-    expect(deliveryOrder(dChain)).toEqual(['typed', 'drop']);
+    expect(dChain.project).toEqual(['drop']);
+    expect(dChain.team).toEqual(['drop']);
+    expect(deliveryOrder(dChain)).toEqual(['drop']);
+    expect(deliveryOrder(dChain)).not.toContain('typed');
   });
 
   test('2. the retired alias cannot widen any order or bypass duplicate validation', () => {
@@ -747,7 +748,7 @@ seats:
     expect(recordRows.find((r) => r.key === 'delivery_order')?.value).toEqual(['mcp-inbox']);
   });
 
-  test('5. a seat with [mcp-inbox] walks the exact same no-order path as a seat with no delivery_order across socket, native, watcherless, and human seats', async () => {
+  test('5. a seat with [mcp-inbox] walks drop, not the no-order typed path, across socket, native, watcherless, and human seats', async () => {
     const sbNoOrder = makeSandbox(BASE_TEAM_YAML);
     const sbAliasOrder = makeSandbox(`format: 1
 entity: corp
@@ -818,12 +819,14 @@ seats:
         ...(seatName === 'crew-lead' ? { overrides: overridesWithAlias } : {}),
         now: AT,
       });
-      expect(chainAliasOrder).toEqual(chainNoOrder);
-      expect(deliveryOrder(chainAliasOrder)).toEqual(deliveryOrder(chainNoOrder));
+      expect(deliveryOrder(chainAliasOrder)).toEqual(['drop']);
+      expect(deliveryOrder(chainAliasOrder)).not.toContain('typed');
+      expect(chainAliasOrder).not.toEqual(chainNoOrder);
     }
 
     // Verify specific seat shapes:
-    // - `jules-worker` (watcherless CLI: `cliWatcher('jules', 'jules') === 'none'`): drops `'drop'`, leaving `['typed']`
+    // - `jules-worker` is watcherless, and the shape would have answered `typed`. The retired
+    //   word is the mailbox instead, on the team and on the seat.
     const julesChain = deliveryChainOf({
       root: sbAliasOrder.root,
       seat: 'jules-worker',
@@ -832,8 +835,8 @@ seats:
       projectOfTeam: () => getProject(sbAliasOrder.home, 'acme'),
       now: AT,
     });
-    expect(julesChain).toEqual({ seat: ['typed'] });
-    expect(deliveryOrder(julesChain)).toEqual(['typed']);
+    expect(julesChain).toEqual({ team: ['drop'], seat: ['drop'] });
+    expect(deliveryOrder(julesChain)).toEqual(['drop']);
 
     // - `human-seat`: `['drop']` alone
     const humanChain = deliveryChainOf({
@@ -844,12 +847,11 @@ seats:
       projectOfTeam: () => getProject(sbAliasOrder.home, 'acme'),
       now: AT,
     });
-    expect(humanChain).toEqual({ seat: ['drop'] });
+    expect(humanChain).toEqual({ team: ['drop'], seat: ['drop'] });
     expect(deliveryOrder(humanChain)).toEqual(['drop']);
 
-    // End-to-end `runSend` comparison: an accepting Claude seat with `[mcp-inbox]` (at team and seat)
-    // vs no `delivery_order` at all -> both imply `socket` first (`declaredOrder === false`), dial the
-    // socket, never type into the pane, and emit the exact same `--json` delivery plan with no `mcp-inbox` entry.
+    // End-to-end `runSend`: a seat with no order may take the implied socket. A seat whose word
+    // is only the retired name walks drop, dials nothing, and names no typed or socket leg.
     const runAcceptingSend = async (withAlias: boolean) => {
       const made: World = world(withAlias ? ['mcp-inbox'] : null);
       cleanups.push(made.cleanup);
@@ -880,9 +882,10 @@ seats:
       const io = owner(made.root);
       const code = await runSend(['lead', 'hello over implied socket', '--json'], io, host);
       expect(code).toBe(0);
-      expect(io.err).toBe('');
+      if (withAlias) expect(io.err).toContain('queued');
+      else expect(io.err).toBe('');
       expect(host.frames).toEqual([]);
-      expect(dialed).toHaveLength(1);
+      expect(dialed).toHaveLength(withAlias ? 0 : 1);
       const report = JSON.parse(io.out) as {
         status: string;
         via: string;
@@ -895,15 +898,12 @@ seats:
     const plainRun = await runAcceptingSend(false);
     const aliasRun = await runAcceptingSend(true);
 
-    expect(aliasRun.report.status).toBe('delivered');
-    expect(aliasRun.report.delivery).toEqual(plainRun.report.delivery);
-    expect(aliasRun.report.delivery[0]).toEqual({ leg: 'channel', state: 'skipped', reason: "the receiving seat's launch carries no development channel" });
-    expect(aliasRun.report.delivery[1]).toEqual({ leg: 'socket', state: 'attempted' });
-    expect(aliasRun.report.delivery.map((d) => d.leg)).toEqual(['channel', 'socket', 'drop']);
+    expect(aliasRun.report.delivery).not.toEqual(plainRun.report.delivery);
+    expect(aliasRun.report.delivery.map((d) => d.leg)).toEqual(['drop']);
+    expect(aliasRun.report.delivery.some((d) => d.leg === 'typed' || d.leg === 'socket')).toBe(false);
     expect(aliasRun.history.ok).toBe(true);
     if (!aliasRun.history.ok) throw new Error(aliasRun.history.reason);
     expect(aliasRun.history.entries).toHaveLength(1);
-    expect(aliasRun.history.entries[0]?.via).toBe('socket');
-    expect(aliasRun.history.entries[0]?.outcome).toBe('delivered');
+    expect(aliasRun.history.entries[0]?.via).toBe('drop');
   });
 });

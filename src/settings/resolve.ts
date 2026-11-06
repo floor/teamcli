@@ -326,9 +326,9 @@ export function resolveOrderSetting<L extends string>(
 
 /**
  * The one call a send makes: the receiving seat's chain in, the order its delivery walks out.
- * The chain may still carry the retired `mcp-inbox` alias in its words — it is dropped here,
- * before the resolver, so a level whose word is aliases only declares nothing and never shows
- * up as a set-aside (`liveOrderRecord`).
+ * The chain may still carry the retired `mcp-inbox` alias in its words. A word that is only
+ * that name is the drop leg, so the fallback never types into a seat that asked for the inbox.
+ * A word that mixes the alias with live legs drops the alias and keeps the legs (`liveOrderRecord`).
  */
 export function deliveryOrder(
   declared: Partial<Record<SettingLevel, readonly OrderWord[] | undefined>>,

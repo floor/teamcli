@@ -376,10 +376,9 @@ describe('the walk records the channel and the legs it skipped', () => {
     expect(Object.keys(entry).sort()).toEqual(['body', 'failed', 'from', 'from_team', 'id', 'ms', 'outcome', 'thread', 'to', 'ts', 'via']);
   });
 
-  test('a seat whose only word is the retired alias reports the implied defaults exactly as with no word', async () => {
-    // The alias-only level declares nothing in the chain, so no order is declared and every
-    // implied default stands — the socket explanation row a no-word seat's report carries
-    // included, not suppressed by a word that names no leg at all.
+  test('a seat whose only word is the retired alias walks the drop and names no typed wake', async () => {
+    // The alias-only word is the mailbox. The implied socket and channel rows of a seat with
+    // no word do not come back, and nothing in the report is a typed wake.
     const w = world({ lead: '    delivery_order: [mcp-inbox]\n' });
     const host = walker(w);
     const io = owner(w.root);
@@ -387,11 +386,9 @@ describe('the walk records the channel and the legs it skipped', () => {
     expect(await runSend(['lead', 'hello', '--json'], io, host)).toBe(0);
 
     const doc = JSON.parse(io.out) as { delivery: { leg: string; state: string; reason?: string }[] };
-    expect(doc.delivery).toEqual([
-      { leg: 'channel', state: 'skipped', reason: "the receiving seat's launch carries no development channel" },
-      { leg: 'socket', state: 'skipped', reason: 'the receiving Claude session does not declare crossSessionInbound accept (human-launched or launch without --settings; owner CLI settings are not read)' },
-      { leg: 'drop', state: 'attempted' },
-    ]);
+    expect(doc.delivery).toEqual([{ leg: 'drop', state: 'attempted' }]);
+    expect(doc.delivery.some((row) => row.leg === 'typed')).toBe(false);
+    expect(host.typed).toEqual([]);
   });
 
   test('a codex seat walks the implied native-first order: native fails, nothing is typed, and the bus inbox keeps it', async () => {
@@ -561,7 +558,7 @@ describe('a retired mcp-inbox word is dropped from the order', () => {
     expect(existsSync(join(dir, `${id}.pending`))).toBe(true);
   });
 
-  test('an order naming only the retired word declares nothing: the default walk still takes the send', async () => {
+  test('an order naming only the retired word stores the drop and types nothing', async () => {
     const w = world();
     const host = walker(w, { seat: ['mcp-inbox'] });
     const io = owner(w.root);
@@ -990,13 +987,11 @@ describe('a seat that declares no word takes the one its shape implies', () => {
       .toEqual({});
   });
 
-  test('a word naming only the retired alias declares nothing: the shape answers as with no word', () => {
+  test('a word naming only the retired alias is the drop leg, not the shape typed wake', () => {
     const w = world({ watchless: '    delivery_order: [mcp-inbox]\n' });
-    // The alias is dropped before the chain is built, so the level is absent — never an empty
-    // word — and the seat walks exactly what it walks with no order at all: its shape's own
-    // word, drop left out for a CLI that watches nothing.
+    // The alias-only word is the mailbox. The watcherless shape must not fill the gap with typed.
     expect(deliveryChainOf({ root: w.root, seat: 'watcherless', home: w.home, projectOfTeam: () => null }))
-      .toEqual({ seat: ['typed'] });
+      .toEqual({ seat: ['drop'] });
   });
 
   test('a word the file declares is the seat’s own, never replaced by the shape', () => {
@@ -1259,7 +1254,7 @@ describe('the dry run names only the legs this build can walk', () => {
     expect(existsSync(dropDir(w.root, 'lead'))).toBe(false);
   });
 
-  test('an order naming only the retired word names nothing in the dry run: the default walk stands', async () => {
+  test('an order naming only the retired word is the drop leg, and the dry run names no typed wake', async () => {
     const w = world();
     const host = walker(w, { seat: ['mcp-inbox'] });
     const io = owner(w.root);
@@ -1268,7 +1263,8 @@ describe('the dry run names only the legs this build can walk', () => {
 
     const doc = JSON.parse(io.out) as { delivery: { leg: string; state: string; eligible?: boolean; reason?: string }[] };
     expect(doc.delivery.find((one) => one.leg === 'mcp-inbox')).toBeUndefined();
-    // The mailbox is under every word, so the walk the dry run names still ends on the drop.
+    expect(doc.delivery.find((one) => one.leg === 'typed')).toBeUndefined();
+    // The retired-only word is the mailbox, so the dry run names drop and never a typed wake.
     expect(doc.delivery.find((one) => one.leg === 'drop')).toEqual({ leg: 'drop', state: 'candidate', eligible: true });
   });
 

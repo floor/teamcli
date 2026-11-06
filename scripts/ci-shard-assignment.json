@@ -918,6 +918,7 @@
     "test/restored-seat-recognition-four-cases.test.ts": 4,
     "test/resume.test.ts": 3,
     "test/retire-mcp-inbox-leg.test.ts": 2,
+    "test/retired-inbox-order-independent.test.ts": 0,
     "test/rewake-after-busy-independent.test.ts": 2,
     "test/route.test.ts": 4,
     "test/rules-at-launch.test.ts": 4,

@@ -71,9 +71,9 @@ cascade always closes on the mailbox: a word that places `drop` first still stor
 wake the order names. A level of the receiving seat's own chain — entity, project, team, seat —
 may drop legs from the order or put the legs it keeps in a different order, and may add `native`,
 `socket`, `headless-resume` or `session`: a word naming any other leg the order in force does not
-have is set aside and the order in force stands. An `mcp-inbox` word declares nothing: it is
-dropped from the order as a retired alias, never a set-aside, and the legs beside it keep their
-word. The words are read from the receiving seat's own files: the team file's
+have is set aside and the order in force stands. An `mcp-inbox` word beside a live leg is dropped, and those legs keep their word. A word that
+names only the retired value is `drop`, the mailbox, which types nothing: it is never an error
+and never a typed wake. The words are read from the receiving seat's own files: the team file's
 `delivery_order` key and the seat's, and the registry project's record for the project the team
 sits in ([the team file](../team-file.md#delivery_order)). A team file that writes a word with no
 leg, an unknown leg, or a leg twice is refused when the file is read.
