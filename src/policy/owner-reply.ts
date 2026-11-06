@@ -1,25 +1,20 @@
 // The `owner-reply-to` policy in force for an entity: the qualified `seat@team` address an
 // owner-origin message names for the seat that answers it. The policy is entity-level only.
-// Entity `floor` ships a default naming its orchestrator; every other entity must declare one,
-// and the reader says so rather than inventing a seat. A signed declaration replaces the
-// default, and an expired one is unset at its level, as it is everywhere in the chain.
+// The release ships no target: every entity must declare one, and the reader says so rather
+// than inventing a seat. A signed declaration answers, and an expired one is unset at its
+// level, as it is everywhere in the chain.
 import { readTeamConfig } from '../file/team-config.ts';
-import {
-  OWNER_REPLY_DEFAULT,
-  OWNER_REPLY_FLOOR_ENTITY,
-  ownerReplyToValueProblem,
-  parseOwnerReplyToValue,
-} from '../settings/owner-reply.ts';
+import { ownerReplyToValueProblem, parseOwnerReplyToValue } from '../settings/owner-reply.ts';
 import { readEntityPolicySource } from './sources.ts';
 import { normalizePolicyName, type Policy } from './types.ts';
 
 /**
- * The owner-reply target, or the explicit reason there is none. `source` says whether a signed
- * entity declaration answered or the floor's own default did; `reason` is `missing` when no live
- * declaration and no default stand, and `invalid` when a declaration or its source cannot be read.
+ * The owner-reply target, or the explicit reason there is none. `source` says the entity's own
+ * signed declaration answered; `reason` is `missing` when no live declaration stands, and
+ * `invalid` when a declaration or its source cannot be read.
  */
 export type OwnerReplyResolution =
-  | { ok: true; entity: string; target: string; source: 'policy' | 'default' }
+  | { ok: true; entity: string; target: string; source: 'policy' }
   | { ok: false; entity: string | null; reason: 'missing' | 'invalid'; why: string };
 
 /**
@@ -28,8 +23,8 @@ export type OwnerReplyResolution =
  * `entity:` names it. `now` judges an expiry and defaults to the wall clock.
  *
  * The answer is always a qualified `seat@team` target or a reason — never a guessed seat and
- * never a pane address. Entity `floor` answers `orchestrator@floor` when it declares nothing
- * live; every other entity without a live declaration is missing.
+ * never a pane address. No entity has a target until it declares one: an entity without a live
+ * declaration is missing, and it is the entity record that supplies the address.
  */
 export function resolveOwnerReplyTo(
   root: string,
@@ -71,16 +66,13 @@ export function resolveOwnerReplyTo(
     }
     return { ok: true, entity: named, target: parsed, source: 'policy' };
   }
-  if (named === OWNER_REPLY_FLOOR_ENTITY) {
-    return { ok: true, entity: named, target: OWNER_REPLY_DEFAULT, source: 'default' };
-  }
   return {
     ok: false,
     entity: named,
     reason: 'missing',
     why: held
       ? `entity "${named}" declares no live owner-reply-to: its only declaration expired`
-      : `entity "${named}" declares no owner-reply-to policy and has no default`,
+      : `entity "${named}" declares no owner-reply-to policy`,
   };
 }
 

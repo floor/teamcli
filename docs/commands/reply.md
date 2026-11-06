@@ -148,8 +148,8 @@ the root and session its live file names, and that team's live file is read befo
 written. The
 owner answers a seat's
 record through this same path. A record the owner sent is answered at its entity's
-`owner-reply-to` endpoint — the `seat@team` address an owner-origin message names — and the
-`floor` entity answers `orchestrator@floor` when it declares none. The reply is written into that
+`owner-reply-to` endpoint — the `seat@team` address an owner-origin message names — declared by
+that entity's own record; no entity ships one. The reply is written into that
 endpoint seat's own folder, and the receipt stays beside the answered record; an entity that
 declares no endpoint, or an endpoint the registry cannot resolve, is refused and nothing is
 written. A client thread is answered by its recipient
