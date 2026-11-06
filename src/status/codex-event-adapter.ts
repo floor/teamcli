@@ -97,11 +97,13 @@ const IGNORED = new Set([
 ]);
 
 /**
- * One app-server frame, as JSON text or a plain object, plus a trusted caller envelope.
+ * One app-server frame as primitive JSON text, plus a trusted caller envelope.
+ * Object frames are refused before any property read or serialization.
  * At most one native observation. Refusal reasons are fixed and carry no payload text.
  */
 export function adaptCodexFrame(frame: unknown, metadata: unknown): CodexFrameResult {
   try {
+    if (typeof frame !== 'string') return refuse('malformed', 'payload_shape');
     const envelope = parseEnvelope(metadata);
     if (isRefusal(envelope)) return envelope;
     const parsed = parseFrame(frame);
@@ -370,23 +372,18 @@ function parseEnvelope(value: unknown): Envelope | Refusal {
 }
 
 function parseFrame(frame: unknown): Record<string, unknown> | Refusal {
-  if (typeof frame === 'string') {
-    if (byteLength(frame) > MAX_BYTES) return refuse('unsupported', 'payload_limit');
-    const value: unknown = JSON.parse(frame, (_key, item: unknown) => {
-      if (typeof item === 'number' && (!Number.isFinite(item) || Math.abs(item) > Number.MAX_SAFE_INTEGER)) {
-        throw new Error('unsafe number');
-      }
-      return item;
-    });
-    if (duplicateTopKeys(frame)) return refuse('malformed', 'payload_shape');
-    const read = readFields(value, FRAME_FIELDS, 'payload_shape');
-    if (isRefusal(read)) return read;
-    return read;
-  }
-  const data = readFields(frame, FRAME_FIELDS, 'payload_shape');
-  if (isRefusal(data)) return data;
-  if (byteLength(JSON.stringify(data)) > MAX_BYTES) return refuse('unsupported', 'payload_limit');
-  return data;
+  if (typeof frame !== 'string') return refuse('malformed', 'payload_shape');
+  if (byteLength(frame) > MAX_BYTES) return refuse('unsupported', 'payload_limit');
+  const value: unknown = JSON.parse(frame, (_key, item: unknown) => {
+    if (typeof item === 'number' && (!Number.isFinite(item) || Math.abs(item) > Number.MAX_SAFE_INTEGER)) {
+      throw new Error('unsafe number');
+    }
+    return item;
+  });
+  if (duplicateTopKeys(frame)) return refuse('malformed', 'payload_shape');
+  const read = readFields(value, FRAME_FIELDS, 'payload_shape');
+  if (isRefusal(read)) return read;
+  return read;
 }
 
 function classify(data: Record<string, unknown>): 'request' | 'notification' | 'response' | 'error' | Refusal {

@@ -20,6 +20,10 @@ const envelope = {
 };
 const context = { seatId: envelope.seatId, incarnation: envelope.incarnation, mainTurn: envelope.mainTurn };
 const gateFields = { toolId: 'example-tool', gateId: 'example-gate', binding: 'example-binding' };
+
+function wire(value: unknown): string {
+  return JSON.stringify(value);
+}
 const itemFields = { itemId: 'item_example', turnId: 'turn_example', ...gateFields };
 
 function text(name: string): string {
@@ -95,8 +99,8 @@ describe('pure Codex app-server frame parser', () => {
       status: 'ignored',
       reason: 'notification',
     });
-    expect(adapt(idle, { ...envelope, threadId: 'thr_other' }).status).toBe('correlation-unproven');
-    expect(adapt(idle, { ...envelope, threadId: 'thr_other' })).toEqual({
+    expect(adapt(wire(idle), { ...envelope, threadId: 'thr_other' }).status).toBe('correlation-unproven');
+    expect(adapt(wire(idle), { ...envelope, threadId: 'thr_other' })).toEqual({
       status: 'correlation-unproven',
       reason: 'correlation_mismatch',
     });
@@ -149,7 +153,7 @@ describe('pure Codex app-server frame parser', () => {
         turn: { id: 'turn_example', status: 'completed', error: { message: 'example-private-error' } },
       },
     };
-    const observation = normalized(adapt(frame, { ...envelope, seq: 2, turnId: 'turn_example', ...gateFields }));
+    const observation = normalized(adapt(wire(frame), { ...envelope, seq: 2, turnId: 'turn_example', ...gateFields }));
     expect(observation.kind).toBe('turn-end');
     expect(observation.gateId).toBeUndefined();
     expect(observation.binding).toBeUndefined();
@@ -160,7 +164,7 @@ describe('pure Codex app-server frame parser', () => {
     expect(result.outcome.reason).toBe('correlation_mismatch');
     for (const status of ['interrupted', 'failed']) {
       const next = adapt(
-        { ...frame, params: { ...frame.params, turn: { id: 'turn_example', status } } },
+        wire({ ...frame, params: { ...frame.params, turn: { id: 'turn_example', status } } }),
         { ...envelope, seq: 2, turnId: 'turn_example' },
       );
       expect(normalized(next).kind).toBe('turn-end');
@@ -180,7 +184,7 @@ describe('pure Codex app-server frame parser', () => {
         },
       },
     };
-    const start = normalized(adapt(started, { ...envelope, seq: 2, ...itemFields }));
+    const start = normalized(adapt(wire(started), { ...envelope, seq: 2, ...itemFields }));
     expect(start.kind).toBe('tool-start');
     expect(start.toolId).toBe('example-tool');
     expect(start.gateId).toBeUndefined();
@@ -194,22 +198,22 @@ describe('pure Codex app-server frame parser', () => {
         item: { type: 'fileChange', id: 'item_example', status: 'declined', changes: [{ path: 'example-path-not-followed' }] },
       },
     };
-    const clear = normalized(adapt(completed, { ...envelope, seq: 2, ...itemFields }));
+    const clear = normalized(adapt(wire(completed), { ...envelope, seq: 2, ...itemFields }));
     expect(clear).toMatchObject({ kind: 'tool-end', ...gateFields });
     const cleared = reduceNativeObservation(gated(), clear);
     expect(cleared.outcome.reason).toBe('gate_cleared');
     expect(cleared.state.gate).toBeNull();
     expect(JSON.stringify(clear)).not.toContain('example-path-not-followed');
 
-    const wrong = normalized(adapt(completed, {
+    const wrong = normalized(adapt(wire(completed), {
       ...envelope, seq: 2, ...itemFields, binding: 'example-other-binding',
     }));
     expect(reduceNativeObservation(gated(), wrong).state.gate).not.toBeNull();
-    expect(adapt(completed, { ...envelope, seq: 2, itemId: 'item_example', toolId: 'example-tool' })).toEqual({
+    expect(adapt(wire(completed), { ...envelope, seq: 2, itemId: 'item_example', toolId: 'example-tool' })).toEqual({
       status: 'correlation-unproven',
       reason: 'unbound_permission',
     });
-    expect(adapt(completed, { ...envelope, seq: 2, ...itemFields, itemId: 'item_other' })).toEqual({
+    expect(adapt(wire(completed), { ...envelope, seq: 2, ...itemFields, itemId: 'item_other' })).toEqual({
       status: 'correlation-unproven',
       reason: 'correlation_mismatch',
     });
@@ -227,7 +231,7 @@ describe('pure Codex app-server frame parser', () => {
         cwd: 'example-path-not-followed',
       },
     };
-    const opened = normalized(adapt(request, { ...envelope, requestId: 7, ...itemFields }));
+    const opened = normalized(adapt(wire(request), { ...envelope, requestId: 7, ...itemFields }));
     expect(opened.kind).toBe('permission-gate');
     expect(opened).toMatchObject(gateFields);
     expect(Object.keys(opened)).not.toContain('ownerRequired');
@@ -235,15 +239,15 @@ describe('pure Codex app-server frame parser', () => {
     expect(result.outcome.reason).toBe('gate_opened');
     expect(result.state.gate?.ownerRequired).toBe(true);
     expect(JSON.stringify(opened)).not.toContain('example-command-not-echoed');
-    expect(adapt(request, { ...envelope, ...itemFields, requestId: 8 })).toEqual({
+    expect(adapt(wire(request), { ...envelope, ...itemFields, requestId: 8 })).toEqual({
       status: 'correlation-unproven',
       reason: 'correlation_mismatch',
     });
-    expect(adapt(request, { ...envelope, requestId: 7, itemId: 'item_example', turnId: 'turn_example' })).toEqual({
+    expect(adapt(wire(request), { ...envelope, requestId: 7, itemId: 'item_example', turnId: 'turn_example' })).toEqual({
       status: 'correlation-unproven',
       reason: 'unbound_permission',
     });
-    expect(adapt({ ...request, id: undefined }, { ...envelope, requestId: 7, ...itemFields }).status).not.toBe('normalized');
+    expect(adapt(wire({ ...request, id: undefined }), { ...envelope, requestId: 7, ...itemFields }).status).not.toBe('normalized');
   });
 
   test('synthetic subagent frames cannot clear a main gate or confirm the process', () => {
@@ -256,7 +260,7 @@ describe('pure Codex app-server frame parser', () => {
       { method: 'thread/closed', params: { threadId: 'thr_example' } },
     ];
     for (const frame of frames) {
-      const observation = normalized(adapt(frame, metadata));
+      const observation = normalized(adapt(wire(frame), metadata));
       expect(observation.kind).toBe('subagent');
       expect(observation.lane).toBe('subagent');
       expect(observation.gateId).toBeUndefined();
@@ -268,9 +272,9 @@ describe('pure Codex app-server frame parser', () => {
   });
 
   test('duplicate and out-of-order sequences stay with the native reducer', () => {
-    const first = normalized(adapt(active, envelope));
-    const late = normalized(adapt(idle, { ...envelope, seq: 1 }));
-    const gap = normalized(adapt(idle, { ...envelope, seq: 3 }));
+    const first = normalized(adapt(wire(active), envelope));
+    const late = normalized(adapt(wire(idle), { ...envelope, seq: 1 }));
+    const gap = normalized(adapt(wire(idle), { ...envelope, seq: 3 }));
     let state = reduceNativeObservation(withContext(), first);
     expect(state.outcome.reason).toBe('advisory_updated');
     expect(reduceNativeObservation(state.state, late).outcome.reason).toBe('duplicate_sequence');
@@ -279,32 +283,32 @@ describe('pure Codex app-server frame parser', () => {
     expect(gapped.state.continuity).toBe('unproven');
     expect(gapped.state.advisory).toBe('working');
     expect(gapped.state.lastSeq).toBe(1);
-    const second = normalized(adapt(idle, { ...envelope, seq: 2 }));
+    const second = normalized(adapt(wire(idle), { ...envelope, seq: 2 }));
     state = reduceNativeObservation(state.state, second);
-    const older = normalized(adapt(active, { ...envelope, seq: 1 }));
+    const older = normalized(adapt(wire(active), { ...envelope, seq: 1 }));
     expect(reduceNativeObservation(state.state, older).outcome.reason).toBe('late_sequence');
   });
 
   test('requests, responses, errors, and unknown methods are not lifecycle successes', () => {
-    expect(adapt({ method: 'thread/start', id: 1, params: { model: 'example' } }, envelope)).toEqual({
+    expect(adapt(wire({ method: 'thread/start', id: 1, params: { model: 'example' } }), envelope)).toEqual({
       status: 'ignored',
       reason: 'request',
     });
-    expect(adapt({ method: 'thread/status/changed', id: 1, params: idle.params }, envelope)).toEqual({
+    expect(adapt(wire({ method: 'thread/status/changed', id: 1, params: idle.params }), envelope)).toEqual({
       status: 'ignored',
       reason: 'request',
     });
     const response = { id: 1, result: { thread: { id: 'thr_example', note: 'example-private-result' } } };
-    expect(adapt(response, envelope)).toEqual({ status: 'ignored', reason: 'response' });
-    expect(JSON.stringify(adapt(response, envelope))).not.toContain('example-private-result');
+    expect(adapt(wire(response), envelope)).toEqual({ status: 'ignored', reason: 'response' });
+    expect(JSON.stringify(adapt(wire(response), envelope))).not.toContain('example-private-result');
     const error = { id: 1, error: { code: 1, message: 'example-private-error' } };
     expect(adapt(JSON.stringify(error), envelope)).toEqual({ status: 'ignored', reason: 'error' });
     expect(JSON.stringify(adapt(JSON.stringify(error), envelope))).not.toContain('example-private-error');
-    expect(adapt({ method: 'example/unknown', params: {} }, envelope)).toEqual({
+    expect(adapt(wire({ method: 'example/unknown', params: {} }), envelope)).toEqual({
       status: 'unsupported',
       reason: 'method',
     });
-    expect(adapt({ method: 'item/agentMessage/delta', params: { text: 'example-private-text' } }, envelope)).toEqual({
+    expect(adapt(wire({ method: 'item/agentMessage/delta', params: { text: 'example-private-text' } }), envelope)).toEqual({
       status: 'ignored',
       reason: 'notification',
     });
@@ -313,7 +317,7 @@ describe('pure Codex app-server frame parser', () => {
   test('malformed frames, accessors, limits, and token constraints stay fixed refusals', () => {
     const before = structuredClone(idle);
     const meta = { ...envelope };
-    expect(adapt(idle, meta).status).toBe('normalized');
+    expect(adapt(wire(idle), meta).status).toBe('normalized');
     expect(idle).toEqual(before);
     expect(meta).toEqual(envelope);
     expect(adapt('{', envelope)).toEqual({ status: 'malformed', reason: 'payload_shape' });
@@ -325,27 +329,64 @@ describe('pure Codex app-server frame parser', () => {
       status: 'malformed',
       reason: 'payload_shape',
     });
+    let rootCalls = 0;
     const getter = {};
-    Object.defineProperty(getter, 'method', { get() { throw new Error('example-private-accessor'); }, enumerable: true });
+    Object.defineProperty(getter, 'method', {
+      enumerable: true,
+      get() { rootCalls += 1; return 'thread/status/changed'; },
+    });
     const refused = adapt(getter, envelope);
     expect(refused).toEqual({ status: 'malformed', reason: 'payload_shape' });
+    expect(rootCalls).toBe(0);
     expect(JSON.stringify(refused)).not.toContain('example-private-accessor');
-    expect(adapt(idle, null)).toEqual({ status: 'correlation-unproven', reason: 'missing_envelope' });
-    expect(adapt(idle, { ...envelope, extra: true })).toEqual({ status: 'malformed', reason: 'envelope_shape' });
-    expect(adapt(active, { ...envelope, toolId: 'bad/tool' })).toEqual({
+    expect(adapt(wire(idle), null)).toEqual({ status: 'correlation-unproven', reason: 'missing_envelope' });
+    expect(adapt(wire(idle), { ...envelope, extra: true })).toEqual({ status: 'malformed', reason: 'envelope_shape' });
+    expect(adapt(wire(active), { ...envelope, toolId: 'bad/tool' })).toEqual({
       status: 'unsupported',
       reason: 'identifier_contract',
     });
     const opaqueId = `item_${'x'.repeat(180)}`;
-    const started = normalized(adapt({
+    const started = normalized(adapt(wire({
       method: 'item/started',
       params: { item: { type: 'commandExecution', id: opaqueId } },
-    }, { ...envelope, itemId: opaqueId, toolId: 'example-tool' }));
+    }), { ...envelope, itemId: opaqueId, toolId: 'example-tool' }));
     expect(started.toolId).toBe('example-tool');
     expect(JSON.stringify(started)).not.toContain(opaqueId);
     expect(adapt(`{"method":"thread/closed","params":{"threadId":"${'t'.repeat(70000)}"}}`, envelope)).toEqual({
       status: 'unsupported',
       reason: 'payload_limit',
     });
+  });
+
+  test('object frames are refused before nested getters or toJSON run', () => {
+    let getterCalls = 0;
+    let toJSONCalls = 0;
+    const nested = { threadId: 'thr_example', status: { type: 'idle' } };
+    Object.defineProperty(nested, 'extra', {
+      enumerable: true,
+      get() { getterCalls += 1; return 'benign'; },
+    });
+    const withToJSON = {
+      threadId: 'thr_example',
+      status: { type: 'idle' },
+      toJSON() {
+        toJSONCalls += 1;
+        return { threadId: 'thr_example', status: { type: 'idle' } };
+      },
+    };
+    const beforeNested = nested.threadId;
+    const beforeStatus = nested.status.type;
+    expect(adapt({ method: 'thread/status/changed', params: nested }, envelope)).toEqual({
+      status: 'malformed',
+      reason: 'payload_shape',
+    });
+    expect(adapt({ method: 'thread/status/changed', params: withToJSON }, envelope)).toEqual({
+      status: 'malformed',
+      reason: 'payload_shape',
+    });
+    expect(getterCalls).toBe(0);
+    expect(toJSONCalls).toBe(0);
+    expect(nested.threadId).toBe(beforeNested);
+    expect(nested.status.type).toBe(beforeStatus);
   });
 });

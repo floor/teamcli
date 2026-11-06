@@ -1,6 +1,6 @@
 # Pure Codex app-server frame parser
 
-This module turns one in-memory app-server frame into at most one native observation.
+This module turns one JSON-text app-server frame into at most one native observation.
 It does not open a socket, launch a process, read a transcript, or write presence.
 A passing test is not a deployed adapter and not proof that a process exited.
 
@@ -13,9 +13,11 @@ comment in `test/codex-presence-source.test.ts` (2026-10-20, codex-cli 0.161.0, 
 No original captured payload is in `test/fixtures/status-codex-events/`. Provenance marks
 every file as measured-history or a documentation example, and `acceptanceComplete` is false.
 
-`adaptCodexFrame(frame, envelope)` accepts JSON text or one plain object, up to 65536 UTF-8
-bytes. Duplicate top-level keys, non-finite or oversized numbers, and accessors refuse with a
-fixed reason and no thrown text. Inputs are left unchanged. Requests, notifications, responses,
+`adaptCodexFrame(frame, envelope)` accepts primitive JSON text only, up to 65536 UTF-8
+bytes. An object frame is refused before any property read or serialization, so nested
+getters and `toJSON` do not run. Duplicate top-level keys, non-finite or oversized numbers,
+and text that is not one JSON object refuse with a fixed reason and no thrown text. Text
+inputs are left unchanged. Requests, notifications, responses,
 and errors stay distinct. An unknown method is unsupported. A request is never read as the
 notification of the same method name.
 
