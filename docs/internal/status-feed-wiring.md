@@ -30,6 +30,8 @@ markers; it establishes no native freshness or health. The daemon refreshes
 markers only on the existing presence pass and removes its own markers on close.
 The ordinary legacy Notification filter caps its stdin at 65537 bytes, even with `--presence` off. An oversized Notification only fails the permission-prompt match: fewer stagings, the safe direction, and only above 64 KiB, which no real Notification reaches. The cap stops a runaway stdin from hanging the hook.
 
+A refusal reason is the seat's own word. The status-feed reader (`team trace`'s note for a `seat.status` row) and the lead's delivery line both show it quoted and labelled as reported by that seat. A seat name that is not a seat id is left out. The reason keeps at most 200 characters and is marked cut past that. DEL, C1, line and paragraph separators, and bidi controls are escaped inside the quotes. Neither surface presents the word as a finding.
+
 Only fixed refusal receipts enter the private presence status spool. No prompt,
 tool payload, provider identifier or raw error is persisted or published. The
 daemon validates the complete refusal-only shape and current binding/claim again

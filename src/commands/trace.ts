@@ -22,6 +22,7 @@ import { withoutFileOffer } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
 import { contextLine, hasJsonFlag, pluralCount, renderTable, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
+import { statusReaderReason } from '../status/reported-reason.ts';
 
 export const USAGE = `Usage: team trace <id> [--json]
 
@@ -141,11 +142,17 @@ function deltaText(delta: number | null): string {
   return delta > 0 ? `+${String(delta)} ms` : `${String(delta)} ms`;
 }
 
+/** The NOTE a `seat.status` row shows. The reason is the seat's own word, quoted and labelled. */
+export function statusEventNote(payload: EventPayload): string {
+  return statusReaderReason(payload.seat ?? '', payload.status_reason ?? '');
+}
+
 /** One row: the step's own fields, never a word the event does not carry. */
 function rowOf(step: TraceStep): string[] {
   const payload = step.payload;
-  const note =
-    payload.reason ?? (payload.rule === undefined ? '-' : `admitted by: ${payload.rule}`);
+  const note = payload.kind === 'seat.status'
+    ? statusEventNote(payload)
+    : payload.reason ?? (payload.rule === undefined ? '-' : `admitted by: ${payload.rule}`);
   return [
     timeOf(payload.ts),
     payload.kind,
