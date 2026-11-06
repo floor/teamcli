@@ -233,6 +233,29 @@ describe('a seat read from its records', () => {
     expect(wakeableWhileIdle(read_.class)).toBe(false);
   });
 
+  test('a runtime launch that names its own accepted settings proves the socket, whatever the file launch would install', () => {
+    // The line the seat actually ran is read first. A seat relaunched with its own
+    // `--settings` file that declares accept has that word in force; the generated file the team
+    // file's launch would install is only what a later launch would run, so it cannot speak for
+    // the session that is running.
+    const { home, socket } = socketSeat();
+    // What the team file's own launch would install declares nothing at all...
+    writeFileSync(join(dir, 'hooks', 'acme', 'helper.json'), '{"hooks":{}}\n');
+    // ...while the runtime line names a settings file of its own that declares accept. It is
+    // written before the socket, so the socket stands as the newer file.
+    const runtime = join(dir, 'runtime-settings.json');
+    writeFileSync(runtime, '{"crossSessionInbound":"accept"}\n');
+    utimesSync(runtime, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+    writeFileSync(socket, '');
+    const read_ = read({
+      declared: { cli: 'claude-code', launch: 'claude', inbound: 'accept' },
+      state: { cli: 'claude-code', watcher: 'hook', launch_line: `claude --settings ${runtime}` },
+      home,
+    });
+    expect(read_.evidence.socket).toBe(true);
+    expect(read_.class).toBe('push');
+  });
+
   test('a recorded socket is no evidence once the pane’s processes no longer carry it', () => {
     // The socket is named by the pid that listened on it, and that pid is the pane's own process:
     // the address choice a send makes dials it, so the class counts it.
