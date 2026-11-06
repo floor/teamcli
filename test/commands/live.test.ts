@@ -3309,7 +3309,7 @@ describe('team up, a session that was restored', () => {
       'process:w1:p1', 'paneText:w1:p1',
       // The address pass reads every declared claude-code seat this run leaves live, after the
       // refusal, for the socket its pane answers at.
-      'process:w2:p1', 'process:w3:p1',
+      ...listed.slice(1).map(({ pane }) => `process:${pane}`),
     ]);
     expect(made.terminal.reads).toBe(0);
     expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
@@ -3394,7 +3394,7 @@ describe('team up, a session that was restored', () => {
       'process:w1:p1', 'paneText:w1:p1',
       // The address pass reads every declared claude-code seat this run leaves live, after the
       // refusal, for the socket its pane answers at.
-      'process:w2:p1', 'process:w3:p1',
+      ...listed.slice(1).map(({ pane }) => `process:${pane}`),
     ]);
     expect(io.out).toContain('claude-coordinator-acme: left out: a run with no terminal does not close a waiting seat; left as it is\n');
     expect(calls.some((call) => call.startsWith('close:'))).toBe(false);
@@ -4007,7 +4007,7 @@ describe('team up, the pause', () => {
       `read:${recorded.pane}`, `process:${recorded.pane}`, 'agents', 'agent-panes', 'agents', 'agents',
       // The address pass: every declared claude-code seat this run leaves live is read once for
       // the socket its pane answers at.
-      'agents', 'process:w1:p1', 'process:w2:p1', 'process:w3:p1',
+      'agents', ...listed().map(({ pane }) => `process:${pane}`),
     ]);
     expect(made.creates).toEqual([]);
     expect(made.runs).toEqual([]);
