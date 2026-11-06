@@ -3,6 +3,7 @@
   "units": {
     "test/0516-dim-border-independent.test.ts": 1,
     "test/0516-stale-spinner-independent.test.ts": 3,
+    "test/0516-yielding-seal-independent.test.ts": 5,
     "test/a9-restart-binding-independent.test.ts": 5,
     "test/ack-reply-placement-tester.test.ts": 3,
     "test/ack-reply-placement.test.ts": 5,
