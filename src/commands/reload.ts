@@ -489,7 +489,10 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   // where the reader of the document meets warnings, and names the command that retries it.
   const refreshStartProblem = (): string | null => {
     const cli = recorded.cli ?? seat.cli;
-    if ((cli !== 'grok' && cli !== 'cursor') || recorded.start_cwd === undefined) return null;
+    if (cli !== 'grok' && cli !== 'cursor') return null;
+    if (recorded.start_cwd === undefined) {
+      return `${seat.name}: its pane has no recorded start folder; set the seat cwd to its own worktree or clone and restart it in a new workspace`;
+    }
     return ownStartFolderProblem({ cli, seat: seat.name, cwd: recorded.start_cwd, root,
       home: home ?? homedir(), lobby: lobbyOf(home ?? homedir(), root, { ...team, session }),
       peers: placedStartFolders(team.seats, readState(dir).sessions[session]) });
