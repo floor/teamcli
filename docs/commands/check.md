@@ -10,6 +10,12 @@ processes no pane holds, ended after one question at a terminal. No git is neede
 as well in a plain folder as in a repository. Where
 [`team status`](status.md) says what the team is, the check says what to act on: the differences
 alone, each with its repair.
+An entity the file names, when the file has a lead and that entity has no live signed
+`owner-reply-to` — none at all, or only an expired declaration — is a difference. The line
+says what is missing, and the repair is
+`team policy set entity owner-reply-to <lead>@<team> --entity <id> --dry-run`, the owner's
+dry-run of the declaration. A live declaration, a file that names no entity, and a
+declaration that cannot be read draw no such line.
 It is also the old name of [`team commits check`](commits.md) and [`team pr check`](pr.md), still
 read through 0.3.3. A `<ref>` (a range when it holds `..`, passed to git as given, otherwise that
 one commit) runs that older reading, as do `--pr <file>` (check a pull request's body as well;

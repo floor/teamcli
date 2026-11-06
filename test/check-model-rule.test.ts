@@ -81,6 +81,15 @@ function world(text = TEAM): World {
   mkdirSync(join(root, '.agents'), { recursive: true });
   execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
   writeFileSync(join(root, '.agents/team.yaml'), text);
+  // A live endpoint, so this scene's differences are the model rule's and not the missing reply.
+  if (text.includes('entity: lab\n')) {
+    const wrote = writePolicySet(
+      home,
+      { level: 'entity', target: 'lab', name: 'owner-reply-to', value: 'keeper@beacon' },
+      { now: NOW },
+    );
+    if (!wrote.ok) throw new Error(wrote.why);
+  }
   return { base, root, home, dir: join(root, '.agents') };
 }
 

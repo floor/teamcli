@@ -92,6 +92,23 @@ const QUIET_LIVE: Live = {
   screens: { 'w1:p1': CLAUDE_IDLE, 'w2:p1': CLAUDE_IDLE },
 };
 
+/** A live owner-reply endpoint, so a scene that asserts a clean check is not also naming the missing one. */
+function declareOwnerReply(home: string, root: string): void {
+  const loaded = validateTeamFile(readFileSync(join(root, '.agents', 'team.yaml'), 'utf8'));
+  if (!loaded.ok || loaded.team.entity === null) return;
+  const wrote = writePolicySet(
+    home,
+    {
+      level: 'entity',
+      target: loaded.team.entity,
+      name: 'owner-reply-to',
+      value: `${loaded.team.orchestrator}@${loaded.team.project}`,
+    },
+    { now: NOW },
+  );
+  if (!wrote.ok) throw new Error(wrote.why);
+}
+
 function makeFixture(
   yamlText: string = TEAM_YAML,
   // A client key's folder must sit outside the OS temp directory, so a scene that writes one
@@ -780,6 +797,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
   test('migration: before any dev-mode policy is set in the chain, team check emits one notice and TEAMCLI_DEV_MODE=1 keeps today behaviour', () => {
     const fx = makeFixture();
     try {
+      declareOwnerReply(fx.home, fx.root);
       let out = '';
       let err = '';
       const io: Io = {
@@ -821,6 +839,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
         { now: NOW },
       );
       expect(wrote.ok).toBe(true);
+      declareOwnerReply(fx.home, fx.root);
 
       let out = '';
       let err = '';
@@ -1385,6 +1404,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
   test('expiry reading is worded "<name> at <level> expired at <t>; read as unset", logged at most once per expired entry, and leaves the signed file untouched', async () => {
     const fx = makeFixture();
     try {
+      declareOwnerReply(fx.home, fx.root);
       const expiryIso = '2026-10-17T12:00:05Z';
       const setIo = testIo(fx.root, { kind: 'owner' });
       const setCode = await runPolicy(
@@ -1572,6 +1592,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
   test('scene: unsigned legacy delivery_order that loosens a signed project policy is reported as the team’s difference, pointing the repair at .agents/team.yaml with who: the team’s lead, and a signed entry shadowing a legacy line emits a note', () => {
     const fx = makeFixture();
     try {
+      declareOwnerReply(fx.home, fx.root);
       // Signed project policy delivery-order [typed]
       const wroteProject = writePolicySet(
         fx.home,
