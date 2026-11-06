@@ -21,7 +21,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { listUnread, readMessage } from '../src/mcp/inbox.ts';
 import { startSendDaemon, type DaemonHost, type SendDaemonHandle } from '../src/send/daemon.ts';
 import { signRecord, signReceiptPayload, writeRecord } from '../src/send/record.ts';
-import { messageKeyOf } from '../src/store/keys.ts';
+import { messageKeyOf, messageKeyPath } from '../src/store/keys.ts';
 import { storePath } from '../src/store/store.ts';
 import { emptySession, LOCK_FILE, updateState } from '../src/state.ts';
 import { testIo } from './helpers.ts';
@@ -115,6 +115,11 @@ function signedMessage(w: World, id: string) {
 function signedRead(w: World, id: string): string {
   return JSON.stringify(signReceiptPayload({
     kind: 'receipt', status: 'read', id, to: 'lead', root: w.root, session: SESSION, at: NOW.toISOString(),
+  }, w.home));
+}
+function signedReplied(w: World, id: string, to = 'lead'): string {
+  return JSON.stringify(signReceiptPayload({
+    kind: 'receipt', status: 'replied', id, to, root: w.root, session: SESSION, at: NOW.toISOString(),
   }, w.home));
 }
 function events(w: World): SignedEventRecord[] {
@@ -211,7 +216,7 @@ for (const receipt of ['read', 'replied'] as const) {
     const pass = passes(w);
     await pass();
     fs.unlinkSync(original);
-    fs.writeFileSync(join(w.drops, 'late-item.' + receipt + '.json'), receipt === 'read' ? signedRead(w, 'late-item') : '{}');
+    fs.writeFileSync(join(w.drops, 'late-item.' + receipt + '.json'), receipt === 'read' ? signedRead(w, 'late-item') : signedReplied(w, 'late-item'));
     const raised = await pass();
     expect(raised.filter(event => event.payload.kind === 'message.' + receipt).map(event => ({ id: event.payload.record_id, from: event.payload.from })))
       .toEqual([{ id: 'late-item:' + receipt, from: 'departed-sender' }]);
@@ -530,7 +535,7 @@ for (const receipt of ['read', 'replied'] as const) {
       fs.unlinkSync(original);
       expect(await pass()).toEqual([]);
       expect(await pass()).toEqual([]);
-      fs.writeFileSync(join(w.drops, 'quiet-late.' + receipt + '.json'), receipt === 'read' ? signedRead(w, 'quiet-late') : '{}');
+      fs.writeFileSync(join(w.drops, 'quiet-late.' + receipt + '.json'), receipt === 'read' ? signedRead(w, 'quiet-late') : signedReplied(w, 'quiet-late'));
       const result = restart ? freshProcessPass(w) : { first: await pass(), second: await pass() };
       expect(result.first.filter(event => event.payload.kind === 'message.' + receipt).map(event => ({ id: event.payload.record_id, from: event.payload.from, to: event.payload.to })))
         .toEqual([{ id: 'quiet-late:' + receipt, from: 'durable-sender', to: 'lead' }]);
@@ -539,6 +544,95 @@ for (const receipt of ['read', 'replied'] as const) {
     });
   }
 }
+
+for (const plant of ['unsigned', 'bare'] as const) {
+  test('a late ' + (plant === 'unsigned' ? 'unsigned' : 'bare') + ' replied marker raises no reply after the drop is taken', async () => {
+    const w = world();
+    const id = plant === 'unsigned' ? 'late-unsigned' : 'late-bare';
+    const original = drop(w, id, 'departed-sender');
+    const pass = passes(w);
+    await pass();
+    fs.unlinkSync(original);
+    const name = plant === 'unsigned' ? id + '.replied.json' : id + '.replied';
+    const body = plant === 'unsigned' ? '{}' : signedReplied(w, id);
+    fs.writeFileSync(join(w.drops, name), body);
+    const raised = await pass();
+    expect(raised.filter(event => event.payload.kind === 'message.replied')).toEqual([]);
+    expect(events(w).filter(event => event.payload.record_id === id + ':replied')).toHaveLength(0);
+  });
+  for (const restart of [false, true]) {
+    test((plant === 'unsigned' ? 'an unsigned' : 'a bare') + ' replied marker raises no reply after two quiet passes; fresh process=' + restart, async () => {
+      const w = world();
+      const id = plant === 'unsigned' ? 'quiet-unsigned' : 'quiet-bare';
+      const original = drop(w, id, 'durable-sender');
+      const pass = passes(w);
+      await pass();
+      fs.unlinkSync(original);
+      expect(await pass()).toEqual([]);
+      expect(await pass()).toEqual([]);
+      const name = plant === 'unsigned' ? id + '.replied.json' : id + '.replied';
+      const body = plant === 'unsigned' ? '{}' : signedReplied(w, id);
+      fs.writeFileSync(join(w.drops, name), body);
+      const result = restart ? freshProcessPass(w) : { first: await pass(), second: await pass() };
+      expect(result.first.filter(event => event.payload.kind === 'message.replied')).toEqual([]);
+      expect(result.second.filter(event => event.payload.kind === 'message.replied')).toEqual([]);
+      expect(events(w).filter(event => event.payload.record_id === id + ':replied')).toHaveLength(0);
+    });
+  }
+}
+
+test('a forged replied marker raises no reply, and a receipt this key signed still does', async () => {
+  const w = world();
+  const forgedDrop = drop(w, 'forged-reply', 'departed-sender');
+  const realDrop = drop(w, 'real-reply', 'departed-sender');
+  const pass = passes(w);
+  await pass();
+  fs.unlinkSync(forgedDrop);
+  fs.unlinkSync(realDrop);
+  const forged = signReceiptPayload({
+    kind: 'receipt', status: 'replied', id: 'forged-reply', to: 'lead', root: w.root, session: SESSION, at: NOW.toISOString(),
+  }, w.home);
+  fs.writeFileSync(join(w.drops, 'forged-reply.replied.json'), JSON.stringify({ ...forged, signature: 'forged' }));
+  fs.writeFileSync(join(w.drops, 'real-reply.replied.json'), signedReplied(w, 'real-reply'));
+  const raised = await pass();
+  expect(raised.filter(event => event.payload.kind === 'message.replied').map(event => event.payload.record_id)).toEqual(['real-reply:replied']);
+  expect(events(w).filter(event => event.payload.record_id === 'forged-reply:replied')).toHaveLength(0);
+  expect(await pass()).toEqual([]);
+});
+
+test('a replied receipt addressed to another seat raises no reply beside this seat record', async () => {
+  const w = world();
+  const original = drop(w, 'other-seat', 'departed-sender');
+  const pass = passes(w);
+  await pass();
+  fs.unlinkSync(original);
+  fs.writeFileSync(join(w.drops, 'other-seat.replied.json'), signedReplied(w, 'other-seat', 'clerk'));
+  const raised = await pass();
+  expect(raised.filter(event => event.payload.kind === 'message.replied')).toEqual([]);
+  expect(events(w).filter(event => event.payload.record_id === 'other-seat:replied')).toHaveLength(0);
+});
+
+test('a key-blind pass stores no reply verdict, so the keyed pass raises the signed reply once', async () => {
+  const w = world();
+  drop(w, 'blind-reply', 'departed-sender');
+  fs.writeFileSync(join(w.drops, 'blind-reply.replied.json'), signedReplied(w, 'blind-reply'));
+  const state = reconcile.createReconcileState();
+  const keyPath = messageKeyPath(w.home);
+  const hidden = keyPath + '.hidden';
+  fs.renameSync(keyPath, hidden);
+  try {
+    const blind = await passes(w, state)();
+    expect(blind.filter(event => event.payload.kind === 'message.replied')).toEqual([]);
+  } finally {
+    fs.renameSync(hidden, keyPath);
+  }
+  const keyed = await passes(w, state)();
+  expect(keyed.filter(event => event.payload.kind === 'message.replied').map(event => event.payload.record_id)).toEqual(['blind-reply:replied']);
+  const again = await passes(w, state)();
+  expect(again.filter(event => event.payload.kind === 'message.replied')).toEqual([]);
+  expect(events(w).filter(event => event.payload.record_id === 'blind-reply:replied')).toHaveLength(1);
+});
+
 for (const restart of [false, true]) {
   test('a late signed read keeps its sender after quiet passes; fresh process=' + restart, async () => {
     const w = world();
