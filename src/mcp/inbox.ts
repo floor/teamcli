@@ -43,7 +43,6 @@ import {
   receiptFile,
   recordAuthOfSealed,
   signReceiptPayload,
-  verifiedRecordAt,
   verifyRecord,
   type ReceiptPayload,
   type RecordPayload,
@@ -486,7 +485,7 @@ export function listUnread(
   const key = messageKeyState(home);
   const readRecordAt: RecordReader | null = key.kind !== 'key'
     ? null
-    : records ?? ((path, id) => verifiedRecordAt(path, id, key.key));
+    : records ?? ((path, id) => verifiedPayloadAt(path, id, key.key));
   const claim = currentClaimIn(context.root, context.session, context.to);
   const superseded = new Set(claim?.superseded ?? []);
   const messages: InboxMessage[] = [];

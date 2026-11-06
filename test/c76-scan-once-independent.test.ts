@@ -355,9 +355,9 @@ describe('1. 50,000-file synthetic fixture: file-open bound per watch pass', () 
         expect(perRecordOpens.get(signedPath)).toBe(1);
       }
 
-      // The 10 .read.json receipts were checked once by listUnackedMessages, once by mail.unread,
-      // and once by wakeUnreadDrops's late-arrival folder check (listUnread with mail.recordAt).
-      expect(receiptOpenTotal).toBe(readRecordPaths.length * 3);
+      // The 10 .read.json receipts were opened and verified once on the pass (listUnackedMessages)
+      // and reused from the receipt-verdict stamp cache by mail.unread and wakeUnreadDrops.
+      expect(receiptOpenTotal).toBe(readRecordPaths.length);
 
       // Clean up the 50,000-file directory inside the test's own timeout budget.
       const idx = activeBases.indexOf(w.base);

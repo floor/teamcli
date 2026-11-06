@@ -81,7 +81,7 @@ import { wakeTrigger, wakeWordsFor, type WakeWords } from '../send/wake.ts';
 import { DELIVERY_LEGS } from '../settings/inherit.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { MailPass, STUCK_MARKER } from './mail-pass.ts';
-import { passPaneProcesses, passPaneScreenAsync, passPaneStatus, type RetryScene } from './retry.ts';
+import { passPaneProcesses, passPaneScreen, passPaneScreenAsync, passPaneStatus, type RetryScene } from './retry.ts';
 import { readScreen } from './screen.ts';
 
 /** The marker beside a message whose one wake line was typed. */
@@ -1340,7 +1340,10 @@ export function reportStuckSeats(scene: RetryScene, window: UnreadWindow, readin
         if (pane === undefined) {
           reason = { class: 'screen', kind: 'no-pane', word: 'no live pane was read, no wake reached it' };
         } else {
-          const screen = scene.sources.screen(pane, scene.session);
+          // The report reads the pass's own snapshot: a hosted pass never reaches the terminal
+          // host synchronously, and a pane the snapshot omits is reported as unreadable here
+          // rather than read outside the pass's one shared reading.
+          const screen = passPaneScreen(scene, pane);
           if (screen === null) {
             reason = {
               class: 'screen',
