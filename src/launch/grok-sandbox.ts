@@ -1,6 +1,8 @@
-// A Grok seat starts inside a sandbox profile TeamCLI writes for it, so the seat may write the
-// team's state folder and the project's `.agents` while everything else stays the workspace's
-// own grant. Measured on grok 1.0.70 (f50904eaee6c) in a scratch home:
+// A Grok seat starts inside a sandbox profile TeamCLI writes for it. The profile names that
+// seat's worktree, its start folder, and only the seat's own paths under the git common dir and
+// under `.agents`. Nothing under the team config directory is granted. `extends = "workspace"`
+// is written; what that preset itself grants is unmeasured. Measured on grok 1.0.70
+// (f50904eaee6c) in a scratch home:
 //   GROK_HOME=<dir> grok --trust --sandbox team-seat-demo -p hi
 // found the profile in `<dir>/sandbox.toml` and reached its auth check, while
 //   GROK_HOME=<dir> grok --trust --sandbox team-seat-absent -p hi
@@ -8,23 +10,33 @@
 // found. Define it in ~/.grok/sandbox.toml or .grok/sandbox.toml:` and exited 1. `--sandbox`
 // takes only a profile name: a path, inline TOML and `GROK_SANDBOX=<path>` are each read as a
 // name and refused. The profile's `read_write` entries are taken literally — `~` and `$HOME` are
-// not expanded, and a relative entry is anchored at the workspace — so the two folders below are
-// written as absolute paths. The file is the user-level one (`$GROK_HOME/sandbox.toml`, default
+// not expanded, and a relative entry is anchored at the workspace — so every grant below is
+// written as an absolute path. The file is the user-level one (`$GROK_HOME/sandbox.toml`, default
 // `~/.grok/sandbox.toml`): a project `.grok/sandbox.toml` would put a machine-specific map
 // inside a repository, and the user-level file is read when the project has none.
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
-import { dirname, isAbsolute, join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, type Stats } from 'node:fs';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { syncChildTimeout } from '../child.ts';
+import { cliHookStatePath } from './cli-hook.ts';
 import { tomlString, writePrivateAtomic } from './private-file.ts';
 import { parseToml } from './toml.ts';
 
 /** The filesystem root Grok reads beside its own home, and the profile TeamCLI keeps there. */
 export interface GrokSandbox {
-  /** The `--sandbox` profile name, `team-seat-<project>`. */
+  /** The `--sandbox` profile name, `team-seat-<project>-<seat>`. */
   profile: string;
   /** The user-level `sandbox.toml` this launch writes or updates. */
   file: string;
   /** The absolute folders the profile grants `read_write`, in file order. */
   readWrite: readonly string[];
+  /** Paths the launch creates when they are missing, before it writes the profile: the seat's
+   *  drop folder, messages folder and seat-state folder, and the checkout's `objects/`, `refs/`
+   *  and `logs/` directories. */
+  prepare: readonly string[];
+  /** The project-wide profile a 0.5.12–0.5.14 launch wrote, when it is a different table.
+   *  Writing this profile removes that table. */
+  retire?: string;
   /** The root the link guard walks: the home the file sits under, else the file's parent. */
   guard: string;
 }
@@ -37,40 +49,191 @@ export function grokHomeFor(home: string, env: NodeJS.ProcessEnv = process.env):
   return named !== undefined && named !== '' && isAbsolute(named) ? named : join(home, '.grok');
 }
 
-/** `team-seat-<project>`, the name the profile and the launch line share. The project word is
+/** `team-seat-<project>-<seat>`, the name the profile and the launch line share. Each word is
  *  reduced to TOML bare-key characters so the same string is a table name and a profile name;
- *  an empty project still names a profile. */
-export function grokSandboxProfileName(project: string): string {
-  const slug = project.trim().replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
-  return slug === '' ? 'team-seat' : `team-seat-${slug}`;
+ *  a word that reduces to nothing is dropped, and an empty pair still names a profile. */
+export function grokSandboxProfileName(project: string, seat: string): string {
+  const slug = (word: string) => word.trim().replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+  const parts = [slug(project), slug(seat)].filter((part) => part !== '');
+  return parts.length === 0 ? 'team-seat' : `team-seat-${parts.join('-')}`;
 }
 
-/** What a Grok seat's launch writes and names: the profile, its file, and the two folders the
- *  seat writes through it — the machine's team config and the project root's `.agents`. The
- *  folders are resolved when they exist, because the sandbox takes the path literally and a
- *  grant to a link's own name would not cover its target. */
+/** What a Grok seat's launch writes and names. The grant is that seat's worktree, its start
+ *  folder, and only these paths of its own: under the git common dir, `objects/`, `refs/`,
+ *  `logs/` and `worktrees/<that worktree>`; under `.agents`,
+ *  `send-drops/<session>/<seat>`, `messages/<seat>` and `seat-state/<session>/<seat>/`.
+ *  The session's seat-state folder is not granted. `hooks/<session>/<seat>.json` is written by
+ *  the launcher and is not granted. The team config directory is never granted, nor is the lobby
+ *  or any other start folder or worktree inside it (the seat is not moved), nor the `.agents`
+ *  folder, nor the common dir, nor that dir's `hooks/`, `config` or `info/`. A path is resolved
+ *  when it or an ancestor exists, because the sandbox takes the path literally and a grant to a
+ *  link's own name would not cover its target. Before the profile is written, the launch creates
+ *  the seat's drop folder, `messages/<seat>` and `seat-state/<session>/<seat>/`, then names a
+ *  path only when it exists as a directory. A path of the wrong type refuses the
+ *  launch. */
 export function grokSandboxOf(input: {
   home: string;
   root: string;
   project: string;
+  seat: string;
+  session: string;
+  /** The folder the seat starts in. Absent when this launch has none. */
+  cwd?: string;
+  /** The seat's worktree. Absent when the seat has none recorded. */
+  worktree?: string;
   /** The resolved Grok home; `grokHomeFor` reads the environment when absent. */
   grokHome?: string;
 }): GrokSandbox {
   const grokHome = input.grokHome ?? grokHomeFor(input.home);
   const file = join(grokHome, 'sandbox.toml');
+  const folders: string[] = [];
+  const worktree = input.worktree === undefined ? undefined : realFolder(input.worktree);
+  const start = input.cwd === undefined ? undefined : realFolder(input.cwd);
+  placeGrant(input.home, worktree, folders);
+  if (start !== worktree) placeGrant(input.home, start, folders);
+  const prepare: string[] = [];
+  for (const grant of gitGrants(input.worktree ?? input.cwd ?? input.root)) {
+    placeGrant(input.home, grant, folders);
+    // `objects/`, `refs/` and `logs/` are directories a commit writes. A missing one is created
+    // before the profile is written. The common dir itself and its files are never granted.
+    if (basename(grant) === 'objects' || basename(grant) === 'refs' || basename(grant) === 'logs') {
+      placeGrant(input.home, grant, prepare);
+    }
+  }
+  for (const grant of agentGrants(input.root, input.session, input.seat)) {
+    placeGrant(input.home, grant, folders);
+    placeGrant(input.home, grant, prepare);
+  }
+  const profile = grokSandboxProfileName(input.project, input.seat);
+  const retire = grokSandboxProfileName(input.project, '');
   return {
-    profile: grokSandboxProfileName(input.project),
+    profile,
     file,
-    readWrite: [realFolder(join(input.home, '.config', 'team')), realFolder(join(input.root, '.agents'))],
+    readWrite: [...new Set(folders)],
+    prepare,
+    ...(retire === profile ? {} : { retire }),
     guard: grokHome === input.home || grokHome.startsWith(`${input.home}/`) ? input.home : dirname(grokHome),
   };
+}
+
+function placeGrant(home: string, folder: string | undefined, into: string[]): void {
+  if (folder === undefined || folder === '') return;
+  if (coveredByTeamConfig(home, folder)) return;
+  into.push(folder);
+}
+
+/** True when `folder` is the team config directory or anything inside it. */
+function coveredByTeamConfig(home: string, folder: string): boolean {
+  const base = realFolder(join(home, '.config', 'team'));
+  const path = realFolder(folder);
+  const root = base.length > 1 && base.endsWith('/') ? base.slice(0, -1) : base;
+  return path === root || path.startsWith(`${root}/`);
+}
+
+function oneSegment(word: string): boolean {
+  return word !== '' && word !== '.' && word !== '..' && !word.includes('/') && !word.includes('\\') && !word.includes('\0');
+}
+
+/** The seat's own files under `.agents`. The folder itself is not a grant. */
+function agentGrants(root: string, session: string, seat: string): string[] {
+  const agents = join(root, '.agents');
+  const grants: string[] = [];
+  if (oneSegment(session) && oneSegment(seat)) {
+    grants.push(realFolder(join(agents, 'send-drops', session, seat)));
+    grants.push(realFolder(join(agents, 'messages', seat)));
+  }
+  const state = cliHookStatePath(agents, session, seat);
+  if (state !== null) grants.push(realFolder(dirname(state)));
+  return grants;
+}
+
+/** `objects/`, `refs/`, `logs/`, and this worktree's own `worktrees/<name>`
+ *  under the git common dir. The common dir itself, `hooks/`, `config` and `info/` are not
+ *  grants. A folder that is not a checkout names nothing. `packed-refs` is never granted:
+ *  Grok requires directories, and replacing packed refs needs a lock in the common dir. */
+function gitGrants(folder: string): string[] {
+  const common = gitAnswer(folder, '--git-common-dir');
+  if (common === undefined) return [];
+  const grants = ['objects', 'refs', 'logs'].map((name) => realFolder(join(common, name)));
+  const gitDir = gitAnswer(folder, '--git-dir');
+  const ownPrefix = `${realFolder(common)}/worktrees/`;
+  if (gitDir !== undefined) {
+    const own = realFolder(gitDir);
+    const name = own.startsWith(ownPrefix) ? own.slice(ownPrefix.length) : '';
+    if (name !== '' && !name.includes('/')) grants.push(own);
+  }
+  return grants;
+}
+
+function gitAnswer(folder: string, flag: '--git-common-dir' | '--git-dir'): string | undefined {
+  if (!existsSync(folder)) return undefined;
+  try {
+    const said = execFileSync('git', ['rev-parse', '--path-format=absolute', flag], {
+      cwd: folder,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: syncChildTimeout(5_000),
+    }).trim();
+    if (said === '') return undefined;
+    return isAbsolute(said) ? said : resolve(folder, said);
+  } catch {
+    return undefined;
+  }
 }
 
 function realFolder(folder: string): string {
   try {
     return realpathSync(folder);
   } catch {
-    return folder;
+    const parent = dirname(folder);
+    if (parent === folder) return folder;
+    const resolved = realFolder(parent);
+    return resolved === parent ? folder : join(resolved, basename(folder));
+  }
+}
+
+/** The profile this launch can write. The seat's drop folder, `messages/<seat>` and seat-state
+ *  folder are created first, at 0700, and so are a missing `objects/`, `refs/` or `logs/`. A path
+ *  that is still not there is left out of the list. Every surviving grant must be a directory;
+ *  any other type refuses the launch before the profile is written. */
+export function settleGrokSandbox(sandbox: GrokSandbox): { ok: true; sandbox: GrokSandbox } | { ok: false; why: string } {
+  const readWrite: string[] = [];
+  for (const path of sandbox.readWrite) {
+    if (lstatOrNull(path) === null && sandbox.prepare.includes(path)) {
+      const made = prepareGrant(path);
+      if (!made.ok) return made;
+    }
+    const held = lstatOrNull(path);
+    if (held === null) continue;
+    if (held.isSymbolicLink()) {
+      return { ok: false, why: grantRefusal(path, 'a symbolic link', 'a directory') };
+    }
+    if (!held.isDirectory()) return { ok: false, why: grantRefusal(path, held.isFile() ? 'a file' : 'not a directory', 'a directory') };
+    readWrite.push(path);
+  }
+  return { ok: true, sandbox: { ...sandbox, readWrite } };
+}
+
+function prepareGrant(path: string): { ok: true } | { ok: false; why: string } {
+  try {
+    mkdirSync(path, { recursive: true, mode: 0o700 });
+    chmodSync(path, 0o700);
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, why: `its sandbox path ${path} could not be created: ${message}; nothing was launched. Repair that path and launch the seat again` };
+  }
+}
+
+function grantRefusal(path: string, found: string, needed: string): string {
+  return `its sandbox grant ${path} is ${found}, and the launch needs ${needed}; nothing was launched. Repair that path and launch the seat again`;
+}
+
+function lstatOrNull(path: string): Stats | null {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
   }
 }
 
@@ -80,15 +243,17 @@ function realFolder(folder: string): string {
  *  is replaced whole through a private temporary file in the same folder, so a failed write leaves
  *  the original as it was; the result is 0600 even when the old file was not. A file that already
  *  holds the profile as this launch would write it is not rewritten, and a symbolic link is not
- *  written through at all: the caller launches without the profile rather than failing the seat. */
+ *  written through at all. A write that fails leaves the file as it was; the caller refuses the
+ *  seat rather than launching it without the profile. */
 export function writeGrokSandbox(sandbox: GrokSandbox): { ok: true } | { ok: false; why: string } {
   try {
     const text = existsSync(sandbox.file) ? readFileSync(sandbox.file, 'utf8') : '';
-    const next = mergeProfile(text, sandbox.profile, [
+    const merged = mergeProfile(text, sandbox.profile, [
       { key: 'extends', value: tomlString('workspace'), parsed: 'workspace' },
       { key: 'read_write', value: arrayValue(sandbox.readWrite), parsed: [...sandbox.readWrite] },
     ]);
-    if (next !== null) writePrivateAtomic(sandbox.file, next, sandbox.guard);
+    const next = withoutRetired(merged ?? text, sandbox.retire, sandbox.profile);
+    if (next !== text) writePrivateAtomic(sandbox.file, next, sandbox.guard);
     return { ok: true };
   } catch (error) {
     return { ok: false, why: error instanceof Error ? error.message : String(error) };
@@ -99,11 +264,8 @@ export function writeGrokSandbox(sandbox: GrokSandbox): { ok: true } | { ok: fal
  *  prompt is one word: the words inside it are text, not options. */
 const SHELL_WORD = /(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g;
 
-/** The launch line without the `--sandbox <profile>` this run appended: what a launch runs when
- *  its sandbox file could not be written, instead of a line Grok would refuse for a profile it
- *  cannot find. The option is removed as the argv pair it is, never as a substring: the same words
- *  inside a quoted prompt are one argument, and the CLI is asked for exactly what it was asked
- *  before. */
+/** The launch line without the `--sandbox <profile>` pair. The option is removed as the argv
+ *  pair it is, never as a substring: the same words inside a quoted prompt are one argument. */
 export function withoutGrokSandbox(command: string, profile: string): string {
   const words = [...command.matchAll(SHELL_WORD)];
   for (let at = 0; at < words.length; at++) {
@@ -134,7 +296,7 @@ type Field = { key: string; value: string; parsed: unknown };
 
 function mergeProfile(text: string, profile: string, fields: readonly Field[]): string | null {
   // The table is decided by parsing, never by one spelling of its header. A file that does not
-  // parse is left exactly as it is and the launch goes on without the profile: rewriting a broken
+  // parse is left exactly as it is and the seat is refused: rewriting a broken
   // file is not this launch's repair, and appending to it could not be checked.
   const parsed = parseSandbox(text);
   const exists = Object.prototype.hasOwnProperty.call(profileTables(parsed), profile);
@@ -185,6 +347,30 @@ function mergeProfile(text: string, profile: string, fields: readonly Field[]): 
   return next;
 }
 
+/** The text with the retired profile's table removed, when that table is a header this version
+ *  can see outside a string. A table that is still there afterwards is left unread: the write
+ *  fails and the file stays as it was. */
+function withoutRetired(text: string, retire: string | undefined, profile: string): string {
+  if (retire === undefined || retire === profile || retire === '') return text;
+  const lines = text.split('\n');
+  const outside = lineScopes(lines);
+  const at = lines.findIndex((line, index) => outside[index] === true && isProfileHeader(line, retire));
+  const dropped = at < 0
+    ? text
+    : [...lines.slice(0, at), ...lines.slice(tableEnd(lines, outside, at))].join('\n');
+  const parsed = parseSandbox(dropped, 'removing the old sandbox profile would leave the file unreadable');
+  if (Object.prototype.hasOwnProperty.call(profileTables(parsed), retire)) {
+    throw new Error(`the sandbox file still holds profiles.${retire}; it was left as it is`);
+  }
+  return dropped;
+}
+
+function tableEnd(lines: readonly string[], outside: readonly boolean[], at: number): number {
+  let end = at + 1;
+  while (end < lines.length && !(outside[end] === true && headerPath(lines[end] ?? '') !== null)) end++;
+  return end;
+}
+
 function isProfileHeader(line: string, profile: string): boolean {
   const path = headerPath(line);
   return path !== null && path.length === 2 && path[0] === 'profiles' && path[1] === profile;
@@ -199,7 +385,7 @@ function sameValue(actual: unknown, wanted: unknown): boolean {
 }
 
 /** A sandbox file parsed as a TOML document. A file that does not parse is not written: the
- *  error tells the caller why, and the launch continues without the profile. */
+ *  error tells the caller why, and the seat is refused. */
 function parseSandbox(text: string, prefix = 'the sandbox file is not valid TOML'): Record<string, unknown> {
   try {
     return parseToml(text);

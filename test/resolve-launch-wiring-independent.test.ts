@@ -1,8 +1,9 @@
 // Independent scenes for the opt-in resolver. With no flag, each seat's pane command is the
 // argv this launch builds today, byte for byte. With --resolve-launch, claude, codex and agy
 // start with the resolver argv plus that profile's own words, and the line that was built is
-// the line the record keeps. A Grok seat and a managed Codex seat are refused by name, and
-// nothing starts. A blank caller session and a placeholder with no context refuse the launch.
+// the line the record keeps. A Grok seat that starts at the shared project root, and a managed
+// Codex seat, are refused by name, and nothing starts. A blank caller session and a placeholder
+// with no context refuse the launch.
 // Synthetic home, team, and host only.
 import { afterEach, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -273,7 +274,8 @@ test('flag on refuses a Grok seat by name and starts nothing', async () => {
   const said = io.out + io.err;
   expect(code, said).not.toBe(0);
   expect(said).toContain(`${seat.name}:`);
-  expect(said).toContain('no sandbox profile on this path');
+  // This seat is the only one, so it is the lead and starts at the shared project root.
+  expect(said).toContain('its start folder is the shared project root, which would grant the whole checkout; give the seat its own worktree or clone');
   expect(made.runs.some((run) => run.command.includes(seat.binary) || run.command.includes(seat.launch))).toBe(false);
 });
 

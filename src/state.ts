@@ -503,6 +503,15 @@ export function emptySession(): SessionState {
   return { seats: {}, worktrees: {} };
 }
 
+/** The worktree a seat was given: the record a launch wrote under the seat's name, else the one
+ *  whose `seat` names it. A task keyed by another word is still the seat's when it says so. */
+export function worktreeOf(state: Pick<SessionState, 'worktrees'> | undefined, seat: string): WorktreeState | undefined {
+  if (state === undefined) return undefined;
+  const named = state.worktrees[seat];
+  if (named !== undefined) return named;
+  return Object.values(state.worktrees).find((worktree) => worktree.seat === seat);
+}
+
 /**
  * The state's sessions map, built without a prototype: `sessions[name]` then finds the team's own
  * record or nothing at all, never an object every object inherits. Session names are keys here,

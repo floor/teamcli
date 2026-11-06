@@ -117,7 +117,7 @@ import { nativePushBindingFor } from '../send/push.ts';
 import { defaultSocketsDirs, refreshAgentAddressFrom } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
-import { emptySession, liveHold, mintSeatId, pidAlive, readState, seatOfFile, updateState, type RetainedSeat, type SeatState, type WaitingRecord } from '../state.ts';
+import { emptySession, liveHold, mintSeatId, pidAlive, readState, seatOfFile, updateState, worktreeOf, type RetainedSeat, type SeatState, type WaitingRecord } from '../state.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
@@ -2595,7 +2595,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
           : { launchProblem: policyProblem };
     if (!placed) {
       const budget = budgetOf(seat);
-      seats.push({ ...planned, ...launchProblem, ...(budget.kind === 'clear' ? {} : { budget }) });
+      const tree = worktreeOf(recorded, seat.name);
+      seats.push({
+        ...planned,
+        ...launchProblem,
+        ...(budget.kind === 'clear' ? {} : { budget }),
+        ...(tree === undefined ? {} : { worktree: tree.path }),
+      });
       continue;
     }
     const start = seatStart({ ...team, session }, seat, root, sources.home);
@@ -2607,12 +2613,14 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       continue;
     }
     const budget = budgetOf(seat);
+    const tree = worktreeOf(recorded, seat.name);
     seats.push({
       ...planned,
       cwd: start.cwd,
       ...(start.lobby ? { lobby: true } : {}),
       ...launchProblem,
       ...(budget.kind === 'clear' ? {} : { budget }),
+      ...(tree === undefined ? {} : { worktree: tree.path }),
     });
   }
   // Records the file no longer declares: a removal that could not drop its state, or a file

@@ -1,6 +1,6 @@
 // The seat's own state signal, written by its CLI: a per-launch settings file installs two
 // command hooks — turn start and turn end — that keep one small file per seat under the
-// project state folder (`.agents/seat-state/<session>/<seat>.json`). The reader is
+// project state folder (`.agents/seat-state/<session>/<seat>/state.json`). The reader is
 // `src/labels/state.ts` through `src/commands/seats.ts`, as the `cli-hook` source. Both files
 // are keyed by session as well as seat: two sessions may each hold a seat of the same name, and
 // neither session's file may answer for the other's seat.
@@ -93,8 +93,18 @@ export function cliHookSettingsPath(dir: string, session: string, seat: string):
   return join(dir, 'hooks', folder, `${seat}.json`);
 }
 
-/** The state file the hooks write for one seat in one session. */
+/** The state file the hooks write for one seat in one session. It lives in that seat's own
+ *  folder, so the hook's temp file and the rename stay inside the folder the sandbox grants.
+ *  The session folder is not granted: it holds every seat's state. */
 export function cliHookStatePath(dir: string, session: string, seat: string): string | null {
+  const folder = sessionFolderName(session);
+  if (folder === null || !seatFileName(seat)) return null;
+  return join(dir, 'seat-state', folder, seat, 'state.json');
+}
+
+/** The state file this version's predecessor wrote in the session folder, one file per seat.
+ *  A read moves it into the seat's own folder. */
+function flatSessionStatePath(dir: string, session: string, seat: string): string | null {
   const folder = sessionFolderName(session);
   if (folder === null || !seatFileName(seat)) return null;
   return join(dir, 'seat-state', folder, `${seat}.json`);
@@ -153,7 +163,7 @@ export function cliWatcher(cli: string, launch: string, hookInstalled = true): C
  *  exclusively in the same folder (the rename never crosses a filesystem and cannot land on a
  *  planted link); the mode comes from the hook's own umask, and the command reads nothing from
  *  its stdin. */
-function hookCommand(statePath: string, state: 'working' | 'idle'): string {
+export function hookCommand(statePath: string, state: 'working' | 'idle'): string {
   return `umask 077; f=$(mktemp ${shellQuote(`${statePath}.new.XXXXXX`)}) && printf '{"state":"${state}","since":"%s"}\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$f" && mv -f "$f" ${shellQuote(statePath)}`;
 }
 
@@ -653,7 +663,7 @@ export function installCliHooks(
   const landed: Record<string, string> = {};
   for (const [seat, settingsPath] of Object.entries(planned)) {
     const statePath = cliHookStatePath(dir, session, seat);
-    if (statePath === null) continue;
+    if (statePath === null || !ensureFolder(dirname(statePath))) continue;
     const epoch = claimEpochAt(dir, session, seat);
     const drops = { seat, session, ...(epoch === undefined ? {} : { epoch }) };
     const command = guarded ? commandGuardHookCommand(guard, session, seat) ?? undefined : undefined;
@@ -763,7 +773,7 @@ export function refreshCliHooks(
  *  leaves running keeps its reading, and the next turn's own hook writes the file again. */
 export function resetCliHookState(dir: string, session: string, seats: readonly string[]): void {
   for (const seat of seats) {
-    for (const path of [cliHookStatePath(dir, session, seat), legacyStatePath(dir, seat)]) {
+    for (const path of [cliHookStatePath(dir, session, seat), flatSessionStatePath(dir, session, seat), legacyStatePath(dir, seat)]) {
       if (path === null) continue;
       try {
         unlinkSync(path);
@@ -825,19 +835,37 @@ function claimLegacyState(older: string, path: string): void {
   }
 }
 
-/** One seat's state reading, in one session: the seat's own file under the session's folder, or
- *  — a seat launched before the session keying — the file that version wrote. The older file is
- *  claimed by the first session that reads it: moved into that session's folder, so one shared
- *  word can answer once and never for two sessions. A file of the session's own that does not
- *  read is final; the older one is never consulted behind it. */
+/** One seat's state reading, in one session. A seat launched before this layout keeps writing
+ *  `seat-state/<session>/<seat>.json` until it restarts, so both that file and
+ *  `seat-state/<session>/<seat>/state.json` are read and the newer one wins. Nothing is moved
+ *  or deleted: moving the flat file would leave the restarted hook's folder file looking final
+ *  while the still-running hook wrote a new flat file. The flat path is dropped in the next
+ *  minor, once every seat has restarted on the new hook. A file kept before the session keying
+ *  is still claimed into the seat's folder when neither of these two is present. A file that is
+ *  present and does not read is final; the older one is never consulted behind it. */
 export function readCliHook(dir: string, session: string, seat: string): CliHookReading | null {
   const path = cliHookStatePath(dir, session, seat);
   if (path === null) return null;
-  const own = readHookFile(path);
-  if (own !== null || lstatOrNull(path) !== null) return own;
+  const flat = flatSessionStatePath(dir, session, seat);
+  const own = dated(path);
+  const previous = dated(flat);
+  if (own !== null && previous !== null) return own.mtimeMs >= previous.mtimeMs ? own.reading : previous.reading;
+  if (own !== null) return own.reading;
+  if (previous !== null) return previous.reading;
+  if ((lstatOrNull(path) ?? (flat === null ? null : lstatOrNull(flat))) !== null) return null;
   const older = legacyStatePath(dir, seat);
   if (older === null) return null;
   const inherited = readHookFile(older);
   if (inherited !== null) claimLegacyState(older, path);
   return inherited;
+}
+
+/** A state file that reads, with the mtime of the lstat that found it. A missing path or a file
+ *  this version does not trust is null, so the other path can still answer. */
+function dated(path: string | null): { reading: CliHookReading; mtimeMs: number } | null {
+  if (path === null) return null;
+  const held = lstatOrNull(path);
+  if (held === null || !held.isFile()) return null;
+  const reading = readHookFile(path);
+  return reading === null ? null : { reading, mtimeMs: held.mtimeMs };
 }

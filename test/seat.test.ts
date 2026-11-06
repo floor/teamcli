@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { runSeat, USAGE } from '../src/commands/seat.ts';
 import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
@@ -128,7 +128,7 @@ function writeConversation(): void {
 function writeTurn(state: 'working' | 'idle', since: string): void {
   const path = cliHookStatePath(join(root, '.agents'), 'acme', 'lead');
   if (path === null) throw new Error('the fixture has no hook path');
-  mkdirSync(join(root, '.agents', 'seat-state', 'acme'), { recursive: true });
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify({ state, since })}\n`);
 }
 

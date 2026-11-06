@@ -1,7 +1,9 @@
 // The launch argv is the declarative resolver's only when the caller asks. With the flag off,
 // the pane runs the launch line it runs today. With the flag on, the resolver argv is the base
 // line and the profile still places its launch words on it. A refused resolution is the
-// resolver's own message, and that seat is not started.
+// resolver's own message, and that seat is not started. A Grok seat that is the lead starts at
+// the shared project root, and that launch is refused in those words; beside a lead it starts
+// in its own folder under the project, inside the trust grant.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -83,7 +85,7 @@ function launcherText(name: string, binary: string, word: string): string {
   ].join('\n');
 }
 
-function teamText(root: string, seats: readonly SeatFixture[]): string {
+function teamText(root: string, seats: readonly SeatFixture[], start?: string): string {
   const first = seats[0];
   if (first === undefined) throw new Error('a scene names no seat');
   const lead = seats.find((seat) => seat.role === 'coordinator')?.name ?? first.name;
@@ -104,12 +106,12 @@ project: acme
 session: ${SESSION}
 coordinator: ${lead}
 operator: ${operator}
-workspace:
+${start === undefined ? '' : `lobby: ${start}\n`}workspace:
   mode: shared
   base: main
 trust:
-  - ~/.config/team/lobby
-  - ${root}
+  - ${lobbyDir(join(root, '..', 'home'))}
+  - ${root}${start === undefined ? '' : `\n  - ${start}`}
 watch:
   interval: 120s
   checks:
@@ -212,14 +214,18 @@ function writeLaunchers(root: string, seats: readonly SeatFixture[], word = '--f
   }
 }
 
-function prepare(seats: readonly SeatFixture[], word?: string, covered = false): { root: string; home: string; made: ReturnType<typeof world> } {
+function prepare(seats: readonly SeatFixture[], word?: string, covered = false, ownStart = false): { root: string; home: string; made: ReturnType<typeof world> } {
   scratch = fixtureBase('resolve-launch-');
   const home = join(scratch, 'home');
   const root = join(scratch, 'repo');
   mkdirSync(lobbyDir(home), { recursive: true, mode: 0o700 });
   mkdirSync(root, { recursive: true });
+  // The seat's own folder under the project. It is inside the root grant and is not the
+  // shared project root, so a Grok seat that starts here is not refused.
+  const start = ownStart ? join(root, 'worktrees', 'grok-hand') : undefined;
+  if (start !== undefined) mkdirSync(start, { recursive: true, mode: 0o700 });
   writeLaunchers(root, seats, word);
-  approve(root, home, teamText(root, seats), covered);
+  approve(root, home, teamText(root, seats, start), covered);
   return { root, home, made: world() };
 }
 
@@ -262,7 +268,11 @@ function release(): void {
 describe('resolve-launch stays off unless named', () => {
   test('flag off runs today\'s argv for claude, codex, grok and agy', async () => {
     for (const seat of CLIS) {
-      const { root, home, made } = prepare([alone(seat)]);
+      // A Grok lead starts at the shared project root, which the sandbox refuses. Beside a
+      // lead, this seat starts in its own folder under the project, inside the trust grant.
+      const own = seat.cli === 'grok';
+      const seats = own ? [firstSeat(), seat] : [alone(seat)];
+      const { root, home, made } = prepare(seats, undefined, false, own);
       const io = testIo(root, OWNER);
       const code = await runUp([], io, sources(home, made));
       const command = made.runs.map((run) => run.command).find((line) => line.includes(`${seat.launch} `) || line.endsWith(seat.launch) || line.includes(` ${seat.launch} `));
@@ -284,8 +294,9 @@ describe('resolve-launch stays off unless named', () => {
       const code = await runUp(['--resolve-launch'], io, sources(home, made));
       const said = io.out + io.err;
       if (seat.cli === 'grok') {
+        // This seat is the lead, so its start folder is the shared project root.
         expect(code, `${seat.name}\n${said}`).not.toBe(0);
-        expect(said).toContain('no sandbox profile on this path');
+        expect(said).toContain('its start folder is the shared project root, which would grant the whole checkout; give the seat its own worktree or clone');
         expect(made.runs.some((run) => run.command.includes(seat.binary))).toBe(false);
         release();
         continue;

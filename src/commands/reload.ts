@@ -67,7 +67,7 @@ import { gateVerdict } from '../permissions/who.ts';
 import { parseVersion, profileFor, versionVerdict } from '../profiles/profile.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
-import { emptySession, readState, updateState, type SeatState } from '../state.ts';
+import { emptySession, readState, updateState, worktreeOf, type SeatState } from '../state.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { modelDiffers, seatModel, type Running } from '../status/statusline.ts';
 import { ensureSeatLine, registerEnd, registerLaunch } from '../registry/sync.ts';
@@ -646,6 +646,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         : `team reload: ${seat.name}: its launch record held no model; its screen names none, so the file's ${compared.model} ${compared.version}${effort} stand; reloading\n`);
     }
 
+    const tree = worktreeOf(readState(dir).sessions[session], seat.name);
     const planned = {
       name: seat.name,
       cli: seat.cli,
@@ -654,6 +655,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       ...(seat.human ? { human: true as const } : {}),
       launch: seat.launch,
       cwd: seat.cwd,
+      ...(tree === undefined ? {} : { worktree: tree.path }),
       label: workspaceLabel(seat),
       displayAgent: displayAgent(seat),
       model: seat.model,
