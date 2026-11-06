@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
+import { withLauncherCover } from '../src/launch/launcher-cover.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
@@ -178,15 +179,16 @@ function doctor(home: string): DoctorSources {
   };
 }
 
-function approve(root: string, home: string, text: string): void {
+function approve(root: string, home: string, text: string, covered: boolean): void {
   const file = join(root, '.agents', 'team.yaml');
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, text, { mode: 0o600 });
   const loaded = loadTeamFile(root, { file, home });
   if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+  const approval = approvalOf(loaded.team, loaded.root, NOW);
   writeApproval(
     storePath(loaded.team.project, loaded.root, home),
-    { approval: approvalOf(loaded.team, loaded.root, NOW), file: text },
+    { approval: covered ? withLauncherCover(approval, root) : approval, file: text },
     loaded.team.seats,
     home,
     NOW,
@@ -201,14 +203,14 @@ function writeLaunchers(root: string, seats: readonly SeatFixture[], word = '--f
   }
 }
 
-function prepare(seats: readonly SeatFixture[], word?: string): { root: string; home: string; made: ReturnType<typeof world> } {
+function prepare(seats: readonly SeatFixture[], word?: string, covered = false): { root: string; home: string; made: ReturnType<typeof world> } {
   scratch = fixtureBase('resolve-launch-');
   const home = join(scratch, 'home');
   const root = join(scratch, 'repo');
   mkdirSync(lobbyDir(home), { recursive: true, mode: 0o700 });
   mkdirSync(root, { recursive: true });
   writeLaunchers(root, seats, word);
-  approve(root, home, teamText(root, seats));
+  approve(root, home, teamText(root, seats), covered);
   return { root, home, made: world() };
 }
 
@@ -268,7 +270,7 @@ describe('resolve-launch stays off unless named', () => {
   test('flag on refuses a profile that still has launch words to place', async () => {
     for (const seat of CLIS) {
       const one = alone(seat);
-      const { root, home, made } = prepare([one]);
+      const { root, home, made } = prepare([one], undefined, true);
       const io = testIo(root, OWNER);
       const code = await runUp(['--resolve-launch'], io, sources(home, made));
       expect(code, `${seat.name}\n${io.out}${io.err}`).not.toBe(0);
@@ -280,7 +282,7 @@ describe('resolve-launch stays off unless named', () => {
 
   test('a missing placeholder refuses the launch and starts nothing', async () => {
     const seat = firstSeat();
-    const { root, home, made } = prepare([seat], '{inbox}');
+    const { root, home, made } = prepare([seat], '{inbox}', true);
     const io = testIo(root, OWNER);
     const code = await runUp(['--resolve-launch'], io, sources(home, made));
     expect(code, io.out + io.err).not.toBe(0);
@@ -290,7 +292,7 @@ describe('resolve-launch stays off unless named', () => {
 
   test('a blank caller session refuses the launch and starts nothing', async () => {
     const seat = firstSeat();
-    const { root, home, made } = prepare([seat]);
+    const { root, home, made } = prepare([seat], undefined, true);
     updateState(join(root, '.agents'), (state) => {
       const held = state.sessions[SESSION] ?? emptySession();
       held.seats[seat.name] = { stage: 'launched', agent_session: '' };
@@ -337,7 +339,7 @@ describe('team restart uses the same flag', () => {
     discardFixtures([scratch], { roots: [dirname(scratch)] });
     scratch = '';
 
-    const on = prepare([seat]);
+    const on = prepare([seat], undefined, true);
     const onIo = testIo(on.root, OWNER);
     const onCode = await runRestart([seat.name, '--resolve-launch'], onIo, restartSources(on.home, on.made));
     expect(onCode, onIo.out + onIo.err).not.toBe(0);
