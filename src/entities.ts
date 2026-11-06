@@ -17,8 +17,8 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { editedRecordText, getAt, withValue } from './config/team-record.ts';
-import { parseYaml, toValue, type YamlEntry, type YamlNode, type YamlValue } from './yaml.ts';
 import { leadWordProblem } from './lead.ts';
+import { parseYaml, toValue, type YamlEntry, type YamlNode, type YamlValue } from './yaml.ts';
 import { livenessMap } from './settings/declared.ts';
 import type { StateThresholds } from './settings/inherit.ts';
 

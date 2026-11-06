@@ -7,7 +7,7 @@ export type Problem = { line: number; message: string; unreadable?: true };
 import type { TaskPolicy } from '../broker/policy.ts';
 import type { Delegates } from '../delegate-types.ts';
 import type { CrossSessionInbound } from '../launch/declaration.ts';
-import type { LivenessThresholds, MessagingStore, OrderWord, SenderNameMode } from '../settings/inherit.ts';
+import type { DeliveryLeg, LivenessThresholds, MessagingStore, OrderWord, SenderNameMode } from '../settings/inherit.ts';
 import type { YamlValue } from '../yaml.ts';
 import type { ReleaseDecl } from './sections/releases.ts';
 

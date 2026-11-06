@@ -10,22 +10,18 @@
 // never sees half a file and two writers never lose each other's update.
 
 import {
-  closeSync,
   existsSync,
   mkdirSync,
-  openSync,
   readFileSync,
   renameSync,
   statSync,
-  unlinkSync,
   writeFileSync,
-  writeSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { editedRecordText, withValue } from '../config/team-record.ts';
 import type { RulesEditPlan } from '../entities.ts';
-import { getTeam, membershipsOf, readTeams, TeamsError } from './teams.ts';
 import { withRegistryLock } from './locks.ts';
+import { getTeam, membershipsOf, readTeams, teamIdOf, TeamsError } from './teams.ts';
 import {
   DELIVERY_LEGS,
   isLivenessSeconds,
@@ -40,7 +36,6 @@ import { writeAtomic } from '../state.ts';
 import { leadWordProblem } from '../lead.ts';
 import { currentRunMemo } from '../run-memo.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
-import { teamIdOf } from './teams.ts';
 
 export type ProjectProvenance = { registered_by: string; registered_at: string; updated_at: string };
 
@@ -373,14 +368,19 @@ function definedOnly<T extends object>(fields: T): Partial<T> {
 // (`lockedEntities` in `src/entities.ts`) is acquired before `projects.yaml.lock` (`locked`).
 
 function locked<T>(home: string, work: () => T): T {
-  return withRegistryLock(home, 'projects', () => {
-    const memo = currentRunMemo();
-    if (memo !== null) {
-      memo.projects.delete(home);
-      memo.projectsRaw.delete(home);
-    }
-    return work();
-  }, message => new ProjectsError(message));
+  return withRegistryLock(
+    home,
+    'projects',
+    () => {
+      const memo = currentRunMemo();
+      if (memo !== null) {
+        memo.projects.delete(home);
+        memo.projectsRaw.delete(home);
+      }
+      return work();
+    },
+    message => new ProjectsError(message),
+  );
 }
 
 function write(home: string, projects: Record<string, ProjectRecord>): void {

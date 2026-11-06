@@ -14,7 +14,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { defaultLeadOf, readLeadChain } from '../src/lead-chain.ts';
 import { leadWordProblem, resolveLead } from '../src/lead.ts';
 import { projectsFile } from '../src/registry/projects.ts';
-import { teamIdOf } from '../src/registry/teams.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { machineSettingsPath } from '../src/settings/declared.ts';
 
 const NO_LEAD = 'the file has no seat that leads: put `leads: true` on one seat';
@@ -79,6 +79,12 @@ function entityLead(home: string, word: string): void {
 
 /** The project's word: its registry record names the team and carries `lead_seat`. */
 function projectLead(world: World, word: string): void {
+  upsertTeam(world.home, teamIdOf(world.root), {
+    project: 'acme',
+    session: 'acme',
+    root: world.root,
+    projectId: 'acme',
+  });
   const prov = '{ registered_by: owner, registered_at: "2026-11-05T00:00:00.000Z", updated_at: "2026-11-05T00:00:00.000Z" }';
   const text = [
     'projects:',

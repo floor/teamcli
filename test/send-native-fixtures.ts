@@ -36,8 +36,6 @@ export type ExtraSeat = {
   human?: boolean;
   /** The seat's webhook adapter, when the scene configures one: two absolute paths. */
   webhook?: { urlFile: string; secretFile: string };
-  /** The seat's pane is a person's: the file marks it `human: true`. */
-  human?: boolean;
 };
 
 /** Launch-line overrides for the three standard seats, for scenes that spy on the wrapper a

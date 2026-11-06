@@ -354,25 +354,23 @@ a start that names `service-manager` without the manager's record to back it is 
 `status --json` prints `{"schema": {"name": "team.daemon-status", "version": 1}, "format": 1,
 "daemon": …}` with the health reading's fields: `state`, `running`, `pid`, `uid`, `since`,
 `startedBy`, `version`, `gitHead`, `heartbeatAt`, `heartbeatSeconds`, `features`, `stuck`, `probe`,
-`why` and `socket`. `gitHead` is the commit a packaged install was built from; it is `null` in a
-source checkout, and an install that changes the version or the packaged commit is a new daemon
-identity. `heartbeatSeconds` is the whole seconds of the `daemon.heartbeat` word the daemon runs;
-`null` when no word is known, as for a daemon on an injected test beat or an older record.
-It also carries `reminders`: one reading per configured reminder, in the configured
-order — `name`, `nextAt` (the next instant, ISO 8601, or null), `lastDue` (the most recent
-scheduled wall-clock key), `lastResult` (the stored key's outcome: `kind` is `first-run`,
+`why` and `socket`. It also carries `reminders`: one reading per configured reminder, in the
+configured order — `name`, `nextAt` (the next instant, ISO 8601, or null), `lastDue` (the most
+recent scheduled wall-clock key), `lastResult` (the stored key's outcome: `kind` is `first-run`,
 `missed`, `sent` or `pending`, with `due`, `sent`, `refused`, `lateMs` and `at`) and `missed` —
 and `remindersError` names a refused configuration entry and an unreadable state record when
 there is one.
-The one-line status does not carry the reminder reading.
-
+The one-line status does not carry the reminder reading. `gitHead` is the commit a packaged
+install was built from; it is `null` in a source checkout, and an install that changes the
+version or the packaged commit is a new daemon identity. `heartbeatSeconds` is the whole seconds
+of the `daemon.heartbeat` word the daemon runs; `null` when no word is known, as for a daemon on
+an injected test beat or an older record.
 An install that the new daemon answers also moves the known kit folders still standing in
 the machine lobby into the runtime home under the machine folder (`runtime/kits/`), one
 line per folder moved, held (a unit still loaded names it), refused, or left for a later
 lane. A moved guard folder prints the exact `guard_dir` line to re-approve and the
 migration is reported moved, not complete until `team check` shows the new path. A dry
 run prints the same lines as would-move and moves nothing.
-
 `install --json` and `uninstall --json` print `team.daemon-install` with `command`, `dry_run`,
 `installed`, `unit_path`, `program`, `roots` and `runtime_migration` (`install`), or `unit_path` and `removed`
 (`uninstall`). A dry run's `install` document also carries `steps`: the neutral sentences the

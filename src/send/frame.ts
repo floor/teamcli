@@ -5,14 +5,12 @@
 // first, and the frame is what its CLI shows. Under `messaging.store: none` there is no stored
 // copy, so the frame carries the signed record's bytes itself (`record`) — signed, never stored —
 // and a reader verifies those bytes with `carriedRecordOf` exactly as it would have verified the
-// file in the drop folder.
-// and the frame is what its CLI shows. The reader line names the message id — the same id the
-// frame carries in `msg_id` — because an answering seat runs `team reply <id>` and a seat that
-// needs no answer runs `team ack <id>`, and both acts write the seat's own signed read receipt.
-// An earlier build kept the id out of the content; ADR D3 supersedes that: the line cannot tell
-// a reader what to run without it, and the id is no secret. The line is one line, the same for
-// every sender — the owner included — because both commands address the record by id, never by
-// the sender's name.
+// file in the drop folder. The reader line names the message id — the same id the frame carries
+// in `msg_id` — because an answering seat runs `team reply <id>` and a seat that needs no answer
+// runs `team ack <id>`, and both acts write the seat's own signed read receipt. An earlier build
+// kept the id out of the content; ADR D3 supersedes that: the line cannot tell a reader what to
+// run without it, and the id is no secret. The line is one line, the same for every sender — the
+// owner included — because both commands address the record by id, never by the sender's name.
 
 import { readdirSync } from 'node:fs';
 import { recordNameOk } from './record.ts';
@@ -128,7 +126,9 @@ export function socketMessageFrame(
 
 /** The one frame this channel carries: `type:"user"`, the whole body, the reader line as its own
  *  last line when the seat has one, and the id. A person-pane seat gets no reader line — a person
- *  answers in their own client — and the id stays in `msg_id` beside the line's own copy. */
+ *  answers in their own client — and the id stays in `msg_id` beside the line's own copy. Under
+ *  `messaging.store: none`, `carried` is the signed record's exact text; it rides in `record`
+ *  beside the id, so the receiver verifies the same bytes it would have read from its folder. */
 export function frameFor(body: string, msgId: string, reply: string | null, carried?: string): string {
   const content = reply === null ? body : `${body}\n\n${reply}`;
   const frame: { type: 'user'; message: { role: 'user'; content: string }; msg_id: string; record?: string } = {

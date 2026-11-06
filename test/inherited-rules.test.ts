@@ -41,7 +41,7 @@ import {
   upsertProject,
   writeProjectRulesSet,
 } from '../src/registry/projects.ts';
-import { teamIdOf } from '../src/registry/teams.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import type { Standing } from '../src/store/store.ts';
 import { testIo } from './helpers.ts';
 
@@ -746,6 +746,12 @@ describe('inherited entity-wide and project-wide rules', () => {
     }
 
     // Neither the concurrent upsertProject fields (`lead`, `teams`) nor the CLI rules write was lost:
+    upsertTeam(home, 'team-a', {
+      project: 'team-a',
+      session: 'team-a',
+      root: teamRoot,
+      projectId: 'beacon',
+    });
     const afterCli = getProject(home, 'beacon');
     expect(afterCli).not.toBeNull();
     expect(afterCli?.lead).toBe('agent-lead-01');
@@ -760,6 +766,12 @@ describe('inherited entity-wide and project-wide rules', () => {
     ]);
 
     // Subsequent `upsertProject` preserves `rules`, and `setProjectRules` preserves `upsertProject`:
+    upsertTeam(home, 'team-b', {
+      project: 'team-b',
+      session: 'team-b',
+      root: teamRoot,
+      projectId: 'beacon',
+    });
     upsertProject(home, 'beacon', {
       teams: ['team-a', 'team-b'],
       at: '2026-11-05T00:00:02Z',

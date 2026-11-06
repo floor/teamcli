@@ -50,7 +50,7 @@ import {
   writeJsonError,
 } from '../output/index.ts';
 import { namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
-import { fileStatStamp, isRead, keyPrintForCache, signedRecordOf, verifyRecord, type StatusContext } from '../send/record.ts';
+import { fileStatStamp, isRead, keyPrintForCache, signedRecordOf, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
 
 export const USAGE = `Usage: team drops [--follow] [--json]
@@ -272,7 +272,8 @@ const dropInspectCache = new Map<
     keyPrint: string;
     from: string | null;
     fromId: string | null;
-    launch: { id: string; sha256: string | undefined; incarnation: string | undefined } | null;
+    launch: { sha256: string | undefined; incarnation: string | undefined } | null;
+    payload: RecordPayload | null;
   }
 >();
 
@@ -315,7 +316,7 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
     let from: string | null = null;
     let fromId: string | null = null;
     let senderAttribution: SenderAttribution = 'none';
-    let launch: { id: string; sha256: string | undefined; incarnation: string | undefined } | null = null;
+    let launch: { sha256: string | undefined; incarnation: string | undefined } | null = null;
     const cached = stamp !== null && keyPrint !== '' ? dropInspectCache.get(path) : undefined;
     if (cached !== undefined && cached.stamp === stamp && cached.keyPrint === keyPrint) {
       from = cached.from;
@@ -328,11 +329,13 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
       try {
         const text = readFileSync(path, 'utf8');
         const record = signedRecordOf(parsedJson(text));
+        let verifiedPayload: RecordPayload | null = null;
         if (record !== null) {
           // The record names its sender in the payload. The key that verified it is the message
           // key; when the folder is read with no key at all, the payload is still what is shown —
           // a record that fails the key it was checked with leaves the sender unknown.
           if (key === undefined || verifyRecord(record, key)) {
+            verifiedPayload = record.payload;
             from = record.payload.from;
             fromId = record.payload.from_id;
             // Only a record this key verified can be attributed, and only the seat's current
@@ -342,7 +345,7 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
               ? 'none'
               : attributeSenderClaim(record.payload, { briefClaim: claim });
             if (record.payload.from === GENERAL_BRIEF_FROM && record.payload.rule === GENERAL_BRIEF_RULE) {
-              launch = { id: record.payload.id, sha256: record.payload.brief_sha256, incarnation: record.payload.incarnation };
+              launch = { sha256: record.payload.brief_sha256, incarnation: record.payload.incarnation };
             }
           }
         } else {
@@ -350,7 +353,7 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
         }
         if (stamp !== null && keyPrint !== '') {
           if (dropInspectCache.size >= DROP_INSPECT_CACHE_LIMIT) dropInspectCache.clear();
-          dropInspectCache.set(path, { stamp, keyPrint, from, fromId, launch });
+          dropInspectCache.set(path, { stamp, keyPrint, from, fromId, launch, payload: verifiedPayload });
         }
       } catch {
         // The file is still a drop; its sender is unknown.

@@ -368,22 +368,25 @@ export function setTeamProjectMembership(
   inProject: string | null,
   opts: { entity?: string | null; by?: string; at?: string } = {},
 ): { projectId: string | null; projects: string[] } {
-  const current = getTeam(home, teamId);
-  const entity = opts.entity !== undefined ? opts.entity : (current?.entity ?? null);
-  const by = opts.by ?? 'rename';
-  const at = opts.at ?? new Date().toISOString();
-  if (inProject === null) {
-    const served = (current?.projects ?? []).filter((id) => id !== current?.projectId);
-    upsertTeam(home, teamId, { projectId: null, projects: served, by, at });
-    projectLeave(home, teamId, null);
-    return { projectId: null, projects: served };
-  }
-  const projectId = projects.projectIdOf(inProject);
-  const otherProjects = (current?.projects ?? []).filter((id) => id !== current?.projectId && id !== projectId);
-  const nextProjects = [projectId, ...otherProjects];
-  upsertTeam(home, teamId, { projectId, projects: nextProjects, by, at });
-  projectJoin(home, teamId, inProject, entity, by);
-  return { projectId, projects: nextProjects };
+  return withTeamProjectsLocks(home, () => {
+    const current = getTeam(home, teamId);
+    const entity = opts.entity !== undefined ? opts.entity : (current?.entity ?? null);
+    const by = opts.by ?? 'rename';
+    const at = opts.at ?? new Date().toISOString();
+    if (inProject === null) {
+      const served = (current?.projects ?? []).filter((id) => id !== current?.projectId);
+      if (current) projectLeave(home, current, null);
+      upsertTeam(home, teamId, { projectId: null, projects: served, by, at });
+      return { projectId: null, projects: served };
+    }
+    const projectId = projects.projectIdOf(inProject);
+    const otherProjects = (current?.projects ?? []).filter((id) => id !== current?.projectId && id !== projectId);
+    const nextProjects = [projectId, ...otherProjects];
+    projectJoin(home, inProject, entity, by);
+    if (current && current.projectId !== projectId) projectLeave(home, current, projectId);
+    upsertTeam(home, teamId, { projectId, projects: nextProjects, by, at });
+    return { projectId, projects: nextProjects };
+  });
 }
 
 /**
