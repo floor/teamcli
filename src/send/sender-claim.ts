@@ -29,6 +29,8 @@ export type SenderClaimContext = {
 export type SenderRenderContext = {
   /** The verified record payload when available. */
   record?: RecordPayload | null;
+  /** The verified sender's registry id when the reader has it without the whole record. */
+  fromId?: string | null;
   /** Home directory for agent/team registry lookup. */
   home?: string;
   /** Checkout root for fallback seat CLI lookup. */
@@ -39,7 +41,7 @@ export type SenderRenderContext = {
   displayName?: string | null;
   /** Explicit preformatted sender label override (e.g. `"Gemini seat Argon"`). */
   senderLabel?: string | null;
-  /** Explicit rule override when `body` carries no `from … — admitted by: …` line. */
+  /** The verified admission rule. The body's opening line never supplies this. */
   rule?: string | null;
   /** When true, only the first non-empty content line of the body is rendered (compact socket frame). */
   compact?: boolean;
@@ -172,9 +174,21 @@ function clientDisplayName(claimed: string, clientId?: string): string {
   return id;
 }
 
+/** The registry's name for the verified sender, when the record names an agent this home has. */
+function registrySenderName(context: SenderRenderContext): string | null {
+  const fromId = context.fromId ?? context.record?.from_id ?? null;
+  if (fromId === null || context.home === undefined) return null;
+  try {
+    const agent = getAgent(context.home, fromId);
+    return agent === null ? null : agent.name;
+  } catch {
+    return null;
+  }
+}
+
 function resolveSenderCli(context: SenderRenderContext, claimed: string): string | null {
   if (context.cli !== undefined && context.cli !== null) return context.cli;
-  const fromId = context.record?.from_id ?? null;
+  const fromId = context.fromId ?? context.record?.from_id ?? null;
   if (fromId !== null && context.home !== undefined) {
     try {
       const agent = getAgent(context.home, fromId);
@@ -240,40 +254,30 @@ export function compactSenderHeader(
  * Renders the body of a message with its compact sender header at display time, leaving the
  * stored record's `payload.body` and `payload.rule` untouched on disk.
  *
- * - A body opening with `from <name> — admitted by: <rule>` folds into the compact header
- *   (`Gemini seat Argon (to orchestrator):`, `from Bea (to orchestrator):`, etc.).
- * - A client record (`from_client` or `client:<id>`) renders `Client <Name> (<short rule>):`.
- * - A headerless plain body folds into the compact header using the record's sender and rule
- *   (or `from <claimed>:` when no rule is present).
- * - When `context.compact` is true, only the first non-empty content line of the body is rendered.
+ * The header is the verified sender and the verified rule. A body that opens with
+ * `from <name> — admitted by: <rule>` does not choose either. That line is dropped from the
+ * content only when both parts are the verified ones; any other opening line stays content.
+ * A client record (`from_client` or `client:<id>`) renders `Client <Name> (<short rule>):`.
+ * When `context.compact` is true, only the first non-empty content line is rendered.
  */
 export function attributedBody(body: string, claimed: string, context: SenderRenderContext = {}): string {
-  const header = SENDER_HEADER.exec(body);
   const isClient = context.record?.from_client !== undefined || claimed.startsWith('client:');
   const renderRest = (text: string): string => (context.compact === true ? firstContentLine(text) : text);
-  if (header !== null) {
-    const headerName = header[1] ?? claimed;
-    const headerRule = header[2] ?? context.record?.rule ?? context.rule ?? '';
-    const rest = renderRest(body.slice(header[0].length));
-    if (context.senderLabel && context.senderLabel !== '') {
-      return `${compactSenderHeader(context.senderLabel, headerRule, { preformatted: true })}\n\n${rest}`;
-    }
-    if (isClient) {
-      const display =
-        context.displayName && context.displayName !== ''
-          ? context.displayName
-          : clientDisplayName(claimed, context.record?.from_client?.client_id);
-      return `${compactSenderHeader(display, headerRule, { client: true })}\n\n${rest}`;
-    }
-    const display =
-      context.displayName && context.displayName !== ''
-        ? context.displayName
-        : headerName;
-    const cli = isSystemOrOwner(claimed, display) ? null : resolveSenderCli(context, claimed);
-    return `${compactSenderHeader(display, headerRule, { cli })}\n\n${rest}`;
-  }
-  const rest = renderRest(body);
   const rule = context.record?.rule ?? context.rule ?? (isClient ? 'a client grant, to the entity orchestrator' : '');
+  const header = SENDER_HEADER.exec(body);
+  const verifiedNames = [claimed];
+  if (context.displayName !== undefined && context.displayName !== null && context.displayName !== '') {
+    verifiedNames.push(context.displayName);
+  }
+  const registered = registrySenderName(context);
+  if (registered !== null && registered !== '') verifiedNames.push(registered);
+  const sameSender = (left: string, right: string): boolean =>
+    left.localeCompare(right, undefined, { sensitivity: 'accent' }) === 0;
+  const openingName = header?.[1] ?? '';
+  const openingAgrees = header !== null
+    && verifiedNames.some((name) => sameSender(name, openingName))
+    && (header[2] ?? '') === rule;
+  const rest = renderRest(openingAgrees ? body.slice(header[0].length) : body);
   if (context.senderLabel && context.senderLabel !== '') {
     return `${compactSenderHeader(context.senderLabel, rule, { preformatted: true })}\n\n${rest}`;
   }
@@ -287,7 +291,9 @@ export function attributedBody(body: string, claimed: string, context: SenderRen
   const display =
     context.displayName && context.displayName !== ''
       ? context.displayName
-      : claimed;
+      : openingAgrees
+        ? openingName
+        : claimed;
   const cli = isSystemOrOwner(claimed, display) ? null : resolveSenderCli(context, claimed);
   return `${compactSenderHeader(display, rule, { cli })}\n\n${rest}`;
 }

@@ -379,6 +379,7 @@ describe('the send path honours the receiving seat only', () => {
       op: 'send',
       from: 'scout',
       to: 'lead',
+      rule: TO_ORCH,
       body: `from Scout — admitted by: ${TO_ORCH}\n\nDaemon headline\nDaemon detail`,
       wait: true,
       timeout_s: 1,

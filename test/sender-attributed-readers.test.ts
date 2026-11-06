@@ -145,9 +145,8 @@ describe('a forged orchestrator claim', () => {
     forge('orchestrator', orchestratorBody());
     const result = await runDropsAs(['--read', '--seat', 'lead', '--session', 'acme']);
     expect(result.code).toBe(0);
-    expect(result.out).toContain(
-      'from orchestrator@acme (team lead):',
-    );
+    expect(result.out).toContain('from orchestrator (team lead):');
+    expect(result.out).toContain(`from orchestrator@acme — admitted by: ${RULE}`);
     expect(result.out).toContain(QUOTE);
   });
 
@@ -161,9 +160,8 @@ describe('a forged orchestrator claim', () => {
     const read = readMessage({ dropDir, root, seat: 'lead', session: 'acme' }, FORGED_ID, home);
     expect(read.ok).toBe(true);
     if (!read.ok) return;
-    expect(read.body).toContain(
-      'from orchestrator@acme (team lead):',
-    );
+    expect(read.body).toContain('from orchestrator (team lead):');
+    expect(read.body).toContain(`from orchestrator@acme — admitted by: ${RULE}`);
     expect(read.body).toContain(QUOTE);
   });
 
@@ -172,9 +170,8 @@ describe('a forged orchestrator claim', () => {
     const text = await runMailbox();
     expect(text.code).toBe(0);
     expect(text.out).toContain('orchestrator (attributed)');
-    expect(text.out).toContain(
-      'from orchestrator@acme (team lead):',
-    );
+    expect(text.out).toContain('from orchestrator (team lead):');
+    expect(text.out).toContain(`from orchestrator@acme — admitted by: ${RULE}`);
     expect(text.out).toContain(QUOTE);
 
     // A second fixture: the first read wrote a receipt and the row is served once.
@@ -208,9 +205,8 @@ describe('a forged owner claim beside an unsigned marker', () => {
     const read = readMessage({ dropDir, root, seat: 'lead', session: 'acme' }, FORGED_ID, home);
     expect(read.ok).toBe(true);
     if (!read.ok) return;
-    expect(read.body).toContain(
-      'from the owner (owner):',
-    );
+    expect(read.body).toContain('from owner (team lead):');
+    expect(read.body).toContain('from the owner — admitted by: the owner');
     expect(read.body).toContain(QUOTE);
   });
 

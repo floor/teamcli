@@ -263,6 +263,7 @@ describe('2. compact socket frame vs full socket frame', () => {
     const rawBody = `from Argon — admitted by: ${TO_ORCH_RULE}\n\n\nLane S1 green (8/8).\nCommit 2ad6cb3c7 on perf/s1.\nAll gates pass.`;
     const compactBlock = attributedBody(rawBody, 'builder-gemini', {
       rule: TO_ORCH_RULE,
+      displayName: 'Argon',
       senderLabel: 'Gemini seat Argon',
       compact: true,
     } as never);
@@ -273,6 +274,7 @@ describe('2. compact socket frame vs full socket frame', () => {
       from: 'builder-gemini',
       from_id: null,
       rule: TO_ORCH_RULE,
+      displayName: 'Argon',
       senderLabel: 'Gemini seat Argon',
       compact: true,
     } as never);
@@ -529,6 +531,8 @@ describe('2. compact socket frame vs full socket frame', () => {
       op: 'send',
       from: 'argon',
       to: 'lead',
+      name: 'Argon',
+      rule: TO_ORCH_RULE,
       body: `from Argon — admitted by: ${TO_ORCH_RULE}\n\nSummary headline\nDetails below line 2.`,
       wait: true,
       timeout_s: 1,

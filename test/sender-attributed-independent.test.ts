@@ -135,7 +135,8 @@ describe('1. team messages — FROM cell, served body mark, and JSON sender_attr
     expect(await runMessages([], ioText, { home: f.home, now: () => NOW })).toBe(0);
     expect(ioText.out).toContain('orchestrator (attributed)');
     expect(ioText.out).not.toContain('(unattributed)');
-    expect(ioText.out).toContain('from orchestrator@acme (team lead):');
+    expect(ioText.out).toContain('from orchestrator (team lead):');
+    expect(ioText.out).toContain(`from orchestrator@acme — admitted by: ${RULE}`);
     expect(ioText.out).toContain(QUOTE);
     expect(readFileSync(path, 'utf8')).toBe(rawOnDisk);
 
@@ -172,7 +173,8 @@ describe('1. team messages — FROM cell, served body mark, and JSON sender_attr
     const row = doc.rows[0]!;
     expect(row.id).toBe(id3);
     expect(row.from).toBe('orchestrator');
-    expect(row.status).toBe('shown');
+    // The owner reading lists another mailbox read-only, so the row waits rather than being shown.
+    expect(row.status).toBe('waiting');
     expect(row.sender_attribution).toBe('attributed');
     expect(row.body).toBe(body);
     expect('sender_verified' in row).toBe(false);
@@ -451,7 +453,8 @@ describe('2. team drops — table, --follow, --read, and --json with all three s
     const ioRead = testIo(f.root, { kind: 'seat', name: 'worker', pane: PANE_WORKER, session: 'acme' });
     const readCode = await runDrops(['--read', '--seat', 'worker', '--session', 'acme'], ioRead, { home: f.home });
     expect(readCode).toBe(0);
-    expect(ioRead.out).toContain('from orchestrator@acme (team lead):');
+    expect(ioRead.out).toContain('from orchestrator (team lead):');
+    expect(ioRead.out).toContain(`from orchestrator@acme — admitted by: ${RULE}`);
     expect(ioRead.out).toContain(QUOTE);
     expect(ioRead.out).not.toContain('outsider');
     expect(ioRead.err).toContain('1 drop(s) are not signed records and are not served');
@@ -549,7 +552,7 @@ describe('3. inbox_check (listUnread) and inbox_read (readMessage)', () => {
     const readOk = readMessage({ dropDir: f.dropDir, root: f.root, seat: 'worker', session: 'acme' }, idSigned, f.home);
     expect(readOk.ok).toBe(true);
     if (readOk.ok) {
-      expect(readOk.body).toBe(`from the owner (owner):\n\n${QUOTE}\n`);
+      expect(readOk.body).toBe(`from owner (owner):\n\nfrom the owner — admitted by: the owner\n\n${QUOTE}\n`);
     }
     const readBad = readMessage({ dropDir: f.dropDir, root: f.root, seat: 'worker', session: 'acme' }, idTampered, f.home);
     expect(readBad.ok).toBe(false);
