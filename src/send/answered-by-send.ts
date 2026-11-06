@@ -21,7 +21,7 @@ import { recordDir, samePath } from '../commands/messages.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { readHistory, type HistoryEntry } from './history.ts';
 import { publishRecordRead } from './read-receipt.ts';
-import { recordAuthOfSealed, isRead, readRecord, sealedOfRecord } from './record.ts';
+import { recordAuthOfSealed, isReadOrCleared, readRecord, sealedOfRecord } from './record.ts';
 import { readUnreadHint } from './unread-hint.ts';
 
 /** The legs whose delivery is evidence enough to answer: a frame the receiver's session took, a
@@ -44,6 +44,9 @@ export type AnsweredBySendInput = {
   home: string;
   /** The send's own signed instant. A delivery after it is not answered by it. */
   at: string;
+  /** The team's lead seat: a clearance signed by it settles in the scans here; absent, only the
+   *  owner's clearances do. */
+  lead?: string;
 };
 
 /** What the sweep did. `none` is the ordinary case: nothing from this sender was waiting. */
@@ -71,7 +74,7 @@ function firstLinesOf(project: string, root: string, home: string): Map<string, 
  * the send.
  */
 export function markAnsweredBySend(input: AnsweredBySendInput): AnsweredBySendOutcome {
-  const { seat, sender, senderId, root, session, project, home, at } = input;
+  const { seat, sender, senderId, root, session, project, home, at, lead } = input;
   const state = messageKeyState(home);
   if (state.kind !== 'key') return { kind: 'unavailable', reason: 'key' };
   const dropDir = recordDir(root, session, seat);
@@ -86,6 +89,7 @@ export function markAnsweredBySend(input: AnsweredBySendInput): AnsweredBySendOu
   // The first that holds is the newest delivered-unread message this send answers; anything that
   // does not hold is passed over, and when nothing holds the send settles nothing rather than
   // searching the tree.
+  const context = { to: seat, root, session, ...(lead === undefined ? {} : { lead }) };
   for (const hint of hints) {
     const read = readRecord(join(dropDir, hint.id), hint.id);
     if (!read.ok || read.record === null) continue;
@@ -106,9 +110,10 @@ export function markAnsweredBySend(input: AnsweredBySendInput): AnsweredBySendOu
     const deliveredAt = Date.parse(line.ts);
     if (Number.isNaN(deliveredAt) || deliveredAt > sentAt) continue;
     if (Number.isNaN(Date.parse(payload.at))) continue;
-    // The index may still name a message that is already read — a clear that was lost, or another
-    // reader that won after this hint was written. It is not this send's to settle.
-    if (isRead(dropDir, payload.id, { to: seat, root, session }, state.key)) continue;
+    // The index may still name a message that is already read or that a lead cleared — a clear
+    // that was lost, or another reader that won after this hint was written. It is not this
+    // send's to settle: the clearance is the lead's, never the seat's own read.
+    if (isReadOrCleared(dropDir, payload.id, context, state.key)) continue;
     const outcome = publishRecordRead({
       dropDir,
       id: payload.id,
@@ -119,6 +124,7 @@ export function markAnsweredBySend(input: AnsweredBySendInput): AnsweredBySendOu
       key: state.key,
       at,
       readBy: 'answered-by-send',
+      ...(lead === undefined ? {} : { lead }),
     });
     if (outcome.kind === 'published' || outcome.kind === 'served') return { kind: 'marked', id: payload.id };
     // A receipt this run could not write is not a hint to try an older message: that message is

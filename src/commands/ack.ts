@@ -36,8 +36,9 @@ import { isGeneralBriefRecord } from '../launch/general-brief.ts';
 import type { Command, Io } from '../io.ts';
 import { contextLine, hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { gateVerdict } from '../permissions/who.ts';
-import { parseDuration, scanAckSeat } from '../send/message-archive.ts';
-import { recordNameOk } from '../send/record.ts';
+import { appendHistory } from '../send/history.ts';
+import { parseDuration, scanAckSeat, seatClearTargetStatus } from '../send/message-archive.ts';
+import { LEAD_ACK_PREFIX, recordNameOk } from '../send/record.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
 import { messageKeyState } from '../store/keys.ts';
 import {
@@ -283,6 +284,7 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
     home: host.home,
     key,
     at,
+    lead: team.orchestrator,
   });
   let outcome: ReturnType<typeof publishRecordRead>;
   if (clientOrigin === null) {
@@ -382,8 +384,16 @@ async function runScopedAck(argv: string[], io: Io, host: AckHost, json: boolean
   const { team, root } = loaded;
   const dir = dirname(loaded.path);
   const session = team.session;
-  if (!team.seats.some((member) => member.name === seat)) {
+  // A retired seat is still a seat while its own folder remembers it: the clearance is exactly
+  // what a lead needs after `team down` removed the name from the file. A running seat is not a
+  // target at all; the gate below refuses it once the caller is admitted, so a seat that is not a
+  // lead learns nothing about another seat's lifecycle from this call.
+  const target = seatClearTargetStatus({ agents: dir, session, seat, seats: team.seats });
+  if (target.kind === 'unknown') {
     return usage(io, json, `"${seat}" is not a seat of this team`);
+  }
+  if (target.kind === 'unreadable') {
+    return configuration(io, json, `the team state cannot be read, so "${seat}" cannot be known to have stopped: ${target.reason}`);
   }
   const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
     gateVerdict(who, team, root, host.home, 'archive', at, host.now);
@@ -396,11 +406,24 @@ async function runScopedAck(argv: string[], io: Io, host: AckHost, json: boolean
       `only the owner or a seat this team marks \`leads\` acknowledges another seat's messages; this call is ${describeCaller(judged.caller)}`,
     );
   }
+  if (target.kind === 'running') {
+    return scopedRefused(io, json, `seat ${seat} is running; stop or retire ${seat} before clearing its messages`);
+  }
   const keyState = messageKeyState(host.home);
   if (keyState.kind !== 'key') return scopedRefused(io, json, 'no message key; nothing was written');
 
+  // The receipt is the lead's, not the seat's: its signed `read_by` names who cleared the mail,
+  // and the history line beside it says the same. Neither ever reads as the seat's own read.
+  // The archive gate admits the owner or a seat, so a lead's sweep always has a name here; the
+  // last arm keeps a receipt truthful rather than inventing one if that ever changes.
+  const actor = judged.caller.kind === 'owner'
+    ? 'owner'
+    : judged.caller.kind === 'seat'
+      ? judged.caller.name
+      : judged.caller.kind;
+  const readBy = `${LEAD_ACK_PREFIX}${actor}`;
   const now = host.now();
-  const scan = scanAckSeat({ root, session, seat, key: keyState.key, olderThanMs, now });
+  const scan = scanAckSeat({ root, session, seat, key: keyState.key, olderThanMs, now, lead: team.orchestrator });
   const notDue = scan.stays.length;
   const failures: string[] = [];
   let read = 0;
@@ -416,8 +439,23 @@ async function runScopedAck(argv: string[], io: Io, host: AckHost, json: boolean
         home: host.home,
         key: keyState.key,
         at,
+        readBy,
+        lead: team.orchestrator,
       });
-      if (outcome.kind === 'published' || outcome.kind === 'served') {
+      if (outcome.kind === 'published') {
+        read += 1;
+        // The line the feed reads says who cleared it, never `delivered (read)`: the seat did
+        // not read its mail, and nothing may report that it did.
+        appendHistory(team.project, root, host.home, {
+          ts: at,
+          from: due.from,
+          to: seat,
+          body: due.body,
+          id: due.id,
+          outcome: `cleared by ${actor}`,
+          thread: due.thread,
+        });
+      } else if (outcome.kind === 'served') {
         read += 1;
       } else if (outcome.kind === 'held') {
         const what = outcome.entry === 'file'

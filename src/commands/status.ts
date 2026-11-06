@@ -778,6 +778,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
         ...(declared !== undefined ? { declared } : {}),
         ...(recorded !== undefined ? { state: recorded } : {}),
         ...(sources.home !== undefined ? { home: sources.home } : {}),
+        lead: team.orchestrator,
         now,
       })];
     }));

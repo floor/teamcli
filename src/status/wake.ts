@@ -34,8 +34,10 @@ export type SeatWake = {
 };
 
 /** One seat's wakeability reading: where its records live, its declared row and runtime record,
- *  the registry home, and the instant the unread age is measured from. */
-export type SeatWakeInput = SeatDeliveryInput & { now: Date };
+ *  the registry home, the team's lead seat (a clearance signed by that seat settles here; a
+ *  caller that does not name it settles only the owner's clearances), and the instant the unread
+ *  age is measured from. */
+export type SeatWakeInput = SeatDeliveryInput & { now: Date; lead?: string };
 
 /**
  * The reading for one seat. The class comes from the same `seatDeliveryClass` a send reads and
@@ -67,7 +69,16 @@ export function seatWakeReadingOf(input: SeatWakeInput): SeatWakeReading {
   const listener = inboxLive(dropDir, input.root, input.session, input.seat).live;
   let oldest: number | null = null;
   if (input.home !== undefined) {
-    const unread = listUnread(dropDir, { to: input.seat, root: input.root, session: input.session }, input.home);
+    const unread = listUnread(
+      dropDir,
+      {
+        to: input.seat,
+        root: input.root,
+        session: input.session,
+        ...(input.lead === undefined ? {} : { lead: input.lead }),
+      },
+      input.home,
+    );
     const first = unread[0];
     if (first !== undefined) {
       const at = Date.parse(first.ts);

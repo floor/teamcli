@@ -496,7 +496,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
   // The pass's own mail reading: this reader and the report that follows share the pass's lists,
   // so each drop folder is scanned once and each record read once. Callers that hold a pass (the
   // watch) hand it in; a caller that does not gets the same reading, taken here.
-  const mail = scene.mail ?? new MailPass({ dir: scene.dir, root: scene.root, session: scene.session, home });
+  const mail = scene.mail ?? new MailPass({ dir: scene.dir, root: scene.root, session: scene.session, home, lead: scene.team.orchestrator });
   // The words every wake this pass types shares: read on the first message that reaches a wake,
   // never per message.
   let words: WakeWords | undefined;
@@ -524,7 +524,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     // drop-file typed leg, whose writer refuses in every real binding.
     const retry = watchRetryOf(seat);
     const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
-    const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session };
+    const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session, lead: scene.team.orchestrator };
     const unread = mail.unread(seat.name);
     // The folder as it is now, not only as the scan saw it. A message that landed after the
     // scan is in none of the pass's lists, and a pass on a big tree can outlast the window, so
@@ -1020,7 +1020,7 @@ function reportBlockedScreenToLead(
   // The pass's own mail reading, so the episode marker this site consults is the one the pass
   // took from the folder listing, and a marker this site claims is the reading every later
   // reader of the pass sees.
-  const mail = scene.mail ?? new MailPass({ dir: scene.dir, root: scene.root, session: scene.session, home });
+  const mail = scene.mail ?? new MailPass({ dir: scene.dir, root: scene.root, session: scene.session, home, lead: scene.team.orchestrator });
   try {
     if (isBareShellPane(scene.dir, scene.session, seat.name, scene.sources.processes?.(pane, scene.session) ?? null)) return;
     const unreadListing = listUnread(dropDir, context, home);
@@ -1286,7 +1286,7 @@ export function reportStuckSeats(scene: RetryScene, window: UnreadWindow, readin
   if (home === undefined) return;
   const key = messageKeyState(home);
   if (key.kind !== 'key') return;
-  const mail = scene.mail ?? new MailPass({ dir: scene.dir, root: scene.root, session: scene.session, home });
+  const mail = scene.mail ?? new MailPass({ dir: scene.dir, root: scene.root, session: scene.session, home, lead: scene.team.orchestrator });
   const leadName = scene.team.orchestrator !== '' ? scene.team.orchestrator : scene.team.operator;
   const lead: ReportTarget | null = leadName === ''
     ? null
@@ -1585,7 +1585,7 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow, readi
   if (key.kind !== 'key') return;
   // The pass's own mail reading, as the wake pass takes it: a caller that ran the wake with a
   // pass hands it in, and each folder is listed once for the whole pass.
-  const mail = scene.mail ?? new MailPass({ dir: scene.dir, root: scene.root, session: scene.session, home });
+  const mail = scene.mail ?? new MailPass({ dir: scene.dir, root: scene.root, session: scene.session, home, lead: scene.team.orchestrator });
   const nowMs = scene.now.getTime();
   const at = scene.now.toISOString();
   const leadName = scene.team.orchestrator !== '' ? scene.team.orchestrator : scene.team.operator;
@@ -1619,7 +1619,7 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow, readi
     // The retry pass's own give-up already names a drop no watcher read.
     if (seat.human === true) continue;
     const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
-    const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session };
+    const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session, lead: scene.team.orchestrator };
     // The seat's class is read only for a seat something waits at, as the wake pass reads it.
     const unread = mail.unread(seat.name);
     if (unread.length === 0) continue;

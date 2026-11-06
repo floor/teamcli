@@ -20,8 +20,9 @@ import { verifiedRecordAt, type RecordPayload, type RecordReader } from '../send
 import { messageKeyState } from '../store/keys.ts';
 
 /** What every reader of one pass names: the checkout's `.agents` directory, the checkout, the
- *  session whose drops are read, and the home whose message key verifies them. */
-export type MailPassInput = { dir: string; root: string; session: string; home: string };
+ *  session whose drops are read, the home whose message key verifies them, and the team's resolved
+ *  lead, when the caller loaded the team. A reader with no lead sees only the owner's clearances. */
+export type MailPassInput = { dir: string; root: string; session: string; home: string; lead?: string };
 
 /** The stuck-episode marker beside a seat's drop folder. Dot-named, so no inbox scan takes it
  *  for mail; its presence is read from the folder listing, its contents only when it is there. */
@@ -67,7 +68,12 @@ export class MailPass {
     if (held !== undefined) return held;
     const listed = listUnread(
       this.dropDir(seat),
-      { to: seat, root: this.input.root, session: this.input.session },
+      {
+        to: seat,
+        root: this.input.root,
+        session: this.input.session,
+        ...(this.input.lead === undefined ? {} : { lead: this.input.lead }),
+      },
       this.input.home,
       this.recordAt,
       (names) => {
@@ -90,7 +96,7 @@ export class MailPass {
    *  pass. */
   unacked(): UnackedMessage[] {
     if (this.unackedOnce === null) {
-      this.unackedOnce = listUnackedMessages(this.input.root, this.input.session, this.input.home, this.recordAt);
+      this.unackedOnce = listUnackedMessages(this.input.root, this.input.session, this.input.home, this.recordAt, this.input.lead);
     }
     return this.unackedOnce;
   }

@@ -439,6 +439,7 @@ function watchChannel(
       key: signingKey,
       at: new Date().toISOString(),
       readBy: CHANNEL_PUSH_READ_BY,
+      lead: serving.team.orchestrator,
       ...(serving.brief?.epoch === undefined ? {} : { epoch: serving.brief.epoch }),
     });
   };
@@ -448,7 +449,7 @@ function watchChannel(
     if (halted()) return;
     const unread = listUnread(
       serving.dropDir,
-      { to: serving.seat, root: serving.root, session: serving.session },
+      { to: serving.seat, root: serving.root, session: serving.session, lead: serving.team.orchestrator },
       serving.home,
     );
     if (!primed) {
@@ -530,6 +531,7 @@ function ackTool(args: unknown, serving: Serving): unknown {
     key: key.key,
     at: new Date().toISOString(),
     readBy: CHANNEL_READ_BY,
+    lead: serving.team.orchestrator,
     ...(serving.brief?.epoch === undefined ? {} : { epoch: serving.brief.epoch }),
   });
   if (outcome.kind === 'held') {
@@ -560,7 +562,7 @@ function callTool(params: unknown, serving: Serving): unknown {
     // file stays where it is; `team drops --read` still counts it as unserved.
     const unread = listUnread(
       serving.dropDir,
-      { to: serving.seat, root: serving.root, session: serving.session },
+      { to: serving.seat, root: serving.root, session: serving.session, lead: serving.team.orchestrator },
       serving.home,
     ).filter((message) => !legacyDropAt(join(serving.dropDir, message.id)));
     return toolText(JSON.stringify({ unread }));
@@ -572,7 +574,7 @@ function callTool(params: unknown, serving: Serving): unknown {
       return toolError('the inbox folder is not a real folder: a link or a file stands in its path');
     }
     const read = readMessage(
-      { dropDir: serving.dropDir, root: serving.root, seat: serving.seat, session: serving.session },
+      { dropDir: serving.dropDir, root: serving.root, seat: serving.seat, session: serving.session, lead: serving.team.orchestrator },
       id,
       serving.home,
       serving.brief,

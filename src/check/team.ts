@@ -1588,7 +1588,7 @@ function unreadDifferences(
       ...(brief?.superseded ?? []),
     ]);
     const dropDir = join(root, '.agents', 'send-drops', session, seat.name);
-    const context = { to: seat.name, root, session };
+    const context = { to: seat.name, root, session, lead: team.orchestrator };
     const unread = listUnread(dropDir, context, home).filter((message) => {
       if (briefIds.has(message.id)) return false;
       return now.getTime() - Date.parse(message.ts) >= floorSeconds * 1000;

@@ -904,7 +904,7 @@ export function readRecord(path: string, expectedId?: string): RecordRead {
   return { ok: true, record };
 }
 
-export type StatusContext = { to: string; root: string; session: string };
+export type StatusContext = { to: string; root: string; session: string; lead?: string };
 
 /** One record's verified payload by path and id, or null when the file is missing, is not a
  *  record this version writes, or does not verify with the reading key. A caller that reads the
@@ -1051,6 +1051,10 @@ export function receiptHolds(
   if (payload.id !== id || payload.status !== status) return false;
   if (payload.to !== context.to || payload.session !== context.session) return false;
   if (!sameFolder(payload.root, context.root)) return false;
+  // A lead's sweep writes a `read` receipt for a stopped seat's mail, but it is not the seat's
+  // own read: the address never saw the body, and nothing may report `delivered (read)` for it.
+  // `leadAckReceiptAt` is the predicate that sees the same file as a clearance instead.
+  if (status === 'read' && isLeadAckReadBy(payload.read_by)) return false;
   if (brief !== undefined) {
     if (payload.incarnation !== brief.incarnation) return false;
     if (payload.brief_sha256 !== brief.sha256) return false;
@@ -1087,6 +1091,106 @@ export function statusOf(dropDir: string, id: string, context: StatusContext, ke
 export function isRead(dropDir: string, id: string, context: StatusContext, key: KeyObject, brief?: BriefBinding): boolean {
   if (receiptHolds(receiptFile(dropDir, id, 'read'), id, 'read', context, key, brief)) return true;
   return receiptHolds(receiptFile(dropDir, id, 'replied'), id, 'replied', context, key, brief);
+}
+
+/**
+ * The signed prefix on the `read_by` of the receipt `team ack --seat <seat> --older-than <dur>`
+ * writes: a lead or the owner clearing a stopped or retired seat's stale mail. The actor after the
+ * prefix is `owner` or the lead seat's name, as the caller was judged.
+ */
+export const LEAD_ACK_PREFIX = 'lead-ack:';
+
+/** Whether a receipt's `read_by` names a lead's clearance rather than a reader's own read. */
+export function isLeadAckReadBy(readBy: string | undefined): boolean {
+  return typeof readBy === 'string' && readBy.startsWith(LEAD_ACK_PREFIX) && readBy.length > LEAD_ACK_PREFIX.length;
+}
+
+/** Who cleared the message, when the receipt is a lead's: `owner` or the lead seat's name. */
+export function leadAckActorOf(readBy: string | undefined): string | null {
+  return isLeadAckReadBy(readBy) ? (readBy as string).slice(LEAD_ACK_PREFIX.length) : null;
+}
+
+/**
+ * The signed receipt at `path` when it verifies for this message, status and context, with the
+ * same checks `receiptHolds` makes — id, status, addressee, checkout and session, and the claim
+ * binding when one is given — but read for what it says rather than reduced to a yes. A lead-ack
+ * receipt is not excluded here: this is how its payload is read back.
+ */
+export function readVerifiedReceipt(
+  path: string,
+  id: string,
+  status: ReceiptStatus,
+  context: StatusContext,
+  key: KeyObject,
+  brief?: BriefBinding,
+): SignedReceipt | null {
+  if (heldAt(path).kind !== 'file') return null;
+  const text = readNoFollow(path);
+  if (text === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const auth = receiptAuthOf(parsed, key);
+  if (auth.kind !== 'ok') return null;
+  const payload = auth.value.payload;
+  if (payload.id !== id || payload.status !== status) return null;
+  if (payload.to !== context.to || payload.session !== context.session) return null;
+  if (!sameFolder(payload.root, context.root)) return null;
+  if (brief !== undefined) {
+    if (payload.incarnation !== brief.incarnation) return null;
+    if (payload.brief_sha256 !== brief.sha256) return null;
+    if (payload.brief_epoch !== brief.epoch) return null;
+  }
+  return auth.value;
+}
+
+/**
+ * The clearance a lead's sweep left beside this message, or null: the signed `read` receipt at
+ * the message's own receipt name, verifying for this message and inbox, whose `read_by` names
+ * `lead-ack:<actor>`. This is not the seat's read — `isRead` and `statusOf` never count it — but
+ * it settles the message: the unread listings skip it and the watch stops retrying it.
+ *
+ * The signature proves the receipt came from this checkout, never which seat wrote it: the
+ * message key is per home, shared by every seat that serves the checkout. A clearance therefore
+ * settles only when its actor is the owner, or the seat this call site resolved as the team's
+ * lead (`context.lead`, the team file's `coordinator`). A context with no lead — a reader that
+ * did not load the team — settles no seat-named clearance at all, so a receipt any seat can sign
+ * cannot clear mail in the lead's name alone. The residual is the owner's name itself: a forged
+ * `lead-ack:owner` is indistinguishable under the shared key, and closing that needs per-seat
+ * keys or daemon-issued receipts.
+ */
+export function leadAckReceiptAt(
+  dropDir: string,
+  id: string,
+  context: StatusContext,
+  key: KeyObject,
+): { by: string; at: string; payload: ReceiptPayload } | null {
+  const verified = readVerifiedReceipt(receiptFile(dropDir, id, 'read'), id, 'read', context, key);
+  if (verified === null) return null;
+  const by = leadAckActorOf(verified.payload.read_by);
+  if (by === null) return null;
+  if (by !== 'owner' && (context.lead === undefined || by !== context.lead)) return null;
+  return { by, at: verified.payload.at, payload: verified.payload };
+}
+
+/**
+ * Whether this message is settled for the seat: the seat read it, or a lead cleared it. Only the
+ * ordinary unread questions ask this — what still waits, what the watch should retry. A brief's
+ * read passes `brief`, and a lead-ack never counts for one: the launch's own delivery is read
+ * only by the seat it was written for.
+ */
+export function isReadOrCleared(
+  dropDir: string,
+  id: string,
+  context: StatusContext,
+  key: KeyObject,
+  brief?: BriefBinding,
+): boolean {
+  return isRead(dropDir, id, context, key, brief)
+    || (brief === undefined && leadAckReceiptAt(dropDir, id, context, key) !== null);
 }
 
 /**

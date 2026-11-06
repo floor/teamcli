@@ -1177,7 +1177,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           project: projectLiveness(sources.home, root),
         };
         const mail = !foreign && sources.home !== undefined
-          ? new MailPass({ dir, root, session, home: sources.home })
+          ? new MailPass({ dir, root, session, home: sources.home, lead: team.orchestrator })
           : undefined;
         const mailbox = !foreign && sources.home
           ? (sources.readMailbox ?? mailboxWaiting)(root, dir, team, live, sources.home, new Date(now), mail)
@@ -1406,7 +1406,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           // receipt is read again here, and an already-read message is not reminded. The snapshot
           // held it only because the read came after that read.
           else if (promotedReads.has(`${ring.to}\n${ring.id}`)
-            || !listUnacked(root, team.session, sources.home).some((one) => one.id === ring.id && one.to === ring.to)) {
+            || !listUnacked(root, team.session, sources.home, team.orchestrator).some((one) => one.id === ring.id && one.to === ring.to)) {
             say(`ring not typed: message ${ring.id} is already read`, false);
           } else {
             await deliver({
@@ -1725,7 +1725,7 @@ function mailboxWaiting(root: string, dir: string, team: TeamFile, live: Live, h
   // every pass. Such a record still raises the owner's waiting note when its box is not free.
   // The pass's reading is used when one is handed in, so the unacked list and each seat's unread
   // list are taken once for the whole pass; absent, this call takes its own.
-  const scan = mail ?? new MailPass({ dir, root, session: team.session, home });
+  const scan = mail ?? new MailPass({ dir, root, session: team.session, home, lead: team.orchestrator });
   const servedByDrops = new Map<string, Set<string>>();
   const waitingIds = (seat: string): Set<string> => {
     let ids = servedByDrops.get(seat);

@@ -233,6 +233,27 @@ describe('what is never watched', () => {
     expect(looks).toEqual([]);
   });
 
+  test('a frame a lead swept for a stopped seat, whatever the box shows', async () => {
+    // The receipt is a `lead-ack` clearance, not the seat's read: the frame is settled all the
+    // same, and a stopped seat's pane is never looked at for a held dialog.
+    const made = scene();
+    const id = '3f2a1b4c-0000-4000-8000-000000000007';
+    recordOf(made, id);
+    deliveredAt(made, id, NOW);
+    const receipt = signReceiptPayload(
+      { kind: 'receipt', status: 'read', id, to: SEAT, root: made.root, session: SESSION, at: NOW.toISOString(), read_by: 'lead-ack:owner' },
+      made.home,
+    );
+    const written = writeReceipt(made.drop, receipt, made.home);
+    expect(written.ok).toBe(true);
+
+    const { step, looks } = stepOf(made, { screen: async () => HELD_DIALOG });
+    const result = await step(instant(HELD_FIRST_LOOK_MS + 10));
+    expect(result.raised).toEqual([]);
+    expect(result.watching).toBe(0);
+    expect(looks).toEqual([]);
+  });
+
   test("another seat, another leg, another checkout's record, an unsigned change and a missing record", async () => {
     const made = scene();
     // Another seat of the session, a line with no socket leg, and a line that is not a delivery:

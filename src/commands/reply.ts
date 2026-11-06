@@ -829,6 +829,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
               key,
               at,
               readBy: 'reply',
+              lead: team.orchestrator,
             });
           } catch {
             // The reply record below is the message; the missing read receipt is argued nowhere.
@@ -1083,6 +1084,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
         key,
         at,
         readBy: 'reply',
+        lead: team.orchestrator,
       });
     } catch {
       // The reply record below is the message; the missing read receipt is argued nowhere.

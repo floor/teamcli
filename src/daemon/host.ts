@@ -1237,6 +1237,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             session: loaded.team.session,
             home,
             seats: loaded.team.seats.map((seat) => ({ name: seat.name, launch: seat.launch })),
+            lead: loaded.team.orchestrator,
           }),
         sources,
         sourceRuns: sources.map(() => null),

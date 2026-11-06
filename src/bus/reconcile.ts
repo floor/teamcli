@@ -35,7 +35,7 @@ import {
 } from '../config/sources.ts';
 import { entitiesPath } from '../entities.ts';
 import { TEAM_FILE } from '../file/load.ts';
-import { TEAM_CONFIG_SOURCE_ENV } from '../file/team-config.ts';
+import { readTeamConfig, TEAM_CONFIG_SOURCE_ENV } from '../file/team-config.ts';
 import { grantsDir } from '../grant.ts';
 import { agentsDir } from '../registry/agents.ts';
 import { projectsFile } from '../registry/projects.ts';
@@ -45,6 +45,7 @@ import { markOrphanedSeats } from '../registry/sync.ts';
 import { machineSettingsPath } from '../settings/declared.ts';
 import { HISTORY_KEPT, readHistorySteps, type HistoryEntry } from '../send/history.ts';
 import type { PendingDrop } from '../send/pending.ts';
+import { leadAckActorOf, readVerifiedReceipt } from '../send/record.ts';
 import { readState } from '../state.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { compareSeatNames } from '../seat-names.ts';
@@ -145,7 +146,16 @@ export type ReconcileStats = {
 type DropEntry =
   | { kind: 'drop'; verified: true; event: EventAppendInput }
   | { kind: 'drop'; verified: false };
-type ReceiptEntry = { kind: 'receipt'; receipt: 'delivered' | 'read' | 'replied'; id: string; at: string };
+type ReceiptEntry = {
+  kind: 'receipt';
+  receipt: 'delivered' | 'read' | 'replied';
+  id: string;
+  at: string;
+  /** A `.read.json` whose envelope this checkout's key did not sign: it raises no step. */
+  unverified?: true;
+  /** The lead or owner a lead-ack read receipt names: the step is a clearance, not a seat read. */
+  clearedBy?: string;
+};
 type PendingEntry = { kind: 'pending'; drop: PendingDrop | null };
 type MessageEntry = {
   kind: 'message';
@@ -582,6 +592,23 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   const nowIso = nowDate.toISOString();
   const nowMs = nowDate.getTime();
   const heldThresholdMs = (options.heldThresholdSeconds ?? DEFAULT_HELD_THRESHOLD_SECONDS) * 1000;
+  // The lead this pass's clearances must name, read from the same team file the ack gate reads.
+  // The read is lazy: an ordinary pass meets no clearance and pays nothing for it, and the pass's
+  // slice discipline keeps its first turn as early as before. A folder whose team cannot be read
+  // proves no lead, and only the owner's clearances settle — the reader's own fail-closed rule.
+  let lead: string | null = null;
+  const leadForClearance = (): string => {
+    if (lead !== null) return lead;
+    // A team file that cannot be read (or throws while being read) proves no lead: the empty
+    // answer settles the owner's clearances only, never a seat-named one on trust.
+    try {
+      const teamRead = readTeamConfig(root, { home });
+      lead = teamRead.ok ? teamRead.team.orchestrator : '';
+    } catch {
+      lead = '';
+    }
+    return lead;
+  };
 
   // The retained log is read as a whole only when one of its files changed. Until then the
   // dedupe sets it produced are still exactly the log's answer, and the log read — which parses
@@ -890,15 +917,53 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
         }
         let entry = cachedEntry(state, seatDir, file, stamp);
         if (entry === null || entry.kind !== 'receipt') {
+          // A `.read.json` receipt is a signed envelope in this build, and its name alone proves
+          // nothing. A pass that cannot read the message key cannot check it: that is unchecked,
+          // not unverified, so the file is left for a pass that holds the key — the drop scan
+          // beside it leaves an unverifiable record the same way, storing nothing.
+          if (receipt.receipt === 'read' && file.endsWith('.read.json') && keyState.kind !== 'key') {
+            yield;
+            continue;
+          }
           const fresh = fileStampOf(fullPath);
           if (fresh === null) {
             yield;
             continue;
           }
-          entry = { kind: 'receipt', receipt: receipt.receipt, id: receipt.id, at: fresh.mtimeIso };
+          // Verify the receipt exactly as the settle side does before reading `read_by`: a file
+          // this checkout's key never signed is no read, so it raises no step and no clearance.
+          const readJson = receipt.receipt === 'read' && file.endsWith('.read.json');
+          const key = keyState.kind === 'key' ? keyState.key : null;
+          const signed = readJson && key !== null
+            ? readVerifiedReceipt(fullPath, receipt.id, 'read', { to: seat, root, session }, key)
+            : null;
+          const unverified = readJson && signed === null;
+          const clearedBy = signed === null ? null : leadAckActorOf(signed.payload.read_by);
+          entry = {
+            kind: 'receipt',
+            receipt: receipt.receipt,
+            id: receipt.id,
+            at: fresh.mtimeIso,
+            ...(unverified ? { unverified: true as const } : {}),
+            ...(clearedBy === null ? {} : { clearedBy }),
+          };
           storeEntry(state, seatDir, file, fresh.stamp, entry);
         } else {
           stats.filesReused += 1;
+        }
+        // An unverified read receipt raises nothing: neither the read its name claims nor the
+        // clearance its unsigned bytes name.
+        if (entry.unverified === true) {
+          yield;
+          continue;
+        }
+        // A lead-ack receipt settles only when it names the owner or this team's lead. The
+        // receipt is signed with the shared message key every seat holds, so its `read_by` name
+        // is the only actor proof there is; a name the team does not admit raises no step at
+        // all, so a forged clearance can never leave a `message.read` a seat did not earn.
+        if (entry.clearedBy !== undefined && entry.clearedBy !== 'owner' && entry.clearedBy !== leadForClearance()) {
+          yield;
+          continue;
         }
         const from = sendersById.get(entry.id) ?? previousSenders?.get(entry.id) ?? arrivedFrom.get(`${seat}\0${entry.id}`);
         raise({
@@ -908,6 +973,12 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
           record_id: `${entry.id}:${entry.receipt}`,
           to: seat,
           ...(from !== undefined ? { from } : {}),
+          // A lead's clearance is the message.read step with what it actually was written into
+          // it: the trace and the feed read the outcome, never a `delivered (read)` the seat
+          // never earned.
+          ...(entry.clearedBy === undefined
+            ? {}
+            : { outcome: `cleared by ${entry.clearedBy}`, reason: `cleared by ${entry.clearedBy}` }),
         });
         yield;
       }

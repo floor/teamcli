@@ -27,7 +27,7 @@ import { readAgents, registerAgent } from '../src/registry/agents.ts';
 import { registerDeclaredSeat } from '../src/registry/sync.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { appendHistory } from '../src/send/history.ts';
-import { signRecord, type RecordPayload } from '../src/send/record.ts';
+import { signReceiptPayload, signRecord, type RecordPayload } from '../src/send/record.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { messageKeyOf, RECEIPT_DOMAIN, signDomain } from '../src/store/keys.ts';
 
@@ -147,7 +147,10 @@ function seedStore(at: World): void {
   writeSignedDrop(at, 'drop-b', '2026-11-05T00:02:00.000Z');
   const dir = dropDirOf(at);
   writeFileSync(join(dir, 'drop-a.delivered.json'), '{"ok":true}');
-  writeFileSync(join(dir, 'drop-a.read.json'), '{"ok":true}');
+  writeFileSync(join(dir, 'drop-a.read.json'), JSON.stringify(signReceiptPayload({
+    kind: 'receipt', status: 'read', id: 'drop-a', to: 'worker', root: at.root, session: PROJECT,
+    at: '2026-11-05T00:01:30.000Z',
+  }, at.home)));
   writeFileSync(
     join(dir, 'drop-b.pending'),
     JSON.stringify({ id: 'drop-b', from: 'lead', to: 'worker', body: 'held', ts: TS, tries: 1, leg: 'drop' }),
