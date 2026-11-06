@@ -170,7 +170,7 @@ describe('a team record changed without a card', () => {
     expect(ran.code).toBe(0);
     expect(ran.err).toBe(`warning: ${CONFIG_LINE} lead; dev mode continues (dev-mode on at machine level)\n`);
     expect(readFileSync(at.file, 'utf8')).toContain('    model: Claude Sonnet\n');
-    expect(logOf(at)).toContain(`config [lead] warning: ${CONFIG_LINE} lead; dev mode continues (dev-mode on at machine level); admitted as orchestrator\n`);
+    expect(logOf(at)).toContain(`config [lead] warning: ${CONFIG_LINE} lead; dev mode continues (dev-mode on at machine level); admitted as lead\n`);
     // The lift writes an audit line, never a card: the owner is not asked for a seat change.
     expect(cards(at.home)).toEqual([]);
   });
@@ -285,7 +285,7 @@ describe('the main orchestrator and the teams around it', () => {
     expect(ran.err).toBe(`warning: ${CONFIG_LINE} atlas; dev mode continues\n`);
     expect(readFileSync(join(at.targetRoot, '.agents', 'team.yaml'), 'utf8')).toContain('    model: Claude Sonnet\n');
     const log = readFileSync(join(at.targetRoot, '.agents', 'team.log'), 'utf8');
-    expect(log).toContain(`config [atlas] warning: ${CONFIG_LINE} atlas; dev mode continues; admitted as orchestrator\n`);
+    expect(log).toContain(`config [atlas] warning: ${CONFIG_LINE} atlas; dev mode continues; admitted as lead\n`);
   });
 
   test('a team of another entity under the same main folder is refused', async () => {
@@ -433,7 +433,7 @@ describe('team add under the same lift', () => {
     expect(io.err).toBe(`team add: warning: ${ADD_LINE} lead; dev mode continues (dev-mode on at machine level)\n`);
     expect(readFileSync(at.file, 'utf8')).toContain('    name: apprentice\n');
     expect(made.creates).toEqual(['apprentice']);
-    expect(logOf(at)).toContain(`add [lead] warning: ${ADD_LINE} lead; dev mode continues (dev-mode on at machine level); admitted as orchestrator\n`);
+    expect(logOf(at)).toContain(`add [lead] warning: ${ADD_LINE} lead; dev mode continues (dev-mode on at machine level); admitted as lead\n`);
     expect(cards(at.home)).toEqual([]);
   });
 

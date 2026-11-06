@@ -1,10 +1,12 @@
 // The release ships no entity-specific owner-reply address. An entity's own signed record sets
 // it. With no record the answer is missing, and another entity's record is not that answer.
-// Synthetic records only, in a throwaway home. Runs against builder-4's head.
+// The address names a team, so the registry holds that team before the policy is written.
+// Synthetic records only, in a throwaway home.
 import { afterEach, expect, test } from 'bun:test';
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { resolveOwnerReplyTo, writePolicySet } from '../src/policy/index.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { fixtureBase } from './helpers.ts';
 
@@ -25,6 +27,14 @@ function homeOf(): string {
 }
 
 function declare(home: string, entity: string, value: string): void {
+  const root = join(home, 'teams', entity);
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  upsertTeam(home, teamIdOf(root), {
+    project: entity,
+    session: entity,
+    root,
+    at: NOW.toISOString(),
+  });
   const wrote = writePolicySet(
     home,
     { level: 'entity', target: entity, name: 'owner-reply-to', value },

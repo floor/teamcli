@@ -351,8 +351,8 @@ test('a replacement that stops at launched moves the agent to the pane that is r
   const io = testIo(root, { kind: 'owner' });
   expect(await runUp([], io, made.sources)).toBe(1);
 
-  expect(io.out).toContain(`${SEAT}: left out: was not named in time; left at launched\n`);
-  expect(io.err).toContain(`0 seats repaired, 0 skipped (working), 1 refused (${SEAT}: was not named in time; left at launched)\n`);
+  expect(io.out).toContain(`${SEAT}: left out: its name was not listed after the rename; left at launched\n`);
+  expect(io.err).toContain(`0 seats repaired, 0 skipped (working), 1 refused (${SEAT}: its name was not listed after the rename; left at launched)\n`);
   // The close re-reads the seat before it reads anything else: a seat that never reached ready
   // on its replacement leaves the recorded workspace as it is, and says so.
   expect(made.trace.closed).toEqual([]);
