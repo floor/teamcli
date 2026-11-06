@@ -690,7 +690,7 @@ type MailboxRow = {
   to: string | null;
   sent: string | null;
   sent_display: string;
-  status: 'shown' | 'refused' | 'waiting';
+  status: 'shown' | 'refused' | 'waiting' | 'read';
   /** The verified body: a served record's on a `shown` row, and, in the owner's reading only, a
    *  record of another mailbox on its `waiting` row. The owner reading is read-only — it carries
    *  the body and publishes no receipt — and a seat's reading never carries another mailbox's
@@ -836,7 +836,8 @@ function bodyLines(body: string): string[] {
  * proof are one ordered act and a receipt that cannot be made durable shows no body. The older
  * store's body prints first and its receipt is written after `io.stdout` returns, as it always
  * was. A record that does not verify prints no body and writes nothing; it is a `refused` row and
- * a difference, and the run exits 1. A record another reader already served is skipped silently.
+ * a difference, and the run exits 1. A record another reader already served is a `read` row
+ * with no body.
  * An empty mailbox is a `0 messages` reading with the note that nothing is waiting, and creates
  * no key. The run serves one mailbox: the owner's, or the seat the caller is placed as, and the
  * receipt records that the addressed party's reader was shown the body. Records for other
@@ -931,7 +932,11 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
         candidate.store === 'record'
           ? recordReadHeld(candidate, root, session, state.key, loaded.team.orchestrator)
           : legacyReceiptMatches(receiptFile(root, candidate.seat, candidate.id), candidate.seat, candidate.id, root, session, state.key);
-      if (readHeld) return false;
+      if (readHeld && candidate.store !== 'record') return false;
+      if (readHeld && candidate.store === 'record') {
+        const payload = signedRecordOf(readJson(candidate.path))?.payload;
+        if (payload !== undefined && isGeneralBriefRecord(payload)) return false;
+      }
     }
     // A body file written before the record spine is plain text. It stays in the folder for
     // its seat to read, but it names no message: the inbox neither shows nor refuses it. A
@@ -1038,14 +1043,47 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
     if (recordPayload !== null && isGeneralBriefRecord(recordPayload)) {
       // A brief's read is bound to the seat's current claim and belongs to the seat's own reader.
       // This checkout-wide mailbox writes no receipt for one, so the seat's reader still serves it.
+      // A brief already served is not waiting mail, and it adds no note.
+      if (key !== null && recordReadHeld(candidate, root, session, key, loaded.team.orchestrator)) continue;
       if (!briefSeats.includes(candidate.seat)) briefSeats.push(candidate.seat);
       continue;
     }
     if (candidate.store === 'record') {
+      // A receipt already settles this id: the row says read, and the body is not shown again.
+      if (key !== null && recordReadHeld(candidate, root, session, key, loaded.team.orchestrator)) {
+        const senderAttribution = recordPayload === null
+          ? 'none' as const
+          : attributeSenderClaim(recordPayload, { briefClaim: claimOf(candidate.seat, candidate.session ?? session) });
+        rows.push({
+          id: candidate.id,
+          seat: candidate.seat,
+          from: result.from,
+          from_id: result.from_id,
+          to: result.to,
+          sent: result.at,
+          sent_display: formatRelativeTime(result.at, now),
+          status: 'read',
+          sender_attribution: senderAttribution,
+        });
+        continue;
+      }
       // The receipt is published and flushed before the body: one reader wins the id, and the
       // proof of exposure survives a crash that follows it.
       const gate = openRecord(candidate, root, session, sources.home, key, sources.now().toISOString(), loaded.team.orchestrator);
-      if (gate.kind === 'served') continue; // another reader already spent this id: no row, no body
+      if (gate.kind === 'served') {
+        rows.push({
+          id: candidate.id,
+          seat: candidate.seat,
+          from: result.from,
+          from_id: result.from_id,
+          to: result.to,
+          sent: result.at,
+          sent_display: formatRelativeTime(result.at, now),
+          status: 'read',
+          sender_attribution: 'none',
+        });
+        continue;
+      }
       if (gate.kind === 'refused') {
         rows.push({
           id: candidate.id,

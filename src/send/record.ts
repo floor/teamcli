@@ -323,9 +323,19 @@ function nonEmpty(value: unknown): value is string {
   return typeof value === 'string' && value !== '';
 }
 
-/** An id that can name one file in a folder: no separator, no traversal, no NUL. */
+/** A file name's own bound: one directory entry, not a path. */
+const RECORD_NAME_MAX = 255;
+
+/** An id that can name one file in a folder: no separator, no traversal, no control character,
+ *  and no name longer than one directory entry. */
 export function recordNameOk(id: string): boolean {
-  return id !== '' && id !== '.' && id !== '..' && !id.includes('/') && !id.includes('\\') && !id.includes('\0');
+  if (id === '' || id === '.' || id === '..' || id.includes('/') || id.includes('\\')) return false;
+  if (Buffer.byteLength(id) > RECORD_NAME_MAX) return false;
+  for (const char of id) {
+    const code = char.codePointAt(0)!;
+    if (code <= 0x1f || code === 0x7f || (code >= 0x80 && code <= 0x9f) || code === 0x2028 || code === 0x2029) return false;
+  }
+  return true;
 }
 
 export type RecordProjection = { payload: RecordPayload; unknown: string[] };
@@ -1145,6 +1155,125 @@ export function readVerifiedReceipt(
     if (payload.brief_epoch !== brief.epoch) return null;
   }
   return auth.value;
+}
+
+/** The team file's seat name (`SEAT_NAME`), at most 64 characters. A longer or looser word is not shown. */
+const SHOWN_SEAT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/** Words this build writes on `read_by` that are not themselves seat names. */
+const KNOWN_READER = new Set(['answered-by-send', 'channel', 'reply']);
+
+/** Role words a receipt must not print. The shared message key can sign any of them, and none is
+ *  a claim that the owner, the lead, or the orchestrator read the message. */
+const UNNAMED_READER = new Set(['owner', 'lead', 'orchestrator']);
+
+/** How many characters of an id the sentence keeps. The rest is marked cut, as a reported reason is. */
+const SHOWN_ID_CAP = 200;
+
+/** One ISO-8601 UTC instant: a real calendar date, a clock time to the second, an optional
+ *  fraction, and `Z`. `Date.parse` reads prose and rolls February 30 forward, so a time that is
+ *  not this shape is left out of the sentence rather than printed. */
+const ISO_INSTANT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?Z$/;
+
+function isoInstantOk(text: string): boolean {
+  const match = ISO_INSTANT.exec(text);
+  if (match === null) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const ms = match[7] === undefined ? 0 : Number(match[7].padEnd(3, '0'));
+  const at = Date.UTC(year, month - 1, day, hour, minute, second, ms);
+  const back = new Date(at);
+  return back.getUTCFullYear() === year && back.getUTCMonth() === month - 1 && back.getUTCDate() === day
+    && back.getUTCHours() === hour && back.getUTCMinutes() === minute && back.getUTCSeconds() === second;
+}
+
+/** A name the sentence may print as a seat: it is on this team's list, it fits the seat-name
+ *  rule, and it is not a role word. */
+function namedSeat(name: string, seats: ReadonlySet<string>): boolean {
+  return !UNNAMED_READER.has(name) && SHOWN_SEAT.test(name) && seats.has(name);
+}
+
+/** The reader the sentence may name. A bare seat is named only when this team lists it. A known
+ *  word stays. A `lead-ack:<seat>` clearance keeps its documented form, including `lead-ack:owner`,
+ *  when the actor fits the seat-name rule: that word is the clearance, and the shared key cannot
+ *  tell a forged owner clearance from the real one. Anything else, including a bare `owner`,
+ *  `lead` or `orchestrator`, is `unknown`. */
+function shownReader(readBy: string | undefined, seats: ReadonlySet<string>): string {
+  if (readBy === undefined || readBy === '') return 'read';
+  if (KNOWN_READER.has(readBy)) return readBy;
+  if (readBy.startsWith(LEAD_ACK_PREFIX)) {
+    const actor = readBy.slice(LEAD_ACK_PREFIX.length);
+    return SHOWN_SEAT.test(actor) ? readBy : 'unknown';
+  }
+  return namedSeat(readBy, seats) ? readBy : 'unknown';
+}
+
+/** DEL, C1, the Unicode line and paragraph separators, and the bidi controls. The same set a
+ *  reported reason escapes inside its quotes. */
+function hiddenCode(code: number): boolean {
+  if (code === 0x7f) return true;
+  if (code >= 0x80 && code <= 0x9f) return true;
+  if (code === 0x2028 || code === 0x2029) return true;
+  if (code === 0x61c || code === 0x200e || code === 0x200f) return true;
+  if (code >= 0x202a && code <= 0x202e) return true;
+  if (code >= 0x2066 && code <= 0x2069) return true;
+  return false;
+}
+
+function escapeCode(code: number): string {
+  const hex = code.toString(16);
+  return code <= 0xffff ? `\\u${hex.padStart(4, '0')}` : `\\u{${hex}}`;
+}
+
+/** The id as one token: quotes and backslashes are escaped, and a control, line separator, bidi
+ *  control or format character is a `\\u` escape. A long id is cut at {@link SHOWN_ID_CAP} code
+ *  points, with ` [cut]` after the kept text. A clean message id is unchanged. */
+function shownId(id: string): string {
+  const points = Array.from(id);
+  const cut = points.length > SHOWN_ID_CAP;
+  const kept = (cut ? points.slice(0, SHOWN_ID_CAP) : points).join('');
+  let out = '';
+  for (const char of kept) {
+    const code = char.codePointAt(0)!;
+    if (char === '"' || char === '\\') {
+      out += `\\${char}`;
+      continue;
+    }
+    if (code <= 0x1f || hiddenCode(code) || /\p{Cf}/u.test(char)) {
+      out += escapeCode(code);
+      continue;
+    }
+    out += char;
+  }
+  return cut ? `${out} [cut]` : out;
+}
+
+/** The line a later read says for an id a receipt already settled. The time is printed only when
+ *  it is an ISO instant. The reader is a known word or one of `seats`; a receipt that names no
+ *  reader says `read`, and any other word says `unknown`. */
+export function alreadyReadSentence(id: string, at: string, readBy: string | undefined, seats: readonly string[]): string {
+  const when = isoInstantOk(at) ? ` at ${at}` : '';
+  return `${shownId(id)}: already read${when} (${shownReader(readBy, new Set(seats))})`;
+}
+
+/** The verifying read or replied receipt beside this id, when one settles it. A lead clearance
+ *  is included: its `read_by` is the word the sentence prints. */
+export function settledReadOf(
+  dropDir: string,
+  id: string,
+  context: StatusContext,
+  key: KeyObject,
+  brief?: BriefBinding,
+): { at: string; readBy: string | undefined } | null {
+  const read = readVerifiedReceipt(receiptFile(dropDir, id, 'read'), id, 'read', context, key, brief);
+  if (read !== null) return { at: read.payload.at, readBy: read.payload.read_by };
+  const replied = readVerifiedReceipt(receiptFile(dropDir, id, 'replied'), id, 'replied', context, key, brief);
+  if (replied !== null) return { at: replied.payload.at, readBy: replied.payload.read_by };
+  return null;
 }
 
 /**
