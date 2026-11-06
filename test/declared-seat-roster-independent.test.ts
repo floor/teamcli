@@ -342,6 +342,7 @@ function restartHarness(home: string): { sources: RestartSources; runs: string[]
     sleep: async () => {},
     now: () => NOW,
   };
+  recordRenames(upLaunch);
   const sources: RestartSources = {
     home,
     sessionRunning: () => true,
