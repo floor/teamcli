@@ -225,14 +225,16 @@ export function readDaemonState(home: string, hooks?: DaemonStateHooks): DaemonS
   const path = daemonStatePath(home);
   let fd: number;
   try {
-    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ENOENT') return { kind: 'missing' };
     return { kind: 'unreadable', why: 'the daemon state record is not a regular file' };
   }
   try {
-    if (!fstatSync(fd).isFile()) return { kind: 'unreadable', why: 'the daemon state record is not a regular file' };
+    const held = fstatSync(fd);
+    if (!held.isFile()) return { kind: 'unreadable', why: 'the daemon state record is not a regular file' };
+    if (held.size > 64 * 1024) return { kind: 'unreadable', why: 'the daemon state record exceeds 64 KiB' };
     hooks?.afterOpen?.();
     let parsed: unknown;
     try {
