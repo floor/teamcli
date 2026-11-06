@@ -1,7 +1,8 @@
 // Independent scenes for the false-busy typed wake. The frames are captured Grok panes.
 // An empty idle prompt under a leftover spinner, or under a leftover turn-status line, is
-// still the idle prompt and is woken. A pane mid-turn is never typed into. An empty prompt
-// whose box already holds text is not typed over. No herdr runs.
+// still the idle prompt: the wake asks for one agent prompt and types nothing. A pane
+// mid-turn is never typed into. An empty prompt whose box already holds text is not typed
+// over. No herdr runs.
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -41,6 +42,7 @@ function under(row: string): string {
 
 function capture(before: string) {
   const typed: string[] = [];
+  const prompts: string[] = [];
   let enters = 0;
   const holding = drawn(IDLE, LINE);
   const host: TypedWakeHost = {
@@ -53,23 +55,33 @@ function capture(before: string) {
       enters += 1;
       return true;
     },
+    prompt: (_pane, text) => {
+      prompts.push(text);
+      return true;
+    },
     wait: async () => {},
   };
-  return { host, typed, enters: () => enters };
+  return { host, typed, prompts, enters: () => enters };
 }
 
 async function wake(before: string) {
   const pane = capture(before);
   const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'grok', FAST);
-  return { delivered: out.delivered, reason: out.reason, typed: pane.typed, enters: pane.enters() };
+  return { delivered: out.delivered, reason: out.reason, typed: pane.typed, prompts: pane.prompts, enters: pane.enters() };
 }
 
-const woken = { delivered: true, reason: 'the working screen showed after 1 Enter', typed: [LINE], enters: 1 };
+const asked = {
+  delivered: false,
+  reason: 'no working screen showed after the agent prompt',
+  typed: [] as string[],
+  prompts: [LINE],
+  enters: 0,
+};
 
-test('an idle prompt under a stale spinner or status line is woken', async () => {
+test('an idle prompt under a stale spinner or status line asks for one agent prompt and types nothing', async () => {
   const spinner = await wake(under(SPINNER));
   const status = await wake(under(STATUS));
-  expect({ spinner, status }).toEqual({ spinner: woken, status: woken });
+  expect({ spinner, status }).toEqual({ spinner: asked, status: asked });
 });
 
 test('a pane mid-turn is never typed into', async () => {
@@ -79,6 +91,7 @@ test('a pane mid-turn is never typed into', async () => {
   expect(out.enters).toBe(0);
   expect(out.reason).toContain('the first read showed working');
   expect(out.reason).toContain('nothing was typed');
+  expect(out.prompts).toEqual([]);
 });
 
 test('an empty prompt with leftover text in the input box is not typed over', async () => {
@@ -88,5 +101,6 @@ test('an empty prompt with leftover text in the input box is not typed over', as
   expect(out.enters).toBe(0);
   expect(out.reason).toContain('the first read showed unsent');
   expect(out.reason).toContain('nothing was typed');
+  expect(out.prompts).toEqual([]);
   expect(UNSENT).toContain('RULES_RECEIVED');
 });
