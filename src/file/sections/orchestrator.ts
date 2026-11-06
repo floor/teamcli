@@ -8,9 +8,10 @@ export const orchestrator: Section = {
   // digest-shaped reads `name`, so a record written under the key keeps its bucket's value.
   key: 'coordinator',
   owner: true,
-  // `lead` first: the team file's own default word is what `resolveLeadField` reads when no seat
-  // carries the mark, and the value this section stores is the resolved lead either way.
-  after: ['seats', 'lead'],
+  // `lead`, `in_project`, and `entity` first: the team file's own default word and its declared
+  // home project and entity are what `resolveLeadField` reads when no seat carries the mark, and
+  // the value this section stores is the resolved lead either way.
+  after: ['seats', 'lead', 'in_project', 'entity'],
   validate(entry, ctx) {
     // The key is still read, and the file may put `leads: true` on the lead's seat instead. The
     // notice says so once, at the key's line, whether or not the mark stands beside it.

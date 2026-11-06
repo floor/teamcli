@@ -401,7 +401,7 @@ function instanceLines(approved: string, source: SeatBlock, name: string): strin
 
 /**
  * Rewrites `fromName` to `toName` in the file's `seats:` list, and also updates
- * top-level `coordinator:` / `operator:` or `grant.seat:` when they name `fromName`.
+ * top-level `coordinator:` / `operator:` / `lead:` or `grant.seat:` when they name `fromName`.
  */
 export function renameSeat(text: string, fromName: string, toName: string): string {
   const block = seatBlocks(text).find((item) => item.name === fromName && item.count <= 1);
@@ -424,7 +424,7 @@ export function renameSeat(text: string, fromName: string, toName: string): stri
       continue;
     }
     if (ind === 0) {
-      const m = /^(coordinator|operator):\s*(.*)$/.exec(line);
+      const m = /^(coordinator|operator|lead):\s*(.*)$/.exec(line);
       if (m && scalar(m[2] ?? '') === fromName) {
         lines[i] = setValue(line, toName);
       }

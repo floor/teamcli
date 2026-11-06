@@ -92,7 +92,7 @@ function projectLead(world: World, word: string): void {
     '    name: Acme',
     '    entity: floor',
     '    lead: null',
-    `    teams: [${teamIdOf(world.root)}]`,
+    `    teams: ["${teamIdOf(world.root)}"]`,
     `    lead_seat: ${word}`,
     `    provenance: ${prov}`,
     '',
@@ -101,7 +101,7 @@ function projectLead(world: World, word: string): void {
 }
 
 /** The team file: five declared seats, so every level's word can name one of them. */
-function teamText(options: { lead?: string; mark?: string } = {}): string {
+function teamText(options: { lead?: string; mark?: string; inProject?: string } = {}): string {
   const seat = (name: string, extra = ''): string => `  - role: implementer
     name: ${name}
     cli: claude-code
@@ -113,7 +113,7 @@ ${extra}`;
   const marked = (name: string): string => (options.mark === name ? '    leads: true\n' : '');
   return `format: 1
 project: acme
-session: acme
+${options.inProject !== undefined ? `in_project: ${options.inProject}\n` : ''}session: acme
 entity: floor
 operator: worker
 ${options.lead !== undefined ? `lead: ${options.lead}\n` : ''}workspace:
@@ -159,6 +159,32 @@ describe('the default lead, end to end', () => {
     entityLead(at.home, 'alpha');
     projectLead(at, 'beta');
     expect(leadOf(load(at))).toBe('beta');
+  });
+
+  test('in_project declared in team.yaml resolves the home project lead_seat before the team is registered in projects.yaml', () => {
+    const at = world();
+    universeLead(at.home, 'lead');
+    entityLead(at.home, 'alpha');
+    const prov = '{ registered_by: owner, registered_at: "2026-11-05T00:00:00.000Z", updated_at: "2026-11-05T00:00:00.000Z" }';
+    writeFileSync(
+      projectsFile(at.home),
+      [
+        'projects:',
+        '  acme:',
+        '    name: Acme',
+        '    entity: floor',
+        '    lead: null',
+        '    teams: []',
+        '    lead_seat: beta',
+        `    provenance: ${prov}`,
+        '',
+      ].join('\n'),
+    );
+    expect(readLeadChain({ home: at.home, root: at.root, inProject: 'Acme' })).toEqual({
+      ok: true,
+      chain: { project: 'beta' },
+    });
+    expect(leadOf(load(at, teamText({ inProject: 'Acme' })))).toBe('beta');
   });
 
   test('the team file\'s `lead:` overrides the project', () => {

@@ -642,11 +642,45 @@ async function executeRename(argv: string[], io: Io, sources: RenameSources): Pr
   const standing = (sources.standing ?? ((at) => approvalStanding(at, home)))(root);
   const where = { home, command: 'rename' };
   const originalText = readTeamText(path, where);
+  // The lead the approval pinned, carried through the rename when the renamed seat is the lead.
+  // A live chain that no longer resolves to that lead is drift: the rename would re-sign the
+  // record under a lead the owner never approved and move the roster's `leads` mark to it, so it
+  // is refused here — drift is reported, never signed over.
+  const approvedPin = standing.kind === 'verified' ? standing.record.approval.lead : undefined;
+  const movedPin =
+    approvedPin === undefined
+      ? undefined
+      : renames.reduce((name, rename) => (name === rename.from ? rename.to : name), approvedPin);
+  if (approvedPin !== undefined) {
+    const pinned = validateTeamFile(originalText, { home, root, lead: approvedPin });
+    if (!pinned.ok) {
+      io.stderr(
+        `team rename: the approval pinned lead "${approvedPin}", which this file no longer resolves; approve the team again before renaming\n`,
+      );
+      return 'refused';
+    }
+    if (pinned.team.orchestrator !== approvedPin) {
+      io.stderr(
+        `team rename: the file now leads with "${pinned.team.orchestrator}", but the approval pinned "${approvedPin}"; approve the team again before renaming\n`,
+      );
+      return 'refused';
+    }
+    if (pinned.team.orchestrator !== team.orchestrator) {
+      io.stderr(
+        `team rename: the live chain leads with "${team.orchestrator}", but the approval pinned "${approvedPin}"; approve the team again before renaming\n`,
+      );
+      return 'refused';
+    }
+  }
   let nextText = originalText;
   for (const { from, to } of renames) {
     nextText = renameSeat(nextText, from, to);
   }
-  const validated = validateTeamFile(nextText, { home, root });
+  const validated = validateTeamFile(nextText, {
+    home,
+    root,
+    ...(movedPin !== undefined ? { lead: movedPin } : {}),
+  });
   if (!validated.ok) {
     const first = validated.errors[0];
     io.stderr(
@@ -656,7 +690,7 @@ async function executeRename(argv: string[], io: Io, sources: RenameSources): Pr
   }
 
   const priorState = readState(dir);
-  writeTeamText(path, nextText, where);
+  writeTeamText(path, nextText, { ...where, ...(movedPin !== undefined ? { lead: movedPin } : {}) });
   recordSeatRenameOf(standing, validated.team, root, renames, home);
 
   const stateMoved = renameSeatInState(dir, renames);

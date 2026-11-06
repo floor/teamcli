@@ -40,12 +40,12 @@ export function diffLines(before: string, after: string): DiffLine[] {
   return out;
 }
 
-/** The changed lines only, as `- 12: old` and `+ 12: new`; empty when the texts are equal. */
+/** The changed lines only, in the unified diff's own spelling — `-old` and `+new`, the mark
+ *  against the line's own indentation, nothing else — and empty when the texts are equal. The
+ *  diff is read beside the approved copy it names; a line number between the mark and the text
+ *  would be a number in one of the two files, not in the change. */
 export function formatDiff(before: string, after: string): string[] {
   return diffLines(before, after)
     .filter((line) => line.kind !== 'same')
-    .map((line) => {
-      const mark = line.kind === 'removed' ? '-' : '+';
-      return line.text.length ? `${mark} ${line.line}: ${line.text}` : `${mark} ${line.line}:`;
-    });
+    .map((line) => `${line.kind === 'removed' ? '-' : '+'}${line.text}`);
 }

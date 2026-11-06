@@ -29,6 +29,9 @@ export type TeamTextOptions = {
   env?: Record<string, string | undefined>;
   /** The editing command, recorded on a registry write. */
   command?: string;
+  /** The lead the edited text is validated with: the verified approval's pin, when the caller
+   *  carries one across a seat rename. Absent, the edit is read under the live chain. */
+  lead?: string;
   now?: () => Date;
   /** A new team (team init): the registry is the target even before it holds a record. */
   create?: boolean;
@@ -141,10 +144,18 @@ export function writeTeamText(path: string, text: string, options: TeamTextOptio
     // other path is read as the file it names, and the chain finds no home project of it.
     const [dir, name] = TEAM_FILE.split('/') as [string, string];
     const root = basename(path) === name && basename(dirname(path)) === dir ? dirname(dirname(path)) : dirname(path);
-    const wrote = writeTeamFile(path, text, { home: options.home ?? homedir(), root });
+    const wrote = writeTeamFile(path, text, {
+      home: options.home ?? homedir(),
+      root,
+      ...(options.lead !== undefined ? { lead: options.lead } : {}),
+    });
     return wrote.ok ? { ok: true, target: 'file' } : wrote;
   }
-  const parsed = validateTeamFile(text, { home: target.home, root: target.root });
+  const parsed = validateTeamFile(text, {
+    home: target.home,
+    root: target.root,
+    ...(options.lead !== undefined ? { lead: options.lead } : {}),
+  });
   if (!parsed.ok) return { ok: false, errors: parsed.errors };
   const previous = readStoredTeamConfig(target.home, target.id);
   const now = (options.now ?? (() => new Date()))().toISOString();
