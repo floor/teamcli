@@ -4,7 +4,7 @@
 // never re-sealed, because a re-sign would launder exactly what the failed check refuses.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   appendEvent,
@@ -237,6 +237,31 @@ describe('migration of an older store', () => {
     const checked = verifyEventLogSeals(PROJECT, world.root, world.home, { kept: KEPT });
     if (!checked.ok) throw new Error(checked.reason);
     expect(checked.segments.map((segment) => segment.state)).toEqual(['sealed', 'sealed']);
+  });
+
+  test('a settled seal attempt stays settled when a later read still sees an unsealed segment', () => {
+    const world = makeWorld('pending-settled');
+    appendUntilSealed(world, 1, 'r');
+    stripSidecars(world, 1);
+    appendFileSync(`${livePath(world)}.1`, 'not a signed record\n');
+    const state = createReconcileState();
+    const pass = {
+      project: PROJECT,
+      root: world.root,
+      session: 'acme',
+      home: world.home,
+      now: NOW,
+      state,
+    };
+    const first = reconcilePass(pass);
+    expect(first.ok).toBe(true);
+    expect(state.sealAttempted).toBe(true);
+    expect(state.sealPending).toBe(false);
+    utimesSync(`${livePath(world)}.1`, new Date(), new Date());
+    const second = reconcilePass(pass);
+    expect(second.ok).toBe(true);
+    expect(state.sealAttempted).toBe(true);
+    expect(state.sealPending).toBe(false);
   });
 
   test('an oversized pre-migration open events.jsonl is not rotated by a sender append, and is split into sealed segments by the migration pass', () => {
