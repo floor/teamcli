@@ -282,6 +282,7 @@
     "test/daemon-handover.test.ts": 0,
     "test/daemon-health-bind-independent.test.ts": 1,
     "test/daemon-health-display.test.ts": 0,
+    "test/daemon-health-state-reads.test.ts": 3,
     "test/daemon-health.test.ts": 3,
     "test/daemon-heartbeat-policy.test.ts": 2,
     "test/daemon-hosted-watch.test.ts": 1,

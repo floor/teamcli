@@ -6,21 +6,27 @@
 // same state door and apply the same rules; the caller supplies the reading, the instant and the
 // daemon epoch, and this module never samples a source.
 import { readFileSync } from 'node:fs';
-import { isSeatId, readState } from '../../state.ts';
+import { isSeatId, readState, type State } from '../../state.ts';
 import { isPresenceBinding, readPresenceReading } from './contract.ts';
 import { presencePaths } from './spool.ts';
 import type { PresenceCanonicalPosition, PresenceSourceStatus } from './health.ts';
 import { reconcilePresenceProof } from './health.ts';
+
+/** The seat's managed binding in a state already read. A missing seat record or an absent
+ *  binding means no continuity may be granted. */
+export function presenceBindingFrom(state: State, session: string, seat: string): string | null {
+  const record = state.sessions[session]?.seats?.[seat];
+  return record !== undefined && isPresenceBinding(record.presence_binding)
+    ? record.presence_binding
+    : null;
+}
 
 /** The seat's current managed binding, read at the moment of use. A missing seat record, an
  *  absent binding or an unreadable team state means no continuity may be granted: the source's
  *  own binding is then fenced against nothing. */
 export function currentPresenceBinding(stateDir: string, session: string, seat: string): string | null {
   try {
-    const record = readState(stateDir).sessions[session]?.seats?.[seat];
-    return record !== undefined && isPresenceBinding(record.presence_binding)
-      ? record.presence_binding
-      : null;
+    return presenceBindingFrom(readState(stateDir), session, seat);
   } catch {
     return null;
   }
