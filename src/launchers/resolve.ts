@@ -158,17 +158,26 @@ export type ResolveContext = {
 
 const PLACEHOLDER_RE = /\{(root|team-home|cwd|inbox|session)\}/g;
 
-function expand(word: string, ctx: ResolveContext): string {
-  return word.replace(PLACEHOLDER_RE, (whole, name: string) => {
+function expand(word: string, ctx: ResolveContext): string | null {
+  let missing = false;
+  const expanded = word.replace(PLACEHOLDER_RE, (whole, name: string) => {
     switch (name) {
       case 'root': return ctx.teamRoot;
       case 'team-home': return ctx.teamHome;
       case 'cwd': return ctx.cwd;
-      case 'inbox': return ctx.inbox ?? whole;
-      case 'session': return ctx.sessionArg ?? whole;
+      case 'inbox':
+      case 'session': {
+        const value = name === 'inbox' ? ctx.inbox : ctx.sessionArg;
+        if (typeof value !== 'string' || value === '') {
+          missing = true;
+          return '';
+        }
+        return value;
+      }
       default: return whole;
     }
   });
+  return missing ? null : expanded;
 }
 
 function envEntries(env: Record<string, EnvValue> | undefined): ResolvedEnv[] {
@@ -202,6 +211,18 @@ export function resolveLaunch(
       chain: [], diagnostics,
     };
   };
+  let missingContext = false;
+  const expandWord = (word: string): string => {
+    const value = expand(word, ctx);
+    if (value === null) {
+      missingContext = true;
+      return '';
+    }
+    return value;
+  };
+  const contextFailure = (): ResolvedLaunch => fail(
+    'a consumed placeholder requires nonempty inbox or session context', 'E_PLACEHOLDER_CONTEXT',
+  );
 
   // Walk the reference chain with cycle detection. The kind rules make cycles unreachable
   // (an endpoint's prefix is checked to be an identity, which has no outgoing reference;
@@ -255,9 +276,11 @@ export function resolveLaunch(
   }
   let executable = '';
   if (terminal.kind === 'custom') {
-    executable = expand((terminal.argv as string[])[0] ?? '', ctx);
+    executable = expandWord((terminal.argv as string[])[0] ?? '');
+    if (missingContext) return contextFailure();
   } else if (terminal.executable !== undefined) {
-    executable = expand(terminal.executable, ctx);
+    executable = expandWord(terminal.executable);
+    if (missingContext) return contextFailure();
     if (ctx.existingPaths === undefined) {
       diagnostics.push({
         code: 'W_EXECUTABLE_UNVERIFIED',
@@ -454,7 +477,7 @@ export function resolveLaunch(
   }
   for (const def of chain) {
     if (def.kind === 'custom') {
-      for (const entry of classifyArgs((def.argv ?? []).slice(1))) argv.push(expand(entry.word, ctx));
+      for (const entry of classifyArgs((def.argv ?? []).slice(1))) argv.push(expandWord(entry.word));
       continue;
     }
     const plan = planFor(def);
@@ -468,9 +491,10 @@ export function resolveLaunch(
     plan.entries.forEach((entry, index) => {
       if (folded.has(index)) return;
       if (overriddenClasses.has(entry.cls)) return;
-      argv.push(expand(entry.word, ctx));
+      argv.push(expandWord(entry.word));
     });
   }
+  if (missingContext) return contextFailure();
   for (const arg of caller) {
     if (terminal.kind === 'custom' && (terminal.args_mode ?? 'append') === 'refuse') {
       return fail(`custom launcher "${terminal.name}" refuses caller arguments (args_mode: refuse)`, 'E_ARG_REFUSED');
@@ -482,12 +506,12 @@ export function resolveLaunch(
     switch (policy) {
       case 'pass_through':
       case 'override':
-        argv.push(expand(arg.word, ctx));
+        argv.push(expandWord(arg.word));
         break;
       case 'merge':
         // A settings-class word under merge was folded as the top layer above and is never
         // an argv word; merge on any other class is refused at validation (E_ARG_POLICY).
-        if (arg.cls !== 'settings') argv.push(expand(arg.word, ctx));
+        if (arg.cls !== 'settings') argv.push(expandWord(arg.word));
         break;
       case 'strip':
         diagnostics.push({
@@ -501,6 +525,7 @@ export function resolveLaunch(
         return fail(`caller argument "${arg.word}" is of class ${arg.cls}, which launcher "${terminal.name}" refuses`, 'E_ARG_REFUSED');
     }
   }
+  if (missingContext) return contextFailure();
 
   // Resume: teamcli_wins beats the preset's resume state whenever TeamCLI passes a session.
   let resume: ResolvedResume = { kind: 'none' };
@@ -523,7 +548,8 @@ export function resolveLaunch(
         resume = { kind: 'preset_fixed', session: resumeBlock.path as string };
         break;
       case 'state_file': {
-        const path = expand(resumeBlock.path ?? '', ctx);
+        const path = expandWord(resumeBlock.path ?? '');
+        if (missingContext) return contextFailure();
         if (ctx.existingPaths === undefined) {
           diagnostics.push({
             code: 'W_RESUME_STATE_UNVERIFIED',
@@ -551,7 +577,10 @@ export function resolveLaunch(
   }
 
   // Writable folders and the sandbox verdict.
-  const folders = (terminal.writable_folders ?? []).map((entry) => expand(entry.path, ctx));
+  const folders = (terminal.writable_folders ?? []).map((entry) => expandWord(entry.path));
+  const cwd = (terminal.kind === 'preset' || terminal.kind === 'custom') && terminal.cwd !== undefined
+    ? expandWord(terminal.cwd) : ctx.cwd;
+  if (missingContext) return contextFailure();
   const sandboxDiagnostics = checkSandbox({
     harness,
     cwd: ctx.cwd,
@@ -572,7 +601,7 @@ export function resolveLaunch(
     executable: argv[0] ?? executable,
     argv,
     env: [...merged.values()],
-    cwd: (terminal.kind === 'preset' || terminal.kind === 'custom') && terminal.cwd !== undefined ? expand(terminal.cwd, ctx) : ctx.cwd,
+    cwd,
     settings: settingsObject,
     resume,
     sandbox: { harness, mechanism, folders },

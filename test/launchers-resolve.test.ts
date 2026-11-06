@@ -353,6 +353,112 @@ describe('fixed resume identity', () => {
   });
 });
 
+describe('consumed optional placeholder context', () => {
+  const preset = { format: 1, name: 'context-example', kind: 'preset', harness: 'claude-code',
+    writable_folders: [{ path: '{root}' }] };
+  const custom = { format: 1, name: 'context-example', kind: 'custom', argv: ['/bin/example'] };
+  function run(raw: unknown, optional: Record<string, unknown> = {}, args: string[] = []) {
+    return resolveLaunch({ launcher: 'context-example', args },
+      discover([{ level: 'team', files: { 'context-example.yaml': raw } }]),
+      { ...CTX, existingPaths: undefined, ...optional } as ResolveContext);
+  }
+  function sites(token: string): [string, unknown, string[]][] {
+    const word = '/srv/example/' + token + '/suffix';
+    return [
+      ['custom executable', { ...custom, argv: [word] }, []],
+      ['pinned executable', { ...preset, executable: word }, []],
+      ['preset fixed argv', { ...preset, args: ['--model', word] }, []],
+      ['custom fixed argv', { ...custom, argv: ['/bin/example', word] }, []],
+      ['caller pass', preset, [word]],
+      ['caller override', { ...preset, arg_policy: { model: 'override' } }, ['--model', word]],
+      ['selected state path', { ...preset, resume: { mode: 'state_file', path: word, precedence: 'preset_wins' } }, []],
+      ['writable folder', { ...preset, writable_folders: [{ path: '{root}' }, { path: word }] }, []],
+      ['preset cwd', { ...preset, cwd: word }, []],
+      ['custom cwd', { ...custom, cwd: word }, []],
+    ];
+  }
+  for (const [token, key] of [['{inbox}', 'inbox'], ['{session}', 'sessionArg']] as const) {
+    for (const [site, raw, args] of sites(token)) {
+      test(`${token} missing/malformed at ${site} returns a closed result`, () => {
+        for (const value of [undefined, null, '', 42, false, {}]) {
+          const out = run(raw, { [key]: value }, args);
+          expect(out.ok).toBe(false);
+          expect(codes(out.diagnostics)).toContain('E_PLACEHOLDER_CONTEXT');
+          expect(out).toMatchObject({ harness: '', executable: '', argv: [], env: [], chain: [],
+            resume: { kind: 'none' }, sandbox: { harness: '', mechanism: '', folders: [] } });
+          const contextError = out.diagnostics.find((d) => d.code === 'E_PLACEHOLDER_CONTEXT');
+          expect(JSON.stringify(contextError)).not.toContain('/srv/example/');
+          expect(JSON.stringify(contextError)).not.toContain(token);
+        }
+      });
+      test(`${token} valid bytes at ${site} resolve without mutation`, () => {
+        const value = 'Ω $& $$ $` ' + "'" + ' $(literal); {session}{inbox}';
+        const before = JSON.stringify(raw);
+        const out = run(raw, { [key]: value }, args);
+        expect(out.ok).toBe(true);
+        expect(codes(out.diagnostics)).not.toContain('E_PLACEHOLDER_CONTEXT');
+        const expected = '/srv/example/' + value + '/suffix';
+        if (site.includes('executable')) expect(out.executable).toBe(expected);
+        else if (site.includes('cwd')) expect(out.cwd).toBe(expected);
+        else if (site === 'selected state path') expect(out.resume).toEqual({ kind: 'preset_state_file', path: expected });
+        else if (site === 'writable folder') expect(out.sandbox.folders).toContain(expected);
+        else expect(out.argv).toContain(expected);
+        expect(JSON.stringify(raw)).toBe(before);
+      });
+    }
+  }
+  test('a file-valued settings merge word is refused before its placeholder is consumed', () => {
+    const word = '/srv/example/{inbox}/suffix';
+    const out = run({ ...preset, arg_policy: { settings: 'merge' } }, {}, ['--settings', word]);
+    expect(out.ok).toBe(false);
+    expect(codes(out.diagnostics)).toContain('E_SETTINGS_FILE');
+    expect(codes(out.diagnostics)).not.toContain('E_PLACEHOLDER_CONTEXT');
+    expect(JSON.stringify(out.diagnostics)).not.toContain(word);
+    expect(JSON.stringify(out.diagnostics)).not.toContain('{inbox}');
+  });
+  test('missing optional context cannot become executable or fresh-session fallback', () => {
+    for (const raw of [{ ...preset, executable: '/opt/example/{inbox}' },
+      { ...preset, resume: { mode: 'state_file', path: '/srv/example/{inbox}', precedence: 'preset_wins' } }]) {
+      const out = run(raw, { existingPaths: [] });
+      expect(out.ok).toBe(false);
+      expect(codes(out.diagnostics)).toContain('E_PLACEHOLDER_CONTEXT');
+      expect(codes(out.diagnostics)).not.toContain('W_EXECUTABLE_MISSING');
+      expect(codes(out.diagnostics)).not.toContain('W_RESUME_STATE_MISSING');
+      expect(out.argv).toEqual([]);
+    }
+  });
+  test('embedded/repeated mixed tokens substitute original templates once', () => {
+    const value = 'Ω {session} $& $$ ' + "'" + ' $(literal)';
+    const template = '{root}|{team-home}|{cwd}|{inbox}{inbox}|{session}';
+    const out = run({ ...preset, args: [template] }, { inbox: value, sessionArg: '{inbox}' });
+    expect(out.ok).toBe(true);
+    expect(out.argv).toEqual(['claude-code', CTX.teamRoot + '|' + CTX.teamHome + '|' + CTX.cwd + '|' + value + value + '|{inbox}']);
+    const space = run({ ...preset, args: ['{inbox}'] }, { inbox: ' ' });
+    expect(space.ok).toBe(true);
+    expect(space.argv).toEqual(['claude-code', ' ']);
+  });
+  test('unused stripped/overridden words and bypassed state file need no context', () => {
+    const stripped = run({ ...preset, arg_policy: { settings: 'strip' } }, {}, ['--settings', '{inbox}']);
+    expect(stripped.ok).toBe(true);
+    expect(stripped.argv).toEqual(['claude-code']);
+    const overridden = run({ ...preset, args: ['--model', '{inbox}'], arg_policy: { model: 'override' } }, {}, ['--model', 'example-model']);
+    expect(overridden.ok).toBe(true);
+    expect(overridden.argv).toEqual(['claude-code', '--model', 'example-model']);
+    const bypassed = run({ ...preset, resume: { mode: 'state_file', path: '{inbox}', precedence: 'teamcli_wins' } }, { sessionArg: 'example-session' });
+    expect(bypassed.ok).toBe(true);
+    expect(bypassed.resume).toEqual({ kind: 'teamcli', session: 'example-session' });
+  });
+  test('non-template argv and non-expanded fields retain existing behavior', () => {
+    const raw = { ...preset, args: ['--model', 'example-model'], env: { EXAMPLE_LITERAL: '{inbox}' },
+      harness_settings: { example: '{session}' }, resume: { mode: 'fixed', path: 'example-literal', precedence: 'preset_wins' } };
+    const out = run(raw, {}, ['--effort', 'high']);
+    expect(out.ok).toBe(true);
+    expect(out.argv).toEqual(['claude-code', '--model', 'example-model', '--effort', 'high']);
+    expect(out.env).toContainEqual({ name: 'EXAMPLE_LITERAL', value: '{inbox}' });
+    expect(out.resume).toEqual({ kind: 'preset_fixed', session: 'example-literal' });
+  });
+});
+
 describe('sandbox verdicts', () => {
   const { launchers } = discover([VALID]);
   const discovery = { launchers, diagnostics: [] as Diagnostic[] };
