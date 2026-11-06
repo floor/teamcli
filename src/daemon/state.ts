@@ -178,6 +178,8 @@ export type DaemonChoresState = {
 
 export type DaemonState = {
   format: 1;
+  /** Internal opt-in owner nonce. Absent when native presence feed hosting is off. */
+  nativeFeedOwner?: string;
   pid: number;
   uid: number;
   since: string;
@@ -259,6 +261,8 @@ function stateOf(record: Record<string, unknown>): DaemonState | null {
   const mailbox = mailboxOf(record.mailbox);
   return {
     format: 1,
+    ...(typeof record.nativeFeedOwner === 'string' && /^[a-f0-9]{32}$/.test(record.nativeFeedOwner)
+      ? { nativeFeedOwner: record.nativeFeedOwner } : {}),
     pid: record.pid as number,
     uid: record.uid,
     since: record.since as string,

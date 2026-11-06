@@ -444,6 +444,7 @@ type Internals = {
   stateDir: string;
   socketPath: string;
   sink: (notification: unknown) => CodexPresenceOutcome;
+  frame?: (text: string) => void;
   now: () => Date;
   connectTimeoutMs: number;
   retryMs: number;
@@ -775,6 +776,10 @@ function applyBoundNotification(
 
 function handleFrame(input: Internals, text: string, receipt: Date): void {
   if (input.closed || !input.admissions) return;
+  // Original text, before parsing or response-role handling; never stringify an object frame.
+  if (input.frame !== undefined && bindingCurrent(input)) {
+    try { input.frame?.(text); } catch { /* advisory feed cannot break the existing source */ }
+  }
   let message: unknown;
   try {
     message = JSON.parse(text);
@@ -908,6 +913,8 @@ export function codexPresenceFor(input: {
   /** The host's presence-hosting gate, default off. */
   feature: boolean;
   sink?: (notification: unknown) => CodexPresenceOutcome;
+  /** Existing connection only. No controller registration or approval response is supplied. */
+  frame?: (text: string) => void;
   now?: () => Date;
   connectTimeoutMs?: number;
   retryMs?: number;
@@ -950,6 +957,7 @@ export function codexPresenceFor(input: {
       notification,
     )),
     now,
+    ...(input.frame === undefined ? {} : { frame: input.frame }),
     connectTimeoutMs: input.connectTimeoutMs ?? CODEX_CONNECT_TIMEOUT_MS,
     retryMs: input.retryMs ?? CODEX_RETRY_MS,
     wired: null,

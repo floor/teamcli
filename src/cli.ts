@@ -203,7 +203,7 @@ export async function main(argv: string[], io: Io): Promise<number> {
   if (name === 'presence-hook') {
     if (rest.includes('--help') || rest.includes('-h')) return printHelp(io, PRESENCE_HOOK_USAGE);
     const { default: run } = await import('./daemon/presence/hook.ts');
-    return run(rest);
+    return run(rest, undefined, io);
   }
   const load = commands[name];
   if (!load) {

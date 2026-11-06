@@ -113,6 +113,16 @@ export type EventPayload = {
   presence_event_id?: string;
   presence_observed_at?: string;
   presence_seq?: number;
+  /** On `seat.status`: native advisory only, never permission to answer or dispatch. */
+  status_binding?: string;
+  status_seq?: number;
+  status_source?: string;
+  status_availability?: string;
+  status_advisory?: string;
+  status_continuity?: string;
+  status_gate?: string;
+  status_process_confirmation?: string;
+  status_reason?: string;
   /** On a message step (`message.staged`, `webhook.posted`, `leg.tried`, `wake.retried`): the
    *  step's own machine word — the walk's (`delivered`, `refused`, `unreachable`, `held`,
    *  `timeout`) or the webhook post's (`posted`, `failed`, `unknown`) — never free text. A reader
@@ -851,9 +861,11 @@ const OPTIONAL_STRING_FIELDS = [
   'presence_binding',
   'presence_event_id',
   'presence_observed_at',
+  'status_binding', 'status_source', 'status_availability', 'status_advisory',
+  'status_continuity', 'status_gate', 'status_process_confirmation', 'status_reason',
 ] as const;
 
-const OPTIONAL_SEQUENCE_FIELDS = ['dropped_oldest_seq', 'dropped_newest_seq', 'presence_seq'] as const;
+const OPTIONAL_SEQUENCE_FIELDS = ['dropped_oldest_seq', 'dropped_newest_seq', 'presence_seq', 'status_seq'] as const;
 
 /** Measured quantities carry a zero legitimately: an attempt refused before it dialed took no
  *  time. They are not sequences, and the one-based check above would refuse the honest value. */
