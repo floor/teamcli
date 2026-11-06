@@ -223,6 +223,18 @@ describe('launch-scoped channel config', () => {
     lease.release();
   });
 
+  test('a leftover channel lock is left for a hand cleanup', () => {
+    const w = world();
+    const lock = join(w.lobby, 'alpha/.team-channel.lock');
+    mkdirSync(join(w.lobby, 'alpha'), { mode: 0o700 });
+    mkdirSync(lock, { mode: 0o700 });
+    const read = prepareChannelConfig(w.input());
+    expect(read.ok).toBe(false);
+    if (read.ok) return;
+    expect(read.reason).toBe('a leftover channel lock is in the seat folder; remove .team-channel.lock by hand and launch again');
+    expect(existsSync(lock)).toBe(true);
+  });
+
   test('a dead config writer leaves a closed claim that a later launch never reclaims', () => {
     const w = world();
     const script = `import { prepareChannelConfig } from ${JSON.stringify(join(import.meta.dir, '../src/mcp/launch-config.ts'))};
