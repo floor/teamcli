@@ -267,8 +267,10 @@ const UNIT_PATH = /^test\/\S+?\.(?:test|spec)\.ts(?:#\d+\/\d+)?$/;
  * A unit's measured time in a JUnit report. Bun nests a suite per top-level describe under the
  * file suite, and both carry the file. The file suite is the unit. A later suite for a file
  * already counted is the describe, and its time is already inside the file suite, so it is not
- * added again. A suite whose name is not a unit path and whose file attribute is not one either
- * stays under that name, and the caller refuses it.
+ * added again. Only a unit-named row marks its file covered: a runner that emits describe rows
+ * without the outer suite then adds every describe's time under the file, instead of keeping the
+ * first one and silently dropping the rest. A suite whose name is not a unit path and whose file
+ * attribute is not one either stays under that name, and the caller refuses it.
  */
 export function unitTimesFromJunit(xml: string, label?: string): Record<string, number> {
   const times: Record<string, number> = {};
@@ -297,8 +299,9 @@ export function unitTimesFromJunit(xml: string, label?: string): Record<string, 
     if (UNIT_PATH.test(row.name)) continue;
     const file = row.file !== undefined && UNIT_PATH.test(row.file) ? row.file : null;
     if (file !== null) {
+      // A describe row never covers its file: without the outer suite, the file's time is the
+      // describes' sum, and covering it after the first would undercount the rest.
       if (covered.has(file)) continue;
-      covered.add(file);
       add(file, row.ms);
       continue;
     }
