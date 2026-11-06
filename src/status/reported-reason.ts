@@ -21,7 +21,14 @@ function hidden(code: number): boolean {
   return false;
 }
 
-/** One quoted reason. C0 controls, DEL, C1, line separators and bidi controls are `\\u` escapes. */
+/** A `\\u` escape. Format characters above the basic plane use the braced form. */
+function escapeCode(code: number): string {
+  const hex = code.toString(16);
+  return code <= 0xffff ? `\\u${hex.padStart(4, '0')}` : `\\u{${hex}}`;
+}
+
+/** One quoted reason. C0 controls, DEL, C1, line separators, bidi controls and format
+ *  characters are escapes, so none of them is drawn inside the quote. */
 function quoteReason(text: string): string {
   let out = '"';
   for (const char of text) {
@@ -30,8 +37,8 @@ function quoteReason(text: string): string {
       out += `\\${char}`;
       continue;
     }
-    if (code <= 0x1f || hidden(code)) {
-      out += `\\u${code.toString(16).padStart(4, '0')}`;
+    if (code <= 0x1f || hidden(code) || /\p{Cf}/u.test(char)) {
+      out += escapeCode(code);
       continue;
     }
     out += char;
