@@ -113,7 +113,8 @@ function makeHarness(fixture: Fixture, probe: Probe): { sources: RestartSources;
     }
     for (const [pane, slot] of newPanes) {
       if (slot.agent) {
-        list.push({ name: slot.name ?? '', agent: 'claude-code', pane, workspace: slot.workspace, status: 'idle', cwd: fixture.root });
+        // A blank herdr name is null. An empty string is another seat's name.
+        list.push({ name: slot.name, agent: 'claude-code', pane, workspace: slot.workspace, status: 'idle', cwd: fixture.root });
       }
     }
     return list;

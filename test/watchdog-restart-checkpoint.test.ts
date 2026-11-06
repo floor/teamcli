@@ -231,7 +231,8 @@ function makeRestartHarness(
         }]
       : []),
     ...[...newPanes.entries()].filter(([, slot]) => slot.agent).map(([pane, slot]) => ({
-      name: slot.name ?? '',
+      // A blank herdr name is null. An empty string is another seat's name.
+      name: slot.name,
       agent: 'claude-code',
       pane,
       workspace: slot.workspace,

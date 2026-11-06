@@ -468,7 +468,8 @@ function restartHarness(world: RestartWorld) {
       : []),
     { name: 'lead', agent: 'claude-code', pane: 'pane-lead', workspace: 'ws-lead', status: 'idle' as const, cwd: world.root, session: 'sess-lead-only' },
     ...[...created.entries()].filter(([, slot]) => slot.agent).map(([pane, slot]) => ({
-      name: slot.name ?? '',
+      // A blank herdr name is null. An empty string is another seat's name.
+      name: slot.name,
       agent: 'claude-code',
       pane,
       workspace: slot.workspace,

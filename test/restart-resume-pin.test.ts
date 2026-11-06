@@ -197,7 +197,8 @@ function makeHarness(fixture: Fixture): Harness {
       ? [{ name: 'worker', agent: 'claude-code', pane: 'pane-old', workspace: 'ws-old', status: 'idle' as const, cwd: fixture.root, session: 'sess-latest' }]
       : []),
     ...[...newPanes.entries()].filter(([, slot]) => slot.agent).map(([pane, slot]) => ({
-      name: slot.name ?? '', agent: 'claude-code', pane, workspace: slot.workspace, status: 'idle' as const, cwd: fixture.root,
+      // A blank herdr name is null. An empty string is another seat's name.
+      name: slot.name, agent: 'claude-code', pane, workspace: slot.workspace, status: 'idle' as const, cwd: fixture.root,
     })),
   ];
 
