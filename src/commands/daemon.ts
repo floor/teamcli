@@ -28,7 +28,7 @@ import { admitGeneral } from '../client/general-grant.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { serveChoresChild } from '../daemon/chores/child.ts';
 import { spawnMailboxChild } from '../daemon/mailbox/spawn.ts';
-import { mailboxHeartbeatFresh, retireShuttles } from '../daemon/mailbox/retire.ts';
+import { mailboxHeartbeatFresh, retireShuttles, SHUTTLE_RETIREMENT_HELD } from '../daemon/mailbox/retire.ts';
 import { readChoresInherit } from '../daemon/chores/token.ts';
 import {
   FAULT_POLL_MS,
@@ -1555,11 +1555,11 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     entry: fullProgram.entry,
     root: fullProgram.runtime?.root ?? dirname(fullProgram.entry),
   });
-  // The shuttle units come out only after the router has answered. A daemon that has not
-  // reported that heartbeat keeps them, and a unit that stays is named. The child is left up.
-  // A non-account home install skips shuttle retirement so it never touches the live user domain's
-  // shuttle jobs.
-  if (isAccountHome(targetHome, account) && mailboxHeartbeatFresh(targetHome)) {
+  // The shuttle units stay. The router child answers a tick and cannot route an ask, so a
+  // fresh heartbeat is not a reason to stop or remove them. The gate opens only once that
+  // path exists and an independent scene has exercised it. A non-account home install skips
+  // the step entirely, so it never touches the live user domain's shuttle jobs.
+  if (!SHUTTLE_RETIREMENT_HELD && isAccountHome(targetHome, account) && mailboxHeartbeatFresh(targetHome)) {
     const retired = retireShuttles({
       heartbeatFresh: true,
       retire: (label) => sources.retireShuttle?.(label) ?? retireShuttleUnit(manager, targetHome, label),
@@ -1569,10 +1569,9 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       io.stderr(`team daemon: ${one.label} was not retired: ${one.why}\n`);
     }
   }
-  // Only now, with the new daemon answering and the shuttles it replaces retired, do the
-  // lobby's kit folders move into the runtime home: a folder a unit that just came out
-  // named is no longer held. A failed or rolled-back install above never reaches this
-  // line, so the old daemon and the old folders stay a consistent pair.
+  // The kit folders move only after the new daemon is answering. A folder a loaded unit
+  // still names stays where it is. A failed or rolled-back install above never reaches
+  // this line, so the old daemon and the old folders stay a consistent pair.
   const migration = runRuntimeMigrationStep(targetHome, named.roots, false, manager, sources);
   if (parsed.json) {
     writeJson(io, 'team.daemon-install', {
