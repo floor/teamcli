@@ -322,8 +322,9 @@ describe('the live line', () => {
     const codex = { cli: 'codex', model: 'GPT Sol', version: '6', display: 'GPT-6 Sol' };
     expect(liveDisplayAgent(codex, '  GPT-6-Astra xhigh · Context 100% left').line).toBe('GPT Astra 6 xhigh');
     const cursor = { cli: 'cursor', model: 'Grok', version: '4.7', display: 'Grok 4.7' };
-    expect(liveDisplayAgent(cursor, '  Grok 4.7 256K High').line).toBe('Grok 4.7 high');
-    expect(liveDisplayAgent(cursor, '  Grok 4.7 256K Extra High  Run Everything').line).toBe('Grok 4.7 xhigh');
+    // The pane draws the workspace line under the status row. Without it the row does not count.
+    expect(liveDisplayAgent(cursor, '  Grok 4.7 256K High\n  <workspace>\n').line).toBe('Grok 4.7 high');
+    expect(liveDisplayAgent(cursor, '  Grok 4.7 256K Extra High  Run Everything\n  <workspace>\n').line).toBe('Grok 4.7 xhigh');
     const agy = { cli: 'antigravity', model: 'Gemini Flash', version: '3.8', display: 'Gemini 3.8 Flash' };
     expect(liveDisplayAgent(agy, 'Gemini 4 Argon · medium').line).toBe('Gemini Argon 4 medium');
     expect(liveDisplayAgent(agy, 'Gemini 9 Mystery · medium').line).toBe('Gemini 3.8 Flash medium');

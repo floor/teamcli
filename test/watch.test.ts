@@ -2556,7 +2556,8 @@ describe('the sidebar of a running seat', () => {
     cursorSeat.model = 'Grok';
     cursorSeat.version = '4.7';
     cursorSeat.display = 'Grok 4.7';
-    const cursorScene = live({ 'claude-operator-acme': { status: 'idle', screen: '  Grok 4.7 256K High\n' } });
+    // The pane draws the workspace line under the status row. Without it the row does not count.
+    const cursorScene = live({ 'claude-operator-acme': { status: 'idle', screen: '  Grok 4.7 256K High\n  <workspace>\n' } });
     const cursor = pass({ team: file, watch: file.watch, state: emptySession(), live: cursorScene, machine: fine, now: 0, memory: newMemory() });
     expect(line(cursor, 'claude-operator-acme')).toBe('Grok 4.7 high');
 
