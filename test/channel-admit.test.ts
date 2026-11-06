@@ -22,7 +22,7 @@ import { listenerPath, receiptPath } from '../src/mcp/inbox.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
 import { registerAgent, type Agent } from '../src/registry/agents.ts';
 import { upsertProject } from '../src/registry/projects.ts';
-import { readTeams, teamIdOf, teamsFile, upsertTeam } from '../src/registry/teams.ts';
+import { readTeams, setTeamProjectMembership, teamIdOf, teamsFile, upsertTeam } from '../src/registry/teams.ts';
 import { signRecord, type RecordPayload } from '../src/send/record.ts';
 import { testIo } from './helpers.ts';
 
@@ -627,14 +627,16 @@ describe('same-team sender and projected-roster uniqueness', () => {
       name: 'proj-main',
       entity: null,
       lead: projectLeadTeam.worker.id,
-      teams: [projectLeadTeam.teamId, subTeam.teamId],
       by: 'owner',
     });
     // Both teams belong to the same project `proj-main` so `projectLeadTeam.worker` (as project lead) reaches `subTeam.lead`.
+    // Membership lives on the team record on this base, so it is written through the registry's own seam.
+    setTeamProjectMembership(home, projectLeadTeam.teamId, 'proj-main', { by: 'owner' });
     writeFileSync(
       subTeam.file,
       readFileSync(subTeam.file, 'utf8').replace('project: proj-sub', 'project: proj-main'),
     );
+    setTeamProjectMembership(home, subTeam.teamId, 'proj-main', { by: 'owner' });
     const reloaded = readTeamConfig(subTeam.root, { home });
     if (!reloaded.ok) throw new Error('failed to reload subTeam');
 
