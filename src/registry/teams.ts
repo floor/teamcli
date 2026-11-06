@@ -441,6 +441,8 @@ export type TeamSeed = {
   /** The project the file names this team sits in, as written, or null when it names none — the
    *  team is then its own project. Absent (undefined) leaves the registry's pointer as it is. */
   inProject?: string | null;
+  /** Served names from the file; only the owner's run in force may publish them. */
+  alsoIn?: readonly string[];
   /** The session the team file itself names, when this note runs under another (`up --session
    *  alt`). That session records the same lobby too, unless it already has one, so a plain
    *  `team check` — which reads the file's own session — finds the lobby back. */
@@ -455,7 +457,7 @@ export type TeamSeed = {
  * registry is a record of what the commands did, so a registry that cannot be written is a line
  * for the caller to say, not a reason for the command to fail. Returns that line, or null.
  */
-export function noteTeam(home: string, root: string, seed: TeamSeed, lifecycle: TeamLifecycle, by: string): string | null {
+export function noteTeam(home: string, root: string, seed: TeamSeed, lifecycle: TeamLifecycle, by: string, options: { owner?: boolean } = {}): string | null {
   const real = realRoot(root);
   const teamId = teamIdOf(real);
   const inProject = seed.inProject;
@@ -467,6 +469,13 @@ export function noteTeam(home: string, root: string, seed: TeamSeed, lifecycle: 
   }
   try {
     return withTeamProjectsLocks(home, () => {
+      // A run may have read the registries before waiting for these locks. Authorisation and
+      // the membership update must both use the records now held under the locks.
+      const memo = currentRunMemo();
+      memo?.teamsStrict.clear();
+      memo?.teamsTolerant.clear();
+      memo?.projects.delete(home);
+      memo?.projectsRaw.delete(home);
       // The lobby is recorded once per session: a session the registry holds a lobby for keeps it,
       // so editing the file's `entity` never moves a running team's seats. An explicit `lobby:` is
       // the owner's own declaration, not a derivation, and is re-recorded; a session with no entry
@@ -480,6 +489,18 @@ export function noteTeam(home: string, root: string, seed: TeamSeed, lifecycle: 
         if (inProject !== null) projectJoin(home, inProject, seed.entity, by);
         if (earlier && earlier.projectId !== projectId) projectLeave(home, earlier, projectId ?? null);
       }
+      // Resolve recorded projects under the same teams -> projects locks as the publication.
+      // A file declaration creates no served project and cannot cross an entity boundary.
+      // Routine seat/delegate/dev-mode runs preserve the last owner-recorded memberships.
+      let memberships: string[] | undefined;
+      if (options.owner === true && seed.alsoIn !== undefined) {
+        const homeId = projectId !== undefined ? projectId : earlier?.projectId ?? null;
+        const served = seed.entity === null || homeId === null ? [] : seed.alsoIn.flatMap(name => {
+          const project = projects.byName(home, name);
+          return project?.id && project.entity === seed.entity ? [project.id] : [];
+        });
+        memberships = [...new Set([...(homeId === null ? [] : [homeId]), ...served])];
+      }
       const prior = earlier?.lobbies[seed.session] ?? '';
       const current = seed.lobby ? resolveLobby(home, { lobby: seed.lobby }) : prior || resolveLobby(home, { entity: seed.entity });
       const lobbies: Record<string, string> = { ...(earlier?.lobbies ?? {}), [seed.session]: current };
@@ -487,6 +508,7 @@ export function noteTeam(home: string, root: string, seed: TeamSeed, lifecycle: 
       upsertTeam(home, teamId, {
         project: seed.project,
         projectId,
+        ...(memberships === undefined ? {} : { projects: memberships }),
         entity: seed.entity,
         session: seed.session,
         root: real,

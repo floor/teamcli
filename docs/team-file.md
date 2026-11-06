@@ -147,13 +147,21 @@ budgets:                      # the owner's: reserve or floor per account, marks
   session gets reused. A team the registry already lists keeps its recorded session over any
   default, so no default's move renames a live team; `team check` names the move and the
   `session:` line that keeps the old name.
-- `in_project` names the project this team sits in, by the project's display name (one path
+- `in_project` names this team's home project, by the project's display name (one path
   segment, 128 characters at most), while `project:` keeps meaning the team's own name;
-  `project_lead: true` beside it marks the team that leads that project — one team per project,
+  `project_lead: true` beside it marks the team that leads its home project — one team per project,
   and `team check` refuses a second. The project's record then carries the lead: the agent of the
   seat this record's `leads: true` marks as the team's lead, re-resolved on every launch, so a
   mark that moves in the record moves the record with it. Joining a project also moves the
   default session, as the `session` bullet above states.
+- `also_in: [project-y, project-z]` lists additional projects this team serves, using the same
+  short display names as `in_project`. It requires `in_project`, cannot repeat the home or a
+  served project, and defaults to an empty list. Only the home supplies settings, policies and
+  rules; `project_lead: true` leads the home alone. Both membership fields are non-owner sections
+  and change no approval fingerprint.
+  Served reach is recorded only by an owner launch or registration in force, for existing
+  projects of the same entity. A seat, delegate or dev-mode run preserves the previously
+  recorded list; declaring an unknown or foreign served project creates no project or reach.
 - `entity` names the entity this team belongs to (one path segment, 128 characters at most): the
   level above its project that a setting, the lobby's `<entity>` folder and a lead pair's reach
   are read from, and the name that makes two teams one entity's when both records carry it.

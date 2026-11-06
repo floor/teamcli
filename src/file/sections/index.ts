@@ -1,6 +1,7 @@
 import { format } from './format.ts';
 import { project } from './project.ts';
 import { inProject } from './in_project.ts';
+import { alsoIn } from './also_in.ts';
 import { projectLead } from './project_lead.ts';
 import { bus } from './bus.ts';
 import { entity } from './entity.ts';
@@ -48,6 +49,8 @@ export const SECTIONS: readonly Section[] = [
   // The project the team makes its own above; the project it sits in here. Non-owner and
   // additive, like `entity` and `lobby` below: absent in every file written before Phase 0b.
   inProject,
+  // Served projects add membership, never an owner section or another inheritance chain.
+  alsoIn,
   // The team-side `leads: true`: set by the one team that leads the project `in_project` names,
   // and read by the registry's writers. Non-owner and additive too, and it reads `in_project`, so
   // it runs after it.

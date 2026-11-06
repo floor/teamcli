@@ -29,6 +29,17 @@
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
       "$comment": "the project this team belongs to, by name; absent, the team is its own project"
     },
+    "also_in": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+      },
+      "uniqueItems": true,
+      "$comment": "additional projects this team serves; requires in_project and cannot repeat the home"
+    },
     "project_lead": {
       "type": "boolean",
       "$comment": "this team leads the project it sits in; one team per project declares it"

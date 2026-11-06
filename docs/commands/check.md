@@ -25,10 +25,12 @@ it with `team check: unknown option --session` and exit 2. `--repair` is this on
 the older one meets it with `team check: unknown option --repair` and exit 2. A run of the older reading says once
 on stderr which command now holds it, and `--pr` adds its own line.
 
-The registries answer for the team's place: a team the project registry names in two projects is a
-difference naming both, repaired by fixing the registry file, and so is a registry that cannot be
-read. A team whose file sets `project_lead: true` while another team of the same project sets it
-too is one as well — `the project <name> has <n> lead teams: <names>`, repaired with
+The registries answer for the team's place: a team may serve several projects, with one home
+project supplying its settings, policies and rules. A file with `also_in` but no `in_project`, or
+with the home repeated in `also_in`, is refused as it loads. `project_lead: true` requires a home
+and leads only that home. An unreadable registry remains a difference. A team whose file sets
+`project_lead: true` while another team of the same home project sets it too is one as well —
+`the project <name> has <n> lead teams: <names>`, repaired with
 `take "project_lead: true" off all but one of them`. The two herdr sidebar lines each file seat
 carries are compared on the same pass: a workspace label or display line that reads as neither the
 file's own text nor a line the watch may paint is a difference repaired with

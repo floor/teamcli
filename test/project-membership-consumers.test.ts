@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { Caller, SeatStanding } from '../src/caller.ts';
 import { admissionOf } from '../src/commands/send.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
+import { writePolicySet } from '../src/policy/index.ts';
 import { registerAgent, type Agent } from '../src/registry/agents.ts';
 import { get as getProject, projectsFile, readProjects, upsertProject } from '../src/registry/projects.ts';
 import { getTeam, rekeyTeamRecord, upsertTeam } from '../src/registry/teams.ts';
@@ -49,13 +50,14 @@ seats:
   for (const [id, seat] of [['team-a', sender], ['team-b', recipient]] as const) {
     const root = join(home, id);
     mkdirSync(root);
-    // The receiver's legacy record inherits entity membership through the project.
+    // Project reach requires both team records to name the same entity.
     upsertTeam(home, id, {
-      project: id, projectId: 'project-a', projects: ['project-a'], entity: id === 'team-a' ? 'entity-x' : null, session: seat.reach.session, root,
+      project: id, projectId: 'project-a', projects: ['project-a'], entity: 'entity-x', session: seat.reach.session, root,
       roster: [{ agent: seat.id, seat: seat.reach.seat, role: 'builder', leads: true }],
     });
   }
   upsertProject(home, 'project-a', { name: 'project-a', entity: 'entity-x', lead: sender.id });
+  expect(writePolicySet(home, { level: 'entity', target: 'entity-x', name: 'seats-cross-teams', value: false }, { now: NOW }).ok).toBe(true);
   const caller: Caller = { kind: 'seat', name: 'seat-a', pane: 'pane-lead', session: 'session-a' };
   const standing: SeatStanding = { session: 'session-a', recordedPane: 'pane-lead', stage: 'ready' };
   const judge = (from: Caller = caller, at: SeatStanding = standing, to: Agent = recipient) => admissionOf(

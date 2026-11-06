@@ -32,8 +32,9 @@ import { readAgents } from '../src/registry/agents.ts';
 import * as projectRegistry from '../src/registry/projects.ts';
 import { readTeams, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import type { NativePane } from '../src/send/native.ts';
+import { updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T01:00:00Z');
 const OWNER = { kind: 'owner' as const };
@@ -87,6 +88,8 @@ function world(): World {
   };
   file(rootA, `format: 1
 project: teamcli
+entity: org-alpha
+lobby: ${lobbyDir(home)}
 in_project: TeamCLI
 project_lead: true
 coordinator: lead
@@ -104,6 +107,8 @@ delivery_order: [mcp-inbox, typed]
 `);
   file(rootB, `format: 1
 project: teamcli.io
+entity: org-alpha
+lobby: ${lobbyDir(home)}
 in_project: TeamCLI
 coordinator: lead-io
 operator: lead-io
@@ -358,6 +363,20 @@ describe('a team serving two projects', () => {
 
     const parsed = validateTeamFile(readFileSync(join(w.rootA, '.agents', 'team.yaml'), 'utf8'));
     if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+    // Registration delivers the brief; a settled seat has also read it on its first turn.
+    deliverBriefs({
+      dir: join(w.rootA, '.agents'),
+      root: w.rootA,
+      session: parsed.team.session,
+      seats: parsed.team.seats.map((seat) => seat.name),
+      home: w.home,
+      at: NOW.toISOString(),
+    });
+    updateState(join(w.rootA, '.agents'), (state) => {
+      const session = state.sessions[parsed.team.session];
+      if (session === undefined) throw new Error('the fixture session was not registered');
+      session.watch = { pid: 1, heartbeat: NOW.toISOString() };
+    });
     const quiet: Live = {
       running: true,
       agents: [{ name: 'lead', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null }],

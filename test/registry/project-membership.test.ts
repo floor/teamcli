@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { parkInRuntimeTrash } from '../../src/file/runtime-trash.ts';
@@ -107,4 +107,34 @@ test('leaving a home clears its lead and preserves served membership', () => {
   expect(noteTeam(home, root, { ...fileSeed, inProject: null }, 'defined', 'test')).toBeNull();
   expect(getTeam(home, id)?.projects).toEqual(['served-a']);
   expect(projects.get(home, 'home-a')?.lead).toBeNull();
+});
+
+
+test('served publication checks fresh project entities under both locks and creates nothing', () => {
+  const root = join(home, 'root-a');
+  projects.upsertProject(home, 'served-a', { name: 'Served A', entity: 'org-alpha' });
+  enterRunMemo();
+  expect(projects.get(home, 'served-a')?.entity).toBe('org-alpha');
+  const path = projects.projectsFile(home);
+  const before = readFileSync(path, 'utf8');
+  const changed = before.replace('entity: org-alpha', 'entity: org-beta');
+  expect(changed).not.toBe(before);
+  writeFileSync(path, changed); // Another writer changed the record after this run cached it.
+  let publications = 0;
+  const original = state.writeAtomic;
+  const watched = spyOn(state, 'writeAtomic').mockImplementation((path, text, options) => {
+    if (path === teamsFile(home)) {
+      expect(existsSync(`${teamsFile(home)}.lock`)).toBe(true);
+      expect(existsSync(`${projects.projectsFile(home)}.lock`)).toBe(true);
+      publications++;
+    }
+    return original(path, text, options);
+  });
+  try {
+    expect(noteTeam(home, root, { ...seed, entity: 'org-alpha', lobby: null, inProject: 'Home A', alsoIn: ['Served A', 'Ghost'] }, 'running', 'fixture', { owner: true })).toBeNull();
+  } finally { watched.mockRestore(); }
+  expect(publications).toBe(1);
+  expect(getTeam(home, teamIdOf(root))?.projects).toEqual(['home-a']);
+  expect(projects.get(home, 'served-a')?.teams).toEqual([]);
+  expect(projects.get(home, 'ghost')).toBeNull();
 });

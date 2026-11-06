@@ -12,18 +12,33 @@ launch, so a mark that moves in the file moves the record with it. A file that s
 is one of that team's agents — so an agent the team no longer leads with is not left admitted as
 the project's lead.
 
-The hierarchy is entity, then project, then team, then seat, and the project level is where
-settings start: they inherit entity, then project, then team, then seat — a lower level may
-tighten, and loosen only where the level above allows it.
+The hierarchy is entity, then project, then team, then seat. Settings inherit through the
+machine, entity, home project, team and seat: a lower level may tighten, and may loosen only
+where the setting's catalogue allows that level to do so.
 
-A team names its project in its team file, `in_project`, holding the project's display name;
+A team names its home project in its team file, `in_project`, holding the project's display name,
+and may list additional served projects with `also_in: [project-y, project-z]`;
 today's `project:` field keeps meaning the team, so every file written before this build loads
 unchanged, and a team that names no home project inherits no project defaults. The team record's
 `project_id` names its home; its `projects` list holds all memberships, home included. A record
 written before `projects` existed reads as the home alone, or an empty list when it has no home.
 Only the home supplies settings, policies and rules; project views list both home and served
-memberships. The team-file declarations and checks for served projects are a separate change.
+memberships. Serving another project does not make it another inheritance chain, and `project_lead: true`
+leads the home only.
 A file that sets `project_lead: true` without naming a project is refused as the file loads.
+[`team check`](check.md) accepts multiple memberships, refuses `also_in` without a home or with
+the home repeated, and still refuses two teams claiming the same home's lead. Both membership
+sections are non-owner and leave existing approval fingerprints intact.
+
+Declaring `also_in` alone changes no recorded reach. An owner launch or registration in force
+publishes the list on the team record, using only existing projects of the same entity. It
+creates no served project. Seat, delegated and dev-mode runs preserve the last owner-recorded
+list; an owner run also removes memberships dropped from the file. Admission skips foreign or
+unscoped projects even if an old team record names them.
+
+Crossing ordinary seats still requires the owner's signed `seats-cross-teams` policy from the
+asker's entity, home project, team and seat chain. A served project's opening supplies no policy
+to the asker. Expired declarations set nothing, and unsigned or unverifiable input opens nothing.
 
 ## Synopsis
 

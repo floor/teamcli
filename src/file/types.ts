@@ -262,6 +262,8 @@ export type TeamFile = {
    * team with no project is its own. `project:` above is still the team's own name.
    */
   inProject: string | null;
+  /** Additional projects served. Omitted in older hand-built values; validated files read []. */
+  alsoIn?: string[];
   /**
    * Whether this team leads the project it sits in — the team-side `leads: true`. One team per
    * project sets it (`team check` refuses two), and the file must name the project it leads.
