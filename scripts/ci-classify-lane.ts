@@ -124,6 +124,7 @@ export const CAREFUL_RULES: readonly LaneRule[] = [
       'src/daemon',
       'src/file',
       'src/launch',
+      'src/launchers',
       'src/lobby',
       'src/lock',
       'src/mcp',

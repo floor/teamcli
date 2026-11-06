@@ -32,8 +32,9 @@ import { loadTeamFile } from '../src/file/load.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { seatDeliveryClass } from '../src/launch/delivery-class.ts';
 import { resolveLobby } from '../src/lobby/gate.ts';
-import { channelPushPath, recordChannelPush, type ChannelPushReceipt } from '../src/mcp/channel.ts';
-import { MESSAGE_ID, listUnread, readMessage, receiptPath, writeListener } from '../src/mcp/inbox.ts';
+import { channelPushPath, markChannelNotified, recordChannelPush, type ChannelPushReceipt } from '../src/mcp/channel.ts';
+import { MESSAGE_ID, inboxLive, listUnread, readMessage, receiptPath, writeListener } from '../src/mcp/inbox.ts';
+import { buildIdentity } from '../src/version.ts';
 import { SEND_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
@@ -224,7 +225,12 @@ function declareAcceptedSocket(world: FixtureWorld, seat: string, pid = 222, pan
   return sockPath;
 }
 
-function registerChannelListener(world: FixtureWorld, seat: string, channel = true): string {
+function registerChannelListener(
+  world: FixtureWorld,
+  seat: string,
+  channel = true,
+  build?: { version: string; head: string | null; build: string | null },
+): string {
   const dropDir = world.dropDirOf(seat);
   mkdirSync(dropDir, { recursive: true, mode: 0o700 });
   expect(
@@ -236,6 +242,11 @@ function registerChannelListener(world: FixtureWorld, seat: string, channel = tr
       cli: 'claude-code',
       pid: process.pid,
       ts: NOW.toISOString(),
+      ...(build === undefined ? {} : {
+        version: build.version,
+        ...(build.head === null ? {} : { head: build.head }),
+        ...(build.build === null ? {} : { build: build.build }),
+      }),
       ...(channel ? { channel: true as const } : {}),
     }),
   ).toBe(true);
@@ -455,7 +466,12 @@ describe('woken-needs-proof independent scenes', () => {
     expect(doc.channel).toBe('socket');
     expect(withoutSendId(doc.action_summary)).toBe('socket-worker: delivered (socket)');
     expect(doc.action_summary).not.toContain('woken');
-    expect(doc.delivery?.[0]).toEqual({ leg: 'socket', state: 'attempted' });
+    expect(doc.delivery?.[0]).toEqual({
+      leg: 'channel',
+      state: 'skipped',
+      reason: "the receiving seat's launch carries no development channel",
+    });
+    expect(doc.delivery?.find((leg) => leg.leg === 'socket')).toEqual({ leg: 'socket', state: 'attempted' });
     expect(frames).toHaveLength(2);
 
     // Reply walk over socket
@@ -501,7 +517,9 @@ describe('woken-needs-proof independent scenes', () => {
 
   test('4. channel marker then a real read receipt: prints notified, not yet read in text, --json and walkReplyDelivery (never woken), then promotes to delivered (read) on signed receipt', async () => {
     const world = createWorld();
-    const dropDir = registerChannelListener(world, 'channel-worker', true);
+    const build = buildIdentity();
+    const dropDir = registerChannelListener(world, 'channel-worker', true, build);
+    expect(inboxLive(dropDir, world.root, SESSION, 'channel-worker', build).live).toBe(true);
     const host = baseHost(world, {
       channelGraceMs: 500,
       native: {
@@ -515,6 +533,8 @@ describe('woken-needs-proof independent scenes', () => {
             if (!existsSync(channelPushPath(dropDir, msg.id))) {
               recordChannelPush(dropDir, makePushReceipt(world, 'channel-worker', msg.id));
             }
+            // A reservation is not a delivery. The server marks the line written.
+            markChannelNotified(dropDir, msg.id);
           }
         },
       },
