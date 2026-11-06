@@ -1003,11 +1003,11 @@ describe("the watch's typed wake retry", () => {
     expect(existsSync(wakeTryPath(dropDir, UNREAD_A))).toBe(false);
   });
 
-  test('a seat that is working, then idle on a grey listed placeholder, is woken by the typed wake', async () => {
+  test('a seat that is working, then idle on a declared-grey listed placeholder, is woken by the typed wake', async () => {
     const { made, team } = typedWorld('muse');
     seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
     const goal = '/goal pins a session objective with a progress bar';
-    const grey = MUSE_IDLE.replace('❯\n', `❯ \x1b[90m${goal}\x1b[0m\n`);
+    const grey = MUSE_IDLE.replace('❯\n', `❯ \x1b[38;2;103;108;116m${goal}\x1b[0m\n`);
     const working = readFileSync(new URL('./fixtures/muse/1.4.11/working-synthetic.txt', import.meta.url), 'utf8');
     const one = pane(working, 'working');
     const live = liveWith('helper', 'helper-pane', 'working');
