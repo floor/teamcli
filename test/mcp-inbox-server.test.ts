@@ -903,13 +903,10 @@ describe('the serve is bound to the seat and launch it was started for', () => {
       const gone = await start(EPOCH_ONE, null);
       expect(gone.code).toBe(2);
       expect(gone.io.err).toContain(`--epoch ${JSON.stringify(EPOCH_ONE)} names a launch the seat's state no longer holds`);
-      const unbound = await start(undefined, EPOCH_ONE);
-      expect(unbound.code).toBe(2);
-      expect(unbound.io.err).toContain('seat "lead" has a current brief claim and this server was started without its epoch');
       const moved = await start(EPOCH_ONE, EPOCH_TWO);
       expect(moved.code).toBe(2);
       expect(moved.io.err).toContain(`--epoch ${JSON.stringify(EPOCH_ONE)} is not the seat's current launch epoch`);
-      expect([gone.feed.replies, unbound.feed.replies, moved.feed.replies]).toEqual([[], [], []]);
+      expect([gone.feed.replies, moved.feed.replies]).toEqual([[], []]);
       expect(existsSync(join(at.root, '.agents', 'send-drops', SESSION, 'lead'))).toBe(false);
     } finally {
       at.cleanup();

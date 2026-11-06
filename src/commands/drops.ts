@@ -10,8 +10,9 @@
 // record spine gives a read receipt — means the drop was read, and it is not listed.
 //
 // `team drops --read` is the same folder, served to the launch's turn-start hook: the launch
-// names the seat and session, the newest waiting records are verified and receipted through the
-// inbox's own read (`readMessage`), and only then are their bodies printed. A file an earlier
+// names the seat and session, the newest waiting records are verified through the inbox's own
+// read (`readMessage`), their bodies are printed, and only then is the signed receipt written.
+// A file an earlier
 // build wrote is plain text no key can verify: it is skipped and counted, never served, and the
 // signed records around it are read as usual. A waiting message whose receipt name is uncertain
 // is named on stderr, one line per message, whether or not another body was served. The read
@@ -80,8 +81,8 @@ Options:
   --json     one team.drops document ({format, project, session, seat, drops, counts});
              it and --follow can't be used together
   --read     hand the seat's waiting messages to a turn: each record is
-             verified with the message key, its signed <id>.read.json receipt
-             is written before its body is printed, and at most ten bodies are
+             verified with the message key, its body is printed, and its signed
+             <id>.read.json receipt is written after that hand-over. At most ten bodies are
              read a run, newest first. A plain-text file an earlier build wrote
              is not a signed record: it is skipped and counted, never served,
              and the records around it are still read. A signed record an
@@ -561,6 +562,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     const brief: BriefRead = { claim: claimOf, ...(epoch === undefined ? {} : { epoch }) };
     const waiting = listUnread(dropDir, context, sources.home);
     const bodies: string[] = [];
+    const seals: Array<() => boolean> = [];
     // The ids a peek showed: a peek writes no receipt, so the log line below is its only trace.
     const peeked: string[] = [];
     let superseded = 0;
@@ -581,9 +583,10 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       const target = { dropDir, root: loaded.root, seat: seatName, session: readSession, lead: loaded.team.orchestrator };
       const got = peek
         ? peekMessage(target, message.id, sources.home, brief)
-        : readMessage(target, message.id, sources.home, brief);
+        : readMessage(target, message.id, sources.home, brief, undefined, { receipt: 'after' });
       if (got.ok) {
         bodies.push(got.body);
+        if (got.seal !== undefined) seals.push(got.seal);
         if (peek) peeked.push(message.id);
       } else if (got.served !== undefined) {
         // Another reader won the receipt name and served this message: there is no body for this
@@ -618,6 +621,12 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       }
     }
     if (bodies.length > 0) io.stdout(`${bodies.join('\n\n')}\n`);
+    // The receipt follows the hand-over. A stdout that throws never reaches here, so the message
+    // stays unread. A seal that loses the name, or cannot be flushed, is said with the other
+    // receipt refusals; the body was already handed over.
+    for (const seal of seals) {
+      if (!seal()) receiptRefusals.push('the read receipt could not be written after the body was handed over');
+    }
     if (peeked.length > 0) {
       // The peek's one trace: who looked, whose mail, and the ids shown — names only, never a
       // body. A read needs none: its signed receipt is the record of what was served.

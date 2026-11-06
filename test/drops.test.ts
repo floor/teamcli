@@ -523,7 +523,7 @@ function expectReceipt(id: string, seat = 'lead', dir = dropDir): void {
 }
 
 describe('team drops --read', () => {
-  test('the launch read serves the seat its launch names, receipting each record before its body', async () => {
+  test('the launch read serves the seat its launch names and receipts each record after the body', async () => {
     plantRecord(home, root, 'acme', 'lead', D_RECORD, 'hello');
     const first = await run(['--read', '--seat', 'lead', '--session', 'acme']);
     expect(first).toEqual({ code: 0, out: 'from lead (team lead):\n\nhello\n', err: '' });

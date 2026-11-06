@@ -259,7 +259,9 @@ every process finds the name held.
 
 The receipt is the only evidence this leg produces, and it is written by `inbox_read` before the
 body is returned, once the record's signature has been checked against the checkout's message
-key. The mark on a sender belongs to the content, not the receipt: `inbox_check` reports
+key. That server path stays receipt-first. `team drops --read` prints the body first and writes
+the same receipt after the hand-over, so that CLI path is at-least-once: two racing readers can
+both print a body, and the exclusive receipt still means only one of them writes it. The mark on a sender belongs to the content, not the receipt: `inbox_check` reports
 `sender_attribution` on each item, and `inbox_read` serves every body with its attribution line
 marked, exactly as `team drops --read` serves it. It is the signed status receipt `team messages` writes — `{payload: {kind, status, id, to,
 root, session, at}, signature}` at `<id>.read.json`, signed with the same message key — so one

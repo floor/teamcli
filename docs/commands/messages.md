@@ -5,8 +5,10 @@ it was shown. A send writes the message as one signed record into the recipient'
 `<root>/.agents/send-drops/<session>/<seat>/<id>`; `team messages` reads every record still waiting
 there, verifies its signature with this checkout's message key, publishes the signed read receipt
 (`<id>.read.json`) with an exclusive, no-clobber link, makes it durable, and prints the body. The
-receipt is the read-once gate every reader shares, so a record another reader already served is
-skipped, and a body is never printed without the receipt that proves it went out. A record that
+receipt is the read-once gate this run and `inbox_read` share, so a record another reader already
+served is skipped, and this run never prints a body without the receipt that proves it went out.
+`team drops --read` prints first and writes the receipt after, so two racing readers can both
+print a body. A record that
 does not verify prints no body and writes nothing. A waiting general seat brief is not shown here:
 it belongs to the seat's own turn-start reader, and the run skips it and notes the seat (see below).
 An entry at a receipt name that

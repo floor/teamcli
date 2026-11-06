@@ -121,8 +121,9 @@ export type InboxListener = {
    *  the `ack` tool. A marker without it is a serving inbox with no channel, and the send walks
    *  its next leg. */
   channel?: true;
-  /** Observational startup metadata, copied only from the explicit validated serve argument.
-   *  Absent on older/unbound listeners; never a replacement for the server's live guards. */
+  /** The launch this process bound at start: the `--epoch` it was given, or the current claim's
+   *  epoch when the launch line named none. Absent when the claim holds no launch epoch, or the
+   *  server started before a claim existed. Never a replacement for the server's live guards. */
   epoch?: string;
 };
 
@@ -580,7 +581,7 @@ export type InboxRefusal = {
 };
 
 export type InboxRead =
-  | { ok: true; body: string }
+  | { ok: true; body: string; seal?: () => boolean }
   // `served` marks a race the gate decided without a body: `already-served` when a verifiable
   // receipt won the name. `busy` stays in the union for callers and fixtures that predate the
   // receipt-only gate; this version never emits it.
@@ -744,6 +745,9 @@ export function readMessage(
   home: string,
   brief?: BriefRead,
   guard?: () => string | null,
+  /** `after` writes no receipt before the body is returned. The caller seals once the body has
+   *  been handed over, and a hand-over that never returns leaves the message unread. */
+  handover?: { receipt: 'after' },
 ): InboxRead {
   if (!messageNameOk(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   const at = join(target.dropDir, id);
@@ -838,38 +842,48 @@ export function readMessage(
   // or — for a manual read — the claim it served. It is never the key's own generation.
   const writerEpoch = brief?.epoch ?? binding?.epoch;
   const signedReceipt = signReceiptPayload(receipt, home, writerEpoch === undefined ? undefined : { epoch: writerEpoch });
-  const published = publishReadReceipt(readName, `${JSON.stringify(signedReceipt, null, 2)}\n`);
-  if (published === 'exists') {
-    // A rival won the name between the check and this link. Its receipt is the single serving of
-    // this id: verify it, and never replace it. If it does not verify, the name is uncertain and
-    // stays as evidence; either way this read returns no body.
-    return receiptHeldNow() ? alreadyServed() : clearedNow() ? alreadyServed() : occupied();
+  const body = attributedBody(payload.body, payload.from, {
+    record: payload,
+    home,
+    root: target.root,
+    rule: payload.rule,
+  });
+  // The inbox server publishes the receipt before it returns the body: a receipt that cannot be
+  // made durable shows nothing, and a seat that loses its place during the write shows nothing
+  // either. The receipt stands — that path is at-most-once. The CLI mailbox reader asks for the
+  // body first and seals only after the hand-over returns, so a hand-over that throws leaves the
+  // message unread.
+  const publish = (): InboxRead | true => {
+    const published = publishReadReceipt(readName, `${JSON.stringify(signedReceipt, null, 2)}\n`);
+    if (published === 'exists') {
+      // A rival won the name between the check and this link. Its receipt is the single serving of
+      // this id: verify it, and never replace it. If it does not verify, the name is uncertain and
+      // stays as evidence; either way this read returns no body.
+      return receiptHeldNow() ? alreadyServed() : clearedNow() ? alreadyServed() : occupied();
+    }
+    if (published === 'failed') {
+      return { ok: false, reason: 'the receipt could not be written, so the message is not returned' };
+    }
+    if (!flushReceipt(readName, target.dropDir)) {
+      return { ok: false, reason: 'the receipt could not be made durable, so the message is not returned' };
+    }
+    return true;
+  };
+  if (handover?.receipt === 'after') {
+    return {
+      ok: true,
+      body,
+      seal: () => publish() === true,
+    };
   }
-  if (published === 'failed') {
-    return { ok: false, reason: 'the receipt could not be written, so the message is not returned' };
-  }
-  // The receipt must survive a crash before any body is shown. A receipt that cannot be
-  // flushed is not proof, so the read returns nothing (and the message stays spent).
-  if (!flushReceipt(readName, target.dropDir)) {
-    return { ok: false, reason: 'the receipt could not be made durable, so the message is not returned' };
-  }
+  const wrote = publish();
+  if (wrote !== true) return wrote;
   // The declaration is looked at once more after the receipt is durable and before the body is
   // handed back: a seat that lost its place during the write shows nothing. The receipt stands —
   // this is the at-most-once side — and the caller returns this refusal instead of the body.
   const lostAfterReceipt = guard?.();
   if (lostAfterReceipt !== undefined && lostAfterReceipt !== null) return { ok: false, reason: lostAfterReceipt };
-  // The body is the sender's own words under the attribution mark. Every sender is attributed —
-  // the launch's general seat brief rests on the seat's current claim, every other record on the
-  // shared checkout key — and the mark is always present so its absence never reads as proof.
-  return {
-    ok: true,
-    body: attributedBody(payload.body, payload.from, {
-      record: payload,
-      home,
-      root: target.root,
-      rule: payload.rule,
-    }),
-  };
+  return { ok: true, body };
 }
 
 /**
