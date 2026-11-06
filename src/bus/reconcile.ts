@@ -226,8 +226,9 @@ export type ReconcileState = {
   /** Whether retention has already run in this process. A busy event key leaves it false so the
    *  next pass runs the whole prune again. */
   pruneDone: boolean;
-  /** A seal migration was seen and did not finish because the event key was busy. The log cache
-   *  can still hit on the next pass, so the retry does not wait for a re-read. */
+  /** A seal migration is still owed because the event key was busy. A settled attempt, including
+   *  one that left a segment unsealed, clears it. The log cache can still hit on the next pass,
+   *  so a busy retry does not wait for a re-read. */
   sealPending: boolean;
   /** Combined stat stamp of the registry and team files `markOrphanedSeats` consults, so a quiet
    *  pass with unchanged declarations skips the team-file reload and git-root lookup. */
@@ -710,7 +711,8 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       options.maxBytes !== undefined &&
       options.maxBytes > 0 &&
       (fileStampOf(existing.path)?.size ?? 0) >= options.maxBytes;
-    if (existing.unsealed > 0 || openOversized) state.sealPending = true;
+    // A later read of a segment the attempt already left unsealed must not raise the flag again.
+    state.sealPending = !state.sealAttempted && (existing.unsealed > 0 || openOversized);
     if ((existing.unsealed > 0 || openOversized) && !state.sealAttempted) {
       // The one-time migration of a store written before seals or under a larger segment bound:
       // each segment is verified in slices and the append lock is held only for the seal write
