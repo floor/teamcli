@@ -144,6 +144,9 @@ export async function runAnalyse(
   const read = readProjectFacts(targetAbs, {
     displayRoot: targetArg,
     now,
+    // The gate's canonical signed root binds the reader too: a target that only sits under the
+    // lexical root through a symlinked ancestor is refused before any listing, read or git call.
+    ...(gate.scopeRoot !== undefined ? { signedRoot: gate.scopeRoot } : {}),
     ...(gate.visibilityHint !== undefined ? { visibilityHint: gate.visibilityHint } : {}),
   });
 

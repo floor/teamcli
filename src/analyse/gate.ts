@@ -7,7 +7,7 @@
 // capability word or grant verb exists.
 
 import type { KeyObject } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { callerOf, callerStanding, isOwner, standingOf, walkCaller, type Caller } from '../caller.ts';
@@ -57,6 +57,12 @@ export type AnalyseGateVerdict =
       ok: true;
       analyser: AnalyserIdentity;
       source: AnalysisSource;
+      /** The canonical path of the signed root the target was admitted under. The reader checks
+       *  the target's own canonical path against it before listing, reading or running git, so a
+       *  symlinked ancestor cannot move the read outside the owner's scope after admission.
+       *  Absent when the signed root cannot be resolved: no target under it can be read either,
+       *  and the reader refuses the target as unreadable on its own. */
+      scopeRoot?: string;
       visibilityHint?: 'public' | 'private';
     }
   | {
@@ -98,6 +104,21 @@ function matchingRootLength(targetAbs: string, rootPath: string, home: string): 
     return resolvedRoot.length;
   }
   return null;
+}
+
+/** The one signed root that contains `targetAbs`, most specific first, as written. Null when
+ *  none does. The gate checked the same relation to choose its config; this call keeps the root
+ *  itself, so its canonical path can travel to the reader. */
+function bestMatchingRoot(targetAbs: string, roots: readonly string[], home: string): string | null {
+  let best: string | null = null;
+  for (const rootPath of roots) {
+    const resolvedRoot = expandHome(rootPath, home);
+    const rel = relative(resolvedRoot, targetAbs);
+    if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) {
+      if (best === null || resolvedRoot.length > best.length) best = resolvedRoot;
+    }
+  }
+  return best;
 }
 
 function isValidAnalyserPrincipal(principal: string): boolean {
@@ -429,7 +450,7 @@ function callerMatchesPrincipal(caller: Caller, principal: string, home: string)
         [team.id ?? teamIdOf(team.root), teamIdOf(team.root), team.project, team.session],
         seatName,
       );
-      if (agent !== null && agent.lifecycle === 'running' && agent.reach.pane !== null && agent.reach.pane !== '') {
+      if (agent !== null && agent.lifecycle === 'running' && agent.reach.session === teamOrSession && agent.reach.pane !== null && agent.reach.pane !== '') {
         recordedPane = agent.reach.pane;
       }
     }
@@ -578,6 +599,48 @@ export function mayAnalyseProject(
   const finalConfig: ParsedAnalyserConfig = matchState.resolvedConfig;
   const resolvedSource = matchState.resolvedSource;
   const { analyser } = finalConfig;
+  // The lexical match chose the most specific root; the scope that binds the reader is that
+  // root's canonical path. A target that sits under the root only through a symlinked ancestor
+  // resolves outside it, and must not be analysed: the read runs on canonical paths, so the
+  // check is canonical here and the root travels to the reader, which checks the target again
+  // before it lists, reads or runs git.
+  const matchingRoot = bestMatchingRoot(targetAbs, finalConfig.roots, home);
+  if (matchingRoot === null) {
+    return {
+      ok: false,
+      code: 'analyse.unauthorised',
+      why: `target path is outside the read scope of named analyser "${analyser.principal}"`,
+    };
+  }
+  let scopeRoot: string | undefined;
+  try {
+    scopeRoot = realpathSync(matchingRoot);
+  } catch {
+    // A signed root that cannot be resolved (a missing folder, a dangling link) has nothing
+    // under it to read: no canonical scope travels to the reader, which refuses the target
+    // itself as unreadable before listing anything.
+    scopeRoot = undefined;
+  }
+  if (scopeRoot !== undefined) {
+    let targetReal: string | null = null;
+    try {
+      targetReal = realpathSync(targetAbs);
+    } catch {
+      // A target that cannot be resolved has nothing to read; the reader reports it unreadable
+      // after checking the same canonical relation on whatever path it does resolve.
+      targetReal = null;
+    }
+    if (targetReal !== null) {
+      const relReal = relative(scopeRoot, targetReal);
+      if (relReal !== '' && (relReal.startsWith('..') || isAbsolute(relReal))) {
+        return {
+          ok: false,
+          code: 'analyse.unauthorised',
+          why: `target path resolves outside the signed read scope of "${analyser.principal}"`,
+        };
+      }
+    }
+  }
   const atIndex = analyser.principal.indexOf('@');
   const sessionHint = atIndex >= 0 ? analyser.principal.slice(atIndex + 1) : undefined;
   const hasInjectedCaller = sources.caller !== undefined || io.caller !== undefined;
@@ -608,6 +671,7 @@ export function mayAnalyseProject(
     ok: true,
     analyser,
     source: resolvedSource,
+    ...(scopeRoot !== undefined ? { scopeRoot } : {}),
     ...(visibility === 'public' || visibility === 'private' ? { visibilityHint: visibility } : {}),
   };
 }

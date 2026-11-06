@@ -116,6 +116,11 @@ export type ReadProjectOptions = {
   displayRoot?: string;
   /** Visibility known from the registry gate, if any. */
   visibilityHint?: 'public' | 'private';
+  /** The canonical path of the signed read root the gate admitted the target under. When set,
+   *  the target's own canonical path must stay inside it: a symlinked ancestor may not move the
+   *  read outside the owner's scope after admission, and the check runs before any listing,
+   *  read or git call. */
+  signedRoot?: string;
   /** Reference clock for the 28-day git pace window. */
   now?: Date;
   /** Optional ceiling overrides for testing bounds. */
@@ -465,6 +470,20 @@ export function readProjectFacts(
       code: 'analyse.unreadable',
       why: `${targetPath}: runtime state under .agents is never analysed`,
     };
+  }
+  // The gate admitted the target under a signed root as written. That root's canonical path is
+  // carried here so the same question is asked of the canonical target, directly before the
+  // first listing: a directory symlink above the root makes the two disagree, and the read is
+  // refused rather than followed outside the owner's scope.
+  if (options.signedRoot !== undefined) {
+    const relSigned = relative(options.signedRoot, rootReal);
+    if (relSigned !== '' && (relSigned.startsWith('..') || isAbsolute(relSigned))) {
+      return {
+        ok: false,
+        code: 'analyse.unreadable',
+        why: `${targetPath}: resolves outside the signed read scope`,
+      };
+    }
   }
 
   let filesRead = 0;
