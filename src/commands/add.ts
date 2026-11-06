@@ -1699,6 +1699,7 @@ function hostOf(input: {
     shellBack: (_name, pane) => launch.shellBack?.(session, pane) ?? null,
     agentStatus: (_name, pane) => launch.agentStatus?.(session, pane) ?? null,
     processInfo: (_name, pane) => launch.processInfo?.(session, pane) ?? null,
+    ...(launch.processStartOf ? { processStartOf: launch.processStartOf } : {}),
     sleep: launch.sleep,
     now: () => input.now().getTime(),
     allow(name) {

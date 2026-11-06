@@ -255,6 +255,9 @@ export type Launch = {
   shellBack?(session: string, pane: string): boolean | null;
   /** The pane's process identity, compared with the one recorded for the seat. */
   processInfo?(session: string, pane: string): PaneProcesses | null;
+  /** The instant a process started, read beside the create when the pane's shell is known;
+   *  absent: the run reads the process table itself. */
+  processStartOf?(pid: number): number | null;
   /** Brings the pane to the owner's attention, without sending a key or a text into it. */
   focus?(session: string, pane: string): boolean;
   /** Stops the session (`q` in the pause, only for a session this invocation started). */
@@ -3422,6 +3425,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       shellBack: (session, pane) => launch.shellBack?.(session, pane) ?? null,
       agentStatus: (session, pane) => launch.agentStatus?.(session, pane) ?? null,
       processInfo: (session, pane) => launch.processInfo?.(session, pane) ?? null,
+      ...(launch.processStartOf ? { processStartOf: launch.processStartOf } : {}),
       sleep: sharedSleep,
       now: () => now().getTime(),
       allow(name) {

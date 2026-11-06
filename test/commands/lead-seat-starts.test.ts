@@ -104,7 +104,7 @@ function world(first: number = 1): {
   workspaces: { label: string; cwd: string }[];
   session: 'absent' | 'running';
 } {
-  const panes = new Map<string, { text: string; agent: boolean }>();
+  const panes = new Map<string, { text: string; agent: boolean; name: string | null }>();
   let n = first - 1;
   let clock = NOW.getTime();
   const made = {
@@ -121,7 +121,7 @@ function world(first: number = 1): {
     sessionUp: () => made.session === 'running',
     createWorkspace(_session, cwd, label) {
       n++;
-      panes.set(`w${n}:p1`, { text: IDLE, agent: false });
+      panes.set(`w${n}:p1`, { text: IDLE, agent: false, name: null });
       made.workspaces.push({ label, cwd });
       return { pane: `w${n}:p1`, workspace: `w${n}` };
     },
@@ -131,15 +131,31 @@ function world(first: number = 1): {
       return true;
     },
     typeText: () => true,
-    renameAgent: () => true,
+    // A rename herdr takes is listed under the seat's name afterwards: the naming step proves
+    // that listed name before the seat can reach ready.
+    renameAgent(_session, pane, name) {
+      const known = panes.get(pane);
+      if (known) known.name = name;
+      return true;
+    },
     closeWorkspace: () => true,
     agentPanes: () => [...panes].filter(([, pane]) => pane.agent).map(([id]) => id),
-    agents: () => [],
+    agents: () => [...panes].flatMap(([id, pane]) => (pane.name === null ? [] : [{
+      name: pane.name,
+      agent: 'claude-code',
+      pane: id,
+      workspace: id.replace(/:p1$/, ''),
+      status: 'idle',
+      cwd: null,
+    }])),
     paneText: (_session, pane) => panes.get(pane)?.text ?? '',
     foreground: () => ['claude', 'codex', 'agy', 'cursor-agent'],
     sleep: async (ms) => {
       clock += ms;
     },
+    // The synthetic panes' shells have no start instant on this machine: never read the host's
+    // process table for a fixture pid.
+    processStartOf: () => null,
     now: () => new Date(clock),
   };
   return made;

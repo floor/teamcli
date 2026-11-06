@@ -81,6 +81,14 @@ export function evictHerdrPaneProcessInfo(pane: string, session?: string): void 
   activeSnapshot?.processInfo.delete(`${session ?? ''}\0${pane}`);
 }
 
+/** The raw stdout of one `herdr` call, or null when the call failed or printed nothing. Tests
+ *  set this to drive the calls whose answer is read from stdout rather than from `result`. */
+export type HerdrCapture = (args: string[], session?: string) => string | null;
+let customCapture: HerdrCapture | null = null;
+export function setHerdrCapture(exec: HerdrCapture | null): void {
+  customCapture = exec;
+}
+
 function run(args: string[], session?: string): unknown {
   if (customRun) return customRun(args, session);
   const full = session ? ['--session', session, ...args] : args;
@@ -452,6 +460,7 @@ export function setCaptureExec(exec: CaptureExec | null): void {
 // What a herdr command printed, or null when it did not run. Exit status is not the answer: a
 // command aimed at a session that does not exist can print an error and exit 0.
 function capture(args: string[], session?: string): string | null {
+  if (customCapture) return customCapture(args, session);
   const full = [...(session ? ['--session', session] : []), ...args];
   try {
     return captureExec(full);
@@ -1308,12 +1317,24 @@ export function applySidebarLayout(
   return { kind: 'applied', reloaded, failed };
 }
 
-// Not proof an agent is there: herdr answers with agent_info for a pane that has none.
+// A rename is true only when herdr lists the name on that pane. The list is read first, so a
+// pane that already carries the name is not renamed again; the call's own answer must then be
+// the success envelope (`{id, result}`, herdr api schema protocol 22), and the name must be in
+// the list read after it. Herdr 0.9.5 refuses a name on a pane with no effective agent
+// (`AgentRenameError::NotAgent`) and on one whose managed launch is pending; an unparseable
+// answer or an envelope without a result is a failure, never a success. The pane's label is
+// never read as its name: `pane rename` sets a sidebar label, not `AgentInfo.name`.
 export function agentRename(pane: string, name: string, session?: string): boolean {
+  const named = (listed: HerdrAgent[] | null): boolean =>
+    listed?.some((agent) => agent.pane === pane && agent.name === name) === true;
+  if (named(agentList(session))) return true;
   const out = capture(['agent', 'rename', pane, name], session);
   if (out === null) return false;
   const body = parsed(out);
-  return body === null || !isHerdrError(body);
+  if (body === null || typeof body !== 'object' || Array.isArray(body) || !('result' in body) || isHerdrError(body)) {
+    return false;
+  }
+  return named(agentList(session));
 }
 
 // Brings an agent's pane to the owner's attention and changes nothing in it: no key, no text.
