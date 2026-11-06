@@ -38,8 +38,17 @@ does not use one of the ten. A signed record an earlier build wrote under the `u
 name it gave a runtime report to the team's lead is served and receipted like any other record:
 the listing and the read agree on what is waiting, and the receipt takes it out of both. A
 record that is otherwise malformed, or an earlier delivery of the
-general seat brief, is not a body either and does not use one of the ten. It asks for no placed
-caller, because a CLI's hook runs outside any pane. The launch passes `--epoch <run_id>`, the
+general seat brief, is not a body either and does not use one of the ten. A read takes a placed
+caller, as the listing does: the launch's hook runs inside the seat's own pane process tree, so
+the pids place it as the seat the launch names. Only the seat itself receipts: the owner and a
+lead (the orchestrator or the operator) may read any seat's drops, but as a peek — the body is
+shown, no receipt is written, nothing is marked read, and the message still waits for its seat.
+A peek is written to the team log with the reader, the seat and the ids it showed, so a look at
+another seat's mail leaves a trace without taking the mail. Every other caller — another seat, a
+pane with no agent name, an unplaced shell — is refused before a record is read: nothing is
+receipted for it, the refusal is written to the team log, and the owner hears it as a refusal
+event naming the seat.
+The launch passes `--epoch <run_id>`, the
 runtime it started the reader under; a record the launch wrote is served only when the claim on
 disk is the same id, incarnation, digest and epoch, and a process started under an earlier
 runtime serves nothing until its seat is launched again. With no `--epoch` — a read by hand — the
@@ -70,7 +79,7 @@ refusal, its body is not printed, and the file is left in place — only
 | --- | --- | --- |
 | `--follow` | — | keep reading the folder and print one line per new drop, `from <sender> — <path>` (`<sender>` carries `(attributed)`, or `(unattributed)` when no key could vouch for the file), flushed as each is read; Ctrl-C stops it and exits 0 |
 | `--json` | — | print one `team.drops` document (`format: 1`, `project`, `session`, `seat`, `drops`, `counts`) |
-| `--read` | — | hand the seat's waiting messages to the launch's turn: verify each record, write its signed `<id>.read.json` receipt, then print its body; at most ten a run, newest first. `--seat` is required |
+| `--read` | — | hand the seat's waiting messages to the launch's turn: verify each record, write its signed `<id>.read.json` receipt, then print its body; at most ten a run, newest first. `--seat` is required. Only the seat itself receipts; the owner and a lead are served the same bodies as a peek — nothing is written or marked read, and the peek is logged |
 | `--seat` | a seat name | the seat whose folder `--read` serves; only with `--read` |
 | `--session` | a session name | the launch's session, when given; only with `--read`, and it must be the team file's own |
 | `--epoch` | a runtime epoch | the epoch the launch started this reader under; when given, only a brief delivered under that epoch is served; only with `--read` |
@@ -96,7 +105,9 @@ skips the current brief claim's superseded ids by name, and a verified launch re
 or incarnation is not that claim's is not listed. Nothing is written
 or removed, and the folder is not created: a folder that does not exist yet is an empty one.
 `--read` is the one mode that writes: the signed `<id>.read.json` receipt beside each record it
-hands over (mode 0600), and nothing else — the drop itself is never moved or deleted. A message
+hands over to its own seat (mode 0600), and nothing else — the drop itself is never moved or
+deleted. A peek by the owner or a lead writes no receipt and no other file; its one trace is the
+`peek` line in `.agents/team.log`. A message
 it cannot verify or receipt is a refusal, and its body is not printed; a receipt name held by a
 file that does not verify for the served claim is refused the same way, and the file is left in
 place. A plain-text drop an earlier build wrote is the exception: nothing in it can be verified,
@@ -112,7 +123,10 @@ and the command answers from the caller's own placement. The owner, another seat
 running on another pane are refused. `--follow` runs until it is stopped, so it belongs to the
 receiving seat and is not a command a lead runs for someone else. `--read` is the launch's own
 invocation, not a seat's: the launch line names its seat and session, no pane is asked for, and
-the team file must declare that seat. The launch's turn-start hook runs it.
+the team file must declare that seat. The launch's turn-start hook runs it, and it is the seat's
+own read that receipts. The owner and a lead (the orchestrator or the operator, on their recorded
+pane) may point it at another seat's folder, but only as a peek: they see the bodies and write
+nothing, so the message still waits for its seat. Every other caller is refused.
 
 ## Output and exit codes
 
@@ -135,9 +149,11 @@ one line, `from <sender> — <path>`, for each drop that appears, with `<sender>
 | the folder was read | the context line, the `FROM  PATH` table, and `<n> drop` or `<n> drops` | 0 |
 | a follow ran and was stopped | the lines of the drops that appeared, and nothing else | 0 |
 | `--read` handed the waiting records over | their bodies, newest first, one after another with a blank line between; nothing when none wait | 0 |
+| `--read` peeked for the owner or a lead | the same bodies, printed the same way, with no receipt written and the messages still listed; `peek [<reader>] <seat>: <ids>` in `.agents/team.log` | 0 |
 | `--read` found plain-text drops an earlier build wrote | `team drops: <n> drop(s) are not signed records and are not served` on stderr, and no body from them | 0 |
 | `--read` found only earlier deliveries of the general seat brief | `team drops: <n> drop(s) carry an earlier general seat brief and are not served` on stderr, and no body | 0 |
-| the caller is not a placed seat of this team | `team drops: only a seat of this team reads its own drops; this call is <caller>`, or the no-pane / another-pane refusal | 1 |
+| the listing's caller is not a placed seat of this team | `team drops: only a seat of this team reads its own drops; this call is <caller>`, or the no-pane / another-pane refusal | 1 |
+| `--read`'s caller is not the seat itself, the owner, or a lead | `team drops: --read serves the seat itself, the owner, or a lead; this call is <caller>`, or the no-pane / another-pane refusal | 1 |
 | the team file can't be read, or the drop folder can't be read | `team drops: <problem>` | 1 |
 | `--read` refused a waiting record and no body could be handed over | `team drops: <reason>`, and the unproven body is not printed | 1 |
 | `--read` named another session, or a seat the file does not declare | `team drops: the team's session is "…", not "…"`, or `team drops: the team file declares no seat "…"` | 1 |

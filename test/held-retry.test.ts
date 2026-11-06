@@ -49,7 +49,7 @@ import { INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, readMessage, receiptPath, wri
 import { CHANNEL_HELD_RECEIPT, channelPushHeld, channelPushPath, channelPushed } from '../src/mcp/channel.ts';
 import { promoteInboxDrops, retryHeldDrops, type RetrySources } from '../src/watch/retry.ts';
 import { confirmTakenDrops } from '../src/watch/taken.ts';
-import { claudeBox, recordBody, testIo } from './helpers.ts';
+import { claudeBox, paneShell, recordBody, testIo } from './helpers.ts';
 import { withoutSendId } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-17T04:00:00.000Z');
@@ -1513,12 +1513,12 @@ describe('the turn-start read, end to end', () => {
     expect(typeof read).toBe('string');
 
     // The hook's stdout is the JSON envelope the CLI adds to the turn; the body arrives whole.
-    // It runs as the launch does: in the project, with the seat's own home for its message key.
-    const out = execFileSync('sh', ['-c', read as string], {
-      cwd: made.root,
-      encoding: 'utf8',
-      env: { ...process.env, HOME: made.home },
-    });
+    // It runs as the launch does: in the project, under the seat's own pane, with the seat's own
+    // home for its message key. The read places its caller, so the subprocess gets what a hook
+    // inside the seat's pane has — the pane's server answer and the seat's recorded standing.
+    const PANE = 'pane-lead';
+    const shell = paneShell({ bin: join(made.home, 'bin'), dir: made.dir, session: 'acme', seat: 'lead', pane: PANE, home: made.home });
+    const out = shell.run(read as string, made.root);
     const envelope = JSON.parse(out) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };
     expect(envelope.hookSpecificOutput.hookEventName).toBe('UserPromptSubmit');
     // The hook takes the sender from the verified record, not from the body's opening. This

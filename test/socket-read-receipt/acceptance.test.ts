@@ -32,9 +32,11 @@ import {
   HELD_SCREEN,
   helperIo,
   hostOf,
+  LEAD_PANE,
   NOW,
   readReceipt,
   receiptVerifies,
+  recordLead,
   recordOf,
   registerHelper,
   sceneOf,
@@ -95,8 +97,10 @@ test('an accepted socket delivery stays unread until the seat reads it, and that
   // The watch's ring reads `listUnacked`: with no receipt the record is still listed.
   expect(listUnacked(one.root, 'acme', one.home).map((message) => message.id)).toEqual([record.id]);
 
-  // The seat's own read serves the body and writes the signed receipt that proves it.
-  const readIo = testIo(one.root, { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' });
+  // The seat's own read serves the body and writes the signed receipt that proves it. The read
+  // places its caller, so the state records the lead's standing as its launch would.
+  recordLead(one);
+  const readIo = testIo(one.root, { kind: 'seat', name: 'lead', pane: LEAD_PANE, session: 'acme' });
   const read = await runDrops(['--read', '--seat', 'lead', '--session', 'acme'], readIo, { home: one.home });
   expect(read).toBe(0);
   expect(readIo.out).toContain('the socket note');

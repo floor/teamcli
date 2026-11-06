@@ -12,15 +12,15 @@
 // team's file names its `entity:`. Every scene pins its caller: a seat of the team whose file is
 // the working folder, standing on the pane the state records for it.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
-import { updateState } from '../src/state.ts';
-import { updateAgent } from '../src/registry/agents.ts';
+import { emptySession, updateState } from '../src/state.ts';
+import { findAgent, recordAgentAddress, updateAgent } from '../src/registry/agents.ts';
 import { registerLaunch } from '../src/registry/sync.ts';
 import { readTeams, setRoster, teamIdOf } from '../src/registry/teams.ts';
 import { historyPath } from '../src/send/history.ts';
@@ -32,7 +32,7 @@ import { withoutSendId } from './helpers/output.ts';
 const NOW = new Date('2026-10-17T12:00:00Z');
 
 type SeatSpec = { name: string; role: string; leads?: boolean; nickname?: string };
-type TeamSpec = { project: string; entity: string; session: string; seats: SeatSpec[]; legacyLead?: string };
+type TeamSpec = { project: string; entity: string; session: string; seats: SeatSpec[]; legacyLead?: string; inbound?: 'accept' };
 
 /** Two entities. `acme` is four teams: the entity's own team (its project is the entity's name),
  *  two teams under it, and `legacy`, upgraded from 0.3.5/0.4 — its file names its lead with the
@@ -63,6 +63,7 @@ const TEAMS: Record<string, TeamSpec> = {
     project: 'api',
     entity: 'acme',
     session: 'api',
+    inbound: 'accept',
     seats: [
       { name: 'api-lead', role: 'guide', leads: true, nickname: 'zeus' },
       { name: 'api-helper', role: 'coordinator' },
@@ -111,7 +112,7 @@ function teamText(spec: TeamSpec): string {
     model: Test
     version: "1"
     launch: claude --model test
-${seat.nickname === undefined ? '' : `    nickname: ${seat.nickname}\n`}${seat.leads === true ? '    leads: true\n' : ''}`,
+${seat.nickname === undefined ? '' : `    nickname: ${seat.nickname}\n`}${seat.leads === true ? '    leads: true\n' : ''}${spec.inbound === undefined ? '' : `    inbound: ${spec.inbound}\n`}`,
     )
     .join('');
   return `format: 1
@@ -231,6 +232,28 @@ function admitted(reading: Reading): void {
   if (reading.code !== 0 || !reading.out.includes(': dry-run:')) {
     throw new Error(`expected admitted, got exit ${reading.code}: ${reading.err.trim() || reading.out.trim()}`);
   }
+}
+
+/** One scene's real send: the same pinned caller and the spec a person would type, with a host
+ *  that records the frames it is asked to take. Nothing is dry: the walk runs. */
+async function sendForReal(
+  from: { team: string; seat: string },
+  spec: string,
+  patch: Partial<SendHost> = {},
+): Promise<Reading & { frames: string[] }> {
+  const file = world.files[from.team] as TeamFile;
+  const caller: Caller = { kind: 'seat', name: from.seat, pane: paneOf(from.team, from.seat), session: file.session };
+  const io = testIo(world.roots[from.team] as string, caller);
+  const frames: string[] = [];
+  const code = await runSend([spec, 'a status line'], io, {
+    ...host(),
+    deliver: async (_socketPath: string, frame: string) => {
+      frames.push(frame);
+      return { ok: true };
+    },
+    ...patch,
+  });
+  return { code, out: io.out, err: io.err, frames };
 }
 
 function refused(reading: Reading): void {
@@ -456,5 +479,69 @@ describe('cross-team --record', () => {
     expect(dry.out).not.toContain('recorded (native');
 
     refused(await record({ team: 'web', seat: 'web-lead' }, 'data-lead@data'));
+  });
+});
+
+describe('a cross-team delivery reads the receiver’s runtime launch', () => {
+  test('a Claude lead relaunched with its own accepted settings takes the frame at its live socket', async () => {
+    // The file's launch carries no channel flag, and the settings file that launch would install
+    // declares nothing at all. The session is running under its own `--settings` file instead,
+    // which declares accept, and its socket is newer than that declaration: the walk must read
+    // the line the seat ran, never the row a later launch would install.
+    const runtime = join(world.base, 'api-lead-settings.json');
+    writeFileSync(runtime, JSON.stringify({ crossSessionInbound: 'accept' }));
+    const past = new Date(NOW.getTime() - 60_000);
+    utimesSync(runtime, past, past);
+    const sockets = join(world.base, 'sockets');
+    mkdirSync(sockets, { recursive: true });
+    // The socket's name carries the pid the host reports for a pane, so it is the pane's own
+    // address; it is written after the declaration, so the setting is in force in the session.
+    const socket = join(sockets, '2.sock');
+    writeFileSync(socket, '');
+    const record = findAgent(world.home, { team: teamIdOf(world.roots.api as string), seat: 'api-lead' });
+    if (record === null) throw new Error('the test world records no agent for api-lead');
+    recordAgentAddress(world.home, record.id, socket);
+    updateState(join(world.roots.api as string, '.agents'), (state) => {
+      const session = (state.sessions.api ??= emptySession());
+      session.seats['api-lead'] = {
+        stage: 'ready',
+        pane: paneOf('api', 'api-lead'),
+        workspace: 'fixture-workspace',
+        cli: 'claude-code',
+        launch_line: `claude --model test --settings ${runtime}`,
+      };
+    });
+
+    // The live read proves the pane the socket belongs to: the seat stands on the pane the state
+    // records, and the socket's name carries that pane's own pid.
+    const reading = await sendForReal({ team: 'acme', seat: 'coord' }, 'api-lead@api', {
+      agents: (asked) => (asked === 'api' ? [{ name: 'api-lead', pane: paneOf('api', 'api-lead') }] : null),
+    });
+
+    expect(reading.code).toBe(0);
+    // The frame was taken at the socket: the seat reads it, and the one outcome line says so.
+    expect(reading.frames).toHaveLength(1);
+    expect(reading.frames[0]).toContain('a status line');
+    expect(reading.out).toContain('api-lead: delivered (socket)');
+    expect(reading.out.match(/api-lead/g)).toHaveLength(1);
+    expect(reading.err).toBe('');
+  });
+
+  test('a cross-team drop names the full address, and prints no second line for the same seat', async () => {
+    // No socket and no channel: the message waits in the receiver's drop folder. The console
+    // names the seat as the caller addressed it — seat@team — in the outcome line and in the
+    // class sentence alike; the bare `queued, no event adapter` line the drop leg printed beside
+    // it named the same seat a second time, by its resolved name alone.
+    const reading = await sendForReal({ team: 'acme', seat: 'coord' }, 'api-lead@api');
+
+    expect(reading.code).toBe(0);
+    expect(reading.frames).toEqual([]);
+    expect(withoutSendId(reading.out)).toBe(
+      'team api, session "api"\n' +
+      'api-lead@api: queued, not woken (drop, 0 ms); queued; api-lead@api reads it at its next turn, and nothing here gives it one (pull-only)\n',
+    );
+    // The bare resolved name never appears on its own: every mention is the full address.
+    expect(reading.out.match(/(?<!@)api-lead(?!@api)/)).toBeNull();
+    expect(reading.err).toBe('');
   });
 });

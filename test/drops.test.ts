@@ -20,7 +20,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readEvents } from '../src/bus/log.ts';
-import type { Caller } from '../src/caller.ts';
+import { placeCaller, type Caller, type CallerSources } from '../src/caller.ts';
 import { listDrops, runDrops, senderOf, USAGE, type DropsSources } from '../src/commands/drops.ts';
 import { plantRecord } from '../src/commands/messages.ts';
 import { generalBriefRecord, GENERAL_BRIEF_SHA256, currentBriefClaim } from '../src/launch/general-brief.ts';
@@ -499,7 +499,7 @@ describe('team drops in a folder that is not a git repository', () => {
   test('--read hands a record over and receipts it against the plain root', async () => {
     plainRoot();
     plantRecord(home, root, 'acme', 'lead', D_RECORD, 'hello from the root');
-    const result = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
+    const result = await run(['--read', '--seat', 'lead', '--session', 'acme']);
     expect(result).toEqual({ code: 0, out: 'from lead (team lead):\n\nhello from the root\n', err: '' });
     const at = receiptPath(dropDir, D_RECORD);
     const receipt = signedReceiptOf(JSON.parse(readFileSync(at, 'utf8')));
@@ -510,26 +510,26 @@ describe('team drops in a folder that is not a git repository', () => {
   });
 });
 
-describe('team drops --read', () => {
-  /** The signed read receipt beside a message: verified against the checkout's message key,
-   *  bound to this message, seat, checkout and session, and 0600. */
-  function expectReceipt(id: string, seat = 'lead'): void {
-    const at = receiptPath(dropDir, id);
-    const receipt = signedReceiptOf(JSON.parse(readFileSync(at, 'utf8')));
-    const key = messageKeyState(home);
-    if (receipt === null || key.kind !== 'key') throw new Error('no signed receipt or no message key');
-    expect(verifyReceipt(receipt, key.key)).toBe(true);
-    expect(receipt.payload).toMatchObject({ kind: 'receipt', status: 'read', id, to: seat, root, session: 'acme' });
-    expect(statSync(at).mode & 0o777).toBe(0o600);
-  }
+/** The signed read receipt beside a message: verified against the checkout's message key,
+ *  bound to this message, seat, checkout and session, and 0600. */
+function expectReceipt(id: string, seat = 'lead', dir = dropDir): void {
+  const at = receiptPath(dir, id);
+  const receipt = signedReceiptOf(JSON.parse(readFileSync(at, 'utf8')));
+  const key = messageKeyState(home);
+  if (receipt === null || key.kind !== 'key') throw new Error('no signed receipt or no message key');
+  expect(verifyReceipt(receipt, key.key)).toBe(true);
+  expect(receipt.payload).toMatchObject({ kind: 'receipt', status: 'read', id, to: seat, root, session: 'acme' });
+  expect(statSync(at).mode & 0o777).toBe(0o600);
+}
 
-  test('the launch read serves the seat with no placed caller, receipting each record before its body', async () => {
+describe('team drops --read', () => {
+  test('the launch read serves the seat its launch names, receipting each record before its body', async () => {
     plantRecord(home, root, 'acme', 'lead', D_RECORD, 'hello');
-    const first = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
+    const first = await run(['--read', '--seat', 'lead', '--session', 'acme']);
     expect(first).toEqual({ code: 0, out: 'from lead (team lead):\n\nhello\n', err: '' });
     expectReceipt(D_RECORD);
     // The receipt is what says it was handed over: the next turn finds nothing waiting.
-    const second = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
+    const second = await run(['--read', '--seat', 'lead', '--session', 'acme']);
     expect(second).toEqual({ code: 0, out: '', err: '' });
   });
 
@@ -553,7 +553,7 @@ describe('team drops --read', () => {
     // name with no body. The receipt and the drop are left exactly as they were.
     const context = { to: 'lead', root, session: 'acme' };
     expect(listUnread(dropDir, context, home).map((message) => message.id)).toEqual([record.id]);
-    const result = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
+    const result = await run(['--read', '--seat', 'lead', '--session', 'acme']);
     expect(result).toEqual({
       code: 1,
       out: '',
@@ -570,11 +570,11 @@ describe('team drops --read', () => {
     expect(read.ok).toBe(true);
     const context = { to: 'lead', root, session: 'acme' };
     expect(listUnread(dropDir, context, home)).toEqual([]);
-    const result = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
+    const result = await run(['--read', '--seat', 'lead', '--session', 'acme']);
     expect(result).toEqual({ code: 0, out: '', err: '' });
   });
 
-  test('--read is an invocation of the launch line, never a placed caller', async () => {
+  test('--read is an invocation of the launch line: --seat is required and its own flags are refused', async () => {
     const noSeat = await run(['--read']);
     expect(noSeat).toEqual({ code: 2, out: '', err: 'team drops: --read needs --seat <seat>\n' + USAGE });
 
@@ -613,18 +613,18 @@ describe('team drops --read', () => {
         at: new Date(Date.parse('2026-10-04T09:00:00.000Z') + index * 1_000).toISOString(),
       });
     }
-    const first = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
+    const first = await run(['--read', '--seat', 'lead']);
     expect(first.code).toBe(0);
     // Newest first: the ten newest are handed over, and the two that wait are the oldest.
     expect(first.out.split('\n').filter((line) => line.startsWith('message '))).toEqual(
       Array.from({ length: 10 }, (_, index) => `message ${String(11 - index)}`),
     );
     expect(readdirSync(dropDir).filter((name) => name.endsWith('.read.json'))).toHaveLength(10);
-    const second = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
+    const second = await run(['--read', '--seat', 'lead']);
     expect(second.out.split('\n').filter((line) => line.startsWith('message '))).toEqual(['message 1', 'message 0']);
     expect(readdirSync(dropDir).filter((name) => name.endsWith('.read.json'))).toHaveLength(12);
     // The receipts are what leave nothing behind: a third read has no body at all.
-    const third = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
+    const third = await run(['--read', '--seat', 'lead']);
     expect(third).toEqual({ code: 0, out: '', err: '' });
   });
 
@@ -635,7 +635,7 @@ describe('team drops --read', () => {
     utimesSync(legacy, new Date('2026-10-04T10:00:00.000Z'), new Date('2026-10-04T10:00:00.000Z'));
     plantRecord(home, root, 'acme', 'lead', D_RECORD_READ, 'a signed body', { at: '2026-10-04T09:00:00.000Z' });
 
-    const result = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
+    const result = await run(['--read', '--seat', 'lead']);
 
     expect(result.code).toBe(0);
     expect(result.out).toBe('from lead (team lead):\n\na signed body\n');
@@ -646,7 +646,7 @@ describe('team drops --read', () => {
     // served is, and the next turn hands over no body and reports the old file again.
     expect(existsSync(receiptPath(dropDir, D_RECORD))).toBe(false);
     expectReceipt(D_RECORD_READ);
-    const again = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
+    const again = await run(['--read', '--seat', 'lead']);
     expect(again).toEqual({
       code: 0,
       out: '',
@@ -672,7 +672,7 @@ describe('team drops --read', () => {
     const legacy = drop('0f0e0d0c-0b0a-4908-8706-050403020100', `${OWNER_HEADER}\n\nan old raw drop\n`);
     utimesSync(legacy, new Date('2026-10-04T09:00:30.000Z'), new Date('2026-10-04T09:00:30.000Z'));
 
-    const first = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
+    const first = await run(['--read', '--seat', 'lead']);
     expect(first.code).toBe(0);
     expect(first.out.split('\n').filter((line) => line.startsWith('message '))).toEqual(
       Array.from({ length: 10 }, (_, index) => `message ${String(11 - index)}`),
@@ -680,7 +680,7 @@ describe('team drops --read', () => {
     expect(first.err).toBe('team drops: 1 drop(s) are not signed records and are not served\n');
     expect(readdirSync(dropDir).filter((name) => name.endsWith('.read.json'))).toHaveLength(10);
     // The two oldest signed records are what waited, not the old file: it is skipped every turn.
-    const second = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
+    const second = await run(['--read', '--seat', 'lead']);
     expect(second.out.split('\n').filter((line) => line.startsWith('message '))).toEqual(['message 1', 'message 0']);
     expect(second.err).toBe('team drops: 1 drop(s) are not signed records and are not served\n');
     expect(readdirSync(dropDir).filter((name) => name.endsWith('.read.json'))).toHaveLength(12);
@@ -713,7 +713,7 @@ describe('team drops --read', () => {
     expect(listing.rows.map((row) => row.path)).toEqual([reportPath]);
     expect(listUnread(dropDir, context, home).map((message) => message.id)).toEqual([legacyId]);
 
-    const result = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
+    const result = await run(['--read', '--seat', 'lead', '--session', 'acme']);
     expect(result).toEqual({
       code: 0,
       out: "from runtime (the team's unread-message report):\n\nwriter-01: a message from architect is queued, not woken - unread for 4 min\n",
@@ -726,13 +726,13 @@ describe('team drops --read', () => {
     if (key.kind !== 'key') throw new Error('the fixture wrote no key');
     expect(listDrops(dropDir, key.key, context)).toEqual({ kind: 'ok', rows: [] });
     expect(listUnread(dropDir, context, home)).toEqual([]);
-    const again = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
+    const again = await run(['--read', '--seat', 'lead', '--session', 'acme']);
     expect(again).toEqual({ code: 0, out: '', err: '' });
   });
 
   test('a file an earlier build wrote is never handed over and gets no receipt', async () => {
     drop(D_RECORD, `${OWNER_HEADER}\n\nan old raw drop\n`);
-    const result = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
+    const result = await run(['--read', '--seat', 'lead']);
     // Old unsigned mail is not an integrity refusal: the folder was read, the file is reported by
     // count, and no body and no receipt come of it.
     expect(result).toEqual({
@@ -758,7 +758,7 @@ describe('team drops --read', () => {
     record.signature = 'not-this-key';
     writeFileSync(at, `${JSON.stringify(record)}\n`);
 
-    const result = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
+    const result = await run(['--read', '--seat', 'lead']);
 
     expect(result.code).toBe(1);
     expect(result.out).toBe('');
@@ -789,7 +789,7 @@ describe('team drops --read', () => {
     writeFileSync(at, `${JSON.stringify(record)}\n`);
     plantRecord(home, root, 'acme', 'lead', D_RECORD_READ, 'a signed body', { at: '2026-10-04T09:00:00.000Z' });
 
-    const result = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
+    const result = await run(['--read', '--seat', 'lead']);
 
     expect(result.code).toBe(0);
     expect(result.out).toBe('from lead (team lead):\n\na signed body\n');
@@ -811,11 +811,144 @@ describe('team drops --read', () => {
     const elsewhere = join(base, 'elsewhere');
     mkdirSync(elsewhere);
     symlinkSync(elsewhere, join(root, '.agents', 'send-drops'));
-    const result = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
+    const result = await run(['--read', '--seat', 'lead']);
     expect(result).toEqual({
       code: 1,
       out: '',
       err: 'team drops: the drop folder is not a real folder: a link or a file stands in its path\n',
     });
+  });
+});
+
+// What `--read` admits: the seat itself, placed on the pane the state records for it — the
+// launch's turn-start hook runs a shell inside the seat's own pane process tree, so the pids
+// place it as the seat — the owner, and a lead (the orchestrator or operator) on its own
+// recorded pane. Every other caller is refused before a record is read, so no receipt is
+// written for it, and the owner hears the refusal as one event naming the seat, never a body.
+describe('team drops --read caller placement', () => {
+  const READ = ['--read', '--seat', 'lead', '--session', 'acme'];
+  // Neutral pane ids: the fixture's own names, never a real session's pane id.
+  const LEAD_PANE = 'pane-lead';
+  const WORKER_PANE = 'pane-worker';
+  const ELSEWHERE_PANE = 'pane-elsewhere';
+
+  /** The turn-start hook's own process tree: the shell the seat's CLI spawned for the hook, the
+   *  CLI above it, the pane's root shell, and the terminal host's server. The host answers only
+   *  when the session is named, as the hook's own invocation names it; `unanswered` is the host
+   *  that answers nothing, which places no one. */
+  function hookSources(unanswered = false): (session: string | undefined) => CallerSources {
+    const paneRoot = 2_400;
+    return (session) => ({
+      ancestors: () => [
+        { pid: 2_440, name: 'sh' },
+        { pid: 2_420, name: 'claude' },
+        { pid: paneRoot, name: 'zsh' },
+        { pid: 2_000, name: 'herdr' },
+      ],
+      agents: () => (unanswered || session === undefined
+        ? null
+        : [{ name: 'lead', agent: 'claude', pane: LEAD_PANE, workspace: 'fixture', status: 'idle', cwd: root }]),
+      paneRootPid: () => paneRoot,
+      env: { HERDR_PANE_ID: LEAD_PANE },
+      stdinIsTTY: false,
+    });
+  }
+
+  async function runPlaced(
+    argv: string[],
+    sources: (session: string | undefined) => CallerSources,
+  ): Promise<{ code: number; out: string; err: string }> {
+    const io = testIo(root);
+    io.callerSources = sources;
+    const code = await runDrops(argv, io, { home });
+    return { code, out: io.out, err: io.err };
+  }
+
+  test('the turn-start hook places as the seat by its pane process tree, and reads its own drops', async () => {
+    // The placement itself, before the command runs: a shell under the seat's CLI, under the pane
+    // root the host reports, is the seat — never the owner and never unplaced.
+    expect(placeCaller(hookSources()('acme'), 'acme')).toEqual({
+      kind: 'seat',
+      name: 'lead',
+      pane: LEAD_PANE,
+      session: 'acme',
+    });
+    // The launch's own standing: the state records the pane the hook places on.
+    placeLead(LEAD_PANE);
+    plantRecord(home, root, 'acme', 'lead', D_RECORD, 'hello from the launch');
+    const result = await runPlaced(READ, hookSources());
+    expect(result).toEqual({ code: 0, out: 'hello from the launch\n', err: '' });
+    expectReceipt(D_RECORD);
+  });
+
+  test('another seat is refused before a record is read, and nothing is receipted', async () => {
+    plantRecord(home, root, 'acme', 'lead', D_RECORD, 'for the lead only');
+    const result = await run(READ, seatCaller('worker', WORKER_PANE));
+    expect(result).toEqual({
+      code: 1,
+      out: '',
+      err: 'team drops: --read serves the seat itself, the owner, or a lead; this call is worker\n',
+    });
+    // Nothing was handed over and nothing was receipted: the message still waits for its seat.
+    expect(existsSync(receiptPath(dropDir, D_RECORD))).toBe(false);
+    expect(listUnread(dropDir, { to: 'lead', root, session: 'acme' }, home).map((message) => message.id)).toEqual([D_RECORD]);
+    expect(result.out).not.toContain('for the lead only');
+    expect(result.err).not.toContain('for the lead only');
+    // The owner hears the refusal as the rule and the seat, never the body.
+    const events = readEvents('acme', root, home);
+    expect(events.ok).toBe(true);
+    if (!events.ok) return;
+    const refused = events.events.filter((event) => event.payload.kind === 'security.refused');
+    expect(refused).toHaveLength(1);
+    expect(refused[0]!.payload).toMatchObject({ session: 'acme', rule: 'placement', seat: 'lead' });
+    expect(JSON.stringify(events.events)).not.toContain('for the lead only');
+    expect(readFileSync(join(root, '.agents', 'team.log'), 'utf8')).toContain('security.refused placement lead');
+  });
+
+  test('a shell no placement names reads nothing', async () => {
+    plantRecord(home, root, 'acme', 'lead', D_RECORD, 'held for the lead');
+    const result = await runPlaced(READ, hookSources(true));
+    expect(result).toEqual({
+      code: 1,
+      out: '',
+      err: "team drops: --read serves the seat itself, the owner, or a lead; this call is unplaced (it runs under herdr, and herdr doesn't answer)\n",
+    });
+    expect(existsSync(receiptPath(dropDir, D_RECORD))).toBe(false);
+  });
+
+  test('the owner peeks at any seat’s drops: the body is shown, and nothing is receipted', async () => {
+    plantRecord(home, root, 'acme', 'worker', D_RECORD, 'mail for the worker');
+    const workerDir = join(root, '.agents', 'send-drops', 'acme', 'worker');
+    const result = await run(['--read', '--seat', 'worker', '--session', 'acme'], { kind: 'owner' });
+    expect(result).toEqual({ code: 0, out: 'mail for the worker\n', err: '' });
+    // A peek serves the body only: the record still waits for its seat, and no receipt stands.
+    expect(existsSync(receiptPath(workerDir, D_RECORD))).toBe(false);
+    expect(listUnread(workerDir, { to: 'worker', root, session: 'acme' }, home).map((message) => message.id)).toEqual([D_RECORD]);
+    // And the peek is logged: the reader, the seat, and the id it looked at.
+    expect(readFileSync(join(root, '.agents', 'team.log'), 'utf8')).toContain(`peek [owner] worker: ${D_RECORD}`);
+  });
+
+  test('a lead peeks at another seat’s drops from its own recorded pane: no receipt, still unread', async () => {
+    plantRecord(home, root, 'acme', 'worker', D_RECORD_READ, 'other mail for the worker');
+    // The lead's standing is the pane the read judges it on: its own recorded pane.
+    placeLead(LEAD_PANE);
+    const workerDir = join(root, '.agents', 'send-drops', 'acme', 'worker');
+    const result = await run(['--read', '--seat', 'worker', '--session', 'acme'], seatCaller('lead', LEAD_PANE));
+    expect(result).toEqual({ code: 0, out: 'other mail for the worker\n', err: '' });
+    expect(existsSync(receiptPath(workerDir, D_RECORD_READ))).toBe(false);
+    expect(listUnread(workerDir, { to: 'worker', root, session: 'acme' }, home).map((message) => message.id)).toEqual([D_RECORD_READ]);
+    expect(readFileSync(join(root, '.agents', 'team.log'), 'utf8')).toContain(`peek [lead] worker: ${D_RECORD_READ}`);
+  });
+
+  test('a lead on a pane the state does not record for it is refused with the repair', async () => {
+    plantRecord(home, root, 'acme', 'worker', D_RECORD, 'mail for the worker');
+    placeLead(LEAD_PANE);
+    const result = await run(['--read', '--seat', 'worker', '--session', 'acme'], seatCaller('lead', ELSEWHERE_PANE));
+    expect(result).toEqual({
+      code: 1,
+      out: '',
+      err: `team drops: the state records pane ${LEAD_PANE} for seat lead in this session, not the pane this call is on: a lead stops the team and starts it again (\`team down\`, then \`team up\`)\n`,
+    });
+    expect(existsSync(receiptPath(join(root, '.agents', 'send-drops', 'acme', 'worker'), D_RECORD))).toBe(false);
   });
 });

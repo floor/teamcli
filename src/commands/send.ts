@@ -627,6 +627,9 @@ function deliveryWordsOf(input: {
   seat: string;
   declared?: Pick<Seat, 'cli' | 'launch' | 'human' | 'watchWake' | 'inbound' | 'webhook'>;
   home?: string;
+  /** The name the words print for the seat. Across teams it is the full `seat@team` address the
+   *  drop line itself uses, so the class sentence never names a second, bare target. */
+  wordsSeat?: string;
 }, wake?: WakeOutcome): { words: string; cls: DeliveryClass } {
   const state = seatStateOf(input.dir, input.session, input.seat);
   const read = seatDeliveryClass({
@@ -648,7 +651,7 @@ function deliveryWordsOf(input: {
         human: read.evidence.human === true,
         watchWake: read.evidence.watchWake,
       },
-      input.seat,
+      input.wordsSeat ?? input.seat,
       wake,
     ),
     cls,
@@ -971,6 +974,10 @@ type WalkOrderInput = {
 
 function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   const order = deliveryOrder(input.rawChain);
+  // The line the receiving seat actually ran, read from its own runtime record first: the
+  // declaration and the development channel are what that argv carries, and the file's row is
+  // only what a later launch would run. Without a runtime record the row stands, as before.
+  const runtimeLaunch = seatStateOf(input.dir, input.session, input.seat)?.launch_line ?? input.declared?.launch ?? '';
   // A receiving seat whose launch declares `crossSessionInbound: "accept"` takes the frame
   // first: the socket is the fastest channel and the owner asked for it ahead of the rest of the
   // order. A receiver keeps the order its files declare — hold, refuse and unset in the launch
@@ -981,7 +988,7 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
     root: input.root,
     session: input.session,
     seat: input.seat,
-    ...(input.declared?.launch !== undefined ? { launch: input.declared.launch } : {}),
+    ...(runtimeLaunch === '' ? {} : { launch: runtimeLaunch }),
   });
   // The one implied default that names the socket: a receiving Claude session whose launch
   // declares `crossSessionInbound: accept`, with no level of its chain declaring an order, walks
@@ -1037,8 +1044,9 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   // The listener is probed whenever the seat's launch enables the channel, even for a declared
   // order the channel is never a word of: a serving channel this build cannot vouch for pushes
   // whatever the sender's walk chooses, so the sender leaves its held marker before a wake of its
-  // own and the stale push cannot follow that wake as a second one.
-  const channelProbe = input.cli === 'claude-code' && channelLaunchEnabled(input.declared?.launch)
+  // own and the stale push cannot follow that wake as a second one. The launch read is the
+  // runtime record's first, the same line the declaration above is read from.
+  const channelProbe = input.cli === 'claude-code' && channelLaunchEnabled(runtimeLaunch)
     ? inboxLive(dropDir, input.root, input.session, input.seat, input.build?.())
     : null;
   const channelFirst = !declaredOrder && channelProbe !== null && channelProbe.live === true && channelProbe.listener.channel === true;
@@ -1457,11 +1465,15 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   // woken, and under the cascade the send itself walks that adapter as its second leg class.
   // An ending that names the webhook's own answer never appends these words — the walk's report
   // already says what the routine answered, and an unconfirmed post must not claim a wake.
+  // The name every console statement uses for the target. Across teams it is the full
+  // `seat@team` address the caller resolved: a bare name could read as a second, local seat.
+  const label = to.cross ? `${to.seat}@${to.project}` : to.seat;
   const classRead = deliveryWordsOf({
     dir: to.dir,
     root: to.root,
     session: to.session,
     seat: to.seat,
+    wordsSeat: label,
     ...(declared === undefined ? {} : { declared }),
     home: host.home,
   });
@@ -2060,7 +2072,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   // The class in words, as the walk has disproved it so far and with the wake this run made: every
   // ending that appends the class reads the same sentence.
   const wordsNow = (wake: WakeOutcome | undefined): string =>
-    classWords(classWithout(to, host.home, walkLost, declared), to.seat, wake);
+    classWords(classWithout(to, host.home, walkLost, declared), label, wake);
   const lowerDelivery = (): void => {
     report.deliveryClass = classWithout(to, host.home, walkLost, declared).cls;
     report.deliveryWords = wordsNow(wakeOutcome);
@@ -2710,9 +2722,11 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       lowerDelivery();
       await ensureEpisode();
       // The drop leg is the bus inbox, never a wake: when it takes the send no event adapter
-      // did, and the sender is told so (src/send/no-pane-messaging.ts). It is the cascade's last
-      // resort, under every other class (src/send/walk-cascade.ts).
-      if (!human && !dry) {
+      // did (src/send/no-pane-messaging.ts). It is the cascade's last resort, under every other
+      // class (src/send/walk-cascade.ts). Across teams the outcome line below names the full
+      // address, so this line would print the same recipient a second time — once by its bare
+      // resolved seat name — and read as a second target; the summary is the one statement.
+      if (!human && !dry && !to.cross) {
         io.stderr(queuedLine(to.seat, noEventAdapter ? NO_PANE_MESSAGING : NO_EVENT_ADAPTER_TOOK_IT));
       }
       if (endpointDown !== undefined) {
@@ -2727,7 +2741,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
           at: host.now().toISOString(),
         });
       }
-      return deliverDropped(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, human, wait, timeoutS, callerRoot, note, stagedWrittenOf());
+      return deliverDropped(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, human, wait, timeoutS, callerRoot, note, stagedWrittenOf(), label);
     }
     // The typed leg. The trigger is built here, so an order that reaches this leg is refused a
     // trigger past the measured line before anything is written. The line is the seat's own
@@ -4341,6 +4355,9 @@ async function deliverDropped(
   extraRoot?: { root: string; session: string },
   note: WalkNote = (_attempt) => { /* no episode */ },
   staged?: RecordWritten | null,
+  /** The name the console ending prints for the seat: across teams its full `seat@team`
+   *  address, so a resolved seat is never mistaken for a second target; else the seat name. */
+  label: string = seatName,
 ): Promise<number> {
   const failed = failures.length > 0 ? { failed: [...failures] } : {};
   const msgId = payload.id;
@@ -4371,7 +4388,7 @@ async function deliverDropped(
       via: 'drop',
       ...failed,
     });
-    return sentUnconfirmed(io, seatName, report, ms, 'drop');
+    return sentUnconfirmed(io, label, report, ms, 'drop');
   }
   if (!('busy' in stored)) {
     return refuse(io, dir, who, `${seatName}: ${stored.reason}; nothing was sent`, host, report);

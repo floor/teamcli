@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { runDrops } from '../src/commands/drops.ts';
 import { runMessages } from '../src/commands/messages.ts';
 import type { Io } from '../src/io.ts';
+import { updateState } from '../src/state.ts';
 import { listUnread, readMessage } from '../src/mcp/inbox.ts';
 import { publishRecordRead } from '../src/send/read-receipt.ts';
 import { isRead, signedReceiptOf, verifyReceipt } from '../src/send/record.ts';
@@ -43,6 +44,11 @@ seats:
     version: "1"
     launch: codex
 `);
+  updateState(join(root, '.agents'), (state) => {
+    state.sessions.acme = {
+      seats: { lead: { stage: 'ready' as const, pane: 'pane-lead' } },
+    } as never;
+  });
   const key = messageKeyOf(home);
   const target = { root, dropDir, seat: 'lead', session: 'acme' };
   const context = { root, to: 'lead', session: 'acme' };

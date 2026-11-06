@@ -37,7 +37,7 @@ import { profileFor } from '../src/profiles/index.ts';
 import { launchCommand } from '../src/profiles/profile.ts';
 import { emptySession, readState, updateState, type SessionState } from '../src/state.ts';
 import type { Comparison, Live } from '../src/status/compare.ts';
-import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, paneShell, testIo, type PaneShell } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
 const ago = (seconds: number): string => new Date(NOW.getTime() - seconds * 1000).toISOString();
@@ -273,9 +273,11 @@ describe('the turn-start folder read', () => {
   const HEADER = 'from the owner — admitted by: the owner\n\n';
   /** A planted record whose verified from is `the owner` opens with that compact header. */
   const MARK = 'from the owner (owner):\n\n';
+  const PANE = 'pane-worker';
 
   let project: string;
   let home: string;
+  let shell: PaneShell;
 
   /** The fixture team file: one Claude Code seat, the session the launch writes into the hook. */
   const teamYaml = (lobby: string, root: string): string => `format: 1
@@ -307,6 +309,9 @@ seats:
     mkdirSync(lobbyDir(home), { recursive: true });
     execFileSync('git', ['init', '-q'], { cwd: project, stdio: 'ignore' });
     writeFileSync(join(project, '.agents', 'team.yaml'), teamYaml(lobbyDir(home), project));
+    // The pane the installed hook runs under: the read now places its caller, so the subprocess
+    // needs the server's answer and the seat's standing, as a hook inside the seat's own pane has.
+    shell = paneShell({ bin: join(base, 'bin'), dir: join(project, '.agents'), session: SESSION, seat: SEAT, pane: PANE, home });
   });
 
   const seat = () => ({ name: SEAT, cli: 'claude-code', launch: CLAUDE });
@@ -324,10 +329,11 @@ seats:
     return read;
   }
 
-  /** Runs one installed hook command the way the CLI does: in the project, with the machine's
-   *  own home replaced by the fixture's, so the message key and the files are the test's. */
+  /** Runs one installed hook command the way the launch's turn start does: in the project, under
+   *  the seat's own pane, with the machine's home replaced by the fixture's, so the message key
+   *  and the files are the test's. */
   function run(command: string): string {
-    return execFileSync('sh', ['-c', command], { cwd: project, encoding: 'utf8', env: { ...process.env, HOME: home } });
+    return shell.run(command, project);
   }
 
   /** The `additionalContext` the hook's stdout carries. Claude Code reads a UserPromptSubmit

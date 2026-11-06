@@ -44,7 +44,8 @@ import { runOrder } from '../../src/commands/order.ts';
 import { runRestart } from '../../src/commands/restart.ts';
 import { runRelease } from '../../src/commands/release.ts';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
-import { deliverBriefForAttribution } from '../../src/launch/general-brief.ts';
+import { currentBriefClaim, deliverBriefForAttribution } from '../../src/launch/general-brief.ts';
+import { listUnread, readMessage } from '../../src/mcp/inbox.ts';
 import { signRecord } from '../../src/send/record.ts';
 import { runList } from '../../src/commands/list.ts';
 import { runSeats } from '../../src/commands/seats.ts';
@@ -269,17 +270,27 @@ async function setup(page: Page): Promise<void> {
       attributed: page.team.seats.map((seat) => seat.name),
     });
     if (page.spec.briefs === 'delivered-and-read') {
-      const readIo: Io = {
-        stdout: () => {},
-        stderr: () => {},
-        cwd: fixture.root,
-        env: {},
-        stdinIsTTY: false,
-        caller: { kind: 'owner' },
-      };
+      // The receipt is the seat's own, so it is written through the receipting read itself, as
+      // the seat: only the seat that owns the inbox writes a read receipt, and a look by the
+      // owner or a lead is a peek that leaves the brief waiting.
       for (const seat of page.team.seats) {
         if (seat.human === true) continue;
-        await runDrops(['--read', '--seat', seat.name], readIo, { home: fixture.home });
+        const dropDir = join(dir, 'send-drops', page.session, seat.name);
+        const target = { dropDir, root: fixture.root, seat: seat.name, session: page.session };
+        // A launch record is served only under the claim the seat's state holds now, as the
+        // launch's own read resolves it.
+        const brief = {
+          claim: () => {
+            try {
+              return currentBriefClaim(readState(dir).sessions[page.session]?.briefs?.[seat.name]);
+            } catch {
+              return null;
+            }
+          },
+        };
+        for (const message of listUnread(dropDir, { to: seat.name, root: fixture.root, session: page.session }, fixture.home)) {
+          readMessage(target, message.id, fixture.home, brief);
+        }
       }
     }
   }

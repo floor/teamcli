@@ -250,8 +250,13 @@ describe('the delivery', () => {
     expect(claim.id).toBe(generalBriefId(claim.incarnation, generalBriefBody(), 0));
 
     // The turn-start hook's own path: `team drops --read --seat` shows the brief and leaves the
-    // signed read receipt beside it, bound to the claim it served.
-    const io = testIo(root, { kind: 'owner' });
+    // signed read receipt beside it, bound to the claim it served. The read places the seat on
+    // the pane its launch records, so the state records its standing first.
+    updateState(dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats = { ...(session.seats ?? {}), lead: { stage: 'ready' as const, pane: 'pane-reader', workspace: 'fixture' } };
+    });
+    const io = testIo(root, { kind: 'seat', name: 'lead', pane: 'pane-reader', session: 'acme' });
     const code = await runDrops(['--read', '--seat', 'lead'], io, { home });
     expect(code).toBe(0);
     expect(io.out).toBe(`${generalBriefBody()}\n`);
@@ -642,12 +647,12 @@ describe('team check', () => {
     updateState(dir, (state) => {
       state.sessions.acme = {
         ...state.sessions.acme,
-        seats: { lead: { stage: 'ready' as const, pane: 'w1:p1', workspace: 'w1' } },
+        seats: { lead: { stage: 'ready' as const, pane: 'pane-reader', workspace: 'fixture' } },
         worktrees: {},
       };
     });
     // The CLI seat's read is the receipt the turn-start hook writes, bound to the claim.
-    const read = testIo(root, { kind: 'owner' });
+    const read = testIo(root, { kind: 'seat', name: 'lead', pane: 'pane-reader', session: 'acme' });
     expect(await runDrops(['--read', '--seat', 'lead'], read, { home })).toBe(0);
     const io = testIo(root, { kind: 'owner' });
     runTeamCheck({ file: '.agents/team.yaml' }, io, {
