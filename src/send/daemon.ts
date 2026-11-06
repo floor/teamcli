@@ -160,6 +160,8 @@ export type DaemonSendRequest = {
   /** The `message-display` header's sender name, as the caller resolved it (the seat's nickname,
    *  or its seat name). Absent, the daemon reads the team file's nickname, then the seat name. */
   name?: string;
+  /** The verified admission rule. The daemon does not read one out of the body. */
+  rule?: string;
   /** The receiving team's `message-display` template as the caller read it; absent, the daemon
    *  resolves it from the chain, and a chain that cannot be read leaves the shipped template. */
   template?: string;
@@ -1111,7 +1113,7 @@ async function executeQueuedSend(
     // The socket frame opens with the compact sender header, then the signed record's body; a
     // person-pane seat gets neither a reply line nor a read hint.
     const display = displayOf(request, team, root, host, body);
-    return executeSocketSend(dir, root, who, from, team, seatName, body, msgId, request.timeout_s ?? 120, waitMs, pollMs, host, alive, sentAs, display.name, configured.human === true);
+    return executeSocketSend(dir, root, who, from, team, seatName, body, msgId, request.timeout_s ?? 120, waitMs, pollMs, host, alive, sentAs, display.name, configured.human === true, request.rule ?? '');
   }
 
   const found = await findSeatAgent(host, team.session, seatName);
@@ -1566,6 +1568,8 @@ async function executeSocketSend(
   senderName = '',
   /** True for a person-pane seat: no reply line and no read hint. */
   personPane = false,
+  /** The verified admission rule, when the caller has one. Empty leaves the header without a rule. */
+  rule = '',
 ): Promise<DaemonSendResponse> {
   // While SOCKET_SEND is off, the daemon serves no waited send: the frame the reply would ride
   // is one this build does not write, and a caller asking for one anyway — an older CLI — is
@@ -1623,6 +1627,7 @@ async function executeSocketSend(
     home: host.home,
     root,
     displayName: senderName === '' ? null : senderName === 'owner' ? 'the owner' : senderName,
+    ...(rule === '' ? {} : { rule }),
     compact,
   });
   const reply = personPane

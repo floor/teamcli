@@ -726,6 +726,8 @@ describe('3. compact sender headers at each reading surface', () => {
           op: 'send',
           from: 'corvid',
           to: 'lead',
+          name: 'Corvid',
+          rule: RULE,
           body: `from Corvid — admitted by: ${RULE}\n\nSummary headline\nDetails below.`,
           wait: true,
           timeout_s: 1,

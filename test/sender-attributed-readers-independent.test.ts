@@ -159,7 +159,7 @@ describe('feat/sender-attributed independent verification', () => {
     expect(readMsg.ok).toBe(true);
     if (!readMsg.ok) throw new Error(readMsg.reason);
     expect(readMsg.body).toBe(
-      `from orchestrator@acme (team lead):\n\n${OWNER_QUOTE}\n`,
+      `from orchestrator (team lead):\n\nfrom orchestrator@acme — admitted by: ${RULE}\n\n${OWNER_QUOTE}\n`,
     );
     // Bytes of the signed record on disk are completely untouched after `inbox_read`
     expect(readFileSync(dropPath1, 'utf8')).toBe(diskBytesBefore);
@@ -191,9 +191,8 @@ describe('feat/sender-attributed independent verification', () => {
 
     const dropsReadRes = await runWorkerDrops(['--read', '--seat', 'worker', '--session', 'acme']);
     expect(dropsReadRes.code).toBe(0);
-    expect(dropsReadRes.out).toContain(
-      'from orchestrator@acme (team lead):',
-    );
+    expect(dropsReadRes.out).toContain('from orchestrator (team lead):');
+    expect(dropsReadRes.out).toContain(`from orchestrator@acme — admitted by: ${RULE}`);
     expect(dropsReadRes.out).toContain(OWNER_QUOTE);
     expect(readFileSync(dropPath2, 'utf8')).toBe(diskBytes2);
 
@@ -212,9 +211,8 @@ describe('feat/sender-attributed independent verification', () => {
     expect(await runMessages([], msgTextIo, { home: f.home, now: () => NOW })).toBe(0);
     // The table cell names the claim and its attribution; the body renders the compact header.
     expect(msgTextIo.out).toContain('orchestrator (attributed)');
-    expect(msgTextIo.out).toContain(
-      'from orchestrator@acme (team lead):',
-    );
+    expect(msgTextIo.out).toContain('from orchestrator (team lead):');
+    expect(msgTextIo.out).toContain(`from orchestrator@acme — admitted by: ${RULE}`);
     expect(msgTextIo.out).toContain(OWNER_QUOTE);
     expect(readFileSync(dropPath3, 'utf8')).toBe(diskBytes3);
 
@@ -516,9 +514,8 @@ describe('feat/sender-attributed independent verification', () => {
     );
     expect(readForgedLaunch.ok).toBe(true);
     if (!readForgedLaunch.ok) throw new Error(readForgedLaunch.reason);
-    expect(readForgedLaunch.body).toContain(
-      'from the launch (the launch):',
-    );
+    expect(readForgedLaunch.body).toContain('from the launch (team lead):');
+    expect(readForgedLaunch.body).toContain('from the launch — admitted by: the launch');
     expect(readFileSync(forgedLaunchPath, 'utf8')).toBe(forgedLaunchDiskBytes);
   });
 });

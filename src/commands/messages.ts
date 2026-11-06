@@ -482,7 +482,7 @@ export function plantRecord(
 
 type Problem = { kind: 'shape' | 'id' | 'seat' | 'root' | 'session' | 'signature' | 'unsupported'; text: string };
 
-type Verified = { from: string; from_id: string | null; to: string; at: string; body: string };
+type Verified = { from: string; from_id: string | null; to: string; at: string; body: string; rule?: string };
 
 function recordProblem(candidate: Candidate, root: string, session: string, key: KeyObject): Problem | Verified {
   const where = `${candidate.seat}/${candidate.id}`;
@@ -511,7 +511,7 @@ function recordProblem(candidate: Candidate, root: string, session: string, key:
   if (payload.session !== (candidate.session ?? session)) {
     return { kind: 'session', text: `${where} does not verify: it is bound to session ${JSON.stringify(payload.session)}` };
   }
-  return { from: payload.from, from_id: payload.from_id, to: payload.to, at: payload.at, body: payload.body };
+  return { from: payload.from, from_id: payload.from_id, to: payload.to, at: payload.at, body: payload.body, rule: payload.rule };
 }
 
 function problemOf(candidate: Candidate, root: string, session: string, key: KeyObject): Problem | Verified {
@@ -711,6 +711,7 @@ function waitingRow(
   key: KeyObject | null,
   now: Date,
   withBody: boolean,
+  home: string,
 ): MailboxRow {
   const verified = key === null ? null : problemOf(candidate, root, session, key);
   const fields = verified !== null && !('text' in verified) ? verified : null;
@@ -724,7 +725,17 @@ function waitingRow(
     sent_display: formatRelativeTime(fields?.at, now),
     status: 'waiting',
     sender_attribution: fields === null ? 'none' : 'attributed',
-    ...(withBody && fields !== null ? { body: fields.body, renderedBody: attributedBody(fields.body, fields.from ?? candidate.seat) } : {}),
+    ...(withBody && fields !== null
+      ? {
+          body: fields.body,
+          renderedBody: attributedBody(fields.body, fields.from ?? candidate.seat, {
+            home,
+            root,
+            ...(fields.from_id === null ? {} : { fromId: fields.from_id }),
+            ...(fields.rule === undefined ? {} : { rule: fields.rule }),
+          }),
+        }
+      : {}),
   };
 }
 
@@ -948,7 +959,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
     if (candidate.seat !== mailbox) {
       // Addressed to another mailbox: listed, never shown, never receipted. The owner's reading
       // carries the verified body; a seat's never does.
-      rows.push(waitingRow(candidate, root, session, key, now, ownerView));
+      rows.push(waitingRow(candidate, root, session, key, now, ownerView, sources.home));
       continue;
     }
     // Every record of this mailbox reaching here is the key's to verify: a keyless run with one
