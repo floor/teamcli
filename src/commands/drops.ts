@@ -719,12 +719,13 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       io.stderr(`team drops: ${String(superseded)} drop(s) carry an earlier general seat brief and are not served\n`);
     }
     if (bodies.length === 0 && superseded === 0 && legacy === 0 && receiptRefusals.length === 0 && refusal === null) {
+      // Nothing for this turn. The notice stays off stdout: the turn-start hook forwards stdout
+      // into the turn, and an empty folder must not become chatter there. One newest settled
+      // read is named, never every settled id, and never a body.
       const lines = ['no unread drops'];
       const newest = settled[0];
       if (newest !== undefined) lines.push(alreadyReadSentence(newest.id, newest.at, newest.readBy, seatNames));
-      io.stdout(`${lines.join('\n')}\n`);
-    } else if (bodies.length > 0) {
-      for (const fact of settled) io.stderr(`${alreadyReadSentence(fact.id, fact.at, fact.readBy, seatNames)}\n`);
+      io.stderr(`${lines.join('\n')}\n`);
     }
     return readOk();
   }

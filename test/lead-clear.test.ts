@@ -13,10 +13,10 @@ import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { runAck, type AckHost } from '../src/commands/ack.ts';
 import { runArchive } from '../src/commands/archive.ts';
-import { listDrops } from '../src/commands/drops.ts';
+import { listDrops, runDrops } from '../src/commands/drops.ts';
 import type { DownSources } from '../src/commands/down.ts';
 import { listUnackedMessages, plantRecord, recordDir, runMessages } from '../src/commands/messages.ts';
-import { listUnread, readMessage } from '../src/mcp/inbox.ts';
+import { listUnread, peekMessage, readMessage } from '../src/mcp/inbox.ts';
 import { readHistory } from '../src/send/history.ts';
 import {
   isRead,
@@ -251,6 +251,16 @@ describe('a lead-ack receipt is how a stopped seat\'s stale mail is cleared', ()
     expect(await runMessages([], io, { home, now: () => NOW })).toBe(0);
     expect(io.out).toContain('the unread line');
     expect(io.out).not.toContain('a body for the seat');
+    expect(io.err).not.toContain('a body for the seat');
+
+    // The same clearance stays body-less for drops --read and inbox_read's peek. The watch rings
+    // from the unacked list above, which already excludes the cleared id.
+    const drops = testIo(root, OWNER);
+    expect(await runDrops(['--read', '--seat', 'worker', '--session', 'acme'], drops, { home })).toBe(0);
+    expect(`${drops.out}${drops.err}`).not.toContain('a body for the seat');
+    const peeked = peekMessage({ dropDir: dir, root, seat: 'worker', session: 'acme', lead: 'lead' }, STALE_ID, home);
+    expect(peeked.ok).toBe(false);
+    if (!peeked.ok) expect(peeked.reason).not.toContain('a body for the seat');
 
     // A message the seat itself read is not a lead-ack and still counts as its own read.
     const seatRead = plantRecord(home, root, 'acme', 'worker', SEAT_READ_ID, 'read by the seat\n', { at: NOW_ISO, from: 'lead' });

@@ -108,7 +108,7 @@ function seatIo(root: string, home: string): { io: Io; out: () => string; err: (
   return { io, out: () => stdout, err: () => stderr };
 }
 
-test('a late pointer names when it was sent, and a mixed read says the receipt and still returns the unread body', async () => {
+test('a late pointer names when it was sent, and a mixed read returns only the unread body', async () => {
   const held = world();
   try {
     const text = writeBody(held.root, held.home, held.dropDir, READ_ID, ALREADY);
@@ -163,9 +163,12 @@ test('a late pointer names when it was sent, and a mixed read says the receipt a
     const code = await runDrops(['--read', '--seat', SEAT], read.io, { home: held.home });
     const said = read.out() + read.err();
     expect(code).toBe(0);
-    expect(said).toContain(`${READ_ID}: already read at ${READ_AT} (${SEAT})`);
+    // A turn that has new mail is not also told about every settled id. The receipt is named
+    // only when the folder has nothing left to serve.
+    expect(said).not.toContain(`${READ_ID}: already read at`);
     expect(read.out()).toContain(UNREAD);
     expect(read.out()).not.toContain(ALREADY);
+    expect(read.err()).toBe('');
   } finally {
     discardFixtures([held.root], { roots: [dirname(held.root)] });
   }
@@ -194,14 +197,15 @@ test('team drops --read with nothing unread names the newest receipt', async () 
     const read = seatIo(held.root, held.home);
     const code = await runDrops(['--read', '--seat', SEAT], read.io, { home: held.home });
     expect(code).toBe(0);
-    expect(read.out()).toBe(`no unread drops\n${READ_ID}: already read at ${READ_AT} (${SEAT})\n`);
+    expect(read.out()).toBe('');
     expect(read.out()).not.toContain(ALREADY);
+    expect(read.err()).toBe(`no unread drops\n${READ_ID}: already read at ${READ_AT} (${SEAT})\n`);
   } finally {
     discardFixtures([held.root], { roots: [dirname(held.root)] });
   }
 });
 
-test('team messages shows a served id as a read row and not its body', async () => {
+test('team messages does not list a served id and does not show its body', async () => {
   const held = world();
   try {
     writeBody(held.root, held.home, held.dropDir, READ_ID, ALREADY);
@@ -209,9 +213,9 @@ test('team messages shows a served id as a read row and not its body', async () 
     const read = seatIo(held.root, held.home);
     const code = await runMessages(['--json'], read.io, { home: held.home, now: () => new Date(READ_AT) });
     expect(code).toBe(0);
-    const document = JSON.parse(read.out()) as { rows: { id: string; status: string; body?: string }[] };
-    expect(document.rows).toEqual([expect.objectContaining({ id: READ_ID, status: 'read' })]);
-    expect(document.rows[0]?.body).toBeUndefined();
+    const document = JSON.parse(read.out()) as { rows: { id: string; body?: string }[]; counts: { messages: number } };
+    expect(document.rows).toEqual([]);
+    expect(document.counts.messages).toBe(0);
     expect(read.out()).not.toContain(ALREADY);
   } finally {
     discardFixtures([held.root], { roots: [dirname(held.root)] });

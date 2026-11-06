@@ -117,12 +117,11 @@ describe('team ack marks one message read without printing it', () => {
     const { writer, ...fields } = signed!.payload;
     expect(fields).toEqual({ kind: 'receipt', status: 'read', id: SENT, to: 'owner', root, session: 'acme', at: NOW_ISO });
     expect(writer).toEqual({ version: version(), pid: process.pid });
-    // The message is no longer waiting. team messages names it read and serves no body.
+    // The message is no longer waiting, and the next read serves no body.
     expect(listUnread(recordDir(root, 'acme', 'owner'), { to: 'owner', root, session: 'acme' }, home)).toEqual([]);
     const io = testIo(root, { kind: 'owner' });
     expect(await runMessages([], io, { home, now: () => NOW })).toBe(0);
-    expect(io.out).toContain(SENT);
-    expect(io.out).toContain('read');
+    expect(io.out).toContain('nothing is waiting');
     expect(io.out).not.toContain('a question');
   });
 

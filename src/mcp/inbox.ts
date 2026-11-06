@@ -35,11 +35,13 @@ import { dropMessage } from '../send/native.ts';
 import { attributedBody, attributeSenderClaim, type SenderAttribution } from '../send/sender-claim.ts';
 import { readState } from '../state.ts';
 import {
+  alreadyReadSentence,
   fileStatStamp,
   isRead,
   isReadOrCleared,
   keyPrintForCache,
   leadAckReceiptAt,
+  settledReadOf,
   readRecord,
   readSealedRecord,
   receiptFile,
@@ -888,9 +890,9 @@ export function readMessage(
 
 /**
  * Reads one message for a peek: the same verification a read makes, and the same attributed body, with nothing
- * written. No receipt is published, so the message stays unread and the seat's own read still
- * serves it; a read or replied receipt an earlier reader left is not consulted, because a peek
- * neither consumes the message nor claims anything about it. This is how the owner and a lead
+ * written. No receipt is published, so a message that is still waiting stays unread and the seat's
+ * own read still serves it. A receipt that already settled the id — the seat's read, or a lead's
+ * clearance — is consulted first, and that peek returns no body. This is how the owner and a lead
  * look at another seat's waiting mail without hiding it from its seat. `served` is never
  * returned: a peek does not race a read for anything.
  */
@@ -898,6 +900,12 @@ export function peekMessage(target: InboxTarget, id: string, home: string, brief
   if (!messageNameOk(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   if (heldAt(join(target.dropDir, id)).kind !== 'file') {
     return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
+  }
+  const key = messageKeyState(home);
+  if (key.kind === 'key') {
+    const context: StatusContext = { to: target.seat, root: target.root, session: target.session, lead: target.lead };
+    const settled = settledReadOf(target.dropDir, id, context, key.key);
+    if (settled !== null) return { ok: false, reason: alreadyReadSentence(id, settled.at, settled.readBy) };
   }
   const opened = openInboxMessage(target, id, home, brief);
   if (!opened.ok) return opened;

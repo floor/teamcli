@@ -932,11 +932,9 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
         candidate.store === 'record'
           ? recordReadHeld(candidate, root, session, state.key, loaded.team.orchestrator)
           : legacyReceiptMatches(receiptFile(root, candidate.seat, candidate.id), candidate.seat, candidate.id, root, session, state.key);
-      if (readHeld && candidate.store !== 'record') return false;
-      if (readHeld && candidate.store === 'record') {
-        const payload = signedRecordOf(readJson(candidate.path))?.payload;
-        if (payload !== undefined && isGeneralBriefRecord(payload)) return false;
-      }
+      // A receipt already settled this id, including a lead's clearance. It is not waiting
+      // mail: no row, no count, and no body, whoever is reading.
+      if (readHeld) return false;
     }
     // A body file written before the record spine is plain text. It stays in the folder for
     // its seat to read, but it names no message: the inbox neither shows nor refuses it. A
@@ -1001,8 +999,10 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
   };
   for (const candidate of waiting) {
     if (candidate.seat !== mailbox) {
-      // Addressed to another mailbox: listed, never shown, never receipted. The owner's reading
-      // carries the verified body; a seat's never does.
+      // Addressed to another mailbox: listed, never shown, never receipted. A record a receipt
+      // already settled is not waiting, so it is not listed and its body is not shown. The
+      // owner's reading carries the verified body of what is still waiting; a seat's never does.
+      if (key !== null && recordReadHeld(candidate, root, session, key, loaded.team.orchestrator)) continue;
       rows.push(waitingRow(candidate, root, session, key, now, ownerView, sources.home, claimOf(candidate.seat, candidate.session ?? session)));
       continue;
     }
@@ -1049,24 +1049,8 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
       continue;
     }
     if (candidate.store === 'record') {
-      // A receipt already settles this id: the row says read, and the body is not shown again.
-      if (key !== null && recordReadHeld(candidate, root, session, key, loaded.team.orchestrator)) {
-        const senderAttribution = recordPayload === null
-          ? 'none' as const
-          : attributeSenderClaim(recordPayload, { briefClaim: claimOf(candidate.seat, candidate.session ?? session) });
-        rows.push({
-          id: candidate.id,
-          seat: candidate.seat,
-          from: result.from,
-          from_id: result.from_id,
-          to: result.to,
-          sent: result.at,
-          sent_display: formatRelativeTime(result.at, now),
-          status: 'read',
-          sender_attribution: senderAttribution,
-        });
-        continue;
-      }
+      // A receipt already settles this id. It is not waiting mail, so it adds no row and no body.
+      if (key !== null && recordReadHeld(candidate, root, session, key, loaded.team.orchestrator)) continue;
       // The receipt is published and flushed before the body: one reader wins the id, and the
       // proof of exposure survives a crash that follows it.
       const gate = openRecord(candidate, root, session, sources.home, key, sources.now().toISOString(), loaded.team.orchestrator);

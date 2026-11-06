@@ -2750,6 +2750,12 @@
         },
         {
           "hidden": false,
+          "name": "--id",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--json",
           "repeatable": false,
           "takesValue": false
@@ -2791,7 +2797,7 @@
       "subcommands": [],
       "usage": [
         "team drops [--follow] [--json]",
-        "team drops --read --seat <seat> [--session <session>] [--epoch <run_id>]"
+        "team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>]"
       ],
       "who": {
         "gate": "seat-only",

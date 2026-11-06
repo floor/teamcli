@@ -94,7 +94,7 @@ function seatIo(root: string, home: string): { io: Io; out: () => string; err: (
   return { io, out: () => stdout, err: () => stderr };
 }
 
-test('a late pointer for a read id says when it was read, and an unread id still returns its body', async () => {
+test('a late pointer for a read id leaves the unread body as the whole turn', async () => {
   const held = world();
   try {
     const readId = '6b1f3c2d-4e5a-4b6c-8d7e-9f0a1b2c3d4e';
@@ -146,8 +146,11 @@ test('a late pointer for a read id says when it was read, and an unread id still
     const code = await runDrops(['--read', '--seat', SEAT], read.io, { home: held.home });
     const said = read.out() + read.err();
     expect(code).toBe(0);
-    expect(said).toContain(`already read at ${READ_AT}`);
+    // New mail is the whole turn. A settled id is named only when nothing unread is left to serve.
+    expect(said).not.toContain(`already read at ${READ_AT}`);
     expect(read.out()).toContain(UNREAD);
+    expect(read.out()).not.toContain(ALREADY);
+    expect(read.err()).toBe('');
   } finally {
     discardFixtures([held.root], { roots: [dirname(held.root)] });
   }

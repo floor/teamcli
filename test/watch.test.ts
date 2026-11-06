@@ -2270,8 +2270,11 @@ describe('team watch', () => {
 
     const retry = testIo(dir, { kind: 'seat', name: seat, pane: 'pane-reader', session });
     expect(await runDrops(['--read', '--seat', seat, '--session', session], retry, { home })).toBe(0);
+    // The next turn names that read on stderr, so a hook that forwards stdout stays quiet, and serves no body.
     expect(retry.out).toBe('');
-    expect(retry.err).toBe('');
+    expect(retry.out).not.toContain('from the launch');
+    expect(retry.err).toContain('no unread drops');
+    expect(retry.err).toContain(`${third.id}: already read at`);
 
     const io = testIo(dir, { kind: 'owner' });
     expect(await runWatch(['--file', file], io, sources(2, { home }))).toBe(0);
