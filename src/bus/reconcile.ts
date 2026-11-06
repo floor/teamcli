@@ -62,6 +62,7 @@ import {
   appendEvent,
   EVENT_LOG_KEPT,
   hydrateEventLogSteps,
+  pruneEventLog,
   sealUnsealedSegmentsSteps,
   type EventAppendInput,
   type EventIndexReadResult,
@@ -219,8 +220,15 @@ export type ReconcileState = {
   refusedNow: Set<string>;
   /** Whether this process has already attempted the one-time seal migration of a store written
    *  before seals. One attempt per process: a segment that cannot be sealed keeps the ordinary
-   *  verified read, and a retry would re-verify it on every pass. */
+   *  verified read, and a retry would re-verify it on every pass. A busy event key is not an
+   *  attempt: the next pass tries again. */
   sealAttempted: boolean;
+  /** Whether retention has already run in this process. A busy event key leaves it false so the
+   *  next pass runs the whole prune again. */
+  pruneDone: boolean;
+  /** A seal migration was seen and did not finish because the event key was busy. The log cache
+   *  can still hit on the next pass, so the retry does not wait for a re-read. */
+  sealPending: boolean;
   /** Combined stat stamp of the registry and team files `markOrphanedSeats` consults, so a quiet
    *  pass with unchanged declarations skips the team-file reload and git-root lookup. */
   orphanStamp: string | null;
@@ -238,6 +246,8 @@ export function createReconcileState(): ReconcileState {
     refused: new Set(),
     refusedNow: new Set(),
     sealAttempted: false,
+    pruneDone: false,
+    sealPending: false,
     orphanStamp: null,
     stats: { passes: 0, filesRead: 0, filesReused: 0, verifies: 0, verifiesReused: 0, yields: 0 },
   };
@@ -587,6 +597,20 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   stats.yields = 0;
   options = withLogSettings(options);
   const kept = options.kept ?? EVENT_LOG_KEPT;
+  if (!state.pruneDone) {
+    try {
+      pruneEventLog(project, root, home, {
+        kept,
+        ...(options.retentionSeconds !== undefined ? { retentionSeconds: options.retentionSeconds } : {}),
+        lockWaitMs: 0,
+        session,
+      });
+      state.pruneDone = true;
+    } catch (error) {
+      // The key was held. This pass did not prune; the next pass tries the whole thing again.
+      if (!(error instanceof LockBusyError)) throw error;
+    }
+  }
   // Deferred appends belong to the previous pass's async retry; a new pass starts its own list.
   state.deferred = [];
   const visited = new Set<string>();
@@ -616,6 +640,28 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   // dedupe sets it produced are still exactly the log's answer, and the log read — which parses
   // every retained line — is skipped.
   let existing: EventIndexReadResult;
+  if (state.sealPending && !state.sealAttempted) {
+    try {
+      yield* sealUnsealedSegmentsSteps(project, root, home, {
+        kept,
+        segmentBytes: options.maxBytes,
+        retentionSeconds: options.retentionSeconds,
+        session,
+        signal: options.signal,
+      });
+      state.sealAttempted = true;
+      state.sealPending = false;
+      // The seals are new files. The cached stamp would still match the segment bytes, so drop
+      // it and let this pass read the sealed log.
+      state.log = null;
+    } catch (error) {
+      if (!(error instanceof LockBusyError)) {
+        state.sealAttempted = true;
+        state.sealPending = false;
+        throw error;
+      }
+    }
+  }
   let cachedLog = state.log;
   // A segment-size word that changed since the cached read moved the set's bound: the cached
   // stamp counted a different set of files, so it cannot answer for this one.
@@ -664,6 +710,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       options.maxBytes !== undefined &&
       options.maxBytes > 0 &&
       (fileStampOf(existing.path)?.size ?? 0) >= options.maxBytes;
+    if (existing.unsealed > 0 || openOversized) state.sealPending = true;
     if ((existing.unsealed > 0 || openOversized) && !state.sealAttempted) {
       // The one-time migration of a store written before seals or under a larger segment bound:
       // each segment is verified in slices and the append lock is held only for the seal write
@@ -677,10 +724,12 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
           signal: options.signal,
         });
         state.sealAttempted = true;
+        state.sealPending = false;
       } catch (error) {
         // The key was held, so this pass did not seal. The next pass tries again.
         if (!(error instanceof LockBusyError)) {
           state.sealAttempted = true;
+          state.sealPending = false;
           throw error;
         }
       }

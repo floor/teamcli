@@ -10,6 +10,8 @@
 //    first reconcile still answers within 500 ms.
 // 7. A holder of the event lock during that seal does not stop a health probe. The commit
 //    defers, and the open log stays in place for the whole hold.
+// 8. A holder during the one-time seal of a closed segment does not stop a health probe.
+//    The segment stays unsealed for the hold, and the next pass seals it after the holder lets go.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import {
@@ -19,6 +21,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   realpathSync,
   rmSync,
   statSync,
@@ -37,6 +40,7 @@ import {
   eventLogPath,
   readEvents,
   sealUnsealedSegmentsSteps,
+  verifyEventLogSeals,
   readEventsFromCursorSliced,
   readEventsSliced,
   resetAppendIndexReads,
@@ -57,6 +61,7 @@ import { daemonSocketPath, daemonStatePath } from '../src/daemon/paths.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { messageKeyOf, signDomain, type Json } from '../src/store/keys.ts';
+import { indexPathOf, sealPathOf } from '../src/bus/seal.ts';
 import { storePath } from '../src/store/store.ts';
 import { acquireLock, LockBusyError } from '../src/state.ts';
 
@@ -925,4 +930,83 @@ describe('fix/presence-cold-scan independent verification', () => {
     expect(answered.length).toBeGreaterThanOrEqual(1);
     for (const ans of answered) expect(ans.ms).toBeLessThanOrEqual(500);
   }, 90_000);
+
+  test('a held event lock still lets a health probe answer while a closed segment stays unsealed', async () => {
+    const world = createWorld([200], 'seal-closed-held');
+    const root = world.roots[0]!.root;
+    const openPath = eventLogPath(PROJECT, root, world.home);
+    const closedPath = `${openPath}.1`;
+    renameSync(openPath, closedPath);
+    rmSync(sealPathOf(closedPath), { force: true });
+    rmSync(indexPathOf(closedPath), { force: true });
+    const appended = appendEvent(
+      PROJECT,
+      root,
+      world.home,
+      {
+        ts: AT,
+        kind: 'seat.working',
+        session: SESSION,
+        record_id: 'rec-open',
+        seat: WORKER,
+      },
+      { retain: false },
+    );
+    if (!appended.ok) throw new Error(appended.reason);
+    const before = verifyEventLogSeals(PROJECT, root, world.home);
+    if (!before.ok) throw new Error(before.reason);
+    expect(before.segments.map((segment) => [segment.name, segment.state, segment.why])).toEqual([
+      ['events.jsonl.1', 'unsealed', 'no-seal'],
+    ]);
+    const release = acquireLock(join(storePath(PROJECT, root, world.home), 'locks', 'events'));
+
+    const socketPath = daemonSocketPath(world.home);
+    const readyPath = join(world.base, 'probe.ready');
+    const stopPath = join(world.base, 'probe.stop');
+    const childScript = fileURLToPath(new URL('./fixtures/cold-read-probe-child.ts', import.meta.url));
+    const prober = Bun.spawn([process.execPath, childScript, socketPath, readyPath, '12000', stopPath], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const readyDeadline = Date.now() + 10_000;
+    while (!existsSync(readyPath)) {
+      if (Date.now() > readyDeadline) throw new Error('probe child did not become ready');
+      await new Promise((r) => setTimeout(r, 10));
+    }
+
+    try {
+      const started = await startMachineDaemon({
+        home: world.home,
+        roots: [root],
+        version: '0.0.0-probe-cold-scan',
+        heartbeatMs: 200,
+        presenceHosting: false,
+        restoreSweep: false,
+        initialBusStart: (input) => startBus({ ...input, reconcileIntervalMs: 400 }),
+      });
+      if (started.kind !== 'serving') throw new Error(`daemon failed to start: ${started.kind}`);
+      activeDaemons.push(started.daemon);
+      await new Promise((r) => setTimeout(r, 700));
+      expect(existsSync(sealPathOf(closedPath))).toBe(false);
+    } finally {
+      writeFileSync(stopPath, '');
+      release();
+    }
+    const stdout = await new Response(prober.stdout).text();
+    const stderr = await new Response(prober.stderr).text();
+    const code = await prober.exited;
+    if (code !== 0) throw new Error(`probe child exited ${String(code)}: ${stdout}${stderr}`);
+    const probes = readColdProbes(stdout);
+    const timeouts = probes.filter((probe) => probe.kind === 'unanswered' && probe.reason === 'timeout');
+    expect(timeouts.map((probe) => `+${String(probe.at)} ms waited ${String(probe.ms)} ms`)).toEqual([]);
+    const answered = probes.filter((probe) => probe.kind === 'answered');
+    expect(answered.length).toBeGreaterThanOrEqual(1);
+    for (const ans of answered) expect(ans.ms).toBeLessThanOrEqual(500);
+
+    const sealDeadline = Date.now() + 4_000;
+    while (!existsSync(sealPathOf(closedPath))) {
+      if (Date.now() > sealDeadline) throw new Error('the closed segment was not sealed after the holder released');
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }, 30_000);
 });

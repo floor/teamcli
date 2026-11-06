@@ -755,7 +755,7 @@ export function pruneEventLog(
   project: string,
   root: string,
   home: string,
-  options: EventLogRetention & { kept?: number; session?: string } = {},
+  options: EventLogRetention & { kept?: number; session?: string; lockWaitMs?: number } = {},
 ): void {
   try {
     // The team's words answer whatever the caller left out; a caller that names all three is
@@ -776,6 +776,8 @@ export function pruneEventLog(
     // The whole pass holds the append lock: its rotation and drops move the retained files the
     // append scans, and its declaration precomputes a sequence override before appending. A
     // writer that slipped between those two steps could mint that same sequence.
+    // A key already held answers busy immediately when the caller asked not to wait. Pausing
+    // here holds the loop for the default, including the start path before the bus is serving.
     withEventLock(storeDir, () => {
       const path = eventLogPath(project, root, home);
       const drops: DroppedSegment[] = [];
@@ -790,9 +792,10 @@ export function pruneEventLog(
       // rotation between the segment rename and its sidecar moves.
       sweepOrphanedSidecars(project, root, home, { kept });
       declareDrop(project, root, home, kept, retention, drops, options.session ?? project);
-    });
-  } catch {
-    // Dropped on purpose: reads and writes are unaffected by retention failing.
+    }, options.lockWaitMs);
+  } catch (error) {
+    // A busy key is the caller's to retry. Any other failure stays best-effort.
+    if (error instanceof LockBusyError) throw error;
   }
 }
 
@@ -1572,11 +1575,18 @@ export function* sealUnsealedSegmentsSteps(
     }
     const written: { seal: StoredSeal | null } = { seal: null };
     try {
-      withEventLock(storeDir, () => {
-        if (!sameStamp(stamp, fileStamp(segment.path))) return;
-        written.seal = sealSegment(segment.path, segment.name, storeDir, keyPrint, keyState.key, previous);
-      });
-    } catch {
+      // A held key defers the whole migration. Swallowing the busy answer and continuing would
+      // look like a finished attempt, and this process would never seal the segment.
+      withEventLock(
+        storeDir,
+        () => {
+          if (!sameStamp(stamp, fileStamp(segment.path))) return;
+          written.seal = sealSegment(segment.path, segment.name, storeDir, keyPrint, keyState.key, previous);
+        },
+        0,
+      );
+    } catch (error) {
+      if (error instanceof LockBusyError) throw error;
       chainOpen = false;
       continue;
     }
