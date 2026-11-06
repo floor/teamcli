@@ -111,6 +111,7 @@ import { delegateGate, type DelegateSources } from '../src/delegate.ts';
 import { listFolder } from '../src/file/landing.ts';
 import { findRoot, loadTeamFile } from '../src/file/load.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
+import { markChannelNotified } from '../src/mcp/channel.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
 import { grantGate, type GrantSources } from '../src/grant.ts';
 import { defaultFs, lobbyDir } from '../src/lobby/gate.ts';
@@ -6413,8 +6414,10 @@ scene('send.sent-unconfirmed', async (place) => {
   return show(await sent(place, ['lead', 'hello'], owner, sendHost(place, { inboxGraceMs: 0 })), 'lead: queued, not woken (drop, 0 ms)');
 });
 /** The development channel: a Claude lead launched with the channel naming the team server, a
- *  live listener that declared it, and no declared order. The server's push marker lands while
- *  the sender waits, so the walk ends `sent (channel)` and nothing is typed. */
+ *  live listener that declared it, and no declared order. The server's push marker lands and
+ *  records the notification while the sender waits. A reservation alone is not that write, so
+ *  the walk would leave the channel and end on the drop. With the notification recorded, the
+ *  walk ends `sent (channel)` and nothing is typed. */
 scene('send.sent-channel', async (place) => {
   const text = TEAM.replace('launch: claude --model claude-opus-5-5', 'launch: claude --model claude-opus-5-5 --dangerously-load-development-channels server:team-inbox')
     .replace(/# The send scenes on this file[\s\S]*$/, '');
@@ -6428,6 +6431,7 @@ scene('send.sent-channel', async (place) => {
     if (id === undefined) return;
     try {
       writeFileSync(join(dropDir, `${id}.channel-push.json`), `${JSON.stringify({ v: 1, kind: 'channel-push', id, seat: 'lead', session: 'acme', root: place.root, at: NOW.toISOString(), meta: { id, from: 'owner', seat: 'lead', team: 'acme' }, content_sha256: 'a'.repeat(64), status: 'sent (channel)' })}\n`, { flag: 'wx', mode: 0o600 });
+      markChannelNotified(dropDir, id);
     } catch {
       // Already pushed on an earlier wait.
     }
