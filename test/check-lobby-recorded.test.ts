@@ -16,7 +16,7 @@ import { noteTeam, setRoster, teamIdOf } from '../src/registry/teams.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { CLAUDE_IDLE, deliverBriefs, notesOtherThanSocket, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, duringAddressWrite, notesOtherThanSocket, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T11:00:00Z');
 
@@ -77,12 +77,14 @@ function place(text: string): { root: string; home: string } {
   deliverBriefs({ dir: join(root, '.agents'), root, session: 'acme', seats: ['lead'], home, at: NOW.toISOString() });
   const entity = /^entity: (\S+)$/m.exec(text)?.[1];
   if (entity !== undefined) {
-    const wrote = writePolicySet(
-      home,
-      { level: 'entity', target: entity, name: 'owner-reply-to', value: 'lead@acme' },
-      { now: NOW },
-    );
-    if (!wrote.ok) throw new Error(wrote.why);
+    duringAddressWrite(home, root, 'acme', entity, NOW, () => {
+      const wrote = writePolicySet(
+        home,
+        { level: 'entity', target: entity, name: 'owner-reply-to', value: 'lead@acme' },
+        { now: NOW },
+      );
+      if (!wrote.ok) throw new Error(wrote.why);
+    });
   }
   return { root, home };
 }

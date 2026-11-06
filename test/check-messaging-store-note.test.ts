@@ -17,7 +17,7 @@ import { writePolicySet } from '../src/policy/index.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { CLAUDE_IDLE, deliverBriefs, notesOtherThanSocket, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, duringAddressWrite, notesOtherThanSocket, testIo } from './helpers.ts';
 import { assertMatchesOutputSchema } from './helpers/output.ts';
 import { CHECK_OUTPUT_SCHEMA } from '../src/output/index.ts';
 
@@ -89,12 +89,14 @@ function place(text: string): { root: string; home: string } {
     at: NOW.toISOString(),
   });
   // A live endpoint, so this scene's notes stay notes and the missing reply is not a difference.
-  const wrote = writePolicySet(
-    home,
-    { level: 'entity', target: 'floor', name: 'owner-reply-to', value: 'lead@acme' },
-    { now: NOW },
-  );
-  if (!wrote.ok) throw new Error(wrote.why);
+  duringAddressWrite(home, root, 'acme', 'floor', NOW, () => {
+    const wrote = writePolicySet(
+      home,
+      { level: 'entity', target: 'floor', name: 'owner-reply-to', value: 'lead@acme' },
+      { now: NOW },
+    );
+    if (!wrote.ok) throw new Error(wrote.why);
+  });
   return { root, home };
 }
 
