@@ -88,6 +88,8 @@ function world(): World {
   };
   file(rootA, `format: 1
 project: teamcli
+entity: org-alpha
+lobby: ${lobbyDir(home)}
 in_project: TeamCLI
 project_lead: true
 coordinator: lead
@@ -105,6 +107,8 @@ delivery_order: [mcp-inbox, typed]
 `);
   file(rootB, `format: 1
 project: teamcli.io
+entity: org-alpha
+lobby: ${lobbyDir(home)}
 in_project: TeamCLI
 coordinator: lead-io
 operator: lead-io

@@ -321,6 +321,7 @@ describe('the project a team leads, read through the launch', () => {
   function leadFixture(): { fixture: Fixture; input: RegistryTeam } {
     const fixture = makeFixture();
     const yaml = TEAM_YAML
+      .replace('project: acme\n', 'project: acme\nentity: org-alpha\n')
       .replace('workspace:\n', `trust:\n  - ~/.config/team/lobby\n  - ${fixture.root}\nworkspace:\n`)
       .replace('workspace:\n', 'in_project: TeamCLI\nproject_lead: true\nworkspace:\n');
     writeFileSync(fixture.file, yaml);
@@ -350,6 +351,7 @@ describe('the project a team leads, read through the launch', () => {
     }).id;
     upsertTeam(fixture.home, teamId, {
       project: 'other',
+      entity: 'org-alpha',
       session: 'other',
       root,
       roster: [{ agent: leadId, seat: 'lead', role: 'coordinator', leads: true }],
