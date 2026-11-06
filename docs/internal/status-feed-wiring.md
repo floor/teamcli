@@ -28,7 +28,7 @@ existing process-placement guard must also place the caller in
 the seat's recorded pane and session. A marker's short lease disables abandoned
 markers; it establishes no native freshness or health. The daemon refreshes
 markers only on the existing presence pass and removes its own markers on close.
-The ordinary legacy Notification filter retains its preexisting stdin read.
+The ordinary legacy Notification filter caps its stdin at 65537 bytes, even with `--presence` off. An oversized Notification only fails the permission-prompt match: fewer stagings, the safe direction, and only above 64 KiB, which no real Notification reaches. The cap stops a runaway stdin from hanging the hook.
 
 Only fixed refusal receipts enter the private presence status spool. No prompt,
 tool payload, provider identifier or raw error is persisted or published. The
