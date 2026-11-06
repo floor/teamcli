@@ -69,7 +69,14 @@ describe('Muse 1.4.14 grey hint (builder-6 scene)', () => {
     const typed = withInputRow(`${PROMPT_BLUE}\x1b[38;2;90;160;255m${TRIGGER_LINE}\x1b[0m`);
     const wake = makeWakeHost((read, enters) => (enters > 0 ? WORKING : read < 2 ? HINT_FRAME : typed));
     const out = await deliverTypedWake(wake.host, 'pane-1', TRIGGER_LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(out).toEqual({
+      delivered: true,
+      typed: true,
+      tries: 1,
+      reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
+    });
     expect(wake.typed).toEqual([TRIGGER_LINE]);
     expect(wake.enters).toBe(1);
   });
