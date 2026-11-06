@@ -188,7 +188,7 @@
     },
     "wake": {
       "enum": ["agent-prompt"],
-      "description": "optional: how a declared typed wake is handed to the pane; agent-prompt asks herdr to prompt the agent and types nothing and presses no Enter; absent, the wake types the line and presses Enter; refused unless typed_wake is declared"
+      "description": "optional: how a declared typed wake is handed to the pane; agent-prompt asks the terminal host to prompt the agent and types nothing and presses no Enter; absent, the wake types the line and presses Enter; refused unless typed_wake is declared"
     },
     "read_hint": {
       "type": "string", "minLength": 1, "maxLength": 60,
