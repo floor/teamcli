@@ -27,6 +27,7 @@ import {
   type ResolvePolicyOptions,
 } from './resolve.ts';
 import { POLICY_DOMAIN, POLICY_LEVELS, getPolicySpec, namesRetiredOrderWord, normalizePolicyName, type Policy, type PolicyKind, type PolicyLevel, type PolicyValue } from './types.ts';
+import { policyAddressRegistryProblem } from './address-registry.ts';
 import { readTeamText, readTeamTextTarget, teamTextTarget, writeTeamText } from '../file/team-text.ts';
 import { currentRunMemo } from '../run-memo.ts';
 
@@ -796,6 +797,11 @@ export function planPolicySet(
       return { ok: false, why: `policy "${name}" names mcp-inbox, which is no longer a leg; remove it` };
     }
     normalizedValue = parsed;
+    // An address policy's team word must resolve in this home's registry, so a value that would
+    // only fail later, when the address is used, is refused where it is written. The check runs
+    // here, in the plan, so `--dry-run` prints the same refusal and neither path writes.
+    const registryProblem = policyAddressRegistryProblem(home, name, normalizedValue);
+    if (registryProblem !== null) return { ok: false, why: registryProblem };
   } else {
     if ((request.kind ?? 'enforced') === 'enforced') {
       return {
