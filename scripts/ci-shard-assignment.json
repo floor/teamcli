@@ -894,6 +894,7 @@
     "test/reply.test.ts": 4,
     "test/repo-visibility.test.ts": 2,
     "test/resolve-launch-flag-independent.test.ts": 0,
+    "test/resolve-launch-wiring-independent.test.ts": 3,
     "test/restart-checkpoint.test.ts": 1,
     "test/restart-hook-binding-ready.test.ts": 3,
     "test/restart-rebind-gpt.test.ts": 5,
