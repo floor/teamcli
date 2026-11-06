@@ -173,7 +173,7 @@ describe('1. team messages — FROM cell, served body mark, and JSON sender_attr
     const row = doc.rows[0]!;
     expect(row.id).toBe(id3);
     expect(row.from).toBe('orchestrator');
-    // The owner reading lists another mailbox read-only, so the row waits rather than being shown.
+    // The owner reading lists another mailbox read-only, so the row waits.
     expect(row.status).toBe('waiting');
     expect(row.sender_attribution).toBe('attributed');
     expect(row.body).toBe(body);
@@ -182,7 +182,7 @@ describe('1. team messages — FROM cell, served body mark, and JSON sender_attr
     expect(readFileSync(path3, 'utf8')).toBe(rawOnDisk3);
   });
 
-  test('a refused record (tampered signature, wrong session, or unverified receipt gate) has FROM (unattributed) and JSON sender_attribution: none', async () => {
+  test('a tampered record in another mailbox is listed with no body, and the owning seat refuses it', async () => {
     const f = makeFixture();
     const idTampered = '10000000-0000-4000-8000-000000000011';
     const pathTampered = plantRecord(f.home, f.root, 'acme', 'worker', idTampered, canonicalSendBody(), {
@@ -199,9 +199,12 @@ describe('1. team messages — FROM cell, served body mark, and JSON sender_attr
     parsed.payload.body = 'tampered body after signature';
     writeFileSync(pathTampered, `${JSON.stringify(parsed, null, 2)}\n`);
 
-    // Also plant a valid record whose `.read.json` receipt is held by an unverified file (gate refusal)
+    // A valid record whose receipt name is held by a file that does not verify. The owner reading
+    // of another mailbox does not take that seat's receipt gate, so the verified body stays visible
+    // read-only. The seat that owns the mailbox refuses the gate and shows nothing.
     const idHeldGate = '10000000-0000-4000-8000-000000000012';
-    plantRecord(f.home, f.root, 'acme', 'worker', idHeldGate, canonicalSendBody('the owner', 'the owner'), {
+    const heldBody = canonicalSendBody('the owner', 'the owner');
+    plantRecord(f.home, f.root, 'acme', 'worker', idHeldGate, heldBody, {
       from: 'owner',
       from_id: null,
       rule: 'the owner',
@@ -210,22 +213,46 @@ describe('1. team messages — FROM cell, served body mark, and JSON sender_attr
     writeFileSync(join(f.dropDir, `${idHeldGate}.read.json`), '{"not":"a valid receipt"}\n');
 
     const ioText = testIo(f.root, { kind: 'owner' });
-    // Refused records exit 1 and show no body
-    expect(await runMessages([], ioText, { home: f.home, now: () => NOW })).toBe(1);
-    expect(ioText.out).toContain('orchestrator (unattributed)');
-    expect(ioText.out).toContain('owner (unattributed)');
-    expect(ioText.out).not.toContain('orchestrator (attributed)');
-    expect(ioText.out).not.toContain('owner (attributed)');
+    expect(await runMessages([], ioText, { home: f.home, now: () => NOW })).toBe(0);
+    expect(ioText.out).toContain('owner (attributed)');
+    expect(ioText.out).toContain(QUOTE);
     expect(ioText.out).not.toContain('tampered body after signature');
-    expect(ioText.out).not.toContain(QUOTE);
+    expect(ioText.out).not.toContain('orchestrator (attributed)');
+    expect(ioText.out).not.toContain('(unattributed)');
 
     const ioJson = testIo(f.root, { kind: 'owner' });
-    expect(await runMessages(['--json'], ioJson, { home: f.home, now: () => NOW })).toBe(1);
+    expect(await runMessages(['--json'], ioJson, { home: f.home, now: () => NOW })).toBe(0);
     const doc = JSON.parse(ioJson.out) as {
       rows: Array<Record<string, unknown>>;
     };
     expect(doc.rows).toHaveLength(2);
+    const tampered = doc.rows.find((row) => row.id === idTampered);
+    const held = doc.rows.find((row) => row.id === idHeldGate);
+    expect(tampered).toMatchObject({ status: 'waiting', from: null, sender_attribution: 'none' });
+    expect(tampered !== undefined && 'body' in tampered).toBe(false);
+    expect(held).toMatchObject({
+      status: 'waiting',
+      from: 'owner',
+      sender_attribution: 'attributed',
+      body: heldBody,
+    });
     for (const row of doc.rows) {
+      expect('sender_verified' in row).toBe(false);
+      expect('sender_trust' in row).toBe(false);
+    }
+
+    const seatText = testIo(f.root, { kind: 'seat', name: 'worker', pane: PANE_WORKER, session: 'acme' });
+    expect(await runMessages([], seatText, { home: f.home, now: () => NOW })).toBe(1);
+    expect(seatText.out).toContain('orchestrator (unattributed)');
+    expect(seatText.out).toContain('owner (unattributed)');
+    expect(seatText.out).not.toContain('tampered body after signature');
+    expect(seatText.out).not.toContain(QUOTE);
+
+    const seatJson = testIo(f.root, { kind: 'seat', name: 'worker', pane: PANE_WORKER, session: 'acme' });
+    expect(await runMessages(['--json'], seatJson, { home: f.home, now: () => NOW })).toBe(1);
+    const seatDoc = JSON.parse(seatJson.out) as { rows: Array<Record<string, unknown>> };
+    expect(seatDoc.rows).toHaveLength(2);
+    for (const row of seatDoc.rows) {
       expect(row.status).toBe('refused');
       expect(row.sender_attribution).toBe('none');
       expect('body' in row).toBe(false);
@@ -265,11 +292,18 @@ describe('1. team messages — FROM cell, served body mark, and JSON sender_attr
     );
 
     const ioText = testIo(f.root, { kind: 'owner' });
-    expect(await runMessages([], ioText, { home: f.home, now: () => NOW })).toBe(1);
+    expect(await runMessages([], ioText, { home: f.home, now: () => NOW })).toBe(0);
     expect(ioText.out).toContain('orchestrator (attributed)');
-    expect(ioText.out).toContain('owner (unattributed)');
     expect(ioText.out).toContain('from orchestrator:\n\nlegacy note');
     expect(ioText.out).not.toContain('forged legacy');
+    expect(ioText.out).not.toContain('(unattributed)');
+
+    const seatText = testIo(f.root, { kind: 'seat', name: 'worker', pane: PANE_WORKER, session: 'acme' });
+    expect(await runMessages([], seatText, { home: f.home, now: () => NOW })).toBe(1);
+    expect(seatText.out).toContain('orchestrator (attributed)');
+    expect(seatText.out).toContain('owner (unattributed)');
+    expect(seatText.out).toContain('from orchestrator:\n\nlegacy note');
+    expect(seatText.out).not.toContain('forged legacy');
   });
 
   test('schema/messages.schema.json and MESSAGES_OUTPUT_SCHEMA require sender_attribution and omit sender_verified and sender_trust', () => {
