@@ -1,7 +1,7 @@
 // A machine with no trash binary parks a retired file in the dated runtime trash. The seam
 // injects that absence: the scene never spawns a trash command, and the file is renamed, not deleted.
 import { afterEach, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runtimeDir } from '../src/daemon/paths.ts';
@@ -104,4 +104,64 @@ test('a file standing where the dated folder should be is refused by name, not b
   expect((caught as Error).message).toBe(runtimeTrashRefusedLine(dated));
   expect((caught as Error).message).not.toContain('ENOTDIR');
   expect(existsSync(file)).toBe(true);
+});
+
+test('a park lands in the opened dated folder and leaves a link standing in it', () => {
+  const outside = scratch('runtime-trash-outside-');
+  const home = scratch('runtime-trash-home-');
+  const dir = scratch('runtime-trash-src-');
+  const file = join(dir, 'team.yaml');
+  writeFileSync(file, 'kept\n');
+  const dated = runtimeTrashFolder(home, NOW);
+  mkdirSync(dated, { recursive: true });
+  const inode = lstatSync(dated).ino;
+  symlinkSync(join(outside, 'gone'), join(dated, 'team.yaml'));
+  const parked = parkInRuntimeTrash(file, home, NOW);
+  expect(lstatSync(dated).ino).toBe(inode);
+  expect(lstatSync(join(dated, 'team.yaml')).isSymbolicLink()).toBe(true);
+  expect(parked.to).toBe(join(dated, 'team.yaml-2'));
+  expect(readFileSync(parked.to, 'utf8')).toBe('kept\n');
+  expect(existsSync(file)).toBe(false);
+  expect(readdirSync(outside)).not.toContain('team.yaml');
+});
+
+test('a symlink at .config or .config/team is refused and the file stays put', () => {
+  const outside = scratch('runtime-trash-outside-');
+  for (const level of ['.config', '.config/team'] as const) {
+    const home = scratch('runtime-trash-home-');
+    const dir = scratch('runtime-trash-src-');
+    const file = join(dir, 'team.yaml');
+    writeFileSync(file, 'kept\n');
+    if (level === '.config/team') mkdirSync(join(home, '.config'));
+    symlinkSync(outside, join(home, level));
+    const dated = runtimeTrashFolder(home, NOW);
+    expect(() => parkInRuntimeTrash(file, home, NOW)).toThrow(runtimeTrashRefusedLine(dated));
+    expect(existsSync(file)).toBe(true);
+    expect(readdirSync(outside)).not.toContain('team.yaml');
+  }
+});
+
+test('a dated folder the park cannot open is refused by name, not by a raw permission code', () => {
+  const home = scratch('runtime-trash-home-');
+  const dir = scratch('runtime-trash-src-');
+  const file = join(dir, 'team.yaml');
+  writeFileSync(file, 'kept\n');
+  const dated = runtimeTrashFolder(home, NOW);
+  mkdirSync(dated, { recursive: true });
+  chmodSync(dated, 0o000);
+  try {
+    let caught: unknown;
+    try {
+      parkInRuntimeTrash(file, home, NOW);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toBe(runtimeTrashRefusedLine(dated));
+    expect((caught as Error).message).not.toContain('EACCES');
+    expect((caught as Error).message).not.toContain('EPERM');
+    expect(existsSync(file)).toBe(true);
+  } finally {
+    chmodSync(dated, 0o700);
+  }
 });
