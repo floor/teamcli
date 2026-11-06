@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'int/**']
   pull_request:
   schedule:
     # 03:00 UTC nightly: verify macOS compatibility does not rot
