@@ -674,6 +674,7 @@ describe('the chain is read from the files when the host hands none in', () => {
   test('a project registry folder this user cannot search refuses the chain, never reads as no project', () => {
     const w = world();
     upsertProject(w.home, 'acme', { name: 'Acme', teams: [teamIdOf(w.root)], deliveryOrder: ['drop'], at: NOW.toISOString() });
+    upsertTeam(w.home, teamIdOf(w.root), { project: 'acme', session: 'acme', root: w.root, projectId: 'acme', at: NOW.toISOString() });
     const readable = deliveryChainOf({
       root: w.root,
       seat: 'lead',
