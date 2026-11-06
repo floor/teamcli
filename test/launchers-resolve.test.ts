@@ -475,7 +475,7 @@ describe('explicit caller-session input boundary', () => {
     return resolveLaunch({ launcher: 'input-example', args: ['--effort', 'high'] },
       discover([{ level: 'team', files: { 'input-example.yaml': raw } }]), ctx);
   }
-  const invalid = ['', null, false, 0, 42, [], {}, () => 'example', Symbol('example')];
+  const invalid = ['', '   ', '\t', ' \n ', null, false, 0, 42, [], {}, () => 'example', Symbol('example')];
   for (const precedence of [undefined, 'teamcli_wins', 'preset_wins']) {
     for (const mode of modes) {
       test(`invalid direct session refuses ${mode}/${precedence ?? 'default'} without a template`, () => {
@@ -487,12 +487,12 @@ describe('explicit caller-session input boundary', () => {
           expect(out).toMatchObject({ harness: '', executable: '', argv: [], env: [], chain: [],
             resume: { kind: 'none' }, sandbox: { harness: '', mechanism: '', folders: [] } });
           expect(out.diagnostics).toContainEqual({ code: 'E_RESUME_SESSION', severity: 'error',
-            launcher: 'input-example', message: 'a supplied caller session must be a nonempty string' });
+            launcher: 'input-example', message: 'a supplied caller session is blank; omit it, or pass a session that contains a non-space character' });
           expect(JSON.stringify(raw)).toBe(before);
         }
       });
       test(`valid opaque direct session preserves ${mode}/${precedence ?? 'default'} selection and argv`, () => {
-        for (const sessionArg of ['example-session', '   ', 'Ω {inbox} {session} $& $$ $(literal);']) {
+        for (const sessionArg of ['example-session', ' Ω lead ', 'Ω {inbox} {session} $& $$ $(literal);']) {
           const out = run(definition(mode, precedence), { sessionArg });
           expect(out.ok).toBe(true);
           if (precedence !== 'preset_wins') expect(out.resume).toEqual({ kind: 'teamcli', session: sessionArg });
@@ -528,6 +528,20 @@ describe('explicit caller-session input boundary', () => {
     expect(codes(out.diagnostics)).toEqual(['E_RESUME_SESSION']);
     expect(out.argv).toEqual([]);
     expect(JSON.stringify(out.diagnostics)).not.toContain('example-private-argument');
+  });
+  test('a blank session is refused before a resume is built, and the refusal names the repair', () => {
+    const raw = { format: 1, name: 'input-example', kind: 'preset', harness: 'claude-code',
+      args: ['--resume', '{session}'], writable_folders: [{ path: '{root}' }],
+      resume: { mode: 'fixed', path: 'example-fixed', precedence: 'teamcli_wins' } };
+    for (const sessionArg of ['', '   ', '\t']) {
+      const out = run(raw, { sessionArg });
+      expect(out.ok).toBe(false);
+      expect(out.resume).toEqual({ kind: 'none' });
+      expect(out.argv).toEqual([]);
+      expect(out.argv).not.toContain('');
+      expect(out.diagnostics).toContainEqual({ code: 'E_RESUME_SESSION', severity: 'error', launcher: 'input-example',
+        message: 'a supplied caller session is blank; omit it, or pass a session that contains a non-space character' });
+    }
   });
 });
 
