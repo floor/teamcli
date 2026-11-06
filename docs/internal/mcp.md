@@ -326,7 +326,6 @@ can't be read):
 | `team mcp serve: this server serves seat "lead" and starts inside that seat's own process; this call is unplaced (<reason>)` | 2 |
 | `team mcp serve: the team state records no session "acme", so this server cannot prove which seat started it` | 2 |
 | `team mcp serve: --epoch "run_aaaaaaaaaaaa" names a launch the seat's state no longer holds; start the server from the seat's launch line` | 2 |
-| `team mcp serve: seat "lead" has a current brief claim and this server was started without its epoch; start the server from the seat's launch line` | 2 |
 | `team mcp serve: --epoch "run_aaaaaaaaaaaa" is not the seat's current launch epoch; start the server from the seat's launch line` | 2 |
 | `team mcp serve: the team state cannot be read, so this server cannot prove the launch it belongs to: <reason>` | 2 |
 | `team mcp serve: the inbox folder is not a real folder: a link, a file or a failed write stands in its path` | 2 |
@@ -337,6 +336,11 @@ A start refusal is `mcp.serve-refused`, not `mcp.invocation`; a clean end of std
 every tool call, so a folder that becomes a link after start, or a seat stopped, moved or
 relaunched under a running server, makes the call fail (`isError: true`, carrying the same
 sentence without the `team mcp serve: ` prefix) instead of serving a body or writing a receipt.
+A start that already finds a current claim and no `--epoch` binds to that claim's epoch and
+serves; a claim that holds no launch epoch is served with none bound. A server that started
+with no claim, under which a claim then appears, refuses the call with `seat "lead" has a
+current brief claim and this server was started without its epoch; start the server from the
+seat's launch line`.
 
 ```console
 $ team mcp  ; echo "exit $?"

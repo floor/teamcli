@@ -121,8 +121,9 @@ export type InboxListener = {
    *  the `ack` tool. A marker without it is a serving inbox with no channel, and the send walks
    *  its next leg. */
   channel?: true;
-  /** Observational startup metadata, copied only from the explicit validated serve argument.
-   *  Absent on older/unbound listeners; never a replacement for the server's live guards. */
+  /** The launch this process bound at start: the `--epoch` it was given, or the current claim's
+   *  epoch when the launch line named none. Absent when the claim holds no launch epoch, or the
+   *  server started before a claim existed. Never a replacement for the server's live guards. */
   epoch?: string;
 };
 

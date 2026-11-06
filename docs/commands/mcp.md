@@ -75,8 +75,12 @@ no team file of its own) serves the same team as every other seat. A server star
 file resolves the team from the registry record that holds its seat, narrowed by `--session`, so
 the folder it starts in is never read as the team. The registration also carries the runtime epoch
 the launch delivered the seat's brief under (`--epoch`), when the state holds that claim, so the
-server names the launch it belongs to; a seat with no claim is registered without one, and a
-server started under a claim without its epoch does not serve.
+server names the launch it belongs to. A seat with no claim is registered without one. A server
+started while a current claim already exists, and started without `--epoch`, binds to that
+claim's epoch and serves the inbox. A claim that holds no launch epoch — one an older build
+wrote, or one a CLI change left without one — is served too, with no epoch bound. A server that
+started with no claim stops serving when a claim appears, and a `--epoch` that is not the
+claim's current epoch does not serve.
 Where the seat's folder is a git work tree that does not ignore a file the registration would
 write, team refuses to register: the seat stays on its drop and typed legs, and its line
 carries the reason.
@@ -95,7 +99,7 @@ carries the reason.
 | `--seat` | a seat the team file declares | `serve` only, required: the seat whose inbox is served. The server is started by that seat's launch line, and this argument must name the seat it was started for |
 | `--session` | the team's session | `serve` only: stamped on the listener and on every receipt; must be the team file's own session |
 | `--file` | a team file | `serve` only: the team file the seat's launch read. A seat that starts in a lobby has no team file in its folder, so its registration names the launch's file and the server reads that instead. Without `--file` the server reads the registry record that holds the seat (`--session` picks between teams that share a seat name), never a team file from the folder it starts in |
-| `--epoch` | the runtime epoch the launch registered the seat under | `serve` only: when the seat's state holds a current brief claim, it must be that claim's epoch; when there is no claim, the server must carry none. Either mismatch is a start refusal |
+| `--epoch` | the runtime epoch the launch registered the seat under | `serve` only: a given value must be the current claim's epoch. Omitted while a current claim exists, the server binds to that claim's epoch and serves. A claim with no launch epoch is served with none bound. When there is no claim, a given `--epoch` is a start refusal, and so is a value that is not the current epoch |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Who may run it

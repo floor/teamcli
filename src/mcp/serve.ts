@@ -827,27 +827,36 @@ export async function placementAtStart(
   return last;
 }
 
-/** The launch the seat's state names now: the current brief claim's epoch, no claim, or a state
- *  this server cannot read. */
-type Generation = { kind: 'claim'; epoch: string } | { kind: 'none' } | { kind: 'unreadable'; message: string };
+/** The launch the seat's state names now: the current brief claim's epoch, a claim that holds no
+ *  launch epoch, no claim, or a state this server cannot read. */
+type Generation =
+  | { kind: 'claim'; epoch: string }
+  | { kind: 'unbound' }
+  | { kind: 'none' }
+  | { kind: 'unreadable'; message: string };
 
 function generationOf(stateDir: string, session: string, name: string): Generation {
   try {
-    const claim = currentBriefClaim(readState(stateDir).sessions[session]?.briefs?.[name]);
-    return claim === null ? { kind: 'none' } : { kind: 'claim', epoch: claim.epoch };
+    const raw = readState(stateDir).sessions[session]?.briefs?.[name];
+    const claim = currentBriefClaim(raw);
+    if (claim !== null) return { kind: 'claim', epoch: claim.epoch };
+    // An older build, or a CLI change, can leave a claim with an id and a time and no launch
+    // epoch. It is not a current claim, and it is not the absence of one.
+    return raw === undefined ? { kind: 'none' } : { kind: 'unbound' };
   } catch (error) {
     return { kind: 'unreadable', message: (error as Error).message };
   }
 }
 
-/** Why a server started with `epoch` no longer belongs to the seat's launch, or null while it
- *  does. A server started without an epoch serves only while the seat has no current claim: the
- *  claim a relaunch writes makes every earlier server, and every server that named no delivery,
- *  stop serving that seat's inbox. */
+/** Why a server bound to `epoch` no longer belongs to the seat's launch, or null while it does.
+ *  A claim with no launch epoch is served: the seat still gets its inbox. A server that bound
+ *  no epoch serves only while the seat has no current claim: the claim a relaunch writes makes
+ *  every earlier server stop serving that seat's inbox. */
 function staleLaunch(generation: Generation, epoch: string | undefined, name: string): string | null {
   if (generation.kind === 'unreadable') {
     return `the team state cannot be read, so this server cannot prove the launch it belongs to: ${generation.message}`;
   }
+  if (generation.kind === 'unbound') return null;
   if (generation.kind === 'none') {
     return epoch === undefined
       ? null
@@ -859,6 +868,16 @@ function staleLaunch(generation: Generation, epoch: string | undefined, name: st
   return epoch === generation.epoch
     ? null
     : `--epoch ${JSON.stringify(epoch)} is not the seat's current launch epoch; start the server from the seat's launch line`;
+}
+
+/** The epoch this process is bound to for the rest of its life. A launch line that omitted
+ *  `--epoch` while a current claim already exists takes that claim's epoch, so a restart whose
+ *  line did not carry one still serves. A claim with no launch epoch binds nothing, and a
+ *  leftover `--epoch` is not treated as the launch. */
+function boundEpochOf(generation: Generation, asked: string | undefined): string | undefined {
+  if (generation.kind === 'claim' && asked === undefined) return generation.epoch;
+  if (generation.kind === 'unbound') return undefined;
+  return asked;
 }
 
 /**
@@ -933,7 +952,9 @@ export async function runMcpServe(
   const stateDir = dirname(loaded.path);
   const placed = await placementAtStart(io, stateDir, team.session, seat.name);
   if (!placed.ok) return refuse(placed.why);
-  const stale = staleLaunch(generationOf(stateDir, team.session, seat.name), options.epoch, seat.name);
+  const generation = generationOf(stateDir, team.session, seat.name);
+  const boundEpoch = boundEpochOf(generation, options.epoch);
+  const stale = staleLaunch(generation, boundEpoch, seat.name);
   if (stale !== null) return refuse(stale);
   const dropDir = ensureInboxFolder(loaded.root, team.session, seat.name);
   if (dropDir === null) {
@@ -956,7 +977,7 @@ export async function runMcpServe(
     build: build.build,
     ...(build.head === null ? {} : { head: build.head }),
     ...(channel ? { channel: true as const } : {}),
-    ...(options.epoch === undefined ? {} : { epoch: options.epoch }),
+    ...(boundEpoch === undefined ? {} : { epoch: boundEpoch }),
   };
   if (!writeListener(dropDir, listener)) return refuse('the inbox listener marker could not be written');
   // A server keeps the code it started with, and an install neither reloads it nor ends it. The
@@ -983,9 +1004,10 @@ export async function runMcpServe(
     streams.close?.();
     return true;
   };
-  // The launch's own brief is served under the claim its state holds. The epoch is the one the
-  // registration was started with, when it has one: a server started before a relaunch serves
-  // nothing of the claim that relaunch wrote, until the seat is launched again.
+  // The launch's own brief is served under the claim its state holds. The epoch is the one this
+  // process bound at start: the registration's, or the current claim's when the launch line named
+  // none. A server that bound none serves nothing of a claim a later relaunch writes, until the
+  // seat is launched again.
   const claimOf = () => {
     try {
       return currentBriefClaim(readState(stateDir).sessions[team.session]?.briefs?.[seat.name]);
@@ -993,7 +1015,7 @@ export async function runMcpServe(
       return null;
     }
   };
-  const brief: BriefRead = { claim: claimOf, ...(options.epoch === undefined ? {} : { epoch: options.epoch }) };
+  const brief: BriefRead = { claim: claimOf, ...(boundEpoch === undefined ? {} : { epoch: boundEpoch }) };
   const serving: Serving = {
     project: team.project,
     seat: seat.name,
@@ -1017,7 +1039,7 @@ export async function runMcpServe(
     alive: () => {
       const now = placementOf(io, stateDir, team.session, seat.name);
       if (!now.ok) return now.why;
-      const staleLaunchNow = staleLaunch(generationOf(stateDir, team.session, seat.name), options.epoch, seat.name);
+      const staleLaunchNow = staleLaunch(generationOf(stateDir, team.session, seat.name), boundEpoch, seat.name);
       if (staleLaunchNow !== null) return staleLaunchNow;
       const file = readTeam();
       if (!file.ok) {
