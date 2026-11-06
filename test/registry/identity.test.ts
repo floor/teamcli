@@ -291,6 +291,7 @@ describe('a record confers no right', () => {
       project: 'alpha',
       projectId: 'p1',
       projects: ['p1'],
+      entity: 'org',
       session: 's-a',
       root: join(world.base, 'team-a'),
       roster: [{ agent: worker.id, seat: 'worker', role: 'implementer' }],
@@ -299,11 +300,12 @@ describe('a record confers no right', () => {
       project: 'beta',
       projectId: 'p1',
       projects: ['p1'],
+      entity: 'org',
       session: 's-b',
       root: join(world.base, 'team-b'),
       roster: [{ agent: builder.id, seat: 'builder', role: 'implementer' }],
     });
-    upsertProject(world.home, 'p1', { name: 'P1', by: 'owner' });
+    upsertProject(world.home, 'p1', { name: 'P1', entity: 'org', by: 'owner' });
     const context: AdmitContext = { projects: projectContext(world.home), crossTeams: {} };
 
     // The records already existed and admitted nothing; the capability, and only the capability,

@@ -1,5 +1,5 @@
 // Channel admission uses the derived project view. A project lead reaches another
-// team's lead from the team records, a lead of another project stays refused
+// team's lead from the team records, a seat of another project stays refused
 // even when a stale project list names that team, and a push reserves the
 // record without writing a read receipt.
 import { afterEach, expect, test } from 'bun:test';
@@ -47,7 +47,7 @@ function scratch(): { base: string; home: string } {
   return { base, home };
 }
 
-function side(base: string, home: string, name: string): Side {
+function side(base: string, home: string, name: string, entity: string | null): Side {
   const root = join(base, name);
   const session = `${name}-session`;
   const file = join(root, '.agents', 'team.yaml');
@@ -56,7 +56,7 @@ function side(base: string, home: string, name: string): Side {
     file,
     `format: 1
 project: ${name}
-session: ${session}
+${entity === null ? '' : `entity: ${entity}\n`}session: ${session}
 coordinator: lead
 operator: lead
 workspace:
@@ -95,7 +95,7 @@ seats:
   upsertTeam(home, teamId, {
     root,
     project: name,
-    entity: null,
+    entity,
     session,
     lobby: join(home, 'lobby'),
     lifecycle: 'running',
@@ -125,19 +125,22 @@ function world(): {
   recipient: Side;
 } {
   const { base, home } = scratch();
-  const leadSide = side(base, home, 'side-lead');
-  const recipient = side(base, home, 'side-recv');
-  const other = side(base, home, 'side-other');
-  upsertProject(home, 'proj-main', { name: 'proj-main', entity: null, lead: null, by: 'owner' });
-  upsertProject(home, 'proj-other', { name: 'proj-other', entity: null, lead: null, by: 'owner' });
+  const leadSide = side(base, home, 'side-lead', 'org');
+  const recipient = side(base, home, 'side-recv', 'org');
+  const other = side(base, home, 'side-other', 'org');
+  upsertProject(home, 'proj-main', { name: 'proj-main', entity: 'org', lead: null, by: 'owner' });
+  upsertProject(home, 'proj-other', { name: 'proj-other', entity: 'org', lead: null, by: 'owner' });
   setTeamProjectMembership(home, leadSide.teamId, 'proj-main', { by: 'owner' });
   setTeamProjectMembership(home, recipient.teamId, 'proj-main', { by: 'owner' });
   setTeamProjectMembership(home, other.teamId, 'proj-other', { by: 'owner' });
   upsertProject(home, 'proj-main', { lead: leadSide.worker.id });
   const path = projectsFile(home);
+  // A team id is twelve hex characters of the temp path. Unquoted, one YAML reads as a number,
+  // and the channel reports the project registry cannot be read.
+  const staleTeams = `teams: [${JSON.stringify(recipient.teamId)}, ${JSON.stringify(other.teamId)}]`;
   const raw = readFileSync(path, 'utf8').replace(
     '    name: proj-main\n',
-    `    name: proj-main\n    teams: [${recipient.teamId}, ${other.teamId}]\n`,
+    `    name: proj-main\n    ${staleTeams}\n`,
   );
   writeFileSync(path, raw);
   return { home, leadSide, other, recipient };
@@ -170,7 +173,7 @@ function deliver(
 test('channel admission admits a project lead from team-record membership', () => {
   const { home, leadSide, other, recipient } = world();
   const stored = readFileSync(projectsFile(home), 'utf8');
-  expect(stored).toContain(`teams: [${recipient.teamId}, ${other.teamId}]`);
+  expect(stored).toContain(`teams: [${JSON.stringify(recipient.teamId)}, ${JSON.stringify(other.teamId)}]`);
   expect(stored).not.toContain(leadSide.teamId);
   const members = list(home).find((project) => project.id === 'proj-main')?.teams ?? [];
   expect(members).toEqual([leadSide.teamId, recipient.teamId].sort());
@@ -179,7 +182,9 @@ test('channel admission admits a project lead from team-record membership', () =
 
 test('a seat of another project is refused though the stale list names its team', () => {
   const { home, other, recipient } = world();
-  const verdict = deliver(home, other, other.lead, recipient);
+  // The other lead may write as a lead of the same entity. The worker is the
+  // project-exclusion case: same entity, other project, stale list, no membership.
+  const verdict = deliver(home, other, other.worker, recipient);
   expect(verdict.ok).toBe(false);
   if (!verdict.ok) expect(verdict.why).toContain('no rule admits');
 });
@@ -228,7 +233,7 @@ test('a channel push reserves the record and does not settle a read', async () =
     }
     expect(existsSync(listenerPath(dropDir)), io.err).toBe(true);
     stage(LEAD_ID, leadSide, leadSide.worker, 'project-lead-body');
-    stage(OTHER_ID, other, other.lead, 'other-project-secret');
+    stage(OTHER_ID, other, other.worker, 'other-project-secret');
     for (let i = 0; i < 400 && !replies.some((one) => one.method === 'notifications/claude/channel'); i += 1) {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }

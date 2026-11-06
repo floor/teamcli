@@ -79,7 +79,7 @@ function scene(options: { memberships: string[]; alphaLead: string | null; betaL
   const recipient = agent('team-b', 'seat-b', 'session-b', 'pane-target');
   for (const [id, seat, entity] of [
     ['team-a', sender, 'entity-x'],
-    ['team-b', recipient, null],
+    ['team-b', recipient, 'entity-x'],
   ] as const) {
     mkdirSync(join(home, id));
     upsertTeam(home, id, {

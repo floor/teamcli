@@ -620,12 +620,12 @@ describe('same-team sender and projected-roster uniqueness', () => {
 
   test('projected roster excludes a seat whose roster agent id is tied or superseded when evaluating project-lead authority', () => {
     const { base, home } = createHome();
-    const projectLeadTeam = createTeam(base, home, 'proj-main', null);
-    const subTeam = createTeam(base, home, 'proj-sub', null);
+    const projectLeadTeam = createTeam(base, home, 'proj-main', 'org');
+    const subTeam = createTeam(base, home, 'proj-sub', 'org');
 
     upsertProject(home, 'proj-main', {
       name: 'proj-main',
-      entity: null,
+      entity: 'org',
       lead: projectLeadTeam.worker.id,
       by: 'owner',
     });
