@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.14] - 2026-11-06
+
+A listed Muse hint is the empty box only when it is faint or drawn in the colour the composer declares. A listed hint in another colour stays a draft, and a typed wake does not type over it.
+
+### Fixed
+
+- A listed Muse hint drawn in typed blue, another colour, or an undeclared grey stays a draft. The empty-box reading is a faint hint or a colour the composer declares, the same rule as a rotating hint. A longer line on that row stays a draft too.
+- The CI timing recorder counts a test file once. A nested describe suite is not a second unit, and a report that has only describe rows keeps the sum of those rows under the file.
+- The daemon answers health and status requests without re-reading the team state for every seat.
+
 ## [0.5.13] - 2026-11-06
 
 Message delivery now reports only the leg that ran, a seat behind a launcher wrapper can
