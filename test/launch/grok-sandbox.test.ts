@@ -184,13 +184,16 @@ describe('the profile name and the file it lives in', () => {
     writeFileSync(join(root, 'readme'), 'scene\n');
     git(['add', 'readme'], root);
     git(['commit', '-m', 'scene'], root);
+    git(['pack-refs', '--all'], root);
     const tree = join(dirname(root), 'tree');
     git(['worktree', 'add', '-b', 'scene', tree], root);
     const sandbox = grokSandboxOf({ home, root, project: 'acme', seat: 'grok-seat', session: 'acme', cwd: tree, worktree: tree });
     const common = git(['rev-parse', '--path-format=absolute', '--git-common-dir'], tree).trim();
     const gitDir = git(['rev-parse', '--path-format=absolute', '--git-dir'], tree).trim();
     expect(sandbox.readWrite).toContain(realpathSync(tree));
-    for (const name of ['objects', 'refs', 'logs', 'packed-refs']) expect(sandbox.readWrite).toContain(join(realpathSync(common), name));
+    for (const name of ['objects', 'refs', 'logs']) expect(sandbox.readWrite).toContain(join(realpathSync(common), name));
+    expect(lstatSync(join(common, 'packed-refs')).isFile()).toBe(true);
+    expect(sandbox.readWrite).not.toContain(join(realpathSync(common), 'packed-refs'));
     expect(sandbox.readWrite).toContain(realpathSync(gitDir));
     for (const wider of [common, realpathSync(common), join(common, 'hooks'), join(common, 'config'), join(common, 'info'), join(common, 'worktrees'), join(home, '.config', 'team'), join(root, '.agents')]) {
       expect(sandbox.readWrite).not.toContain(wider);
@@ -568,6 +571,31 @@ describe('the plan and the launch', () => {
     return { runs, said, done: executePlan(steps, 'acme', host), existsAtRun };
   }
 
+  for (const name of ['injected.json', 'packed-refs']) test(`directory-only settlement refuses a surviving file grant named ${name} before launch`, async () => {
+    const { base, sandbox } = world();
+    const file = join(base, name);
+    writeFileSync(file, 'unchanged synthetic bytes\n');
+    const scene = execute({ ...sandbox, readWrite: [...sandbox.readWrite, file] });
+    await scene.done;
+    expect(scene.runs).toEqual([]);
+    expect(scene.said.join('')).toContain(`${file} is a file, and the launch needs a directory; nothing was launched`);
+    expect(existsSync(sandbox.file)).toBe(false);
+    expect(readFileSync(file, 'utf8')).toBe('unchanged synthetic bytes\n');
+  });
+
+  test('directory-only settlement accepts and prepares folders whose names end in .json', () => {
+    const { base, sandbox } = world();
+    const existing = join(base, 'worktree.json');
+    const missing = join(base, 'seat.json');
+    mkdirSync(existing);
+    const settled = settleGrokSandbox({ ...sandbox, readWrite: [existing, missing], prepare: [missing] });
+    expect(settled.ok).toBe(true);
+    if (!settled.ok) throw new Error(settled.why);
+    expect(settled.sandbox.readWrite).toEqual([existing, missing]);
+    expect(lstatSync(missing).isDirectory()).toBe(true);
+    expect(lstatSync(missing).mode & 0o777).toBe(0o700);
+  });
+
   test('the profile is on disk before the pane\'s command runs', async () => {
     const { root, sandbox } = world();
     const scene = execute(sandbox);
@@ -581,7 +609,7 @@ describe('the plan and the launch', () => {
     for (const grant of written.profiles['team-seat-acme-grok-seat']!.read_write) {
       const held = lstatSync(grant);
       expect(held.isSymbolicLink()).toBe(false);
-      expect(grant.endsWith('.json') ? held.isFile() : held.isDirectory()).toBe(true);
+      expect(held.isDirectory()).toBe(true);
     }
     const state = join(root, '.agents', 'seat-state', 'acme', 'grok-seat');
     expect(lstatSync(state).isDirectory()).toBe(true);
@@ -623,14 +651,14 @@ describe('the plan and the launch', () => {
     }
   });
 
-  test('a missing packed-refs is omitted, and every written grant exists as its type', () => {
+  test('packed-refs is omitted, and every written grant exists as a directory', () => {
     const { home, root, start } = world();
     const env = { ...gitEnv(), GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
     execFileSync('git', ['init'], { cwd: root, env });
     const sandbox = grokSandboxOf({ home, root, project: 'acme', seat: 'grok-seat', session: 'acme', cwd: start });
-    const packed = sandbox.readWrite.find((grant) => grant.endsWith('/packed-refs'));
-    expect(packed).toBeDefined();
-    if (existsSync(packed!)) rmSync(packed!, { recursive: true });
+    const packed = join(root, '.git', 'packed-refs');
+    expect(sandbox.readWrite).not.toContain(packed);
+    expect(existsSync(packed)).toBe(false);
     const logs = sandbox.readWrite.find((grant) => grant.endsWith('/logs'));
     if (logs !== undefined && existsSync(logs)) rmSync(logs, { recursive: true });
     const settled = settleGrokSandbox(sandbox);
@@ -645,26 +673,22 @@ describe('the plan and the launch', () => {
     for (const grant of written.profiles['team-seat-acme-grok-seat']!.read_write) {
       const held = lstatSync(grant);
       expect(held.isSymbolicLink()).toBe(false);
-      expect(grant.endsWith('/packed-refs') || grant.endsWith('.json') ? held.isFile() : held.isDirectory()).toBe(true);
+      expect(held.isDirectory()).toBe(true);
     }
   });
 
-  test('a directory at packed-refs refuses the launch', async () => {
+  test('a directory at packed-refs is never a grant and is left untouched', () => {
     const { home, root, start } = world();
     const env = { ...gitEnv(), GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
     execFileSync('git', ['init'], { cwd: root, env });
-    const sandbox = grokSandboxOf({ home, root, project: 'acme', seat: 'grok-seat', session: 'acme', cwd: start });
-    const packed = sandbox.readWrite.find((grant) => grant.endsWith('/packed-refs'));
-    if (packed === undefined) throw new Error('the plan names packed-refs');
-    if (existsSync(packed)) rmSync(packed, { recursive: true });
+    const packed = join(root, '.git', 'packed-refs');
     mkdirSync(packed);
-    const scene = execute(sandbox);
-    await scene.done;
-    expect(scene.runs).toEqual([]);
-    const said = scene.said.join('');
-    expect(said).toContain(`${packed} is a directory, and the launch needs a file`);
-    expect(said).toContain('nothing was launched');
-    expect(said).toContain('Repair that path and launch the seat again');
+    const sandbox = grokSandboxOf({ home, root, project: 'acme', seat: 'grok-seat', session: 'acme', cwd: start });
+    expect(sandbox.readWrite).not.toContain(packed);
+    const settled = settleGrokSandbox(sandbox);
+    expect(settled.ok).toBe(true);
+    if (!settled.ok) throw new Error(settled.why);
+    expect(settled.sandbox.readWrite).not.toContain(packed);
     expect(lstatSync(packed).isDirectory()).toBe(true);
   });
 

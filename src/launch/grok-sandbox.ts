@@ -15,7 +15,7 @@
 // `~/.grok/sandbox.toml`): a project `.grok/sandbox.toml` would put a machine-specific map
 // inside a repository, and the user-level file is read when the project has none.
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync, type Stats } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, type Stats } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { syncChildTimeout } from '../child.ts';
 import { cliHookStatePath } from './cli-hook.ts';
@@ -60,7 +60,7 @@ export function grokSandboxProfileName(project: string, seat: string): string {
 
 /** What a Grok seat's launch writes and names. The grant is that seat's worktree, its start
  *  folder, and only these paths of its own: under the git common dir, `objects/`, `refs/`,
- *  `logs/`, `packed-refs` when that file already exists, and `worktrees/<that worktree>`; under `.agents`,
+ *  `logs/` and `worktrees/<that worktree>`; under `.agents`,
  *  `send-drops/<session>/<seat>`, `messages/<seat>` and `seat-state/<session>/<seat>/`.
  *  The session's seat-state folder is not granted. `hooks/<session>/<seat>.json` is written by
  *  the launcher and is not granted. The team config directory is never granted, nor is the lobby
@@ -69,7 +69,7 @@ export function grokSandboxProfileName(project: string, seat: string): string {
  *  when it or an ancestor exists, because the sandbox takes the path literally and a grant to a
  *  link's own name would not cover its target. Before the profile is written, the launch creates
  *  the seat's drop folder, `messages/<seat>` and `seat-state/<session>/<seat>/`, then names a
- *  path only when it exists as the type the grant needs. A path of the wrong type refuses the
+ *  path only when it exists as a directory. A path of the wrong type refuses the
  *  launch. */
 export function grokSandboxOf(input: {
   home: string;
@@ -95,8 +95,7 @@ export function grokSandboxOf(input: {
   for (const grant of gitGrants(input.worktree ?? input.cwd ?? input.root)) {
     placeGrant(input.home, grant, folders);
     // `objects/`, `refs/` and `logs/` are directories a commit writes. A missing one is created
-    // before the profile is written. `packed-refs` is a file git replaces by rename, so a missing
-    // one is left unnamed.
+    // before the profile is written. The common dir itself and its files are never granted.
     if (basename(grant) === 'objects' || basename(grant) === 'refs' || basename(grant) === 'logs') {
       placeGrant(input.home, grant, prepare);
     }
@@ -148,14 +147,14 @@ function agentGrants(root: string, session: string, seat: string): string[] {
   return grants;
 }
 
-/** `objects/`, `refs/`, `logs/`, `packed-refs`, and this worktree's own `worktrees/<name>`
+/** `objects/`, `refs/`, `logs/`, and this worktree's own `worktrees/<name>`
  *  under the git common dir. The common dir itself, `hooks/`, `config` and `info/` are not
- *  grants. A folder that is not a checkout names nothing. `packed-refs` is a file grant: the
- *  launch names it only when it already exists as a regular file. */
+ *  grants. A folder that is not a checkout names nothing. `packed-refs` is never granted:
+ *  Grok requires directories, and replacing packed refs needs a lock in the common dir. */
 function gitGrants(folder: string): string[] {
   const common = gitAnswer(folder, '--git-common-dir');
   if (common === undefined) return [];
-  const grants = ['objects', 'refs', 'logs', 'packed-refs'].map((name) => realFolder(join(common, name)));
+  const grants = ['objects', 'refs', 'logs'].map((name) => realFolder(join(common, name)));
   const gitDir = gitAnswer(folder, '--git-dir');
   const ownPrefix = `${realFolder(common)}/worktrees/`;
   if (gitDir !== undefined) {
@@ -195,45 +194,30 @@ function realFolder(folder: string): string {
 
 /** The profile this launch can write. The seat's drop folder, `messages/<seat>` and seat-state
  *  folder are created first, at 0700, and so are a missing `objects/`, `refs/` or `logs/`. A path
- *  that is still not there is left out of the list, so a missing `packed-refs` is not granted and
- *  `git gc` or `git pack-refs` from the seat fails closed. A path that is there as the wrong type
- *  refuses the launch. */
+ *  that is still not there is left out of the list. Every surviving grant must be a directory;
+ *  any other type refuses the launch before the profile is written. */
 export function settleGrokSandbox(sandbox: GrokSandbox): { ok: true; sandbox: GrokSandbox } | { ok: false; why: string } {
   const readWrite: string[] = [];
   for (const path of sandbox.readWrite) {
-    const kind = grantKind(path);
     if (lstatOrNull(path) === null && sandbox.prepare.includes(path)) {
-      const made = prepareGrant(path, kind);
+      const made = prepareGrant(path);
       if (!made.ok) return made;
     }
     const held = lstatOrNull(path);
     if (held === null) continue;
     if (held.isSymbolicLink()) {
-      return { ok: false, why: grantRefusal(path, 'a symbolic link', kind === 'file' ? 'a file' : 'a directory') };
+      return { ok: false, why: grantRefusal(path, 'a symbolic link', 'a directory') };
     }
-    if (kind === 'file' && !held.isFile()) return { ok: false, why: grantRefusal(path, 'a directory', 'a file') };
-    if (kind === 'directory' && !held.isDirectory()) return { ok: false, why: grantRefusal(path, 'a file', 'a directory') };
+    if (!held.isDirectory()) return { ok: false, why: grantRefusal(path, held.isFile() ? 'a file' : 'not a directory', 'a directory') };
     readWrite.push(path);
   }
   return { ok: true, sandbox: { ...sandbox, readWrite } };
 }
 
-function grantKind(path: string): 'file' | 'directory' {
-  const name = basename(path);
-  return name === 'packed-refs' || name.endsWith('.json') ? 'file' : 'directory';
-}
-
-function prepareGrant(path: string, kind: 'file' | 'directory'): { ok: true } | { ok: false; why: string } {
+function prepareGrant(path: string): { ok: true } | { ok: false; why: string } {
   try {
-    if (kind === 'directory') {
-      mkdirSync(path, { recursive: true, mode: 0o700 });
-      chmodSync(path, 0o700);
-      return { ok: true };
-    }
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    const since = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
-    writeFileSync(path, `{"state":"idle","since":"${since}"}\n`, { flag: 'wx', mode: 0o600 });
-    chmodSync(path, 0o600);
+    mkdirSync(path, { recursive: true, mode: 0o700 });
+    chmodSync(path, 0o700);
     return { ok: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
