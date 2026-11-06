@@ -1,0 +1,1 @@
+{ "method": "thread/closed", "params": { "threadId": "thr_123" } }

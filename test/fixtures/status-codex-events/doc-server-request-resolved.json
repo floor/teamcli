@@ -1,0 +1,4 @@
+{
+  "method": "serverRequest/resolved",
+  "params": { "threadId": "thr_123", "requestId": "req_doc_example" }
+}

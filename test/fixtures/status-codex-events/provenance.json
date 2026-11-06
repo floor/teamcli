@@ -1,0 +1,95 @@
+{
+  "acceptanceComplete": false,
+  "realCapturedFixtures": [],
+  "entries": [
+    {
+      "file": "measured-status-active.json",
+      "evidenceClass": "repository-measured-history",
+      "sourceCommit": "63e07e1d1542ff5b068bd2ae8d450140cca8aa24",
+      "sourcePath": "test/codex-presence-source.test.ts",
+      "sourceDescription": "Comment records a 2026-10-20 measured shape for thread/status/changed active with an empty activeFlags array. This file uses a synthetic thread id. It is not an original captured payload.",
+      "cliVersion": "0.161.0",
+      "appServerVersion": "0.163.0",
+      "measurementDate": "2026-10-20",
+      "captureSource": null,
+      "captureDate": null,
+      "countsAsRealCapturedFixture": false
+    },
+    {
+      "file": "measured-status-idle.json",
+      "evidenceClass": "repository-measured-history",
+      "sourceCommit": "63e07e1d1542ff5b068bd2ae8d450140cca8aa24",
+      "sourcePath": "test/codex-presence-source.test.ts",
+      "sourceDescription": "Comment records a measured thread/status/changed idle shape. Synthetic thread id. Not an original captured payload. Turn events and waiting flags were not observed.",
+      "cliVersion": "0.161.0",
+      "appServerVersion": "0.163.0",
+      "measurementDate": "2026-10-20",
+      "captureSource": null,
+      "captureDate": null,
+      "countsAsRealCapturedFixture": false
+    },
+    {
+      "file": "measured-thread-started.json",
+      "evidenceClass": "repository-measured-history",
+      "sourceCommit": "63e07e1d1542ff5b068bd2ae8d450140cca8aa24",
+      "sourcePath": "test/codex-presence-source.test.ts",
+      "sourceDescription": "Comment records thread/started with thread.id and status.type idle. This notification frame is a synthetic stand-in for that object shape, not an original capture.",
+      "cliVersion": "0.161.0",
+      "appServerVersion": "0.163.0",
+      "measurementDate": "2026-10-20",
+      "captureSource": null,
+      "captureDate": null,
+      "countsAsRealCapturedFixture": false
+    },
+    {
+      "file": "doc-status-waiting.json",
+      "evidenceClass": "documentation-example",
+      "sourceUrl": "https://learn.chatgpt.com/docs/app-server",
+      "accessed": "2026-11-06",
+      "sourceDescription": "Track thread status changes example: active with activeFlags waitingOnApproval. Documentation example, not a capture.",
+      "captureSource": null,
+      "captureDate": null,
+      "countsAsRealCapturedFixture": false
+    },
+    {
+      "file": "doc-turn-started.json",
+      "evidenceClass": "documentation-example",
+      "sourceUrl": "https://learn.chatgpt.com/docs/app-server",
+      "accessed": "2026-11-06",
+      "sourceDescription": "Message schema notification example for turn/started. Documentation example, not a capture. Local measured history did not observe turn events.",
+      "captureSource": null,
+      "captureDate": null,
+      "countsAsRealCapturedFixture": false
+    },
+    {
+      "file": "doc-thread-closed.json",
+      "evidenceClass": "documentation-example",
+      "sourceUrl": "https://learn.chatgpt.com/docs/app-server",
+      "accessed": "2026-11-06",
+      "sourceDescription": "Unsubscribe section example of thread/closed after notLoaded. Documentation example, not a capture and not process-exit proof.",
+      "captureSource": null,
+      "captureDate": null,
+      "countsAsRealCapturedFixture": false
+    },
+    {
+      "file": "doc-server-request-resolved.json",
+      "evidenceClass": "documentation-example",
+      "sourceUrl": "https://learn.chatgpt.com/docs/app-server",
+      "accessed": "2026-11-06",
+      "sourceDescription": "Approvals section describes serverRequest/resolved as answer or cleanup. The request id here is a synthetic stand-in for that documented shape, not a capture.",
+      "captureSource": null,
+      "captureDate": null,
+      "countsAsRealCapturedFixture": false
+    },
+    {
+      "file": "doc-status-not-loaded.json",
+      "evidenceClass": "documentation-example",
+      "sourceUrl": "https://learn.chatgpt.com/docs/app-server",
+      "accessed": "2026-11-06",
+      "sourceDescription": "Unsubscribe section example of thread/status/changed notLoaded before thread/closed. Documentation example, not a capture.",
+      "captureSource": null,
+      "captureDate": null,
+      "countsAsRealCapturedFixture": false
+    }
+  ]
+}
