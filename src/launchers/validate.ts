@@ -2,6 +2,7 @@
 // their resolution), argument boundaries and the no-secrets rule. Unknown keys are errors
 // at every level of the document. Nothing here reads a credential store, the process
 // environment or a CLI home; the input is the parsed file's value and nothing else.
+import { readSettingsObject, stringHoldsSecret } from './settings.ts';
 import {
   ARG_CLASSES,
   ARG_POLICIES,
@@ -15,6 +16,8 @@ import {
   type SecretRef,
 } from './types.ts';
 
+export { looksLikeCredentialValue } from './settings.ts';
+
 const NAME_WORD = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 const NAME_MAX = 48;
 const STORE_WORD = /^[a-z][a-z0-9_-]*$/;
@@ -23,15 +26,14 @@ const KNOWN_PLACEHOLDERS = new Set(['root', 'team-home', 'cwd', 'inbox', 'sessio
 const SHELL_SYNTAX = /\$\(|`/;
 
 /** Values that look like a credential materialize nowhere: the same rule family the config
- *  store applies (`looksLikeCredential` in src/config/sources.ts), kept local so the
- *  validator stands alone. Names (env keys) are exempt; values and free strings are not. */
-const CREDENTIAL_WORD = /(?:token|secret|password|passwd|api[-_]?key|credential)/i;
-const CREDENTIAL_PREFIX = /^(?:sk-|gh[pousr]_|xox[abpr]-)/;
+ *  store applies (`looksLikeCredential` in src/config/sources.ts). The helpers live in
+ *  settings.ts so the settings walker and this validator share one rule; names (env keys)
+ *  are exempt, values and free strings are not. */
 
 const COMMON_KEYS = ['format', 'name', 'kind', 'summary', 'writable_folders', 'source'] as const;
 const KIND_KEYS: Record<LauncherDefinition['kind'], readonly string[]> = {
   identity: ['env'],
-  endpoint: ['harness', 'prefix', 'provider', 'executable', 'args', 'arg_policy', 'env', 'env_policy'],
+  endpoint: ['harness', 'prefix', 'provider', 'executable', 'args', 'arg_policy', 'env', 'env_policy', 'harness_settings'],
   preset: ['harness', 'base', 'executable', 'args', 'arg_policy', 'resume', 'env', 'env_policy', 'cwd', 'harness_settings', 'caller_args'],
   custom: ['argv', 'args_mode', 'env', 'env_policy', 'cwd'],
 };
@@ -55,25 +57,6 @@ function isMap(value: unknown): value is Record<string, unknown> {
 
 function isStringList(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((one) => typeof one === 'string');
-}
-
-export function looksLikeCredentialValue(word: string): boolean {
-  return CREDENTIAL_PREFIX.test(word);
-}
-
-/** A credential-shaped token anywhere a word can start (a value, or prose quoting one). */
-const CREDENTIAL_TOKEN = /(?:^|[\s"'`])(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{8,}|xox[abpr]-[A-Za-z0-9-]{8,})/;
-
-/** A free string that embeds a secret-shaped word *and* material: conservative — a value
- *  that carries a credential token, or a `<word>=<material>` pair where the word names a
- *  credential and the material is not a reference or placeholder. */
-function stringHoldsSecret(value: string): boolean {
-  if (CREDENTIAL_TOKEN.test(value)) return true;
-  const pair = /^([A-Za-z_][A-Za-z0-9_]*)=(.+)$/.exec(value.trim());
-  if (pair !== null && CREDENTIAL_WORD.test(pair[1] ?? '') && (pair[2] ?? '').length >= 8) {
-    return !/^\{.*\}$/.test((pair[2] ?? '').trim());
-  }
-  return false;
 }
 
 type Sink = Diagnostic[];
@@ -208,6 +191,15 @@ function checkWritable(sink: Sink, ctx: Ctx, folders: unknown, field: string): v
   });
 }
 
+/** D2: harness settings are JSON literals, checked recursively. Every diagnostic names the
+ *  key path, never the value; credential-shaped strings and unsafe keys are refused. */
+function checkHarnessSettings(sink: Sink, ctx: Ctx, value: unknown, field: string): void {
+  const read = readSettingsObject(value, field);
+  for (const issue of read.issues) {
+    fail(sink, ctx, issue.code, issue.path, issue.message);
+  }
+}
+
 function checkEnvPolicy(sink: Sink, ctx: Ctx, policy: unknown, field: string): void {
   if (!isMap(policy)) {
     fail(sink, ctx, 'E_ENV_POLICY', field, 'env_policy is a map { mode, keep? }');
@@ -285,6 +277,11 @@ export function validateDefinition(
   }
   if (raw.env !== undefined) checkEnv(diagnostics, ctxN, raw.env, 'env');
   if (raw.env_policy !== undefined) checkEnvPolicy(diagnostics, ctxN, raw.env_policy, 'env_policy');
+  // D1: harness_settings belongs to endpoint and preset only; identity and custom carrying
+  // it are refused as E_UNKNOWN_KEY by the kind key lists above.
+  if ((kind === 'endpoint' || kind === 'preset') && raw.harness_settings !== undefined) {
+    checkHarnessSettings(diagnostics, ctxN, raw.harness_settings, 'harness_settings');
+  }
 
   switch (kind) {
     case 'identity':
@@ -369,9 +366,6 @@ export function validateDefinition(
       }
       if (raw.cwd !== undefined && (typeof raw.cwd !== 'string' || raw.cwd === '')) {
         fail(diagnostics, ctxN, 'E_WRITABLE_PATH', 'cwd', 'cwd is a path or placeholder');
-      }
-      if (raw.harness_settings !== undefined && !isMap(raw.harness_settings)) {
-        fail(diagnostics, ctxN, 'E_HARNESS_SETTINGS', 'harness_settings', 'harness_settings is a map of the harness\'s settings keys to JSON literals');
       }
       if (raw.caller_args !== undefined && raw.caller_args !== 'append' && raw.caller_args !== 'refuse') {
         fail(diagnostics, ctxN, 'E_CALLER_ARGS', 'caller_args', 'caller_args is append or refuse');

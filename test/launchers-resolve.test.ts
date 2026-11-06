@@ -119,11 +119,14 @@ describe('argv construction without a shell', () => {
   const { launchers } = discover([VALID]);
   const discovery = { launchers, diagnostics: [] as Diagnostic[] };
 
-  test('argv is an array: executable, fixed args, then admitted caller args', () => {
+  test('argv is an array: executable, fixed args (the inline settings fold as data), then admitted caller args', () => {
     const out = resolveLaunch({ launcher: 'claude-on-acme', args: ['--verbose'] }, discovery, CTX);
     expect(out.ok).toBe(true);
     expect(out.argv[0]).toBe('claude-code');
-    expect(out.argv).toContain('--settings');
+    // The one inline --settings object folds into the resolved settings object and leaves
+    // argv: a merged result never coexists with a stale contradictory flag (D5).
+    expect(out.argv).not.toContain('--settings');
+    expect(out.settings).toEqual({ crossSessionInbound: 'accept' });
     expect(out.argv[out.argv.length - 1]).toBe('--verbose');
     expect(out.argv.every((word) => typeof word === 'string')).toBe(true);
   });

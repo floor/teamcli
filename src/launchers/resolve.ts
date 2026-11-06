@@ -5,12 +5,14 @@
 // context (paths, parent environment, existing files) arrives as explicit input. Nothing
 // here executes a launch, reads a credential store or inspects process.env.
 import { checkSandbox, SANDBOX_CAPABILITIES } from './sandbox.ts';
+import { mergeSettingsObject, readSettingsObject, settingsSpans, type SettingsIssue, type SettingsSpan } from './settings.ts';
 import { validateDefinition } from './validate.ts';
 import type {
   ArgClass,
   ArgPolicy,
   Diagnostic,
   EnvValue,
+  JsonValue,
   LauncherDefinition,
   ResolvedEnv,
   ResolvedLaunch,
@@ -149,6 +151,9 @@ export type ResolveContext = {
   sandboxSetupReason?: string;
   /** Seat names and nicknames of the team, for the collision warning. */
   seatNames?: readonly string[];
+  /** D3's lowest settings layer: the profile defaults, as explicit input. The core reads no
+   *  profile file; this is the whole of the defaults. */
+  settingsDefaults?: Record<string, JsonValue>;
 };
 
 const PLACEHOLDER_RE = /\{(root|team-home|cwd|inbox|session)\}/g;
@@ -191,7 +196,7 @@ export function resolveLaunch(
   const fail = (message: string, code: string): ResolvedLaunch => {
     diagnostics.push({ code, severity: 'error', launcher: seat.launcher, message });
     return {
-      ok: false, harness: '', executable: '', argv: [], env: [], cwd: ctx.cwd,
+      ok: false, harness: '', executable: '', argv: [], env: [], cwd: ctx.cwd, settings: {},
       resume: { kind: 'none' },
       sandbox: { harness: '', mechanism: '', folders: [] },
       chain: [], diagnostics,
@@ -342,17 +347,130 @@ export function resolveLaunch(
     merged.set(name, entry);
   }
 
-  // argv: executable + fixed args (chain order, terminal first) + admitted caller args.
-  const fixed: { word: string; cls: ArgClass }[] = chain.flatMap((def) =>
-    classifyArgs(def.kind === 'custom' ? (def.argv ?? []).slice(1) : (def.args ?? [])),
-  );
+  // Settings merge (D1–D7): one object from the profile defaults, the endpoint layer, the
+  // preset layer and — only under arg_policy.settings: merge — the caller's inline JSON.
+  // An inline --settings JSON object folds into that object and leaves argv: a merged
+  // result never coexists with a stale contradictory flag. A file-valued fixed word stays
+  // byte-for-byte (the pure core never reads a file). `custom` terminals are exempt: their
+  // argv is verbatim by contract.
   const caller = classifyArgs(seat.args ?? []);
+  const settingsPolicy = policyFor(terminal, 'settings');
+  const callerHasSettings = caller.some((arg) => arg.cls === 'settings');
+  // D6 override: the caller's settings words replace the launcher's fixed settings-class
+  // args entirely — excluded from argv and from the fold, while data layers still fold.
+  const fixedSettingsExcluded = settingsPolicy === 'override' && callerHasSettings;
+  let settingsObject: Record<string, JsonValue> = {};
+  let settingsFileWordCount = 0;
+  const fixedPlans = new Map<LauncherDefinition, { entries: { word: string; cls: ArgClass }[]; spans: SettingsSpan[] }>();
+  const planFor = (def: LauncherDefinition): { entries: { word: string; cls: ArgClass }[]; spans: SettingsSpan[] } => {
+    const cached = fixedPlans.get(def);
+    if (cached !== undefined) return cached;
+    const entries = classifyArgs(def.kind === 'custom' ? (def.argv ?? []).slice(1) : (def.args ?? []));
+    const plan = { entries, spans: settingsSpans(entries, 'fixed') };
+    fixedPlans.set(def, plan);
+    return plan;
+  };
+  const foldLayer = (name: string, object: Record<string, JsonValue>): void => {
+    settingsObject = mergeSettingsObject(settingsObject, object, (path) => {
+      diagnostics.push({
+        code: 'W_SETTINGS_OVERRIDE',
+        severity: 'warning',
+        launcher: terminal.name,
+        message: `the settings key ${path} is overridden by the ${name} layer`,
+      });
+    });
+  };
+  const failIssues = (issues: SettingsIssue[]): ResolvedLaunch =>
+    fail(issues[0]?.message ?? 'the settings object is invalid', issues[0]?.code ?? 'E_SETTINGS_JSON');
+  const foldDefinitionLayer = (def: LauncherDefinition, name: string): ResolvedLaunch | null => {
+    if (def.harness_settings !== undefined) {
+      const read = readSettingsObject(def.harness_settings, 'harness_settings');
+      if (read.value === null) return failIssues(read.issues);
+      foldLayer(name, read.value);
+    }
+    if (fixedSettingsExcluded) return null;
+    for (const span of planFor(def).spans) {
+      if (span.kind === 'error') return fail(span.message, span.code);
+      if (span.kind === 'inline') foldLayer(name, span.object);
+      else if (span.kind === 'file') settingsFileWordCount += 1;
+    }
+    return null;
+  };
+
+  if (terminal.kind !== 'custom') {
+    if (ctx.settingsDefaults !== undefined) {
+      const read = readSettingsObject(ctx.settingsDefaults, 'settingsDefaults');
+      if (read.value === null) return failIssues(read.issues);
+      foldLayer('profile settings defaults', read.value);
+    }
+    if (endpointLayer !== undefined) {
+      const stopped = foldDefinitionLayer(endpointLayer, `endpoint "${endpointLayer.name}"`);
+      if (stopped !== null) return stopped;
+    }
+    if (terminal.kind === 'preset') {
+      const stopped = foldDefinitionLayer(terminal, `preset "${terminal.name}"`);
+      if (stopped !== null) return stopped;
+    }
+    if (settingsPolicy === 'merge') {
+      for (const span of settingsSpans(caller, 'caller')) {
+        if (span.kind === 'error') return fail(span.message, span.code);
+        if (span.kind === 'inline') foldLayer('caller settings', span.object);
+      }
+    }
+  }
+  if (Object.keys(settingsObject).length > 0) {
+    for (let i = 0; i < settingsFileWordCount; i += 1) {
+      diagnostics.push({
+        code: 'W_SETTINGS_FILE_TARGET',
+        severity: 'warning',
+        launcher: terminal.name,
+        // The word itself is never echoed: a fixed settings word is caller-authored text and
+        // may be credential-shaped, and D2's no-value-echo rule covers diagnostics too.
+        message: 'a fixed settings-file word stays in argv; the merged settings object awaits the settings-file adapter (the word is not echoed)',
+      });
+    }
+  }
+  if (
+    terminal.kind !== 'custom'
+    && callerHasSettings
+    && (settingsPolicy === 'pass_through' || settingsPolicy === 'override')
+    && Object.keys(settingsObject).length > 0
+  ) {
+    diagnostics.push({
+      code: 'W_SETTINGS_SPLIT',
+      severity: 'warning',
+      launcher: terminal.name,
+      message: 'caller --settings words stay in argv while the merged settings object is non-empty: settings reach the harness from two sources',
+    });
+  }
+
+  // argv: executable + fixed args (chain order, terminal first) + admitted caller args.
+  // Folded settings spans and, under D6 override, the whole settings class are absent; every
+  // other word keeps its position and its bytes.
   const argv: string[] = [executable];
   const overriddenClasses = new Set<ArgClass>();
   for (const cls of ['model', 'settings', 'resume', 'mcp', 'effort'] as const) {
     if (policyFor(terminal, cls) === 'override' && caller.some((arg) => arg.cls === cls)) overriddenClasses.add(cls);
   }
-  argv.push(...fixed.filter((arg) => !overriddenClasses.has(arg.cls)).map((arg) => expand(arg.word, ctx)));
+  for (const def of chain) {
+    if (def.kind === 'custom') {
+      for (const entry of classifyArgs((def.argv ?? []).slice(1))) argv.push(expand(entry.word, ctx));
+      continue;
+    }
+    const plan = planFor(def);
+    const folded = new Set<number>();
+    if (!fixedSettingsExcluded) {
+      for (const span of plan.spans) {
+        if (span.kind !== 'inline') continue;
+        for (let i = span.start; i <= span.end; i += 1) folded.add(i);
+      }
+    }
+    plan.entries.forEach((entry, index) => {
+      if (folded.has(index)) return;
+      if (overriddenClasses.has(entry.cls)) return;
+      argv.push(expand(entry.word, ctx));
+    });
+  }
   for (const arg of caller) {
     if (terminal.kind === 'custom' && (terminal.args_mode ?? 'append') === 'refuse') {
       return fail(`custom launcher "${terminal.name}" refuses caller arguments (args_mode: refuse)`, 'E_ARG_REFUSED');
@@ -367,7 +485,9 @@ export function resolveLaunch(
         argv.push(expand(arg.word, ctx));
         break;
       case 'merge':
-        argv.push(expand(arg.word, ctx));
+        // A settings-class word under merge was folded as the top layer above and is never
+        // an argv word; merge on any other class is refused at validation (E_ARG_POLICY).
+        if (arg.cls !== 'settings') argv.push(expand(arg.word, ctx));
         break;
       case 'strip':
         diagnostics.push({
@@ -449,6 +569,7 @@ export function resolveLaunch(
     argv,
     env: [...merged.values()],
     cwd: (terminal.kind === 'preset' || terminal.kind === 'custom') && terminal.cwd !== undefined ? expand(terminal.cwd, ctx) : ctx.cwd,
+    settings: settingsObject,
     resume,
     sandbox: { harness, mechanism, folders },
     chain: chain.map((d) => d.name),

@@ -7,6 +7,9 @@ export type LauncherKind = 'identity' | 'endpoint' | 'preset' | 'custom';
 
 export const LAUNCHER_KINDS: readonly LauncherKind[] = ['identity', 'endpoint', 'preset', 'custom'];
 
+/** A JSON literal: the only shape a harness settings value may take. */
+export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+
 /** A secret by reference: where it lives, never its value. Exactly these two keys. */
 export type SecretRef = { store: string; item: string };
 
@@ -92,8 +95,8 @@ export type LauncherDefinition = {
   resume?: ResumeBlock;
   /** preset, custom: working directory override; default the seat's cwd. */
   cwd?: string;
-  /** preset: harness settings keys merged into the harness's one settings object. */
-  harness_settings?: Record<string, unknown>;
+  /** endpoint, preset: harness settings keys merged into the harness's one settings object. */
+  harness_settings?: Record<string, JsonValue>;
   /** preset: whether seat args may follow the fixed args at all. `refuse` models a preset
    *  whose original wrapper forwarded nothing; default `append`. */
   caller_args?: 'append' | 'refuse';
@@ -145,6 +148,9 @@ export type ResolvedLaunch = {
   argv: string[];
   env: ResolvedEnv[];
   cwd: string;
+  /** The merged harness settings object (one per launch): data for the future settings-file
+   *  adapter, never an argv word written by this pure core. Empty when nothing declares any. */
+  settings: Record<string, JsonValue>;
   resume: ResolvedResume;
   sandbox: { harness: string; mechanism: string; folders: string[] };
   chain: string[];
