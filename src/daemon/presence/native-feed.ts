@@ -190,10 +190,19 @@ function isReceiptName(name: string): boolean {
   return name.endsWith('.json') && PRESENCE_ID.test(name.slice(0, -5));
 }
 
+/** Preserve the writer's exact staging names without an age cutoff: a producer may still
+ *  rename one onto its receipt. Orphaned staging names are left for separate cleanup. */
+function isReceiptStagingName(name: string): boolean {
+  const suffix = /\.new\.[a-f0-9]{16}$/.exec(name);
+  return suffix !== null && suffix.index + suffix[0].length === name.length
+    && isReceiptName(name.slice(0, suffix.index));
+}
+
 /** Sweeps at most 1,024 names from a sorted directory snapshot per pass. The in-memory
  *  last-name cursor resumes after removed names too, and wraps so persistent entries cannot
- *  starve later junk. Listing/sorting still scales with the directory size. No payload is read
- *  and no directory is followed or recursively removed. */
+ *  starve later junk. Receipts and exact writer staging names are preserved. Listing/sorting
+ *  still scales with the directory size. No payload is read and no directory is followed
+ *  or recursively removed. */
 export function sweepNonId(root: string, directory: string): number {
   let names: string[];
   try { names = readdirSync(directory).sort(); }
@@ -219,7 +228,7 @@ export function sweepNonId(root: string, directory: string): number {
   for (let scanned = 0; scanned < Math.min(STATUS_SPOOL_SWEEP_CAP, names.length); scanned += 1) {
     const name = names[(start + scanned) % names.length]!;
     spoolSweepResume.set(directory, name);
-    if (isReceiptName(name)) continue;
+    if (isReceiptName(name) || isReceiptStagingName(name)) continue;
     const path = join(directory, name);
     try { unlinkSync(path); removed += 1; }
     catch (error) {
