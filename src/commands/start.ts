@@ -2,8 +2,10 @@
 // on bootstrap and writes nothing: that door is not this command. A caller the ordinary
 // map already admits (the owner, once a durable record exists) gets one pass: detect the
 // folder, write the small preset, register the root as running, then init, up, and the
-// lead's send through the ordinary send command. A later run resumes at the first step
-// that is not done. It does not call `team config` and it does not grant a sender.
+// lead's send through the ordinary send command. A folder that already holds a team file,
+// with no preset step recorded, is refused. The registry is noted only on the pass that
+// wrote the file. A later run resumes at the first step that is not done. It does not
+// call `team config` and it does not grant a sender.
 import { connect } from 'node:net';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -271,22 +273,36 @@ export async function runStart(argv: string[], io: Io, sources: StartSources = {
   report.detectMs = now() - begun;
 
   const teamFile = join(root, '.agents', 'team.yaml');
+  let wrotePreset = false;
   if (steps.preset !== true) {
+    if (existsSync(teamFile)) {
+      report.teamFile = true;
+      io.stderr('team start: this folder already holds a team; run team up\n');
+      return finish(1, () => {
+        report.detectMs = now() - begun;
+      });
+    }
     mkdirSync(join(root, '.agents'), { recursive: true });
     writeFileSync(teamFile, presetText(projectName(root), [clis[0] ?? 'grok', clis[1] ?? 'cursor']));
     steps.preset = true;
     writeSteps(root, steps);
+    wrotePreset = true;
   }
   report.teamFile = existsSync(teamFile);
 
-  const noted = noteTeam(home, root, {
-    project: projectName(root),
-    entity: null,
-    session: projectName(root),
-    lobby: null,
-  }, 'running', 'owner');
-  if (noted === null) {
-    (sources.notifyRoot ?? ((path: string) => notifyDaemon(home, path)))(root);
+  if (wrotePreset) {
+    const noted = noteTeam(home, root, {
+      project: projectName(root),
+      entity: null,
+      session: projectName(root),
+      lobby: null,
+    }, 'running', 'owner');
+    if (noted === null) {
+      (sources.notifyRoot ?? ((path: string) => notifyDaemon(home, path)))(root);
+      report.roots = 1;
+      report.daemonRunning = sources.daemonRunning?.() ?? false;
+    }
+  } else if (steps.preset === true) {
     report.roots = 1;
     report.daemonRunning = sources.daemonRunning?.() ?? false;
   }
