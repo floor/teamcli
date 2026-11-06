@@ -424,15 +424,21 @@ describe('team usage', () => {
     // another key renamed, another field deprecated — this fixture would warn, and this fails
     // here rather than on the check that runs the whole suite. The fixture's trust entry is its
     // own resolved path; a path no longer reads as a random value (`secrets.ts`), so the whole
-    // list is asserted. The session name is the drifted spelling the file keeps, and that
-    // warning is the only one: a deprecation would add another, whatever temporary name a run draws.
+    // list is asserted, whatever temporary name a run draws. The session this file keys off,
+    // "acme-web", is off the derived default "acme": that drift warns, and it is the only
+    // warning. A deprecation is its own list and stays empty.
     const checked = validateTeamFile(teamText(), { home, root });
     expect(checked.ok).toBe(true);
     const warnings = checked.ok ? checked.warnings : [];
-    expect(warnings).toEqual([{
-      line: 3,
-      message: 'session "acme-web" is not the default "acme" for this entity and project: kept as written; a drifted name is how a stale session gets reused',
-    }]);
+    const deprecations = checked.ok ? checked.deprecations : [];
+    expect(deprecations).toEqual([]);
+    expect(warnings).toEqual([
+      {
+        line: 3,
+        message:
+          'session "acme-web" is not the default "acme" for this entity and project: kept as written; a drifted name is how a stale session gets reused',
+      },
+    ]);
   });
 
   test('the machine report is the header, the lines and the notes — and status rows its own rows', async () => {
