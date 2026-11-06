@@ -1175,7 +1175,10 @@ function lockFolderAt(dir: string): { held: ReturnType<typeof heldAt>; problem: 
 // taken over, and `onStale` is told. `waitMs: 0` tries once and throws `LockBusyError` at the
 // first held lock instead of pausing, so a caller on a scheduler tick can defer the same work to
 // a later tick without blocking its event loop.
-export function withLock<T>(dir: string, work: () => T, options: { waitMs?: number; onStale?: (pid: number) => void } = {}): T {
+//
+// `acquireLock` returns the release. The caller holds the key until it calls that release,
+// including across an await. `withLock` is the same acquire around one synchronous `work`.
+export function acquireLock(dir: string, options: { waitMs?: number; onStale?: (pid: number) => void } = {}): () => void {
   const path = join(dir, LOCK_FILE);
   const waitMs = options.waitMs ?? 5000;
   const deadline = Date.now() + waitMs;
@@ -1231,7 +1234,13 @@ export function withLock<T>(dir: string, work: () => T, options: { waitMs?: numb
       const fd = openSync(path, 'wx');
       writeFileSync(fd, `${process.pid}\n`);
       closeSync(fd);
-      break;
+      return () => {
+        try {
+          unlinkSync(path);
+        } catch {
+          // A release that loses the race with a reclaimer has nothing left to drop.
+        }
+      };
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       // A create can meet a folder removed under it as ENOENT; the platform also reported EINVAL
@@ -1309,12 +1318,15 @@ export function withLock<T>(dir: string, work: () => T, options: { waitMs?: numb
       }
     }
   }
+}
+
+/** Runs `work` while this call holds `dir`'s lock, and releases the key when `work` returns. */
+export function withLock<T>(dir: string, work: () => T, options: { waitMs?: number; onStale?: (pid: number) => void } = {}): T {
+  const release = acquireLock(dir, options);
   try {
     return work();
   } finally {
-    try {
-      unlinkSync(path);
-    } catch {}
+    release();
   }
 }
 

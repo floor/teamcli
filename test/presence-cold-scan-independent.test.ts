@@ -6,6 +6,8 @@
 // 3. A truncated or tampered log is refused (never served from a stale in-memory or on-disk checkpoint).
 // 4. The append index never reports a record as appended that is not on disk.
 // 5. Events appended during an async subscribe registration are delivered once.
+// 6. Sealing a 22 MB open log writes one segment per turn, and a health probe during that
+//    first reconcile still answers within 500 ms.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import {
@@ -13,6 +15,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -31,6 +34,7 @@ import {
   EVENT_DOMAIN,
   eventLogPath,
   readEvents,
+  sealUnsealedSegmentsSteps,
   readEventsFromCursorSliced,
   readEventsSliced,
   resetAppendIndexReads,
@@ -738,4 +742,113 @@ describe('fix/presence-cold-scan independent verification', () => {
       expect(seenIds.has(`rec-after-${String(i)}`)).toBe(true);
     }
   }, 30_000);
+
+  test('a 22 MB open log past the segment bound writes one segment per turn', () => {
+    // The first reconcile of an open log past the segment bound used to write every sealed
+    // chunk inside one event-lock turn. A health probe shares that loop. One turn may add
+    // the bytes of a single segment; the open log stays the readable file until the commit.
+    const world = createWorld([50_000], 'seal-one-segment');
+    const root = world.roots[0]!.root;
+    const logPath = eventLogPath(PROJECT, root, world.home);
+    const openBytes = statSync(logPath).size;
+    expect(openBytes).toBeGreaterThan(20_000_000);
+    const storeDir = storePath(PROJECT, root, world.home);
+    const storeBytes = (): number =>
+      readdirSync(storeDir).reduce((sum, name) => {
+        try {
+          return sum + statSync(join(storeDir, name)).size;
+        } catch {
+          return sum;
+        }
+      }, 0);
+    const steps = sealUnsealedSegmentsSteps(PROJECT, root, world.home);
+    let previous = storeBytes();
+    let grew = 0;
+    try {
+      for (;;) {
+        const next = steps.next();
+        const now = storeBytes();
+        const added = now - previous;
+        if (added > 0) {
+          grew += added;
+          // One segment plus its index. The open log is several segments, so a turn that
+          // wrote every chunk would add more than a quarter of it.
+          expect(added).toBeLessThanOrEqual(Math.floor(openBytes / 4));
+        }
+        previous = now;
+        if (next.done) break;
+      }
+    } finally {
+      steps.return([]);
+    }
+    expect(grew).toBeGreaterThan(openBytes / 2);
+    const read = readEvents(PROJECT, root, world.home);
+    expect(read.ok).toBe(true);
+    if (read.ok) expect(read.events.length).toBe(50_000);
+  }, 60_000);
+
+  test('a 22 MB open log answers a health probe within 500 ms during the first reconcile', async () => {
+    const world = createWorld([50_000], 'seal-probe');
+    const root = world.roots[0]!.root;
+    expect(statSync(eventLogPath(PROJECT, root, world.home)).size).toBeGreaterThan(20_000_000);
+
+    const socketPath = daemonSocketPath(world.home);
+    const readyPath = join(world.base, 'probe.ready');
+    const stopPath = join(world.base, 'probe.stop');
+    const childScript = fileURLToPath(new URL('./fixtures/cold-read-probe-child.ts', import.meta.url));
+    const prober = Bun.spawn([process.execPath, childScript, socketPath, readyPath, '30000', stopPath], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const readyDeadline = Date.now() + 10_000;
+    while (!existsSync(readyPath)) {
+      if (Date.now() > readyDeadline) throw new Error('probe child did not become ready');
+      await new Promise((r) => setTimeout(r, 10));
+    }
+
+    const epochNow = (): number => Math.round(performance.timeOrigin + performance.now());
+    const startupBegan = epochNow();
+    const started = await startMachineDaemon({
+      home: world.home,
+      roots: [root],
+      version: '0.0.0-probe-cold-scan',
+      heartbeatMs: 200,
+      presenceHosting: false,
+      restoreSweep: false,
+    });
+    const startupEnded = epochNow();
+    if (started.kind !== 'serving') throw new Error(`daemon failed to start: ${started.kind}`);
+    activeDaemons.push(started.daemon);
+    expect(started.daemon.roots.map((r) => r.bus)).toEqual(['serving']);
+
+    type DaemonStateShape = {
+      roots?: Array<{ firstPass?: { running?: boolean; errors?: boolean } }>;
+    };
+    const settleDeadline = Date.now() + 60_000;
+    let finalRows: NonNullable<DaemonStateShape['roots']> = [];
+    while (true) {
+      try {
+        const parsed = JSON.parse(readFileSync(daemonStatePath(world.home), 'utf8')) as DaemonStateShape;
+        const rows = parsed.roots ?? [];
+        if (rows.length === 1 && rows[0]?.firstPass !== undefined && rows[0].firstPass.running === false) {
+          finalRows = rows;
+          break;
+        }
+      } catch {}
+      if (Date.now() > settleDeadline) throw new Error('daemon firstPass did not settle');
+      await new Promise((r) => setTimeout(r, 25));
+    }
+
+    writeFileSync(stopPath, '');
+    const stdout = await new Response(prober.stdout).text();
+    const stderr = await new Response(prober.stderr).text();
+    const code = await prober.exited;
+    if (code !== 0) throw new Error(`probe child exited ${String(code)}: ${stdout}${stderr}`);
+    expect(finalRows.every((row) => row.firstPass?.errors === false)).toBe(true);
+    const fatal = timeoutsAfterServing(readColdProbes(stdout), startupBegan, startupEnded);
+    expect(fatal.map((probe) => `+${String(probe.at)} ms waited ${String(probe.ms)} ms`)).toEqual([]);
+    const answered = readColdProbes(stdout).filter((probe) => probe.kind === 'answered');
+    expect(answered.length).toBeGreaterThanOrEqual(3);
+    for (const ans of answered) expect(ans.ms).toBeLessThanOrEqual(500);
+  }, 120_000);
 });
