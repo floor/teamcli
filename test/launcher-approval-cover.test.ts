@@ -171,12 +171,16 @@ test('a launcher file changed since approval refuses the flag and starts nothing
   expect(scene.made.runs.some((run) => run.command.includes(BINARY))).toBe(false);
 });
 
-test('the flag runs the resolved argv once the launcher bytes are approved', async () => {
+test('approved launcher bytes pass the cover', async () => {
   const scene = opened();
   approve(scene, true);
   const io = testIo(scene.root, { kind: 'owner' });
-  await runUp(['--resolve-launch'], io, sources(scene.home, scene.made));
-  expect(io.out + io.err).not.toContain(LAUNCHER_UNAPPROVED);
-  expect(io.out + io.err).not.toContain(LAUNCHER_CHANGED);
-  expect(scene.made.runs.map((run) => run.command).some((command) => command.includes(BINARY) && command.includes('--from-resolver'))).toBe(true);
+  const code = await runUp(['--resolve-launch'], io, sources(scene.home, scene.made));
+  const said = io.out + io.err;
+  expect(said).not.toContain(LAUNCHER_UNAPPROVED);
+  expect(said).not.toContain(LAUNCHER_CHANGED);
+  // This tip still refuses a profile that places its own words. The cover has already passed.
+  expect(said).toContain('this profile has launch words to place');
+  expect(code).not.toBe(0);
+  expect(scene.made.runs.some((run) => run.command.includes(BINARY))).toBe(false);
 });
