@@ -14,6 +14,7 @@ import { MESSAGE_ID, receiptPath, writeListener } from '../src/mcp/inbox.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
 import { readHistory } from '../src/send/history.ts';
 import { signedReceiptOf, verifyReceipt } from '../src/send/record.ts';
+import { updateState } from '../src/state.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { testIo, type TestIo } from './helpers.ts';
@@ -64,6 +65,17 @@ seats:
     launch: ${cli === 'claude-code' ? 'claude' : cli}
 ${human ? '    human: true\n' : ''}`);
   return { base, root, dir, home, sockets };
+}
+
+/** The seat's standing, as its launch records it: a seat's own read places its caller on a pane
+ *  from this record. Only the scenes that read as the seat write it, so a scene that asserts a
+ *  refused send wrote nothing still starts from a fresh folder. */
+function recordStanding(dir: string): void {
+  updateState(dir, (state) => {
+    state.sessions[SESSION] = {
+      seats: { [SEAT]: { stage: 'ready' as const, pane: 'pane-reader' } },
+    } as never;
+  });
 }
 
 function fake(w: World): SendHost {
@@ -412,7 +424,8 @@ describe('a message-transport full brief sent end to end', () => {
     }
 
     // The seat's own read hands the full body over and signs the receipt against the record.
-    const readIo = testIo(w.root, { kind: 'owner' });
+    recordStanding(w.dir);
+    const readIo = testIo(w.root, { kind: 'seat', name: SEAT, pane: 'pane-reader', session: SESSION });
     const read = await runDrops(['--read', '--seat', SEAT, '--session', SESSION], readIo, { home: w.home });
     expect(read, readIo.err).toBe(0);
     expect(readIo.out).toBe(`${HEADER}\n\n${text}\n`);
@@ -433,7 +446,7 @@ describe('a message-transport full brief sent end to end', () => {
     });
 
     // Write-once: the next turn finds nothing waiting, so the full body is not served twice.
-    const againIo = testIo(w.root, { kind: 'owner' });
+    const againIo = testIo(w.root, { kind: 'seat', name: SEAT, pane: 'pane-reader', session: SESSION });
     const again = await runDrops(['--read', '--seat', SEAT, '--session', SESSION], againIo, { home: w.home });
     expect(again, againIo.err).toBe(0);
     expect(againIo.out).toBe('');
