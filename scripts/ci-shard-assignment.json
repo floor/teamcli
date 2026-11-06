@@ -395,6 +395,7 @@
     "test/daemon-stall-load.test.ts": 0,
     "test/daemon-start-admission-independent.test.ts": 4,
     "test/daemon-start-admission.test.ts": 4,
+    "test/daemon-state-nofollow-independent.test.ts": 2,
     "test/daemon-state-nofollow.test.ts": 5,
     "test/daemon-unit-authorization.test.ts": 1,
     "test/daemon-unit-no-key-independent.test.ts": 1,
