@@ -10,14 +10,19 @@ Generated schemas match only the CLI that produced them. Local measured history 
 comment in `test/codex-presence-source.test.ts` (2026-10-20, codex-cli 0.161.0, app-server
 0.163.0): idle and empty-flag active `thread/status/changed`, plus `thread/started` and
 `thread/name/updated`. That comment says turn events and waiting flags were not observed.
-No original captured payload is in `test/fixtures/status-codex-events/`. Provenance marks
-every file as measured-history or a documentation example, and `acceptanceComplete` is false.
+`test/fixtures/status-codex-events/` also has two sanitized `thread/started` frames and one
+sanitized turn-start error from app-server stdio captures on 2026-11-06, codex-cli 0.161.0.
+No separate app-server build version was established. Both turns were rejected before
+acceptance. `acceptanceComplete` and `positiveLifecycleCoverage` stay false, and the missing
+turn, item, status, approval, and close methods stay missing.
 
 `adaptCodexFrame(frame, envelope)` accepts primitive JSON text only, up to 65536 UTF-8
 bytes. An object frame is refused before any property read or serialization, so nested
-getters and `toJSON` do not run. Duplicate top-level keys, non-finite or oversized numbers,
-and text that is not one JSON object refuse with a fixed reason and no thrown text. Text
-inputs are left unchanged. Requests, notifications, responses,
+getters and `toJSON` do not run. Optional top-level `emittedAtMs` must be an integer from
+0 through the maximum safe integer. A valid value is discarded and is not a sequence, gate,
+or process fact. Any other unknown top-level field is refused. Duplicate top-level keys,
+non-finite or oversized numbers, and text that is not one JSON object refuse with a fixed
+reason and no thrown text. Text inputs are left unchanged. Requests, notifications, responses,
 and errors stay distinct. An unknown method is unsupported. A request is never read as the
 notification of the same method name.
 
@@ -41,6 +46,7 @@ is unsupported. The reducer is not changed.
 | `serverRequest/resolved` | Correlation-unproven even when the request id matches. Cleanup and acceptance share this notification |
 | `thread/closed` | Main session-end. Process confirmation remains needed |
 | Subagent lane | `subagent` only, after the same identity checks. It cannot clear or confirm the main candidate |
+| `thread/started` | Ignored notification. A valid `emittedAtMs` does not change that |
 | Other known noise, responses, errors, unrelated requests | Ignored |
 
 The caller establishes correlation outside this parser. Equality checks consistency only.

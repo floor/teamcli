@@ -1,5 +1,6 @@
-// Positive pairs are synthetic, repository measured-history shapes, or documentation examples.
-// None of them is an original captured payload. See fixtures/status-codex-events/provenance.json.
+// Positive lifecycle pairs are synthetic, repository measured-history shapes, or documentation examples.
+// Sanitized thread/started and turn-error frames are real captures and are not lifecycle proof.
+// See fixtures/status-codex-events/provenance.json.
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { adaptCodexFrame as adapt, type CodexFrameResult } from '../src/status/codex-event-adapter.ts';
@@ -63,17 +64,30 @@ describe('pure Codex app-server frame parser', () => {
   test('provenance keeps measured history and documentation examples out of the capture set', () => {
     const provenance = JSON.parse(text('provenance.json')) as {
       acceptanceComplete: boolean;
-      realCapturedFixtures: unknown[];
-      entries: { countsAsRealCapturedFixture: boolean; captureDate: null; evidenceClass: string }[];
+      positiveLifecycleCoverage: boolean;
+      observedTargetMethods: string[];
+      missingTargetMethods: string[];
+      realCapturedFixtures: string[];
+      entries: { file: string; countsAsRealCapturedFixture: boolean; captureDate?: null; evidenceClass: string }[];
     };
     expect(provenance.acceptanceComplete).toBe(false);
-    expect(provenance.realCapturedFixtures).toEqual([]);
-    expect(provenance.entries.length).toBe(8);
-    for (const entry of provenance.entries) {
-      expect(entry.countsAsRealCapturedFixture).toBe(false);
+    expect(provenance.positiveLifecycleCoverage).toBe(false);
+    expect(provenance.observedTargetMethods).toEqual(['thread/started']);
+    expect(provenance.missingTargetMethods).toContain('turn/started');
+    expect(provenance.missingTargetMethods).toContain('thread/closed');
+    expect(provenance.realCapturedFixtures).toEqual([
+      'captured-thread-started-20261106T144757Z.json',
+      'captured-thread-started-20261106T145950Z.json',
+      'captured-turn-start-error.json',
+    ]);
+    const historical = provenance.entries.filter((entry) => !entry.countsAsRealCapturedFixture);
+    expect(historical.length).toBe(8);
+    for (const entry of historical) {
       expect(entry.captureDate).toBeNull();
       expect(['repository-measured-history', 'documentation-example']).toContain(entry.evidenceClass);
     }
+    expect(provenance.entries.filter((entry) => entry.countsAsRealCapturedFixture).map((entry) => entry.file))
+      .toEqual(provenance.realCapturedFixtures);
   });
 
   test('measured idle and active shapes update advisory and preserve an open gate', () => {
@@ -388,5 +402,72 @@ describe('pure Codex app-server frame parser', () => {
     expect(toJSONCalls).toBe(0);
     expect(nested.threadId).toBe(beforeNested);
     expect(nested.status.type).toBe(beforeStatus);
+  });
+
+  test('captured frames tolerate emittedAtMs and do not prove a lifecycle', () => {
+    for (const name of [
+      'captured-thread-started-20261106T144757Z.json',
+      'captured-thread-started-20261106T145950Z.json',
+    ]) {
+      const frame = text(name);
+      expect(frame).toContain('"emittedAtMs"');
+      const result = adapt(frame, envelope);
+      expect(result).toEqual({ status: 'ignored', reason: 'notification' });
+      expect(JSON.stringify(result)).not.toContain('emittedAtMs');
+      expect(JSON.stringify(result)).not.toContain('example-private-path');
+    }
+    const errorFrame = text('captured-turn-start-error.json');
+    expect(adapt(errorFrame, envelope)).toEqual({ status: 'ignored', reason: 'error' });
+    expect(JSON.stringify(adapt(errorFrame, envelope))).not.toContain('example-redacted-string');
+
+    const quiet = normalized(adapt(wire({ ...idle, emittedAtMs: 0 }), { ...envelope, seq: 2 }));
+    expect(quiet.kind).toBe('quiet');
+    expect(JSON.stringify(quiet)).not.toContain('emittedAtMs');
+    const preserved = reduceNativeObservation(gated(), quiet);
+    expect(preserved.outcome.reason).toBe('quiet_preserved');
+    expect(preserved.state.gate).not.toBeNull();
+
+    const clear = normalized(adapt(wire({
+      method: 'item/completed',
+      params: { item: { type: 'commandExecution', id: 'item_example', status: 'completed' } },
+      emittedAtMs: 1,
+    }), { ...envelope, seq: 2, ...itemFields }));
+    expect(clear.kind).toBe('tool-end');
+    expect(reduceNativeObservation(gated(), clear).outcome.reason).toBe('gate_cleared');
+
+    const first = normalized(adapt(wire({ ...active, emittedAtMs: 10 }), envelope));
+    const second = normalized(adapt(wire({ ...idle, emittedAtMs: 11 }), { ...envelope, seq: 2 }));
+    const ordered = reduceNativeObservation(reduceNativeObservation(withContext(), first).state, second);
+    expect(ordered.state.lastSeq).toBe(2);
+    expect(ordered.state.advisory).toBe('quiet');
+
+    expect(adapt(wire({ method: 'thread/started', params: {}, emittedAtMs: -1 }), envelope)).toEqual({
+      status: 'malformed',
+      reason: 'payload_shape',
+    });
+    expect(adapt(wire({ method: 'thread/started', params: {}, emittedAtMs: 1.5 }), envelope)).toEqual({
+      status: 'malformed',
+      reason: 'payload_shape',
+    });
+    expect(adapt(wire({ method: 'thread/started', params: {}, emittedAtMs: '1' }), envelope)).toEqual({
+      status: 'malformed',
+      reason: 'payload_shape',
+    });
+    expect(adapt(wire({ method: 'thread/started', params: {}, extra: true }), envelope)).toEqual({
+      status: 'malformed',
+      reason: 'payload_shape',
+    });
+    expect(adapt(wire({ method: 'example/unknown', params: {}, emittedAtMs: 1 }), envelope)).toEqual({
+      status: 'unsupported',
+      reason: 'method',
+    });
+    expect(adapt(
+      `{"method":"thread/started","params":{},"emittedAtMs":${Number.MAX_SAFE_INTEGER}}`,
+      envelope,
+    )).toEqual({ status: 'ignored', reason: 'notification' });
+    expect(adapt(
+      '{"method":"thread/started","params":{},"emittedAtMs":9007199254740992}',
+      envelope,
+    )).toEqual({ status: 'malformed', reason: 'payload_shape' });
   });
 });

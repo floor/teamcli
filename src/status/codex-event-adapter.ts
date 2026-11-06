@@ -99,6 +99,7 @@ const IGNORED = new Set([
 /**
  * One app-server frame as primitive JSON text, plus a trusted caller envelope.
  * Object frames are refused before any property read or serialization.
+ * Optional emittedAtMs is checked, then discarded. Other unknown top-level fields are refused.
  * At most one native observation. Refusal reasons are fixed and carry no payload text.
  */
 export function adaptCodexFrame(frame: unknown, metadata: unknown): CodexFrameResult {
@@ -381,9 +382,30 @@ function parseFrame(frame: unknown): Record<string, unknown> | Refusal {
     return item;
   });
   if (duplicateTopKeys(frame)) return refuse('malformed', 'payload_shape');
-  const read = readFields(value, FRAME_FIELDS, 'payload_shape');
+  const read = readFrame(value);
   if (isRefusal(read)) return read;
   return read;
+}
+
+function readFrame(value: unknown): Record<string, unknown> | Refusal {
+  if (!plain(value)) return refuse('malformed', 'payload_shape');
+  const data: Record<string, unknown> = Object.create(null);
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string') return refuse('malformed', 'payload_shape');
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !('value' in descriptor)) return refuse('malformed', 'payload_shape');
+    if (key === 'emittedAtMs') {
+      if (!emittedAt(descriptor.value)) return refuse('malformed', 'payload_shape');
+      continue;
+    }
+    if (!FRAME_FIELDS.has(key)) return refuse('malformed', 'payload_shape');
+    data[key] = descriptor.value;
+  }
+  return data;
+}
+
+function emittedAt(value: unknown): boolean {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
 }
 
 function classify(data: Record<string, unknown>): 'request' | 'notification' | 'response' | 'error' | Refusal {
