@@ -44,6 +44,7 @@ import {
   readSealedRecord,
   receiptFile,
   recordAuthOfSealed,
+  recordNameOk,
   signReceiptPayload,
   verifyRecord,
   type ReceiptPayload,
@@ -76,6 +77,12 @@ export const LEGACY_REPORT_ID = /^unread-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-
  *  string reaches the filesystem. */
 export function messageNameOk(name: string): boolean {
   return MESSAGE_ID.test(name) || LEGACY_REPORT_ID.test(name);
+}
+
+/** A name `readMessage` will open: a listed id, or a signed record whose file name has no
+ *  separator. The listing stays on `messageNameOk`. A plain name still has to verify. */
+export function readableMessageName(name: string): boolean {
+  return messageNameOk(name) || (recordNameOk(name) && !name.includes('.') && !name.includes('/') && !name.includes('\\'));
 }
 
 /** How long a send waits for the read receipt before it reports `sent (unconfirmed)`: long
@@ -745,7 +752,7 @@ export function readMessage(
   brief?: BriefRead,
   guard?: () => string | null,
 ): InboxRead {
-  if (!messageNameOk(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
+  if (!readableMessageName(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   const at = join(target.dropDir, id);
   if (heldAt(at).kind !== 'file') return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   const atReceipt = heldAt(receiptPath(target.dropDir, id));
@@ -881,7 +888,7 @@ export function readMessage(
  * returned: a peek does not race a read for anything.
  */
 export function peekMessage(target: InboxTarget, id: string, home: string, brief?: BriefRead): InboxRead {
-  if (!messageNameOk(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
+  if (!readableMessageName(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   if (heldAt(join(target.dropDir, id)).kind !== 'file') {
     return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   }

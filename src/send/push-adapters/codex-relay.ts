@@ -251,9 +251,11 @@ export type CodexNativeMessage = {
   record: string;
   /**
    * Optional pre-built single-line pointer (`pushPointer(id, sender)`). When omitted, built from
-   * `message.id` and `target.sender` via `pushPointer`.
+   * `message.id` and `target.sender` via `pushPointer`. `sentAt` is the record's send time, named
+   * on that line when it fits.
    */
   pointer?: string;
+  sentAt?: string;
 };
 
 export type CodexNativeProbeInput = {
@@ -264,6 +266,8 @@ export type CodexNativeProbeInput = {
   id: string;
   sender: PushSender;
   pointer?: string | null;
+  /** The record's send time, carried on the pointer when one is built here. */
+  sentAt?: string;
   agentSession?: string | null;
   remote?: string;
   /** Optional already-resolved `codex-daemon` policy from `resolveCodexDaemonPolicy`. */
@@ -366,7 +370,7 @@ export function probeCodexNativeRoute(input: CodexNativeProbeInput): CodexNative
     };
   }
 
-  const pointer = input.pointer !== undefined ? input.pointer : pushPointer(input.id, input.sender);
+  const pointer = input.pointer !== undefined ? input.pointer : pushPointer(input.id, input.sender, input.sentAt);
   if (
     pointer === null
     || pointer === ''
@@ -1262,6 +1266,7 @@ export async function deliverCodexNativeRoute(
     id: message.id,
     sender: target.sender,
     ...(message.pointer !== undefined ? { pointer: message.pointer } : {}),
+    ...(message.sentAt !== undefined ? { sentAt: message.sentAt } : {}),
     ...(target.agentSession !== undefined ? { agentSession: target.agentSession } : {}),
     ...(target.remote !== undefined ? { remote: target.remote } : {}),
     ...(options.codexDaemon !== undefined ? { codexDaemon: options.codexDaemon } : {}),

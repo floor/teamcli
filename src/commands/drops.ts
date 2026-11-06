@@ -47,7 +47,7 @@ import { isBriefEpoch } from '../launch/brief-id.ts';
 import { briefBindingOf, currentBriefClaim, GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE } from '../launch/general-brief.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { logLine } from '../log.ts';
-import { currentClaimIn, listUnread, peekMessage, readMessage, type BriefRead } from '../mcp/inbox.ts';
+import { currentClaimIn, listUnread, messageNameOk, peekMessage, readMessage, type BriefRead, type InboxMessage } from '../mcp/inbox.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { attributeSenderClaim, senderReading, type SenderAttribution } from '../send/sender-claim.ts';
 import { readState } from '../state.ts';
@@ -61,11 +61,11 @@ import {
   writeJsonError,
 } from '../output/index.ts';
 import { namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
-import { fileStatStamp, isReadOrCleared, keyPrintForCache, signedRecordOf, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
+import { alreadyReadSentence, fileStatStamp, isReadOrCleared, keyPrintForCache, recordNameOk, settledReadOf, signedRecordOf, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
 
 export const USAGE = `Usage: team drops [--follow] [--json]
-       team drops --read --seat <seat> [--session <session>] [--epoch <run_id>]
+       team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>]
 
 Lists the drop files waiting in the calling seat's own drop folder,
 .agents/send-drops/<session>/<seat>: one row each, with the sender the message
@@ -101,6 +101,10 @@ Options:
   --session  the launch's session, which must be the team file's own
   --epoch    the runtime epoch the launch started this reader under; when
              given, only a brief delivered under that epoch is served
+  --id       read this one id. An id a receipt already settled prints
+             \`<id>: already read at <time> (<read_by>)\` and no body. With
+             nothing unread, the read says \`no unread drops\` and the newest
+             such line.
 
 Exits 0 when the folder is read, 1 when the caller may not read it (the
 listing needs a placed seat of this team; --read needs the seat itself, the
@@ -440,6 +444,43 @@ function refuse(io: Io, json: boolean, ...messages: string[]): number {
   return 1;
 }
 
+/** Receipts already in this folder, newest first. A name with a dot is a sidecar, not a message. */
+function settledFacts(dropDir: string, context: StatusContext, home: string): { id: string; at: string; readBy: string | undefined }[] {
+  const key = messageKeyState(home);
+  if (key.kind !== 'key') return [];
+  let names: string[];
+  try {
+    names = readdirSync(dropDir);
+  } catch {
+    return [];
+  }
+  const facts: { id: string; at: string; readBy: string | undefined }[] = [];
+  for (const name of names) {
+    if (name.includes('.') || !recordNameOk(name)) continue;
+    const settled = settledReadOf(dropDir, name, context, key.key);
+    if (settled === null) continue;
+    facts.push({ id: name, at: settled.at, readBy: settled.readBy });
+  }
+  return facts.sort((a, b) => (Date.parse(b.at) - Date.parse(a.at)) || a.id.localeCompare(b.id));
+}
+
+/** Signed records whose names are not the UUID the inbox lists. A receipted name is not waiting. */
+function plainWaiting(dropDir: string, settled: ReadonlySet<string>): InboxMessage[] {
+  let names: string[];
+  try {
+    names = readdirSync(dropDir);
+  } catch {
+    return [];
+  }
+  const extra: InboxMessage[] = [];
+  for (const name of names) {
+    if (messageNameOk(name) || name.includes('.') || !recordNameOk(name) || settled.has(name)) continue;
+    if (heldAt(join(dropDir, name)).kind !== 'file') continue;
+    extra.push({ id: name, ts: '1970-01-01T00:00:00.000Z', bytes: 0, sender_attribution: 'none' });
+  }
+  return extra;
+}
+
 /**
  * Reads the caller's own drop folder: the caller must be a seat of this team on the pane the
  * state records for it, and the folder is the one its messages land in. `--json` prints the
@@ -447,7 +488,7 @@ function refuse(io: Io, json: boolean, ...messages: string[]): number {
  * the ones already there, so a Monitor starts quiet.
  */
 export async function runDrops(argv: string[], io: Io, sources: DropsSources = realSources): Promise<number> {
-  const args = readArgs(argv, ['seat', 'session', 'epoch'], ['follow', 'json', 'read']);
+  const args = readArgs(argv, ['seat', 'session', 'epoch', 'id'], ['follow', 'json', 'read']);
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
   // structured error document, and the parser errors before its flag set sees them.
   const json = hasJsonFlag(argv);
@@ -459,7 +500,9 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     ? 'seat'
     : !read && args.values.session !== undefined
       ? 'session'
-      : !read && args.values.epoch !== undefined ? 'epoch' : null;
+      : !read && args.values.epoch !== undefined
+        ? 'epoch'
+        : !read && args.values.id !== undefined ? 'id' : null;
   const epoch = args.values.epoch;
   const badEpoch = read && epoch !== undefined && !isBriefEpoch(epoch);
   if (args.error || args.rest.length || (follow && json) || (read && (follow || json || args.values.seat === undefined)) || stray !== null || badEpoch) {
@@ -559,7 +602,45 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       }
     };
     const brief: BriefRead = { claim: claimOf, ...(epoch === undefined ? {} : { epoch }) };
-    const waiting = listUnread(dropDir, context, sources.home);
+    const asked = args.values.id;
+    if (asked !== undefined) {
+      const target = { dropDir, root: loaded.root, seat: seatName, session: readSession, lead: loaded.team.orchestrator };
+      const key = messageKeyState(sources.home);
+      const settled = key.kind === 'key' ? settledReadOf(dropDir, asked, context, key.key) : null;
+      if (peek && settled !== null) {
+        io.stdout(`${alreadyReadSentence(asked, settled.at, settled.readBy)}\n`);
+        return readOk();
+      }
+      const got = peek
+        ? peekMessage(target, asked, sources.home, brief)
+        : readMessage(target, asked, sources.home, brief);
+      if (!got.ok && got.served === 'already-served') {
+        io.stdout(`${settled === null ? got.reason : alreadyReadSentence(asked, settled.at, settled.readBy)}\n`);
+        return readOk();
+      }
+      if (got.ok) {
+        io.stdout(`${got.body}\n`);
+        if (peek) logLine(dir, 'peek', logTag(shown), `${seatName}: ${asked}`);
+        return readOk();
+      }
+      if (got.refusal !== undefined) {
+        raiseRefusalEvent({
+          project: loaded.team.project,
+          root: loaded.root,
+          home: sources.home,
+          session: readSession,
+          kind: 'record.invalid',
+          rule: got.refusal.rule,
+          object: { id: got.refusal.id, seat: got.refusal.seat, path: got.refusal.path },
+        });
+      }
+      return refuse(io, json, got.reason);
+    }
+    const settled = settledFacts(dropDir, context, sources.home);
+    const waiting = [
+      ...listUnread(dropDir, context, sources.home),
+      ...plainWaiting(dropDir, new Set(settled.map((fact) => fact.id))),
+    ];
     const bodies: string[] = [];
     // The ids a peek showed: a peek writes no receipt, so the log line below is its only trace.
     const peeked: string[] = [];
@@ -585,6 +666,8 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       if (got.ok) {
         bodies.push(got.body);
         if (peek) peeked.push(message.id);
+      } else if (!messageNameOk(message.id)) {
+        // A plain name that does not verify is not mail, and it writes no receipt.
       } else if (got.served !== undefined) {
         // Another reader won the receipt name and served this message: there is no body for this
         // run. It is not a refusal and does not use one of the ten; the message has left the
@@ -641,6 +724,14 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       // Nothing this run can serve: every waiting launch record is an earlier delivery. The read
       // is done with them, and a turn that ran the hook should not look like one with mail.
       io.stderr(`team drops: ${String(superseded)} drop(s) carry an earlier general seat brief and are not served\n`);
+    }
+    if (bodies.length === 0 && superseded === 0 && legacy === 0 && receiptRefusals.length === 0 && refusal === null) {
+      const lines = ['no unread drops'];
+      const newest = settled[0];
+      if (newest !== undefined) lines.push(alreadyReadSentence(newest.id, newest.at, newest.readBy));
+      io.stdout(`${lines.join('\n')}\n`);
+    } else if (bodies.length > 0) {
+      for (const fact of settled) io.stderr(`${alreadyReadSentence(fact.id, fact.at, fact.readBy)}\n`);
     }
     return readOk();
   }

@@ -1147,6 +1147,29 @@ export function readVerifiedReceipt(
   return auth.value;
 }
 
+/** The line a later read says for an id a receipt already settled. `read_by` is the receipt's
+ *  own word; a receipt that names no reader still says `read`. */
+export function alreadyReadSentence(id: string, at: string, readBy: string | undefined): string {
+  const who = readBy !== undefined && readBy !== '' ? readBy : 'read';
+  return `${id}: already read at ${at} (${who})`;
+}
+
+/** The verifying read or replied receipt beside this id, when one settles it. A lead clearance
+ *  is included: its `read_by` is the word the sentence prints. */
+export function settledReadOf(
+  dropDir: string,
+  id: string,
+  context: StatusContext,
+  key: KeyObject,
+  brief?: BriefBinding,
+): { at: string; readBy: string | undefined } | null {
+  const read = readVerifiedReceipt(receiptFile(dropDir, id, 'read'), id, 'read', context, key, brief);
+  if (read !== null) return { at: read.payload.at, readBy: read.payload.read_by };
+  const replied = readVerifiedReceipt(receiptFile(dropDir, id, 'replied'), id, 'replied', context, key, brief);
+  if (replied !== null) return { at: replied.payload.at, readBy: replied.payload.read_by };
+  return null;
+}
+
 /**
  * The clearance a lead's sweep left beside this message, or null: the signed `read` receipt at
  * the message's own receipt name, verifying for this message and inbox, whose `read_by` names

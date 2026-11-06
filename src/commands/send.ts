@@ -2475,7 +2475,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
             seat: to.seat,
             sender: { seat: from, team: teamIdOf(root) },
           },
-          { id: msgId, record: staged.record },
+          { id: msgId, record: staged.record, sentAt: record.at },
           {
             now: host.now,
             startedAt,
@@ -5787,7 +5787,7 @@ export async function walkReplyDelivery(input: {
             seat: seatName,
             sender: { seat: from, team: teamIdOf(input.root) },
           },
-          { id: msgId, record: staged.record },
+          { id: msgId, record: staged.record, sentAt: input.payload.at },
           {
             now: input.host.now,
             startedAt,
