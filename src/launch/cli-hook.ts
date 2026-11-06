@@ -835,27 +835,37 @@ function claimLegacyState(older: string, path: string): void {
   }
 }
 
-/** One seat's state reading, in one session: the file in the seat's own folder, or a file the
- *  previous layout wrote as `seat-state/<session>/<seat>.json`. That flat file is read once and
- *  moved into the seat's folder. A file kept before the session keying is claimed the same way.
- *  A file that is present and does not read is final; the older one is never consulted behind it. */
+/** One seat's state reading, in one session. A seat launched before this layout keeps writing
+ *  `seat-state/<session>/<seat>.json` until it restarts, so both that file and
+ *  `seat-state/<session>/<seat>/state.json` are read and the newer one wins. Nothing is moved
+ *  or deleted: moving the flat file would leave the restarted hook's folder file looking final
+ *  while the still-running hook wrote a new flat file. The flat path is dropped in the next
+ *  minor, once every seat has restarted on the new hook. A file kept before the session keying
+ *  is still claimed into the seat's folder when neither of these two is present. A file that is
+ *  present and does not read is final; the older one is never consulted behind it. */
 export function readCliHook(dir: string, session: string, seat: string): CliHookReading | null {
   const path = cliHookStatePath(dir, session, seat);
   if (path === null) return null;
-  const own = readHookFile(path);
-  if (own !== null || lstatOrNull(path) !== null) return own;
   const flat = flatSessionStatePath(dir, session, seat);
-  if (flat !== null) {
-    const moved = readHookFile(flat);
-    if (moved !== null) {
-      claimLegacyState(flat, path);
-      return moved;
-    }
-    if (lstatOrNull(flat) !== null) return null;
-  }
+  const own = dated(path);
+  const previous = dated(flat);
+  if (own !== null && previous !== null) return own.mtimeMs >= previous.mtimeMs ? own.reading : previous.reading;
+  if (own !== null) return own.reading;
+  if (previous !== null) return previous.reading;
+  if ((lstatOrNull(path) ?? (flat === null ? null : lstatOrNull(flat))) !== null) return null;
   const older = legacyStatePath(dir, seat);
   if (older === null) return null;
   const inherited = readHookFile(older);
   if (inherited !== null) claimLegacyState(older, path);
   return inherited;
+}
+
+/** A state file that reads, with the mtime of the lstat that found it. A missing path or a file
+ *  this version does not trust is null, so the other path can still answer. */
+function dated(path: string | null): { reading: CliHookReading; mtimeMs: number } | null {
+  if (path === null) return null;
+  const held = lstatOrNull(path);
+  if (held === null || !held.isFile()) return null;
+  const reading = readHookFile(path);
+  return reading === null ? null : { reading, mtimeMs: held.mtimeMs };
 }

@@ -723,12 +723,41 @@ describe('the state file a hook writes', () => {
     expect(cliHookStatePath(dir, SESSION, 'a/b')).toBeNull();
   });
 
-  test('a flat session file is read once and moved into the seat folder', () => {
+  test('a flat session file is read where it is and left there', () => {
     mkdirSync(join(dir, 'seat-state', SESSION), { recursive: true, mode: 0o700 });
-    writeFileSync(join(dir, 'seat-state', SESSION, 'worker.json'), '{"state":"working","since":"2026-10-17T12:00:00Z"}\n');
+    const flat = join(dir, 'seat-state', SESSION, 'worker.json');
+    writeFileSync(flat, '{"state":"working","since":"2026-10-17T12:00:00Z"}\n');
     expect(readCliHook(dir, SESSION, 'worker')).toEqual({ state: 'working', since: '2026-10-17T12:00:00Z' });
-    expect(existsSync(join(dir, 'seat-state', SESSION, 'worker.json'))).toBe(false);
-    expect(readFileSync(statePath(SESSION, 'worker'), 'utf8')).toContain('"working"');
+    expect(readFileSync(flat, 'utf8')).toContain('"working"');
+    expect(existsSync(statePath(SESSION, 'worker'))).toBe(false);
+  });
+
+  test('an old hook writing the flat file after the folder file is the fresh state', () => {
+    const folder = statePath(SESSION, 'worker');
+    const flat = join(dir, 'seat-state', SESSION, 'worker.json');
+    mkdirSync(dirname(folder), { recursive: true, mode: 0o700 });
+    writeFileSync(folder, '{"state":"idle","since":"2026-10-17T12:00:00Z"}\n');
+    writeFileSync(flat, '{"state":"working","since":"2026-10-17T12:00:01Z"}\n');
+    utimesSync(folder, new Date('2026-10-17T12:00:00Z'), new Date('2026-10-17T12:00:00Z'));
+    utimesSync(flat, new Date('2026-10-17T12:00:02Z'), new Date('2026-10-17T12:00:02Z'));
+    expect(readCliHook(dir, SESSION, 'worker')).toEqual({ state: 'working', since: '2026-10-17T12:00:01Z' });
+    expect(existsSync(folder)).toBe(true);
+    expect(existsSync(flat)).toBe(true);
+  });
+
+  test('when both state files exist, the newer one wins', () => {
+    const folder = statePath(SESSION, 'worker');
+    const flat = join(dir, 'seat-state', SESSION, 'worker.json');
+    mkdirSync(dirname(folder), { recursive: true, mode: 0o700 });
+    writeFileSync(folder, '{"state":"idle","since":"2026-10-17T11:00:00Z"}\n');
+    writeFileSync(flat, '{"state":"working","since":"2026-10-17T10:00:00Z"}\n');
+    utimesSync(flat, new Date('2026-10-17T10:00:00Z'), new Date('2026-10-17T10:00:00Z'));
+    utimesSync(folder, new Date('2026-10-17T11:00:00Z'), new Date('2026-10-17T11:00:00Z'));
+    expect(readCliHook(dir, SESSION, 'worker')).toEqual({ state: 'idle', since: '2026-10-17T11:00:00Z' });
+    utimesSync(flat, new Date('2026-10-17T12:00:00Z'), new Date('2026-10-17T12:00:00Z'));
+    expect(readCliHook(dir, SESSION, 'worker')).toEqual({ state: 'working', since: '2026-10-17T10:00:00Z' });
+    expect(existsSync(folder)).toBe(true);
+    expect(existsSync(flat)).toBe(true);
   });
 
   test('the hook command renames inside the seat folder and cannot in the session folder', () => {

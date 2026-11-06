@@ -255,9 +255,11 @@ seat's worktree, its start folder, and only these paths of its own: under the gi
 `objects/`, `refs/`, `logs/`, `packed-refs` and `worktrees/<that worktree>`; under `.agents`,
 `send-drops/<session>/<seat>`, `messages/<seat>` and `seat-state/<session>/<seat>/`.
 The session's seat-state folder is not granted. The hook writes `state.json` inside the seat's
-folder, and its temporary file is renamed there. An existing `seat-state/<session>/<seat>.json` is
-read once and moved into that folder; a file kept from before the session keying is claimed the
-same way. `packed-refs` is named only when it already exists as a regular file. When it does not,
+folder, and its temporary file is renamed there. A seat launched before this layout keeps writing
+`seat-state/<session>/<seat>.json` until it restarts. Readers take the newer of that file and
+`state.json`; nothing is moved or deleted. The flat path is dropped in the next minor, once every
+seat has restarted on the new hook. A file kept from before the session keying is still claimed
+into the seat's folder when neither of those two is present. `packed-refs` is named only when it already exists as a regular file. When it does not,
 the seat's `git gc` and `git pack-refs` fail closed, because the seat cannot create that file in
 the common dir. Before the profile is written, the launch creates the seat's drop folder,
 `messages/<seat>` and `seat-state/<session>/<seat>/`. It also creates a missing `objects/`, `refs/`
