@@ -825,6 +825,10 @@ describe('team drops --read', () => {
 // written for it, and the owner hears the refusal as one event naming the seat, never a body.
 describe('team drops --read caller placement', () => {
   const READ = ['--read', '--seat', 'lead', '--session', 'acme'];
+  // Neutral pane ids: the fixture's own names, never a real session's pane id.
+  const LEAD_PANE = 'pane-lead';
+  const WORKER_PANE = 'pane-worker';
+  const ELSEWHERE_PANE = 'pane-elsewhere';
 
   /** The turn-start hook's own process tree: the shell the seat's CLI spawned for the hook, the
    *  CLI above it, the pane's root shell, and the terminal host's server. The host answers only
@@ -841,9 +845,9 @@ describe('team drops --read caller placement', () => {
       ],
       agents: () => (unanswered || session === undefined
         ? null
-        : [{ name: 'lead', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: root }]),
+        : [{ name: 'lead', agent: 'claude', pane: LEAD_PANE, workspace: 'fixture', status: 'idle', cwd: root }]),
       paneRootPid: () => paneRoot,
-      env: { HERDR_PANE_ID: 'w1:p1' },
+      env: { HERDR_PANE_ID: LEAD_PANE },
       stdinIsTTY: false,
     });
   }
@@ -864,9 +868,11 @@ describe('team drops --read caller placement', () => {
     expect(placeCaller(hookSources()('acme'), 'acme')).toEqual({
       kind: 'seat',
       name: 'lead',
-      pane: 'w1:p1',
+      pane: LEAD_PANE,
       session: 'acme',
     });
+    // The launch's own standing: the state records the pane the hook places on.
+    placeLead(LEAD_PANE);
     plantRecord(home, root, 'acme', 'lead', D_RECORD, 'hello from the launch');
     const result = await runPlaced(READ, hookSources());
     expect(result).toEqual({ code: 0, out: 'hello from the launch\n', err: '' });
@@ -875,7 +881,7 @@ describe('team drops --read caller placement', () => {
 
   test('another seat is refused before a record is read, and nothing is receipted', async () => {
     plantRecord(home, root, 'acme', 'lead', D_RECORD, 'for the lead only');
-    const result = await run(READ, seatCaller('worker', 'w1:p2'));
+    const result = await run(READ, seatCaller('worker', WORKER_PANE));
     expect(result).toEqual({
       code: 1,
       out: '',
@@ -917,18 +923,21 @@ describe('team drops --read caller placement', () => {
 
   test('a lead reads another seat’s drops from its own recorded pane', async () => {
     plantRecord(home, root, 'acme', 'worker', D_RECORD_READ, 'other mail for the worker');
-    const result = await run(['--read', '--seat', 'worker', '--session', 'acme'], seatCaller('lead', 'w1:p1'));
+    // The lead's standing is the pane the read judges it on: its own recorded pane.
+    placeLead(LEAD_PANE);
+    const result = await run(['--read', '--seat', 'worker', '--session', 'acme'], seatCaller('lead', LEAD_PANE));
     expect(result).toEqual({ code: 0, out: 'other mail for the worker\n', err: '' });
     expectReceipt(D_RECORD_READ, 'worker', join(root, '.agents', 'send-drops', 'acme', 'worker'));
   });
 
   test('a lead on a pane the state does not record for it is refused with the repair', async () => {
     plantRecord(home, root, 'acme', 'worker', D_RECORD, 'mail for the worker');
-    const result = await run(['--read', '--seat', 'worker', '--session', 'acme'], seatCaller('lead', 'w1:p9'));
+    placeLead(LEAD_PANE);
+    const result = await run(['--read', '--seat', 'worker', '--session', 'acme'], seatCaller('lead', ELSEWHERE_PANE));
     expect(result).toEqual({
       code: 1,
       out: '',
-      err: 'team drops: the state records pane w1:p1 for seat lead in this session, not the pane this call is on: a lead stops the team and starts it again (`team down`, then `team up`)\n',
+      err: `team drops: the state records pane ${LEAD_PANE} for seat lead in this session, not the pane this call is on: a lead stops the team and starts it again (\`team down\`, then \`team up\`)\n`,
     });
     expect(existsSync(receiptPath(join(root, '.agents', 'send-drops', 'acme', 'worker'), D_RECORD))).toBe(false);
   });

@@ -257,14 +257,17 @@ export function registerHelper(made: World, nickname: string | null): Agent {
   return helper;
 }
 
-/** The lead's standing, as its launch records it: the pane the world's agent list names, `w1:p1`.
- *  A scene that reads as the lead itself (the turn-start read places its caller) records it
- *  first — a placed seat alone is not the proof the read asks for, the recorded pane is. */
+/** The pane the read scenes place the lead on: a neutral fixture id, never a real session's. */
+export const LEAD_PANE = 'pane-lead';
+
+/** The lead's standing, as its launch records it: the pane the scene's caller runs on. A scene
+ *  that reads as the lead itself (the turn-start read places its caller) records it first — a
+ *  placed seat alone is not the proof the read asks for, the recorded pane is. */
 export function recordLead(made: World): void {
   updateState(join(made.root, '.agents'), (state) => {
     const seats = state.sessions.acme?.seats ?? {};
     state.sessions.acme = {
-      seats: { ...seats, lead: { stage: 'launched', pane: 'w1:p1', workspace: 'w1' } },
+      seats: { ...seats, lead: { stage: 'launched', pane: LEAD_PANE, workspace: 'fixture' } },
       worktrees: state.sessions.acme?.worktrees ?? {},
     };
   });
