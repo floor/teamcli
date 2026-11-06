@@ -2812,7 +2812,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       root,
       standing.kind === 'verified' ? standing.record.approval.fingerprints.sections : undefined,
     );
-    if (covered !== null) refusals.push({ id: 'up.launcher-approval', message: covered });
+    if (covered !== null) refusals.push({ id: 'up.launcher-cover', message: covered });
     for (const seat of seats) {
       const raw = rawAgentSession(dir, session, seat.name);
       if (raw !== undefined) seat.resolveSession = raw;

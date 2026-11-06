@@ -7,9 +7,9 @@ import { join } from 'node:path';
 import { canonical } from '../approve/fingerprint.ts';
 
 export const LAUNCHER_UNAPPROVED =
-  'the launcher files are not in the approval; re-approve before --resolve-launch';
+  'the launcher files are not in the approval; re-sign the team file before --resolve-launch';
 export const LAUNCHER_CHANGED =
-  'a launcher file changed since approval; re-approve before --resolve-launch';
+  'a launcher file changed since approval; re-sign the team file before --resolve-launch';
 export const LAUNCHER_NOT_REGULAR =
   'a launcher file is not a regular file the approval can cover';
 
