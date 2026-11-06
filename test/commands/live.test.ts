@@ -3233,6 +3233,9 @@ describe('team up, a session that was restored', () => {
       'process:w1:p1', 'process:w2:p1', 'process:w3:p1',
       'paneText:w2:p1', 'paneText:w3:p1',
       'process:w1:p1', 'paneText:w1:p1',
+      // The address pass reads every declared claude-code seat this run leaves live, after the
+      // refusal, for the socket its pane answers at.
+      'process:w2:p1', 'process:w3:p1',
     ]);
     expect(made.terminal.reads).toBe(0);
     expect(made.creates).not.toContain('claude-coordinator-acme · project coordinator');
@@ -3315,6 +3318,9 @@ describe('team up, a session that was restored', () => {
       'process:w1:p1', 'process:w2:p1', 'process:w3:p1',
       'paneText:w2:p1', 'paneText:w3:p1',
       'process:w1:p1', 'paneText:w1:p1',
+      // The address pass reads every declared claude-code seat this run leaves live, after the
+      // refusal, for the socket its pane answers at.
+      'process:w2:p1', 'process:w3:p1',
     ]);
     expect(io.out).toContain('claude-coordinator-acme: left out: a run with no terminal does not close a waiting seat; left as it is\n');
     expect(calls.some((call) => call.startsWith('close:'))).toBe(false);
@@ -3652,6 +3658,9 @@ describe('team up, the pause', () => {
       ...sessionProof(thirdPane), 'agent-panes', ...sessionProof(thirdPane), ...sessionProof(thirdPane),
       // Then the watch's workspace and its command line, the plan's last step.
       'create:Watch · acme-web', `run:${watchPane}`,
+      // The address pass: every declared claude-code seat this run leaves live is read once for
+      // the socket its pane answers at.
+      'agents', 'agent-panes', `process:${firstPane}`, `process:${secondPane}`, `process:${thirdPane}`,
     ]);
     expect(typed).toEqual([]);
     expect(lockedWhileWaiting.length).toBeGreaterThanOrEqual(2);
@@ -3917,6 +3926,9 @@ describe('team up, the pause', () => {
       'agents', 'process:w1:p1', 'process:w1:p1', 'focus:w1:p1',
       'sleep:2000', 'agents', 'process:w1:p1', 'read:w1:p1',
       `read:${recorded.pane}`, `process:${recorded.pane}`, 'agents', 'agent-panes', 'agents', `rename:${recorded.pane}:${recorded.name}`,
+      // The address pass: every declared claude-code seat this run leaves live is read once for
+      // the socket its pane answers at.
+      'agents', 'process:w1:p1', 'process:w2:p1', 'process:w3:p1',
     ]);
     expect(made.creates).toEqual([]);
     expect(made.runs).toEqual([]);
