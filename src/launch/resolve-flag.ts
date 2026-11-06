@@ -4,7 +4,7 @@ import { closeSync, constants, lstatSync, openSync, readdirSync, readFileSync } 
 import { join } from 'node:path';
 import { discover, resolveLaunch, type Discovery, type ResolveContext } from '../launchers/resolve.ts';
 import type { Diagnostic, ResolvedLaunch } from '../launchers/types.ts';
-import { shellQuote, supportsCliHook, supportsSessionId, supportsSessionName, type Profile } from '../profiles/profile.ts';
+import { shellQuote } from '../profiles/profile.ts';
 import { STATE_FILE } from '../state.ts';
 import { parseYaml, toValue } from '../yaml.ts';
 
@@ -74,22 +74,6 @@ export function rawAgentSession(dir: string, session: string, seat: string): str
   if (held === null || typeof held !== 'object') return undefined;
   const value = (held as { agent_session?: unknown }).agent_session;
   return typeof value === 'string' ? value : undefined;
-}
-
-/** Whether today's launch still places words of its own after the seat's line: unattended
- *  flags, a rules option or launch prompt, session settings, pinned features, an inbox leg,
- *  a hook settings file, or a minted session. The flag does not place those yet, so a profile
- *  that has any of them is refused rather than started on the launcher argv alone. */
-export function profilePlacesLaunchWords(profile: Profile): boolean {
-  return profile.unattended.length > 0
-    || profile.rulesOption !== null
-    || profile.rulesPrompt !== null
-    || profile.settings !== null
-    || profile.features.length > 0
-    || profile.mcpInbox !== null
-    || supportsCliHook(profile.cli)
-    || supportsSessionId(profile.cli)
-    || supportsSessionName(profile.cli);
 }
 
 /** The pane command for one seat, or the refusal the resolution returned. A seat that names

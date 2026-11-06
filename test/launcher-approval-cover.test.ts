@@ -179,8 +179,8 @@ test('approved launcher bytes pass the cover', async () => {
   const said = io.out + io.err;
   expect(said).not.toContain(LAUNCHER_UNAPPROVED);
   expect(said).not.toContain(LAUNCHER_CHANGED);
-  // This tip still refuses a profile that places its own words. The cover has already passed.
-  expect(said).toContain('this profile has launch words to place');
-  expect(code).not.toBe(0);
-  expect(scene.made.runs.some((run) => run.command.includes(BINARY))).toBe(false);
+  const command = scene.made.runs.map((run) => run.command).find((line) => line.includes(BINARY));
+  expect(command, said).toBeDefined();
+  expect(command).toContain('--from-resolver');
+  expect(code, said).toBe(0);
 });

@@ -115,7 +115,7 @@ export const USAGE = `Usage: team restart <seat> [--abandon] [--fresh] [--resume
 
 The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying restart for: it restarts a seat of that one team, as signed, and nothing else. It never prompts, never abandons a pane (--abandon, --fresh, --resume, --file and --session are the owner's and take no --client), and is never the owner.
 
---resolve-launch starts the launcher argv alone. It is off unless named. A profile that still has launch words to place is refused, and a refused resolution refuses that seat and starts it nowhere.
+--resolve-launch takes the named launcher argv as the base line and still places the profile's launch words on it. It is off unless named. A resolution that cannot be placed refuses that seat and starts it nowhere.
 
 Exits 0 when the seat is restarted or the dry-run plan is printed, 1 when restart is refused or fails, 2 when the invocation or team file can't be read.
 `;

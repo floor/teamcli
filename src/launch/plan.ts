@@ -9,7 +9,7 @@ import type { SidebarIndicator } from '../settings/sidebar-policy.ts';
 import { profileFor } from '../profiles/index.ts';
 import type { Discovery, ResolveContext } from '../launchers/resolve.ts';
 import { cliWordList, launchCommandOrRefusal, pinnedRecordLine, resumeCarry, shellQuote } from '../profiles/profile.ts';
-import { profilePlacesLaunchWords, resolvedCommand } from './resolve-flag.ts';
+import { resolvedCommand } from './resolve-flag.ts';
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
@@ -1306,6 +1306,7 @@ export function upPlan(input: UpInput): Step[] {
     const launchWarnings: string[] = [];
     let command: string;
     let fromResolver = false;
+    let baseLine = recordedLine;
     if (input.resolveLaunch === true) {
       const ctx: ResolveContext = {
         teamRoot: input.root,
@@ -1329,43 +1330,34 @@ export function upPlan(input: UpInput): Step[] {
         });
         continue;
       }
-      // The flag starts the launcher argv alone. A profile that still places its own words
-      // on today's line is refused, rather than started without them.
-      if (profilePlacesLaunchWords(profile)) {
-        const why = 'resolve-launch starts the launcher argv alone, and this profile has launch words to place';
-        steps.push({
-          kind: 'skip',
-          text: `${seat.name}: would refuse: ${why}`,
-          do: { do: 'refuse', seat: seat.name, why },
-        });
-        continue;
-      }
-      command = decided.command;
+      // The resolver argv is the base line. The profile still places its rules, hooks,
+      // inbox words, channel flag and session words on that line, and refuses when they
+      // cannot be placed.
+      baseLine = decided.command;
       fromResolver = true;
-    } else {
-      const launcher = launchCommandOrRefusal(profile, recordedLine, seat.rules, input.cliHooks?.[seat.name], {
-        seat: seat.name,
-        session,
-        ...selfRunner(),
-        ...(input.teamFile === undefined ? {} : { file: input.teamFile }),
-        ...(input.briefEpochs?.[seat.name] === undefined ? {} : { epoch: input.briefEpochs[seat.name] }),
-      }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon }, rulesLine, (text) => {
-        // A launch line whose shape this version cannot prove keeps 0.5.10's placement of the
-        // options after it; the seat says so on the launch step rather than losing the words.
-        launchWarnings.push(text);
-      }, cwd, plannedSandbox?.profile, wouldLaunch);
-      // A line the profile's words cannot be placed on is refused before any workspace is created
-      // or closed: its options would be read as prompt text, or its rules line lost.
-      if (launcher.refusal !== undefined) {
-        steps.push({
-          kind: 'skip',
-          text: `${seat.name}: would refuse: ${launcher.refusal}`,
-          do: { do: 'refuse', seat: seat.name, why: launcher.refusal },
-        });
-        continue;
-      }
-      command = launcher.command;
     }
+    const launcher = launchCommandOrRefusal(profile, baseLine, seat.rules, input.cliHooks?.[seat.name], {
+      seat: seat.name,
+      session,
+      ...selfRunner(),
+      ...(input.teamFile === undefined ? {} : { file: input.teamFile }),
+      ...(input.briefEpochs?.[seat.name] === undefined ? {} : { epoch: input.briefEpochs[seat.name] }),
+    }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon }, rulesLine, (text) => {
+      // A launch line whose shape this version cannot prove keeps 0.5.10's placement of the
+      // options after it; the seat says so on the launch step rather than losing the words.
+      launchWarnings.push(text);
+    }, cwd, plannedSandbox?.profile, wouldLaunch);
+    // A line the profile's words cannot be placed on is refused before any workspace is created
+    // or closed: its options would be read as prompt text, or its rules line lost.
+    if (launcher.refusal !== undefined) {
+      steps.push({
+        kind: 'skip',
+        text: `${seat.name}: would refuse: ${launcher.refusal}`,
+        do: { do: 'refuse', seat: seat.name, why: launcher.refusal },
+      });
+      continue;
+    }
+    command = launcher.command;
     let notice: string | undefined;
     if (seat.budget?.kind === 'unknown') notice = seat.budget.text;
     else if (seat.budget?.kind === 'refuse') notice = seat.budget.why;

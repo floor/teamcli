@@ -1,6 +1,7 @@
 // The launch argv is the declarative resolver's only when the caller asks. With the flag off,
-// the pane runs the launch line it runs today. With the flag on, the pane runs the resolver's
-// argv. A refused resolution is the resolver's own message, and that seat is not started.
+// the pane runs the launch line it runs today. With the flag on, the resolver argv is the base
+// line and the profile still places its launch words on it. A refused resolution is the
+// resolver's own message, and that seat is not started.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -36,7 +37,13 @@ const SESSION = 'scratch';
 const OWNER = { kind: 'owner' } as const;
 const PLACEHOLDER = 'a consumed placeholder requires nonempty inbox or session context';
 const BLANK_SESSION = 'a supplied caller session must be a nonempty string';
-const LAUNCH_WORDS = 'resolve-launch starts the launcher argv alone, and this profile has launch words to place';
+
+function placedWord(cli: string): string {
+  if (cli === 'codex') return 'mcp_servers.team_inbox';
+  if (cli === 'grok') return '--rules';
+  if (cli === 'antigravity') return '--prompt-interactive';
+  return '--append-system-prompt';
+}
 
 type SeatFixture = {
   name: string;
@@ -267,15 +274,17 @@ describe('resolve-launch stays off unless named', () => {
     }
   }, 30000);
 
-  test('flag on refuses a profile that still has launch words to place', async () => {
+  test('flag on places the profile words on the resolver argv', async () => {
     for (const seat of CLIS) {
       const one = alone(seat);
       const { root, home, made } = prepare([one], undefined, true);
       const io = testIo(root, OWNER);
       const code = await runUp(['--resolve-launch'], io, sources(home, made));
-      expect(code, `${seat.name}\n${io.out}${io.err}`).not.toBe(0);
-      expect(io.out + io.err).toContain(LAUNCH_WORDS);
-      expect(made.runs.some((run) => run.command.includes(seat.binary))).toBe(false);
+      const command = made.runs.map((run) => run.command).find((line) => line.includes(seat.binary));
+      expect(command, `${seat.name}\n${io.out}${io.err}`).toBeDefined();
+      expect(command).toContain('--from-resolver');
+      expect(command).toContain(placedWord(seat.cli));
+      if (seat.cli === 'claude-code') expect(code, `${seat.name}\n${io.out}${io.err}`).toBe(0);
       release();
     }
   }, 30000);
@@ -326,7 +335,7 @@ describe('team restart uses the same flag', () => {
     };
   }
 
-  test('flag off restarts on today\'s argv and flag on refuses a profile with launch words', async () => {
+  test('flag off restarts on today\'s argv and flag on places the profile words', async () => {
     const seat = firstSeat();
     const off = prepare([seat]);
     const offIo = testIo(off.root, OWNER);
@@ -342,8 +351,10 @@ describe('team restart uses the same flag', () => {
     const on = prepare([seat], undefined, true);
     const onIo = testIo(on.root, OWNER);
     const onCode = await runRestart([seat.name, '--resolve-launch'], onIo, restartSources(on.home, on.made));
-    expect(onCode, onIo.out + onIo.err).not.toBe(0);
-    expect(onIo.out + onIo.err).toContain(LAUNCH_WORDS);
-    expect(on.made.runs.some((run) => run.command.includes(seat.binary))).toBe(false);
+    const onCommand = on.made.runs.map((run) => run.command).find((line) => line.includes(seat.binary));
+    expect(onCommand, onIo.out + onIo.err).toBeDefined();
+    expect(onCommand).toContain('--from-resolver');
+    expect(onCommand).toContain(placedWord(seat.cli));
+    expect(onCode, onIo.out + onIo.err).toBe(0);
   });
 });

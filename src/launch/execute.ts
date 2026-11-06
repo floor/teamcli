@@ -1511,8 +1511,9 @@ export async function executePlan(
         let attachedEndpoint = false;
         let freshFrom: string | undefined;
         let launch = { command, sessionId: undefined as string | undefined, notice: undefined as string | undefined };
-        // A resolved argv is the command the pane runs. The adjustments below belong to the
-        // launch line the file already runs, and stay off this path.
+        // The sandbox file and the managed endpoint belong to the file's own launch line.
+        // A resolved argv already carries the profile's words; those two stays are the next
+        // commit. Resume and the session mint still run: a resolved line is a seat launch.
         if (op.resolved !== true) {
         // A Grok seat's sandbox profile is written before its command runs, the same place the
         // plan decided to name it. Grok refuses to start for a profile it cannot find, so a file
@@ -1543,6 +1544,7 @@ export async function executePlan(
         if (op.cli === 'codex' && !attachedEndpoint && !codexCommandHasFlag(command, '--no-daemon')) {
           command = appendOnLaunchLine(command, '--no-daemon', 'codex').line;
         }
+        }
         // A resume of a conversation its CLI never wrote stops at the CLI's own error and leaves
         // the pane at its shell: the seat is launched fresh instead, and says so.
         const resumeTarget = namedResumeTarget(op.cli ?? '', command);
@@ -1558,7 +1560,6 @@ export async function executePlan(
         // not be placed where the CLI reads it is not recorded, and the run says so.
         const minted = withLaunchSession(op.cli ?? '', command);
         launch = { command: minted.command, sessionId: minted.sessionId, notice: minted.notice };
-        }
         if (launch.notice !== undefined) {
           hold(op.seat, `${op.seat}: ${launch.notice}\n`);
           host.log(op.seat, launch.notice);
