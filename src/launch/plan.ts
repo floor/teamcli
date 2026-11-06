@@ -354,6 +354,8 @@ export interface UpSeat {
   cwd: string;
   /** The seat's recorded worktree, relative to the root or absolute. */
   worktree?: string;
+  /** Actual recorded start of a pane reused for an in-place launch. */
+  startCwd?: string;
   label: string;
   /** Sidebar line 2, set on the pane after launch. Absent: the plan does not report one. */
   displayAgent?: string;
@@ -1154,7 +1156,7 @@ export function upPlan(input: UpInput): Step[] {
       });
       continue;
     }
-    const cwd = isAbsolute(seat.cwd) ? seat.cwd : resolve(input.root, seat.cwd);
+    let cwd = isAbsolute(seat.cwd) ? seat.cwd : resolve(input.root, seat.cwd);
     // A seat recorded waiting is never launched again: its recorded pane is reused, and the
     // idle step below reads it fresh and asks its owner (§5).
     const waiting = seat.waiting;
@@ -1169,6 +1171,10 @@ export function upPlan(input: UpInput): Step[] {
     // The same condition as the launch step below. A seat already running keeps
     // its idle wait, rename and rules, and hears the reading as a notice.
     const wouldLaunch = launchWillRun(seat);
+    const inPlace = reuse !== undefined || ownLine !== undefined || (!fresh && seat.pane !== undefined);
+    if (inPlace && (profile.cli === 'grok' || profile.cli === 'cursor') && seat.cwd === '.' && seat.worktree !== undefined) {
+      cwd = resolve(input.root, seat.worktree);
+    }
     if (seat.launchProblem && wouldLaunch) {
       steps.push({
         // The dry run prints the finding in full, as it always did; the record is left out with
@@ -1272,12 +1278,25 @@ export function upPlan(input: UpInput): Step[] {
       (profile.cli === 'grok' || profile.cli === 'cursor') && input.home !== undefined && input.team !== undefined
         ? { cli: profile.cli, seat: seat.name, cwd, root: input.root, home: input.home,
             lobby: lobbyOf(input.home, input.root, input.team),
+            ...(inPlace && seat.startCwd !== undefined ? { inPlaceCwd: resolve(input.root, seat.startCwd) } : {}),
             // Keep occupied records as well as placements planned by this run. Single-seat
             // commands still compare the complete team, and new peers compare each other.
             peers: [...(input.startFolders ?? input.team.seats.filter(peer => !input.seats.some(placed => placed.name === peer.name))), ...input.seats.map(peer => ({ ...peer,
               cwd: peer.cwd === '.' ? peer.worktree ?? peer.cwd : peer.cwd,
             }))] }
         : undefined;
+    if (ownStartFolder !== undefined && wouldLaunch && inPlace) {
+      const actual = seat.startCwd === undefined ? undefined : resolve(input.root, seat.startCwd);
+      const problem = actual === undefined
+        ? 'its reused pane has no recorded start folder; set the seat cwd to its own worktree or clone and restart it in a new workspace'
+        : ownStartFolderProblem({ ...ownStartFolder, cwd: actual }) ??
+          (samePlace(actual, cwd) ? null : 'its reused pane starts in another folder; set the seat cwd to its own worktree or clone and restart it in a new workspace');
+      if (problem !== null) {
+        steps.push({ kind: 'skip', text: `${seat.name}: would refuse: ${problem}`,
+          do: { do: 'refuse', seat: seat.name, why: problem } });
+        continue;
+      }
+    }
     if (ownStartFolder !== undefined && wouldLaunch) {
       const problem = ownStartFolderProblem(ownStartFolder) ??
         (grokSandbox === undefined ? null : grokStartFolderProblem(cwd, grokSandbox, ownStartFolder.lobby));

@@ -2516,13 +2516,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     const resumeCwd = recorded?.seats[seat.name]?.start_cwd;
     const line = doctor
       ? placed
-        ? launchLineFinding(team, seat, root, { onPath: (binary) => doctor.onPath(binary), home: doctor.home })
+        ? launchLineFinding(team, seat, root, { onPath: (binary) => doctor.onPath(binary), home: doctor.home, state: recorded })
         : typeof resumeCwd === 'string' && resumeCwd !== ''
           ? launchLineFinding(
               team,
               seat,
               root,
-              { onPath: (binary) => doctor.onPath(binary), home: doctor.home },
+              { onPath: (binary) => doctor.onPath(binary), home: doctor.home, state: recorded },
               { cwd: resolve(root, resumeCwd), folder: resumeCwd },
             )
           : {
@@ -2559,6 +2559,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         ...launchProblem,
         ...(budget.kind === 'clear' ? {} : { budget }),
         ...(tree === undefined ? {} : { worktree: tree.path }),
+        ...(resumeCwd === undefined ? {} : { startCwd: resumeCwd }),
       });
       continue;
     }
@@ -2579,6 +2580,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       ...launchProblem,
       ...(budget.kind === 'clear' ? {} : { budget }),
       ...(tree === undefined ? {} : { worktree: tree.path }),
+      ...(resumeCwd === undefined ? {} : { startCwd: resumeCwd }),
     });
   }
   // Records the file no longer declares: a removal that could not drop its state, or a file

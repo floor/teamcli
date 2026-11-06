@@ -988,3 +988,37 @@ test('a planned peer worktree replaces its shared-root declaration for overlap c
   expect(plan.some(step => step.do?.do === 'refuse' && step.do.seat === 'grok-seat')).toBe(false);
   expect(plan.some(step => step.do?.do === 'launch' && step.do.seat === 'grok-seat')).toBe(true);
 });
+
+
+describe('in-place restore proves the folder the pane will reuse', () => {
+  for (const cli of ['grok', 'cursor']) for (const kind of ['own', 'unknown', 'lobby', 'different-own']) {
+    test(`${cli} in-place start ${kind}`, () => {
+      const w = world(), own = join(w.base, 'own-tree'); mkdirSync(own);
+      const lobby = join(w.home, '.config/team/lobby'); mkdirSync(lobby, { recursive: true });
+      const other = join(w.base, 'other-tree'); mkdirSync(other);
+      const checked = validateTeamFile(TEAM, { home: w.home, root: w.root });
+      if (!checked.ok) throw new Error('invalid synthetic team');
+      const plan = upPlan({ root: w.root, home: w.home, team: { ...checked.team, lobby }, session: 'acme',
+        sessionRunning: true, watchAlive: true, watchLabel: 'Watch', seats: [{
+          name: 'grok-seat', cli, launch: cli === 'grok' ? 'grok' : 'cursor-agent', cwd: own, worktree: own,
+          ...(kind === 'unknown' ? {} : { startCwd: kind === 'own' ? own : kind === 'lobby' ? lobby : other }),
+          label: 'grok-seat', stopped: false, rules: 'Rules.', repairLine: 'repair', pane: 'own-pane',
+          repair: { pane: 'own-pane', workspace: 'own-workspace', launched: { shell: 1, cli: [2] }, cli, ownLine: {} },
+        }] });
+      expect(plan.some(s => s.do?.do === 'launch')).toBe(kind === 'own');
+      expect(plan.some(s => s.do?.do === 'relaunch')).toBe(kind === 'own');
+      expect(plan.find(s => s.do?.do === 'refuse' || s.do?.do === 'relaunch')?.do?.do).toBe(kind === 'own' ? 'relaunch' : 'refuse');
+    });
+  }
+});
+
+
+for (const cli of ['grok', 'cursor']) test(`${cli} rechecks a reused pane's recorded folder alias`, () => {
+  const w = world(), own = join(w.base, 'own'); mkdirSync(own);
+  const lobby = join(w.home, '.config/team/lobby'); mkdirSync(lobby, { recursive: true });
+  const alias = join(w.base, 'recorded-start'); symlinkSync(own, alias);
+  const input = { cli, seat: 'worker', cwd: own, inPlaceCwd: alias, root: w.root, home: w.home, lobby, peers: [] };
+  expect(ownStartFolderProblem(input)).toBeNull();
+  renameSync(alias, alias + '-before'); symlinkSync(lobby, alias);
+  expect(ownStartFolderProblem(input)).toContain('own worktree');
+});

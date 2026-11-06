@@ -2,11 +2,14 @@
 // seat that `up` leaves alone keeps the launch record, including a lead.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
+import { runTeamCheck } from '../src/check/team.ts';
 import { runReload, USAGE, type ReloadSources } from '../src/commands/reload.ts';
+import { rulesOf } from '../src/launch/rules.ts';
+import { rulesFilePath } from '../src/launch/rules-file.ts';
 import { currentBriefClaim, generalBriefBody, generalBriefId } from '../src/launch/general-brief.ts';
 import { RELOAD_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { readRecord } from '../src/send/record.ts';
@@ -17,7 +20,7 @@ import { loadTeamFile } from '../src/file/load.ts';
 import { findAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
-import { storePath, writeApproval } from '../src/store/store.ts';
+import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T09:00:00Z');
@@ -700,4 +703,90 @@ describe('team reload', () => {
     assertJsonErrorShape(io.out, { id: 'reload.invocation', messageContains: 'unknown option --bogus' });
     expect(USAGE).toContain('Exits 0 when the seat is reloaded');
   });
+});
+
+
+describe('review: reload honors recorded own and peer folders', () => {
+  for (const cli of ['grok', 'cursor']) for (const occupied of [false, true]) {
+    test(`${cli} recorded worktree, occupied=${occupied}`, async () => {
+      const own = join(base, 'worker-tree'); mkdirSync(own);
+      const body = seat('worker', 'implementer', 'high');
+      approve(teamYaml(['reload']).replace(body, body.replace('cli: claude-code', `cli: ${cli}`)
+        .replace('vendor: anthropic', 'vendor: xai').replace('model: Claude Opus', 'model: Grok')
+        .replace('version: "5.5"', 'version: "4.7"').replace('launch: claude --model claude-opus-5-5', `launch: ${cli === 'grok' ? 'grok' : 'cursor-agent'}`)));
+      remember('worker', 'low', '4.6', 'Grok');
+      updateState(dir, state => {
+        const held = state.sessions.alpha!;
+        held.seats.worker!.cli = cli;
+        held.seats.worker!.launch_line = cli === 'grok' ? 'grok' : 'cursor-agent';
+        held.worktrees.task = { seat: 'worker', path: own, branch: 'fix/worker', setup: 'ok' };
+        if (occupied) held.worktrees.peer = { seat: 'lead', path: own, branch: 'fix/peer', setup: 'ok' };
+      });
+      const before = readState(dir);
+      const screen = readFileSync(new URL(cli === 'grok' ? './fixtures/grok/1.0.52/idle.txt' : './fixtures/cursor/2026.10.01/idle.txt', import.meta.url), 'utf8');
+      const run = harness({ text: screen, after: screen });
+      run.sources.launch.foreground = () => [cli === 'grok' ? 'grok' : 'cursor-agent'];
+      const starts: string[] = [];
+      const create = run.sources.launch.createWorkspace;
+      run.sources.launch.createWorkspace = (session, cwd, label) => { starts.push(cwd); return create(session, cwd, label); };
+      const io = testIo(root, OWNER);
+      expect(await runReload(['worker'], io, run.sources), io.err).toBe(occupied ? 1 : 0);
+      if (occupied) {
+        expect(io.err).toContain('overlaps seat lead');
+        expect(run.closed).toEqual([]);
+        expect(starts).toEqual([]);
+        expect(readState(dir)).toEqual(before);
+        expect(existsSync(join(dir, 'hooks', 'alpha', 'worker.json'))).toBe(false);
+      } else {
+        expect(starts, io.out + io.err).toEqual([own]);
+        expect(run.closed).toEqual(['worker-ws']);
+        expect(run.commands).toHaveLength(1);
+      }
+    });
+  }
+});
+
+
+describe('review: check and inbox refresh share the start-folder rule', () => {
+  for (const cli of ['grok', 'cursor']) {
+    const yaml = () => {
+      const body = seat('worker', 'implementer', 'high');
+      return teamYaml(['reload']).replace(body, body.replace('cli: claude-code', `cli: ${cli}`)
+        .replace('vendor: anthropic', 'vendor: xai').replace('model: Claude Opus', 'model: Grok')
+        .replace('version: "5.5"', 'version: "4.7"').replace('launch: claude --model claude-opus-5-5', `launch: ${cli === 'grok' ? 'grok' : 'cursor-agent'}`));
+    };
+    for (const kind of ['home', 'occupied', 'safe']) test(`${cli} check diagnoses ${kind} without writes`, () => {
+      approve(yaml()); remember('worker', 'high', '4.7', 'Grok');
+      const own = join(base, 'own-tree'); mkdirSync(own);
+      updateState(dir, state => {
+        const held = state.sessions.alpha!;
+        held.seats.worker!.cli = cli; held.seats.worker!.start_cwd = kind === 'home' ? home : own;
+        held.worktrees.task = { seat: 'worker', path: own, branch: 'fix/own', setup: 'ok' };
+        if (kind === 'occupied') held.worktrees.peer = { seat: 'lead', path: own, branch: 'fix/peer', setup: 'ok' };
+      });
+      const before = readState(dir), io = testIo(root, OWNER);
+      runTeamCheck({ file: join(dir, 'team.yaml') }, io, { home, now: () => NOW,
+        live: () => ({ running: true, agents: [], workspaces: [], screens: {} }),
+        branch: () => 'main', standing: at => approvalStanding(at, home), sockets: join(base, 'sockets'), alive: () => false });
+      if (kind === 'home') expect(io.out).toContain('cannot start in or grant an ancestor');
+      else if (kind === 'occupied') expect(io.out).toContain('start folder overlaps seat lead');
+      else { expect(io.out).not.toContain('cannot start in or grant an ancestor'); expect(io.out).not.toContain('start folder overlaps'); }
+      expect(readState(dir)).toEqual(before);
+    });
+    test(`${cli} no-op reload refuses a recorded lobby before refreshing its inbox`, async () => {
+      approve(yaml()); remember('worker', 'high', '4.7', 'Grok');
+      updateState(dir, state => { state.sessions.alpha!.seats.worker!.cli = cli; state.sessions.alpha!.seats.worker!.start_cwd = lobby; });
+      const loaded = loadTeamFile(root, { file: join(dir, 'team.yaml'), home });
+      if (!loaded.ok) throw new Error('invalid synthetic team');
+      const path = rulesFilePath('acme', root, home, 'worker')!;
+      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+      writeFileSync(path, rulesOf(loaded.team, loaded.team.seats.find(s => s.name === 'worker')!, root), { mode: 0o600 });
+      const before = readState(dir), run = harness(), calls: string[] = [];
+      run.sources.launch.registerInbox = () => { calls.push('inbox'); return { ok: true }; };
+      const io = testIo(root, OWNER);
+      expect(await runReload(['worker'], io, run.sources), io.out + io.err).toBe(1);
+      expect(io.err).toContain('own worktree'); expect(calls).toEqual([]);
+      expect(run.closed).toEqual([]); expect(readState(dir)).toEqual(before);
+    });
+  }
 });

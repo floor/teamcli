@@ -89,6 +89,8 @@ export function placedStartFolders(
 export type OwnStartFolderInput = {
   cli: string; seat: string; cwd: string; root: string; home: string; lobby: string;
   peers: readonly StartFolder[];
+  /** Recorded cwd of a pane whose existing process/workspace will be reused. */
+  inPlaceCwd?: string;
 };
 
 /** Profiles that write their start folder need an explicit own folder, never shared startup
@@ -101,6 +103,15 @@ export function ownStartFolderProblem(input: OwnStartFolderInput): string | null
     if (!statSync(start).isDirectory()) throw new Error('not a directory');
   } catch {
     return `${input.cli} needs an existing start folder of its own; ${repair}`;
+  }
+  if (input.inPlaceCwd !== undefined) {
+    try {
+      if (realpathSync(resolve(input.root, input.inPlaceCwd)) !== start) {
+        return `${input.cli} reused pane starts in another folder; ${repair} in a new workspace`;
+      }
+    } catch {
+      return `${input.cli} reused pane's recorded start folder cannot be verified; ${repair} in a new workspace`;
+    }
   }
   const inside = (folder: string, parent: string): boolean => {
     const tail = relative(parent, folder);

@@ -827,13 +827,14 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     ? launchLineFinding(prepared.team, built.seat, root, {
         onPath: (binary) => sources.doctor.onPath(binary),
         home: sources.doctor.home,
+        state: recorded,
       })
     : typeof resumeCwd === 'string' && resumeCwd !== ''
       ? launchLineFinding(
           prepared.team,
           built.seat,
           root,
-          { onPath: (binary) => sources.doctor.onPath(binary), home: sources.doctor.home },
+          { onPath: (binary) => sources.doctor.onPath(binary), home: sources.doctor.home, state: recorded },
           { cwd: resolve(root, resumeCwd), folder: resumeCwd },
         )
       : {

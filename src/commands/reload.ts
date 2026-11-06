@@ -77,6 +77,8 @@ import { realSources as doctorSources } from './doctor.ts';
 import { rulesFileProblem } from './status.ts';
 import type { Launch } from './up.ts';
 import { registerInbox } from '../mcp/register.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
+import { ownStartFolderProblem, placedStartFolders, seatStart } from '../worktree/place.ts';
 
 export const USAGE = `Usage: team reload <seat> [--file <path>] [--json]
        team reload <seat> --client <grant-file> --key <client-key> [--team <team>] [--json]
@@ -482,7 +484,21 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   // the command `team check` names for this, so its no-op paths register again after delivering
   // the brief — idempotent when the registration is already there. A refusal is one line, said
   // where the reader of the document meets warnings, and names the command that retries it.
-  const registerSeatInbox = (): void => {
+  const refreshStartProblem = (): string | null => {
+    const cli = recorded.cli ?? seat.cli;
+    if ((cli !== 'grok' && cli !== 'cursor') || recorded.start_cwd === undefined) return null;
+    return ownStartFolderProblem({ cli, seat: seat.name, cwd: recorded.start_cwd, root,
+      home: home ?? homedir(), lobby: lobbyOf(home ?? homedir(), root, { ...team, session }),
+      peers: placedStartFolders(team.seats, readState(dir).sessions[session]) });
+  };
+  const refuseRefreshStart = (): boolean => {
+    const problem = refreshStartProblem();
+    if (problem === null) return false;
+    refuse(io, json, 'reload', { id: 'reload.start', message: problem, repair: null });
+    return true;
+  };
+  const registerSeatInbox = (): boolean => {
+    if (refuseRefreshStart()) return false;
     const inboxCli = recorded.cli ?? seat.cli;
     const register = sources.launch.registerInbox;
     if (recorded.start_cwd !== undefined && register !== undefined) {
@@ -494,10 +510,12 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         logLine(dir, 'reload', who, said, now());
       }
     }
+    return true;
   };
   if (detail === null && rulesProblem === null && source === null) {
+    if (refuseRefreshStart()) return 1;
     await deliverBrief(false);
-    registerSeatInbox();
+    if (!registerSeatInbox()) return 1;
     refreshHookFile();
     const summary = `team reload: ${seat.name} is already running what the file declares`;
     if (json) {
@@ -534,6 +552,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   }
   try {
     if (detail === null && rulesProblem === null) {
+      if (refuseRefreshStart()) return 1;
       updateState(dir, (file) => {
         const held = file.sessions[session]?.seats[seat.name];
         if (!held) return;
@@ -544,7 +563,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       });
       const summary = `team reload: ${seat.name}: its launch record held no model; recorded ${mentioned(shown, compared, recorded)}; it is already running what the file declares`;
       await deliverBrief(false);
-      registerSeatInbox();
+      if (!registerSeatInbox()) return 1;
       refreshHookFile();
       if (json) {
         writeJson(io, 'team.reload', {
@@ -643,7 +662,18 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         : `team reload: ${seat.name}: its launch record held no model; its screen names none, so the file's ${compared.model} ${compared.version}${effort} stand; reloading\n`);
     }
 
-    const tree = worktreeOf(readState(dir).sessions[session], seat.name);
+    const placement = readState(dir).sessions[session];
+    const tree = worktreeOf(placement, seat.name);
+    // Profile-writing seats use the same own-folder placement as up/add/restart. Refuse
+    // before the brief or hook writes, and before closing the seat's existing workspace.
+    const start = seat.cli === 'grok' || seat.cli === 'cursor'
+      ? seatStart({ ...team, session }, seat, root, home ?? homedir(), undefined, tree?.path, placement)
+      : { cwd: seat.cwd };
+    if ('problem' in start) {
+      refuse(io, json, 'reload', { id: 'reload.start', message: start.problem, repair: null });
+      return 1;
+    }
+    const startFolders = placedStartFolders(team.seats, placement);
     const planned = {
       name: seat.name,
       cli: seat.cli,
@@ -651,7 +681,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       // the seat instead of closing or typing into a human's pane.
       ...(seat.human ? { human: true as const } : {}),
       launch: seat.launch,
-      cwd: seat.cwd,
+      cwd: start.cwd,
       ...(tree === undefined ? {} : { worktree: tree.path }),
       label: workspaceLabel(seat),
       displayAgent: displayAgent(seat),
@@ -709,6 +739,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       session,
       root,
       seats: [planned],
+      startFolders,
       sessionRunning: true,
       startWatch: false,
       teamFile: launchTeamFile(loaded),

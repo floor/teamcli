@@ -1022,7 +1022,7 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
           standing,
           undefined,
           budgetCheckFindings(team, standing, root, sources, callerOf(io)),
-          launchLineFindings(team, root, { onPath: (binary) => sources.onPath(binary), home: sources.home }),
+          launchLineFindings(team, root, { onPath: (binary) => sources.onPath(binary), home: sources.home, state: readState(dirname(loaded.path)).sessions[session] }),
           rulesOriginOf(loaded.source),
         ),
         // A wildcard general grant signed before the release that first shipped an op reaches that

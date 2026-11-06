@@ -60,6 +60,8 @@ import { seatDeliveryClass, wakeableWhileIdle } from '../launch/delivery-class.t
 import { seatProcessVerdict } from '../launch/identity.ts';
 import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
+import { ownStartFolderProblem, placedStartFolders } from '../worktree/place.ts';
 import { listUnread } from '../mcp/inbox.ts';
 import {
   collapseNotes,
@@ -482,6 +484,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...liftCardDriftDifferences(sources.home, root, quiet, sources.now()),
     ...attention.differences,
     ...labelDifferences(team, state, live),
+    ...startFolderDifferences(team, state, root, sources.home ?? homedir(), session),
     ...featureDifferences(team, state),
     ...unmanagedCodexServerDifferences(team, state, live, dir, session, continuityIds, sources),
     ...rosterDifferences(team, state, live, root, sources.home),
@@ -2341,6 +2344,21 @@ function viewOf(attention: Attention, name: string, _status: string): Difference
     default:
       return null;
   }
+}
+
+/** The same own-folder rule used by launches, read without changing a running seat. */
+function startFolderDifferences(team: TeamFile, state: SessionState, root: string, home: string, session: string): Difference[] {
+  const peers = placedStartFolders(team.seats, state);
+  const lobby = lobbyOf(home, root, { ...team, session });
+  const out: Difference[] = [];
+  for (const seat of team.seats) {
+    if (seat.human || seat.stopped || (seat.cli !== 'grok' && seat.cli !== 'cursor')) continue;
+    const cwd = peers.find(peer => peer.name === seat.name)!.cwd;
+    const problem = ownStartFolderProblem({ cli: seat.cli, seat: seat.name, cwd, root, home, lobby, peers });
+    if (problem !== null) out.push({ what: `${seat.name}: ${problem}`,
+      repair: `set seats.${seat.name}.cwd to its own worktree or clone, then run team restart ${seat.name}` });
+  }
+  return out;
 }
 
 /**
