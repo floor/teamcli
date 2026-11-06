@@ -2229,6 +2229,8 @@ describe('team watch', () => {
     const session = current.session;
     const seat = 'deepseek-acme';
     const lead = current.orchestrator;
+    const leadPane = 'notice-lead-pane';
+    const seatPane = 'notice-worker-pane';
     const root = findRoot(dir);
     if (!root) throw new Error('the watch fixture is not a git checkout');
     const home = join(dir, 'home'); mkdirSync(home, { recursive: true });
@@ -2243,11 +2245,11 @@ describe('team watch', () => {
     }
     updateState(agents, (state) => {
       const one = state.sessions[session] ??= emptySession();
-      one.seats[lead] = { stage: 'ready', pane: 'w1:p1' };
-      one.seats[seat] = { stage: 'ready', pane: 'w3:p1' };
+      one.seats[lead] = { stage: 'ready', pane: leadPane };
+      one.seats[seat] = { stage: 'ready', pane: seatPane };
     });
     writeFileSync(file, example.replace('    name: deepseek-acme\n', '    name: deepseek-acme\n    stopped: true\n'));
-    const clear = testIo(dir, { kind: 'seat', name: lead, pane: 'w1:p1', session });
+    const clear = testIo(dir, { kind: 'seat', name: lead, pane: leadPane, session });
     expect(await runAck(['--seat', seat, '--older-than', '7d'], clear, { home, now: () => new Date(clock) }), clear.err).toBe(0);
     expect(clear.out).toContain('1 marked read');
     // Restore the seat so a lifecycle refusal cannot hide an exposed body.
@@ -2257,7 +2259,7 @@ describe('team watch', () => {
     const peek = peekMessage({ dropDir, root, seat, session, lead }, id, home, current.seats.map((one) => one.name));
     const messages = testIo(dir, { kind: 'owner' });
     expect(await runMessages(['--json'], messages, { home, now: () => new Date(clock) }), messages.err).toBe(0);
-    const reader = () => testIo(dir, { kind: 'seat', name: seat, pane: 'w3:p1', session });
+    const reader = () => testIo(dir, { kind: 'seat', name: seat, pane: seatPane, session });
     const drops = reader();
     expect(await runDrops(['--read', '--seat', seat, '--session', session], drops, { home }), drops.err).toBe(0);
     const mcp = reader();
@@ -2275,6 +2277,10 @@ describe('team watch', () => {
     const control = 'live9f38';
     dropWaiting(seat, control, new Date(clock).toISOString(), '55555555-5555-4555-8555-555555555555');
     scene = live({ 'deepseek-acme': { status: 'idle', screen: idle }, 'deepseek-acme-2': { status: 'working', screen: busy } });
+    const worker = scene.agents.find((one) => one.name === seat);
+    if (!worker) throw new Error('the synthetic live scene has no worker');
+    scene.screens[seatPane] = scene.screens[worker.pane] ?? '';
+    worker.pane = seatPane;
     const watched = testIo(dir, { kind: 'owner' });
     expect(await runWatch(['--file', file], watched, sources(2, { home })), watched.err).toBe(0);
     expect({
