@@ -1,6 +1,8 @@
-// A Grok seat starts inside a sandbox profile TeamCLI writes for it, so the seat may write the
-// team's state folder and the project's `.agents` while everything else stays the workspace's
-// own grant. Measured on grok 1.0.70 (f50904eaee6c) in a scratch home:
+// A Grok seat starts inside a sandbox profile TeamCLI writes for it. The profile names that
+// seat's worktree, its start folder, and only the seat's own paths under the git common dir and
+// under `.agents`. Nothing under the team config directory is granted. `extends = "workspace"`
+// is written; what that preset itself grants is unmeasured. Measured on grok 1.0.70
+// (f50904eaee6c) in a scratch home:
 //   GROK_HOME=<dir> grok --trust --sandbox team-seat-demo -p hi
 // found the profile in `<dir>/sandbox.toml` and reached its auth check, while
 //   GROK_HOME=<dir> grok --trust --sandbox team-seat-absent -p hi
@@ -8,18 +10,21 @@
 // found. Define it in ~/.grok/sandbox.toml or .grok/sandbox.toml:` and exited 1. `--sandbox`
 // takes only a profile name: a path, inline TOML and `GROK_SANDBOX=<path>` are each read as a
 // name and refused. The profile's `read_write` entries are taken literally — `~` and `$HOME` are
-// not expanded, and a relative entry is anchored at the workspace — so the two folders below are
-// written as absolute paths. The file is the user-level one (`$GROK_HOME/sandbox.toml`, default
+// not expanded, and a relative entry is anchored at the workspace — so every grant below is
+// written as an absolute path. The file is the user-level one (`$GROK_HOME/sandbox.toml`, default
 // `~/.grok/sandbox.toml`): a project `.grok/sandbox.toml` would put a machine-specific map
 // inside a repository, and the user-level file is read when the project has none.
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
-import { dirname, isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { syncChildTimeout } from '../child.ts';
+import { cliHookSettingsPath, cliHookStatePath } from './cli-hook.ts';
 import { tomlString, writePrivateAtomic } from './private-file.ts';
 import { parseToml } from './toml.ts';
 
 /** The filesystem root Grok reads beside its own home, and the profile TeamCLI keeps there. */
 export interface GrokSandbox {
-  /** The `--sandbox` profile name, `team-seat-<project>`. */
+  /** The `--sandbox` profile name, `team-seat-<project>-<seat>`. */
   profile: string;
   /** The user-level `sandbox.toml` this launch writes or updates. */
   file: string;
@@ -37,40 +42,127 @@ export function grokHomeFor(home: string, env: NodeJS.ProcessEnv = process.env):
   return named !== undefined && named !== '' && isAbsolute(named) ? named : join(home, '.grok');
 }
 
-/** `team-seat-<project>`, the name the profile and the launch line share. The project word is
+/** `team-seat-<project>-<seat>`, the name the profile and the launch line share. Each word is
  *  reduced to TOML bare-key characters so the same string is a table name and a profile name;
- *  an empty project still names a profile. */
-export function grokSandboxProfileName(project: string): string {
-  const slug = project.trim().replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
-  return slug === '' ? 'team-seat' : `team-seat-${slug}`;
+ *  a word that reduces to nothing is dropped, and an empty pair still names a profile. */
+export function grokSandboxProfileName(project: string, seat: string): string {
+  const slug = (word: string) => word.trim().replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+  const parts = [slug(project), slug(seat)].filter((part) => part !== '');
+  return parts.length === 0 ? 'team-seat' : `team-seat-${parts.join('-')}`;
 }
 
-/** What a Grok seat's launch writes and names: the profile, its file, and the two folders the
- *  seat writes through it — the machine's team config and the project root's `.agents`. The
- *  folders are resolved when they exist, because the sandbox takes the path literally and a
- *  grant to a link's own name would not cover its target. */
+/** What a Grok seat's launch writes and names. The grant is that seat's worktree, its start
+ *  folder, and only these paths of its own: under the git common dir, `objects/`, `refs/`,
+ *  `logs/`, `packed-refs` and `worktrees/<that worktree>`; under `.agents`,
+ *  `send-drops/<session>/<seat>`, `messages/<seat>`, `seat-state/<session>/<seat>.json` and
+ *  `hooks/<session>/<seat>.json`. The team config directory is never granted, nor is a start
+ *  folder or worktree inside it, nor the `.agents` folder, nor the common dir, nor that dir's
+ *  `hooks/`, `config` or `info/`. A path is resolved when it or an ancestor exists, because the
+ *  sandbox takes the path literally and a grant to a link's own name would not cover its target. */
 export function grokSandboxOf(input: {
   home: string;
   root: string;
   project: string;
+  seat: string;
+  session: string;
+  /** The folder the seat starts in. Absent when this launch has none. */
+  cwd?: string;
+  /** The seat's worktree. Absent when the seat has none recorded. */
+  worktree?: string;
   /** The resolved Grok home; `grokHomeFor` reads the environment when absent. */
   grokHome?: string;
 }): GrokSandbox {
   const grokHome = input.grokHome ?? grokHomeFor(input.home);
   const file = join(grokHome, 'sandbox.toml');
+  const folders: string[] = [];
+  const worktree = input.worktree === undefined ? undefined : realFolder(input.worktree);
+  const start = input.cwd === undefined ? undefined : realFolder(input.cwd);
+  placeGrant(input.home, worktree, folders);
+  if (start !== worktree) placeGrant(input.home, start, folders);
+  for (const grant of gitGrants(input.worktree ?? input.cwd ?? input.root)) placeGrant(input.home, grant, folders);
+  for (const grant of agentGrants(input.root, input.session, input.seat)) placeGrant(input.home, grant, folders);
   return {
-    profile: grokSandboxProfileName(input.project),
+    profile: grokSandboxProfileName(input.project, input.seat),
     file,
-    readWrite: [realFolder(join(input.home, '.config', 'team')), realFolder(join(input.root, '.agents'))],
+    readWrite: [...new Set(folders)],
     guard: grokHome === input.home || grokHome.startsWith(`${input.home}/`) ? input.home : dirname(grokHome),
   };
+}
+
+function placeGrant(home: string, folder: string | undefined, into: string[]): void {
+  if (folder === undefined || folder === '') return;
+  if (coveredByTeamConfig(home, folder)) return;
+  into.push(folder);
+}
+
+/** True when `folder` is the team config directory or anything inside it. */
+function coveredByTeamConfig(home: string, folder: string): boolean {
+  const base = realFolder(join(home, '.config', 'team'));
+  const path = realFolder(folder);
+  const root = base.length > 1 && base.endsWith('/') ? base.slice(0, -1) : base;
+  return path === root || path.startsWith(`${root}/`);
+}
+
+function oneSegment(word: string): boolean {
+  return word !== '' && word !== '.' && word !== '..' && !word.includes('/') && !word.includes('\\') && !word.includes('\0');
+}
+
+/** The seat's own files under `.agents`. The folder itself is not a grant. */
+function agentGrants(root: string, session: string, seat: string): string[] {
+  const agents = join(root, '.agents');
+  const grants: string[] = [];
+  if (oneSegment(session) && oneSegment(seat)) {
+    grants.push(realFolder(join(agents, 'send-drops', session, seat)));
+    grants.push(realFolder(join(agents, 'messages', seat)));
+  }
+  const state = cliHookStatePath(agents, session, seat);
+  const hooks = cliHookSettingsPath(agents, session, seat);
+  if (state !== null) grants.push(realFolder(state));
+  if (hooks !== null) grants.push(realFolder(hooks));
+  return grants;
+}
+
+/** `objects/`, `refs/`, `logs/`, `packed-refs`, and this worktree's own `worktrees/<name>`
+ *  under the git common dir. The common dir itself, `hooks/`, `config` and `info/` are not
+ *  grants. A folder that is not a checkout names nothing. */
+function gitGrants(folder: string): string[] {
+  const common = gitAnswer(folder, '--git-common-dir');
+  if (common === undefined) return [];
+  const grants = ['objects', 'refs', 'logs', 'packed-refs'].map((name) => realFolder(join(common, name)));
+  const gitDir = gitAnswer(folder, '--git-dir');
+  const ownPrefix = `${realFolder(common)}/worktrees/`;
+  if (gitDir !== undefined) {
+    const own = realFolder(gitDir);
+    const name = own.startsWith(ownPrefix) ? own.slice(ownPrefix.length) : '';
+    if (name !== '' && !name.includes('/')) grants.push(own);
+  }
+  return grants;
+}
+
+function gitAnswer(folder: string, flag: '--git-common-dir' | '--git-dir'): string | undefined {
+  if (!existsSync(folder)) return undefined;
+  try {
+    const said = execFileSync('git', ['rev-parse', '--path-format=absolute', flag], {
+      cwd: folder,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: syncChildTimeout(5_000),
+    }).trim();
+    if (said === '') return undefined;
+    return isAbsolute(said) ? said : resolve(folder, said);
+  } catch {
+    return undefined;
+  }
 }
 
 function realFolder(folder: string): string {
   try {
     return realpathSync(folder);
   } catch {
-    return folder;
+    const parent = dirname(folder);
+    if (parent === folder) return folder;
+    const resolved = realFolder(parent);
+    return resolved === parent ? folder : join(resolved, basename(folder));
   }
 }
 

@@ -336,6 +336,8 @@ export interface UpSeat {
   launch: string;
   /** Relative to the root. */
   cwd: string;
+  /** The seat's recorded worktree, relative to the root or absolute. */
+  worktree?: string;
   label: string;
   /** Sidebar line 2, set on the pane after launch. Absent: the plan does not report one. */
   displayAgent?: string;
@@ -1205,13 +1207,24 @@ export function upPlan(input: UpInput): Step[] {
     // before the command runs from this decision, never by searching the built command's text,
     // which is shell-quoted there.
     const rulesLine = profile.rulesMode === 'message' && !seat.rulesRefusal ? seat.rulesFile?.line : undefined;
-    // A Grok seat runs inside the sandbox profile this run writes for it: the workspace's own
-    // grant plus the two folders the seat's state lives in. The profile belongs to the team's
-    // project, and a launch line that names its own `--sandbox` keeps it — nothing is written
-    // for a profile this run did not name. A plan with no home or no team file cannot place the
-    // file, and names no profile rather than one Grok could not find.
+    // A Grok seat runs inside the sandbox profile this run writes for it: its worktree, its
+    // start folder, and only that seat's own paths under the git common dir and under `.agents`.
+    // The profile belongs to the seat. A launch line that names its own `--sandbox` keeps it —
+    // nothing is written for a profile this run did not name. A plan with no home or no team
+    // file cannot place the file, and names no profile rather than one Grok could not find.
+    const sandboxWorktree = seat.worktree === undefined
+      ? undefined
+      : isAbsolute(seat.worktree) ? seat.worktree : resolve(input.root, seat.worktree);
     const grokSandbox = profile.cli === 'grok' && input.home !== undefined && input.team !== undefined
-      ? grokSandboxOf({ home: input.home, root: input.root, project: input.team.project })
+      ? grokSandboxOf({
+        home: input.home,
+        root: input.root,
+        project: input.team.project,
+        seat: seat.name,
+        session,
+        cwd,
+        ...(sandboxWorktree === undefined ? {} : { worktree: sandboxWorktree }),
+      })
       : undefined;
     // The line's own `--sandbox` keeps the file's choice. Asked of the CLI's decoded words,
     // exactly as the launch command asks every "does the line already set this": a flag inside a

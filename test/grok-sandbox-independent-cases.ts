@@ -81,17 +81,30 @@ async function launch(w: World, command = 'grok') {
   return { op, run: runs[0]!, said: said.join(''), recorded };
 }
 function flag(argv: string[], name: string) { const pair = argv.indexOf(name); return pair < 0 ? argv.find(x => x.startsWith(name + '='))?.slice(name.length + 1) : argv[pair + 1]; }
-function ownProfile(w: World) { return parsed(w).profiles['team-seat-orbit']; }
+function ownProfile(w: World) { return parsed(w).profiles['team-seat-orbit-scout']; }
 function expectGrants(w: World) {
-  expect(ownProfile(w)).toMatchObject({ extends: 'workspace', read_write: [realpathSync(join(w.home, '.config/team')), realpathSync(join(w.root, '.agents'))] });
+  const grants = ownProfile(w).read_write as string[];
+  expect(ownProfile(w)).toMatchObject({
+    extends: 'workspace',
+    read_write: [
+      realpathSync(w.root),
+      join(w.root, '.agents', 'send-drops', 'orbit-scene', 'scout'),
+      join(w.root, '.agents', 'messages', 'scout'),
+      join(w.root, '.agents', 'seat-state', 'orbit-scene', 'scout.json'),
+      join(w.root, '.agents', 'hooks', 'orbit-scene', 'scout.json'),
+    ],
+  });
+  for (const wider of [realpathSync(join(w.home, '.config/team')), realpathSync(join(w.root, '.agents'))]) {
+    expect(grants).not.toContain(wider);
+  }
 }
 test('the dry plan writes nothing; the real launch writes the profile before its fake CLI runs', async () => {
   const w = world(), op = planned(w);
   expect(existsSync(w.file)).toBe(false);
-  expect(op.command).toContain('--sandbox team-seat-orbit');
+  expect(op.command).toContain('--sandbox team-seat-orbit-scout');
   const out = await launch(w);
   expect(out.run.atRun).not.toBeNull(); expectGrants(w);
-  expect(flag(out.run.argv, '--sandbox')).toBe('team-seat-orbit');
+  expect(flag(out.run.argv, '--sandbox')).toBe('team-seat-orbit-scout');
   expect(statSync(w.file).mode & 0o777).toBe(0o600);
   expect(out.said).not.toContain('sandbox profile was not written');
 });
@@ -110,15 +123,15 @@ for (const command of ['grok --sandbox=personal', "grok --sandbox 'personal prof
 });
 test('a multiline quoted profile is updated without losing neighboring fields, tables, or idempotence', async () => {
   const w = world();
-  writeFileSync(w.file, `title = "kept"\n[profiles."team-seat-orbit"]\nextends = "old"\nread_write = [\n  "/old", # retained bracket ] in comment\n  "/another[folder]",\n]\ncustom = "retain me"\n[profiles.personal]\nextends = "read-only"\nread_write = ["/personal"]\n`);
-  const before = parsed(w); expect(before.profiles['team-seat-orbit'].read_write).toHaveLength(2);
+  writeFileSync(w.file, `title = "kept"\n[profiles."team-seat-orbit-scout"]\nextends = "old"\nread_write = [\n  "/old", # retained bracket ] in comment\n  "/another[folder]",\n]\ncustom = "retain me"\n[profiles.personal]\nextends = "read-only"\nread_write = ["/personal"]\n`);
+  const before = parsed(w); expect(before.profiles['team-seat-orbit-scout'].read_write).toHaveLength(2);
   await launch(w); expectGrants(w);
   const after = parsed(w); expect(after.title).toBe(before.title); expect(after.profiles.personal).toEqual(before.profiles.personal); expect(ownProfile(w).custom).toBe('retain me');
   const bytes = readFileSync(w.file), mtime = statSync(w.file, { bigint: true }).mtimeNs;
   await Bun.sleep(20); await launch(w);
   expect(readFileSync(w.file)).toEqual(bytes); expect(statSync(w.file, { bigint: true }).mtimeNs).toBe(mtime);
 });
-for (const header of ['[profiles.team-seat-orbit] # keep this table comment', '[ profiles . "team-seat-orbit" ]']) test(`a valid existing table header stays valid after update: ${header}`, async () => {
+for (const header of ['[profiles.team-seat-orbit-scout] # keep this table comment', '[ profiles . "team-seat-orbit-scout" ]']) test(`a valid existing table header stays valid after update: ${header}`, async () => {
   const w = world(); writeFileSync(w.file, `${header}\nextends = "old"\nread_write = ["/old"]\ncustom = "kept"\n`);
   expect(ownProfile(w).custom).toBe('kept');
   await launch(w); expectGrants(w); expect(ownProfile(w).custom).toBe('kept');
@@ -135,7 +148,7 @@ for (const location of ['file', 'home', 'ancestor'] as const) test(`a link at th
   expect(flag(out.run.argv, '--sandbox')).toBeUndefined();
   expect(out.said.match(/sandbox profile was not written/g)).toHaveLength(1);
   expect(out.said).toContain('launched without it');
-  expect(JSON.stringify(out.recorded)).not.toContain('--sandbox team-seat-orbit');
+  expect(JSON.stringify(out.recorded)).not.toContain('--sandbox team-seat-orbit-scout');
 });
 test('a regular file in the config-home position is reported and the appended flag is removed', async () => {
   const w = world(), blocked = join(w.base, 'blocked'); writeFileSync(blocked, 'keep exact bytes'); process.env.GROK_HOME = blocked;
@@ -144,7 +157,7 @@ test('a regular file in the config-home position is reported and the appended fl
 });
 test('fallback removes the appended option while preserving a prompt that quotes the same words', async () => {
   const w = world(), blocked = join(w.base, 'blocked'); writeFileSync(blocked, 'keep'); process.env.GROK_HOME = blocked;
-  const prompt = 'preserve --sandbox team-seat-orbit in this quoted prompt';
+  const prompt = 'preserve --sandbox team-seat-orbit-scout in this quoted prompt';
   const out = await launch(w, `grok -p ${shellQuote(prompt)}`);
   expect(out.run.argv[out.run.argv.indexOf('-p') + 1]).toBe(prompt);
   expect(flag(out.run.argv, '--sandbox')).toBeUndefined();
@@ -154,19 +167,26 @@ test('linked grant directories are named by their actual targets', async () => {
   const w = world(), actual = join(w.base, 'actual'); mkdirSync(actual);
   const linkedRoot = join(w.base, 'linked-project'); mkdirSync(linkedRoot); symlinkSync(actual, join(linkedRoot, '.agents'));
   const changed = { ...w, root: linkedRoot };
-  await launch(changed); expectGrants(changed);
+  await launch(changed);
+  const grants = ownProfile(changed).read_write as string[];
+  expect(grants).toContain(realpathSync(linkedRoot));
+  for (const tail of ['send-drops/orbit-scene/scout', 'messages/scout', 'seat-state/orbit-scene/scout.json', 'hooks/orbit-scene/scout.json']) {
+    expect(grants).toContain(join(realpathSync(actual), ...tail.split('/')));
+  }
+  expect(grants).not.toContain(realpathSync(join(w.home, '.config/team')));
+  expect(grants).not.toContain(join(linkedRoot, '.agents'));
 });
 test('a non-Grok plan does not create or request a Grok profile', () => {
   const w = world(), op = planned(w, 'cursor-agent', 'cursor');
-  expect(op.command).not.toContain('team-seat-orbit'); expect(existsSync(w.file)).toBe(false);
+  expect(op.command).not.toContain('team-seat-orbit-scout'); expect(existsSync(w.file)).toBe(false);
 });
 
 test('a header-looking line inside a multiline string is preserved while the real profile is updated', async () => {
   const w = world();
-  writeFileSync(w.file, 'notes = """\n[profiles.team-seat-orbit]\nextends = "quoted prose"\nread_write = ["not a grant"]\n"""\n[profiles.team-seat-orbit]\nextends = "old"\nread_write = ["/old"]\ncustom = "real table field"\n');
+  writeFileSync(w.file, 'notes = """\n[profiles.team-seat-orbit-scout]\nextends = "quoted prose"\nread_write = ["not a grant"]\n"""\n[profiles.team-seat-orbit-scout]\nextends = "old"\nread_write = ["/old"]\ncustom = "real table field"\n');
   const before = parsed(w);
-  expect(before.notes).toContain('[profiles.team-seat-orbit]');
-  expect(before.profiles['team-seat-orbit'].custom).toBe('real table field');
+  expect(before.notes).toContain('[profiles.team-seat-orbit-scout]');
+  expect(before.profiles['team-seat-orbit-scout'].custom).toBe('real table field');
   await launch(w);
   const after = parsed(w);
   expect(after.notes).toBe(before.notes);

@@ -33,7 +33,7 @@ tested:
 # asking with the widget up. The same run's line, `--trust --permission-mode auto --allow
 # 'Bash(bun *)' --allow 'Bash(team *)' --allow 'Bash(git *)' --version`, exited 0 — the three
 # rules name the commands an unattended seat runs. The sandbox profile is named per launch
-# (`--sandbox team-seat-<project>`): TeamCLI writes it under `$GROK_HOME/sandbox.toml` before the
+# (`--sandbox team-seat-<project>-<seat>`): TeamCLI writes it under `$GROK_HOME/sandbox.toml` before the
 # pane starts (src/launch/grok-sandbox.ts). `--always-approve` is still taken when a file names
 # it, and it is the footer the 1.0.50–1.0.52 captures under test/fixtures/grok/ were taken with.
 unattended:

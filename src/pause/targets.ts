@@ -13,7 +13,7 @@ import type { TeamFile } from '../file/types.ts';
 import type { Io } from '../io.ts';
 import { plainText } from '../launch/plain.ts';
 import { findTeams, readTeams } from '../registry/teams.ts';
-import type { PauseStop, SeatState, SessionState, WorktreeState } from '../state.ts';
+import { worktreeOf, type PauseStop, type SeatState, type SessionState } from '../state.ts';
 
 export type PauseTarget = {
   team: TeamFile;
@@ -226,11 +226,3 @@ export function pauseStops(team: TeamFile, state: SessionState | undefined): Pau
   return stops;
 }
 
-/** The worktree a seat was given: the record a launch wrote under the seat's name, else the one
- *  whose `seat` names it. A task keyed by another word is still the seat's when it says so. */
-function worktreeOf(state: SessionState | undefined, seat: string): WorktreeState | undefined {
-  if (state === undefined) return undefined;
-  const named = state.worktrees[seat];
-  if (named !== undefined) return named;
-  return Object.values(state.worktrees).find((worktree) => worktree.seat === seat);
-}
