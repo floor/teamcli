@@ -21,6 +21,12 @@ test('a synthetic frame that carries the sandbox refusal is recognised', () => {
   expect(grokSandboxUnapplied('idle prompt\n› ')).toBe(false);
 });
 
+test('the warning line is recognised when Grok changes its letter case', () => {
+  for (const prefix of ['Warning', 'WARNING']) {
+    expect(grokSandboxUnapplied(`${prefix}: sandbox could not be applied: missing profile`)).toBe(true);
+  }
+});
+
 test('team status names the stopped seat from the record, not from a stored sentence', () => {
   const notes = sandboxUnappliedNotes(
     [{ name: 'worker' }, { name: 'other' }],

@@ -266,7 +266,7 @@ export const GROK_SANDBOX_UNAPPLIED = 'sandbox could not be applied';
 /** Grok's own warning line, never a phrase in an echoed launch or a model answer. Synthetic
  *  frames exercise the same line match without starting a CLI. */
 export function grokSandboxUnapplied(text: string): boolean {
-  return /^\s*warning: sandbox could not be applied\b/m.test(text);
+  return /^\s*warning: sandbox could not be applied\b/im.test(text);
 }
 
 /** The line `team status` and `team check` show for a seat stopped on that refusal. The words
