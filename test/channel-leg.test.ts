@@ -1,8 +1,9 @@
 import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 // The channel leg as the sender and the watch see it: a Claude Code seat whose launch carries the
 // development channel, whose own inbox server is listening with `channel` declared, takes the
-// written record as a push. The server's `<id>.channel-push.json` marker is what ends the walk
-// `notified, not yet read`; nothing is typed and no pane is read. The marker is not a receipt
+// written record as a push. The server's `<id>.channel-push.json` marker ends the walk
+// `notified, not yet read` only once it records that the notification was written; a
+// reservation alone does not. Nothing is typed and no pane is read. The marker is not a receipt
 // and the summary never says woken. The push is not a read: the marker stays
 // pending until a signed receipt follows, and a promotion settles it `delivered (read)` without a
 // keystroke. A push whose confirmation window ends with no receipt is redelivered exactly once —
@@ -29,6 +30,7 @@ import {
   channelPushHeld,
   channelPushPath,
   channelPushed,
+  markChannelNotified,
   recordChannelPush,
   type ChannelPushReceipt,
 } from '../src/mcp/channel.ts';
@@ -151,7 +153,10 @@ function senderHost(made: World, one: Watched, push: boolean, patch: Record<stri
         if (!push) return;
         const names = existsSync(dir) ? readdirSync(dir) : [];
         const id = names.find((name) => MESSAGE_ID.test(name));
-        if (id !== undefined) recordChannelPush(dir, pushMarker(made, id));
+        if (id !== undefined) {
+          recordChannelPush(dir, pushMarker(made, id));
+          markChannelNotified(dir, id);
+        }
       },
     },
     ...patch,
@@ -292,6 +297,7 @@ describe('the channel leg', () => {
     expect(recordBody(join(dir, SEND_ID))).toBe(BODY);
     const marker = JSON.parse(readFileSync(channelPushPath(dir, SEND_ID), 'utf8')) as Record<string, unknown>;
     expect(marker.id).toBe(SEND_ID);
+    expect(marker.notified).toBe(true);
     // The marker waits for the seat's signed receipt; the push itself proved only that the
     // notification was written.
     expect(readPending(dir)).toEqual([
@@ -368,11 +374,11 @@ describe('the channel leg', () => {
     expect(said).toEqual([`lead: a channel send from owner was read (receipt)`]);
   });
 
-  test('no push marker means the walk continues: the record waits in the inbox and the channel claims nothing', async () => {
+  test('no completed notification leaves the held marker and the walk continues', async () => {
     const made = channelWorld();
     const dir = listening(made);
     const one: Watched = { typed: [], enters: [] };
-    // The server never writes the marker this time; the grace is over at once.
+    // The server never completes the notification; the grace is over at once.
     const host = senderHost(made, one, false, { channelGraceMs: 0 });
     const io = owner(made.root);
 
@@ -382,11 +388,16 @@ describe('the channel leg', () => {
     expect(withoutSendId(io.out)).toBe(`team acme, session "acme"\nlead: queued, not woken (drop, 0 ms)\n`);
     expect(io.out).not.toContain('woken through');
     expect(io.out).not.toContain('sent (channel)');
-    expect(existsSync(channelPushPath(dir, SEND_ID))).toBe(false);
+    // The sender reserves the push name so a later server does not deliver it. That hold is
+    // not a notification.
+    const held = JSON.parse(readFileSync(channelPushPath(dir, SEND_ID), 'utf8')) as Record<string, unknown>;
+    expect(held.kind).toBe(CHANNEL_HELD_RECEIPT);
+    expect(held.id).toBe(SEND_ID);
+    expect(held.notified).toBeUndefined();
     expect(one.typed).toEqual([]);
     expect(one.enters).toEqual([]);
-    // The channel's own marker was cleared when its leg fell through; the drop leg's marker is
-    // the one left standing, so a watch pass treats it as the seat's own message, never a push.
+    // The drop leg's marker is the one the watch reads, so a later pass treats this as the
+    // seat's own message. The held push name is not a notification.
     expect(readPending(dir)).toEqual([
       { id: SEND_ID, from: 'owner', to: 'lead', body: BODY, ts: NOW.toISOString(), tries: 0, leg: 'drop' },
     ]);

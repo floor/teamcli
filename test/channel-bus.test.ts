@@ -13,6 +13,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { channelPushPath } from '../src/mcp/channel.ts';
 import { listenerPath } from '../src/mcp/inbox.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
+import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { signRecord, type RecordPayload } from '../src/send/record.ts';
 import { testIo } from './helpers.ts';
@@ -44,7 +45,7 @@ seats:
     launch: claude ${FLAG}
 `;
 
-type Place = { root: string; home: string };
+type Place = { root: string; home: string; agents: Record<string, string> };
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
   while (cleanups.length > 0) await cleanups.pop()!();
@@ -66,17 +67,34 @@ function place(): Place {
     `${JSON.stringify({ format: 1, sessions: { [SESSION]: { seats, worktrees: {} } } })}\n`,
   );
   // A server started with no --file resolves its team from the registry record holding the seat.
+  // The roster names the live agent records: a seat sender with no agent id is refused.
+  const agents = Object.fromEntries((['lead', 'worker'] as const).map((seat) => {
+    const agent = registerAgent(home, {
+      name: seat,
+      signing: { model: 'Test', version: '1', role: seat === 'lead' ? 'coordinator' : 'worker' },
+      lab: 'test',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude',
+      reach: { team: teamIdOf(root), seat, session: SESSION, pane: `pane-${seat}`, address: null },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'owner',
+    });
+    return [seat, agent.id];
+  }));
   upsertTeam(home, teamIdOf(root), {
     project: 'acme',
     session: SESSION,
     root,
     roster: [
-      { agent: 'agt_000000000001', seat: 'lead', role: 'coordinator' },
-      { agent: 'agt_000000000002', seat: 'worker', role: 'worker' },
+      { agent: agents.lead!, seat: 'lead', role: 'coordinator' },
+      { agent: agents.worker!, seat: 'worker', role: 'worker' },
     ],
   });
   cleanups.push(() => rmSync(base, { recursive: true, force: true }));
-  return { root, home };
+  return { root, home, agents };
 }
 
 async function bus(at: Place): Promise<BusHandle> {
@@ -158,13 +176,13 @@ async function deliver(at: Place, from: string, to: string, body: string, extra:
     kind: 'message',
     id,
     to,
-    to_id: null,
     root: realpathSync(at.root),
     session: SESSION,
     at: new Date().toISOString(),
     body: `from ${from} — admitted by: the owner\n\n${body}`,
     from,
-    from_id: null,
+    from_id: at.agents[from] ?? null,
+    to_id: at.agents[to] ?? null,
     rule: 'the owner',
     thread: extra.thread ?? id,
     ...extra,
