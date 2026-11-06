@@ -435,7 +435,7 @@ function doctor(home: string, over: Partial<DoctorSources> = {}): DoctorSources 
 function launching(text: string, paneOk: (command: string) => boolean = () => true, server = true): Launch {
   let n = 0;
   let session: 'absent' | 'running' = 'absent';
-  const panes = new Map<string, { text: string; agent: boolean }>();
+  const panes = new Map<string, { text: string; agent: boolean; name: string | null }>();
   return {
     sessionState: () => session,
     startServer() {
@@ -447,7 +447,7 @@ function launching(text: string, paneOk: (command: string) => boolean = () => tr
     createWorkspace() {
       n += 1;
       const pane = `w${n}:p1`;
-      panes.set(pane, { text, agent: false });
+      panes.set(pane, { text, agent: false, name: null });
       return { pane, workspace: `w${n}` };
     },
     paneRun(_session, pane, command) {
@@ -456,10 +456,23 @@ function launching(text: string, paneOk: (command: string) => boolean = () => tr
       if (known) known.agent = true;
       return true;
     },
-    renameAgent: () => true,
+    // A rename the list already shows under the seat's name is left as it is. One that changes
+    // the name is listed under it, which is what the naming step reads back.
+    renameAgent(_session, pane, name) {
+      const known = panes.get(pane);
+      if (known !== undefined && known.name !== name) known.name = name;
+      return true;
+    },
     closeWorkspace: () => true,
     agentPanes: () => [...panes].filter(([, pane]) => pane.agent).map(([id]) => id),
-    agents: () => [],
+    agents: () => [...panes].flatMap(([id, pane]) => (pane.name === null ? [] : [{
+      name: pane.name,
+      agent: 'claude-code',
+      pane: id,
+      workspace: id.replace(/:p1$/, ''),
+      status: 'idle',
+      cwd: null,
+    }])),
     paneText: (_session, pane) => panes.get(pane)?.text ?? '',
     foreground: () => ['claude'],
     sleep: async () => {},
@@ -1987,9 +2000,13 @@ scene('down.never-approved', async (place) => {
 scene('down.legacy', async (place) => {
   approve(place, TEAM);
   editApproval(place, (record) => {
+    // Format 1 is the unsigned shape. lead and actor are signed with format 2, and a format-1
+    // record that still carries either is refused before the legacy reading.
     record.format = 1;
     delete record.signature;
     delete record.generation;
+    delete record.lead;
+    delete record.actor;
   });
   return show(await down(place, [], owner, downSources({
     sessionRunning: () => true, agents: () => [agent('lead')], home: place.home,
@@ -6798,6 +6815,7 @@ function recordReload(place: Place, name: string, recorded = true): void {
 
 function reloadLaunch(options: { create?: boolean; agents?: HerdrAgent[]; text?: string } = {}): Launch {
   const panes = new Map<string, string>([['w1:p1', options.text ?? IDLE]]);
+  const named = new Map<string, string>();
   let clock = Date.parse('2026-10-14T09:00:00Z');
   let n = 0;
   return {
@@ -6815,10 +6833,27 @@ function reloadLaunch(options: { create?: boolean; agents?: HerdrAgent[]; text?:
       panes.set(pane, IDLE);
       return true;
     },
-    renameAgent: () => true,
+    // A rename the list already shows under the seat's name is not called again. One that is
+    // called is listed under that name, which is what the naming step reads back.
+    renameAgent(_session, pane, name) {
+      if (named.get(pane) === name) return true;
+      named.set(pane, name);
+      return true;
+    },
     closeWorkspace: () => true,
     agentPanes: () => [...panes.keys()],
-    agents: () => options.agents ?? [agent('lead')],
+    agents: () => {
+      const base = (options.agents ?? [agent('lead')]).map((one) => {
+        const name = named.get(one.pane);
+        return name === undefined ? one : { ...one, name };
+      });
+      const seen = new Set(base.map((one) => one.pane));
+      for (const [pane, name] of named) {
+        if (seen.has(pane)) continue;
+        base.push({ name, agent: 'claude', pane, workspace: pane, status: 'idle', cwd: null });
+      }
+      return base;
+    },
     workspacePanes: () => ['w1:p1'],
     paneText: (_session, pane) => panes.get(pane) ?? options.text ?? IDLE,
     foreground: () => ['claude'],
