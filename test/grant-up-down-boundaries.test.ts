@@ -22,7 +22,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { LOG_FILE, emptySession, updateState } from '../src/state.ts';
 import { generationsFolder } from '../src/store/keys.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T09:00:00Z');
 const IDLE = CLAUDE_IDLE;
@@ -213,6 +213,8 @@ function upTrace(): { sources: UpSources; trace: UpTrace; session: () => 'absent
     sleep: async () => {},
     now: () => NOW,
   };
+
+  recordRenames(launch);
   const sources: UpSources = {
     sessionRunning: () => session === 'running',
     sessionState: () => session,

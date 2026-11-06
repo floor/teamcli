@@ -24,7 +24,7 @@ import { readAgents } from '../../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../../src/registry/teams.ts';
 import { emptySession, LOG_FILE, readState, updateState } from '../../src/state.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo, recordRenames } from '../helpers.ts';
 
 const NOW = new Date('2026-10-17T09:00:00Z');
 const IDLE = CLAUDE_IDLE;
@@ -182,6 +182,8 @@ function upTrace(): { sources: UpSources; trace: UpTrace } {
     sleep: async () => {},
     now: () => NOW,
   };
+
+  recordRenames(launch);
   const sources: UpSources = {
     sessionRunning: () => session === 'running',
     sessionState: () => session,

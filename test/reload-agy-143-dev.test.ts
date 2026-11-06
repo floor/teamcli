@@ -15,7 +15,7 @@ import { loadTeamFile } from '../src/file/load.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-20T11:00:00Z');
 const OWNER = { kind: 'owner' as const };
@@ -227,6 +227,8 @@ function harness(workerCli: WorkerCli): { sources: ReloadSources; closed: string
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(launch);
   return { sources: { launch, home, now: () => new Date(clock) }, closed, commands };
 }
 

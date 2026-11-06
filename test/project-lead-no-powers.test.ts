@@ -28,7 +28,7 @@ import { readTeams, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { admitSend, PROJECT_RULES, type AdmitContext } from '../src/send/admit.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Machine } from '../src/watch/machine.ts';
-import { testIo } from './helpers.ts';
+import { testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T09:00:00Z');
 const ENTITY = 'floor';
@@ -226,6 +226,8 @@ function launching(onLaunch: () => void): Launch & { closed: number } {
     sleep: async () => {},
     now: () => NOW,
   };
+
+  recordRenames(host);
   return host;
 }
 

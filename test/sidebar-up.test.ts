@@ -25,7 +25,7 @@ import {
 import { noteTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { installKey } from '../src/store/keys.ts';
-import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, testIo, recordRenames } from './helpers.ts';
 
 const EXAMPLE = readFileSync(join(import.meta.dir, 'fixtures/example.yaml'), 'utf8');
 const KEY = JSON.parse(readFileSync(join(import.meta.dir, 'fixtures/key.json'), 'utf8'));
@@ -444,6 +444,9 @@ describe('sidebar step execution', () => {
       log: (who, what) => logged.push(`${who}: ${what}`),
       ...overrides,
     };
+
+
+    recordRenames(host);
     return { host, said, logged, events };
   }
 

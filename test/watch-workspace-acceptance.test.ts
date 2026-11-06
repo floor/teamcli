@@ -21,7 +21,7 @@ import { installKey } from '../src/store/keys.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T09:00:00Z');
 const PROJECT = 'acme';
@@ -157,6 +157,8 @@ function world(): World {
     sleep: async () => {},
     now: () => NOW,
   };
+
+  recordRenames(made.launch);
   return made;
 }
 

@@ -39,7 +39,7 @@ import { validateTeamFile } from '../../src/file/validate.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
 import { emptySession, type State, updateState } from '../../src/state.ts';
 import { approvalStanding, readApproval, storePath, writeApproval, type Standing } from '../../src/store/store.ts';
-import { CLAUDE_IDLE, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, recordRenames, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00.000Z');
 
@@ -342,7 +342,7 @@ function launching(): Launch {
   const panes = new Map<string, { text: string; agent: boolean }>();
   let n = 0;
   let clock = NOW.getTime();
-  return {
+  const host: Launch = {
     sessionState: () => session,
     startServer() {
       session = 'running';
@@ -371,6 +371,8 @@ function launching(): Launch {
     },
     now: () => new Date(clock),
   };
+  recordRenames(host);
+  return host;
 }
 
 function doctor(home: string): DoctorSources {

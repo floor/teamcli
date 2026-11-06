@@ -27,7 +27,7 @@ import { loadTeamFile } from '../../src/file/load.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
 import type { Live } from '../../src/status/compare.ts';
 import { approvalStanding, storePath, writeApproval, type Standing } from '../../src/store/store.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo, recordRenames } from '../helpers.ts';
 import type { Machine } from '../../src/watch/machine.ts';
 
 const NOW = new Date('2026-10-04T00:00:00Z');
@@ -191,6 +191,9 @@ describe('one read of the approval store per command', () => {
       sleep: async () => {},
       now: () => NOW,
     };
+
+
+    recordRenames(launch);
     const gate = gateThenPoison();
     const io = testIo(project, owner);
     const code = await runAdd(['worker', '--file', file], io, {

@@ -30,7 +30,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { readState, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo, recordRenames } from './helpers.ts';
 import { seatOwner, type FakeStore } from './helpers/owner-seat.ts';
 
 const NOW = new Date('2026-11-04T09:00:00.000Z');
@@ -394,6 +394,8 @@ function addWorld(): { launch: Launch; creates: string[] } {
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(made.launch);
   return made;
 }
 

@@ -18,7 +18,7 @@ import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { gitEnv, testIo } from './helpers.ts';
+import { gitEnv, recordRenames, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-11-05T00:10:00Z');
 const SESSION = 'acme';
@@ -196,6 +196,7 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
     sleep: async () => {},
     now: () => NOW,
   };
+  recordRenames(launch);
   const doctor: DoctorSources = {
     version: () => '2.1.288',
     onPath: () => true,

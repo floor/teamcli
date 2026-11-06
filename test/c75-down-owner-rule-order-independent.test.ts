@@ -33,7 +33,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo, recordRenames } from './helpers.ts';
 import { seatOwner, type FakeStore } from './helpers/owner-seat.ts';
 
 const NOW = new Date('2026-11-05T09:30:00.000Z');
@@ -149,6 +149,8 @@ function fakeLaunch(): { launch: Launch; creates: string[] } {
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(state.launch);
   return state;
 }
 

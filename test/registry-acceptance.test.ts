@@ -34,7 +34,7 @@ import { readTriggerLine, type NativePane } from '../src/send/native.ts';
 import { resolveTarget } from '../src/send/resolve.ts';
 import { readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { gitEnv, testIo } from './helpers.ts';
+import { gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-16T09:00:00Z');
 const OWNER = { kind: 'owner' as const };
@@ -509,6 +509,9 @@ seats:
       },
       now: () => new Date(clock),
     };
+
+
+    recordRenames(launch);
     const sources: UpSources = {
       sessionRunning: () => session === 'running',
       sessionState: () => session,

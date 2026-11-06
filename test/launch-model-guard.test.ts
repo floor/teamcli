@@ -24,7 +24,7 @@ import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { emptySession, updateState } from '../src/state.ts';
-import { CLAUDE_IDLE, claudeBox, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-22T10:00:00Z');
 const FILE = ['--file', '.agents/team.yaml'];
@@ -226,6 +226,9 @@ describe('up and add under the entity model rule', () => {
       sleep: async () => {},
       now: () => NOW,
     };
+
+
+    recordRenames(made.launch);
     return made;
   }
 

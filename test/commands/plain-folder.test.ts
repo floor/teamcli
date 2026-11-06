@@ -19,7 +19,7 @@ import { lobbyDir } from '../../src/lobby/gate.ts';
 import { storePath, writeApproval, type Standing } from '../../src/store/store.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
 import { watchLabel } from '../../src/watch/pane.ts';
-import { CLAUDE_IDLE, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, testIo, recordRenames } from '../helpers.ts';
 
 const NOW = new Date('2026-10-03T14:02:00Z');
 const SESSION = 'acme-web';
@@ -165,6 +165,8 @@ function world(): {
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(launch);
   return { launch, creates, runs };
 }
 

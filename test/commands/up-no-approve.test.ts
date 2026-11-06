@@ -14,7 +14,7 @@ import type { Terminal } from '../../src/launch/terminal.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
 import { storePath } from '../../src/store/store.ts';
 import type { Machine } from '../../src/watch/machine.ts';
-import { CLAUDE_IDLE, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, testIo, recordRenames } from '../helpers.ts';
 import { withoutSendId } from '../helpers/output.ts';
 
 const NOW = new Date('2026-10-15T09:00:00Z');
@@ -132,6 +132,8 @@ function launching(onLaunch: () => void): Launch & { closed: number } {
     sleep: async () => {},
     now: () => NOW,
   };
+
+  recordRenames(host);
   return host;
 }
 

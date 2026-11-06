@@ -24,7 +24,7 @@ import { readAgents } from '../src/registry/agents.ts';
 import { generationsFolder, keyFolder } from '../src/store/keys.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const IDLE = CLAUDE_IDLE;
 const NOW = new Date('2026-10-15T12:00:00Z');
@@ -109,6 +109,8 @@ function world(): { launch: Launch; runs: { pane: string; command: string }[] } 
     sleep: async () => {},
     now: () => NOW,
   };
+
+  recordRenames(launch);
   return { launch, runs };
 }
 

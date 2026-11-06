@@ -23,7 +23,7 @@ import { SEAT_ID_PATTERN, emptySession, readState, updateState } from '../src/st
 import { storePath, writeApproval } from '../src/store/store.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-15T12:30:00Z');
 const IDLE = CLAUDE_IDLE;
@@ -163,6 +163,8 @@ function world() {
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(launch);
   return {
     launch,
     get clock() { return clock; },

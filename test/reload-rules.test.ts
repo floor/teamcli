@@ -18,7 +18,7 @@ import { rulesOf } from '../src/launch/rules.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import type { Launch } from '../src/commands/up.ts';
-import { gitEnv, testIo } from './helpers.ts';
+import { gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T09:00:00Z');
 const OWNER = { kind: 'owner' as const };
@@ -199,6 +199,8 @@ function harness(options: { recordedText?: string; recordedStatus?: string; read
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(launch);
   return { sources: { launch, home, now: () => new Date(clock) }, closed, commands, typed, keys };
 }
 

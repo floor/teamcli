@@ -19,7 +19,7 @@ import type { HerdrAgent } from '../src/herdr.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { CLAUDE_IDLE, gitEnv, testIo, type TestIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo, type TestIo, recordRenames } from './helpers.ts';
 import type { Machine } from '../src/watch/machine.ts';
 
 const NOW = new Date('2026-10-03T14:02:00Z');
@@ -170,6 +170,8 @@ function world(): { launch: Launch; creates: string[]; renames: string[] } {
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(made.launch);
   return made;
 }
 

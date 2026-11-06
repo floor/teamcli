@@ -22,7 +22,7 @@ import { getTeam, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { signRecord } from '../src/send/record.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { gitEnv, testIo } from './helpers.ts';
+import { gitEnv, testIo, recordRenames } from './helpers.ts';
 import { intoRegistry, storedTeam, underRegistry } from './helpers/registry-team.ts';
 
 const SESSION = 'acme';
@@ -229,6 +229,8 @@ function fake(): World {
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(world.launch);
   return world;
 }
 

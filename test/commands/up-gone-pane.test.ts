@@ -7,7 +7,7 @@ import { runApprove } from '../../src/approve/command.ts';
 import { runUp, type Launch, type UpSources } from '../../src/commands/up.ts';
 import { type HerdrAgent } from '../../src/herdr.ts';
 import { readState, type SeatState } from '../../src/state.ts';
-import { CLAUDE_IDLE, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, testIo, recordRenames } from '../helpers.ts';
 
 // The boundaries of the waiting-seat heal: a pane the host no longer lists is replaced, and
 // nothing else is. These tests pin the other side of each line the heal draws — the seats whose
@@ -136,6 +136,8 @@ function world(text: string = IDLE): World {
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(state.launch);
   return state;
 }
 

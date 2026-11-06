@@ -21,7 +21,7 @@ import { delegateGate } from '../../src/delegate.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
 import { readState } from '../../src/state.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo, recordRenames } from '../helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00.000Z');
 // The map's own refusal, in the words the add prints it: one sentence for every seat.
@@ -167,6 +167,8 @@ function world(): { launch: Launch; creates: string[] } {
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(held.launch);
   return held;
 }
 

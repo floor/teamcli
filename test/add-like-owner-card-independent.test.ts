@@ -21,7 +21,7 @@ import { readTeamConfig } from '../src/file/team-config.ts';
 import { readTeamText, writeTeamText } from '../src/file/team-text.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { realRegistryTouched } from './helpers/real-registry.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-19T06:10:00Z');
 const owner = { kind: 'owner' } as const;
@@ -168,6 +168,8 @@ function world(): Made {
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(made.launch);
   return made;
 }
 

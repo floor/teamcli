@@ -19,7 +19,7 @@ import type { HerdrAgent } from '../src/herdr.ts';
 import { SESSIONS_FILE, readStoreSessions } from '../src/sessions/registry.ts';
 import { LOG_FILE, readState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, recordRenames, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-19T03:00:00Z');
 const OWNER = { kind: 'owner' as const };
@@ -179,6 +179,7 @@ function makeWorld(root: string): World {
     sleep: async () => {},
     now: () => NOW,
   };
+  recordRenames(launch);
   const down: DownLaunch = {
     typeText(_session, pane, text) {
       const slot = slots.get(pane);
