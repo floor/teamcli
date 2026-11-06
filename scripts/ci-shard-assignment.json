@@ -468,6 +468,7 @@
     "test/e2e.test.ts": 5,
     "test/effort-default-acceptance.test.ts": 5,
     "test/end.test.ts": 0,
+    "test/endpoint-blocked-notice.test.ts": 0,
     "test/entity-create-grant.test.ts": 4,
     "test/error-same-dest-independent.test.ts": 0,
     "test/event-thresholds-coverage.test.ts": 0,

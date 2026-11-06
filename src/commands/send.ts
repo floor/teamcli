@@ -63,6 +63,7 @@ import {
   type HeadlessResumeSpawn,
 } from '../send/push-adapters.ts';
 import { bindPane, deliverTrigger, draftNote, showsTranscriptToken, TRIGGER_TAKEN_NOTE, type DeliverResult } from '../send/deliver.ts';
+import { clearEndpointBlocked, endpointBlockedLine, writeEndpointBlockedNotice } from '../send/endpoint-notice.ts';
 import { dropMessage, readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { deliverTypedWake, herdrTypedWakeHost, type TypedWakeHost } from '../send/typed-wake.ts';
 import { awaitReceipt, claimBindingIn, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld, type InboxLiveness } from '../mcp/inbox.ts';
@@ -2490,6 +2491,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
         note(attempt.walkAttempt);
         markLeg('native', 'attempted', attempt.outcome === 'enqueue' ? undefined : attempt.reason);
         if (attempt.outcome === 'enqueue') {
+          clearEndpointBlocked(to.root, to.session, to.seat);
           report.sent = msgId;
           // The leg that took the message decides the words. The queue accepted the pointer, so
           // the seat is woken through its runtime queue whatever the class read said before the
@@ -5798,6 +5800,7 @@ export async function walkReplyDelivery(input: {
           },
         );
         if (attempt.outcome === 'enqueue') {
+          clearEndpointBlocked(input.root, input.session, seatName);
           const grace = input.host.inboxGraceMs ?? INBOX_GRACE_MS;
           if (await awaitReceipt(dropDir, msgId, { to: seatName, root: input.root, session: input.session }, input.host.home, grace, claimBindingIn(input.root, input.session, seatName, msgId))) {
             return ended({ via: 'native', walked: true, unconfirmed: false, summary: `${seatName}: delivered (read) (drop ${String(input.payload.body.length)} characters, native queue receipt)` });
@@ -7130,49 +7133,6 @@ function deliveredSession(io: Io, seat: string, report: Report, session: string)
  *  while it is idle says `queued, not woken` instead — the same word the history line carries —
  *  because `sent (unconfirmed)` reads like success while the drop waits for a turn nothing gives.
  *  Exit 0, always. */
-/** The one line a missing Codex socket prints, to the sender and to the lead. The probe's
- *  reason stays on the line. The history outcome stays `queued, not woken`. */
-function endpointBlockedLine(seat: string, reason: string): string {
-  return `${seat}: blocked, its Codex endpoint is not listening; the message is in its bus inbox; team up restores the endpoint (${reason})`;
-}
-
-/** The signed notice the lead's drop folder gets when a Codex seat's recorded socket is not
- *  listening. The seat's own record stays the mailbox copy; a lead write that fails leaves
- *  that copy where it is. */
-function writeEndpointBlockedNotice(input: {
-  home: string;
-  root: string;
-  session: string;
-  lead: string;
-  seat: string;
-  reason: string;
-  at: string;
-}): void {
-  if (input.lead === '' || input.lead === input.seat) return;
-  try {
-    const id = randomUUID();
-    const leadDir = join(input.root, '.agents', 'send-drops', input.session, input.lead);
-    const signed = signRecord({
-      kind: 'message',
-      id,
-      to: input.lead,
-      to_id: null,
-      root: realpathSync(input.root),
-      session: input.session,
-      at: input.at,
-      body: endpointBlockedLine(input.seat, input.reason),
-      from: 'runtime',
-      from_id: null,
-      rule: "the team's unread-message report",
-      thread: id,
-    }, input.home);
-    dropMessage(leadDir, id, `${JSON.stringify(signed, null, 2)}\n`);
-  } catch {
-    // The printed line is the notice. A lead drop that cannot be written does not
-    // unsend the seat's own record.
-  }
-}
-
 function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 'drop' | 'typed' | 'native' | 'headless-resume' | 'webhook' | 'socket' | 'session', note?: string): number {
   const notWoken = leg === 'drop' && dropNotWoken(report);
   const status: 'sent (unconfirmed)' | 'queued, not woken' = notWoken ? 'queued, not woken' : 'sent (unconfirmed)';
