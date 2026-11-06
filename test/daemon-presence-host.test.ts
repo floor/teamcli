@@ -321,6 +321,8 @@ describe('the health answer during startup', () => {
       close: async () => ({ quiesced: true }),
       isClosed: () => false,
     };
+    let enteredSend!: () => void;
+    const sendEntered = new Promise<void>(resolve => { enteredSend = resolve; });
     const started = startMachineDaemon({
       home: world.home,
       roots: [world.root],
@@ -331,11 +333,11 @@ describe('the health answer during startup', () => {
       presenceIngest: () => ingester,
       presenceActivity: () => async () => activityResult(),
       presencePublish: () => async () => publishResult(),
-      sendStart: () => gate,
+      sendStart: () => { enteredSend(); return gate; },
     });
     // A failed assertion above the release must not leave the close waiting on the gate.
-    later(() => releaseSend?.({ kind: 'locked', holderPid: null }));
     later(async () => {
+      releaseSend?.({ kind: 'locked', holderPid: null });
       const result = await started;
       if (result.kind === 'serving') await result.daemon.close();
     });
@@ -344,6 +346,9 @@ describe('the health answer during startup', () => {
       return read.kind === 'ok'
         && read.state.roots.some((one) => one.root === world.root && one.send === 'starting');
     });
+    // The state file can name the root before its health route is registered. This callback
+    // is entered only after the route and presence work exist.
+    await sendEntered;
     const answer = await probeDaemonHealth(daemonSocketPath(world.home), {
       id: 'probe-during-startup',
       timeoutMs: 2_000,
