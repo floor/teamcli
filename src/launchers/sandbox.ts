@@ -58,6 +58,9 @@ export type SandboxContext = {
   setup?: 'ok' | 'failed';
   /** Why setup failed, surfaced in the refusal. */
   setupReason?: string;
+  /** The folder the launcher kind passed as the sandbox root. A writable folder
+   *  outside it is refused. Absent: this check is not applied. */
+  sandboxRoot?: string;
 };
 
 function covers(folder: string, path: string): boolean {
@@ -110,6 +113,26 @@ export function checkSandbox(ctx: SandboxContext): Diagnostic[] {
           code: 'E_SANDBOX_UNSUPPORTED',
           severity: 'error',
           message: `harness "${ctx.harness}" (${capability.mechanism}) cannot map ${folder} outside the workspace at launch; the seat is refused`,
+        });
+      }
+    }
+  }
+
+  if (ctx.sandboxRoot !== undefined) {
+    const root = ctx.sandboxRoot;
+    if (!ctx.folders.some((folder) => covers(folder, root))) {
+      diagnostics.push({
+        code: 'E_SANDBOX_EXCLUDES_WORKTREE',
+        severity: 'error',
+        message: `the sandbox does not include ${root}; the launcher kind did not pass it`,
+      });
+    }
+    for (const folder of ctx.folders) {
+      if (!covers(root, folder)) {
+        diagnostics.push({
+          code: 'E_SANDBOX_OUTSIDE_ROOT',
+          severity: 'error',
+          message: `team check refuses ${folder}: the sandbox root ${root} does not include it`,
         });
       }
     }
