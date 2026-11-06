@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
+import { syncChildTimeout } from '../child.ts';
 import { declaredRoots } from '../entities.ts';
 import { readArgs } from '../args.ts';
 import { admitGeneral } from '../client/general-grant.ts';
@@ -82,7 +83,11 @@ function declaredEntity(home: string, place: string): string | null {
 
 function git(root: string, ...args: string[]): string | null {
   try {
-    return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return execFileSync('git', ['-C', root, ...args], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: syncChildTimeout(5_000),
+    }).trim();
   } catch {
     return null;
   }

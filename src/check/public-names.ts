@@ -24,6 +24,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { syncChildTimeout } from '../child.ts';
 import { forbiddenPatterns, type CheckConfig } from './config.ts';
 
 /** Where a rule reads: a tracked path, or a tracked file's text. */
@@ -80,7 +81,11 @@ export function publicNameRules(config: CheckConfig): { rules: PublicNameRule[] 
 
 /** Every tracked file under `root`, or the reason the index could not be read. */
 function trackedFiles(root: string): { files: string[] } | { problem: string } {
-  const listed = spawnSync('git', ['-C', root, 'ls-files', '-z'], { encoding: 'utf8' });
+  const listed = spawnSync('git', ['-C', root, 'ls-files', '-z'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: syncChildTimeout(15_000),
+  });
   if (listed.error !== undefined) {
     return { problem: `cannot list the tracked files of ${root}: ${listed.error.message}` };
   }

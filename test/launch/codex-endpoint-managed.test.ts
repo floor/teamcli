@@ -278,7 +278,7 @@ describe('Scope (3): a Codex seat never attaches to an unmanaged shared server (
     ).then(() => ({ ran, said }));
   }
 
-  test('passes --no-daemon when managedCodexEndpoint refuses, is absent, or codexEndpoint is unmarked', async () => {
+  test('a managed start that is not up leaves the seat out; an unmarked line still passes --no-daemon', async () => {
     const baseStep = (command: string, withEndpoint: boolean): Step => ({
       kind: 'run',
       argv: ['herdr', 'pane', 'run', 'pane-2', command],
@@ -297,10 +297,12 @@ describe('Scope (3): a Codex seat never attaches to an unmanaged shared server (
       baseStep('codex -m gpt-5.4 -a never -s danger-full-access', true),
       async () => ({ kind: 'unmanaged', why: 'the Codex app-server did not create its socket in time' }),
     );
-    expect(refused.ran).toEqual(['codex -m gpt-5.4 -a never -s danger-full-access --no-daemon']);
+    expect(refused.ran).toEqual([]);
+    expect(refused.said.join('\n')).toContain('the managed Codex endpoint was not started: the Codex app-server did not create its socket in time');
 
     const noHost = await runLaunch(baseStep("zsh -lc 'codex -m gpt-5.4 -a never -s danger-full-access'", true));
-    expect(noHost.ran).toEqual(["zsh -lc 'codex -m gpt-5.4 -a never -s danger-full-access --no-daemon'"]);
+    expect(noHost.ran).toEqual([]);
+    expect(noHost.said.join('\n')).toContain('the managed Codex endpoint was not started: this launch starts no managed Codex endpoint');
 
     const unmarked = await runLaunch(baseStep('codex -m gpt-5.4', false));
     expect(unmarked.ran).toEqual(['codex -m gpt-5.4 --no-daemon']);

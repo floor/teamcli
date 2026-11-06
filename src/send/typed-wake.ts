@@ -198,6 +198,23 @@ export async function deliverTypedWake(
       if (returned !== 'idle') {
         return { delivered: false, typed: keyedReturn, tries: 0, reason: `the screen read ${returned} after the return key, not an empty idle prompt; no wake line was typed` };
       }
+    } else if (first === 'feedback survey') {
+      // The pane sits at the CLI's post-turn feedback survey in the composer's place. The only
+      // answer TeamCLI ever sends to this dialog is '0' (Skip), once; the pane is then re-read
+      // twice after it, and the wake continues only if an empty idle prompt shows.
+      const skipKey = screenData(cli)?.feedbackSurvey?.skipKey;
+      if (skipKey === undefined || host.key === undefined) {
+        return { delivered: false, typed: false, tries: 0, reason: 'the screen is at a feedback survey and no skip key is bound; nothing was typed' };
+      }
+      if (!host.key(pane, skipKey)) {
+        return { delivered: false, typed: false, tries: 0, reason: 'the pane did not take the skip key; nothing was typed' };
+      }
+      keyedReturn = true;
+      await host.wait(enterSettleMs);
+      const returned = seenOf(cli, host.read(pane));
+      if (returned !== 'idle') {
+        return { delivered: false, typed: keyedReturn, tries: 0, reason: `the screen read ${returned} after the skip key, not an empty idle prompt; no wake line was typed` };
+      }
     } else if (first !== 'idle') {
       return { delivered: false, typed: false, tries: 0, reason: `the first read showed ${first}, not an empty idle prompt; nothing was typed` };
     }

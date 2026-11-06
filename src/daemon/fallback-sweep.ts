@@ -20,6 +20,7 @@ import { DAEMON_BACKLOG_DEFAULTS, loadAndResolvePolicyChain } from '../policy/in
 import {
   drainDeferredNotesSteps,
   escalationSteps,
+  FALLBACK_STEP_CHUNK_MS,
   reclaimSteps,
   retirementSteps,
   type DeferredNoteDrainReport,
@@ -35,6 +36,10 @@ export const FALLBACK_STORE_PASS_MS = 30_000;
 /** Episodes retired and lock folders judged by one retirement pass. A store with a long history
  *  drains over several passes instead of one tick holding the event loop. */
 export const FALLBACK_STORE_PASS_LIMIT = 256;
+
+/** The wall-clock turn cap inside a sliced pass: even when the caller's slice budget is wider, a
+ *  real-clock pass yields at least this often so a child's heartbeat timer is never starved. */
+export const FALLBACK_SLICE_STEP_MS = FALLBACK_STEP_CHUNK_MS;
 
 /** A hosted checkout and the team file the daemon validated when it started. */
 export type SweepRoot = { root: string; team: TeamFile };
@@ -184,6 +189,10 @@ export async function sweepFallbackEscalationsSliced(
   input: FallbackSweepInput & { slices: SweepSlices; sliceClock?: () => number },
 ): Promise<FallbackSweepResult> {
   const clock = input.sliceClock ?? Date.now;
+  const budgetMs =
+    input.sliceClock !== undefined
+      ? input.slices.sliceMs
+      : Math.min(input.slices.sliceMs, FALLBACK_SLICE_STEP_MS);
   const at = input.now();
   const roots: SweepRootResult[] = [];
   for (const given of input.roots) {
@@ -192,7 +201,7 @@ export async function sweepFallbackEscalationsSliced(
     let sliceStart = clock();
     let step = steps.next();
     while (!step.done) {
-      if (clock() - sliceStart >= input.slices.sliceMs) {
+      if (clock() - sliceStart >= budgetMs) {
         const more = await input.slices.yield();
         if (!more || input.slices.stopping()) {
           steps.return(null);

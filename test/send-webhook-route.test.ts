@@ -103,7 +103,7 @@ describe('team send names the webhook route', () => {
     const io = owner(at.root);
     const code = await runSend(['iris', 'the gate is green'], io, fake(at));
     expect(code, io.err).toBe(0);
-    expect(io.out).toContain('sent (unconfirmed)');
+    expect(io.out).toContain('queued, not woken');
     // The send walked the adapter and the post provably failed (the port refuses), so the walk
     // fell through to the drop and the queued words stand for the bus and the seat's pull.
     expect(io.out).toContain('webhook not delivered: could not connect (ConnectionRefused)');
@@ -145,7 +145,7 @@ describe('team send names the webhook route', () => {
     const io = owner(at.root);
     const code = await runSend(['iris', 'the gate is green'], io, fake(at));
     expect(code, io.err).toBe(0);
-    expect(io.out).toContain('sent (unconfirmed)');
+    expect(io.out).toContain('queued, not woken');
     expect(io.out).toContain('queued; its webhook fires when the bus takes it');
     expect(io.out).not.toContain('woken through its event adapter');
     expect(io.out).not.toContain('woken through its webhook adapter');

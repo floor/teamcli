@@ -205,6 +205,7 @@
               "conversation",
               "endpoint",
               "listener",
+              "unread",
               "oldest_unread_seconds"
             ],
             "properties": {
@@ -228,6 +229,13 @@
               },
               "listener": {
                 "type": "boolean"
+              },
+              "unread": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
               },
               "oldest_unread_seconds": {
                 "type": [

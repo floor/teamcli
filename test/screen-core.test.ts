@@ -1356,3 +1356,55 @@ ${scrollBack}
     return_key: escape`))).toThrow('a scroll_back status footer must match the whole line');
   });
 });
+
+describe('the feedback_survey declaration', () => {
+  const snippet = (survey: string): string => `format: 1
+cli: fixture
+screen:
+${survey}
+  composer:
+    mode: status-last
+    status_line: ['^  STATUS']
+    prompt: '^>'
+    placeholders:
+      - equals: ''
+`;
+
+  test('loads prompt, choices, optional status_footer and skip_key 0, and refuses any other key or unanchored row', () => {
+    const bare = loadScreen(snippet(`  feedback_survey:
+    prompt: '^How is the CLI\\?$'
+    choices: '^\\[1\\] Good  \\[0\\] Skip$'
+    skip_key: '0'`)) as { feedbackSurvey?: { prompt: RegExp; choices: RegExp; statusFooter?: RegExp; skipKey: string } };
+    expect(bare.feedbackSurvey?.prompt.test('How is the CLI?')).toBe(true);
+    expect(bare.feedbackSurvey?.choices.test('[1] Good  [0] Skip')).toBe(true);
+    expect(bare.feedbackSurvey?.statusFooter).toBeUndefined();
+    expect(bare.feedbackSurvey?.skipKey).toBe('0');
+
+    const withFooter = loadScreen(snippet(`  feedback_survey:
+    prompt: '^How is the CLI\\?$'
+    choices: '^\\[1\\] Good  \\[0\\] Skip$'
+    status_footer: '^\\? for shortcuts$'
+    skip_key: '0'`)) as { feedbackSurvey?: { statusFooter?: RegExp; skipKey: string } };
+    expect(withFooter.feedbackSurvey?.statusFooter?.test('? for shortcuts')).toBe(true);
+
+    for (const badKey of ['1', '2', '3', 'escape', 'enter']) {
+      expect(() => loadScreen(snippet(`  feedback_survey:
+    prompt: '^How is the CLI\\?$'
+    choices: '^\\[1\\] Good  \\[0\\] Skip$'
+    skip_key: '${badKey}'`))).toThrow('"feedback_survey.skip_key" must be one of 0');
+    }
+    expect(() => loadScreen(snippet(`  feedback_survey:
+    prompt: 'How is the CLI\\?'
+    choices: '^\\[1\\] Good  \\[0\\] Skip$'
+    skip_key: '0'`))).toThrow('a feedback_survey prompt must match the whole line');
+    expect(() => loadScreen(snippet(`  feedback_survey:
+    prompt: '^How is the CLI\\?$'
+    choices: '\\[1\\] Good  \\[0\\] Skip'
+    skip_key: '0'`))).toThrow('a feedback_survey choices must match the whole line');
+    expect(() => loadScreen(snippet(`  feedback_survey:
+    prompt: '^How is the CLI\\?$'
+    choices: '^\\[1\\] Good  \\[0\\] Skip$'
+    status_footer: '\\? for shortcuts'
+    skip_key: '0'`))).toThrow('a feedback_survey status footer must match the whole line');
+  });
+});

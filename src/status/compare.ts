@@ -480,8 +480,8 @@ export function compare(
       const unidentifiedMismatch = unidentified && modelDiffers(seatModel(seat, screenText), seat);
       if (isUnsent && recorded?.stage === 'named' && !unidentifiedMismatch) {
         differences.push({
-          what: `${seat.name}: its launch stopped at "named", and it holds text in its input box that was never sent`,
-          repair: 'clear or send it in the pane, then team up (it resumes the launch)',
+          what: `${seat.name}: its launch stopped at "named", and its input box reads as holding text; nothing is typed there`,
+          repair: 'the owner looks at it in the pane, then team up (it resumes the launch)',
           needs: 'approve',
         });
       } else {
@@ -498,8 +498,8 @@ export function compare(
         }
         if (isUnsent) {
           differences.push({
-            what: `${seat.name} holds text in its input box that was never sent`,
-            repair: "the owner clears or sends it in the pane; team does not type into a box it can't verify",
+            what: `${seat.name}: its input box reads as holding text; nothing is typed there`,
+            repair: 'the owner looks at it in the pane; team types nothing there',
             owner: true,
           });
         }

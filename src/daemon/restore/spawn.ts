@@ -140,6 +140,12 @@ export async function runRestoreSweepInChild(input: SpawnRestoreInput): Promise<
     resolveResult = resolve;
     rejectResult = reject;
   });
+  // The caller's await is what reads this promise, and it still sees every rejection: this
+  // handler is only the spawner's own, so an ended pass is never a process-level unhandled
+  // rejection. A close that ends the pass rejects in the same turn the daemon stops admitting,
+  // before that await can be reached again; a hosted Linux run reported exactly that abort as
+  // unhandled and failed the scenes that close a daemon mid-pass.
+  void done.catch(() => {});
 
   /** Ends the child after a settled result: its pass returned, so the first signal ends it. The
    *  signal is forced after a short grace, never left to a pass that has nothing left to stop. */

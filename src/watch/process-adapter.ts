@@ -29,6 +29,7 @@
 
 import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import { readlinkSync } from 'node:fs';
+import { syncChildTimeout } from '../child.ts';
 
 /** The one fact this adapter answers: the working folder of the process at `pid`, or null when
  *  the process is gone or the folder cannot be read. */
@@ -46,6 +47,7 @@ export const processWorkingFolderOf: WorkingFolderReader = (pid) => {
     const line = execFileSync('lsof', ['-a', '-d', 'cwd', '-p', String(pid), '-Fn'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: syncChildTimeout(2_000),
     });
     for (const entry of line.split('\n')) {
       if (entry.startsWith('n') && entry.length > 1) return entry.slice(1);

@@ -1730,6 +1730,13 @@
       "provenance": "constructed"
     },
     {
+      "file": "antigravity/1.4.12/feedback-survey.txt",
+      "cli": "antigravity",
+      "classify": "feedback survey",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
       "file": "cursor/2026.10.14/exit.txt",
       "cli": "cursor",
       "classify": "unknown",
@@ -2129,6 +2136,13 @@
       "provenance": "constructed"
     },
     {
+      "file": "muse/1.4.14/hint-grey-synthetic.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "constructed"
+    },
+    {
       "file": "muse/1.4.14/idle.txt",
       "cli": "muse",
       "classify": "idle",
@@ -2348,8 +2362,8 @@
     {
       "file": "muse/1.4.11/prose-hint-color.txt",
       "cli": "muse",
-      "classify": "unsent",
-      "composer": "unsent",
+      "classify": "idle",
+      "composer": "idle",
       "provenance": "constructed"
     },
     {

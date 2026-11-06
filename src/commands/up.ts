@@ -85,7 +85,7 @@ import { launchLineFinding, launchedCliBinary } from '../launch/line.ts';
 import { launchRefusal, readEntityModelRule, type EntityModelRule } from '../launch/model-guard.ts';
 import { charterGate } from '../charter/check.ts';
 import { charterFolderPretrust, grantedFolderPretrust, lobbyPretrustLine, projectRootPretrust } from '../launch/pretrust.ts';
-import { formatPlan, launchWillRun, managedCodexLaunch, registryLaunches, upPlan, type Op, type UpSeat } from '../launch/plan.ts';
+import { codexCommandHasFlag, formatPlan, launchWillRun, managedCodexLaunch, registryLaunches, upPlan, type Op, type UpSeat } from '../launch/plan.ts';
 import { runPause, type PauseHost, type PauseInput } from '../launch/pause.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { unreadIdle } from '../launch/unread.ts';
@@ -111,7 +111,7 @@ import { continuityIdOf, continuityIdsOf, recordedSeatContinuity, recordedSeatSe
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { nativePushBindingFor } from '../send/push.ts';
-import { refreshAgentAddress } from '../send/address.ts';
+import { defaultSocketsDirs, refreshAgentAddressFrom } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { emptySession, liveHold, mintSeatId, pidAlive, readState, seatOfFile, updateState, type RetainedSeat, type SeatState, type WaitingRecord } from '../state.ts';
@@ -177,6 +177,9 @@ export type UpSources = {
   logGranted?: typeof logGranted;
   // Present on the shipped command. A dry run never calls it.
   launch?: Launch;
+  // The folders a session's socket is discovered in, where the run records an address. Absent:
+  // the real ones. A test passes its own, so no scene reads a socket of the machine's.
+  sockets?: string | readonly string[];
   // The loaded threads a managed Codex endpoint holds, for binding a ready seat whose records
   // name no conversation to the one thread its endpoint proves. Absent in a world that binds
   // nothing: the launch's summary then names no pull-only reason.
@@ -961,12 +964,11 @@ function seatPlan(
         };
       }
       if (drift.kind === 'hold') return { ...planned, stage: 'ready', driftHold: drift.detail };
-      // The recorded managed endpoint died with the host (or with the process): the pane's CLI
-      // is not the seat's running form any more. It is exited in place and the seat is launched
-      // again there through its own line — the launch starts a fresh endpoint and attaches to
-      // it — carrying the conversation this proof names where the line can. A live endpoint,
-      // an absent or invalid record, or a reading this build cannot take leaves the pane
-      // adopted as it is: the repair is never made on a guess.
+      // The recorded managed endpoint died, or the seat is live with no usable record: the
+      // pane's CLI is not the seat's running form any more. It is exited in place and the seat
+      // is launched again there through its own line — the launch starts a fresh endpoint and
+      // attaches to it — carrying the conversation this proof names where the line can. A live
+      // endpoint, or a reading this build cannot take, leaves the pane adopted as it is.
       if (endpointRelaunch(seat, recorded, planned.launch)) {
         const held = replacedScreenRefusal(seat, recorded.pane, screenOf, onRecordedPane?.status);
         if (held) {
@@ -1061,9 +1063,10 @@ function seatPlan(
         resume: continuitySession,
       };
     } else if ((proof.kind === 'session' || proof.kind === 'cli') && endpointRelaunch(seat, recorded, planned.launch)) {
-      // A Codex seat whose recorded managed endpoint died with the host is not adopted on the
-      // endpoint it lost: the CLI is exited in place and the seat's own launch line runs there,
-      // starting a fresh endpoint and attaching to it. The weak (`cli`) proof is enough — the
+      // A Codex seat whose recorded managed endpoint died, or that is live with no usable
+      // record, is not adopted on the endpoint it lost: the CLI is exited in place and the
+      // seat's own launch line runs there, starting a fresh endpoint and attaching to it. The
+      // weak (`cli`) proof is enough — the
       // exit is for the endpoint, not for a conversation — and the strong one carries its
       // conversation. The pane guards are item 7's own: a working or unsent pane is held before
       // any key is typed, and a line that cannot carry a proven conversation stops here.
@@ -1132,6 +1135,19 @@ function seatPlan(
   // created or closed. The live run re-reads the pane and its workspace immediately before the
   // launch (`execute.ts`), and a changed reading leaves the seat out with nothing launched.
   if (verdict === 'gone' && recorded.workspace && recorded.pane && recorded.launched) {
+    // A seat with no live process here is not this session's to relaunch when its agent record
+    // stands in another session's pane: the registry's reach names the pane a send resolves, so
+    // a launch here would write this session's pane over a seat another session still holds —
+    // the same record the address pass refuses to refresh. Nothing is closed, typed into or
+    // recorded; the run names the conflict and leaves the seat to that session.
+    const elsewhere = findAgent(home, { team: teamIdOf(root), seat: seat.name });
+    if (elsewhere !== null && elsewhere.reach.session !== session) {
+      return {
+        ...planned,
+        stage: recorded.stage,
+        sessionDoubt: `its agent record names ${elsewhere.reach.pane === null ? 'no pane' : `pane ${elsewhere.reach.pane}`} in session ${elsewhere.reach.session}, not this one; this run leaves the seat to that session`,
+      };
+    }
     return {
       ...planned,
       repair: { pane: recorded.pane, workspace: recorded.workspace, launched: recorded.launched, cli: seat.cli, reuse: true },
@@ -1177,6 +1193,42 @@ function seatPlan(
         };
       }
       if (drift.kind === 'hold') return { ...planned, stage: 'ready', driftHold: drift.detail };
+      if (
+        verdict === 'same'
+        && recorded.pane
+        && recorded.workspace
+        && recorded.launched
+        && paneEntry !== undefined
+        && callerSeat !== seat.name
+        && endpointRelaunch(seat, recorded, planned.launch)
+      ) {
+        const held = replacedScreenRefusal(seat, recorded.pane, screenOf, paneEntry.status);
+        if (held) {
+          return {
+            ...planned,
+            stage: 'ready',
+            sessionDoubt: held.why,
+            ...(held.working ? { doubtWorking: true } : {}),
+          };
+        }
+        const resumedSession =
+          provenSession ?? (paneEntry.session === undefined && continuitySession !== null ? continuitySession : undefined);
+        const resumeHold = resumedSession === undefined ? undefined : uncarryableResume(planned, resumedSession);
+        if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+        return {
+          ...planned,
+          pane: recorded.pane,
+          workspace: recorded.workspace,
+          repair: {
+            pane: recorded.pane,
+            workspace: recorded.workspace,
+            launched: recorded.launched,
+            cli: seat.cli,
+            ownLine: { ...(provenSession === undefined ? {} : { session: provenSession }), endpoint: true },
+          },
+          ...(resumedSession === undefined ? {} : { resume: resumedSession }),
+        };
+      }
       const listed = named ?? known.find((agent) => agent.pane === recorded.pane);
       return {
         ...planned,
@@ -2398,19 +2450,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   });
   const seats: UpSeat[] = [];
   const refused = new Set<string>();
-  // Whether a restored seat's managed Codex endpoint is provably gone. The record must be one a
-  // launch wrote for the seat's current binding, its socket must be missing, its pid dead or
-  // handed to another process since (the same chain `team check` reports), and the seat's own
-  // launch line must be one that would start a managed endpoint now. Only a proven loss
-  // relaunches the seat; an absent record, a policy that plans no endpoint, or a reading this
-  // build cannot take keeps the pane adopted.
+  // Whether a restored seat must be launched again for its managed endpoint. The seat's own
+  // launch line must be one that would start a managed endpoint now. A usable record that is
+  // provably dead is relaunched, and so is a ready seat whose record is absent or unusable,
+  // including a recorded line that carries the --no-daemon a failed start appended. A policy
+  // that plans no endpoint, or a live record this build cannot prove dead, keeps the pane.
   const endpointRelaunch = (seat: Seat, held: SeatState, launch: string): boolean => {
     const liveness = sources.codexEndpoint;
     if (liveness === undefined || sources.launch?.codexEndpoint === undefined) return false;
     const profile = profileFor(seat.cli);
     if (profile === null) return false;
-    const record = readRecordedCodexEndpoint(held.codex_endpoint, held.presence_binding);
-    if (record === null) return false;
     const daemon = codexDaemonForSeat({ home: sources.home, root, team, seat: seat.name, session });
     if (!managedCodexLaunch({
       cli: profile.cli,
@@ -2420,6 +2469,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       launch,
       command: launch,
     })) return false;
+    const record = readRecordedCodexEndpoint(held.codex_endpoint, held.presence_binding);
+    if (record === null) return true;
+    if (held.launch_line !== undefined && codexCommandHasFlag(held.launch_line, '--no-daemon')) return true;
     const read = recordedEndpointState({
       dir,
       session,
@@ -3825,15 +3877,42 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         };
       }),
     )) logLine(dir, 'up', callerLabel(caller), note, now());
-    // The address: a claude-code seat this run left ready records the socket its session answers
-    // at, so a later send reaches it without re-reading herdr. A pane herdr cannot read leaves
-    // whatever the record holds; the note, if any, is a log line like the registry's own.
+    // The address: every declared claude-code seat this run leaves live records the socket its
+    // session answers at, so a later send reaches it without re-reading herdr — a seat it left
+    // ready and one it could not take as well, because a run that gave up on a seat does not
+    // stop the pane being the one the seat's record names. Each pane is read once, through the
+    // same seam the run's own steps used, and the record's identity is the gate: `same` is the
+    // very process the record names, whose socket is the seat's; `gone` is that seat's shell
+    // back in front, and clears an address the dead CLI left. A pane holding a process the
+    // record does not name, or a record that names none, is never given an address — a send
+    // that dialed one would wake a process this record cannot name (`team register` is that
+    // seat's repair). `unknown` covers a pane herdr cannot read, which writes nothing. The
+    // note, if any, is a log line like the registry's own.
+    //
+    // Two records are never refreshed from here. A record whose reach names another session's
+    // pane describes a launch standing where this run is not: the address found here, or the
+    // silence of a dead pane there, is another session's to write, and writing it from this one
+    // would clear or re-point a live seat this run never read. A pane is one seat's as well: a
+    // pane herdr names for another seat belongs to that seat, and an unnamed pane another
+    // declared seat's own record already claims is no seat's to dial — `team register` refuses
+    // both the same way (`paneNamedRefused`, `paneTakenRefused`), and a send that followed
+    // either address would wake a process this seat does not own.
+    const listedAgents = launch.agents(session);
     for (const seat of team.seats) {
       const held = afterwards[seat.name];
-      if (seat.cli !== 'claude-code' || held?.stage !== 'ready' || !held.pane) continue;
+      if (seat.cli !== 'claude-code' || !held?.pane) continue;
       const agent = findAgent(sources.home, { team: teamIdOf(root), seat: seat.name });
       if (!agent) continue;
-      const refreshed = refreshAgentAddress(sources.home, agent.id, held.pane, session);
+      if (agent.reach.session !== session || agent.reach.pane !== held.pane) continue;
+      const named = listedAgents?.find((entry) => entry.pane === held.pane);
+      if (named !== undefined && named.name !== null && named.name !== seat.name) continue;
+      const claimedByOther = named?.name !== seat.name
+        && team.seats.some((other) => other.name !== seat.name && other.human !== true && afterwards[other.name]?.pane === held.pane);
+      if (claimedByOther) continue;
+      const processes = launch.processInfo?.(session, held.pane) ?? null;
+      const verdict = seatProcessVerdict(held.launched, processes);
+      if (verdict !== 'same' && verdict !== 'gone') continue;
+      const refreshed = refreshAgentAddressFrom(sources.home, agent.id, processes, sources.sockets ?? defaultSocketsDirs());
       if (refreshed.note) logLine(dir, 'up', callerLabel(caller), refreshed.note, now());
     }
     const pending = team.seats.filter((seat) => {

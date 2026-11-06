@@ -746,7 +746,7 @@ export function* drainDeferredNotesSteps(
     unreadable: [],
     scanned: 0,
   };
-  for (const found of yield* notesUnderSteps(ctx.root)) {
+  for (const found of yield* notesUnderSteps(ctx.root, limit)) {
     if (report.drained.length + report.refused.length + report.deferred.length + report.unreadable.length >= limit) break;
     yield;
     report.scanned += 1;
@@ -802,8 +802,9 @@ export function* drainDeferredNotesSteps(
 
 /** Every deferred note under a root's transport tree, sessions and seats sorted so a pass is
  *  ordered. `text` is null when the file cannot be read at all. */
-function* notesUnderSteps(root: string): Generator<void, { path: string; text: string | null }[]> {
+function* notesUnderSteps(root: string, limit = Number.POSITIVE_INFINITY): Generator<void, { path: string; text: string | null }[]> {
   const found: { path: string; text: string | null }[] = [];
+  if (limit <= 0) return found;
   const base = join(root, '.agents', 'send-drops');
   for (const session of yield* folderNamesSteps(base)) {
     const sessionDir = join(base, session);
@@ -813,6 +814,7 @@ function* notesUnderSteps(root: string): Generator<void, { path: string; text: s
         yield;
         const path = join(seatDir, name);
         found.push({ path, text: readNoFollow(path) });
+        if (found.length >= limit) return found;
       }
     }
   }

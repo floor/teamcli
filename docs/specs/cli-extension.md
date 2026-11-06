@@ -125,7 +125,11 @@ Four modes, each a variant of `Composer` (`src/watch/screen-data.ts`):
 
 Placeholders are `{ equals }`, `{ prefix }`, or `{ shape: slash-hint }`. The greyed suggestions
 are told by their styling when the CLI renders them dim (`placeholder_style: dim`), else by the
-list. `slash-hint` is the extra dim row `/<command> …`; a plain draft is still the list's. Every composer
+list. A composer whose CLI draws its rotating hint in a colour with no faint attribute declares
+that colour (`placeholder_fg`, a list of SGR foreground parameter lists such as
+`38;2;103;108;116`): an input row whose text past the prompt is exactly one declared colour is
+the empty box, while an undeclared colour, a mixed row, a bold word or a cursor cell stays text.
+`slash-hint` is the extra dim row `/<command> …`; a plain draft is still the list's. Every composer
 carries `frameRows` — the empty rows a capture shows the pane drawing under the text, inside the
 frame. A wrap is `{ continuation: 'text-column', kind: 'word' | 'hard' }`: the continuation
 starts at the text column, and the break folds the space at a word boundary or falls mid-word.

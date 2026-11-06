@@ -1,18 +1,16 @@
-// Independent coverage of a reply waiting a bounded budget for a busy seat lock.
+// Independent coverage of the general seat-lock API waiting a bounded budget.
 // The clock and the sleep are injected, so a scene counts polls and never waits on wall time.
-// A holder that releases inside the budget lets the reply land. A spent budget leaves the
+// A holder that releases inside the budget lets the next taker acquire it. A spent budget leaves the
 // holder untouched and names its pid. An unreadable lock is refused at once. Every other
-// taker passes no budget, so the first sight of a live holder refuses without a sleep.
+// production taker passes no budget; reply queues its record when the lock stays held.
 import { afterEach, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { plantRecord, recordDir } from '../src/commands/messages.ts';
-import { runReply, type ReplyHost } from '../src/commands/reply.ts';
 import { acquireSeatLock, seatLockPath, type LockSteps } from '../src/launch/seat-lock.ts';
-import { testIo } from './helpers.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
-import { NOW, fake, world, type World } from './send-native-fixtures.ts';
+import { NOW, world, type World } from './send-native-fixtures.ts';
 
 const SENT = '019a4f61-5000-7000-8000-000000000001';
 const REPLY = '019a4f61-5000-7000-8000-000000000002';
@@ -31,19 +29,6 @@ function scene(): World {
     at: NOW.toISOString(),
   });
   return made;
-}
-
-async function reply(at: World, seatLock: ReplyHost['seatLock']): Promise<{ code: number; out: string; err: string }> {
-  const io = testIo(at.root, { kind: 'owner' });
-  const host: ReplyHost = {
-    home: at.home,
-    now: () => NOW,
-    newId: () => REPLY,
-    send: fake(at, { agents: () => [{ name: 'iris', pane: 'pane-iris' }] }),
-    ...(seatLock === undefined ? {} : { seatLock }),
-  };
-  const code = await runReply([SENT, 'the answer'], io, host);
-  return { code, out: io.out, err: io.err };
 }
 
 function clockOf(release?: () => void): { steps: Partial<LockSteps>; sleeps: number[] } {
@@ -106,20 +91,19 @@ function lockCalls(): { file: string; call: string }[] {
   return found;
 }
 
-test('a reply lands once the holder releases inside the budget', async () => {
+test('a lock taker acquires once the holder releases inside the budget', () => {
   const at = scene();
   const held = acquireSeatLock(at.dir, 'acme', 'iris');
   expect('release' in held).toBe(true);
   if (!('release' in held)) throw new Error('the holder did not take the lock');
   const clock = clockOf(() => held.release());
-  const result = await reply(at, { steps: clock.steps });
-  expect(result.code).toBe(0);
-  expect(result.out).toContain('delivered');
+  const result = acquireSeatLock(at.dir, 'acme', 'iris', clock.steps, { waitMs: 2_000, pollMs: 25 });
+  expect('release' in result).toBe(true);
   expect(clock.sleeps).toEqual([25]);
-  expect(existsSync(join(recordDir(at.root, 'acme', 'iris'), REPLY))).toBe(true);
+  if ('release' in result) result.release();
 });
 
-test('a spent budget leaves the holder untouched and names its pid', async () => {
+test('a spent lock budget leaves the holder untouched and names its pid', () => {
   const at = scene();
   const held = acquireSeatLock(at.dir, 'acme', 'iris');
   expect('release' in held).toBe(true);
@@ -128,9 +112,8 @@ test('a spent budget leaves the holder untouched and names its pid', async () =>
   const before = readFileSync(path, 'utf8');
   try {
     const clock = clockOf();
-    const result = await reply(at, { steps: clock.steps });
-    expect(result.code).toBe(1);
-    expect(result.err).toContain(`iris: another command holds it (pid ${String(process.pid)}, started ${new Date(Number(before.trim().split(' ')[2])).toISOString()}); nothing was written`);
+    const result = acquireSeatLock(at.dir, 'acme', 'iris', clock.steps, { waitMs: 2_000, pollMs: 25 });
+    expect(result).toEqual({ held: process.pid, startedAt: Number(before.trim().split(' ')[2]) });
     expect(clock.sleeps).toHaveLength(80);
     expect(clock.sleeps.every((ms) => ms === 25)).toBe(true);
     expect(readFileSync(path, 'utf8')).toBe(before);
@@ -140,26 +123,22 @@ test('a spent budget leaves the holder untouched and names its pid', async () =>
   }
 });
 
-test('an unreadable lock is refused at once, even with the reply budget', async () => {
+test('an unreadable lock is refused at once, even with a lock budget', () => {
   const at = scene();
   const path = seatLockPath(at.dir, 'acme', 'iris');
   mkdirSync(path, { recursive: true });
   const clock = clockOf();
-  const result = await reply(at, { steps: clock.steps });
-  expect(result.code).toBe(1);
-  expect(result.err).toContain('iris: another command holds it (an unreadable lock); nothing was written');
+  const result = acquireSeatLock(at.dir, 'acme', 'iris', clock.steps, { waitMs: 2_000, pollMs: 25 });
+  expect(result).toEqual({ held: -1, startedAt: null });
   expect(clock.sleeps).toEqual([]);
   expect(existsSync(path)).toBe(true);
   expect(existsSync(join(recordDir(at.root, 'acme', 'iris'), REPLY))).toBe(false);
 });
 
-test('every taker but the reply target seat stays at zero wait', () => {
+test('every production lock taker stays at zero wait', () => {
   const calls = lockCalls();
   const waiting = calls.filter((one) => one.call.includes('waitMs'));
-  expect(waiting).toHaveLength(1);
-  expect(waiting[0]?.call).toContain('targetSeat');
-  expect(waiting[0]?.call).toContain('SEAT_LOCK_WAIT_MS');
-  expect(calls.filter((one) => !one.call.includes('waitMs')).length).toBe(calls.length - 1);
+  expect(waiting).toHaveLength(0);
   for (const one of calls) {
     if (one.call.includes('waitMs')) continue;
     expect(one.call).not.toContain('pollMs');

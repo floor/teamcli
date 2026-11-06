@@ -6387,7 +6387,7 @@ scene('send.sent-channel', async (place) => {
       // Already pushed on an earlier wait.
     }
   };
-  return show(await sent(place, ['lead', 'hello'], owner, host), 'lead: sent (channel)');
+  return show(await sent(place, ['lead', 'hello'], owner, host), 'lead: notified, not yet read');
 });
 scene('send.dry-run', async (place) => {
   write(place, TEAM);

@@ -27,6 +27,10 @@ export type Screen =
                                      // read; the seat is at its prompt behind the scroll, so it
                                      // reads idle, and only a wake that may press the profile's
                                      // return key acts
+  | { kind: 'feedback survey' }      // the CLI's post-turn feedback survey drawn at the bottom of
+                                     // the pane in the composer's place: the typed wake answers it
+                                     // with the profile's Skip key ('0') once, then re-reads and
+                                     // continues only if an empty idle prompt shows
   | { kind: 'permission' }           // a permission dialog: its owner's to answer
   | { kind: 'plan approval' }        // a plan the agent wrote, waiting to execute: read before
                                      // `permission`, whose generic numbered choice it draws too;

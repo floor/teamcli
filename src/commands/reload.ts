@@ -479,12 +479,13 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     }
     if (briefs.recording !== undefined) sayBrief(`the general seat brief was written and not recorded (${briefs.recording})`);
   };
-  if (detail === null && rulesProblem === null && source === null) {
-    // A seat can run exactly what the file declares and still hold no inbox: a launch that could
-    // not resolve the team registered nothing, and the seat's window is gone by the time anyone
-    // reads it. Reload is the command `team check` names for this, so its no-op path registers
-    // again — idempotent when the registration is already there. A refusal is one line, said
-    // where the reader of the document meets warnings, and names the command that retries it.
+  // A seat can run exactly what the file declares and still hold no inbox (or hold an older
+  // registration without the current brief's `--epoch`): a launch that could not resolve the
+  // team registered nothing, and the seat's window is gone by the time anyone reads it. Reload is
+  // the command `team check` names for this, so its no-op paths register again after delivering
+  // the brief — idempotent when the registration is already there. A refusal is one line, said
+  // where the reader of the document meets warnings, and names the command that retries it.
+  const registerSeatInbox = (): void => {
     const inboxCli = recorded.cli ?? seat.cli;
     const register = sources.launch.registerInbox;
     if (recorded.start_cwd !== undefined && register !== undefined) {
@@ -496,7 +497,10 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         logLine(dir, 'reload', who, said, now());
       }
     }
+  };
+  if (detail === null && rulesProblem === null && source === null) {
     await deliverBrief(false);
+    registerSeatInbox();
     refreshHookFile();
     const summary = `team reload: ${seat.name} is already running what the file declares`;
     if (json) {
@@ -543,6 +547,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       });
       const summary = `team reload: ${seat.name}: its launch record held no model; recorded ${mentioned(shown, compared, recorded)}; it is already running what the file declares`;
       await deliverBrief(false);
+      registerSeatInbox();
       refreshHookFile();
       if (json) {
         writeJson(io, 'team.reload', {

@@ -243,7 +243,7 @@ describe('an install under a running server', () => {
         });
         const sendIo = owner(made.root);
         expect(await runSend(['lead', TRIGGER], sendIo, host)).toBe(0);
-        expect(sendIo.out).toContain('sent (channel)');
+        expect(sendIo.out).toContain('notified, not yet read');
         expect(pane.typed).toEqual([]);
         expect(pane.enters).toBe(0);
         await until(() => notices(installedFeed.replies).length === 1);

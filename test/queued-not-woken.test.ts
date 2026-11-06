@@ -1,12 +1,8 @@
-// The `queued, not woken` outcome: a send whose walk ends on the drop leg for a seat nothing
-// wakes while it is idle says so in the send's own words — never `sent (unconfirmed)`, which
-// reads like success — and the same three words ride the history line, the `--json` status and
-// the lead's status note. The word is reserved to the drop leg: a seat a channel, socket or
-// webhook wakes keeps `sent (unconfirmed)` even when the drop is what carried the message. A
-// live inbox listener is no leg in this build's walk — the seat's own reader serves it at its
-// next turn — so a seat with nothing else ends at the drop like any wakeless one. Every scene
-// runs the real walk over a synthetic team whose seats cover each delivery class; no live
-// session is touched.
+// The `queued, not woken` outcome: a send whose walk ends on the drop leg says so, including
+// a seat whose class names an event adapter when no adapter leg ran. The class is not a leg.
+// The same words ride the history line, the `--json` status and the lead's status note.
+// `sent (unconfirmed)` is not this ending. A live inbox listener is no leg in this build's
+// walk. Every scene runs the real walk over a synthetic team; no live session is touched.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -159,12 +155,16 @@ describe('the queued, not woken outcome', () => {
     expect(entries()).toEqual([{ outcome: 'queued, not woken', via: 'drop' }]);
   });
 
-  test('a seat the event adapter wakes keeps sent (unconfirmed), drop leg or not', async () => {
+  test('a seat whose class names an event adapter, with only the drop leg, says queued, not woken', async () => {
     made = world();
     const io = testIo(made.root, { kind: 'owner' });
+    // The launch names the development channel, and this host dials nothing, so no adapter leg
+    // runs. The trace is the drop, held. The class is not a leg, so the line cannot say woken.
     expect(await runSend(['push-seat', 'hello'], io, host(made))).toBe(0);
-    expect(io.out).toContain('push-seat: sent (unconfirmed) (drop, 0 ms); woken through its event adapter');
-    expect(entries()).toEqual([{ outcome: 'sent (unconfirmed)', via: 'drop' }]);
+    expect(io.out).toContain('push-seat: queued, not woken (drop, 0 ms)');
+    expect(io.out).not.toContain('woken through');
+    expect(io.out).not.toContain('sent (unconfirmed)');
+    expect(entries()).toEqual([{ outcome: 'queued, not woken', via: 'drop' }]);
   });
 
   test('a live inbox listener is no leg: the send ends at the drop and says the not-woken word', async () => {
@@ -195,9 +195,9 @@ describe('the queued, not woken outcome', () => {
       expect(await runSend([seat, 'hello'], io, host(made))).toBe(0);
     }
     const queued = entries().filter((entry) => entry.outcome === 'queued, not woken');
-    // Every wakeless ending said it — pull, person, and the listener that is no leg — and every
-    // line that says it was left by the drop leg.
-    expect(queued.length).toBe(3);
+    // Pull, person, the push class with no adapter leg, and the listener that is no leg.
+    // Every line that says it was left by the drop leg.
+    expect(queued.length).toBe(4);
     expect(queued.every((entry) => entry.via === 'drop')).toBe(true);
   });
 });

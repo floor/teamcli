@@ -202,11 +202,16 @@ test('a healthy daemon is one line, and every line stays neutral', () => {
 });
 
 test('a running daemon that does not answer reads as possibly hung, never as healthy', () => {
-  expect(daemonNotes(health({ probe: { state: 'unanswered', at: AT, reason: 'timeout' } }))).toEqual([
-    `${HEALTHY_LINE}; it did not answer the health probe (timeout), so it may be hung`,
+  // A heartbeat older than three beats: the loop has not written since, so the hung reading stands.
+  expect(daemonNotes(health({
+    probe: { state: 'unanswered', at: AT, reason: 'timeout' },
+    heartbeatAt: '2026-10-19T08:59:00.000Z',
+  }))).toEqual([
+    `${HEALTHY_LINE}; the machine daemon did not answer the health probe (timeout), so it may be hung`,
   ]);
+  // A closed socket is not the timeout case; the same reading stands however fresh the heartbeat.
   expect(daemonNotes(health({ probe: { state: 'unanswered', at: AT, reason: 'closed' } }))).toEqual([
-    `${HEALTHY_LINE}; it did not answer the health probe (closed), so it may be hung`,
+    `${HEALTHY_LINE}; the machine daemon did not answer the health probe (closed), so it may be hung`,
   ]);
   expect(daemonNotes(health({
     probe: { state: 'refused', at: AT, code: 'daemon.unsupported', message: 'health is not answered yet' },
@@ -220,6 +225,15 @@ test('a running daemon that does not answer reads as possibly hung, never as hea
     ],
   }))).toEqual([
     `${HEALTHY_LINE}; 2 requests held past the stuck threshold (dispatch since 2026-10-19T08:59:00.000Z, health since 2026-10-19T08:59:30.000Z)`,
+  ]);
+});
+
+test('a timed-out probe with a fresh heartbeat reads as busy, not as hung', () => {
+  // The daemon wrote its heartbeat 2 s before the probe. A 500 ms probe timeout inside that
+  // window is a stalled or descheduled loop, not evidence of a hang — and the sentence names the
+  // daemon explicitly, so it cannot be read as the last root the chores clause named.
+  expect(daemonNotes(health({ probe: { state: 'unanswered', at: AT, reason: 'timeout' } }))).toEqual([
+    `${HEALTHY_LINE}; the machine daemon did not answer the health probe (timeout) while its last heartbeat was 2s old, so it is probably busy or the machine is loaded`,
   ]);
 });
 
@@ -241,8 +255,11 @@ test('check hears only an actionable reading, and absence is not one', () => {
   expect(daemonProblemNotes(unknown())).toEqual([
     'machine daemon: cannot tell whether it is running (the daemon state record cannot be read)',
   ]);
-  expect(daemonProblemNotes(health({ probe: { state: 'unanswered', at: AT, reason: 'timeout' } }))).toEqual([
-    `${HEALTHY_LINE}; it did not answer the health probe (timeout), so it may be hung`,
+  expect(daemonProblemNotes(health({
+    probe: { state: 'unanswered', at: AT, reason: 'timeout' },
+    heartbeatAt: '2026-10-19T08:59:00.000Z',
+  }))).toEqual([
+    `${HEALTHY_LINE}; the machine daemon did not answer the health probe (timeout), so it may be hung`,
   ]);
   expect(daemonProblemNotes(health({
     stuck: [{ id: 'req-1', op: 'dispatch', since: '2026-10-19T08:59:00.000Z', ageMs: 60000 }],
@@ -614,11 +631,14 @@ test('a hung daemon is a check note that changes no total and no exit', () => {
   const io = testIo(at.root, { kind: 'owner' });
   const code = runTeamCheck({ file: '.agents/team.yaml' }, io, {
     ...checkSources(at, undefined),
-    daemon: health({ probe: { state: 'unanswered', at: AT, reason: 'timeout' } }),
+    daemon: health({
+      probe: { state: 'unanswered', at: AT, reason: 'timeout' },
+      heartbeatAt: '2026-10-19T08:59:00.000Z',
+    }),
   });
   expect(code).toBe(0);
   expect(io.out).toContain(
-    `${HEALTHY_LINE}; it did not answer the health probe (timeout), so it may be hung`,
+    `${HEALTHY_LINE}; the machine daemon did not answer the health probe (timeout), so it may be hung`,
   );
   expect(io.out).toContain('no differences');
 });

@@ -424,6 +424,7 @@
         "rate_limit": { "$ref": "#/$defs/rateLimitStage" },
         "working": { "$ref": "#/$defs/stage" },
         "scroll_back": { "$ref": "#/$defs/scrollBack" },
+        "feedback_survey": { "$ref": "#/$defs/feedbackSurvey" },
         "question_text": { "$ref": "#/$defs/questionText" },
         "composer": { "$ref": "#/$defs/composer" },
         "screen_module": { "$ref": "#/$defs/screenModule" }
@@ -442,6 +443,17 @@
         "marker": { "type": "string", "minLength": 1, "description": "The second reported layout: the whole row of the CLI's return marker, \"^…$\", as the nearest non-blank row above the drawn composer. Read only together with \"status_footer\", where the composer cannot be read." },
         "status_footer": { "type": "string", "minLength": 1, "description": "The whole row of the CLI's scroll-back status footer, \"^…$\", on the pane's last non-blank row beneath the marker and the drawn composer. Read only together with \"marker\"." },
         "return_key": { "enum": ["escape"], "description": "The key the CLI's own row names for returning to the prompt. Only a key a run established at this screen." }
+      }
+    },
+    "feedbackSurvey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prompt", "choices", "skip_key"],
+      "properties": {
+        "prompt": { "type": "string", "minLength": 1, "description": "The CLI's feedback survey prompt row as the whole row it draws, \"^…$\", immediately above \"choices\" at the bottom of the pane." },
+        "choices": { "type": "string", "minLength": 1, "description": "The CLI's feedback survey choices row as the whole row it draws, \"^…$\", immediately below \"prompt\" at the bottom of the pane." },
+        "status_footer": { "type": "string", "minLength": 1, "description": "Optional whole-row pattern, \"^…$\", for the CLI's own status/shortcuts footer row when it remains drawn on the last non-blank row beneath the two survey rows." },
+        "skip_key": { "enum": ["0"], "description": "The key the survey's own Skip option names ('0'). Only '0' is permitted, and it is sent at most once before re-reading for an empty idle prompt." }
       }
     },
     "questionText": {
@@ -767,6 +779,12 @@
         },
         "placeholders": { "$ref": "#/$defs/placeholders" },
         "placeholder_style": { "enum": ["dim"] },
+        "placeholder_fg": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^(?:3[0-7]|9[0-7]|38;5;[0-9]{1,3}|38;2;[0-9]{1,3};[0-9]{1,3};[0-9]{1,3})$" },
+          "minItems": 1,
+          "description": "The foregrounds a CLI draws its rotating hints in, as SGR parameter lists (`90`, `38;5;244`, `38;2;103;108;116`), measured off a capture. An input row whose visible text past the prompt is exactly one of these colours is the empty box, with no faint attribute needed (Muse 1.4.14's rotating hint). Only a measured colour is declared — an undeclared one keeps the row text. Requires placeholder_style: dim."
+        },
         "footers": { "type": "array", "items": { "$ref": "#/$defs/patternString" }, "minItems": 1 },
         "fold": { "$ref": "#/$defs/patternString" },
         "wrap": {

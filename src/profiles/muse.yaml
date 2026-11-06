@@ -149,10 +149,18 @@ screen:
     rule: '^[─━]{2}(?: [^─━]+ )?[─━]{8,}$'
     footers:
       - '^\s{2}\S.*\s·\s.*$'
-    # Rotating hints are faint. An all-faint row after the prompt is the empty box.
-    # A row that is not all faint is text, including a draft that starts with `/`.
+    # Rotating hints are faint, or drawn in the grey declared below with no faint attribute at
+    # all. A row after the prompt that is all faint, or one non-bold declared colour, is the
+    # empty box; a row in any other colour is text, including a draft that starts with `/`.
     # The equals lines are the plain-read fallback. The rotation is not added to them.
     placeholder_style: dim
+    # 1.4.14 draws its rotating hint in this grey with no faint attribute at all (a live 1.4.14
+    # pane, 2026-11-05): the blue prompt, then the hint text in 38;2;103;108;116. An input row
+    # whose text past the prompt is that one colour is the empty box. Typed text on 1.4.14 is
+    # drawn blue (38;2;90;160;255), so a draft stays text; an undeclared grey keeps the row
+    # text too.
+    placeholder_fg:
+      - '38;2;103;108;116'
     placeholders:
       - equals: ''
       # An operator's notes transcribe the fresh composer as showing this hint; the

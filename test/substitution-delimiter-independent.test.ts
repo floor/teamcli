@@ -12,8 +12,8 @@
 // word after `env` is split (`env A=$(printf '%s' 'x y')` tries to run `y`). The vendor's
 // credential lookup is exactly that leading-assignment shape, so it keeps launching.
 import { afterAll, expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendOnLaunchLine, cliWordListOf, lineDelimiterRisk } from '../src/launch/cli-scope.ts';
@@ -48,12 +48,17 @@ function fakeCodex(): { bin: string; log: string; home: string } {
   return { bin, log, home };
 }
 
+/** The probe runs under bash, the shell these ANSI-C scenes were measured on. */
+function probeShell(): string {
+  return existsSync('/bin/bash') ? '/bin/bash' : '/usr/bin/bash';
+}
+
 /** The launcher's command, run as a pane would run it; the fake codex's argv. */
 function argvOf(launch: string): string[] {
   const { bin, log, home } = fakeCodex();
   const built = launchCommandOrRefusal(PROFILE, launch, 'Rules.', undefined, undefined, undefined, undefined, RULES);
   expect(built.refusal, launch).toBeUndefined();
-  const out = spawnSync('/bin/sh', ['-c', built.command], { env: { PATH: `${bin}:/usr/bin:/bin`, HOME: home }, encoding: 'utf8' });
+  const out = spawnSync(probeShell(), ['-c', built.command], { env: { PATH: `${bin}:/usr/bin:/bin`, HOME: home }, encoding: 'utf8' });
   expect(out.status, `${launch}: ${out.stderr}`).toBe(0);
   expect(existsSync(log), `${launch}: the fake codex never ran`).toBe(true);
   return readFileSync(log, 'utf8').replace(/\n$/, '').split('\n');
@@ -115,9 +120,7 @@ test('a literal spelling is a word this reader knows, and the launch stands', ()
   addedBeforeDelimiter(escaped);
 });
 
-// Known for 0.5.12.1: running $'--' under /bin/sh -c assumes a shell that decodes ANSI-C quoting;
-// Ubuntu /bin/sh is dash.
-test.skipIf(process.platform !== 'darwin')('a decodable ANSI-C delimiter is still a known delimiter: options stand before it', () => {
+test('a decodable ANSI-C delimiter is still a known delimiter: options stand before it', () => {
   const line = "codex exec $'--' plain task";
   expect(lineDelimiterRisk(line)).toBe(false);
   expect(cliWordListOf('codex', line)).toEqual(['codex', 'exec', '--', 'plain', 'task']);

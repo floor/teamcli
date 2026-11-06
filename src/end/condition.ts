@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { syncChildTimeout } from '../child.ts';
 import { branchProblem } from './until.ts';
 
 // Whether a temporary seat's `merged:` end holds. "Merged" is provable only when the branch had
@@ -44,9 +45,11 @@ function git(cwd: string, args: string[]): Run {
     cwd,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: syncChildTimeout(10_000),
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
   });
-  return { code: result.status ?? 1, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+  const stderr = (result.stderr ?? '') !== '' ? (result.stderr ?? '') : (result.error?.message ?? '');
+  return { code: result.error ? 1 : (result.status ?? 1), stdout: result.stdout ?? '', stderr };
 }
 
 /** The branch is a local branch or a remote-tracking one. Null when git can't be asked. */

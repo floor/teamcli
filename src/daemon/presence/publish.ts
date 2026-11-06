@@ -30,6 +30,11 @@
 import { readdir } from 'node:fs/promises';
 import { appendEvent, type EventAppendInput } from '../../bus/log.ts';
 import { readState, type SeatState } from '../../state.ts';
+import {
+  PRESENCE_ACTIVITY_CHUNK_ENTRIES,
+  PRESENCE_ACTIVITY_CHUNK_MS,
+  type PresenceActivityRunOptions,
+} from './activity.ts';
 import { isPresenceBinding, type PresenceLogLine } from './contract.ts';
 import { readPresenceTransitions } from './read.ts';
 import { isPresenceSeatName, presenceSessionDir } from './spool.ts';
@@ -83,7 +88,10 @@ export type PresencePublishResult = {
   failed: string | null;
 };
 
-export type PresencePublisherStep = (at: Date) => Promise<PresencePublishResult>;
+export type PresencePublisherStep = (
+  at: Date,
+  options?: PresenceActivityRunOptions,
+) => Promise<PresencePublishResult>;
 
 type Cursor = { seq: number; offset: number; retryAt: number };
 
@@ -186,7 +194,11 @@ export function createPresencePublisher(input: PresencePublisherInput): Presence
     return { kind: 'ok', binding: isPresenceBinding(record.presence_binding) ? record.presence_binding : null };
   };
 
-  return async function step(at: Date): Promise<PresencePublishResult> {
+  return async function step(
+    at: Date,
+    options?: PresenceActivityRunOptions,
+  ): Promise<PresencePublishResult> {
+    const slices = options?.slices;
     let seats: string[];
     if (input.seats !== undefined) {
       seats = [...input.seats];
@@ -196,8 +208,18 @@ export function createPresencePublisher(input: PresencePublisherInput): Presence
       seats = found;
     }
 
+    const clock = options?.sliceClock ?? (() => performance.now());
+    const budgetMs =
+      slices === undefined
+        ? Number.POSITIVE_INFINITY
+        : options?.sliceClock !== undefined
+          ? slices.sliceMs
+          : Math.min(slices.sliceMs, PRESENCE_ACTIVITY_CHUNK_MS);
+    let entriesInChunk = 0;
+    let sliceStart = clock();
     const reported: PresencePublishSeat[] = [];
-    for (const seat of seats) {
+    for (let seatIndex = 0; seatIndex < seats.length; seatIndex += 1) {
+      const seat = seats[seatIndex]!;
       const cursor = cursors.get(seat) ?? { seq: 0, offset: 0, retryAt: 0 };
       if (at.getTime() < cursor.retryAt) {
         reported.push(noPublish(seat, cursor));
@@ -213,40 +235,54 @@ export function createPresencePublisher(input: PresencePublisherInput): Presence
         ...(input.maxBytes === undefined ? {} : { maxBytes: input.maxBytes }),
       });
       if (read.kind === 'bad') {
+        entriesInChunk += 1;
         reported.push(noPublish(seat, cursor, { bad: read.why }));
         continue;
       }
+      if (read.transitions.length === 0) entriesInChunk += 1;
 
       let published = 0;
       let duplicate = 0;
       let skipped = 0;
       let failure: string | null = null;
-      for (const line of read.transitions) {
+      for (let lineIndex = 0; lineIndex < read.transitions.length; lineIndex += 1) {
+        const line = read.transitions[lineIndex]!;
+        entriesInChunk += 1;
         if (!line.applied || line.session !== session) {
           skipped += 1;
-          continue;
+        } else {
+          // Immediately before the append, not only before the awaited read: the binding may have
+          // changed while the batch was read. An old line is consumed as a skip, never published as
+          // the successor's transition.
+          const current = currentBindingOf(seat);
+          if (current.kind === 'bad') {
+            failure = current.why;
+            break;
+          }
+          if (current.binding === null || line.binding !== current.binding) {
+            skipped += 1;
+          } else {
+            const appended = appendEvent(input.project, input.root, input.home, eventInputOf(seat, session, line), {
+              deduplicate: true,
+            });
+            if (!appended.ok) {
+              failure = appended.reason;
+              break;
+            }
+            if (appended.duplicate) duplicate += 1;
+            else published += 1;
+          }
         }
-        // Immediately before the append, not only before the awaited read: the binding may have
-        // changed while the batch was read. An old line is consumed as a skip, never published as
-        // the successor's transition.
-        const current = currentBindingOf(seat);
-        if (current.kind === 'bad') {
-          failure = current.why;
-          break;
+        if (
+          lineIndex < read.transitions.length - 1 &&
+          slices !== undefined &&
+          (entriesInChunk >= PRESENCE_ACTIVITY_CHUNK_ENTRIES || clock() - sliceStart >= budgetMs)
+        ) {
+          const more = await slices.yield();
+          if (!more || slices.stopping()) return { seats: reported, failed: null };
+          entriesInChunk = 0;
+          sliceStart = clock();
         }
-        if (current.binding === null || line.binding !== current.binding) {
-          skipped += 1;
-          continue;
-        }
-        const appended = appendEvent(input.project, input.root, input.home, eventInputOf(seat, session, line), {
-          deduplicate: true,
-        });
-        if (!appended.ok) {
-          failure = appended.reason;
-          break;
-        }
-        if (appended.duplicate) duplicate += 1;
-        else published += 1;
       }
 
       if (failure === null) {
@@ -265,20 +301,31 @@ export function createPresencePublisher(input: PresencePublisherInput): Presence
           skipped,
           failure,
         }));
-        continue;
+      } else {
+        if (forwardOf({ seq: read.nextSeq, offset: read.nextOffset }, cursor)) {
+          cursor.seq = read.nextSeq;
+          cursor.offset = read.nextOffset;
+        }
+        cursor.retryAt = 0;
+        cursors.set(seat, cursor);
+        reported.push(noPublish(seat, cursor, {
+          read: read.transitions.length,
+          published,
+          duplicate,
+          skipped,
+        }));
       }
-      if (forwardOf({ seq: read.nextSeq, offset: read.nextOffset }, cursor)) {
-        cursor.seq = read.nextSeq;
-        cursor.offset = read.nextOffset;
+      if (
+        seatIndex < seats.length - 1 &&
+        slices !== undefined &&
+        (entriesInChunk >= PRESENCE_ACTIVITY_CHUNK_ENTRIES || clock() - sliceStart >= budgetMs)
+      ) {
+        if (slices.stopping()) return { seats: reported, failed: null };
+        const more = await slices.yield();
+        if (!more || slices.stopping()) return { seats: reported, failed: null };
+        entriesInChunk = 0;
+        sliceStart = clock();
       }
-      cursor.retryAt = 0;
-      cursors.set(seat, cursor);
-      reported.push(noPublish(seat, cursor, {
-        read: read.transitions.length,
-        published,
-        duplicate,
-        skipped,
-      }));
     }
     return { seats: reported, failed: null };
   };

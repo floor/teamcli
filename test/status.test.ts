@@ -37,7 +37,7 @@ const claudeScreen = (model: string) => `❯ \n${'─'.repeat(40)}\n  main · �
  *  turns, nothing wakes it while it is idle, and no home stands in for its receipts. */
 const PULL_ONLY = {
   class: 'pull-on-turn', wakeable: false, conversation: false, endpoint: false, listener: false,
-  oldest_unread_seconds: null,
+  unread: null, oldest_unread_seconds: null,
 };
 const codexScreen = (name: string) => readFileSync(new URL(`./fixtures/codex/0.157.0/${name}.txt`, import.meta.url), 'utf8');
 const codexRateLimitSwitch = `Approaching rate limits
@@ -203,7 +203,7 @@ describe('team status', () => {
     const row = JSON.parse(jsonIo.out).rows.find((one: { name: string }) => one.name === 'codex-acme');
     expect(row.seat_wake).toEqual({
       class: 'pull-on-turn', wakeable: false, conversation: false, endpoint: false,
-      listener: true, oldest_unread_seconds: 300,
+      listener: true, unread: 1, oldest_unread_seconds: 300,
     });
   });
 
@@ -229,7 +229,7 @@ describe('team status', () => {
     );
     const io = testIo(dir, { kind: 'owner' });
     expect(await runStatus(['--file', file], io, { ...sources, home })).toBe(1);
-    expect(io.out).toContain('note: codex-acme: queued, not woken — its oldest unread drop has waited 11m, past the 60s unread window; the watch\'s typed retry has not delivered for it; codex-acme reads it at its next turn, and nothing here gives it one (pull-only)');
+    expect(io.out).toContain('note: codex-acme: queued, not woken — 1 unread; its oldest unread drop has waited 11m, past the 60s unread window; the watch\'s typed retry has not delivered for it; codex-acme reads it at its next turn, and nothing here gives it one (pull-only)');
   });
 
   test('a seat whose model can\'t be read is a note, not a difference', async () => {
@@ -1026,7 +1026,7 @@ describe('team status', () => {
     expect(switchRun.out).toContain('repair: the owner switches it back: git -C . switch main');
     branch = 'main';
 
-    // 5. the owner clears or sends it in the pane; team does not type into a box it can't verify
+    // 5. the owner looks at it in the pane; team types nothing there
     const codexUnsent = codexScreen('unsent');
     live = {
       ...built(),
@@ -1037,17 +1037,17 @@ describe('team status', () => {
     });
     const unsentRun = await status();
     expect(unsentRun.out).toContain(
-      "repair: the owner clears or sends it in the pane; team does not type into a box it can't verify",
+      'repair: the owner looks at it in the pane; team types nothing there',
     );
 
-    // 6. clear or send it in the pane, then team up (it resumes the launch): the who line
+    // 6. the owner looks at it in the pane, then team up (it resumes the launch): the who line
     // names the team's lead
     updateState(join(dir, '.agents'), (state) => {
       (state.sessions['acme-web'] ??= emptySession()).seats['codex-acme'] = { stage: 'named' };
     });
     const mergedRun = await status();
     expect(mergedRun.out).toContain(
-      'repair: clear or send it in the pane, then team up (it resumes the launch)',
+      'repair: the owner looks at it in the pane, then team up (it resumes the launch)',
     );
   });
 
@@ -1064,17 +1064,17 @@ describe('team status', () => {
     });
     const unsentRes = await status();
     expect(unsentRes.out).toMatch(/codex-acme\s+idle \(unsent text\), parked/);
-    expect(unsentRes.out).toContain('difference: codex-acme holds text in its input box that was never sent');
-    expect(unsentRes.out).toContain("repair: the owner clears or sends it in the pane; team does not type into a box it can't verify");
+    expect(unsentRes.out).toContain('difference: codex-acme: its input box reads as holding text; nothing is typed there');
+    expect(unsentRes.out).toContain('repair: the owner looks at it in the pane; team types nothing there');
 
     // merged form for a named seat
     updateState(join(dir, '.agents'), (state) => {
       (state.sessions['acme-web'] ??= emptySession()).seats['codex-acme'] = { stage: 'named' };
     });
     const namedRes = await status();
-    expect(namedRes.out).toContain('difference: codex-acme: its launch stopped at "named", and it holds text in its input box that was never sent');
-    expect(namedRes.out).toContain('repair: clear or send it in the pane, then team up (it resumes the launch)');
-    expect(namedRes.out).not.toContain('difference: codex-acme holds text in its input box that was never sent');
+    expect(namedRes.out).toContain('difference: codex-acme: its launch stopped at "named", and its input box reads as holding text; nothing is typed there');
+    expect(namedRes.out).toContain('repair: the owner looks at it in the pane, then team up (it resumes the launch)');
+    expect(namedRes.out).not.toContain('difference: codex-acme: its input box reads as holding text');
 
     // seat that reads unknown: no unsent reading; the row says what herdr's word could not
     live = {
@@ -1085,7 +1085,7 @@ describe('team status', () => {
     expect(unknownRes.out).toMatch(/codex-acme\s+idle \(screen not recognised\), parked/);
     expect(unknownRes.out).toContain('difference: codex-acme: its launch stopped at "named"\n  repair: team up (it resumes the launch)');
     expect(unknownRes.out).not.toContain('unsent text');
-    expect(unknownRes.out).not.toContain('holds text in its input box that was never sent');
+    expect(unknownRes.out).not.toContain('its input box reads as holding text');
   });
 
   test('C2: done is as free as idle — unsent text is read for both; working and blocked are not', async () => {
@@ -1107,19 +1107,19 @@ describe('team status', () => {
     // idle: as before
     const idle = await withStatus('idle');
     expect(idle.out).toMatch(/codex-acme\s+idle \(unsent text\), parked/);
-    expect(idle.out).toContain('difference: codex-acme holds text in its input box that was never sent');
+    expect(idle.out).toContain('difference: codex-acme: its input box reads as holding text; nothing is typed there');
 
     // done: the same reading and the same difference — team types into a done box too
     const done = await withStatus('done');
     expect(done.out).toMatch(/codex-acme\s+done \(unsent text\), parked/);
-    expect(done.out).toContain('difference: codex-acme holds text in its input box that was never sent');
+    expect(done.out).toContain('difference: codex-acme: its input box reads as holding text; nothing is typed there');
 
     // working and blocked: the box is not team's to read as unsent text
     for (const state of ['working', 'blocked']) {
       const other = await withStatus(state);
       expect(other.out).toMatch(new RegExp(`codex-acme\\s+${state}, parked`));
       expect(other.out).not.toContain('unsent text');
-      expect(other.out).not.toContain('holds text in its input box that was never sent');
+      expect(other.out).not.toContain('its input box reads as holding text');
     }
   });
 

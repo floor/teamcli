@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.13] - 2026-11-06
+
+Message delivery now reports only the leg that ran, a seat behind a launcher wrapper can
+answer, and a managed Codex endpoint that is down is named instead of typed into.
+
+### Fixed
+
+- A send to a managed Codex seat whose endpoint is not listening now says the endpoint is
+  blocked, with the socket's own reason: the message stays in the seat's mailbox, the lead
+  gets one signed notice, and the outcome is queued, not woken. A reply takes the same path.
+- A managed Codex seat whose endpoint does not start is left out with one line instead of
+  falling back to `--no-daemon`, and `team check` names each ready Codex seat whose endpoint
+  record is absent or unusable.
+- A send reports the leg that actually ran: a mailbox drop says queued, a channel
+  notification says notified, not yet read, and neither says the seat was woken. A recorded
+  socket that is gone is reported as that failure, never as an event-adapter wake.
+- A send's `--json` document accepts the channel leg.
+- `team reply` and `team ack` run from a seat's shell now recognise the seat placed in the
+  team's session, as `team send` already did, so a seat behind a launcher wrapper is no longer
+  refused as unplaced.
+- A reply to a seat held by another command is queued instead of refused: the signed answer
+  is written to the seat's mailbox, and the watch delivers it once the seat is free.
+- An idle Codex pane whose last row shows `? for shortcuts` with the account's warning now
+  reads idle, while a box holding text still reads unsent.
+- A Cursor seat launched through the terminal host now records its conversation, and a
+  restored pane ties back to its launch.
+- A typed wake to an Antigravity seat answers the CLI's bottom feedback survey with Skip once,
+  then reads the prompt again before typing.
+- The watch's chores child awaits its pane proof read, so a slow terminal-host read no longer
+  stalls its heartbeat.
+- `team status` reports a machine daemon whose health probe timed out but whose heartbeat is
+  recent as busy under load, not hung.
+- `team up` records a live Claude seat's socket address even when it leaves the seat at
+  launched, so a send reaches it without a restart.
+- `team up` binds an address only to the seat and session that own the pane: it skips a pane
+  the terminal host names for another seat, or one another declared seat's record already
+  claims, and leaves a record standing in another session neither refreshed nor cleared — a
+  send can no longer wake another seat's process.
+- `team check` names the repair that works: `team up` for a live seat whose record holds no
+  address or whose pane was restored (its own plan adopts the running process in place), and
+  `team register` when the record names no held process or stands in another session. A pane
+  two seats both claim is named once for the pane, and only a pane no proof binds names a
+  restart, which records the address itself. The stale-socket line names the machine's restart
+  load limit.
+- A managed Codex seat's inbox tool starts after a restore or reload: its launch epoch is
+  carried through both, `team reload` registers the inbox again when the registration is
+  missing, and a managed endpoint that died is started again in place.
+- An idle Muse box that shows its rotating hint reads as empty, so a typed wake can reach the
+  seat. The unsent check and `team status` say the box reads as holding text, and never ask
+  anyone to clear it.
+- A command that waits on a team lock now stops at its deadline in every case, including a lock
+  whose holder record cannot be read and a stale record the folder refuses to remove, so a
+  wedged lock can no longer hang a run. A no-wait attempt is refused at once, and the refusal
+  names the process holding the lock now, never one that has exited.
+
 ## [0.5.12] - 2026-11-05
 
 A send walks one cascade and stops at the first leg that takes it. A message stays in the mailbox

@@ -48,7 +48,7 @@ import { projectIdOfTeam } from '../dev_mode.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
-import { acquireSeatLock, holderText, type LockSteps } from '../launch/seat-lock.ts';
+import { acquireSeatLock, holderText } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { contextLine, hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { eventThresholdsInForce, type EventThresholds } from '../policy/index.ts';
@@ -107,16 +107,10 @@ export type ReplyHost = {
    *  real host binds the send's; a test hands the walk a fake, and an absent one leaves the
    *  answer the record alone, exactly as a reply was before the walk existed. */
   send?: SendHost;
-  /** The lock this walk takes on the target seat before writing the copy. A test injects the
-   *  clock and the sleep, or a shorter budget; the real one waits out a busy seat. */
-  seatLock?: { steps?: Partial<LockSteps>; waitMs?: number; pollMs?: number };
+
 };
 
 export const realHost: ReplyHost = { home: homedir(), now: () => new Date(), send: realSendHost };
-
-/** How long a reply waits for a busy target seat, and the step it polls at while waiting. */
-const SEAT_LOCK_WAIT_MS = 2_000;
-const SEAT_LOCK_POLL_MS = 25;
 
 const reply: Command = (argv, io) => runReply(argv, io, realHost);
 export default reply;
@@ -1036,16 +1030,15 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   };
 
   let landed = false;
-  // A seat that is mid-write holds its lock only for that write. Reply waits it out, so a
-  // burst of replies to one seat queues instead of refusing each other.
-  const asked = host.seatLock;
-  const lock = acquireSeatLock(toDir, toSession, targetSeat, asked?.steps, {
-    waitMs: asked?.waitMs ?? SEAT_LOCK_WAIT_MS,
-    pollMs: asked?.pollMs ?? SEAT_LOCK_POLL_MS,
-  });
-  if (!('release' in lock)) {
-    return refused(io, json, `${targetSeat}: another command holds it (${holderText(lock)}); nothing was written`);
-  }
+  // A held seat is a queue, not a refusal, exactly as a send's own drop and typed legs say it:
+  // the record is a file, not a keystroke — its id names the file, the seal is idempotent, and
+  // the hint's write is atomic and lock-optional on its own — so it is written without the lock,
+  // and the seat's watcher delivers the answer when the seat is free. Only a live holder reaches
+  // this arm: a dead pid, or a live process the token's start does not name, is stale and is
+  // taken over by `acquireSeatLock`. The unread hint is the one piece that can race the holder,
+  // and its own write is atomic: the worst a race costs is one hint, which the sweep settles by
+  // verifying the folder.
+  const lock = acquireSeatLock(toDir, toSession, targetSeat);
   try {
     try {
       sealDropTree(toDir, toSession, targetSeat);
@@ -1061,9 +1054,10 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     const folder = recordDir(toRoot, toSession, targetSeat);
     const written = writeRecord(folder, signed);
     if (!written.ok) return refused(io, json, `${targetSeat}: the record could not be written (${written.reason}); nothing was written`);
-    // The recipient's unread index names this record as its sender's newest: the thread lock is
-    // already held here, so the hint is written inside it and never waits on it.
-    noteUnread(folder, me, replyId, at, { held: true });
+    // The recipient's unread index names this record as its sender's newest. A caller that holds
+    // the lock writes the hint inside it; a queued write hands the hint its own best-effort lock,
+    // which the holder refuses without costing the entry.
+    noteUnread(folder, me, replyId, at, 'release' in lock ? { held: true } : {});
     // The word the report will use is decided here, by the reader's own checks: the record at the
     // path `team messages` and the seat's inbox server scan, its name the id, bound to that tree's
     // root and session, addressed to that seat, its signature verifying. Only a record that passes
@@ -1092,7 +1086,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     const receipt = signReceiptPayload({ kind: 'receipt', status: 'replied', id: answered.id, to: me, root, session, at }, host.home);
     writeReceipt(recordDir(root, session, me), receipt, host.home);
   } finally {
-    lock.release();
+    if ('release' in lock) lock.release();
   }
   // The history line belongs to the team the record was written into: the answer's own team, which
   // is the owner endpoint's team when the owner asked.
@@ -1140,17 +1134,19 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     : `${targetSeat}: wrote to ${recordDir(toRoot, toSession, targetSeat)}, and could not confirm the recipient's reader will read it`);
   logLine(dir, 'reply', who, summary, host.now());
   const walkedVia = walk?.summary == null ? 'drop' : walk.via;
-  const walkedOutcome = walkedVia === 'socket'
-    ? 'delivered'
-    : walkedVia === 'channel'
-      ? 'sent (channel)'
-      : walkedVia === 'webhook'
-        ? (walk?.unconfirmed === true ? 'sent (unconfirmed)' : 'delivered')
-        : walkedVia === 'typed'
-          ? 'delivered (typed wake)'
-          : walkedVia === 'native' || walkedVia === 'headless-resume'
-            ? (walk?.unconfirmed === true ? 'sent (unconfirmed)' : 'delivered (read)')
-            : landed ? 'delivered' : 'sent (unconfirmed)';
+  const walkedOutcome = walk?.endpointBlocked !== undefined
+    ? 'queued, not woken'
+    : walkedVia === 'socket'
+      ? 'delivered'
+      : walkedVia === 'channel'
+        ? 'sent (channel)'
+        : walkedVia === 'webhook'
+          ? (walk?.unconfirmed === true ? 'sent (unconfirmed)' : 'delivered')
+          : walkedVia === 'typed'
+            ? 'delivered (typed wake)'
+            : walkedVia === 'native' || walkedVia === 'headless-resume'
+              ? (walk?.unconfirmed === true ? 'sent (unconfirmed)' : 'delivered (read)')
+              : landed ? 'delivered' : 'sent (unconfirmed)';
   appendHistory(toProject, toRoot, host.home, {
     ts: at,
     from: me,

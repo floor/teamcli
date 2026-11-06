@@ -28,6 +28,9 @@ export type SeatWake = {
   /** A live MCP inbox listener stands in the seat's drop folder: the inbox leg is served when
    *  the seat takes a turn. It never wakes an idle seat, and it is not a wake. */
   listener: boolean;
+  /** How many messages wait unread in the seat's inbox; zero when none waits, and null when the
+   *  home that holds the read receipts could not be named. */
+  unread: number | null;
   /** The age of the oldest unread drop in the seat's inbox, in seconds; null when nothing waits
    *  or the home that holds the read receipts could not be named. */
   oldest_unread_seconds: number | null;
@@ -68,6 +71,7 @@ export function seatWakeReadingOf(input: SeatWakeInput): SeatWakeReading {
   const dropDir = join(input.dir, 'send-drops', input.session, input.seat);
   const listener = inboxLive(dropDir, input.root, input.session, input.seat).live;
   let oldest: number | null = null;
+  let unreadCount: number | null = null;
   if (input.home !== undefined) {
     const unread = listUnread(
       dropDir,
@@ -79,6 +83,7 @@ export function seatWakeReadingOf(input: SeatWakeInput): SeatWakeReading {
       },
       input.home,
     );
+    unreadCount = unread.length;
     const first = unread[0];
     if (first !== undefined) {
       const at = Date.parse(first.ts);
@@ -92,6 +97,7 @@ export function seatWakeReadingOf(input: SeatWakeInput): SeatWakeReading {
       conversation: delivery.evidence.conversation,
       endpoint: delivery.evidence.endpointRecorded,
       listener,
+      unread: unreadCount,
       oldest_unread_seconds: oldest,
     },
     words: delivery.words,

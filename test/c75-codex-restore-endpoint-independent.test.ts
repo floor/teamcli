@@ -3,7 +3,7 @@
 // re-tied" path) would leave the seat on Codex's own endpoint, so `team up` relaunches it in
 // place instead: the pane's CLI is exited cleanly, nothing is closed or made, and the seat's own
 // launch line runs in the same pane — the launch then ensures a fresh endpoint and attaches to it
-// with `--remote`, or falls back to `--no-daemon` when it cannot start. A seat whose recorded
+// with `--remote`, or leaves the seat out when it cannot start. A seat whose recorded
 // endpoint is still live is adopted exactly as before, and an unreadable liveness reading is
 // never repaired on a guess. The exit timeout, a working pane and an unsent box keep the guards
 // the own-line path already has.
@@ -433,7 +433,7 @@ test('an exit the pane never acknowledges leaves the record and the endpoint rec
   expect(seatState()?.codex_endpoint?.url).toBe(ownedUrl());
 });
 
-test('a fresh endpoint that does not come up still launches the seat, on --no-daemon', async () => {
+test('a fresh endpoint that does not come up leaves the seat out, with no --no-daemon launch', async () => {
   setup();
   record();
   const made = sources({
@@ -441,15 +441,11 @@ test('a fresh endpoint that does not come up still launches the seat, on --no-da
     managed: { kind: 'unmanaged', why: 'the app-server could not start' },
   });
   const io = testIo(root, { kind: 'owner' });
-  expect(await runUp([], io, made.sources)).toBe(0);
+  expect(await runUp([], io, made.sources)).not.toBe(0);
   expect(made.trace.typed).toEqual(['/exit']);
-  expect(seatRuns(made.trace)).toHaveLength(1);
-  expect(seatRuns(made.trace)[0]?.pane).toBe(PANE);
-  expect(firstWord(seatRuns(made.trace)[0]?.command ?? '')).toBe('codex');
-  expect(seatRuns(made.trace)[0]?.command).toContain('--no-daemon');
-  expect(seatRuns(made.trace)[0]?.command).not.toContain('--remote');
-  expect(io.err).toContain('the managed Codex endpoint was not started: the app-server could not start');
+  expect(seatRuns(made.trace)).toEqual([]);
+  expect(`${io.out}\n${io.err}`).toContain('the managed Codex endpoint was not started: the app-server could not start');
   expect(findAgent(home, { team: teamIdOf(root), seat: SEAT })?.lifecycle).toBe('running');
-  expect(seatState()?.stage).toBe('ready');
+  expect(seatState()?.stage).toBe('launched');
   expect(seatState()?.pane).toBe(PANE);
 });

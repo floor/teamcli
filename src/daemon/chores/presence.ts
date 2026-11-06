@@ -12,8 +12,13 @@
 // answers every reading with a miss instead of guessing a store. The work is built once per root
 // and kept resident: the publisher's cursor and the activity step's own state must survive the
 // passes, exactly as they do in the daemon today.
-import { createPresenceActivity, type PresenceActivityResult } from '../presence/activity.ts';
-import { createPresencePublisher, type PresencePublishResult } from '../presence/publish.ts';
+import {
+  createPresenceActivity,
+  PRESENCE_ACTIVITY_CHUNK_ENTRIES,
+  PRESENCE_ACTIVITY_CHUNK_MS,
+  type PresenceActivityStep,
+} from '../presence/activity.ts';
+import { createPresencePublisher, type PresencePublisherStep } from '../presence/publish.ts';
 import { reconcileSeatProof } from '../presence/reconcile.ts';
 import type {
   ChoresChildConfig,
@@ -38,8 +43,8 @@ export type ChoresPresencePass = {
 
 type RootWork = {
   stateDir: string;
-  activity: (at: Date) => Promise<PresenceActivityResult>;
-  publisher: (at: Date) => Promise<PresencePublishResult>;
+  activity: PresenceActivityStep;
+  publisher: PresencePublisherStep;
 };
 
 /** One presence pass per root, with the same steps and order the daemon ran inline. */
@@ -85,7 +90,7 @@ export function createPresencePass(config: ChoresChildConfig): ChoresPresencePas
       const stateDir = built.stateDir;
 
       try {
-        const applied = await built.activity(input.at);
+        const applied = await built.activity(input.at, { slices: input.slices });
         if (applied.failed !== null) notes.push(`the activity step failed: ${applied.failed}`);
         const bad = applied.seats.find((seat) => seat.bad !== null)?.bad;
         if (typeof bad === 'string') notes.push(bad);
@@ -100,30 +105,56 @@ export function createPresencePass(config: ChoresChildConfig): ChoresPresencePas
       }
       await input.slices.yield();
 
-      const proofs: ChoresPresenceProof[] = input.readings.map((reading) => {
+      const proofs: ChoresPresenceProof[] = [];
+      const budgetMs = Math.min(input.slices.sliceMs, PRESENCE_ACTIVITY_CHUNK_MS);
+      let entriesInChunk = 0;
+      let sliceStart = performance.now();
+      for (let index = 0; index < input.readings.length; index += 1) {
+        const reading = input.readings[index]!;
+        entriesInChunk += 1;
         // A reading the daemon could not take is its own reason; the inline pass reported it
         // quietly, so no note is added for it here.
-        if ('failed' in reading) return { seat: reading.seat, miss: reading.failed };
-        const verdict = reconcileSeatProof({
-          stateDir,
-          session: route.session,
-          seat: reading.seat,
-          reading: reading.status,
-          at: input.at,
-        });
-        if (verdict.ok) return { seat: reading.seat, id: verdict.proof.id, binding: verdict.proof.binding };
-        // A reconciliation verdict is the one the inline pass logged once per route; the daemon
-        // still owns that dedupe, so the note is a plain line and it decides.
-        notes.push(`${reading.seat}: ${verdict.why}`);
-        return { seat: reading.seat, miss: verdict.why };
-      });
+        if ('failed' in reading) {
+          proofs.push({ seat: reading.seat, miss: reading.failed });
+        } else {
+          const verdict = reconcileSeatProof({
+            stateDir,
+            session: route.session,
+            seat: reading.seat,
+            reading: reading.status,
+            at: input.at,
+          });
+          if (verdict.ok) {
+            proofs.push({ seat: reading.seat, id: verdict.proof.id, binding: verdict.proof.binding });
+          } else {
+            // A reconciliation verdict is the one the inline pass logged once per route; the daemon
+            // still owns that dedupe, so the note is a plain line and it decides.
+            notes.push(`${reading.seat}: ${verdict.why}`);
+            proofs.push({ seat: reading.seat, miss: verdict.why });
+          }
+        }
+        if (
+          index < input.readings.length - 1 &&
+          (entriesInChunk >= PRESENCE_ACTIVITY_CHUNK_ENTRIES || performance.now() - sliceStart >= budgetMs)
+        ) {
+          if (input.slices.stopping()) {
+            return { proofs, notes: [...notes, 'the presence pass stopped at a slice boundary before the publish step'] };
+          }
+          const more = await input.slices.yield();
+          if (!more || input.slices.stopping()) {
+            return { proofs, notes: [...notes, 'the presence pass stopped at a slice boundary before the publish step'] };
+          }
+          entriesInChunk = 0;
+          sliceStart = performance.now();
+        }
+      }
 
       if (input.slices.stopping()) {
         return { proofs, notes: [...notes, 'the presence pass stopped at a slice boundary before the publish step'] };
       }
       await input.slices.yield();
       try {
-        const published = await built.publisher(input.at);
+        const published = await built.publisher(input.at, { slices: input.slices });
         if (published.failed !== null) notes.push(`the publish step failed: ${published.failed}`);
         const failed = published.seats.find((seat) => seat.failure !== null)
           ?? published.seats.find((seat) => seat.bad !== null);

@@ -28,7 +28,7 @@ const NOW = new Date('2026-10-03T14:10:00Z');
  *  turns, nothing wakes it while it is idle, and no home stands in for its receipts. */
 const PULL_ONLY = {
   class: 'pull-on-turn', wakeable: false, conversation: false, endpoint: false, listener: false,
-  oldest_unread_seconds: null,
+  unread: null, oldest_unread_seconds: null,
 } as const;
 
 const claudeScreen = (model: string) => `❯ \n${'─'.repeat(40)}\n  main · …/acme · ${model} · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on\n`;
@@ -247,7 +247,7 @@ describe('team seats', () => {
     const row = parsed.seats.find((one) => one.name === 'codex-acme');
     expect(row?.wake).toEqual({
       class: 'pull-on-turn', wakeable: false, conversation: false, endpoint: true,
-      listener: false, oldest_unread_seconds: null,
+      listener: false, unread: 0, oldest_unread_seconds: null,
     });
   });
 

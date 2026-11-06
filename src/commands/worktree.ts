@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { syncChildTimeout } from '../child.ts';
 import { notInForce } from '../approve/approval.ts';
 import { unverifiedRecordSentence } from '../approve/unverified-record.ts';
 import { devModeState } from '../dev_mode.ts';
@@ -865,8 +866,9 @@ function realSetup(cwd: string, command: string): number {
     cwd,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: syncChildTimeout(60_000),
   });
-  return result.status ?? 1;
+  return result.error ? 1 : (result.status ?? 1);
 }
 
 function runSetup(
@@ -893,9 +895,11 @@ function git(cwd: string, args: string[]): Run {
     cwd,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: syncChildTimeout(30_000),
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
   });
-  return { code: result.status ?? 1, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+  const stderr = (result.stderr ?? '') !== '' ? (result.stderr ?? '') : (result.error?.message ?? '');
+  return { code: result.error ? 1 : (result.status ?? 1), stdout: result.stdout ?? '', stderr };
 }
 
 function firstLine(text: string): string {

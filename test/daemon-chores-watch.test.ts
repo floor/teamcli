@@ -283,6 +283,69 @@ describe('the chores child\'s hosted watch', () => {
       await watch.stop('the test is done');
     }
   }, 15_000);
+
+  test('a slow proof read is awaited, so the loop keeps its beat while it runs', async () => {
+    bind();
+    const clock = { at: NOW };
+    // A live pane watch stands in the way: the host must prove the holder through its pane read
+    // before it can ask that watch to hand the record over.
+    updateState(agents, (state) => {
+      (state.sessions.crew ??= emptySession()).watch = {
+        pid: process.pid,
+        heartbeat: iso(NOW),
+        pane: 'pane-7',
+      };
+    });
+    const sources = quietSources(clock);
+    const readStarts: number[] = [];
+    const readEnds: number[] = [];
+    const ticks: number[] = [];
+    let syncReads = 0;
+    let asyncReads = 0;
+    // A 20 ms timer stands in for the child's own heartbeat: both are timers on the same loop,
+    // so a synchronous read of this length holds both.
+    const timer = setInterval(() => ticks.push(Date.now()), 20);
+    const watch = createChoresWatch({
+      routes: [route()],
+      log: () => {},
+      report: () => {},
+      pulse: () => {},
+      faultResult: () => {},
+      now: () => new Date(clock.at),
+      base: {
+        ...sources,
+        // The synchronous reader holds the loop for the whole read; the awaited one does not.
+        // The child must take the awaited source whenever the base supplies one.
+        processes: () => {
+          syncReads += 1;
+          readStarts.push(Date.now());
+          const end = Date.now() + 500;
+          while (Date.now() < end) { /* the blocking proof read */ }
+          readEnds.push(Date.now());
+          return null;
+        },
+        processesAsync: async () => {
+          asyncReads += 1;
+          readStarts.push(Date.now());
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          readEnds.push(Date.now());
+          return null;
+        },
+      },
+    });
+    try {
+      await waitUntil(() => readEnds.length === 1, 5000);
+    } finally {
+      clearInterval(timer);
+      await watch.stop('the test is done');
+    }
+    expect(syncReads).toBe(0);
+    expect(asyncReads).toBe(1);
+    const started = readStarts[0];
+    const ended = readEnds[0];
+    if (started === undefined || ended === undefined) throw new Error('the proof read never finished');
+    expect(ticks.some((at) => at >= started && at <= ended)).toBe(true);
+  }, 15_000);
 });
 
 describe('the chores child\'s beat beside a slow terminal host', () => {

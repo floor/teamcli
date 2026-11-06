@@ -35,6 +35,8 @@ type World = {
   log: string;
   /** A folder outside any repository, so git reads no project config. */
   work: string;
+  /** An absolute folder with nothing in it: a PATH on which the forge CLI is not found. */
+  empty: string;
 };
 
 const roots: string[] = [];
@@ -45,7 +47,8 @@ function world(): World {
   const home = join(root, 'home');
   const real = join(root, 'real');
   const work = join(root, 'work');
-  for (const dir of [home, real, work]) mkdirSync(dir, { recursive: true });
+  const empty = join(root, 'empty');
+  for (const dir of [home, real, work, empty]) mkdirSync(dir, { recursive: true });
   const log = join(root, 'runs.log');
   const cli = join(real, 'gh');
   // The account-like CLI. Without a token it answers the way the measured fallback did: the
@@ -72,7 +75,7 @@ function world(): World {
     join(home, '.gitconfig'),
     ['[credential "https://github.com"]', '\thelper =', '\thelper = !gh auth git-credential', ''].join('\n'),
   );
-  return { root, home, real, cli, log, work };
+  return { root, home, real, cli, log, work, empty };
 }
 
 function settings(home: string, text: string): void {
@@ -245,20 +248,20 @@ describe('the session server environment', () => {
     expect(env.SSH_AUTH_SOCK).toBe('/fixture/agent.sock');
   });
 
-  // Known for 0.5.12.1: Ubuntu runners preinstall /usr/bin/gh, so /usr/bin:/bin is not a
-  // forge-free PATH off macOS.
-  test.skipIf(process.platform !== 'darwin')('a PATH without the forge CLI is left as it was, and no shim is written', () => {
+  // The fixture's own folder is the whole PATH: nothing in it answers to the CLI's name, so the
+  // scene proves the empty case without relying on a system folder being free of it.
+  test('a PATH without the forge CLI is left as it was, and no shim is written', () => {
     const w = world();
-    const env = seatServerEnv({ HOME: w.home, PATH: '/usr/bin:/bin' }, w.home);
-    expect(env.PATH).toBe('/usr/bin:/bin');
+    const env = seatServerEnv({ HOME: w.home, PATH: w.empty }, w.home);
+    expect(env.PATH).toBe(w.empty);
     expect(existsSync(shimOf(w))).toBe(false);
   });
 
-  test.skipIf(process.platform !== 'darwin')('a file called like the CLI but not executable is not it', () => {
+  test('a file called like the CLI but not executable is not it', () => {
     const w = world();
     chmodSync(w.cli, 0o644);
-    const env = seatServerEnv({ HOME: w.home, PATH: `${w.real}:/usr/bin:/bin` }, w.home);
-    expect(env.PATH).toBe(`${w.real}:/usr/bin:/bin`);
+    const env = seatServerEnv({ HOME: w.home, PATH: w.real }, w.home);
+    expect(env.PATH).toBe(w.real);
     expect(existsSync(shimOf(w))).toBe(false);
   });
 

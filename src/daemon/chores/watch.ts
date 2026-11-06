@@ -90,15 +90,17 @@ function startRoute(input: ChoresWatchInput, route: ChoresChildRoute, now: () =>
     now,
     ...(input.base === undefined ? {} : { base: input.base }),
     // Proving a recorded pane watch is the process in its own pane is the same terminal-host
-    // read the daemon makes; a pane it cannot read stays unproven and is never asked to hand over.
-    // A provided reader is the reader, and null is its answer: the pane cannot be read. Only a
-    // route with no reader asks the terminal host. That read is awaited, so a slow host holds
-    // this read, never this child's loop and the beat it owes the daemon.
+    // read the daemon makes, and it is the awaited one: a synchronous herdr read would hold this
+    // child's loop — and its heartbeat — for the read's whole timeout, which is the lateness the
+    // supervisor then reports. A pane it cannot read stays unproven and is never asked to hand
+    // over. A test's read sources answer first; a base that supplies only the synchronous reader
+    // keeps using it, so no scene probes the machine's own sessions.
     processInfo: (pane) => {
-      const processes = input.base?.processes;
-      return processes !== undefined
-        ? processes(pane, hosted.session)
-        : paneProcessesAsync(pane, hosted.session);
+      if (input.base?.processesAsync !== undefined) {
+        return input.base.processesAsync(pane, hosted.session, { timeoutMs: 10_000 });
+      }
+      if (input.base?.processes !== undefined) return input.base.processes(pane, hosted.session);
+      return paneProcessesAsync(pane, hosted.session, { timeoutMs: 10_000 });
     },
     ...(watch.presence
       ? {

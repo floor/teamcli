@@ -116,7 +116,7 @@ function loadScreenModule(specifier: string, baseDir: string | undefined, line: 
 
 function screenOf(node: YamlNode, topScreenModule?: YamlEntry, baseDir?: string, profileFile?: string): ScreenData {
   const entries = mapping(node, 'screen');
-  only(entries, ['chrome', 'turn_end', 'composer', 'screen_module', 'question_text', 'scroll_back', ...STAGES]);
+  only(entries, ['chrome', 'turn_end', 'composer', 'screen_module', 'question_text', 'scroll_back', 'feedback_survey', ...STAGES]);
   const chrome = optional(entries, 'chrome');
   const screenScreenModule = optional(entries, 'screen_module');
   const moduleEntry = screenScreenModule ?? topScreenModule;
@@ -162,7 +162,49 @@ function screenOf(node: YamlNode, topScreenModule?: YamlEntry, baseDir?: string,
   if (questionText) data.questionText = questionTextOf(questionText);
   const scrollBack = optional(entries, 'scroll_back');
   if (scrollBack) data.scrollBack = scrollBackOf(scrollBack);
+  const feedbackSurvey = optional(entries, 'feedback_survey');
+  if (feedbackSurvey) data.feedbackSurvey = feedbackSurveyOf(feedbackSurvey);
   return data;
+}
+
+/** The only answer the product ever sends to a feedback survey: `'0'` (`Skip`), once. */
+const FEEDBACK_SURVEY_KEYS = ['0'] as const;
+
+/** A post-turn feedback survey drawn at the bottom of the pane in the composer's place: two
+ *  contiguous whole rows (`prompt` immediately above `choices`), with at most the profile's
+ *  optional `status_footer` row on the last non-blank row beneath them. */
+function feedbackSurveyOf(entry: YamlEntry): { prompt: RegExp; choices: RegExp; statusFooter?: RegExp; skipKey: string } {
+  const entries = mapping(entry.value, 'feedback_survey');
+  only(entries, ['prompt', 'choices', 'status_footer', 'skip_key']);
+  const key = required(entries, 'skip_key', entry.line);
+  const keyText = stringOf(key.value);
+  if (keyText === null) fail(key.line, '"feedback_survey.skip_key" must be a string');
+  if (!(FEEDBACK_SURVEY_KEYS as readonly string[]).includes(keyText)) {
+    fail(key.line, `"feedback_survey.skip_key" must be one of ${FEEDBACK_SURVEY_KEYS.join(', ')}: only Skip ('0') may be sent to a feedback survey`);
+  }
+  const requiredRow = (name: 'prompt' | 'choices'): RegExp => {
+    const found = required(entries, name, entry.line);
+    const text = stringOf(found.value);
+    if (text === null) fail(found.line, `"feedback_survey.${name}" must be a string`);
+    if (!anchored(text)) fail(found.line, `a feedback_survey ${name} must match the whole line: "^…$"`);
+    return patternOf(text, false, found.line);
+  };
+  const prompt = requiredRow('prompt');
+  const choices = requiredRow('choices');
+  let statusFooter: RegExp | undefined;
+  const footerEntry = optional(entries, 'status_footer');
+  if (footerEntry !== undefined) {
+    const text = stringOf(footerEntry.value);
+    if (text === null) fail(footerEntry.line, '"feedback_survey.status_footer" must be a string');
+    if (!anchored(text)) fail(footerEntry.line, 'a feedback_survey status footer must match the whole line: "^…$"');
+    statusFooter = patternOf(text, false, footerEntry.line);
+  }
+  return {
+    prompt,
+    choices,
+    ...(statusFooter === undefined ? {} : { statusFooter }),
+    skipKey: keyText,
+  };
 }
 
 /** The keys a `scroll_back` return may name: only a key a run established at that screen — an
@@ -490,6 +532,13 @@ function composerOf(node: YamlNode): Composer {
   // a composer whose suggestions plain text already names needs none of it.
   const style = optional(entries, 'placeholder_style');
   const placeholderStyle = style ? placeholderStyleOf(style) : undefined;
+  // The foregrounds the CLI draws its rotating hints in, measured off a capture: an input row
+  // whose text past the prompt is one of them is the empty box even with no faint attribute.
+  // Only a CLI a capture shows drawing them so declares any. The key needs the dim style: the
+  // styling is what answers the question, so a declared colour without it would read nothing.
+  const fgEntry = optional(entries, 'placeholder_fg');
+  const placeholderFg = fgEntry ? placeholderFgOf(fgEntry) : undefined;
+  if (fgEntry && placeholderStyle !== 'dim') fail(fgEntry.line, '"placeholder_fg" needs "placeholder_style: dim"');
   // How the box continues a line onto its next row, declared only where a capture showed the
   // wrap. A composer without one is read by tiling the typed text's own runs.
   const wrapEntry = optional(entries, 'wrap');
@@ -501,7 +550,7 @@ function composerOf(node: YamlNode): Composer {
   const frameEntry = optional(entries, 'frame_rows');
   const frameRows = frameEntry ? frameRowsOf(frameEntry) : 0;
   if (name === 'box-to-rule') {
-    only(entries, ['mode', 'prompt', 'rule', 'footers', 'status', 'placeholders', 'placeholder_style', 'strip_suffix', 'wrap', 'frame_rows', 'own_rows']);
+    only(entries, ['mode', 'prompt', 'rule', 'footers', 'status', 'placeholders', 'placeholder_style', 'placeholder_fg', 'strip_suffix', 'wrap', 'frame_rows', 'own_rows']);
     // For a scrolled-out box, the non-blank lines under the closing rule must match
     // every pattern, in order, and the counts must be equal.
     const footers = optional(entries, 'footers');
@@ -516,19 +565,20 @@ function composerOf(node: YamlNode): Composer {
       status: statusFieldOf(entries),
       placeholders: placeholdersOf(required(entries, 'placeholders', node.line).value),
       placeholderStyle,
+      placeholderFg,
       wrap,
       frameRows,
       ...(own ? { ownRows: ownRowsOf(own.value) } : {}),
     };
   }
   if (name === 'status-last') {
-    only(entries, ['mode', 'status_line', 'status_below', 'prompt', 'placeholders', 'placeholder_style', 'wrap', 'frame_rows', 'border']);
+    only(entries, ['mode', 'status_line', 'status_below', 'prompt', 'placeholders', 'placeholder_style', 'placeholder_fg', 'wrap', 'frame_rows', 'border']);
     const below = optional(entries, 'status_below');
     const border = optional(entries, 'border');
-    return { mode: name, statusLine: statusLineField(entries, node.line), ...(below ? { statusBelow: statusBelowOf(below) } : {}), prompt: regexField(entries, 'prompt', node.line), placeholders: placeholdersOf(required(entries, 'placeholders', node.line).value), placeholderStyle, wrap, frameRows, ...(border ? { border: borderOf(border) } : {}) };
+    return { mode: name, statusLine: statusLineField(entries, node.line), ...(below ? { statusBelow: statusBelowOf(below) } : {}), prompt: regexField(entries, 'prompt', node.line), placeholders: placeholdersOf(required(entries, 'placeholders', node.line).value), placeholderStyle, placeholderFg, wrap, frameRows, ...(border ? { border: borderOf(border) } : {}) };
   }
   if (name === 'status-then-one') {
-    only(entries, ['mode', 'status_line', 'status_below', 'prompt', 'placeholders', 'placeholder_style', 'strip_suffix', 'fallback', 'wrap', 'frame_rows', 'border', 'own_rows', 'chrome']);
+    only(entries, ['mode', 'status_line', 'status_below', 'prompt', 'placeholders', 'placeholder_style', 'placeholder_fg', 'strip_suffix', 'fallback', 'wrap', 'frame_rows', 'border', 'own_rows', 'chrome']);
     const suffix = optional(entries, 'strip_suffix');
     const fallback = required(entries, 'fallback', node.line);
     const below = optional(entries, 'status_below');
@@ -542,6 +592,7 @@ function composerOf(node: YamlNode): Composer {
       prompt: regexField(entries, 'prompt', node.line),
       placeholders: placeholdersOf(required(entries, 'placeholders', node.line).value),
       placeholderStyle,
+      placeholderFg,
       stripSuffix: suffix ? composerString(suffix.value, 'strip_suffix', suffix.line) : null,
       fallback: fallbackOf(fallback.value),
       wrap,
@@ -552,7 +603,7 @@ function composerOf(node: YamlNode): Composer {
     };
   }
   if (name === 'two-rules-footer-below') {
-    only(entries, ['mode', 'ignore_case', 'prompt', 'rule', 'footers', 'placeholders', 'fold', 'placeholder_style', 'wrap', 'frame_rows']);
+    only(entries, ['mode', 'ignore_case', 'prompt', 'rule', 'footers', 'placeholders', 'fold', 'placeholder_style', 'placeholder_fg', 'wrap', 'frame_rows']);
     const flag = optional(entries, 'ignore_case');
     const ignoreCase = flag ? boolOf(flag.value, 'ignore_case') : false;
     // Any line below the closing rule matches any pattern in the list.
@@ -566,6 +617,7 @@ function composerOf(node: YamlNode): Composer {
       placeholders: placeholdersOf(required(entries, 'placeholders', node.line).value),
       fold: fold ? patternOf(stringOf(fold.value) ?? fail(fold.line, '"fold" must be a string'), ignoreCase, fold.line) : null,
       placeholderStyle,
+      placeholderFg,
       wrap,
       frameRows,
     };
@@ -621,6 +673,24 @@ function placeholderStyleOf(entry: YamlEntry): 'dim' {
   const text = stringOf(entry.value);
   if (text !== 'dim') fail(entry.line, '"placeholder_style" must be dim');
   return text;
+}
+
+// The foregrounds a CLI draws its rotating hints in, as SGR parameter lists (`90`, `38;5;244`,
+// `38;2;103;108;116`), measured off a capture. Each is normalised to the pen's own token — the
+// same colour written `:`-separated — so the reader compares one spelling alone.
+const FOREGROUND_PARAMS = /^(?:3[0-7]|9[0-7]|38;5;[0-9]{1,3}|38;2;[0-9]{1,3};[0-9]{1,3};[0-9]{1,3})$/;
+
+function placeholderFgOf(entry: YamlEntry): string[] {
+  const node = entry.value;
+  if (node.kind !== 'seq' || node.items.length === 0) fail(entry.line, '"placeholder_fg" must be a non-empty list');
+  return node.items.map((item) => {
+    const text = stringOf(item);
+    if (text === null) fail(item.line, '"placeholder_fg" entries must be strings');
+    if (!FOREGROUND_PARAMS.test(text)) {
+      fail(item.line, '"placeholder_fg" entries must be one foreground\'s SGR parameters: 30-37, 90-97, 38;5;n or 38;2;r;g;b');
+    }
+    return text.replace(/;/g, ':');
+  });
 }
 
 function fallbackOf(node: YamlNode): FallbackRule[] {

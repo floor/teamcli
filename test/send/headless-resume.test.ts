@@ -26,6 +26,7 @@ import { teamIdOf } from '../../src/registry/teams.ts';
 import {
   buildHeadlessResumeArgs,
   CURSOR_HEADLESS_RESUME_ADAPTER,
+  defaultHeadlessResumeSpawn,
   deliverHeadlessResumeRoute,
   GEMINI_HEADLESS_RESUME_ADAPTER,
   HEADLESS_RESUME_ADAPTERS,
@@ -828,5 +829,38 @@ exit 0
       '-p',
       `From owner@${teamIdOf(scene.root)}: New team message ${MESSAGE_ID}: call inbox_read({"id":"${MESSAGE_ID}"})`,
     ]);
+  });
+
+  test('defaultHeadlessResumeSpawn returns when the binary exits while a grandchild still holds its pipes', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'headless-resume-exit-'));
+    tempDirs.push(dir);
+    const script = join(dir, 'gemini');
+    const pidFile = join(dir, 'grandchild.pid');
+    writeFileSync(
+      script,
+      `#!/bin/sh
+sleep 30 &
+printf '%s\\n' "$!" > ${JSON.stringify(pidFile)}
+exit 0
+`,
+      { mode: 0o755 },
+    );
+    let result: Awaited<ReturnType<typeof defaultHeadlessResumeSpawn>> | undefined;
+    try {
+      result = await defaultHeadlessResumeSpawn(script, [], { timeoutMs: 1500 });
+    } finally {
+      if (existsSync(pidFile)) {
+        const pid = Number(readFileSync(pidFile, 'utf8').trim());
+        if (Number.isInteger(pid) && pid > 0) {
+          try {
+            process.kill(pid, 'SIGKILL');
+          } catch {
+            // The grandchild already exited.
+          }
+        }
+      }
+    }
+    expect(result?.error).toBeUndefined();
+    expect(result?.status).toBe(0);
   });
 });

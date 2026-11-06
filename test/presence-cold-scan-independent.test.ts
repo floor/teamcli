@@ -1,5 +1,7 @@
 // Independent verification for `fix/presence-cold-scan`:
-// 1. A three-root cold start of tens-of-MB fixture logs answers health probes within 500 ms throughout.
+// 1. A three-root cold start of tens-of-MB fixture logs answers health probes at the 500 ms budget.
+//    A timeout during the recorded startMachineDaemon window is startup. Once that call has
+//    returned serving, every timeout is fatal. A blocking answer after that window stays fatal.
 // 2. Every read line is still signature-verified (one bad line planted mid-log is refused as before).
 // 3. A truncated or tampered log is refused (never served from a stale in-memory or on-disk checkpoint).
 // 4. The append index never reports a record as appended that is not on disk.
@@ -19,7 +21,7 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs';
-import { connect } from 'node:net';
+import { connect, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -186,6 +188,36 @@ function unwrapRead(res: EventReadResult): Extract<EventReadResult, { ok: true }
   return res;
 }
 
+type ColdProbe = { at: number; epoch: number; kind: string; reason: string | null; ms: number };
+
+function readColdProbes(stdout: string): ColdProbe[] {
+  const probes: ColdProbe[] = [];
+  for (const line of stdout.split('\n')) {
+    if (!line.startsWith('PROBE ')) continue;
+    const obj = JSON.parse(line.slice('PROBE '.length)) as Record<string, unknown>;
+    if (obj.done !== undefined) continue;
+    probes.push({
+      at: Number(obj.at),
+      epoch: Number(obj.epoch),
+      kind: String(obj.kind),
+      reason: obj.reason === null || obj.reason === undefined ? null : String(obj.reason),
+      ms: Number(obj.ms),
+    });
+  }
+  return probes;
+}
+
+/** Timeouts whose wait does not overlap the recorded startup window. A missing epoch fails closed. */
+function timeoutsAfterServing(probes: ColdProbe[], startupBegan: number, startupEnded: number): ColdProbe[] {
+  if (!(startupEnded > startupBegan)) throw new Error('the startup window was not recorded');
+  return probes.filter((probe) => {
+    if (probe.kind !== 'unanswered' || probe.reason !== 'timeout') return false;
+    const duringStartup = Number.isFinite(probe.epoch) && Number.isFinite(probe.ms)
+      && probe.epoch < startupEnded && probe.epoch + probe.ms > startupBegan;
+    return !duringStartup;
+  });
+}
+
 describe('fix/presence-cold-scan independent verification', () => {
   test('probe 1: three-root cold start of tens-of-MB fixture logs answers health probes within 500 ms throughout', async () => {
     // 50,000 signed records per root (~22.6 MB per root, ~67.8 MB across three roots).
@@ -211,6 +243,8 @@ describe('fix/presence-cold-scan independent verification', () => {
       await new Promise((r) => setTimeout(r, 10));
     }
 
+    const epochNow = (): number => Math.round(performance.timeOrigin + performance.now());
+    const startupBegan = epochNow();
     const started = await startMachineDaemon({
       home: world.home,
       roots: world.roots.map((r) => r.root),
@@ -219,6 +253,7 @@ describe('fix/presence-cold-scan independent verification', () => {
       presenceHosting: false,
       restoreSweep: false,
     });
+    const startupEnded = epochNow();
     if (started.kind !== 'serving') throw new Error(`daemon failed to start: ${started.kind}`);
     activeDaemons.push(started.daemon);
     expect(started.daemon.roots.map((r) => r.bus)).toEqual(['serving', 'serving', 'serving']);
@@ -252,21 +287,9 @@ describe('fix/presence-cold-scan independent verification', () => {
 
     expect(finalRows.every((row) => row.firstPass?.errors === false)).toBe(true);
 
-    const probes: Array<{ at: number; kind: string; reason: string | null; ms: number }> = [];
-    for (const line of stdout.split('\n')) {
-      if (!line.startsWith('PROBE ')) continue;
-      const obj = JSON.parse(line.slice('PROBE '.length)) as Record<string, unknown>;
-      if (obj.done !== undefined) continue;
-      probes.push({
-        at: Number(obj.at),
-        kind: String(obj.kind),
-        reason: obj.reason === null || obj.reason === undefined ? null : String(obj.reason),
-        ms: Number(obj.ms),
-      });
-    }
-
-    const timeouts = probes.filter((p) => p.kind === 'unanswered' && p.reason === 'timeout');
-    expect(timeouts).toEqual([]);
+    const probes = readColdProbes(stdout);
+    const fatal = timeoutsAfterServing(probes, startupBegan, startupEnded);
+    expect(fatal.map((probe) => `+${String(probe.at)} ms waited ${String(probe.ms)} ms`)).toEqual([]);
 
     const answered = probes.filter((p) => p.kind === 'answered');
     expect(answered.length).toBeGreaterThanOrEqual(3);
@@ -274,6 +297,72 @@ describe('fix/presence-cold-scan independent verification', () => {
       expect(ans.ms).toBeLessThanOrEqual(500);
     }
   }, 120_000);
+
+  test('a blocking health answer after the startup window is fatal', async () => {
+    // The demonstrated stall: the first two health answers block for 700 ms, past the 500 ms
+    // budget. The startup window is already closed, so those timeouts stay fatal.
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'presence-cold-scan-hold-')));
+    tempBases.push(base);
+    const socketPath = join(base, 'daemon.sock');
+    const readyPath = join(base, 'probe.ready');
+    const stopPath = join(base, 'probe.stop');
+    let holds = 0;
+    const server = createServer((socket) => {
+      socket.on('error', () => {});
+      let buffer = '';
+      socket.on('data', (chunk: Buffer) => {
+        buffer += chunk.toString('utf8');
+        const nl = buffer.indexOf('\n');
+        if (nl < 0) return;
+        const line = buffer.slice(0, nl);
+        buffer = buffer.slice(nl + 1);
+        let parsed: { v?: unknown; id?: unknown };
+        try {
+          parsed = JSON.parse(line) as { v?: unknown; id?: unknown };
+        } catch {
+          socket.destroy();
+          return;
+        }
+        holds += 1;
+        if (holds <= 2) Bun.sleepSync(700);
+        try {
+          socket.end(`${JSON.stringify({ v: parsed.v, id: parsed.id, ok: true, health: { pid: process.pid } })}\n`);
+        } catch {
+          // The probe already gave up at its budget and closed the socket.
+        }
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(socketPath, () => resolve());
+    });
+    try {
+      const epochNow = (): number => Math.round(performance.timeOrigin + performance.now());
+      const startupBegan = epochNow() - 20;
+      const startupEnded = epochNow() - 1;
+      const childScript = fileURLToPath(new URL('./fixtures/cold-read-probe-child.ts', import.meta.url));
+      const prober = Bun.spawn([process.execPath, childScript, socketPath, readyPath, '2500', stopPath], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      const readyDeadline = Date.now() + 10_000;
+      while (!existsSync(readyPath)) {
+        if (Date.now() > readyDeadline) throw new Error('probe child did not become ready');
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      const code = await prober.exited;
+      const stdout = await new Response(prober.stdout).text();
+      const stderr = await new Response(prober.stderr).text();
+      if (code !== 0) throw new Error(`probe child exited ${String(code)}: ${stdout}${stderr}`);
+      const probes = readColdProbes(stdout);
+      const fatal = timeoutsAfterServing(probes, startupBegan, startupEnded);
+      expect(fatal.length).toBeGreaterThanOrEqual(2);
+      for (const probe of fatal) expect(probe.ms).toBeGreaterThanOrEqual(500);
+      expect(probes.some((probe) => probe.kind === 'answered')).toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }, 20_000);
 
   test('probe 2: every read line is signature-verified and a bad line planted mid-log is refused as before', async () => {
     const TOTAL = 4_500;

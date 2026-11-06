@@ -211,7 +211,7 @@ describe('muse launch and captured screens', () => {
     expect(boxHoldsText('muse', '/goal ship the release', draft)).toBe(true);
   });
 
-  test('a faint prose hint is an empty box, and the same words without the faint attribute are a draft', () => {
+  test('a faint prose hint is an empty box, the truecolor hint in the declared grey is too, and the same words plain are a draft', () => {
     const prose = 'Ask to monitor a running build or log and get pinged on changes';
     const tasks = '/tasks shows workflows, subagents and terminals in one place';
     const dim = fixture1411('prose-hint-dim');
@@ -227,9 +227,11 @@ describe('muse launch and captured screens', () => {
     expect(readScreen('muse', plain).kind).toBe('unsent');
     expect(readBox('muse', plain)?.first).toBe(prose);
     expect(boxHoldsText('muse', prose, plain)).toBe(true);
-    expect(readScreen('muse', color).kind).toBe('unsent');
-    expect(readBox('muse', color)?.first).toBe(prose);
-    expect(boxHoldsText('muse', prose, color)).toBe(true);
+    // 1.4.14 draws this hint in its declared grey with no faint attribute (the profile's
+    // placeholder_fg); the same words in any other colour keep the row text.
+    expect(readScreen('muse', color).kind).toBe('idle');
+    expect(readBox('muse', color)).toBeNull();
+    expect(boxHoldsText('muse', prose, color)).toBe(false);
   });
 
   test('the quota patterns read the 5-hour and weekly windows off the /usage box lines', () => {

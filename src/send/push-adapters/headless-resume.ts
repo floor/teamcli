@@ -26,8 +26,8 @@
 //     fallback-walk transport fact). Signed `<id>.read.json` receipt verification and user-facing
 //     `delivered (read)` vs `sent (unconfirmed)` classification stay in `src/commands/send.ts`.
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { accessSync, constants, existsSync, statSync } from 'node:fs';
+import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import { readTeamConfig } from '../../file/team-config.ts';
 import {
   stage as relayStage,
@@ -288,9 +288,38 @@ export type HeadlessResumeSpawn = (
 ) => Promise<HeadlessResumeSpawnResult> | HeadlessResumeSpawnResult;
 
 /**
+ * The first executable file `binary` names on `pathEnv`. A name that is already a path is
+ * not searched. An empty path entry is skipped: it would mean the working directory, and a
+ * resume must run the binary the caller placed on `PATH`, not whatever file shares the folder.
+ * A directory is not a binary. Returns null when no file is executable, so the spawn itself
+ * reports the miss.
+ */
+function executableOnPath(binary: string, pathEnv: string | undefined): string | null {
+  if (binary.length === 0 || isAbsolute(binary) || binary.includes('/') || binary.includes('\\')) return null;
+  for (const dir of (pathEnv ?? '').split(delimiter)) {
+    if (dir.length === 0) continue;
+    const candidate = join(dir, binary);
+    try {
+      if (!statSync(candidate).isFile()) continue;
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+/**
  * Default non-blocking process runner for headless one-turn resume (`gemini` / `cursor-agent`).
  * Never reads or passes owner CLI homes directly; stdin is closed immediately, `AGENT_UNATTENDED=1`
  * is set in the environment, and stdout/stderr are collected up to `timeoutMs`.
+ *
+ * The run ends when the binary itself exits. Waiting for the stdio pipes to close holds the
+ * send open for whatever grandchild inherited them, and a process that has already exited
+ * before its exit listener is attached never delivers that event, so the exit status is read
+ * off the handle as well. A `PATH` name is resolved to the first executable file before the
+ * spawn, so the lookup stops at that file.
  */
 export const defaultHeadlessResumeSpawn: HeadlessResumeSpawn = (binary, args, options) =>
   new Promise<HeadlessResumeSpawnResult>((resolve) => {
@@ -309,11 +338,13 @@ export const defaultHeadlessResumeSpawn: HeadlessResumeSpawn = (binary, args, op
       resolve(result);
     };
 
+    const env: NodeJS.ProcessEnv = { ...process.env, AGENT_UNATTENDED: '1' };
+    const file = executableOnPath(binary, env.PATH) ?? binary;
     let child;
     try {
-      child = spawn(binary, [...args], {
+      child = spawn(file, [...args], {
         ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-        env: { ...process.env, AGENT_UNATTENDED: '1' },
+        env,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch (error) {
@@ -336,13 +367,18 @@ export const defaultHeadlessResumeSpawn: HeadlessResumeSpawn = (binary, args, op
       stderr += chunk;
     });
 
+    // The data events for a short write are already queued when the process exits. Settling
+    // on the next turn keeps that text with the status.
+    const settle = (code: number | null): void => {
+      process.nextTick(() => finish({ status: code, stdout, stderr }));
+    };
+
     child.on('error', (error: Error) => {
       finish({ status: null, stdout, stderr, error });
     });
 
-    child.on('close', (code: number | null) => {
-      finish({ status: code, stdout, stderr });
-    });
+    child.on('exit', settle);
+    if (child.exitCode !== null) settle(child.exitCode);
 
     timer = setTimeout(() => {
       try {

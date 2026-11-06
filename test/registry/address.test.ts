@@ -8,7 +8,10 @@
 //     or its socket is gone — and only then: a pane herdr cannot answer for, a null pane, a seat
 //     that is not claude-code, and an unknown agent all leave the registry exactly as it was;
 // (c) a refresh moves nothing but the address: the record keeps its id, reach and provenance;
-// (d) every reading answers null rather than guessing — nothing here throws.
+// (d) every reading answers null rather than guessing — nothing here throws;
+// (e) the same write from a reading the caller made (`refreshAgentAddressFrom`) never reads a
+//     pane at all: a run that already holds the processes records from them, and a null reading
+//     writes nothing.
 // Herdr is faked and the sockets live in a temporary folder: no live session is read, and no
 // socket of the machine's own is touched.
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -22,6 +25,7 @@ import {
   liveSocketOf,
   paneSocket,
   refreshAgentAddress,
+  refreshAgentAddressFrom,
   socketPid,
   socketOfProcesses,
 } from '../../src/send/address.ts';
@@ -226,6 +230,48 @@ describe('a recorded address', () => {
 
     expect(refreshAgentAddress(w.home, id, PANE, SESSION, w.dir).address).toBeNull();
     expect(getAgent(w.home, id)?.reach.address).toBeNull();
+  });
+});
+
+describe('a reading the caller already made', () => {
+  test('is recorded from the processes in hand, with no pane read of its own', () => {
+    const w = world();
+    const id = agent(w.home);
+    const live = sock(w.dir, 401);
+    let asked = 0;
+    setHerdrRun(() => {
+      asked += 1;
+      return {};
+    });
+
+    const r = refreshAgentAddressFrom(w.home, id, { shell: 400, foreground: [401] }, w.dir);
+
+    expect(r).toEqual({ address: live });
+    expect(getAgent(w.home, id)?.reach.address).toBe(live);
+    // The rule is the caller's reading: herdr is never asked a second time.
+    expect(asked).toBe(0);
+  });
+
+  test('clears an address the reading no longer carries', () => {
+    const w = world();
+    const id = agent(w.home, { address: sock(w.dir, 401) });
+
+    expect(refreshAgentAddressFrom(w.home, id, { shell: 400, foreground: [500] }, w.dir).address).toBeNull();
+    expect(getAgent(w.home, id)?.reach.address).toBeNull();
+  });
+
+  test('writes nothing for a null reading, another CLI, or an agent the registry does not hold', () => {
+    const w = world();
+    const held = sock(w.dir, 401);
+    const claude = agent(w.home, { address: held });
+    const codex = agent(w.home, { cli: 'codex', address: null });
+
+    expect(refreshAgentAddressFrom(w.home, claude, null, w.dir)).toEqual({ address: held });
+    expect(refreshAgentAddressFrom(w.home, codex, { shell: 400, foreground: [401] }, w.dir)).toEqual({ address: null });
+    expect(refreshAgentAddressFrom(w.home, `agt_${'0'.repeat(12)}`, { shell: 400, foreground: [401] }, w.dir))
+      .toEqual({ address: null });
+    expect(getAgent(w.home, claude)?.reach.address).toBe(held);
+    expect(getAgent(w.home, codex)?.reach.address).toBeNull();
   });
 });
 

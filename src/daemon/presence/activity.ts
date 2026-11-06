@@ -33,6 +33,25 @@ import { isPresenceSeatName, presenceSessionDir } from './spool.ts';
 /** The events that prove the seat did work. The other two move the fence, never the clock. */
 export const PRESENCE_ACTIVITY_EVENTS = ['turn-start', 'turn-end'] as const;
 
+/** How many seats or transition lines one intra-step activity chunk reconciles before yielding
+ *  to the slice driver's budget check. */
+export const PRESENCE_ACTIVITY_CHUNK_ENTRIES = 64;
+
+/** The wall-clock stretch (ms) one intra-step activity chunk may spend before yielding to the
+ *  slice driver's budget check. */
+export const PRESENCE_ACTIVITY_CHUNK_MS = 50;
+
+export type PresenceActivitySlices = {
+  sliceMs: number;
+  stopping(): boolean;
+  yield(): Promise<boolean>;
+};
+
+export type PresenceActivityRunOptions = {
+  slices?: PresenceActivitySlices;
+  sliceClock?: () => number;
+};
+
 export type PresenceActivityInput = {
   /** The team file's folder (today `.agents`), never the checkout root. */
   stateDir: string;
@@ -67,7 +86,10 @@ export type PresenceActivityResult = {
   failed: string | null;
 };
 
-export type PresenceActivityStep = (at: Date) => Promise<PresenceActivityResult>;
+export type PresenceActivityStep = (
+  at: Date,
+  options?: PresenceActivityRunOptions,
+) => Promise<PresenceActivityResult>;
 
 type ScanCursor = { binding: string | null; seq: number; offset: number };
 
@@ -147,7 +169,11 @@ export function createPresenceActivity(input: PresenceActivityInput): PresenceAc
   const stateDir = input.stateDir;
   const session = input.session;
 
-  return async function step(at: Date): Promise<PresenceActivityResult> {
+  return async function step(
+    at: Date,
+    options?: PresenceActivityRunOptions,
+  ): Promise<PresenceActivityResult> {
+    const slices = options?.slices;
     let state;
     try {
       state = readState(stateDir);
@@ -165,7 +191,101 @@ export function createPresenceActivity(input: PresenceActivityInput): PresenceAc
 
     const reported: PresenceActivitySeat[] = [];
     const pending: PendingSeat[] = [];
-    for (const seat of seats) {
+    const clock = options?.sliceClock ?? (() => performance.now());
+    const budgetMs =
+      slices === undefined
+        ? Number.POSITIVE_INFINITY
+        : options?.sliceClock !== undefined
+          ? slices.sliceMs
+          : Math.min(slices.sliceMs, PRESENCE_ACTIVITY_CHUNK_MS);
+
+    const flushChunk = (batch: PendingSeat[]): { failed: string | null } => {
+      if (batch.length === 0) return { failed: null };
+      try {
+        const applied = updateState(stateDir, (locked) => {
+          const results: PresenceActivitySeat[] = [];
+          let changed = false;
+          for (const one of batch) {
+            const seatState = locked.sessions[session]?.seats?.[one.seat];
+            if (seatState === undefined) {
+              // Only an existing seat record is reconciled: presence never creates a seat.
+              results.push(unchanged(one.seat, one.base));
+              continue;
+            }
+            const stored = cursorOf(seatState);
+            if (stored.seq > one.base.seq || (stored.seq === one.base.seq && stored.offset > one.base.offset)) {
+              // A later write already consumed this batch; the next beat reads past it.
+              results.push(unchanged(one.seat, stored));
+              continue;
+            }
+            let stamped: string | null = null;
+            let fence: number | null = null;
+            let reconciled = 0;
+            for (const line of one.transitions) {
+              if (!line.applied) continue;
+              const binding = seatState.presence_binding;
+              if (!isPresenceBinding(binding) || line.binding !== binding) continue;
+              reconciled += 1;
+              if (line.event === 'turn-start' || line.event === 'turn-end') {
+                const eventAt = Date.parse(line.ts);
+                const current = seatState.last_active === undefined ? Number.NaN : Date.parse(seatState.last_active);
+                if (!Number.isFinite(current) || eventAt > current) {
+                  seatState.last_active = line.ts;
+                  stamped = line.ts;
+                }
+              }
+              if (isSeatId(seatState.id)) {
+                seatState.presence_applied = {
+                  seat_id: seatState.id,
+                  binding: line.binding,
+                  seq: line.seq,
+                  applied_at: at.toISOString(),
+                };
+                fence = line.seq;
+              }
+            }
+            let cursor = stored.seq;
+            let cursorChanged = false;
+            if (forwardOf({ seq: one.nextSeq, offset: one.nextOffset }, stored)) {
+              seatState.presence_scan = {
+                binding: isPresenceBinding(seatState.presence_binding) ? seatState.presence_binding : null,
+                seq: one.nextSeq,
+                offset: one.nextOffset,
+              };
+              cursor = one.nextSeq;
+              cursorChanged = true;
+            }
+            if (stamped !== null || reconciled > 0 || cursorChanged) changed = true;
+            results.push({
+              seat: one.seat,
+              read: one.transitions.length,
+              reconciled,
+              stamped,
+              fence: fence ?? seatState.presence_applied?.seq ?? null,
+              cursor,
+              busy: false,
+              bad: null,
+            });
+          }
+          return { results, changed };
+        }, { waitMs: 0, writeWhen: (result) => result.changed });
+        reported.push(...applied.results);
+        return { failed: null };
+      } catch (error) {
+        if (error instanceof LockBusyError) {
+          for (const one of batch) {
+            reported.push(unchanged(one.seat, one.base, { read: one.transitions.length, busy: true }));
+          }
+          return { failed: null };
+        }
+        return { failed: messageOf(error) };
+      }
+    };
+
+    let entriesInChunk = 0;
+    let sliceStart = clock();
+    for (let index = 0; index < seats.length; index += 1) {
+      const seat = seats[index]!;
       const base = cursorOf(state.sessions[session]?.seats?.[seat]);
       const read = await readPresenceTransitions({
         stateDir,
@@ -176,100 +296,37 @@ export function createPresenceActivity(input: PresenceActivityInput): PresenceAc
         ...(input.maxRecords === undefined ? {} : { maxRecords: input.maxRecords }),
         ...(input.maxBytes === undefined ? {} : { maxBytes: input.maxBytes }),
       });
+      entriesInChunk += read.kind === 'bad' ? 1 : Math.max(1, read.transitions.length);
       if (read.kind === 'bad') {
         reported.push(unchanged(seat, base, { bad: read.why }));
-        continue;
+      } else {
+        pending.push({
+          seat,
+          base,
+          transitions: read.transitions,
+          nextSeq: read.nextSeq,
+          nextOffset: read.nextOffset,
+        });
       }
-      pending.push({
-        seat,
-        base,
-        transitions: read.transitions,
-        nextSeq: read.nextSeq,
-        nextOffset: read.nextOffset,
-      });
-    }
-    if (pending.length === 0) return { seats: reported, failed: null };
-
-    try {
-      const applied = updateState(stateDir, (locked) => {
-        const results: PresenceActivitySeat[] = [];
-        let changed = false;
-        for (const one of pending) {
-          const seatState = locked.sessions[session]?.seats?.[one.seat];
-          if (seatState === undefined) {
-            // Only an existing seat record is reconciled: presence never creates a seat.
-            results.push(unchanged(one.seat, one.base));
-            continue;
-          }
-          const stored = cursorOf(seatState);
-          if (stored.seq > one.base.seq || (stored.seq === one.base.seq && stored.offset > one.base.offset)) {
-            // A later write already consumed this batch; the next beat reads past it.
-            results.push(unchanged(one.seat, stored));
-            continue;
-          }
-          let stamped: string | null = null;
-          let fence: number | null = null;
-          let reconciled = 0;
-          for (const line of one.transitions) {
-            if (!line.applied) continue;
-            const binding = seatState.presence_binding;
-            if (!isPresenceBinding(binding) || line.binding !== binding) continue;
-            reconciled += 1;
-            if (line.event === 'turn-start' || line.event === 'turn-end') {
-              const eventAt = Date.parse(line.ts);
-              const current = seatState.last_active === undefined ? Number.NaN : Date.parse(seatState.last_active);
-              if (!Number.isFinite(current) || eventAt > current) {
-                seatState.last_active = line.ts;
-                stamped = line.ts;
-              }
-            }
-            if (isSeatId(seatState.id)) {
-              seatState.presence_applied = {
-                seat_id: seatState.id,
-                binding: line.binding,
-                seq: line.seq,
-                applied_at: at.toISOString(),
-              };
-              fence = line.seq;
-            }
-          }
-          let cursor = stored.seq;
-          let cursorChanged = false;
-          if (forwardOf({ seq: one.nextSeq, offset: one.nextOffset }, stored)) {
-            seatState.presence_scan = {
-              binding: isPresenceBinding(seatState.presence_binding) ? seatState.presence_binding : null,
-              seq: one.nextSeq,
-              offset: one.nextOffset,
-            };
-            cursor = one.nextSeq;
-            cursorChanged = true;
-          }
-          if (stamped !== null || reconciled > 0 || cursorChanged) changed = true;
-          results.push({
-            seat: one.seat,
-            read: one.transitions.length,
-            reconciled,
-            stamped,
-            fence: fence ?? seatState.presence_applied?.seq ?? null,
-            cursor,
-            busy: false,
-            bad: null,
-          });
-        }
-        return { results, changed };
-      }, { waitMs: 0, writeWhen: (result) => result.changed });
-      return { seats: [...reported, ...applied.results], failed: null };
-    } catch (error) {
-      if (error instanceof LockBusyError) {
-        return {
-          seats: [
-            ...reported,
-            ...pending.map((one) => unchanged(one.seat, one.base, { read: one.transitions.length, busy: true })),
-          ],
-          failed: null,
-        };
+      if (
+        index < seats.length - 1 &&
+        slices !== undefined &&
+        (entriesInChunk >= PRESENCE_ACTIVITY_CHUNK_ENTRIES || clock() - sliceStart >= budgetMs)
+      ) {
+        const flushed = flushChunk(pending);
+        pending.length = 0;
+        if (flushed.failed !== null) return { seats: reported, failed: flushed.failed };
+        if (slices.stopping()) return { seats: reported, failed: null };
+        const more = await slices.yield();
+        if (!more || slices.stopping()) return { seats: reported, failed: null };
+        entriesInChunk = 0;
+        sliceStart = clock();
       }
-      return { seats: reported, failed: messageOf(error) };
     }
+    if (pending.length > 0) {
+      const flushed = flushChunk(pending);
+      if (flushed.failed !== null) return { seats: reported, failed: flushed.failed };
+    }
+    return { seats: reported, failed: null };
   };
 }
