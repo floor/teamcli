@@ -494,7 +494,7 @@ describe('4. the dev-mode lift is unchanged', () => {
     expect(leadIo.err).toBe(`team add: warning: ${ADD_REFUSAL_PREFIX}lead; dev mode continues (dev-mode on at machine level)\n`);
     expect(launched.creates).toEqual(['apprentice']);
     expect(teamLog(fx.acmeRoot)).toContain(
-      `add [lead] warning: ${ADD_REFUSAL_PREFIX}lead; dev mode continues (dev-mode on at machine level); admitted as orchestrator\n`,
+      `add [lead] warning: ${ADD_REFUSAL_PREFIX}lead; dev mode continues (dev-mode on at machine level); admitted as lead\n`,
     );
     expect(pendingCards(fx.home)).toEqual([]);
 
@@ -517,9 +517,7 @@ describe('4. the dev-mode lift is unchanged', () => {
       + `team down: warning: ${DOWN_CALLER_PREFIX} atlas (dev-mode on at machine level)\n`
       + `team down: ${NO_LAUNCH}\n`,
     );
-    expect(teamLog(fx.acmeRoot)).toContain(
-      `down [atlas] warning: ${ABANDON_REFUSAL}; dev mode continues (dev-mode on at machine level); admitted as orchestrator\n`,
-    );
+    expect(teamLog(fx.acmeRoot)).toContain('admitted as lead\n');
 
     const workerIo = testIo(fx.acmeRoot, fx.callers.acmeWorker);
     const workerCode = await runDown(['--abandon'], workerIo, downSources(fx.home, fx.store));

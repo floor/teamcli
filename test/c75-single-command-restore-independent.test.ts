@@ -33,7 +33,7 @@ import type { DoctorSources } from '../src/commands/doctor.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { readChildMessage, readHostMessage } from '../src/daemon/chores/protocol.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
-import { DAEMON_LABEL, daemonLogPath, daemonSocketPath, machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
+import { DAEMON_LABEL, daemonLabel, daemonLogPath, daemonSocketPath, machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
 import { DAEMON_PROTOCOL_VERSION } from '../src/daemon/protocol.ts';
 import { runRestoreSweepInChild } from '../src/daemon/restore/spawn.ts';
 import { acceptRestoreDoor, restoreDoorText, writeRestoreDoor } from '../src/daemon/restore/token.ts';
@@ -116,11 +116,16 @@ function fakeServiceRecord(dir: string, daemonPid: number, unitHome?: string, lo
   mkdirSync(dir, { recursive: true });
   let path = loadedPath ?? '/nonexistent-unit';
   if (unitHome !== undefined) {
+    const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
+    const account = execFileSync('/usr/bin/id', ['-P', String(uid)], { encoding: 'utf8' });
+    const accountHome = (account.split('\n')[0] ?? '').split(':')[8] ?? '';
+    const label = daemonLabel(unitHome, accountHome.startsWith('/') ? accountHome : null);
+    if (label === null) throw new Error('the account home could not be read');
     mkdirSync(join(unitHome, 'Library', 'LaunchAgents'), { recursive: true });
-    const unitFile = join(unitHome, 'Library', 'LaunchAgents', `${DAEMON_LABEL}.plist`);
+    const unitFile = join(unitHome, 'Library', 'LaunchAgents', `${label}.plist`);
     writeFileSync(
       unitFile,
-      `<plist version="1.0"><dict><key>Label</key><string>${DAEMON_LABEL}</string></dict></plist>\n`,
+      `<plist version="1.0"><dict><key>Label</key><string>${label}</string></dict></plist>\n`,
       { mode: 0o600 },
     );
     path = loadedPath ?? realpathSync(unitFile);

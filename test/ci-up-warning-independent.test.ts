@@ -161,7 +161,7 @@ function recordingLaunch(): { launch: Launch; created: () => number } {
 /** The launch an admitted owner run uses: a running session and the seat's panes to read. */
 function admittedLaunch(): Launch {
   const panes: string[] = [];
-  return {
+  const launch: Launch = {
     sessionState: () => 'absent',
     startServer: () => true,
     sessionUp: () => true,
@@ -179,6 +179,8 @@ function admittedLaunch(): Launch {
     sleep: async () => {},
     now: () => NOW,
   };
+  recordRenames(launch);
+  return launch;
 }
 
 describe('a refused up says only its refusal', () => {
