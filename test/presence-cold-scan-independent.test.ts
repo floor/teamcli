@@ -567,10 +567,13 @@ describe('fix/presence-cold-scan independent verification', () => {
     const readAfterReappend = unwrapRead(readEvents(PROJECT, root, world.home));
     expect(readAfterReappend.events.some((e) => e.payload.record_id === 'rec-ephemeral')).toBe(true);
 
-    // 4d. One-pass index efficiency check on a fresh checkout.
+    // 4d. The fixture is past the segment bound, so the first append seals it.
+    // Later appends read the open segment once. The counter is that pass, not
+    // another read of the sealed log.
     const world2 = createWorld([6_000], 'append-one-pass');
     const root2 = world2.roots[0]!.root;
-    const log2Bytes = statSync(eventLogPath(PROJECT, root2, world2.home)).size;
+    const log2Path = eventLogPath(PROJECT, root2, world2.home);
+    const sealedBytes = statSync(log2Path).size;
     resetAppendIndexReads();
     for (let i = 1; i <= 25; i += 1) {
       const res = appendEvent(PROJECT, root2, world2.home, {
@@ -583,9 +586,11 @@ describe('fix/presence-cold-scan independent verification', () => {
       if (!res.ok) throw new Error(res.reason);
       expect(res.duplicate).toBe(false);
     }
+    const openBytes = statSync(log2Path).size;
     const stats = appendIndexReads();
-    expect(stats.bytes).toBeGreaterThanOrEqual(log2Bytes);
-    expect(stats.bytes).toBeLessThan(log2Bytes * 1.15);
+    expect(openBytes).toBeLessThan(sealedBytes);
+    expect(stats.bytes).toBeGreaterThan(openBytes / 2);
+    expect(stats.bytes).toBeLessThan(openBytes * 1.15);
   }, 30_000);
 
   test('probe 5: events appended during an async subscribe registration are delivered once', async () => {
