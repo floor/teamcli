@@ -126,6 +126,7 @@
 "test/checkpoint-record-independent.test.ts":401,
 "test/checkpoint-record.test.ts":372,
 "test/child-exec.test.ts":1531,
+"test/ci-classify-lane.test.ts":100,
 "test/ci-shard-tests.test.ts":3,
 "test/ci-up-warning-independent.test.ts":159,
 "test/clean-printed-doc-boundaries.test.ts":11,
