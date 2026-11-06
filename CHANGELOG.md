@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.16] - Unreleased
+
+### Security
+
+- Grok's workspace preset also grants the folder a Grok seat starts in; a Grok seat started in a shared lobby can write that lobby. Until the next release, start Grok seats in their own worktree.
+- Grok and Cursor seats now require their own start folder, using a recorded worktree when one is available. Shared root, lobby, overlapping seat folders and Grok starts outside its sandbox grants refuse before launch with the own-worktree repair. Cursor seats keep separate project MCP configurations.
+
 ## [0.5.15] - 2026-11-06
 
 ### Security

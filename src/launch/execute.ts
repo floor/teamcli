@@ -15,7 +15,7 @@ import { reportedAgentIsCli, reportedLiveAgent } from './agent.ts';
 import { refusalReport, type Refusal } from './deliver.ts';
 import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeTarget, withoutResume, conversationMissingOnScreen } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
-import { settleGrokSandbox, writeGrokSandbox } from './grok-sandbox.ts';
+import { grokStartFolderProblem, settleGrokSandbox, writeGrokSandbox } from './grok-sandbox.ts';
 import { launchedIdentity, paneHoldsOnlyShell, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
 import { restoreProof } from './restore-proof.ts';
 import type { CliWatcher } from './cli-hook.ts';
@@ -1431,6 +1431,11 @@ export async function executePlan(
           const settled = settleGrokSandbox(op.grokSandbox);
           if (!settled.ok) {
             leftOut(op.seat, settled.why);
+            break;
+          }
+          const startProblem = grokStartFolderProblem(op.cwd ?? '', settled.sandbox);
+          if (startProblem !== null) {
+            leftOut(op.seat, startProblem);
             break;
           }
           const written = writeGrokSandbox(settled.sandbox);

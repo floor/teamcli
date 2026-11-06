@@ -1,6 +1,6 @@
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { migrationText } from '../file/migrate.ts';
 import { insideTrust, isLegacyTrust, isMigratedTrust, protectedBy } from '../file/paths.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
@@ -72,6 +72,39 @@ export function protectedLanding(root: string, folder: string, checkouts: readon
   return null;
 }
 
+/** Profiles that write their start folder need an explicit own folder, never shared startup
+ *  instruction space. Used for Grok's workspace preset and Cursor's project MCP configuration. */
+export function ownStartFolderProblem(input: {
+  cli: string; seat: string; cwd: string; root: string; home: string; lobby: string;
+  peers: readonly { name: string; cwd: string }[];
+}): string | null {
+  const repair = 'set the seat cwd to its own worktree or clone, then launch it again';
+  let start: string;
+  try {
+    start = realpathSync(resolve(input.root, input.cwd));
+    if (!statSync(start).isDirectory()) throw new Error('not a directory');
+  } catch {
+    return `${input.cli} needs an existing start folder of its own; ${repair}`;
+  }
+  const inside = (folder: string, parent: string): boolean => {
+    const tail = relative(parent, folder);
+    return tail === '' || (!isAbsolute(tail) && tail !== '..' && !tail.startsWith(`..${sep}`));
+  };
+  if (start === realLanding(input.root, '.').real ||
+      inside(start, realLanding(input.root, input.lobby).real) ||
+      inside(start, realLanding(input.root, join(input.home, '.config', 'team')).real)) {
+    return `${input.cli} cannot start in the shared project root, lobby or team config folder; ${repair}`;
+  }
+  for (const peer of input.peers) {
+    if (peer.name === input.seat) continue;
+    const other = realLanding(input.root, peer.cwd).real;
+    if (inside(start, other) || inside(other, start)) {
+      return `${input.cli} start folder overlaps seat ${peer.name}'s start folder; ${repair}`;
+    }
+  }
+  return null;
+}
+
 /** Where a seat starts: the folder it waits in, or why it can't start. */
 export type SeatStart = { cwd: string; lobby?: true } | { problem: string; once?: true };
 
@@ -80,7 +113,7 @@ export type SeatStart = { cwd: string; lobby?: true } | { problem: string; once?
 // lobby. In a legacy file, a shared seat starts in its cwd, and a worktree seat starts in the
 // old derived lobby.
 export function seatStart(
-  team: Pick<TeamFile, 'project' | 'session' | 'workspace' | 'trust' | 'seats' | 'entity' | 'lobby' | 'orchestrator' | 'operator'>, seat: Seat, root: string, home: string = homedir(), verifiedLobby?: string,
+  team: Pick<TeamFile, 'project' | 'session' | 'workspace' | 'trust' | 'seats' | 'entity' | 'lobby' | 'orchestrator' | 'operator'>, seat: Seat, root: string, home: string = homedir(), verifiedLobby?: string, worktree?: string,
 ): SeatStart {
   if (!team.trust || team.trust.length === 0) {
     const lobby = lobbyOf(home, root, team);
@@ -89,6 +122,21 @@ export function seatStart(
         `the file is legacy: migrate trust to absolute paths including the lobby ${lobby}:\n${migrationText(team, root, home)}`,
       once: true,
     };
+  }
+
+  // Grok's preset and Cursor's MCP configuration write the start folder. Both require a
+  // folder of the seat's own, including lead seats; neither waits in the shared lobby.
+  if (seat.cli === 'grok' || seat.cli === 'cursor') {
+    const lobby = verifiedLobby ?? lobbyOf(home, root, team);
+    // A fresh workspace can use the seat's recorded worktree. An explicit file cwd still
+    // stands and is checked, so naming a lobby is refused rather than silently repaired.
+    const cwd = seat.cwd === '.' && worktree !== undefined ? worktree : seat.cwd;
+    const problem = ownStartFolderProblem({ cli: seat.cli, seat: seat.name, cwd, root, home, lobby, peers: team.seats });
+    if (problem !== null) return { problem: `seat ${seat.name}: ${problem}` };
+    const start = realLanding(root, cwd);
+    const hit = protectedLanding(root, relative(root, start.logical), team.workspace.protected);
+    if (hit) return { problem: `seat ${seat.name} would start inside the protected checkout ${hit}; set its cwd to its own worktree or clone, then launch it again` };
+    return { cwd };
   }
 
   if (isLegacyTrust(team.trust)) {

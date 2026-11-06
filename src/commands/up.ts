@@ -2562,7 +2562,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       });
       continue;
     }
-    const start = seatStart({ ...team, session }, seat, root, sources.home);
+    const tree = worktreeOf(recorded, seat.name);
+    const start = seatStart({ ...team, session }, seat, root, sources.home, undefined, tree?.path);
     if ('problem' in start) {
       if (!start.once || !refused.has(start.problem)) {
         refused.add(start.problem);
@@ -2571,7 +2572,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       continue;
     }
     const budget = budgetOf(seat);
-    const tree = worktreeOf(recorded, seat.name);
     seats.push({
       ...planned,
       cwd: start.cwd,

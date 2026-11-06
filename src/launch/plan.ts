@@ -1,5 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
+import { ownStartFolderProblem } from '../worktree/place.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
 import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { selfRunner } from '../mcp/register.ts';
 import { codexDaemonForSeat, type CodexDaemonValue } from '../policy/codex-daemon.ts';
@@ -9,7 +11,7 @@ import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
 import { shellScriptWordOf } from './cli-scope.ts';
-import { grokSandboxOf, type GrokSandbox } from './grok-sandbox.ts';
+import { grokSandboxOf, grokStartFolderProblem, type GrokSandbox } from './grok-sandbox.ts';
 import { launchedCliBinary } from './line.ts';
 import type { WaitingRecord } from '../state.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -1261,6 +1263,17 @@ export function upPlan(input: UpInput): Step[] {
         do: { do: 'refuse', seat: seat.name, why },
       });
       continue;
+    }
+    if ((profile.cli === 'grok' || profile.cli === 'cursor') && wouldLaunch && input.home !== undefined && input.team !== undefined) {
+      const lobby = lobbyOf(input.home, input.root, input.team);
+      const problem = ownStartFolderProblem({ cli: profile.cli, seat: seat.name, cwd,
+        root: input.root, home: input.home, lobby, peers: input.seats }) ??
+        (grokSandbox === undefined ? null : grokStartFolderProblem(cwd, grokSandbox, lobby));
+      if (problem !== null) {
+        steps.push({ kind: 'skip', text: `${seat.name}: would refuse: ${problem}`,
+          do: { do: 'refuse', seat: seat.name, why: problem } });
+        continue;
+      }
     }
     // The line is built before the steps that create or close a workspace: a refusal must come
     // before any of them, and the warnings it produces are said on the launch step where they

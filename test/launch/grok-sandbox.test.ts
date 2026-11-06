@@ -10,6 +10,8 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { registerInbox } from '../../src/mcp/register.ts';
+import { seatStart } from '../../src/worktree/place.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import { executePlan, type Host } from '../../src/launch/execute.ts';
 import {
@@ -527,7 +529,7 @@ describe('the plan and the launch', () => {
     expect(existsSync(join(grokHome, 'sandbox.toml'))).toBe(false);
   });
 
-  function execute(sandbox: GrokSandbox, root = '.'): { runs: string[]; said: string[]; done: Promise<unknown>; existsAtRun: boolean[] } {
+  function execute(sandbox: GrokSandbox, root = sandbox.readWrite[0]!): { runs: string[]; said: string[]; done: Promise<unknown>; existsAtRun: boolean[] } {
     const runs: string[] = [];
     const said: string[] = [];
     const existsAtRun: boolean[] = [];
@@ -594,6 +596,17 @@ describe('the plan and the launch', () => {
     expect(settled.sandbox.readWrite).toEqual([existing, missing]);
     expect(lstatSync(missing).isDirectory()).toBe(true);
     expect(lstatSync(missing).mode & 0o777).toBe(0o700);
+  });
+
+
+  test('an uncovered start folder refuses execution without changing the profile', async () => {
+    const { home, sandbox } = world();
+    const lobby = join(home, '.config/team/lobby'); mkdirSync(lobby, { recursive: true });
+    const before = '# synthetic profile must remain unchanged\n'; writeFileSync(sandbox.file, before);
+    const scene = execute(sandbox, lobby); await scene.done;
+    expect(scene.runs).toEqual([]);
+    expect(scene.said.join('')).toContain('own worktree');
+    expect(readFileSync(sandbox.file, 'utf8')).toBe(before);
   });
 
   test('the profile is on disk before the pane\'s command runs', async () => {
@@ -704,5 +717,140 @@ describe('the plan and the launch', () => {
     expect(said).toContain(`${state} is a file, and the launch needs a directory`);
     expect(said).toContain('Repair that path and launch the seat again');
     expect(lstatSync(state).isFile()).toBe(true);
+  });
+});
+
+
+describe('Grok start folders stay within the seat grants', () => {
+  function scene(cwd: (w: ReturnType<typeof world>) => string, launch = 'grok') {
+    const w = world();
+    const checked = validateTeamFile(TEAM, { home: w.home, root: w.root });
+    if (!checked.ok) throw new Error('invalid synthetic team');
+    const start = cwd(w);
+    const plan = upPlan({ root: w.root, home: w.home, team: checked.team, session: 'acme',
+      sessionRunning: true, watchAlive: true, watchLabel: 'Watch', seats: [{
+        name: 'grok-seat', cli: 'grok', launch, cwd: start, worktree: w.start,
+        label: 'grok-seat', stopped: false, rules: 'Rules.', repairLine: 'repair synthetic seat',
+      }] });
+    return { ...w, plan };
+  }
+  for (const customProfile of [false, true]) test(`a lobby start refuses before workspace/profile writes, custom profile=${customProfile}`, () => {
+    const w = scene(({ home }) => {
+      const lobby = join(home, '.config/team/lobby'); mkdirSync(lobby, { recursive: true }); return lobby;
+    }, customProfile ? 'grok --sandbox own-profile' : 'grok');
+    const refused = w.plan.find(step => step.do?.do === 'refuse')?.do;
+    expect(refused?.do).toBe('refuse');
+    if (refused?.do === 'refuse') expect(refused.why).toContain('own worktree');
+    expect(w.plan.some(step => (step.do?.do === 'create' || step.do?.do === 'launch') && step.do.seat === 'grok-seat')).toBe(false);
+    expect(existsSync(w.sandbox.file)).toBe(false);
+  });
+  test('an existing worktree does not lend a grant to an unrelated start folder', () => {
+    const w = scene(({ base }) => { const other = join(base, 'elsewhere'); mkdirSync(other); return other; });
+    expect(w.plan.some(step => step.do?.do === 'refuse')).toBe(true);
+    expect(w.plan.some(step => step.do?.do === 'launch')).toBe(false);
+  });
+  test('a symlink inside the worktree that escapes it refuses by its real target', () => {
+    const w = scene(({ base, start }) => {
+      const outside = join(base, 'outside'); mkdirSync(outside);
+      const link = join(start, 'escape'); symlinkSync(outside, link); return link;
+    });
+    expect(w.plan.some(step => step.do?.do === 'refuse')).toBe(true);
+    expect(w.plan.some(step => step.do?.do === 'launch')).toBe(false);
+  });
+  test('a linked parent and a real child inside the worktree remain valid starts', () => {
+    const w = scene(({ base, start }) => {
+      mkdirSync(join(start, 'child'));
+      const link = join(base, 'own-link'); symlinkSync(start, link); return join(link, 'child');
+    });
+    expect(w.plan.some(step => step.do?.do === 'refuse')).toBe(false);
+    expect(w.plan.some(step => step.do?.do === 'launch')).toBe(true);
+  });
+  test('a sibling sharing the worktree name prefix is outside the grant', () => {
+    const w = scene(({ start }) => { const sibling = start + '-other'; mkdirSync(sibling); return sibling; });
+    expect(w.plan.some(step => step.do?.do === 'refuse')).toBe(true);
+  });
+  function placement() {
+    const w = world();
+    const checked = validateTeamFile(TEAM, { home: w.home, root: w.root });
+    if (!checked.ok) throw new Error('invalid synthetic team');
+    const lobby = join(w.home, '.config/team/lobby'); mkdirSync(lobby, { recursive: true });
+    const team = { ...checked.team, trust: [w.root, lobby], lobby };
+    const start = join(w.base, 'own-worktree'); mkdirSync(start);
+    const seat = { ...team.seats.find(s => s.name === 'grok-seat')!, cwd: start };
+    return { ...w, start, lobby, team, seat };
+  }
+  test('placement keeps a Grok worker in its explicit own worktree instead of the lobby', () => {
+    const w = placement();
+    expect(seatStart(w.team, w.seat, w.root, w.home)).toEqual({ cwd: w.start });
+  });
+
+  for (const requested of ['lobby', 'root', 'unspecified', 'custom-lobby']) test(`Cursor placement refuses ${requested} instead of sharing the MCP file`, () => {
+    const w = placement();
+    let cwd = requested === 'root' ? w.root : requested === 'unspecified' ? '.' : w.lobby;
+    let team = w.team;
+    if (requested === 'custom-lobby') { cwd = join(w.base, 'custom-lobby'); mkdirSync(cwd); team = { ...team, lobby: cwd, trust: [...team.trust, cwd] }; }
+    const placed = seatStart(team, { ...w.seat, cli: 'cursor', launch: 'cursor-agent', cwd }, w.root, w.home);
+    expect('problem' in placed).toBe(true);
+    if ('problem' in placed) expect(placed.problem).toContain('own worktree');
+  });
+  test('two Cursor placements keep distinct MCP registrations without writing the lobby', () => {
+    const w = placement(), other = join(w.base, 'peer-worktree'); mkdirSync(other);
+    const first = { ...w.seat, cli: 'cursor', launch: 'cursor-agent' };
+    const second = { ...first, name: 'peer', cwd: other };
+    const yaml = TEAM.replace('cli: grok', 'cli: cursor').replace('launch: grok', 'launch: cursor-agent') + '\n  - role: implementer\n    name: peer\n    cli: cursor\n    vendor: xai\n    model: Grok\n    version: "4.7"\n    launch: cursor-agent\n';
+    const file = join(w.root, '.agents/team.yaml'); writeFileSync(file, yaml);
+    const placeA = seatStart(w.team, first, w.root, w.home), placeB = seatStart(w.team, second, w.root, w.home);
+    if ('problem' in placeA || 'problem' in placeB) throw new Error('own worktree placement refused');
+    const register = (name: string, cwd: string) => registerInbox({ cli: 'cursor', seat: name, cwd, file, home: w.home, session: 'acme' });
+    expect(register(first.name, placeA.cwd)).toEqual({ ok: true });
+    const configA = join(placeA.cwd, '.cursor/mcp.json'), bytesA = readFileSync(configA);
+    expect(register(second.name, placeB.cwd)).toEqual({ ok: true });
+    expect(readFileSync(configA)).toEqual(bytesA);
+    expect(placeA.cwd).toBe(w.start); expect(placeB.cwd).toBe(other);
+    for (const [name, cwd] of [[first.name, placeA.cwd], [second.name, placeB.cwd]]) {
+      const args = JSON.parse(readFileSync(join(cwd!, '.cursor/mcp.json'), 'utf8')).mcpServers['team-inbox'].args as string[];
+      expect(args[args.indexOf('--seat') + 1]).toBe(name);
+    }
+    expect(existsSync(join(w.lobby, '.cursor/mcp.json'))).toBe(false);
+  });
+
+  test('two Cursor seats cannot claim the same own folder through different path spellings', () => {
+    const w = placement(), link = join(w.base, 'peer-link'); symlinkSync(w.start, link);
+    const first = { ...w.seat, cli: 'cursor', launch: 'cursor-agent' };
+    const second = { ...first, name: 'peer', cwd: link };
+    const team = { ...w.team, seats: [first, second] };
+    for (const seat of team.seats) {
+      const placed = seatStart(team, seat, w.root, w.home);
+      expect('problem' in placed).toBe(true);
+      if ('problem' in placed) expect(placed.problem).toContain('own worktree');
+    }
+  });
+
+  test('the planner refuses a Cursor launch in the lobby before creating a workspace', () => {
+    const w = placement();
+    const plan = upPlan({ root: w.root, home: w.home, team: w.team, session: 'acme', sessionRunning: true,
+      watchAlive: true, watchLabel: 'Watch', seats: [{ name: 'grok-seat', cli: 'cursor', launch: 'cursor-agent',
+        cwd: w.lobby, label: 'worker', stopped: false, rules: 'Rules.', repairLine: 'repair' }] });
+    expect(plan.some(step => step.do?.do === 'refuse')).toBe(true);
+    expect(plan.some(step => (step.do?.do === 'create' || step.do?.do === 'launch') && step.do.seat === 'grok-seat')).toBe(false);
+  });
+
+
+  for (const cli of ['grok', 'cursor']) test(`${cli} fresh placement uses its recorded own worktree and never overrides an explicit lobby`, () => {
+    const w = placement(), seat = { ...w.seat, cli, cwd: '.' };
+    expect(seatStart(w.team, seat, w.root, w.home, undefined, w.start)).toEqual({ cwd: w.start });
+    const explicit = seatStart(w.team, { ...seat, cwd: w.lobby }, w.root, w.home, undefined, w.start);
+    expect('problem' in explicit).toBe(true);
+  });
+
+  for (const requested of ['lobby', 'root', 'unspecified', 'custom-lobby', 'linked-lobby']) test(`placement refuses ${requested} and names the own-worktree repair`, () => {
+    const w = placement();
+    let cwd = requested === 'root' ? w.root : requested === 'unspecified' ? '.' : w.lobby;
+    let team = w.team;
+    if (requested === 'custom-lobby') { cwd = join(w.base, 'custom-lobby'); mkdirSync(cwd); team = { ...team, lobby: cwd, trust: [...team.trust, cwd] }; }
+    if (requested === 'linked-lobby') { cwd = join(w.base, 'linked-lobby'); symlinkSync(w.lobby, cwd); }
+    const placed = seatStart(team, { ...w.seat, cwd }, w.root, w.home);
+    expect('problem' in placed).toBe(true);
+    if ('problem' in placed) expect(placed.problem).toContain('own worktree');
   });
 });
