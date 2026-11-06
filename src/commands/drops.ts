@@ -600,7 +600,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
         return readOk();
       }
       const got = peek
-        ? peekMessage(target, asked, sources.home, brief)
+        ? peekMessage(target, asked, sources.home, seatNames, brief)
         : readMessage(target, asked, sources.home, brief);
       if (!got.ok && got.served === 'already-served') {
         io.stdout(`${settled === null ? got.reason : alreadyReadSentence(asked, settled.at, settled.readBy, seatNames)}\n`);
@@ -649,7 +649,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       if (bodies.length >= DROP_READ_BATCH) break;
       const target = { dropDir, root: loaded.root, seat: seatName, session: readSession, lead: loaded.team.orchestrator };
       const got = peek
-        ? peekMessage(target, message.id, sources.home, brief)
+        ? peekMessage(target, message.id, sources.home, seatNames, brief)
         : readMessage(target, message.id, sources.home, brief, undefined, { receipt: 'after' });
       if (got.ok) {
         bodies.push(got.body);

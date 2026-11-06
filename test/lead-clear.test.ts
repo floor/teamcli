@@ -16,6 +16,7 @@ import { runArchive } from '../src/commands/archive.ts';
 import { listDrops, runDrops } from '../src/commands/drops.ts';
 import type { DownSources } from '../src/commands/down.ts';
 import { listUnackedMessages, plantRecord, recordDir, runMessages } from '../src/commands/messages.ts';
+import { readTeamConfig } from '../src/file/team-config.ts';
 import { listUnread, peekMessage, readMessage } from '../src/mcp/inbox.ts';
 import { readHistory } from '../src/send/history.ts';
 import {
@@ -258,7 +259,9 @@ describe('a lead-ack receipt is how a stopped seat\'s stale mail is cleared', ()
     const drops = testIo(root, OWNER);
     expect(await runDrops(['--read', '--seat', 'worker', '--session', 'acme'], drops, { home })).toBe(0);
     expect(`${drops.out}${drops.err}`).not.toContain('a body for the seat');
-    const peeked = peekMessage({ dropDir: dir, root, seat: 'worker', session: 'acme', lead: 'lead' }, STALE_ID, home);
+    const loaded = readTeamConfig(root, { home });
+    if (!loaded.ok) throw new Error('the synthetic serving team could not be read');
+    const peeked = peekMessage({ dropDir: dir, root, seat: 'worker', session: 'acme', lead: 'lead' }, STALE_ID, home, loaded.team.seats.map((one) => one.name));
     expect(peeked.ok).toBe(false);
     if (!peeked.ok) expect(peeked.reason).not.toContain('a body for the seat');
 

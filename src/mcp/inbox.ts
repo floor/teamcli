@@ -896,7 +896,7 @@ export function readMessage(
  * look at another seat's waiting mail without hiding it from its seat. `served` is never
  * returned: a peek does not race a read for anything.
  */
-export function peekMessage(target: InboxTarget, id: string, home: string, brief?: BriefRead): InboxRead {
+export function peekMessage(target: InboxTarget, id: string, home: string, seats: readonly string[], brief?: BriefRead): InboxRead {
   if (!messageNameOk(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   if (heldAt(join(target.dropDir, id)).kind !== 'file') {
     return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
@@ -905,7 +905,7 @@ export function peekMessage(target: InboxTarget, id: string, home: string, brief
   if (key.kind === 'key') {
     const context: StatusContext = { to: target.seat, root: target.root, session: target.session, lead: target.lead };
     const settled = settledReadOf(target.dropDir, id, context, key.key);
-    if (settled !== null) return { ok: false, reason: alreadyReadSentence(id, settled.at, settled.readBy) };
+    if (settled !== null) return { ok: false, reason: alreadyReadSentence(id, settled.at, settled.readBy, seats) };
   }
   const opened = openInboxMessage(target, id, home, brief);
   if (!opened.ok) return opened;

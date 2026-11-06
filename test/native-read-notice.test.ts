@@ -5,7 +5,9 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { runDrops } from '../src/commands/drops.ts';
 import { runMessages } from '../src/commands/messages.ts';
+import { readTeamConfig } from '../src/file/team-config.ts';
 import type { Io } from '../src/io.ts';
+import { peekMessage } from '../src/mcp/inbox.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
 import { deliverCodexNativeRoute } from '../src/send/push-adapters/codex-relay.ts';
 import type { CodexSpawn } from '../src/send/push-adapters/codex.ts';
@@ -248,6 +250,44 @@ test('inbox_read of a receipted id says when it was read and returns no body', a
     discardFixtures([held.root], { roots: [dirname(held.root)] });
   }
 });
+
+for (const readBy of [SEAT, 'owner', 'stranger']) {
+  test(`peek and inbox_read name the serving roster's reader for ${readBy}`, async () => {
+    const held = world();
+    try {
+      writeBody(held.root, held.home, held.dropDir, READ_ID, ALREADY);
+      const marked = writeReceipt(held.dropDir, signReceiptPayload({
+        kind: 'receipt', status: 'read', id: READ_ID, to: SEAT, root: held.root,
+        session: SESSION, at: READ_AT, read_by: readBy,
+      }, held.home), held.home);
+      if (!marked.ok) throw new Error(marked.reason);
+      const loaded = readTeamConfig(held.root, { home: held.home });
+      if (!loaded.ok) throw new Error('the synthetic serving team could not be read');
+      const expected = `${READ_ID}: already read at ${READ_AT} (${readBy === SEAT ? SEAT : 'unknown'})`;
+      const peek = peekMessage({
+        dropDir: held.dropDir, root: held.root, seat: SEAT, session: SESSION,
+        lead: loaded.team.orchestrator,
+      }, READ_ID, held.home, loaded.team.seats.map((one) => one.name));
+      expect(peek).toEqual({ ok: false, reason: expected });
+      const read = seatIo(held.root, held.home);
+      const replies: string[] = [];
+      const code = await runMcpServe({ seat: SEAT, session: SESSION, file: join(held.root, '.agents', 'team.yaml') }, read.io, {
+        lines: (async function* () {
+          yield JSON.stringify({ jsonrpc: '2.0', id: 'reader', method: 'tools/call', params: { name: 'inbox_read', arguments: { id: READ_ID } } });
+        })(),
+        write: (line) => { replies.push(line); },
+      }, { home: held.home });
+      expect(code, read.err()).toBe(0);
+      expect(replies).toHaveLength(1);
+      const reply = JSON.parse(replies[0]!) as { result?: { content?: { text: string }[]; isError?: boolean } };
+      expect(reply.result?.isError).toBeUndefined();
+      expect(reply.result?.content?.[0]?.text).toBe(expected);
+      expect(JSON.stringify({ peek, replies })).not.toContain(ALREADY);
+    } finally {
+      discardFixtures([held.root], { roots: [dirname(held.root)] });
+    }
+  });
+}
 
 test('the pointer keeps the send time only while the line stays within the trigger cap', () => {
   const sender = { seat: 'lead', team: 'fixture' };

@@ -2254,7 +2254,7 @@ describe('team watch', () => {
     writeFileSync(file, example);
     expect(existsSync(path)).toBe(true);
 
-    const peek = peekMessage({ dropDir, root, seat, session, lead }, id, home);
+    const peek = peekMessage({ dropDir, root, seat, session, lead }, id, home, current.seats.map((one) => one.name));
     const messages = testIo(dir, { kind: 'owner' });
     expect(await runMessages(['--json'], messages, { home, now: () => new Date(clock) }), messages.err).toBe(0);
     const reader = () => testIo(dir, { kind: 'seat', name: seat, pane: 'w3:p1', session });
