@@ -250,6 +250,15 @@ export async function runStart(argv: string[], io: Io, sources: StartSources = {
 
   const sandbox = sandboxRootFor({ mode: 'shared', projectRoot: root });
   const steps = readSteps(root);
+  const teamFile = join(root, '.agents', 'team.yaml');
+  // The team-file check comes before any start.json write. A refusal leaves the folder as it was.
+  if (steps.preset !== true && existsSync(teamFile)) {
+    report.teamFile = true;
+    io.stderr('team start: this folder already holds a team; run team up\n');
+    return finish(1, () => {
+      report.detectMs = now() - begun;
+    });
+  }
   const loggedIn = sources.loggedIn ?? signedIn;
   let clis = steps.clis?.slice(0, 2) ?? [];
   if (steps.detect !== true) {
@@ -272,16 +281,8 @@ export async function runStart(argv: string[], io: Io, sources: StartSources = {
   }
   report.detectMs = now() - begun;
 
-  const teamFile = join(root, '.agents', 'team.yaml');
   let wrotePreset = false;
   if (steps.preset !== true) {
-    if (existsSync(teamFile)) {
-      report.teamFile = true;
-      io.stderr('team start: this folder already holds a team; run team up\n');
-      return finish(1, () => {
-        report.detectMs = now() - begun;
-      });
-    }
     mkdirSync(join(root, '.agents'), { recursive: true });
     writeFileSync(teamFile, presetText(projectName(root), [clis[0] ?? 'grok', clis[1] ?? 'cursor']));
     steps.preset = true;

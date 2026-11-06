@@ -130,6 +130,7 @@ describe('team start without the admission door', () => {
     });
     expect(readFileSync(join(root, '.agents', 'team.yaml'), 'utf8')).toBe(held);
     expect(readFileSync(join(home, '.config', 'team', 'teams.yaml'), 'utf8')).toBe(registry);
+    expect(existsSync(join(root, '.agents', 'start.json'))).toBe(false);
     expect(io.err).toContain('this folder already holds a team; run team up');
     expect(code).toBe(1);
     expect(noticed).toEqual([]);
