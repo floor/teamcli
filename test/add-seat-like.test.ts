@@ -173,6 +173,7 @@ function world(opts: { fail?: boolean } = {}): Made {
   let n = 0;
   let clock = NOW.getTime();
   const made: Made = { launch: {} as Launch, creates: [], renames: [], commands: [], session: 'absent' };
+  const named = new Map<string, string>();
   made.launch = {
     sessionState: () => made.session,
     startServer() {
@@ -193,13 +194,21 @@ function world(opts: { fail?: boolean } = {}): Made {
       if (known) known.agent = true;
       return true;
     },
-    renameAgent(_session, _pane, name) {
+    renameAgent(_session, pane, name) {
       made.renames.push(name);
+      named.set(pane, name);
       return true;
     },
     closeWorkspace: () => true,
     agentPanes: () => [...panes].filter(([, pane]) => pane.agent).map(([id]) => id),
-    agents: () => [],
+    agents: () => [...named].map(([pane, name]) => ({
+      name,
+      agent: 'claude',
+      pane,
+      workspace: pane.split(':')[0] ?? pane,
+      status: 'idle',
+      cwd: null,
+    })),
     workspacePanes: (_session, workspace) => {
       const found = [...panes.keys()].filter((pane) => pane.startsWith(`${workspace}:`));
       return found.length > 0 ? found : [`${workspace}:p1`];

@@ -121,7 +121,8 @@ function dialogHost(home: string) {
   let clock = NOW.getTime();
   let n = 0;
   let session: 'absent' | 'running' = 'absent';
-  const panes = new Map<string, { cwd: string; agent: boolean }>();
+  const panes = new Map<string, { cwd: string; agent: boolean; workspace: string }>();
+  const named: { pane: string; name: string; workspace: string }[] = [];
   const host = {
     closed: 0,
     sessionState: () => session,
@@ -133,8 +134,9 @@ function dialogHost(home: string) {
     createWorkspace(_session: string, cwd: string) {
       n += 1;
       const pane = `seat-pane-${n}`;
-      panes.set(pane, { cwd, agent: false });
-      return { pane, workspace: `ws-${n}` };
+      const workspace = `ws-${n}`;
+      panes.set(pane, { cwd, agent: false, workspace });
+      return { pane, workspace };
     },
     paneRun(_session: string, pane: string) {
       const known = panes.get(pane);
@@ -142,13 +144,24 @@ function dialogHost(home: string) {
       return true;
     },
     spawnWatch: () => 4242,
-    renameAgent: () => true,
+    renameAgent(_session: string, pane: string, name: string) {
+      const held = panes.get(pane);
+      named.push({ pane, name, workspace: held?.workspace ?? '' });
+      return true;
+    },
     closeWorkspace() {
       host.closed += 1;
       return true;
     },
     agentPanes: () => [...panes].filter(([, pane]) => pane.agent).map(([id]) => id),
-    agents: () => [],
+    agents: () => named.map((item) => ({
+      name: item.name,
+      agent: 'claude',
+      pane: item.pane,
+      workspace: item.workspace,
+      status: 'idle',
+      cwd: panes.get(item.pane)?.cwd ?? null,
+    })),
     paneText(_session: string, pane: string) {
       const known = panes.get(pane);
       if (!known?.agent) return '';

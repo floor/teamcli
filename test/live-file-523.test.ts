@@ -95,6 +95,7 @@ function world(existing: HerdrAgent[] = []) {
   const commands: string[] = [];
   const effects: string[] = [];
   const panes: string[] = existing.map((item) => item.pane);
+  const listed = existing.map((item) => ({ ...item }));
   let running = existing.length > 0;
   let clock = NOW.getTime();
   const launch: Launch = {
@@ -108,10 +109,15 @@ function world(existing: HerdrAgent[] = []) {
       return { pane: `${name}-pane`, workspace: `${name}-ws` };
     },
     paneRun(_session, _pane, command) { commands.push(command); return true; },
-    renameAgent: () => true,
+    renameAgent(_session, pane, name) {
+      const prior = listed.find((item) => item.pane === pane);
+      if (prior) prior.name = name;
+      else listed.push({ name, agent: 'claude', pane, workspace: pane.replace(/-pane$/, '-ws'), status: 'idle', cwd: null });
+      return true;
+    },
     closeWorkspace(_session, workspace) { effects.push(`close ${workspace}`); return true; },
     agentPanes: () => panes,
-    agents: () => existing,
+    agents: () => listed,
     workspacePanes: (_session, workspace) => [workspace.replace(/-ws$/, '-pane')],
     paneText: () => IDLE,
     foreground: () => ['claude'],

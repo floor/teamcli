@@ -84,7 +84,8 @@ function cursorWorld(home: string, root: string): {
 } {
   const runs: string[] = [];
   const registered: Registered[] = [];
-  const panes = new Map<string, { text: string; front: string[] }>();
+  const panes = new Map<string, { text: string; front: string[]; workspace: string }>();
+  const named: { pane: string; name: string; workspace: string }[] = [];
   let n = 0;
   let session: 'absent' | 'running' = 'absent';
   const world = {
@@ -108,8 +109,9 @@ function cursorWorld(home: string, root: string): {
     createWorkspace() {
       n += 1;
       const pane = `pane${String(n)}`;
-      panes.set(pane, { text: CURSOR_IDLE, front: [] });
-      return { pane, workspace: `space${String(n)}` };
+      const workspace = `space${String(n)}`;
+      panes.set(pane, { text: CURSOR_IDLE, front: [], workspace });
+      return { pane, workspace };
     },
     paneRun(_session, pane, command) {
       const roster = rosterSeats(home, root);
@@ -130,10 +132,21 @@ function cursorWorld(home: string, root: string): {
         run: () => ({ code: 0 }),
       });
     },
-    renameAgent: () => true,
+    renameAgent(_session, pane, name) {
+      const held = panes.get(pane);
+      named.push({ pane, name, workspace: held?.workspace ?? '' });
+      return true;
+    },
     closeWorkspace: () => true,
     agentPanes: () => [...panes].filter(([, pane]) => pane.front.length > 0).map(([id]) => id),
-    agents: () => [],
+    agents: () => named.map((item) => ({
+      name: item.name,
+      agent: 'cursor-agent',
+      pane: item.pane,
+      workspace: item.workspace,
+      status: 'idle',
+      cwd: root,
+    })),
     paneText: (_session, pane) => panes.get(pane)?.text ?? '',
     foreground: (_session, pane) => panes.get(pane)?.front ?? [],
     sleep: async () => {},
@@ -304,6 +317,7 @@ function restartHarness(home: string): { sources: RestartSources; runs: string[]
   const runs: string[] = [];
   const created = { n: 0 };
   const panes = new Map<string, string>();
+  const named: { name: string; agent: string; pane: string; workspace: string; status: string; cwd: null }[] = [];
   const down: DownLaunch = {
     typeText: () => true,
     sendKey: () => true,
@@ -330,10 +344,16 @@ function restartHarness(home: string): { sources: RestartSources; runs: string[]
       runs.push(command);
       return true;
     },
-    renameAgent: () => true,
+    renameAgent(_session, pane, name) {
+      named.push({ name, agent: 'claude', pane, workspace: 'ws-new', status: 'idle', cwd: null });
+      return true;
+    },
     closeWorkspace: () => true,
     agentPanes: () => ['pane-lead', ...panes.keys()],
-    agents: () => [{ name: 'lead', agent: 'claude-code', pane: 'pane-lead', workspace: 'ws-lead', status: 'idle', cwd: null }],
+    agents: () => [
+      { name: 'lead', agent: 'claude-code', pane: 'pane-lead', workspace: 'ws-lead', status: 'idle', cwd: null },
+      ...named,
+    ],
     paneText: (_session, pane) => panes.get(pane) ?? CLAUDE_IDLE,
     pressEnter: () => true,
     foreground: () => ['claude'],

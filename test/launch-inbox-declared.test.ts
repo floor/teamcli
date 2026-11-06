@@ -161,6 +161,7 @@ function fake(): World {
   const runs: { pane: string; command: string }[] = [];
   const registered: RegisterCall[] = [];
   const panes = new Map<string, { text: string; front: string[]; workspace: string }>();
+  const named: { pane: string; name: string; workspace: string }[] = [];
   const spaces = new Map<string, string>();
   let n = 0;
   let clock = NOW.getTime();
@@ -215,10 +216,21 @@ function fake(): World {
       });
       return made;
     },
-    renameAgent: () => true,
+    renameAgent(_session, pane, name) {
+      const held = panes.get(pane);
+      named.push({ pane, name, workspace: held?.workspace ?? '' });
+      return true;
+    },
     closeWorkspace: () => true,
     agentPanes: () => [...panes].filter(([, pane]) => pane.front.length > 0).map(([id]) => id),
-    agents: () => [],
+    agents: () => named.map((item) => ({
+      name: item.name,
+      agent: 'cursor-agent',
+      pane: item.pane,
+      workspace: item.workspace,
+      status: 'idle',
+      cwd: null,
+    })),
     workspacePanes: (_session, workspace) => [...panes].filter(([, pane]) => pane.workspace === workspace).map(([id]) => id),
     paneText: (_session, pane) => panes.get(pane)?.text ?? '',
     foreground: (_session, pane) => panes.get(pane)?.front ?? [],
