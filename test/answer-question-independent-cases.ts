@@ -114,7 +114,7 @@ async function delivered(w: World) {
   const ids = messages(w); expect(ids).toHaveLength(1);
   const path = join(w.dir, 'send-drops', 'scene', 'lead', ids[0]!);
   expect(recordAt(path).payload.body).toBe(OWNER_BODY);
-  expect(readMessage({ root: w.root, seat: 'lead', session: 'scene', dropDir: join(w.dir, 'send-drops', 'scene', 'lead') }, ids[0]!, w.home)).toEqual({ ok: true, body: OWNER_BODY });
+  expect(readMessage({ root: w.root, seat: 'lead', session: 'scene', dropDir: join(w.dir, 'send-drops', 'scene', 'lead') }, ids[0]!, w.home)).toEqual({ ok: true, body: `from owner (owner):\n\n${OWNER_BODY}` });
   expect(w.keys).toEqual(['escape']); expect(w.inputs).toEqual([]); keyOrder(w);
   expect(w.calls.indexOf('send-agents')).toBeGreaterThan(w.calls.indexOf('key'));
 }
