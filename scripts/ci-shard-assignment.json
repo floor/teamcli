@@ -671,6 +671,7 @@
     "test/muse-exit-independent.test.ts": 2,
     "test/muse-hint-colour-tester.test.ts": 5,
     "test/muse-hint-colour.test.ts": 0,
+    "test/muse-listed-hint-colour.test.ts": 4,
     "test/muse-placeholder-empty-independent.test.ts": 1,
     "test/muse-wake-independent.test.ts": 1,
     "test/must-not-pretend.test.ts": 4,
