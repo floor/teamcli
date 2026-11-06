@@ -37,6 +37,8 @@ seats:
 const NOW = Date.parse('2026-11-05T02:00:00.000Z');
 const AT = new Date(NOW).toISOString();
 const RSS = 48 * 1024 * 1024;
+/** One unchanging CPU total. A silent child is ended only when the process table says it did not advance. */
+const flatCpu = (): number => 5_000;
 const dirs: string[] = [];
 
 afterEach(() => {
@@ -121,6 +123,7 @@ function makeFleet(home: string, root: string, clock: { at: number }, logs: stri
     routes: [routeInput(root)],
     log: (text) => logs.push(text),
     loadAverage: () => 23.456,
+    cpuTimeOf: flatCpu,
     factory: () => {
       const fake = fakeChild(4100 + spawned.length);
       spawned.push(fake);
@@ -167,7 +170,7 @@ describe('a recorded stall carries the machine load', () => {
     clock.at += 1000;
     fleet.tick(new Date(clock.at));
     beat(child, clock.at);
-    // On-time beats, a silent child: two missed beats end it, with the load beside the end.
+    // On-time beats, then silence. The process table stays flat, so the missed beats end the child and the load is logged beside that end.
     clock.at += 1000;
     fleet.tick(new Date(clock.at));
     clock.at += 1000;
