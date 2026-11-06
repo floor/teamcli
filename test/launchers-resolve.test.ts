@@ -10,7 +10,7 @@ import { parseYaml, toValue } from '../src/yaml.ts';
 import { discover, resolveLaunch, type LauncherHome, type ResolveContext } from '../src/launchers/resolve.ts';
 import { checkSandbox } from '../src/launchers/sandbox.ts';
 import { validateDefinition } from '../src/launchers/validate.ts';
-import type { Diagnostic } from '../src/launchers/types.ts';
+import type { Diagnostic, LauncherDefinition, ResumeBlock } from '../src/launchers/types.ts';
 
 const FIXTURES = join(import.meta.dir, 'fixtures', 'launchers');
 
@@ -257,6 +257,20 @@ describe('environment resolution', () => {
 describe('resume precedence and restore behavior', () => {
   const { launchers } = discover([VALID]);
   const discovery = { launchers, diagnostics: [] as Diagnostic[] };
+
+  test('typed omitted precedence defaults to caller wins without mutating the input', () => {
+    const resume: ResumeBlock = { mode: 'state_file', path: '{team-home}/lead-session' };
+    const def: LauncherDefinition = { format: 1, name: 'default-example', kind: 'preset',
+      harness: 'claude-code', writable_folders: [{ path: '{root}' }], resume };
+    const found = discover([{ level: 'team', files: { 'default-example.yaml': def } }]);
+    const caller = resolveLaunch({ launcher: 'default-example' }, found, { ...CTX, sessionArg: 'example-caller' });
+    expect(caller.ok).toBe(true);
+    expect(caller.resume).toEqual({ kind: 'teamcli', session: 'example-caller' });
+    const absent = resolveLaunch({ launcher: 'default-example' }, found, CTX);
+    expect(absent.ok).toBe(true);
+    expect(absent.resume).toEqual({ kind: 'preset_state_file', path: '/srv/example/team-home/lead-session' });
+    expect(resume).toEqual({ mode: 'state_file', path: '{team-home}/lead-session' });
+  });
 
   test('teamcli_wins: a TeamCLI session argument beats the preset state file', () => {
     const out = resolveLaunch({ launcher: 'lead-preset' }, discovery, { ...CTX, sessionArg: 'sess-123' });

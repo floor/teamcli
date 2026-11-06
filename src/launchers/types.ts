@@ -63,7 +63,8 @@ export type ResumeBlock = {
   /** state_file: where the preset keeps its resume word. fixed: the literal identity
    *  itself, nonblank with no controls or braces; never placeholder-expanded. */
   path?: string;
-  precedence: ResumePrecedence;
+  /** Omitted input defaults to teamcli_wins. */
+  precedence?: ResumePrecedence;
 };
 
 export type LauncherDefinition = {
