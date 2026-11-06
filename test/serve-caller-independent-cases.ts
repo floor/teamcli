@@ -147,6 +147,9 @@ for (const withFile of [false, true]) {
     test(`another team's arguments refuse ${target}, file=${withFile}, without touching its inbox`, async () => {
       const w = world(), a = w.team('alpha'), b = w.team('beta');
       if (target === 'runtime removed') change(b, s => { delete s.seats[b.seat]; });
+      // A recorded pane whose id the environment also names is the launch's own start wait.
+      // This target is refused, so the record names no pane and the refusal returns at once.
+      else change(b, s => { delete s.seats[b.seat].pane; });
       if (target === 'declared stopped') writeFileSync(b.file, readFileSync(b.file, 'utf8').replace('    role: worker', '    role: worker\n    stopped: true'));
       expect(readTeamConfig(b.root, { home: w.home }).ok).toBe(true);
       const options = { ...opts(b, withFile), ...(target === 'old epoch' ? { epoch: OLD } : {}) };
