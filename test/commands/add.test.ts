@@ -2060,3 +2060,27 @@ describe('team add after a lead swap', () => {
     expect(readFileSync(join(agents, 'team.log'), 'utf8')).toContain('lead runs its new agent (swap started by owner at 2026-10-15T07:00:00.000Z)');
   });
 });
+
+
+describe('review: add honors recorded own and peer folders', () => {
+  for (const cli of ['grok', 'cursor']) for (const occupied of [false, true]) {
+    test(`${cli} recorded worktree, occupied=${occupied}`, async () => {
+      const own = join(home, 'worktrees', 'own'); mkdirSync(own, { recursive: true });
+      const yaml = FILE.replace('    name: worker\n    label: worker\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5',
+        `    name: worker\n    label: worker\n    cli: ${cli}\n    vendor: xai\n    model: Grok\n    version: "4.7"\n    launch: ${cli === 'grok' ? 'grok' : 'cursor-agent'}`);
+      approve(yaml);
+      updateState(join(project, '.agents'), state => {
+        const session = state.sessions.acme ??= emptySession();
+        session.worktrees.task = { seat: 'worker', path: own, branch: 'fix/own', setup: 'ok' };
+        if (occupied) session.worktrees.peer = { seat: 'lead', path: own, branch: 'fix/peer', setup: 'ok' };
+      });
+      const before = readFileSync(join(project, '.agents/team.yaml'), 'utf8');
+      const made = world(), io = testIo(project, owner);
+      expect(await runAdd(['worker', '--dry-run'], io, sources(made)), io.err).toBe(occupied ? 1 : 0);
+      if (occupied) expect(io.err).toContain('overlaps seat lead');
+      else expect(io.out).toContain(own);
+      expect(made.creates).toEqual([]);
+      expect(readFileSync(join(project, '.agents/team.yaml'), 'utf8')).toBe(before);
+    });
+  }
+});

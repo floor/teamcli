@@ -2,7 +2,8 @@ import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { profileFor } from '../profiles/index.ts';
-import { lobbyPath } from '../worktree/place.ts';
+import { lobbyPath, seatStart } from '../worktree/place.ts';
+import { worktreeOf, type SessionState } from '../state.ts';
 import { shellScriptWordOf } from './cli-scope.ts';
 import { channelLobbyFolder, claudeChannelSeat } from '../mcp/launch-config.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
@@ -90,6 +91,8 @@ export type LineSources = {
    *  path this is also the executability test main's launcher check used: `accessSync(…, X_OK)`. */
   onPath(binary: string): boolean;
   home: string;
+  /** Recorded starts used by the same placement gate as the launch. */
+  state?: Pick<SessionState, 'seats' | 'worktrees'>;
 };
 
 function miss(why: string, record?: string): LineFinding {
@@ -309,6 +312,12 @@ export function launchLineFinding(
   sources: LineSources,
   start?: { cwd: string; folder: string },
 ): LineFinding | null {
+  if (seat.cli === 'grok' || seat.cli === 'cursor') {
+    const placed = seatStart(team, start === undefined ? seat : { ...seat, cwd: start.cwd }, root, sources.home,
+      undefined, start === undefined ? worktreeOf(sources.state, seat.name)?.path : undefined, sources.state);
+    if ('problem' in placed) return miss(placed.problem);
+    start = { cwd: resolve(root, placed.cwd), folder: placed.cwd };
+  }
   const launch = seat.launch;
   // A line whose quoting never closes is not a command any shell can read: it is refused in
   // plain words, before any of the readings below guess at its words. A line a shell can run

@@ -2277,6 +2277,12 @@ describe('team restart resumes the seat\'s own recorded session', () => {
         ...(opts.state === undefined ? {} : { agent_session: opts.state }),
       };
     });
+    if (opts.cli === 'grok' || opts.cli === 'cursor') {
+      const own = join(fixture.base, 'worker-tree'); mkdirSync(own);
+      updateState(fixture.dir, state => {
+        state.sessions.acme!.worktrees.worker = { path: own, branch: 'fix/worker', setup: 'ok' };
+      });
+    }
     let agentId: string | undefined;
     if (opts.registry !== undefined) {
       agentId = registerAgent(fixture.home, {
@@ -3869,3 +3875,25 @@ describe('a stored approval that does not verify', () => {
   });
 });
 
+
+
+describe('review: restart honors recorded own and peer folders', () => {
+  for (const cli of ['grok', 'cursor']) for (const occupied of [false, true]) {
+    test(`${cli} recorded worktree, occupied=${occupied}`, async () => {
+      const fixture = makeFixture(cli === 'grok' ? GROK_TEAM_YAML : CURSOR_TEAM_YAML);
+      const own = join(fixture.base, 'own'); mkdirSync(own);
+      updateState(fixture.dir, state => {
+        const session = state.sessions.acme ??= emptySession();
+        session.worktrees.task = { seat: 'worker', path: own, branch: 'fix/own', setup: 'ok' };
+        if (occupied) session.worktrees.peer = { seat: 'lead', path: own, branch: 'fix/peer', setup: 'ok' };
+      });
+      const run = makeHarness(fixture, { initialRunning: false, foregroundArgv0: cli === 'grok' ? 'grok' : 'cursor-agent' });
+      const io = testIo(fixture.root, { kind: 'owner' });
+      expect(await runRestart(['worker', '--dry-run'], io, run.sources), io.err).toBe(occupied ? 1 : 0);
+      if (occupied) expect(io.err).toContain('overlaps seat lead');
+      else expect(io.out).toContain(own);
+      expect(run.did.closed).toEqual([]);
+      expect(run.did.created).toBe(0);
+    });
+  }
+});

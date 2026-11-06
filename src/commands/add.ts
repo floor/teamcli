@@ -73,7 +73,7 @@ import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
-import { seatStart, type SeatStart } from '../worktree/place.ts';
+import { placedStartFolders, seatStart, type SeatStart } from '../worktree/place.ts';
 import { registerInbox } from '../mcp/register.ts';
 import { channelLobbyFolder } from '../mcp/launch-config.ts';
 import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
@@ -821,10 +821,11 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (json) jsonNotes.push(`team add: ${derived.warning}`);
     else out.stderr(`team add: ${plainText(derived.warning)}\n`);
   }
+  const recordedTree = worktreeOf(recorded, built.name);
   // Where the seat waits: the lobby the gate verified, or a refusal — before the file is edited.
   const start: SeatStart = startProblem
     ? { problem: startProblem }
-    : seatStart(runTeam, built.seat, root, sources.home, verifiedLobby ?? undefined);
+    : seatStart(runTeam, built.seat, root, sources.home, verifiedLobby ?? undefined, recordedTree?.path, recorded);
   if ('problem' in start) {
     refuse(io, json, 'add', { id: 'add.start', message: start.problem, repair: null });
     // exit: add.start
@@ -848,13 +849,14 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     ? launchLineFinding(prepared.team, built.seat, root, {
         onPath: (binary) => sources.doctor.onPath(binary),
         home: sources.doctor.home,
+        state: recorded,
       })
     : typeof resumeCwd === 'string' && resumeCwd !== ''
       ? launchLineFinding(
           prepared.team,
           built.seat,
           root,
-          { onPath: (binary) => sources.doctor.onPath(binary), home: sources.doctor.home },
+          { onPath: (binary) => sources.doctor.onPath(binary), home: sources.doctor.home, state: recorded },
           { cwd: resolve(root, resumeCwd), folder: resumeCwd },
         )
       : {
@@ -1013,6 +1015,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const wouldLaunch = planned.stage === undefined || !planned.pane || (planned.stage === 'launched' && !planned.agentLive);
   const seatForPlan = {
     ...planned,
+    ...(recordedTree === undefined ? {} : { worktree: recordedTree.path }),
     ...(launchProblem && wouldLaunch
       ? { launchProblem, ...(launchProblemDetail ? { launchProblemDetail } : {}) }
       : {}),
@@ -1068,6 +1071,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       session,
       sessionRunning: live === 'running',
       seats: [seatForPlan],
+      startFolders: placedStartFolders(prepared.team.seats, recorded),
+      team: prepared.team,
       watchAlive: true,
       teamFile: launchTeamFile(loaded),
       cliHooks: plannedCliHooks(dir, session, [seatForPlan]),
@@ -1230,7 +1235,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
       logLine(dir, 'add', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
     }
-    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, teamFile: launchTeamFile(loaded), cliHooks: installed, briefEpochs: currentBriefEpochs(dir, session), watchLabel: watchLabel(prepared.team.project), home: sources.home, team: prepared.team, ...(sources.launch.codexEndpoint === undefined ? {} : { stateDir: dir }) });
+    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], startFolders: placedStartFolders(prepared.team.seats, recorded), watchAlive: true, teamFile: launchTeamFile(loaded), cliHooks: installed, briefEpochs: currentBriefEpochs(dir, session), watchLabel: watchLabel(prepared.team.project), home: sources.home, team: prepared.team, ...(sources.launch.codexEndpoint === undefined ? {} : { stateDir: dir }) });
     // A new seat starts from no reading at all: nothing a previous run left says what it is doing.
     resetCliHookState(dir, session, [planSeat.name]);
     const outcome = { swallowed: false, unknown: false, launched: false };

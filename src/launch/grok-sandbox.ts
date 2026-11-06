@@ -1,7 +1,8 @@
 // A Grok seat starts inside a sandbox profile TeamCLI writes for it. The profile names that
 // seat's worktree, its start folder, and only the seat's own paths under the git common dir and
 // under `.agents`. Nothing under the team config directory is granted. `extends = "workspace"`
-// is written; what that preset itself grants is unmeasured. Measured on grok 1.0.70
+// also grants the process start folder (live measurement on grok 1.0.77). The launch therefore
+// requires that start to be inside a listed grant already. Measured on grok 1.0.70
 // (f50904eaee6c) in a scratch home:
 //   GROK_HOME=<dir> grok --trust --sandbox team-seat-demo -p hi
 // found the profile in `<dir>/sandbox.toml` and reached its auth check, while
@@ -16,7 +17,7 @@
 // inside a repository, and the user-level file is read when the project has none.
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, type Stats } from 'node:fs';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { syncChildTimeout } from '../child.ts';
 import { cliHookStatePath } from './cli-hook.ts';
 import { tomlString, writePrivateAtomic } from './private-file.ts';
@@ -90,7 +91,9 @@ export function grokSandboxOf(input: {
   const worktree = input.worktree === undefined ? undefined : realFolder(input.worktree);
   const start = input.cwd === undefined ? undefined : realFolder(input.cwd);
   placeGrant(input.home, worktree, folders);
-  if (start !== worktree) placeGrant(input.home, start, folders);
+  // A recorded worktree is the grant; an unrelated start must not grant itself access.
+  // Without a recorded worktree, the explicitly placed own folder supplies that grant.
+  if (worktree === undefined) placeGrant(input.home, start, folders);
   const prepare: string[] = [];
   for (const grant of gitGrants(input.worktree ?? input.cwd ?? input.root)) {
     placeGrant(input.home, grant, folders);
@@ -114,6 +117,35 @@ export function grokSandboxOf(input: {
     ...(retire === profile ? {} : { retire }),
     guard: grokHome === input.home || grokHome.startsWith(`${input.home}/`) ? input.home : dirname(grokHome),
   };
+}
+
+/** The workspace preset grants the start folder in addition to read_write. Validate its real
+ *  location against the existing grants, and never accept the team's shared lobby. The planner
+ *  checks before creating a workspace; execution checks again before writing the profile. */
+export function grokStartFolderProblem(cwd: string, sandbox: GrokSandbox, lobby?: string): string | null {
+  const repair = 'nothing was launched. Set the Grok seat cwd to its own worktree or clone, then launch it again';
+  let start: string;
+  try {
+    start = realpathSync(cwd);
+    if (!lstatSync(start).isDirectory()) throw new Error('not a directory');
+  } catch {
+    return `its start folder ${cwd} is not an existing directory; ${repair}`;
+  }
+  if (lobby !== undefined && insideFolder(start, realFolder(lobby))) {
+    return `its start folder ${cwd} is in the shared lobby, which Grok would grant write access; ${repair}`;
+  }
+  for (const grant of sandbox.readWrite) {
+    try {
+      const folder = realpathSync(grant);
+      if (lstatSync(folder).isDirectory() && insideFolder(start, folder)) return null;
+    } catch { /* A missing grant cannot cover the existing start folder. */ }
+  }
+  return `its start folder ${cwd} is outside its sandbox grants, and Grok would grant that folder write access; ${repair}`;
+}
+
+function insideFolder(folder: string, parent: string): boolean {
+  const tail = relative(parent, folder);
+  return tail === '' || (!isAbsolute(tail) && tail !== '..' && !tail.startsWith(`..${sep}`));
 }
 
 function placeGrant(home: string, folder: string | undefined, into: string[]): void {

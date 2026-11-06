@@ -15,7 +15,8 @@ import { reportedAgentIsCli, reportedLiveAgent } from './agent.ts';
 import { refusalReport, type Refusal } from './deliver.ts';
 import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeTarget, withoutResume, conversationMissingOnScreen } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
-import { settleGrokSandbox, writeGrokSandbox } from './grok-sandbox.ts';
+import { ownStartFolderProblem } from '../worktree/place.ts';
+import { grokStartFolderProblem, settleGrokSandbox, writeGrokSandbox } from './grok-sandbox.ts';
 import { launchedIdentity, paneHoldsOnlyShell, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
 import { restoreProof } from './restore-proof.ts';
 import type { CliWatcher } from './cli-hook.ts';
@@ -629,6 +630,13 @@ export async function executePlan(
   const closing = options?.isClosing ?? (() => false);
   const places = new Map<string, Place>();
   const dropped = new Set<string>();
+  const invalidStart = new Set<string>();
+  const launches = new Map(steps.flatMap(step => step.do?.do === 'launch' ? [[step.do.seat, step.do] as const] : []));
+  const startProblem = (op: Extract<Op, { do: 'launch' }>): string | null => {
+    const problem = op.ownStartFolder === undefined ? null : ownStartFolderProblem(op.ownStartFolder);
+    return problem ?? (op.grokSandbox === undefined ? null :
+      grokStartFolderProblem(op.cwd ?? '', op.grokSandbox, op.ownStartFolder?.lobby));
+  };
   // Seats whose launch line carried their rules line as the CLI's initial prompt: their rules
   // file was written before the launch, and nothing is ever typed (0.5.9).
   const rulesAtLaunch = new Set<string>();
@@ -835,6 +843,14 @@ export async function executePlan(
     dropped.add(seat);
     final(seat, { kind: 'left out', reason }, detail);
     return 'settled';
+  };
+
+  const guardStart = (op: Extract<Op, { do: 'launch' }>): boolean => {
+    const problem = startProblem(op);
+    if (problem === null) return true;
+    invalidStart.add(op.seat);
+    leftOut(op.seat, problem);
+    return false;
   };
 
   const dropRecord = (seat: string): boolean => {
@@ -1158,6 +1174,11 @@ export async function executePlan(
     // `team answer` — has nothing left in the plan: a rename would overwrite the ready stage,
     // and a delivery would send the rules a second time while the first turn is still running.
     if (seat && ready.has(seat) && !leftover) return;
+    // A path can change after planning or workspace creation. Check before the first write
+    // for this seat, including inbox registration; a refused start also suppresses cleanup.
+    if (seat && invalidStart.has(seat)) return;
+    const launch = seat === undefined ? undefined : launches.get(seat);
+    if (launch !== undefined && !guardStart(launch)) return;
 
     if (step.kind === 'skip') {
       if (op?.do === 'record' && op.seat) {
@@ -1451,6 +1472,7 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: why });
           break;
         }
+        if (!guardStart(op)) break;
         const channel = op.channel === undefined ? undefined
           : op.cwd === undefined || !created.has(op.seat)
             ? { ok: false as const, reason: 'a Claude channel requires a fresh scoped workspace; restart the seat' }
@@ -1479,6 +1501,7 @@ export async function executePlan(
             break;
           }
         }
+        if (!guardStart(op)) break;
         const here = place(op.seat, op.pane, op.workspace);
         // The rules line rides this launch: its file is written before anything starts, so the
         // CLI reads it on its first turn, and a file that cannot be written leaves the seat out
@@ -1506,6 +1529,7 @@ export async function executePlan(
         // attach is added only once an endpoint exists to attach to. A start that is not up
         // leaves the seat out. It does not append --no-daemon and continue. A line the plan
         // did not mark stays unmanaged and still launches on the line it had.
+        if (!guardStart(op)) break;
         let command = op.command;
         let startedEndpoint = false;
         let attachedEndpoint = false;
@@ -1523,6 +1547,12 @@ export async function executePlan(
           const settled = settleGrokSandbox(op.grokSandbox);
           if (!settled.ok) {
             leftOut(op.seat, settled.why);
+            break;
+          }
+          const problem = startProblem({ ...op, grokSandbox: settled.sandbox });
+          if (problem !== null) {
+            invalidStart.add(op.seat);
+            leftOut(op.seat, problem);
             break;
           }
           const written = writeGrokSandbox(settled.sandbox);

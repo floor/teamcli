@@ -128,7 +128,7 @@ import { watchSitting } from '../watch/liveness.ts';
 import { busLabel, watchIdentity, watchLabel } from '../watch/pane.ts';
 import { busAnswers } from '../bus/follow.ts';
 import { readScreen } from '../watch/screen.ts';
-import { seatStart } from '../worktree/place.ts';
+import { placedStartFolders, seatStart } from '../worktree/place.ts';
 import { registerInbox, type InboxRegistration } from '../mcp/register.ts';
 import { expiryPhrase } from '../client/duration-policy.ts';
 
@@ -2558,13 +2558,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     const resumeCwd = recorded?.seats[seat.name]?.start_cwd;
     const line = doctor
       ? placed
-        ? launchLineFinding(team, seat, root, { onPath: (binary) => doctor.onPath(binary), home: doctor.home })
+        ? launchLineFinding(team, seat, root, { onPath: (binary) => doctor.onPath(binary), home: doctor.home, state: recorded })
         : typeof resumeCwd === 'string' && resumeCwd !== ''
           ? launchLineFinding(
               team,
               seat,
               root,
-              { onPath: (binary) => doctor.onPath(binary), home: doctor.home },
+              { onPath: (binary) => doctor.onPath(binary), home: doctor.home, state: recorded },
               { cwd: resolve(root, resumeCwd), folder: resumeCwd },
             )
           : {
@@ -2601,10 +2601,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         ...launchProblem,
         ...(budget.kind === 'clear' ? {} : { budget }),
         ...(tree === undefined ? {} : { worktree: tree.path }),
+        ...(resumeCwd === undefined ? {} : { startCwd: resumeCwd }),
       });
       continue;
     }
-    const start = seatStart({ ...team, session }, seat, root, sources.home);
+    const tree = worktreeOf(recorded, seat.name);
+    const start = seatStart({ ...team, session }, seat, root, sources.home, undefined, tree?.path, recorded);
     if ('problem' in start) {
       if (!start.once || !refused.has(start.problem)) {
         refused.add(start.problem);
@@ -2613,7 +2615,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       continue;
     }
     const budget = budgetOf(seat);
-    const tree = worktreeOf(recorded, seat.name);
     seats.push({
       ...planned,
       cwd: start.cwd,
@@ -2621,6 +2622,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       ...launchProblem,
       ...(budget.kind === 'clear' ? {} : { budget }),
       ...(tree === undefined ? {} : { worktree: tree.path }),
+      ...(resumeCwd === undefined ? {} : { startCwd: resumeCwd }),
     });
   }
   // Records the file no longer declares: a removal that could not drop its state, or a file
@@ -2833,6 +2835,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     // One that is still `stopped` here is not this team's: the refusal already stopped the run.
     sessionRunning: state === 'running' || state === 'stopped',
     seats,
+    startFolders: placedStartFolders(team.seats, recorded),
     watchLabel: watchLabel(team.project),
     watchAlive,
     ...(watchPid !== null ? { watchPid } : {}),

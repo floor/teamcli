@@ -1,5 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
+import { ownStartFolderProblem, type StartFolder, type OwnStartFolderInput } from '../worktree/place.ts';
 import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { selfRunner } from '../mcp/register.ts';
 import { channelLobbyFolder, claudeChannelSeat, type ChannelLaunchScope } from '../mcp/launch-config.ts';
@@ -15,7 +16,7 @@ import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
 import { shellScriptWordOf } from './cli-scope.ts';
-import { grokSandboxOf, type GrokSandbox } from './grok-sandbox.ts';
+import { grokSandboxOf, grokStartFolderProblem, type GrokSandbox } from './grok-sandbox.ts';
 import { launchedCliBinary } from './line.ts';
 import type { WaitingRecord } from '../state.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -117,7 +118,9 @@ export type Op =
        * The command is the declarative launcher's argv and is run as given. The launch does
        * not mint a session, attach an endpoint, or rewrite a sandbox flag onto it.
        */
-      resolved?: true }
+      resolved?: true;
+      /** Placement facts rechecked before each seat operation and again before profile writes. */
+      ownStartFolder?: OwnStartFolderInput }
   /** `why` is the reason the record and the log carry; `detail`, when the reason has a fuller
    *  sentence with a folder in it, is the stderr line said under the record. */
   | { do: 'refuse'; seat: string; why: string; detail?: string }
@@ -375,6 +378,8 @@ export interface UpSeat {
   cwd: string;
   /** The seat's recorded worktree, relative to the root or absolute. */
   worktree?: string;
+  /** Actual recorded start of a pane reused for an in-place launch. */
+  startCwd?: string;
   label: string;
   /** Sidebar line 2, set on the pane after launch. Absent: the plan does not report one. */
   displayAgent?: string;
@@ -618,6 +623,8 @@ export interface UpInput {
   /** Whether the herdr session is already running, empty. */
   sessionRunning: boolean;
   seats: readonly UpSeat[];
+  /** Other seats' actual recorded starts, including peers outside a single-seat plan. */
+  startFolders?: readonly StartFolder[];
   /** The watch's workspace label: the one `watchLabel` makes for this team. */
   watchLabel: string;
   /** The watch is running, so no second watch is started. */
@@ -1217,7 +1224,7 @@ export function upPlan(input: UpInput): Step[] {
       });
       continue;
     }
-    const cwd = claudeChannelSeat(seat) && input.home !== undefined && input.team !== undefined
+    let cwd = claudeChannelSeat(seat) && input.home !== undefined && input.team !== undefined
       ? channelLobbyFolder(lobbyOf(input.home, input.root, input.team), seat)
       : isAbsolute(seat.cwd) ? seat.cwd : resolve(input.root, seat.cwd);
     const channel = claudeChannelSeat(seat)
@@ -1238,6 +1245,10 @@ export function upPlan(input: UpInput): Step[] {
     // The same condition as the launch step below. A seat already running keeps
     // its idle wait, rename and rules, and hears the reading as a notice.
     const wouldLaunch = launchWillRun(seat);
+    const inPlace = reuse !== undefined || ownLine !== undefined || (!fresh && seat.pane !== undefined);
+    if (inPlace && (profile.cli === 'grok' || profile.cli === 'cursor') && seat.cwd === '.' && seat.worktree !== undefined) {
+      cwd = resolve(input.root, seat.worktree);
+    }
     if (seat.launchProblem && wouldLaunch) {
       steps.push({
         // The dry run prints the finding in full, as it always did; the record is left out with
@@ -1336,6 +1347,38 @@ export function upPlan(input: UpInput): Step[] {
         do: { do: 'refuse', seat: seat.name, why },
       });
       continue;
+    }
+    const ownStartFolder: OwnStartFolderInput | undefined =
+      (profile.cli === 'grok' || profile.cli === 'cursor') && input.home !== undefined && input.team !== undefined
+        ? { cli: profile.cli, seat: seat.name, cwd, root: input.root, home: input.home,
+            lobby: lobbyOf(input.home, input.root, input.team),
+            ...(inPlace && seat.startCwd !== undefined ? { inPlaceCwd: resolve(input.root, seat.startCwd) } : {}),
+            // Keep occupied records as well as placements planned by this run. Single-seat
+            // commands still compare the complete team, and new peers compare each other.
+            peers: [...(input.startFolders ?? input.team.seats.filter(peer => !input.seats.some(placed => placed.name === peer.name))), ...input.seats.map(peer => ({ ...peer,
+              cwd: peer.cwd === '.' ? peer.worktree ?? peer.cwd : peer.cwd,
+            }))] }
+        : undefined;
+    if (ownStartFolder !== undefined && wouldLaunch && inPlace) {
+      const actual = seat.startCwd === undefined ? undefined : resolve(input.root, seat.startCwd);
+      const problem = actual === undefined
+        ? 'its reused pane has no recorded start folder; set the seat cwd to its own worktree or clone and restart it in a new workspace'
+        : ownStartFolderProblem({ ...ownStartFolder, cwd: actual }) ??
+          (samePlace(actual, cwd) ? null : 'its reused pane starts in another folder; set the seat cwd to its own worktree or clone and restart it in a new workspace');
+      if (problem !== null) {
+        steps.push({ kind: 'skip', text: `${seat.name}: would refuse: ${problem}`,
+          do: { do: 'refuse', seat: seat.name, why: problem } });
+        continue;
+      }
+    }
+    if (ownStartFolder !== undefined && wouldLaunch) {
+      const problem = ownStartFolderProblem(ownStartFolder) ??
+        (grokSandbox === undefined ? null : grokStartFolderProblem(cwd, grokSandbox, ownStartFolder.lobby));
+      if (problem !== null) {
+        steps.push({ kind: 'skip', text: `${seat.name}: would refuse: ${problem}`,
+          do: { do: 'refuse', seat: seat.name, why: problem } });
+        continue;
+      }
     }
     // The line is built before the steps that create or close a workspace: a refusal must come
     // before any of them, and the warnings it produces are said on the launch step where they
@@ -1540,7 +1583,7 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
         note: launchNote,
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: reuse?.pane ?? seat.pane, ...(reuse === undefined ? {} : { reuse: reuse.launched, workspace: reuse.workspace }), ...(reuse === undefined && seat.workspace !== undefined ? { workspace: seat.workspace } : {}), cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, recordLine, ...(channel === undefined ? {} : { channel }), ...(fromResolver ? { resolved: true as const } : {}), ...(fromResolver || !(managedCodex && input.stateDir !== undefined) ? {} : { codexEndpoint: { dir: input.stateDir } }), ...(fromResolver || plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }) },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: reuse?.pane ?? seat.pane, ...(reuse === undefined ? {} : { reuse: reuse.launched, workspace: reuse.workspace }), ...(reuse === undefined && seat.workspace !== undefined ? { workspace: seat.workspace } : {}), cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, recordLine, ...(channel === undefined ? {} : { channel }), ...(fromResolver ? { resolved: true as const } : {}), ...(fromResolver || !(managedCodex && input.stateDir !== undefined) ? {} : { codexEndpoint: { dir: input.stateDir } }), ...(fromResolver || plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }), ...(ownStartFolder === undefined ? {} : { ownStartFolder }) },
       });
     }
     const rules = profile.rulesMode;
