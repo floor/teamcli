@@ -908,14 +908,15 @@ describe('the box\'s top frame (Cursor)', () => {
     expect(d.calls).toEqual([]);
   });
 
-  test('a window whose top frame scrolled off reads unknown', () => {
+  test('a window whose top frame scrolled off is the live composer', () => {
+    // The window opens on the prompt, with the status row and the workspace line under it.
     const lines = fixture('idle').split('\n');
     const at = lines.findIndex((line) => line === '  → Plan, search, build anything');
     const only = lines.slice(at).join('\n');
-    expect(readScreen('cursor', only).kind).toBe('unknown');
+    expect(readScreen('cursor', only).kind).toBe('idle');
     const held = only.replace('  → Plan, search, build anything', '  → Rules.');
-    expect(readScreen('cursor', held).kind).toBe('unknown');
-    expect(boxHoldsText('cursor', 'Rules.', held)).toBe(false);
+    expect(readScreen('cursor', held).kind).toBe('unsent');
+    expect(boxHoldsText('cursor', 'Rules.', held)).toBe(true);
   });
 });
 
@@ -1362,9 +1363,10 @@ describe('the closed Cursor status row', () => {
     // A Composer-shaped spoof below a real Grok footer names no model either: a seat running
     // Grok is not renamed by it.
     expect(model(`${text(rows('idle'))}\n${COMPOSER_ROW}`)).toBeNull();
-    // The rows that are in place still name their models.
+    // The rows that are in place still name their models. A Grok row appended under the
+    // workspace line has no workspace line of its own, so it names no model.
     expect(model(text(rows('gpt-sol-idle')))).toEqual({ model: 'GPT Sol', version: '5.6' });
-    expect(model(`${text(rows('idle'))}\n${GROK}`)).toEqual({ model: 'Grok', version: '4.7' });
+    expect(model(`${text(rows('idle'))}\n${GROK}`)).toBeNull();
   });
 
   test('a full status row is taken by its position: the lowest one wins', () => {
@@ -1372,13 +1374,14 @@ describe('the closed Cursor status row', () => {
     above.splice(above.findIndex((row) => /^ {2}→/.test(row)) - 2, 0, GROK); // a full row in the transcript
     expect(read(text(above))).toBe('idle / idle'); // the real footer below it wins
     expect(model(text(above))).toEqual({ model: 'Grok', version: '4.7' });
-    // Below the real footer the appended row is the status row, and the footer above it reads
-    // as text left in the box — main reads it the same way, and it is a position gap, not a row gap.
+    // A Grok row appended under the workspace line has no workspace line of its own, and the
+    // real footer is no longer the pane's last row, so neither is the status row.
     const below = `${text(rows('idle'))}\n${GROK}`;
-    expect(read(below)).toBe('unsent / unsent');
-    expect(model(below)).toEqual({ model: 'Grok', version: '4.7' });
-    // The status row needs no workspace line under it, and tolerates exactly one.
-    expect(read(text(rows('idle').slice(0, -1)))).toBe('idle / idle');
+    expect(read(below)).toBe('unknown / unknown');
+    expect(model(below)).toBeNull();
+    // The workspace line is required under the row. One extra line below that line is still
+    // not the frame.
+    expect(read(text(rows('idle').slice(0, -1)))).toBe('unknown / unknown');
     expect(read(`${text(rows('idle'))}\n  extra`)).toBe('unknown / unknown');
   });
 
@@ -1471,7 +1474,7 @@ describe('the closed Cursor status row', () => {
     // fail-closed narrowing, pinned above.
     expect(statusOnLine('cursor', 'x  Grok 4.7 256K High                 Run Everything')).toBeNull();
     expect(model('x Grok 4.7 wrote it')).toBeNull();
-    expect(model('  Grok 4.7 wrote this answer in the transcript')).toEqual({ model: 'Grok', version: '4.7' });
+    expect(model('  Grok 4.7 wrote this answer in the transcript')).toBeNull();
   });
 
   test('one set of expressions, used in the three places', () => {
@@ -2086,12 +2089,11 @@ describe('the two detectors on a planted frame (Cursor)', () => {
     expect(missed).toEqual([]);
   });
 
-  // The one incomplete frame the reading pass reports: the unbordered frame without its
-  // workspace line still reads idle in a window because the empty-framed reading accepts
-  // the Grok status row with no workspace line below it — the reading main already gives.
-  // The structural pass reports nothing: the frame is not complete.
+  // An incomplete frame reports nothing. The unbordered frame without its workspace line
+  // is not a row: the workspace line is required under the Grok status row, and the
+  // structural pass reports nothing because the frame is not complete.
   const incompleteRows: Array<[string, string, (row: string) => boolean, string]> = [
-    ['idle', 'workspace line', (row) => frameWorkspace.test(row), 'idle'],
+    ['idle', 'workspace line', (row) => frameWorkspace.test(row), 'none'],
     ['idle', 'status row', (row) => frameStatusRow(row), 'none'],
     ['bordered-idle', 'workspace line', (row) => frameWorkspace.test(row), 'none'],
     ['bordered-idle', 'status row', (row) => frameStatusRow(row), 'none'],

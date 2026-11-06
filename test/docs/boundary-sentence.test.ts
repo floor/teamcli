@@ -14,11 +14,10 @@ const SENTENCE =
 const POSITION =
   "the status row's place: a line the row's grammar matches is the row only when the workspace line sits directly below it, that line is the pane's last non-blank one, and the input row sits above it within the captured distance";
 
-// The exception the positional rule needs to be true: Grok rows are read by their grammar alone,
-// and the captures draw them with the two spaces that grammar spells. Pinned too, so the page
-// cannot claim the place rule for every Cursor row.
+// The exception the positional rule needs to be true: Grok rows skip the distance pin, and the
+// workspace line still sits directly below them. Pinned too, so the page cannot drop that line.
 const GROK =
-  "Grok rows are the profile's exception — selected by their grammar wherever they sit — and every Grok row in the captures carries exactly the two spaces that grammar spells.";
+  "Grok rows are the profile's exception to the distance pin — the workspace line still sits directly below them — and every Grok row in the captures carries exactly the two spaces that grammar spells.";
 
 // Whitespace runs collapse before the match, so the sentences survive line wrapping but not
 // rewording: every other character is compared as written.
