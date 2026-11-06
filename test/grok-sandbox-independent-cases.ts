@@ -20,9 +20,10 @@ test('sandbox scenes import the product only after synthetic HOME startup', asse
 function world() {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'sandbox-scene-'))); owned.push(base);
   const home = join(base, 'home with "quote"'), root = join(base, 'project with space'), grok = join(home, '.grok');
-  mkdirSync(join(home, '.config/team'), { recursive: true }); mkdirSync(join(root, '.agents'), { recursive: true }); mkdirSync(grok);
+  const start = join(root, 'scout-start');
+  mkdirSync(join(home, '.config/team'), { recursive: true }); mkdirSync(join(root, '.agents'), { recursive: true }); mkdirSync(start); mkdirSync(grok);
   process.env.GROK_HOME = grok;
-  return { base, home, root, grok, file: join(grok, 'sandbox.toml') };
+  return { base, home, root, start, grok, file: join(grok, 'sandbox.toml') };
 }
 type World = ReturnType<typeof world>;
 function planned(w: World, command = 'grok', cli = 'grok') {
@@ -51,7 +52,7 @@ seats:
 `;
   const team = validateTeamFile(text, { root: w.root, home: w.home });
   if (!team.ok) throw new Error(team.errors.map(e => e.message).join('; '));
-  const plan = upPlan({ root: w.root, home: w.home, team: team.team, session: 'orbit-scene', sessionRunning: true, watchAlive: true, watchLabel: 'synthetic watch', seats: [{ name: 'scout', cli, launch: command, cwd: w.root, label: 'scout', stopped: false, rules: 'fixture-rules', repairLine: 'synthetic repair' }] });
+  const plan = upPlan({ root: w.root, home: w.home, team: team.team, session: 'orbit-scene', sessionRunning: true, watchAlive: true, watchLabel: 'synthetic watch', seats: [{ name: 'scout', cli, launch: command, cwd: w.start, label: 'scout', stopped: false, rules: 'fixture-rules', repairLine: 'synthetic repair' }] });
   const op = plan.find(step => step.do?.do === 'launch')?.do;
   if (op?.do !== 'launch') throw new Error('the plan must contain the synthetic seat launch');
   return op;
@@ -87,14 +88,13 @@ function expectGrants(w: World) {
   expect(ownProfile(w)).toMatchObject({
     extends: 'workspace',
     read_write: [
-      realpathSync(w.root),
+      realpathSync(w.start),
       join(w.root, '.agents', 'send-drops', 'orbit-scene', 'scout'),
       join(w.root, '.agents', 'messages', 'scout'),
       join(w.root, '.agents', 'seat-state', 'orbit-scene', 'scout.json'),
-      join(w.root, '.agents', 'hooks', 'orbit-scene', 'scout.json'),
     ],
   });
-  for (const wider of [realpathSync(join(w.home, '.config/team')), realpathSync(join(w.root, '.agents'))]) {
+  for (const wider of [realpathSync(join(w.home, '.config/team')), realpathSync(join(w.root, '.agents')), join(w.root, '.agents', 'hooks', 'orbit-scene', 'scout.json')]) {
     expect(grants).not.toContain(wider);
   }
 }
@@ -166,13 +166,15 @@ test('fallback removes the appended option while preserving a prompt that quotes
 test('linked grant directories are named by their actual targets', async () => {
   const w = world(), actual = join(w.base, 'actual'); mkdirSync(actual);
   const linkedRoot = join(w.base, 'linked-project'); mkdirSync(linkedRoot); symlinkSync(actual, join(linkedRoot, '.agents'));
-  const changed = { ...w, root: linkedRoot };
+  const linkedStart = join(linkedRoot, 'scout-start'); mkdirSync(linkedStart);
+  const changed = { ...w, root: linkedRoot, start: linkedStart };
   await launch(changed);
   const grants = ownProfile(changed).read_write as string[];
-  expect(grants).toContain(realpathSync(linkedRoot));
-  for (const tail of ['send-drops/orbit-scene/scout', 'messages/scout', 'seat-state/orbit-scene/scout.json', 'hooks/orbit-scene/scout.json']) {
+  expect(grants).toContain(realpathSync(linkedStart));
+  for (const tail of ['send-drops/orbit-scene/scout', 'messages/scout', 'seat-state/orbit-scene/scout.json']) {
     expect(grants).toContain(join(realpathSync(actual), ...tail.split('/')));
   }
+  expect(grants).not.toContain(join(realpathSync(actual), 'hooks', 'orbit-scene', 'scout.json'));
   expect(grants).not.toContain(realpathSync(join(w.home, '.config/team')));
   expect(grants).not.toContain(join(linkedRoot, '.agents'));
 });

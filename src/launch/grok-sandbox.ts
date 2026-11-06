@@ -18,7 +18,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { syncChildTimeout } from '../child.ts';
-import { cliHookSettingsPath, cliHookStatePath } from './cli-hook.ts';
+import { cliHookStatePath } from './cli-hook.ts';
 import { tomlString, writePrivateAtomic } from './private-file.ts';
 import { parseToml } from './toml.ts';
 
@@ -30,6 +30,9 @@ export interface GrokSandbox {
   file: string;
   /** The absolute folders the profile grants `read_write`, in file order. */
   readWrite: readonly string[];
+  /** The project-wide profile a 0.5.12–0.5.14 launch wrote, when it is a different table.
+   *  Writing this profile removes that table. */
+  retire?: string;
   /** The root the link guard walks: the home the file sits under, else the file's parent. */
   guard: string;
 }
@@ -54,10 +57,10 @@ export function grokSandboxProfileName(project: string, seat: string): string {
 /** What a Grok seat's launch writes and names. The grant is that seat's worktree, its start
  *  folder, and only these paths of its own: under the git common dir, `objects/`, `refs/`,
  *  `logs/`, `packed-refs` and `worktrees/<that worktree>`; under `.agents`,
- *  `send-drops/<session>/<seat>`, `messages/<seat>`, `seat-state/<session>/<seat>.json` and
- *  `hooks/<session>/<seat>.json`. The team config directory is never granted, nor is the lobby
- *  or any other start folder or worktree inside it (the seat is not moved), nor the `.agents`
- *  folder, nor the common dir, nor that dir's
+ *  `send-drops/<session>/<seat>`, `messages/<seat>` and `seat-state/<session>/<seat>.json`.
+ *  `hooks/<session>/<seat>.json` is written by the launcher and is not granted. The team config
+ *  directory is never granted, nor is the lobby or any other start folder or worktree inside it
+ *  (the seat is not moved), nor the `.agents` folder, nor the common dir, nor that dir's
  *  `hooks/`, `config` or `info/`. A path is resolved when it or an ancestor exists, because the
  *  sandbox takes the path literally and a grant to a link's own name would not cover its target. */
 export function grokSandboxOf(input: {
@@ -82,10 +85,13 @@ export function grokSandboxOf(input: {
   if (start !== worktree) placeGrant(input.home, start, folders);
   for (const grant of gitGrants(input.worktree ?? input.cwd ?? input.root)) placeGrant(input.home, grant, folders);
   for (const grant of agentGrants(input.root, input.session, input.seat)) placeGrant(input.home, grant, folders);
+  const profile = grokSandboxProfileName(input.project, input.seat);
+  const retire = grokSandboxProfileName(input.project, '');
   return {
-    profile: grokSandboxProfileName(input.project, input.seat),
+    profile,
     file,
     readWrite: [...new Set(folders)],
+    ...(retire === profile ? {} : { retire }),
     guard: grokHome === input.home || grokHome.startsWith(`${input.home}/`) ? input.home : dirname(grokHome),
   };
 }
@@ -117,9 +123,7 @@ function agentGrants(root: string, session: string, seat: string): string[] {
     grants.push(realFolder(join(agents, 'messages', seat)));
   }
   const state = cliHookStatePath(agents, session, seat);
-  const hooks = cliHookSettingsPath(agents, session, seat);
   if (state !== null) grants.push(realFolder(state));
-  if (hooks !== null) grants.push(realFolder(hooks));
   return grants;
 }
 
@@ -177,11 +181,12 @@ function realFolder(folder: string): string {
 export function writeGrokSandbox(sandbox: GrokSandbox): { ok: true } | { ok: false; why: string } {
   try {
     const text = existsSync(sandbox.file) ? readFileSync(sandbox.file, 'utf8') : '';
-    const next = mergeProfile(text, sandbox.profile, [
+    const merged = mergeProfile(text, sandbox.profile, [
       { key: 'extends', value: tomlString('workspace'), parsed: 'workspace' },
       { key: 'read_write', value: arrayValue(sandbox.readWrite), parsed: [...sandbox.readWrite] },
     ]);
-    if (next !== null) writePrivateAtomic(sandbox.file, next, sandbox.guard);
+    const next = withoutRetired(merged ?? text, sandbox.retire, sandbox.profile);
+    if (next !== text) writePrivateAtomic(sandbox.file, next, sandbox.guard);
     return { ok: true };
   } catch (error) {
     return { ok: false, why: error instanceof Error ? error.message : String(error) };
@@ -276,6 +281,30 @@ function mergeProfile(text: string, profile: string, fields: readonly Field[]): 
     throw new Error('writing the sandbox profile did not land in the file; it was left as it is');
   }
   return next;
+}
+
+/** The text with the retired profile's table removed, when that table is a header this version
+ *  can see outside a string. A table that is still there afterwards is left unread: the write
+ *  fails and the file stays as it was. */
+function withoutRetired(text: string, retire: string | undefined, profile: string): string {
+  if (retire === undefined || retire === profile || retire === '') return text;
+  const lines = text.split('\n');
+  const outside = lineScopes(lines);
+  const at = lines.findIndex((line, index) => outside[index] === true && isProfileHeader(line, retire));
+  const dropped = at < 0
+    ? text
+    : [...lines.slice(0, at), ...lines.slice(tableEnd(lines, outside, at))].join('\n');
+  const parsed = parseSandbox(dropped, 'removing the old sandbox profile would leave the file unreadable');
+  if (Object.prototype.hasOwnProperty.call(profileTables(parsed), retire)) {
+    throw new Error(`the sandbox file still holds profiles.${retire}; it was left as it is`);
+  }
+  return dropped;
+}
+
+function tableEnd(lines: readonly string[], outside: readonly boolean[], at: number): number {
+  let end = at + 1;
+  while (end < lines.length && !(outside[end] === true && headerPath(lines[end] ?? '') !== null)) end++;
+  return end;
 }
 
 function isProfileHeader(line: string, profile: string): boolean {

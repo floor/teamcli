@@ -59,14 +59,14 @@ seats:
 const made: string[] = [];
 const ambientGrokHome = process.env.GROK_HOME;
 
-/** The seat's own paths when the seat starts at a checkout that is not a git repository. */
-function seatGrants(root: string): string[] {
+/** The seat's own paths when it starts in `start`, a folder that is not the shared project root
+ *  and not a git checkout. The launcher's hook file is not among them. */
+function seatGrants(root: string, start: string): string[] {
   return [
-    realpathSync(root),
+    realpathSync(start),
     join(root, '.agents', 'send-drops', 'acme', 'grok-seat'),
     join(root, '.agents', 'messages', 'grok-seat'),
     join(root, '.agents', 'seat-state', 'acme', 'grok-seat.json'),
-    join(root, '.agents', 'hooks', 'acme', 'grok-seat.json'),
   ];
 }
 
@@ -87,16 +87,18 @@ afterAll(() => {
 
 /** A home, a project root and a Grok home of their own; the environment Grok reads names the
  *  last, so `grokSandboxOf` resolves exactly the file this scene reads back. */
-function world(project = 'acme'): { base: string; home: string; root: string; grokHome: string; sandbox: GrokSandbox } {
+function world(project = 'acme'): { base: string; home: string; root: string; start: string; grokHome: string; sandbox: GrokSandbox } {
   const base = dir();
   const home = join(base, 'home');
   const root = join(base, 'project');
+  const start = join(root, 'seat');
   const grokHome = join(base, 'grok-home');
   mkdirSync(join(home, '.config', 'team'), { recursive: true });
   mkdirSync(join(root, '.agents'), { recursive: true });
+  mkdirSync(start, { recursive: true });
   mkdirSync(grokHome, { recursive: true });
   process.env.GROK_HOME = grokHome;
-  return { base, home, root, grokHome, sandbox: grokSandboxOf({ home, root, project, seat: 'grok-seat', session: 'acme', cwd: root }) };
+  return { base, home, root, start, grokHome, sandbox: grokSandboxOf({ home, root, project, seat: 'grok-seat', session: 'acme', cwd: start }) };
 }
 
 describe('the profile name and the file it lives in', () => {
@@ -122,17 +124,19 @@ describe('the profile name and the file it lives in', () => {
   });
 
   test('a launch names its file and only the seat\'s own paths', () => {
-    const { base, home, root, grokHome, sandbox } = world();
+    const { base, home, root, start, grokHome, sandbox } = world();
     expect(sandbox).toEqual({
       profile: 'team-seat-acme-grok-seat',
       file: join(grokHome, 'sandbox.toml'),
-      readWrite: seatGrants(root),
+      readWrite: seatGrants(root, start),
+      retire: 'team-seat-acme',
       // The Grok home here sits outside the user home: the guard is its parent, so a linked
       // Grok home is refused before anything is written through it.
       guard: base,
     });
     expect(sandbox.readWrite).not.toContain(join(home, '.config', 'team'));
     expect(sandbox.readWrite).not.toContain(join(root, '.agents'));
+    expect(sandbox.readWrite).not.toContain(join(root, '.agents', 'hooks', 'acme', 'grok-seat.json'));
   });
 
   test('a folder reached through a link is granted by its target, and the team config directory is not', () => {
@@ -195,10 +199,10 @@ describe('the profile name and the file it lives in', () => {
 
 describe('writing the file', () => {
   test('a first launch creates the profile: it extends workspace and grants only the seat\'s own paths', () => {
-    const { root, sandbox } = world();
+    const { root, start, sandbox } = world();
     expect(writeGrokSandbox(sandbox)).toEqual({ ok: true });
     expect(readFileSync(sandbox.file, 'utf8')).toBe(
-      `[profiles.team-seat-acme-grok-seat]\nextends = "workspace"\nread_write = ${JSON.stringify(seatGrants(root)).replaceAll(',', ', ')}\n`,
+      `[profiles.team-seat-acme-grok-seat]\nextends = "workspace"\nread_write = ${JSON.stringify(seatGrants(root, start)).replaceAll(',', ', ')}\n`,
     );
   });
 
@@ -214,7 +218,7 @@ describe('writing the file', () => {
   });
 
   test('an existing profile is updated in place, a multi-line array replaced whole', () => {
-    const { home, root, sandbox } = world();
+    const { root, start, sandbox } = world();
     writeFileSync(sandbox.file, [
       '[profiles.team-seat-acme-grok-seat]',
       'extends = "workspace"',
@@ -231,7 +235,7 @@ describe('writing the file', () => {
     ].join('\n'));
     expect(writeGrokSandbox(sandbox)).toEqual({ ok: true });
     const text = readFileSync(sandbox.file, 'utf8');
-    expect(text).toContain(`read_write = ${JSON.stringify(seatGrants(root)).replaceAll(',', ', ')}`);
+    expect(text).toContain(`read_write = ${JSON.stringify(seatGrants(root, start)).replaceAll(',', ', ')}`);
     expect(text).not.toContain('/old/one');
     expect(text).toContain('# a comment stays\ndeny = ["/etc"]');
     expect(text.split('[profiles.team-seat-acme-grok-seat]')).toHaveLength(2);
@@ -440,7 +444,7 @@ describe('taking the flag off a line whose profile was not written', () => {
 });
 
 describe('the plan and the launch', () => {
-  function grokPlan(home: string, root: string, launch = 'grok') {
+  function grokPlan(home: string, root: string, launch = 'grok', cwd = 'seat') {
     const checked = validateTeamFile(TEAM, { home, root });
     if (!checked.ok) throw new Error(checked.errors.map((error) => error.message).join('; '));
     return upPlan({
@@ -452,7 +456,7 @@ describe('the plan and the launch', () => {
       home,
       team: checked.team,
       seats: [{
-        name: 'grok-seat', cli: 'grok', launch, cwd: '.', label: 'grok-seat', stopped: false, rules: 'Rules.',
+        name: 'grok-seat', cli: 'grok', launch, cwd, label: 'grok-seat', stopped: false, rules: 'Rules.',
         repairLine: '`team remove grok-seat --keep` then `team add grok-seat`',
       }],
     });
@@ -466,6 +470,46 @@ describe('the plan and the launch', () => {
     expect(launch.command).toBe(`AGENT_UNATTENDED=1 grok ${FLAGS} --sandbox team-seat-acme-grok-seat --rules Rules.`);
     expect(launch.grokSandbox).toEqual(sandbox);
     expect(existsSync(join(grokHome, 'sandbox.toml'))).toBe(false);
+  });
+
+  test('a start at the shared project root is refused before a workspace is created', () => {
+    const { home, root, grokHome } = world();
+    const granted = grokSandboxOf({ home, root, project: 'acme', seat: 'grok-seat', session: 'acme', cwd: root });
+    expect(granted.readWrite).toContain(realpathSync(root));
+    const plan = grokPlan(home, root, 'grok', '.');
+    const refusal = plan.find((step) => step.do?.do === 'refuse')?.do;
+    expect(refusal).toMatchObject({
+      do: 'refuse',
+      seat: 'grok-seat',
+      why: 'its start folder is the shared project root, which would grant the whole checkout; give the seat its own worktree or clone',
+    });
+    expect(plan.some((step) => step.do?.do === 'launch' || step.do?.do === 'create')).toBe(false);
+    expect(existsSync(join(grokHome, 'sandbox.toml'))).toBe(false);
+  });
+
+  test('writing the per-seat profile removes the project-wide table and keeps a quoted copy', () => {
+    const { sandbox } = world();
+    writeFileSync(sandbox.file, [
+      'notes = """',
+      '[profiles.team-seat-acme]',
+      'read_write = ["/quoted"]',
+      '"""',
+      '[profiles.team-seat-acme]',
+      'extends = "workspace"',
+      'read_write = ["/wide"]',
+      '[profiles.other]',
+      'extends = "workspace"',
+      '',
+    ].join('\n'));
+    expect(writeGrokSandbox(sandbox)).toEqual({ ok: true });
+    const text = readFileSync(sandbox.file, 'utf8');
+    expect(text).toContain('[profiles.team-seat-acme]\nread_write = ["/quoted"]');
+    expect(text).not.toContain('read_write = ["/wide"]');
+    expect(text).toContain('[profiles.team-seat-acme-grok-seat]');
+    expect(text).toContain('[profiles.other]');
+    const parsed = Bun.TOML.parse(text) as { profiles: Record<string, unknown>; notes: string };
+    expect(parsed.profiles['team-seat-acme']).toBeUndefined();
+    expect(parsed.notes).toContain('[profiles.team-seat-acme]');
   });
 
   test('a launch line naming its own --sandbox keeps it, and the plan carries no write', () => {

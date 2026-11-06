@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { selfRunner } from '../mcp/register.ts';
@@ -16,6 +17,17 @@ import type { TeamFile } from '../file/types.ts';
 /** The pace the idle wait polls a pane at — and the one a pause re-reads an opened pane at, and
  *  reads a trust prompt's terminal with, when `team answer` may be racing it. */
 export const IDLE_POLL_MS = 2000;
+
+function samePlace(a: string, b: string): boolean {
+  const place = (folder: string): string => {
+    try {
+      return realpathSync(folder);
+    } catch {
+      return resolve(folder);
+    }
+  };
+  return place(a) === place(b);
+}
 
 /** How long a replacement waits for a signalled watch to be confirmed gone. A watch stopped by a
  *  signal ends its wait and returns well inside this; a process still alive at the deadline is
@@ -1238,6 +1250,18 @@ export function upPlan(input: UpInput): Step[] {
     const plannedSandbox = grokSandbox !== undefined && !lineNamesSandbox
       ? grokSandbox
       : undefined;
+    // A start folder that is the shared project root would grant that whole checkout, including
+    // `.agents` and the checkout's git directory. The launch refuses it. The repair is a worktree
+    // or a clone of the seat's own, not a grant of the root.
+    if (grokSandbox !== undefined && wouldLaunch && samePlace(cwd, input.root)) {
+      const why = 'its start folder is the shared project root, which would grant the whole checkout; give the seat its own worktree or clone';
+      steps.push({
+        kind: 'skip',
+        text: `${seat.name}: would refuse: ${why}`,
+        do: { do: 'refuse', seat: seat.name, why },
+      });
+      continue;
+    }
     // The line is built before the steps that create or close a workspace: a refusal must come
     // before any of them, and the warnings it produces are said on the launch step where they
     // have always been said.
