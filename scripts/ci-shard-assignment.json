@@ -624,6 +624,7 @@
     "test/launch/toml.test.ts": 5,
     "test/launch/unattended-option-forms.test.ts": 5,
     "test/launched-team-writers-independent.test.ts": 4,
+    "test/launcher-approval-cover.test.ts": 1,
     "test/launchers-resolve.test.ts": 3,
     "test/launchers-settings.test.ts": 0,
     "test/launchers-slices-independent.test.ts": 1,

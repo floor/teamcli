@@ -73,6 +73,7 @@ import { endpointCleanupHost } from '../launch/endpoint-cleanup.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { executePlan, launchKind, restoreSummaryOf, type Report, type RestoreSweepSummary } from '../launch/execute.ts';
+import { launcherCoverRefusal } from '../launch/launcher-cover.ts';
 import { loadTeamLaunchers, rawAgentSession } from '../launch/resolve-flag.ts';
 import { channelLobbyFolder } from '../mcp/launch-config.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
@@ -2807,6 +2808,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // Built where it is needed: on a dry run, just below, before anything is made; on a real run,
   // after the lock, so the lobby made there under it is already every lobby seat's `cwd`.
   if (resolveLaunch) {
+    const covered = launcherCoverRefusal(
+      root,
+      standing.kind === 'verified' ? standing.record.approval.fingerprints.sections : undefined,
+    );
+    if (covered !== null) refusals.push({ id: 'up.launcher-approval', message: covered });
     for (const seat of seats) {
       const raw = rawAgentSession(dir, session, seat.name);
       if (raw !== undefined) seat.resolveSession = raw;

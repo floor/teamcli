@@ -75,6 +75,7 @@ import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/id
 import { launchRefusal, readEntityModelRule } from '../launch/model-guard.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { formatPlan, registryLaunches, upPlan, type DownSeat, type UpSeat } from '../launch/plan.ts';
+import { launcherCoverRefusal } from '../launch/launcher-cover.ts';
 import { loadTeamLaunchers } from '../launch/resolve-flag.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
@@ -990,6 +991,13 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   const liveRules = standing.kind !== 'verified' || owner;
   const planSeat = buildUpSeat(standing, team, next, start, root, home, liveRules, input.rulesOrigin ?? 'file');
   if (input.resolveLaunch === true && input.resume !== undefined) planSeat.resolveSession = input.resume;
+  if (input.resolveLaunch === true) {
+    const covered = launcherCoverRefusal(
+      root,
+      standing.kind === 'verified' ? standing.record.approval.fingerprints.sections : undefined,
+    );
+    if (covered !== null) return { kind: 'not-ready', message: covered };
+  }
   const launcherDiscovery = input.resolveLaunch === true ? loadTeamLaunchers(root) : undefined;
   if (input.registryLaunch) planSeat.launch = input.registryLaunch;
   const declaredLaunch = planSeat.launch;

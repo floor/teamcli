@@ -15,6 +15,7 @@ import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { grantGate, logGranted } from '../grant.ts';
+import { readLauncherCover, withLauncherCover } from '../launch/launcher-cover.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { OVERRIDE_CHANGED, overrideFile } from '../profiles/overrides.ts';
@@ -357,7 +358,9 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
   // The out-of-band owner-authorization fingerprint: the agent shows it with `--show`, the owner
   // reads it back ("yes <fingerprint>"), and the agent reruns with `TEAM_OWNER_APPROVAL=<it>`. It
   // is recomputed from the live file, so a post-yes edit prints — and demands — a different hex.
-  const approveFp = approveFingerprint(team);
+  const launcherCover = readLauncherCover(root);
+  const launcherDigest = launcherCover.ok && launcherCover.present ? launcherCover.digest : undefined;
+  const approveFp = approveFingerprint(team, launcherDigest);
   io.stdout(`Owner-authorization fingerprint: ${approveFp}\n`);
 
   // exit: approve.show
@@ -378,7 +381,7 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
       store,
       // `pane` is the approved delegate's on a delegated approval: the record names it as the
       // actor beside the owner's signature, and the signed payload covers it.
-      { approval: { ...approvalOf(team, root, now, resolved.checks, pane), overrides: live.text }, file: text },
+      { approval: { ...withLauncherCover(approvalOf(team, root, now, resolved.checks, pane), root), overrides: live.text }, file: text },
       team.seats,
       sources.home,
       now,
