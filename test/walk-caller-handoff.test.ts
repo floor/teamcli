@@ -188,7 +188,7 @@ test('config set: the handoff lead is admitted through the dev-mode lift, with i
   expect(ran.code).toBe(0);
   expect(ran.err).toBe(`warning: ${CONFIG_LINE}; dev mode continues\n`);
   expect(teamFile(root)).toContain('inbound: accept');
-  expect(logOf(root)).toContain(`config [lead] warning: ${CONFIG_LINE}; dev mode continues; admitted as orchestrator\n`);
+  expect(logOf(root)).toContain(`config [lead] warning: ${CONFIG_LINE}; dev mode continues; admitted as lead\n`);
 });
 
 test('config set: a root pid that is not an ancestor is refused and writes nothing', async () => {
