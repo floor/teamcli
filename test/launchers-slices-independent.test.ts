@@ -142,10 +142,10 @@ test('an empty session is refused as a resume and as an argument word', () => {
     [],
     { sessionArg: '' },
   );
-  expect({ resume: out.resume, emptyArg: out.argv.includes('') }).toEqual({
-    resume: { kind: 'preset_fixed', session: 'example-session' },
-    emptyArg: false,
-  });
+  expect(out.ok).toBe(false);
+  expect(out.resume).toEqual({ kind: 'none' });
+  expect(out.argv).not.toContain('');
+  expect(codes(out.diagnostics)).toContain('E_PLACEHOLDER_CONTEXT');
 });
 
 test('argument order is the executable, the terminal fixed words, the base fixed words, then the caller', () => {
