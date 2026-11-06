@@ -14,10 +14,11 @@
 // client reads it. A receipt promotes it once (`delivered (read)`, the marker cleared) with nothing
 // typed; a message still unread when `INBOX_FALLBACK_MS` ends is handed to this same retry, which
 // types its trigger and records why the fallback happened. A message the drop leg left is not a
-// held send either: nothing is ever typed for it, and a receipt from the seat's own watcher — the
-// turn-start hook's read (`team drops --read`), or its inbox client's `inbox_read` — promotes it
-// the same way. A
-// drop no watcher read is given up on with the file's path, never typed and never called lost.
+// held send: the retry find does not type it. When the seat returns to idle, one queued drop is
+// offered through the guarded typed wake, once for that idle stretch, and a later pass that still
+// sees idle offers nothing. A receipt from the seat's own watcher — the turn-start hook's read
+// (`team drops --read`), or its inbox client's `inbox_read` — promotes it the same way. A drop no
+// watcher read is given up on with the file's path once the age bound ends, and is never called lost.
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ChildOptions } from '../child.ts';
@@ -28,6 +29,7 @@ import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { isBareShellPane } from '../send/daemon.ts';
 import { claimBindingIn, currentClaimIn, INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, inboxLive, receiptHeld } from '../mcp/inbox.ts';
 import { briefBindingOf, GENERAL_BRIEF_FROM } from '../launch/general-brief.ts';
+import { profileFor } from '../profiles/profile.ts';
 import {
   channelLaunchEnabled,
   CHANNEL_CONFIRM_MS,
@@ -37,7 +39,9 @@ import {
   recordChannelHeld,
 } from '../mcp/channel.ts';
 import {
+  clearDropOffered,
   clearPending,
+  markDropOffered,
   markRedelivered,
   PENDING_MAX_AGE_MS,
   PENDING_MAX_TRIES,
@@ -658,6 +662,62 @@ export function promoteInboxDrops(scene: RetryScene): ReadonlySet<string> {
   return read;
 }
 
+/** The line the guarded wake offers, or null when this home cannot name one. A missing line does
+ *  not retire the marker: the age bound still does, and this stretch's offer mark already stops
+ *  a loop. */
+function queuedTriggerLine(scene: RetryScene, seat: Seat, dropDir: string, drop: PendingDrop): string | null {
+  const home = scene.home;
+  if (home === undefined || !existsSync(join(dropDir, drop.id))) return null;
+  const payload = verifiedPayloadOf(dropDir, drop.id, home);
+  if (payload === null) return null;
+  const sender = wakeTrigger(payload, home, { root: scene.root, session: scene.session, team: scene.team }, scene.now);
+  if (sender === null) return null;
+  return readTriggerLine(drop.to, scene.session, sender, seat.cli);
+}
+
+/** A profile the watch may wake the same way a send does: the seat's own `watch_wake` word, or
+ *  the profile's, and only where that profile declares the typed wake. */
+function queuedWakeOn(seat: Seat): boolean {
+  const profile = profileFor(seat.cli);
+  if (profile?.typedWake == null) return false;
+  return (seat.watchWake ?? profile.watchWake) === true;
+}
+
+/**
+ * Offers the oldest queued drop through the guarded typed wake, once for this idle stretch.
+ * The offer mark is written before the wake, and the offer spends one try. A later pass that
+ * still sees idle finds the mark and offers nothing. Leaving idle clears the mark, so the next
+ * return can offer once, until the try limit is spent. The wake itself reads the box twice and
+ * types nothing into a pane that is not the empty idle prompt.
+ */
+async function reofferQueuedDrop(
+  scene: RetryScene,
+  seat: Seat,
+  pane: string,
+  dropDir: string,
+  queued: readonly PendingDrop[],
+): Promise<void> {
+  if (queued.length === 0 || queued.some((one) => one.offered === true)) return;
+  const wake = scene.sources.typedWake;
+  if (wake === undefined || !queuedWakeOn(seat)) return;
+  const drop = queued[0];
+  if (drop === undefined || !existsSync(join(dropDir, drop.id))) return;
+  if (drop.tries >= PENDING_MAX_TRIES) {
+    giveUpUnread(scene, dropDir, drop, `the seat did not read it in ${String(PENDING_MAX_TRIES)} offers`);
+    return;
+  }
+  const lock = acquireSeatLock(scene.dir, scene.session, seat.name);
+  if (!('release' in lock)) return;
+  try {
+    markDropOffered(dropDir, drop);
+    const line = queuedTriggerLine(scene, seat, dropDir, drop);
+    if (line === null) return;
+    await wake(pane, line, seat.cli, scene.session);
+  } finally {
+    lock.release();
+  }
+}
+
 /**
  * Retries the held drops of every seat this team has a live pane for: the oldest drop of each
  * seat, at most one per seat per pass, so a seat is never sent two messages at once.
@@ -759,19 +819,31 @@ export async function retryHeldDrops(scene: RetryScene): Promise<void> {
     const agents = scene.live.agents.filter((agent) => agent.name === seat.name);
     const pane = agents.length === 1 ? agents[0]?.pane : undefined;
     if (pane === undefined || pane === scene.ownPane) continue;
+    // Leaving idle clears the stretch mark. The next return to idle can offer once; a pass that
+    // still sees the seat working offers nothing.
+    const status = scene.sources.status(pane, scene.session);
+    const queued = live.filter((one) => one.leg === 'drop');
+    if (status === 'working' || status === 'blocked' || status === 'unknown') {
+      for (const one of queued) clearDropOffered(dropDir, one);
+    }
     // A typed marker is the retry's own business and always goes first. A channel marker is
     // redelivered once, after its confirmation window and only while no redelivery is recorded.
     // An inbox marker is typed only once its fallback window has ended — before that the seat's
     // own client still has the message, and typing the trigger would race a read that is about to
-    // happen. A drop marker is in none of the finds: nothing is ever typed for it.
+    // happen. A drop marker is not in that find. It is offered below, once, when the seat is idle
+    // and no other retry took this pass.
     const channelDue = live.find(
       (one) => one.leg === 'channel' && one.redelivered === undefined && now - Date.parse(one.ts) > CHANNEL_CONFIRM_MS,
     );
     const drop = live.find((one) => one.leg === undefined)
       ?? channelDue
       ?? live.find((one) => one.leg === 'mcp-inbox' && now - Date.parse(one.ts) > INBOX_FALLBACK_MS);
-    if (drop === undefined) continue;
-    if (drop.leg === 'channel') await redeliverChannel(scene, seat, pane, dropDir, drop);
-    else await retryOne(scene, seat, pane, dropDir, drop);
+    if (drop !== undefined) {
+      if (drop.leg === 'channel') await redeliverChannel(scene, seat, pane, dropDir, drop);
+      else await retryOne(scene, seat, pane, dropDir, drop);
+      continue;
+    }
+    if (status !== 'idle' && status !== 'done') continue;
+    await reofferQueuedDrop(scene, seat, pane, dropDir, queued);
   }
 }

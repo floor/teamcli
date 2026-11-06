@@ -4486,8 +4486,9 @@ async function deliverDropped(
   }
   note(walkAttempt('drop', 'held', false, host.now(), startedAt, { reason: 'the record is stored; no seat was woken' }));
   if (!human) {
-    // The marker is the watcher's receipt record, as on every drop send: it is never typed,
-    // and its receipt promotes the send once the seat reads the file.
+    // The marker is the watcher's receipt record, as on every drop send: this send types
+    // nothing. The watch may offer it once, through the guarded wake, when the seat returns
+    // to idle, and a receipt still promotes the send once the seat reads the file.
     markPending(dropDir, {
       ts: host.now().toISOString(),
       from,
