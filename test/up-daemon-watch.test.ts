@@ -94,7 +94,7 @@ function world(): World {
   let clock = NOW.getTime();
   let n = 0;
   let foreground = 1000;
-  const panes = new Map<string, { text: string; agent: boolean; workspace: string }>();
+  const panes = new Map<string, { text: string; agent: boolean; workspace: string; name: string | null }>();
   const spaces = new Map<string, string>();
   state.launch = {
     sessionState: () => state.session,
@@ -106,7 +106,7 @@ function world(): World {
     createWorkspace(_session, _cwd, label) {
       n += 1;
       const pane = `fixture${String(n)}:p1`;
-      panes.set(pane, { text: CLAUDE_IDLE, agent: false, workspace: `fixture${String(n)}` });
+      panes.set(pane, { text: CLAUDE_IDLE, agent: false, workspace: `fixture${String(n)}`, name: null });
       spaces.set(`fixture${String(n)}`, label);
       state.creates.push(label);
       return { pane, workspace: `fixture${String(n)}` };
@@ -119,7 +119,11 @@ function world(): World {
       state.processes.set(pane, { shell: 900, foreground: [900, foreground] });
       return true;
     },
-    renameAgent: () => true,
+    renameAgent(_session, pane, name) {
+      const known = panes.get(pane);
+      if (known) known.name = name;
+      return true;
+    },
     closeWorkspace(_session, workspace) {
       state.closes.push(workspace);
       spaces.delete(workspace);
@@ -127,7 +131,7 @@ function world(): World {
       return true;
     },
     agentPanes: () => [...panes].filter(([, pane]) => pane.agent).map(([id]) => id),
-    agents: () => [],
+    agents: () => [...panes].flatMap(([id, pane]) => pane.name === null ? [] : [agent(pane.name, id)]),
     workspacePanes: (_session, workspace) => state.unreadable.has(workspace)
       ? null
       : [...panes.keys()].filter((pane) => pane.startsWith(`${workspace}:`)),
