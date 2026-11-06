@@ -129,6 +129,12 @@ export type Seat = {
   version: string;
   display: string;
   launch: string;
+  /**
+   * The declarative launcher this seat names, when the file writes one. Omitted when the
+   * file omits it, so a file that names none keeps the digest it had. The launch reads it
+   * only when asked to resolve a launcher; otherwise the launch line is the command.
+   */
+  launcher?: string;
   cwd: string;
   /**
    * The file's label: written, or `<model> <version>` in lowercase. Hashed with the seat.

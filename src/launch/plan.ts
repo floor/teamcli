@@ -7,7 +7,9 @@ import { codexDaemonForSeat, type CodexDaemonValue } from '../policy/codex-daemo
 import { sidebarRowsWord } from '../policy/types.ts';
 import type { SidebarIndicator } from '../settings/sidebar-policy.ts';
 import { profileFor } from '../profiles/index.ts';
+import type { Discovery, ResolveContext } from '../launchers/resolve.ts';
 import { cliWordList, launchCommandOrRefusal, pinnedRecordLine, resumeCarry, shellQuote } from '../profiles/profile.ts';
+import { resolvedCommand } from './resolve-flag.ts';
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
@@ -98,7 +100,12 @@ export type Op =
        * only when this plan named the profile on the line, so a failure can take the same
        * `--sandbox` off again instead of launching a line Grok would refuse.
        */
-      grokSandbox?: GrokSandbox }
+      grokSandbox?: GrokSandbox;
+      /**
+       * The command is the declarative launcher's argv and is run as given. The launch does
+       * not mint a session, attach an endpoint, or rewrite a sandbox flag onto it.
+       */
+      resolved?: true }
   /** `why` is the reason the record and the log carry; `detail`, when the reason has a fuller
    *  sentence with a folder in it, is the stderr line said under the record. */
   | { do: 'refuse'; seat: string; why: string; detail?: string }
@@ -347,6 +354,11 @@ export interface UpSeat {
   name: string;
   cli: string;
   launch: string;
+  /** The declarative launcher name, when the seat names one. */
+  launcher?: string;
+  /** The session the resolver is given, including a blank one it refuses. Absent when this
+   *  run has no session to give. Ignored unless the launch is asked to resolve a launcher. */
+  resolveSession?: string;
   /** Relative to the root. */
   cwd: string;
   label: string;
@@ -684,6 +696,11 @@ export interface UpInput {
     /** The whole step is already in force: the sentence says so, and nothing runs. */
     skip?: string;
   };
+  /** When true, a seat's pane command is the declarative launcher's argv. Absent keeps the
+   *  launch line the file already runs. */
+  resolveLaunch?: boolean;
+  /** Launcher homes for this run. Read only when `resolveLaunch` is set. */
+  launcherDiscovery?: Discovery;
 }
 
 /** The variables a herdr server starts with: nothing else reaches a seat's pane. */
@@ -1287,7 +1304,39 @@ export function upPlan(input: UpInput): Step[] {
     // before any of them, and the warnings it produces are said on the launch step where they
     // have always been said.
     const launchWarnings: string[] = [];
-    const launcher = launchCommandOrRefusal(profile, recordedLine, seat.rules, input.cliHooks?.[seat.name], {
+    let command: string;
+    let fromResolver = false;
+    let baseLine = recordedLine;
+    if (input.resolveLaunch === true) {
+      const ctx: ResolveContext = {
+        teamRoot: input.root,
+        teamHome: input.home ?? input.root,
+        cwd,
+        parentEnv: {},
+        existingPaths: [],
+        seatNames: input.seats.map((one) => one.name),
+        ...(seat.resolveSession === undefined ? {} : { sessionArg: seat.resolveSession }),
+      };
+      const decided = resolvedCommand({
+        launcher: seat.launcher,
+        discovery: input.launcherDiscovery ?? { launchers: new Map(), diagnostics: [] },
+        ctx,
+      });
+      if ('refusal' in decided) {
+        steps.push({
+          kind: 'skip',
+          text: `${seat.name}: would refuse: ${decided.refusal}`,
+          do: { do: 'refuse', seat: seat.name, why: decided.refusal },
+        });
+        continue;
+      }
+      // The resolver argv is the base line. The profile still places its rules, hooks,
+      // inbox words, channel flag and session words on that line, and refuses when they
+      // cannot be placed.
+      baseLine = decided.command;
+      fromResolver = true;
+    }
+    const launcher = launchCommandOrRefusal(profile, baseLine, seat.rules, input.cliHooks?.[seat.name], {
       seat: seat.name,
       session,
       ...selfRunner(),
@@ -1308,7 +1357,7 @@ export function upPlan(input: UpInput): Step[] {
       });
       continue;
     }
-    const command = launcher.command;
+    command = launcher.command;
     let notice: string | undefined;
     if (seat.budget?.kind === 'unknown') notice = seat.budget.text;
     else if (seat.budget?.kind === 'refuse') notice = seat.budget.why;
@@ -1404,12 +1453,11 @@ export function upPlan(input: UpInput): Step[] {
     const launchWords = cliWordList(profile.cli, command);
     const rulesCarried = rulesLine !== undefined && profile.rulesPrompt !== null
       && launchWords !== null && launchWords.at(-1) === rulesLine;
-    // What the seat's record keeps as its launch line when this run records it: the same base
-    // recipe the record paths store today, with the profile's pins placed where the launch puts
-    // them — before the CLI's first delimiter, inside a proven script that runs the CLI. Never
-    // the expanded command — a dry run prints that and a pane runs it, and the record's line is
-    // the recipe, not the expansion. A profile that pins nothing records its base line unchanged.
-    const recordLine = pinnedRecordLine(profile.cli, seat.launch, profile.features);
+    // What the seat's record keeps as its launch line when this run records it. A resolved
+    // launch records the line the plan built, so check and restart compare that command.
+    // Every other launch keeps the base recipe, with the profile's pins placed where the
+    // launch puts them, never the expanded command.
+    const recordLine = fromResolver ? command : pinnedRecordLine(profile.cli, seat.launch, profile.features);
     // A managed Codex seat's endpoint, decided from the same signed policy that shaped the line:
     // the launch must be the Codex binary itself (a wrapper's own endpoint is not ours to bind),
     // and a `--remote` or `--no-daemon` the file already names is a collision, refused rather
@@ -1424,6 +1472,24 @@ export function upPlan(input: UpInput): Step[] {
       launch: seat.launch,
       command,
     });
+    if (fromResolver && profile.cli === 'grok') {
+      const why = 'resolve-launch refuses a Grok seat: no sandbox profile on this path';
+      steps.push({
+        kind: 'skip',
+        text: `${seat.name}: would refuse: ${why}`,
+        do: { do: 'refuse', seat: seat.name, why },
+      });
+      continue;
+    }
+    if (fromResolver && managedCodex) {
+      const why = 'resolve-launch refuses a seat that needs the managed Codex endpoint';
+      steps.push({
+        kind: 'skip',
+        text: `${seat.name}: would refuse: ${why}`,
+        do: { do: 'refuse', seat: seat.name, why },
+      });
+      continue;
+    }
     // The `waiting` guard is not this condition's alone: §5's seat is never launched again,
     // whatever its live-ness reads, so the wait above is the whole of its plan.
     if (wouldLaunch) {
@@ -1437,7 +1503,7 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
         note: launchNote,
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: reuse?.pane ?? seat.pane, ...(reuse === undefined ? {} : { reuse: reuse.launched, workspace: reuse.workspace }), ...(reuse === undefined && seat.workspace !== undefined ? { workspace: seat.workspace } : {}), cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, recordLine, ...(channel === undefined ? {} : { channel }), ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}), ...(plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }) },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: reuse?.pane ?? seat.pane, ...(reuse === undefined ? {} : { reuse: reuse.launched, workspace: reuse.workspace }), ...(reuse === undefined && seat.workspace !== undefined ? { workspace: seat.workspace } : {}), cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, recordLine, ...(channel === undefined ? {} : { channel }), ...(fromResolver ? { resolved: true as const } : {}), ...(fromResolver || !(managedCodex && input.stateDir !== undefined) ? {} : { codexEndpoint: { dir: input.stateDir } }), ...(fromResolver || plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }) },
       });
     }
     const rules = profile.rulesMode;

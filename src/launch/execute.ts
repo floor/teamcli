@@ -885,9 +885,9 @@ export async function executePlan(
   // idle wait that follows reads the line it typed for submission, gives a line still sitting
   // at the prompt one more guarded Enter, and takes its end from the foreground.
   const reusedPanes = new Set<string>();
-  // The base recipe each seat's record keeps when this run records it: the plan's pinned line for
-  // a launched seat, never the expanded command above. A seat this run did not launch has no
-  // entry, so every later record of it keeps what its own earlier launch wrote.
+  // The line each seat's record keeps when this run records it. A resolved launch stores the
+  // plan's command. Every other launch stores the pinned recipe, never the expanded command.
+  // A seat this run did not launch has no entry, so a later record keeps what an earlier launch wrote.
   const recordLines = new Map<string, string>();
   const recordSeat = (seat: string, patch: Parameters<Host['record']>[1]): void => {
     const line = recordLines.get(seat);
@@ -1507,6 +1507,14 @@ export async function executePlan(
         // leaves the seat out. It does not append --no-daemon and continue. A line the plan
         // did not mark stays unmanaged and still launches on the line it had.
         let command = op.command;
+        let startedEndpoint = false;
+        let attachedEndpoint = false;
+        let freshFrom: string | undefined;
+        let launch = { command, sessionId: undefined as string | undefined, notice: undefined as string | undefined };
+        // The sandbox file and the managed endpoint belong to the file's own launch line.
+        // A resolved argv already carries the profile's words; those two stays are the next
+        // commit. Resume and the session mint still run: a resolved line is a seat launch.
+        if (op.resolved !== true) {
         // A Grok seat's sandbox profile is written before its command runs, the same place the
         // plan decided to name it. Grok refuses to start for a profile it cannot find, so a file
         // that cannot be written takes the plan's own `--sandbox` off the line and the seat
@@ -1518,8 +1526,6 @@ export async function executePlan(
             hold(op.seat, `${op.seat}: its sandbox profile was not written: ${written.why}; launched without it\n`);
           }
         }
-        let startedEndpoint = false;
-        let attachedEndpoint = false;
         if (op.codexEndpoint !== undefined) {
           const read = host.managedCodexEndpoint === undefined
             ? { kind: 'unmanaged' as const, why: 'this launch starts no managed Codex endpoint' }
@@ -1538,10 +1544,10 @@ export async function executePlan(
         if (op.cli === 'codex' && !attachedEndpoint && !codexCommandHasFlag(command, '--no-daemon')) {
           command = appendOnLaunchLine(command, '--no-daemon', 'codex').line;
         }
+        }
         // A resume of a conversation its CLI never wrote stops at the CLI's own error and leaves
         // the pane at its shell: the seat is launched fresh instead, and says so.
         const resumeTarget = namedResumeTarget(op.cli ?? '', command);
-        let freshFrom: string | undefined;
         if (resumeTarget && op.cwd !== undefined && host.conversationExists?.(op.cli ?? '', op.cwd, resumeTarget) === false) {
           const fresh = withoutResume(op.cli ?? '', command);
           if (fresh !== null) {
@@ -1552,7 +1558,8 @@ export async function executePlan(
         // The session id is minted here, not in the plan: the plan's command stays the
         // deterministic line a dry run prints, and each launch gets its own id. An id that could
         // not be placed where the CLI reads it is not recorded, and the run says so.
-        const launch = withLaunchSession(op.cli ?? '', command);
+        const minted = withLaunchSession(op.cli ?? '', command);
+        launch = { command: minted.command, sessionId: minted.sessionId, notice: minted.notice };
         if (launch.notice !== undefined) {
           hold(op.seat, `${op.seat}: ${launch.notice}\n`);
           host.log(op.seat, launch.notice);

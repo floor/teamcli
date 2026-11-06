@@ -75,6 +75,8 @@ import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/id
 import { launchRefusal, readEntityModelRule } from '../launch/model-guard.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { formatPlan, registryLaunches, upPlan, type DownSeat, type UpSeat } from '../launch/plan.ts';
+import { launcherCoverRefusal } from '../launch/launcher-cover.ts';
+import { loadTeamLaunchers } from '../launch/resolve-flag.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
@@ -108,10 +110,12 @@ import { realSources as downSources, stateOfPane } from './down.ts';
 import { stopRunning, type RemoveSources } from './remove.ts';
 import type { Launch } from './up.ts';
 
-export const USAGE = `Usage: team restart <seat> [--abandon] [--fresh] [--resume <cli-session-id>] [--dry-run] [--session <name>] [--file <path>] [--json]
+export const USAGE = `Usage: team restart <seat> [--abandon] [--fresh] [--resume <cli-session-id>] [--resolve-launch] [--dry-run] [--session <name>] [--file <path>] [--json]
        team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
 
 The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying restart for: it restarts a seat of that one team, as signed, and nothing else. It never prompts, never abandons a pane (--abandon, --fresh, --resume, --file and --session are the owner's and take no --client), and is never the owner.
+
+--resolve-launch takes the named launcher argv as the base line and still places the profile's launch words on it. It is off unless named. A resolution that cannot be placed refuses that seat and starts it nowhere.
 
 Exits 0 when the seat is restarted or the dry-run plan is printed, 1 when restart is refused or fails, 2 when the invocation or team file can't be read.
 `;
@@ -277,7 +281,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'resume'], ['abandon', 'fresh', 'dry-run', 'json']);
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'resume'], ['abandon', 'fresh', 'dry-run', 'json', 'resolve-launch']);
   const resumeProblem = args.error === undefined && args.values.resume !== undefined
     ? args.values.resume.trim() === ''
       ? '--resume requires a session id'
@@ -707,6 +711,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       ? { declare: () => declareRevived(path, name, home), restore: () => declareStopped(path, name, home) }
       : {}),
     ...(boundSession.kind === 'bound' && boundSession.recorded.launch ? { registryLaunch: boundSession.recorded.launch } : {}),
+    ...(args.flags.has('resolve-launch') ? { resolveLaunch: true } : {}),
     now: sources.now,
     sources,
   });
@@ -854,6 +859,8 @@ export type PerformInput = {
   restore?: () => { ok: true } | { ok: false; why: string };
   now(): Date;
   sources: RestartSources;
+  /** The launch argv comes from the seat's declarative launcher. Absent keeps today's line. */
+  resolveLaunch?: boolean;
 };
 
 /** What the launch's own screen says the new conversation is, read back after ready. */
@@ -983,6 +990,15 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
 
   const liveRules = standing.kind !== 'verified' || owner;
   const planSeat = buildUpSeat(standing, team, next, start, root, home, liveRules, input.rulesOrigin ?? 'file');
+  if (input.resolveLaunch === true && input.resume !== undefined) planSeat.resolveSession = input.resume;
+  if (input.resolveLaunch === true) {
+    const covered = launcherCoverRefusal(
+      root,
+      standing.kind === 'verified' ? standing.record.approval.fingerprints.sections : undefined,
+    );
+    if (covered !== null) return { kind: 'not-ready', message: covered };
+  }
+  const launcherDiscovery = input.resolveLaunch === true ? loadTeamLaunchers(root) : undefined;
   if (input.registryLaunch) planSeat.launch = input.registryLaunch;
   const declaredLaunch = planSeat.launch;
   // The recorded conversation, resumed on the new declaration. The profile decides whether the
@@ -1050,6 +1066,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       // The home and the team let the plan read the seat's codex-daemon policy, as `team up` does.
       home,
       team,
+      ...(input.resolveLaunch === true ? { resolveLaunch: true as const, launcherDiscovery } : {}),
     });
     // The stop comes before the launch the plan prints; a seat that is not running is a skip.
     const stopPlan: PlanStep[] = inspected.agent
@@ -1398,6 +1415,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       home,
       team,
       ...(sources.upLaunch.codexEndpoint === undefined ? {} : { stateDir: dir }),
+      ...(input.resolveLaunch === true ? { resolveLaunch: true as const, launcherDiscovery } : {}),
     });
     // The old pane is closed: whatever its last turn wrote says nothing about the seat this
     // plan starts.
@@ -1843,6 +1861,7 @@ function buildUpSeat(
     name: seat.name,
     cli: seat.cli,
     launch: seat.launch,
+    ...(seat.launcher !== undefined ? { launcher: seat.launcher } : {}),
     cwd: start.cwd,
     label: workspaceLabel(seat),
     displayAgent: displayAgent(seat),
