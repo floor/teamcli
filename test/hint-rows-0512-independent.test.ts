@@ -118,6 +118,8 @@ describe('exact /tasks hint rows read as an empty box and accept a typed wake in
         typed: true,
         tries: 1,
         reason: 'the working screen showed after 1 Enter',
+        submittedAt: expect.any(Number),
+        workingAt: expect.any(Number),
       });
       expect(pane.typed).toEqual([WAKE_LINE]);
       expect(pane.enters).toBe(1);
@@ -135,6 +137,8 @@ describe('exact /tasks hint rows read as an empty box and accept a typed wake in
       typed: true,
       tries: 1,
       reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
     });
     expect(rotating.typed).toEqual([WAKE_LINE]);
     expect(rotating.enters).toBe(1);
@@ -162,6 +166,8 @@ describe('exact /tasks hint rows read as an empty box and accept a typed wake in
           typed: true,
           tries: 1,
           reason: 'the working screen showed after 1 Enter',
+          submittedAt: expect.any(Number),
+          workingAt: expect.any(Number),
         });
         expect(pane.typed).toEqual([WAKE_LINE]);
         expect(pane.enters).toBe(1);
@@ -180,6 +186,8 @@ describe('exact /tasks hint rows read as an empty box and accept a typed wake in
       typed: true,
       tries: 1,
       reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
     });
     expect(rotating.typed).toEqual([WAKE_LINE]);
     expect(rotating.enters).toBe(1);

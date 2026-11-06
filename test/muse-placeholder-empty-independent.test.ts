@@ -238,6 +238,8 @@ describe('muse faint placeholder vs non-faint draft (independent verification)',
       typed: true,
       tries: 1,
       reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
     });
     expect(wake.typed).toEqual([TRIGGER_LINE]);
     expect(wake.enters).toBe(1);
@@ -259,6 +261,8 @@ describe('muse faint placeholder vs non-faint draft (independent verification)',
       typed: true,
       tries: 1,
       reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
     });
     expect(wakeSlash.typed).toEqual([TRIGGER_LINE]);
     expect(wakeSlash.enters).toBe(1);
@@ -329,6 +333,8 @@ describe('muse faint placeholder vs non-faint draft (independent verification)',
       typed: true,
       tries: 1,
       reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
     });
     expect(host80.typed).toEqual([exact80]);
     expect(host80.enters).toBe(1);
@@ -378,12 +384,14 @@ describe('muse faint placeholder vs non-faint draft (independent verification)',
       typed: true,
       tries: 1,
       reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
     });
     expect(drawingHost.typed).toEqual([TRIGGER_LINE]);
     expect(drawingHost.enters).toBe(1);
 
-    // 3. Unsettled line: if the screen keeps changing on every read even while holding TRIGGER_LINE,
-    // no Enter is ever pressed (`the drawn line did not settle; no Enter was pressed`).
+    // 3. Frame noise while the box holds the line is not an unsettled row: two looks that hold
+    // the line press Enter. With no working screen the wake stops at the enter cap.
     let unsettledCount = 0;
     const unsettledHost = makeWakeHost((read) => {
       if (read < 2) return IDLE;
@@ -394,9 +402,9 @@ describe('muse faint placeholder vs non-faint draft (independent verification)',
     expect(outUnsettled).toEqual({
       delivered: false,
       typed: true,
-      tries: 0,
-      reason: 'the drawn line did not settle; no Enter was pressed',
+      tries: 3,
+      reason: 'the line stayed in the box through 3 Enters and no working screen showed',
     });
-    expect(unsettledHost.enters).toBe(0);
+    expect(unsettledHost.enters).toBe(3);
   });
 });

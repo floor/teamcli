@@ -85,6 +85,8 @@ describe('independent verification of exact /tasks hint rows in Antigravity and 
         typed: true,
         tries: 1,
         reason: 'the working screen showed after 1 Enter',
+        submittedAt: expect.any(Number),
+        workingAt: expect.any(Number),
       });
       expect(agyWake.typed).toEqual([WAKE_LINE]);
       expect(agyWake.enters).toBe(1);
@@ -104,6 +106,8 @@ describe('independent verification of exact /tasks hint rows in Antigravity and 
           typed: true,
           tries: 1,
           reason: 'the working screen showed after 1 Enter',
+          submittedAt: expect.any(Number),
+          workingAt: expect.any(Number),
         });
         expect(museWake.typed).toEqual([WAKE_LINE]);
         expect(museWake.enters).toBe(1);
@@ -200,6 +204,8 @@ describe('independent verification of exact /tasks hint rows in Antigravity and 
       typed: true,
       tries: 1,
       reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
     });
     expect(loopWake.typed).toEqual([WAKE_LINE]);
 
