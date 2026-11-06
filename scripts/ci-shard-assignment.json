@@ -1050,6 +1050,7 @@
     "test/status-disagreement-plan.test.ts": 0,
     "test/status-effort-drift.test.ts": 0,
     "test/status-live-async.test.ts": 2,
+    "test/status-native-observation.test.ts": 4,
     "test/status-permission-boundaries.test.ts": 0,
     "test/status-plain.test.ts": 3,
     "test/status-probe-plan.test.ts": 0,
