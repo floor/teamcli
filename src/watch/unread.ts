@@ -60,6 +60,7 @@ import { herdrUnreliable, profileFor } from '../profiles/profile.ts';
 import { AGENT_ID_PATTERN, getAgent } from '../registry/agents.ts';
 import { getTeam, teamIdOf } from '../registry/teams.ts';
 import { isBareShellPane } from '../send/daemon.ts';
+import { RUNTIME_RULE as LEAD_REPORT_RULE } from '../send/endpoint-notice.ts';
 import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from '../send/deliver.ts';
 import { appendHistory, readHistory, type HistoryEntry } from '../send/history.ts';
 import { dropMessage, readTriggerLine, socketWakeHint } from '../send/native.ts';
@@ -754,7 +755,6 @@ type ReportTarget = { root: string; session: string; to: string; label: string }
 
 /** The rule line the lead's signed report drop carries, and the mark that keeps that drop from
  *  being reported on again: a report is the pass's own product, not a message to report about. */
-const LEAD_REPORT_RULE = "the team's unread-message report";
 
 /** The lead drop's id for one report: a UUID shaped from the sorted source message ids it lists,
  *  so a repeat pass — even one whose `.reported` markers were lost — finds the standing record
