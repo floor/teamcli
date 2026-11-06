@@ -1,8 +1,8 @@
 // Independent verification of feat/sender-attributed (612a09d9f, based on int/0.5.13 63adaf839).
 //
 // Behaviour covered:
-// 1. messages: the FROM cell carries (attributed) for a record the shared key verified and
-//    (unattributed) for a refused one; the served body carries the mark; JSON rows carry
+// 1. messages: the FROM cell carries (unverified claim) for a record the shared key signed and
+//    (unattributed) for a refused one; the served body carries the sender line; JSON rows carry
 //    sender_attribution and no sender_verified or sender_trust.
 // 2. drops: the table marks every named sender, --follow marks its one line, --read marks the
 //    served body, and JSON carries sender_attribution with its three values ('attributed',
@@ -119,7 +119,7 @@ function canonicalSendBody(fromDisplay = 'orchestrator@acme', rule = RULE, text 
 }
 
 describe('1. team messages — FROM cell, served body mark, and JSON sender_attribution', () => {
-  test('a record verified with the shared key has FROM (attributed), marked text body, and JSON sender_attribution: attributed with no legacy fields', async () => {
+  test('a record signed with the shared key has FROM (unverified claim), the sender line, and JSON sender_attribution: attributed with no legacy fields', async () => {
     const f = makeFixture();
     const id = '10000000-0000-4000-8000-000000000001';
     const body = canonicalSendBody();
@@ -133,7 +133,7 @@ describe('1. team messages — FROM cell, served body mark, and JSON sender_attr
 
     const ioText = testIo(f.root, { kind: 'owner' });
     expect(await runMessages([], ioText, { home: f.home, now: () => NOW })).toBe(0);
-    expect(ioText.out).toContain('orchestrator (attributed)');
+    expect(ioText.out).toContain('orchestrator (unverified claim)');
     expect(ioText.out).not.toContain('(unattributed)');
     expect(ioText.out).toContain('from orchestrator (team lead):');
     expect(ioText.out).toContain(`from orchestrator@acme — admitted by: ${RULE}`);
@@ -152,7 +152,7 @@ describe('1. team messages — FROM cell, served body mark, and JSON sender_attr
     });
     const ioBanner = testIo(f.root, { kind: 'owner' });
     expect(await runMessages([], ioBanner, { home: f.home, now: () => NOW })).toBe(0);
-    expect(ioBanner.out).toContain('owner (attributed)');
+    expect(ioBanner.out).toContain('owner (unverified claim)');
     expect(ioBanner.out).toContain(`from owner (owner):\n\n${plainBody.trimEnd()}`);
 
     rmSync(f.dropDir, { recursive: true, force: true });
@@ -214,10 +214,10 @@ describe('1. team messages — FROM cell, served body mark, and JSON sender_attr
 
     const ioText = testIo(f.root, { kind: 'owner' });
     expect(await runMessages([], ioText, { home: f.home, now: () => NOW })).toBe(0);
-    expect(ioText.out).toContain('owner (attributed)');
+    expect(ioText.out).toContain('owner (unverified claim)');
     expect(ioText.out).toContain(QUOTE);
     expect(ioText.out).not.toContain('tampered body after signature');
-    expect(ioText.out).not.toContain('orchestrator (attributed)');
+    expect(ioText.out).not.toContain('orchestrator (unverified claim)');
     expect(ioText.out).not.toContain('(unattributed)');
 
     const ioJson = testIo(f.root, { kind: 'owner' });
@@ -261,7 +261,7 @@ describe('1. team messages — FROM cell, served body mark, and JSON sender_attr
     }
   });
 
-  test('legacy mailbox (.agents/messages/<seat>/<id>.json) marks verified rows (attributed) and tampered rows (unattributed)', async () => {
+  test('legacy mailbox (.agents/messages/<seat>/<id>.json) marks signed rows (unverified claim) and tampered rows (unattributed)', async () => {
     const f = makeFixture();
     plantMessage(f.home, f.root, 'worker', 'legacy-ok', {
       kind: 'message',
@@ -293,14 +293,14 @@ describe('1. team messages — FROM cell, served body mark, and JSON sender_attr
 
     const ioText = testIo(f.root, { kind: 'owner' });
     expect(await runMessages([], ioText, { home: f.home, now: () => NOW })).toBe(0);
-    expect(ioText.out).toContain('orchestrator (attributed)');
+    expect(ioText.out).toContain('orchestrator (unverified claim)');
     expect(ioText.out).toContain('from orchestrator:\n\nlegacy note');
     expect(ioText.out).not.toContain('forged legacy');
     expect(ioText.out).not.toContain('(unattributed)');
 
     const seatText = testIo(f.root, { kind: 'seat', name: 'worker', pane: PANE_WORKER, session: 'acme' });
     expect(await runMessages([], seatText, { home: f.home, now: () => NOW })).toBe(1);
-    expect(seatText.out).toContain('orchestrator (attributed)');
+    expect(seatText.out).toContain('orchestrator (unverified claim)');
     expect(seatText.out).toContain('owner (unattributed)');
     expect(seatText.out).toContain('from orchestrator:\n\nlegacy note');
     expect(seatText.out).not.toContain('forged legacy');
@@ -343,7 +343,7 @@ describe('1. team messages — FROM cell, served body mark, and JSON sender_attr
 });
 
 describe('2. team drops — table, --follow, --read, and --json with all three sender_attribution values', () => {
-  test('table marks verified record and current launch brief (attributed), raw drop (unattributed), and tampered record unknown; --json emits attributed, launch-brief, and none', async () => {
+  test('table marks a shared-key record (unverified claim), the current launch brief (attributed), a raw drop (unattributed), and a tampered record unknown; --json emits attributed, launch-brief, and none', async () => {
     const f = makeFixture();
     // (1) Current launch brief -> sender_attribution: 'launch-brief', table: 'the launch (attributed)'
     const incarnation = 'inc_000000000042';
@@ -374,7 +374,7 @@ describe('2. team drops — table, --follow, --read, and --json with all three s
       } as never;
     });
 
-    // (2) Verified shared-key record -> sender_attribution: 'attributed', table: 'orchestrator (attributed)'
+    // (2) Shared-key record -> sender_attribution: 'attributed', table: 'orchestrator (unverified claim)'
     const idAttr = '20000000-0000-4000-8000-000000000001';
     plantRecord(f.home, f.root, 'acme', 'worker', idAttr, canonicalSendBody(), {
       from: 'orchestrator',
@@ -411,7 +411,7 @@ describe('2. team drops — table, --follow, --read, and --json with all three s
     const tableRes = await runAsWorker();
     expect(tableRes.code).toBe(0);
     expect(tableRes.out).toContain('the launch (attributed)');
-    expect(tableRes.out).toContain('orchestrator (attributed)');
+    expect(tableRes.out).toContain('orchestrator (unverified claim)');
     expect(tableRes.out).toContain('stranger (unattributed)');
     expect(tableRes.out).toContain('unknown');
 
@@ -453,7 +453,7 @@ describe('2. team drops — table, --follow, --read, and --json with all three s
     }
   });
 
-  test('--follow marks both (attributed) and (unattributed) on its one-line output, and --read marks the served bodies', async () => {
+  test('--follow marks a shared-key record (unverified claim) and a raw drop (unattributed), and --read serves the signed body', async () => {
     const f = makeFixture();
     messageKeyOf(f.home);
     const idSigned = '20000000-0000-4000-8000-000000000021';
@@ -480,7 +480,7 @@ describe('2. team drops — table, --follow, --read, and --json with all three s
       },
     });
     expect(followCode).toBe(0);
-    expect(ioFollow.out).toContain(`from orchestrator (attributed) — ${signedPath}`);
+    expect(ioFollow.out).toContain(`from orchestrator (unverified claim) — ${signedPath}`);
     expect(ioFollow.out).toContain(`from outsider (unattributed) — ${rawFollowPath}`);
 
     // Now run `team drops --read` and verify the signed record body is served with `(attributed)` while the raw file is skipped

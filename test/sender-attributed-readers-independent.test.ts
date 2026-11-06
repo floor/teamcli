@@ -1,8 +1,8 @@
 // Independent verification of feat/sender-attributed (63adaf839 plus the lane's own commits):
 // 1. A forged `from: orchestrator` drop, signed with the checkout key and carrying an owner
-//    quote, is attributed across `team drops` (table, `--json`, `--follow`, `--read`),
-//    `team messages` (plain text and `--json`), `inbox_check` (`listUnread`), and `inbox_read`
-//    (`readMessage`), while the signed record bytes on disk remain byte-for-byte unchanged.
+//    quote, reads as an unverified claim across `team drops` (table, `--follow`) and
+//    `team messages` plain text. `--json` keeps sender_attribution `attributed`. The signed
+//    record bytes on disk remain byte-for-byte unchanged.
 // 2. Socket frame delivery opens `message.content` with `[attributed sender: <caller>]`
 //    before the display header, body, and reader line.
 // 3. Reconciled `config.changed` events carry no `from`, set `reconciled: "true"`, and render as
@@ -127,7 +127,7 @@ describe('feat/sender-attributed independent verification', () => {
     // (a) `team drops` plain table
     const dropsTable = await runWorkerDrops();
     expect(dropsTable.code).toBe(0);
-    expect(dropsTable.out).toContain('orchestrator (attributed)');
+    expect(dropsTable.out).toContain('orchestrator (unverified claim)');
     expect(dropsTable.out).toContain(dropPath1);
     expect(readFileSync(dropPath1, 'utf8')).toBe(diskBytesBefore);
 
@@ -186,7 +186,7 @@ describe('feat/sender-attributed independent verification', () => {
       },
     });
     expect(followRes.code).toBe(0);
-    expect(followRes.out).toContain(`from orchestrator (attributed) — ${dropPath2}`);
+    expect(followRes.out).toContain(`from orchestrator (unverified claim) — ${dropPath2}`);
     expect(readFileSync(dropPath2, 'utf8')).toBe(diskBytes2);
 
     const dropsReadRes = await runWorkerDrops(['--read', '--seat', 'worker', '--session', 'acme']);
@@ -210,7 +210,7 @@ describe('feat/sender-attributed independent verification', () => {
     const msgTextIo = testIo(f.root, { kind: 'owner' });
     expect(await runMessages([], msgTextIo, { home: f.home, now: () => NOW })).toBe(0);
     // The table cell names the claim and its attribution; the body renders the compact header.
-    expect(msgTextIo.out).toContain('orchestrator (attributed)');
+    expect(msgTextIo.out).toContain('orchestrator (unverified claim)');
     expect(msgTextIo.out).toContain('from orchestrator (team lead):');
     expect(msgTextIo.out).toContain(`from orchestrator@acme — admitted by: ${RULE}`);
     expect(msgTextIo.out).toContain(OWNER_QUOTE);

@@ -1013,6 +1013,7 @@
     "test/sender-attributed-readers.test.ts": 3,
     "test/sender-line.test.ts": 1,
     "test/sender-names.test.ts": 2,
+    "test/sender-unverified-claim-independent.test.ts": 1,
     "test/sender-unverified-claim.test.ts": 0,
     "test/serve-caller-independent.test.ts": 2,
     "test/session-cli-delivery.test.ts": 5,

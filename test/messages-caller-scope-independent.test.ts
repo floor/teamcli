@@ -137,7 +137,7 @@ describe('independent caller mailbox scope verification', () => {
     const resA = await run([], WORKER_A);
     expect(resA.code).toBe(0);
     expect(resA.err).toBe('');
-    expect(resA.out).toContain('orchestrator (attributed)');
+    expect(resA.out).toContain('orchestrator (unverified claim)');
     expect(resA.out).toContain(`worker-a/${idA}:\nfrom orchestrator (team lead):\n\nSECRET_BODY_WORKER_A`);
     expect(resA.out).not.toContain('SECRET_BODY_WORKER_B');
     expect(resA.out).not.toContain('SECRET_BODY_ORCHESTRATOR');
