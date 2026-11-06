@@ -887,6 +887,7 @@
     "test/reload-agy-143-dev.test.ts": 1,
     "test/reload-boundaries.test.ts": 4,
     "test/reload-rules.test.ts": 4,
+    "test/reload-unrecorded-start-independent.test.ts": 3,
     "test/reload.test.ts": 0,
     "test/reminder-authority-child.test.ts": 0,
     "test/reminder-beat.test.ts": 3,
