@@ -10,7 +10,7 @@ group('the session default move', () => {
     const approved = fingerprints(team({ entity: 'acme', session: 'web' }));
     const current = team({ entity: 'acme', session: 'acme-web' });
     const lines = compare(approved, fingerprints(current), current).map(describe);
-    expect(lines).toContain('`session` changed: "web" -> "acme-web", the new default session (<entity>-<project>); set `session: web` to keep the old one');
+    expect(lines).toContain('`session` changed: "web" -> "acme-web", the new default session (<entity>-<project>[-<team>]); set `session: web` to keep the old one');
   });
 
   test('any other session change reads as before', () => {

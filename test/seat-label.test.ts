@@ -377,15 +377,16 @@ seats:
     const io = testIo(root, { kind: 'owner' });
     const code = await runDoctor(['--file', '.agents/team.yaml'], io, sources);
     expect(code).toBe(0);
-    // The fixture still spells the lead `coordinator:`, on line 4: doctor prints the file's
-    // notice before the seat's own warning, and counts both. The seat's warning reads the
-    // stored fields — the name repeats the project "acme", and the written `web-tab`, kept on
-    // the seat, repeats the session "web" — while the workspace title, derived from the
-    // display, repeats neither.
+    // The fixture still spells the lead `coordinator:`, on line 4, and its session `web` is not
+    // the default `acme`: doctor prints both file notices before the seat's own warning, and
+    // counts all three. The seat's warning reads the stored fields — the name repeats the
+    // project "acme", and the written `web-tab`, kept on the seat, repeats the session "web" —
+    // while the workspace title, derived from the display, repeats neither.
+    expect(io.out).toContain('warn  the file, line 3: session "web" is not the default "acme" for this entity and project: kept as written; a drifted name is how a stale session gets reused\n');
     expect(io.out).toContain('warn  the file, line 4: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read\n');
     expect(io.out).toContain('warn  acme-lead: its name repeats "acme" and its label repeats "web"; the session already carries it\n');
     expect(io.out).not.toContain('reviewer:');
-    expect(io.out).toContain('team doctor: nothing missing, 2 warnings\n');
+    expect(io.out).toContain('team doctor: nothing missing, 3 warnings\n');
     rmSync(base, { recursive: true, force: true });
   });
 });

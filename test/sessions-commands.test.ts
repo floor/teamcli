@@ -122,7 +122,8 @@ function makeWorld(root: string): World {
   const agents = (): HerdrAgent[] => (reporting.on ? [...slots]
     .filter(([, slot]) => slot.running)
     .map(([pane, slot]) => ({
-      name: slot.name ?? pane,
+      // Unnamed until the rename. A pane id in this field is another seat's name, and the launch leaves the seat at launched.
+      name: slot.name,
       agent: 'claude-code',
       pane,
       workspace: slot.workspace,
@@ -180,6 +181,12 @@ function makeWorld(root: string): World {
     now: () => NOW,
   };
   recordRenames(launch);
+  // A closed pane stays in the rename record. The list a later command reads is the panes still open.
+  const withRenames = launch.agents!;
+  launch.agents = (session) => {
+    const list = withRenames.call(launch, session);
+    return list?.filter((agent) => slots.has(agent.pane)) ?? null;
+  };
   const down: DownLaunch = {
     typeText(_session, pane, text) {
       const slot = slots.get(pane);
