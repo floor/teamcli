@@ -409,13 +409,11 @@ projects:
     name: Beacon
     entity: acme
     lead: null
-    teams: ["7a8b9c0d1e2f", "3d4e5f607182"]
     provenance: { registered_by: team, registered_at: "2026-10-05T04:00:00.000Z", updated_at: "2026-10-05T04:00:00.000Z" }
   beacon-io:
     name: Beacon IO
     entity: acme
     lead: null
-    teams: ["3d4e5f607182"]
     provenance: { registered_by: team, registered_at: "2026-10-05T04:00:00.000Z", updated_at: "2026-10-05T04:00:00.000Z" }
 ```
 
@@ -424,6 +422,7 @@ teams:
   7a8b9c0d1e2f:
     project: beacon
     project_id: beacon
+    projects: ["beacon"]
     entity: acme
     session: beacon
     root: /work/beacon
@@ -436,6 +435,7 @@ teams:
   3d4e5f607182:
     project: beacon-io
     project_id: beacon-io
+    projects: ["beacon-io", "beacon"]
     entity: acme
     session: beacon-io
     root: /work/beacon-io
