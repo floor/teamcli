@@ -30,6 +30,16 @@ A file that sets `project_lead: true` without naming a project is refused as the
 the home repeated, and still refuses two teams claiming the same home's lead. Both membership
 sections are non-owner and leave existing approval fingerprints intact.
 
+Declaring `also_in` alone changes no recorded reach. An owner launch or registration in force
+publishes the list on the team record, using only existing projects of the same entity. It
+creates no served project. Seat, delegated and dev-mode runs preserve the last owner-recorded
+list; an owner run also removes memberships dropped from the file. Admission skips foreign or
+unscoped projects even if an old team record names them.
+
+Crossing ordinary seats still requires the owner's signed `seats-cross-teams` policy from the
+asker's entity, home project, team and seat chain. A served project's opening supplies no policy
+to the asker. Expired declarations set nothing, and unsigned or unverifiable input opens nothing.
+
 ## Synopsis
 
     team projects [--json]

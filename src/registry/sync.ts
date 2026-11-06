@@ -13,6 +13,7 @@ import { readTeamConfig } from '../file/team-config.ts';
 import { endSession, type SessionEndReason } from '../sessions/registry.ts';
 import type { ActingCommand } from '../delegate-types.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
+import { membershipsOfFile } from '../file/memberships.ts';
 
 /** What every writer here is told about the team it writes for. */
 export type RegistryTeam = {
@@ -57,6 +58,7 @@ function noteOf(error: unknown): string {
  *  `noteTeam` never throws; the line it returns is why the record was not written. */
 function ensureTeam(input: RegistryTeam): string | null {
   const { team, root, home, by } = input;
+  const membership = membershipsOfFile(team);
   // `up --session alt` records the session it launches; the file's own session records the same
   // lobby beside it, so a plain `team check` still reads it back.
   // A file that does not name `in_project` is not an instruction to leave a project. `noteTeam`
@@ -67,10 +69,12 @@ function ensureTeam(input: RegistryTeam): string | null {
     entity: team.entity,
     session: input.session ?? team.session,
     lobby: team.lobby,
-    ...(team.inProject === null ? {} : { inProject: team.inProject }),
+    ...(membership.home === null ? {} : { inProject: membership.home, alsoIn: membership.served }),
     aliasSession: team.session,
   };
-  return noteTeam(home, root, seed, 'running', by);
+  return noteTeam(home, root, seed, 'running', by, {
+    owner: input.owner === true && input.devMode !== true && input.delegated === undefined,
+  });
 }
 
 /** The rule one roster line is re-marked by: its `nickname` from the name the seat goes by — the

@@ -95,8 +95,8 @@ const teams: AdmitTeams = {
 };
 
 const projects = {
-  teamcli: { lead: LEAD_A, teams: ['cli', 'site', 'labs', 'legacy'] },
-  radio: { lead: RADIO_LEAD, teams: ['radio'] },
+  teamcli: { entity: 'teamcli', lead: LEAD_A, teams: ['cli', 'site', 'labs', 'legacy'] },
+  radio: { entity: 'radio', lead: RADIO_LEAD, teams: ['radio'] },
 };
 const context: AdmitContext = { projects };
 const crossed: AdmitContext = { ...context, crossTeams: { project: true } };
@@ -177,30 +177,32 @@ describe('project admission: the project decides its own pairs', () => {
   });
 
   test('a second membership preserves shared-project reach without connecting disjoint projects', () => {
-    const cliTwice: AdmitContext = { projects: { ...projects, pOther: { lead: null, teams: ['cli'] } } };
+    const cliTwice: AdmitContext = { projects: { ...projects, pOther: { entity: 'teamcli', lead: null, teams: ['cli'] } } };
     expect(admitSend(leadA, leadB, teams, undefined, cliTwice)).toEqual({
       ok: true,
       rule: 'the project lead and the leads of its teams',
     });
-    const radioTwice: AdmitContext = { projects: { ...projects, pOther: { lead: null, teams: ['radio'] } } };
+    const radioTwice: AdmitContext = { projects: { ...projects, pOther: { entity: 'radio', lead: null, teams: ['radio'] } } };
     expect(admitSend(leadA, builder3, teams, undefined, radioTwice).ok).toBe(false);
   });
 
   test('a later shared project can supply project-lead reach', () => {
     const shared: AdmitContext = {
       projects: {
-        'project-a': { lead: null, teams: ['radio', 'site'] },
-        'project-b': { lead: RADIO_LEAD, teams: ['radio', 'site'] },
+        'project-a': { entity: 'teamcli', lead: null, teams: ['radio', 'site'] },
+        'project-b': { entity: 'teamcli', lead: RADIO_LEAD, teams: ['radio', 'site'] },
       },
     };
-    // This sender is a project lead by agent id, but not its team's roster lead.
-    expect(admitSend(radioLead, leadB, teams, undefined, shared)).toEqual({
+    // Both teams belong to the shared project's entity. This sender is a project lead by id,
+    // but not its team's roster lead.
+    const sameEntity = { ...teams, radio: { ...teams.radio!, entity: 'teamcli' } };
+    expect(admitSend(radioLead, leadB, sameEntity, undefined, shared)).toEqual({
       ok: true,
       rule: 'the project lead and the leads of its teams',
     });
-    expect(admitSend(radioLead, builder2, teams, undefined, shared).ok).toBe(false);
-    expect(admitSend(builder3, builder2, teams, undefined, shared).ok).toBe(false);
-    expect(admitSend(builder3, builder2, teams, undefined, { ...shared, crossTeams: { project: true, team: false } }).ok).toBe(false);
+    expect(admitSend(radioLead, builder2, sameEntity, undefined, shared).ok).toBe(false);
+    expect(admitSend(builder3, builder2, sameEntity, undefined, shared).ok).toBe(false);
+    expect(admitSend(builder3, builder2, sameEntity, undefined, { ...shared, crossTeams: { project: true, team: false } }).ok).toBe(false);
   });
 
   test('with no project context the project rules are not in play', () => {

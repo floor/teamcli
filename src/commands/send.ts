@@ -33,6 +33,7 @@ import { PENDING_ID, clearPending, dropTaken, markPending, nativeNonceOf, readPe
 import { getAgent, readAgents, type Agent } from '../registry/agents.ts';
 import * as projectRegistry from '../registry/projects.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
+import { crossTeamsFor } from '../send/cross-teams.ts';
 import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
 import { socketAddressOf, type SocketAddress } from '../send/address.ts';
 import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, unverifiedGrantFor, type AdmitContext, type AdmitProjects, type AdmitTeam, type AdmitTeams, type DeclaredSender, type ReplyContext, type SendSide } from '../send/admit.ts';
@@ -6754,21 +6755,26 @@ export function admissionOf(
   // a rule that crosses teams to read, so a send that would leave stays refused.
   if (record === null && teamOf(judged) !== fileTeamId) return { ok: false, why: noAgentRecord(caller, declared) };
   const records = admitRecordsOf(home, team, ownTeam, target);
-  // The project level `admitSend` reads: the registered projects, which decide the pairs a
-  // project's own rules admit, and the asker's `seats_cross_teams` chain, entity → project →
-  // team → seat, which `admitSend` resolves itself, once per reach. No level's record carries a
-  // declaration of that setting yet, so the chain is empty here and each reach stands at its own
-  // default: the project's crossing seats off, the entity's lead pair and its main orchestrator's
-  // reach on.
+  // Admission reads the registered memberships and the asker's verified home chain, once per
+  // reach with its existing default. Served projects supply membership, never policy.
   // Membership is the registry's derived view: the raw records keep only the legacy stored
   // `teams` list, which no writer maintains any more, so a project would reach admission naming
   // no team and its rules would never fire. `list` derives each project's teams from the team
   // records, the one place membership is stored.
   const projects: AdmitProjects = {};
+  const registeredTeams = readTeams(home);
   for (const project of projectRegistry.list(home)) {
-    if (project.id !== undefined) projects[project.id] = project;
+    if (project.id !== undefined) projects[project.id] = {
+      ...project,
+      teams: project.teams.filter(id => project.entity !== null && registeredTeams[id]?.entity === project.entity),
+    };
   }
-  const context: AdmitContext = { projects, crossTeams: {}, ...(reply !== undefined ? { reply } : {}) };
+  const crossing = teamOf(judged) !== ownTeam;
+  const chain = record !== null && crossing
+    ? crossTeamsFor(home, team, fileTeamId, record, now())
+    : { ok: true as const, declared: {} };
+  if (!chain.ok) return { ok: false, why: `the asker's crossing policy could not be verified: ${chain.why}` };
+  const context: AdmitContext = { projects, crossTeams: chain.declared, ...(reply !== undefined ? { reply } : {}) };
   const verdict = admitSend(sender, judged, records, undefined, context);
   if (verdict.ok) return { ok: true, rule: verdict.rule, sender };
   // The grant folder is asked for a recorded sender alone: a grant names an identity, and the

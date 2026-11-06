@@ -54,7 +54,7 @@ export type AdmitTeams = Record<string, AdmitTeam>;
 
 /** One registered project as admission reads it: the lead, by agent id, and the teams it names.
  *  The project registry's public reads derive these memberships from team records. */
-export type AdmitProject = { lead: string | null; teams: string[] };
+export type AdmitProject = { entity?: string | null; lead: string | null; teams: string[] };
 
 /** Every registered project, keyed by id, with memberships derived from team records. */
 export type AdmitProjects = Record<string, AdmitProject>;
@@ -219,6 +219,8 @@ export function admitSend(
   if (context !== undefined) {
     for (const [, project] of projectsNaming(callerTeamId, context.projects)) {
       if (!project.teams.includes(targetTeamId)) continue;
+      // Membership is reach within one recorded entity, never a bridge to another entity.
+      if (project.entity == null || project.entity !== callerTeam?.entity || project.entity !== targetTeam?.entity) continue;
       const crossing = callerTeamId !== targetTeamId;
       const callerLead = leadSeat(callerTeam);
       const targetLead = leadSeat(targetTeam);

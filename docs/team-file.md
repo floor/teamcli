@@ -159,6 +159,9 @@ budgets:                      # the owner's: reserve or floor per account, marks
   served project, and defaults to an empty list. Only the home supplies settings, policies and
   rules; `project_lead: true` leads the home alone. Both membership fields are non-owner sections
   and change no approval fingerprint.
+  Served reach is recorded only by an owner launch or registration in force, for existing
+  projects of the same entity. A seat, delegate or dev-mode run preserves the previously
+  recorded list; declaring an unknown or foreign served project creates no project or reach.
 - `entity` names the entity this team belongs to (one path segment, 128 characters at most): the
   level above its project that a setting, the lobby's `<entity>` folder and a lead pair's reach
   are read from, and the name that makes two teams one entity's when both records carry it.

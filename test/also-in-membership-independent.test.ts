@@ -106,8 +106,8 @@ function teamsOf(home: string, project: string): string[] {
   return get(home, project)?.teams ?? [];
 }
 
-function derivedProjects(home: string): Record<string, { lead: string | null; teams: string[] }> {
-  return Object.fromEntries(list(home).map((project) => [project.id, { lead: project.lead, teams: [...project.teams] }]));
+function derivedProjects(home: string): Record<string, { entity: string | null; lead: string | null; teams: string[] }> {
+  return Object.fromEntries(list(home).map((project) => [project.id, { entity: project.entity, lead: project.lead, teams: [...project.teams] }]));
 }
 
 describe('served projects', () => {

@@ -45,8 +45,8 @@ const teams: AdmitTeams = {
 
 const context: AdmitContext = {
   projects: {
-    north: { lead: null, teams: ['oak', 'pine'] },
-    south: { lead: null, teams: ['elm'] },
+    north: { entity: 'acme', lead: null, teams: ['oak', 'pine'] },
+    south: { entity: 'acme', lead: null, teams: ['elm'] },
   },
   crossTeams: { project: true },
 };
