@@ -90,9 +90,11 @@ import { cliWordList, displayEffort } from '../profiles/profile.ts';
 import {
   loadAndResolvePolicyChain,
   mailboxRouterPolicyProblems,
+  parseOwnerReplyToValue,
   readProjectPolicySource,
   readSeatPolicySource,
   readTeamPolicySource,
+  resolveOwnerReplyTo,
   type PolicyLoadRefusal,
 } from '../policy/index.ts';
 import { codexDaemonForSeat } from '../policy/codex-daemon.ts';
@@ -710,6 +712,11 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // with its outbound gate closed, is a difference — the watch is not enforcing anything.
     ...hostedWatch,
     ...policyChecked.differences,
+    // An entity with a lead and no live signed owner-reply endpoint loses owner replies
+    // after the upgrade that stopped shipping one. One difference: what is missing, and
+    // the dry-run that declares the lead's own address. A live declaration, a team that
+    // names no entity, and an unreadable value say nothing here.
+    ...ownerReplyDifferences(team, root, sources.home, sources.now()),
     ...modelRule.differences,
     // The nightly harness's latest per-leg result: a class over its send-to-read target, a lost
     // message, or a result older than a day. A team that has not run draws nothing.
@@ -2945,6 +2952,27 @@ function policyRefusalRepair(refusal: PolicyLoadRefusal, seatName?: string): str
     return `team policy unset ${refusal.level} ${match[1]}${seatFlag}`;
   }
   return `team policy unset ${refusal.level} <name>${seatFlag}`;
+}
+
+/** The dry-run an owner runs first for an entity whose owner-reply endpoint is missing or expired. */
+function ownerReplyDifferences(
+  team: TeamFile,
+  root: string,
+  home: string | undefined,
+  now: Date,
+): Difference[] {
+  if (home === undefined) return [];
+  const lead = team.orchestrator.trim();
+  if (lead === '') return [];
+  const found = resolveOwnerReplyTo(root, home, team.entity ?? null, now);
+  if (found.ok || found.reason !== 'missing' || found.entity === null) return [];
+  const target = `${lead}@${team.project}`;
+  if (parseOwnerReplyToValue(target) === null) return [];
+  return [{
+    what: found.why,
+    repair: `team policy set entity owner-reply-to ${target} --entity ${found.entity} --dry-run`,
+    owner: true,
+  }];
 }
 
 /**

@@ -88,6 +88,13 @@ function place(text: string): { root: string; home: string } {
     home,
     at: NOW.toISOString(),
   });
+  // A live endpoint, so this scene's notes stay notes and the missing reply is not a difference.
+  const wrote = writePolicySet(
+    home,
+    { level: 'entity', target: 'floor', name: 'owner-reply-to', value: 'lead@acme' },
+    { now: NOW },
+  );
+  if (!wrote.ok) throw new Error(wrote.why);
   return { root, home };
 }
 

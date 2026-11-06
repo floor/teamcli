@@ -141,6 +141,7 @@
     "test/check-nickname-drift.test.ts": 0,
     "test/check-orphan-processes-independent.test.ts": 4,
     "test/check-orphans.test.ts": 3,
+    "test/check-owner-reply.test.ts": 5,
     "test/check-readmes.test.ts": 4,
     "test/check-repair-dev-lift.test.ts": 2,
     "test/check-repair.test.ts": 5,
