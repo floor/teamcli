@@ -1089,18 +1089,21 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     };
     watched.push(watch);
     let registered = false;
-    const register = (): void => {
-      if (registered) return;
+    const register = (): Promise<void> => {
+      if (registered) return Promise.resolve();
       registered = true;
       roots.push(status);
-      void writeState();
+      // Awaited by the loop below: the record names this root before any of its endpoints
+      // starts, so a reader that finds the bound socket during the roots loop finds the
+      // checkout being brought up, never an empty startup record beside a live socket.
+      return writeState();
     };
     const loaded = readTeamConfig(rootArg, { home });
     if (!loaded.ok) {
       status.why = loaded.errors[0]?.message ?? 'the team file cannot be read';
       status.send = 'failed';
       status.bus = 'failed';
-      register();
+      await register();
       logLine(`root ${rootArg}: ${status.why}`);
       continue;
     }
@@ -1111,7 +1114,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       status.why = 'the checkout root cannot be resolved to a folder';
       status.send = 'failed';
       status.bus = 'failed';
-      register();
+      await register();
       logLine(`root ${rootArg}: ${status.why}`);
       continue;
     }
@@ -1120,7 +1123,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       status.why = 'this checkout is already hosted by this daemon';
       status.send = 'failed';
       status.bus = 'failed';
-      register();
+      await register();
       logLine(`root ${rootArg}: ${status.why}`);
       continue;
     }
@@ -1131,7 +1134,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     teams.set(canonical, loaded.team);
     // Registered before any endpoint is started: status can name the root, and a heartbeat
     // keeps its record fresh, while a large store or a slow start below is still in progress.
-    register();
+    // The write is awaited so the record names the root before its endpoints do.
+    await register();
     const route = routeOf(
       canonical,
       loaded.team.project,
@@ -1301,7 +1305,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       status.bus = 'failed';
       status.busFailedAt = status.sendFailedAt;
       status.why = `the send server could not start: ${error instanceof Error ? error.message : 'unknown error'}`;
-      register();
+      await register();
       logLine(`root ${rootArg}: ${status.why}`);
       continue;
     }
@@ -1334,7 +1338,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       status.bus = 'failed';
       status.busFailedAt = now().toISOString();
       status.busWhy ??= thresholds.refusals.map((refusal) => refusal.message).join('; ');
-      register();
+      await register();
       logLine(`root ${rootArg}: bus not hosted: ${status.busWhy}`);
       continue;
     }
@@ -1358,7 +1362,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       status.bus = 'failed';
       status.busFailedAt = now().toISOString();
       status.busWhy ??= `the bus server could not start: ${error instanceof Error ? error.message : 'unknown error'}`;
-      register();
+      await register();
       logLine(`root ${rootArg}: ${status.busWhy}`);
       continue;
     }
@@ -1388,7 +1392,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             ? 'another bus server is starting'
             : 'the bus socket could not be bound';
     }
-    register();
+    await register();
     logLine(`root ${rootArg}: send ${status.send}, bus ${status.bus}`);
   }
 
