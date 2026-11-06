@@ -95,6 +95,8 @@ describe('a listed Muse hint is the empty box only when faint or declared', () =
       typed: true,
       tries: 1,
       reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
     });
     expect(wake.typed).toEqual([TRIGGER_LINE]);
     expect(wake.enters).toBe(1);

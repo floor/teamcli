@@ -100,7 +100,14 @@ test('the typed wake types into the hint row and waits for the working screen', 
   const hint = row(OPEN);
   const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? hint : row(typed[typed.length - 1] ?? '')));
   const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
-  expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+  expect(out).toEqual({
+    delivered: true,
+    typed: true,
+    tries: 1,
+    reason: 'the working screen showed after 1 Enter',
+    submittedAt: expect.any(Number),
+    workingAt: expect.any(Number),
+  });
   expect(pane.typed).toEqual([LINE]);
   expect(pane.enters).toBe(1);
 });
