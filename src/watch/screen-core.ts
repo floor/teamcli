@@ -111,7 +111,8 @@ function statusRowAt(
  * never read as the row a quota figure comes from. Where the profile pins the row's place, a
  * candidate that is not in its place is ordinary text: the scan skips it (the lines below a
  * lower candidate are then not the frame a place needs, so a higher one fails too). A row the
- * profile exempts from the place test keeps the trailing rule the other profiles read it by.
+ * profile exempts from the distance pin keeps the trailing rule, except the Cursor prompt,
+ * whose excepted row still needs the workspace line directly under it.
  * The classification and the quota read both take their line from here, so the two cannot
  * disagree about which line the composer's status line is.
  */
@@ -130,6 +131,13 @@ function statusIndex(
     if (composer.statusBelow && !composer.statusBelow.except?.test(lines[i] ?? '')) {
       if (statusRowAt(composer, lines, i)) return i;
       continue;
+    }
+    // Cursor's except skips the distance pin only. The dialect rewrites the arrow, so the
+    // compiled prompt starts `^ {2}\u2192`. The workspace line is still required under that
+    // row. Every other except keeps the grammar-only reading it had.
+    if (composer.statusBelow && composer.prompt.source.startsWith('^ {2}\\u2192')) {
+      const under = lines[i + 1] ?? '';
+      if (!composer.statusBelow.line.test(under)) continue;
     }
     const trailing = lines.slice(i + 1).filter((line) => line.trim());
     if (allowOneTrailing) {

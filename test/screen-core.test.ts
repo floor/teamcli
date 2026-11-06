@@ -483,13 +483,13 @@ const captured: [string, string, (lines: string[]) => Screen['kind']][] = [
 ];
 
 describe('codex, cursor and antigravity through the screen core', () => {
-  test('typed text ending in ctrl+c to stop is a running turn, and unsent in the composer', () => {
+  test('typed text ending in ctrl+c to stop is a running turn, and the composer reads no row without a workspace line', () => {
     // Constructed, not a capture, drawn at the capture's own columns: the prompt sits at
     // the pane's second column, as unsent.txt draws it, under the blank frame row every
     // capture keeps against the input row. The suffix on the prompt is the running turn.
-    // The composer strips it, and the words typed under it are unsent.
+    // There is no workspace line under the Grok row, so the composer reads no row.
     const text = '\n  → ship the fix   ctrl+c to stop\n  Grok 4.7 256K High\n';
-    expect(classifyComposer('cursor', text.split('\n')).kind).toBe('unsent');
+    expect(classifyComposer('cursor', text.split('\n')).kind).toBe('unknown');
     expect(classify('cursor', text.split('\n')).kind).toBe('working');
   });
 
