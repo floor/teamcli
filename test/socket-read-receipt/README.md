@@ -73,7 +73,7 @@ The product branch's answers, at the strings level:
   the naming rule resolves it, falling back to the seat name; `<seat>` is the record's
   signed sender; `<team>` is the sending team's project name. The frame keeps its shape:
   claim banner, blank line, header, blank line, record body (which keeps its own attribution
-  line), blank line, the reader line ADR `zeus-message-path`, D3 pins:
+  line), blank line, the reader line the message-path ADR, D3, pins:
   `Answer with team reply <id> "…" (this marks it read), or team ack <id> if no answer is
   needed.` The id is the record's own, appears on the line once, and names both acts that
   settle it — `team reply <id>` answers and writes the seat's signed read, `team ack <id>`

@@ -705,8 +705,8 @@ A socket frame is not a message-display line. The frame an agent seat receives o
 single compact header line (`from <name> (<short rule>):`, `Client <Display> (owner relay):`, or
 `<Kind> seat <name> (<short rule>):` for a Gemini, Codex or Grok seat, where `<name>` is the
 nickname the registry holds, the name the seat's written label carries before the middle dot, or its
-seat name), then a blank line, the message body, and the one-line reader footer ADR
-`zeus-message-path`, D3 pins:
+seat name), then a blank line, the message body, and the one-line reader footer the
+message-path ADR, D3, pins:
 `↩ team reply <prefix> "…" · team ack <prefix>`
 `<prefix>` is the shortest unique prefix of the record's id in that mailbox (at least 8 characters);
 `team reply <prefix>` answers and marks it read, `team ack <prefix>` marks it read with no answer.
