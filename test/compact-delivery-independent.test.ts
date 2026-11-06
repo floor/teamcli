@@ -153,14 +153,14 @@ describe('the compact frame is the first content line and the show footer', () =
       'scout',
       { rule: TO_ORCH, cli: 'claude-code', compact: true },
     );
-    expect(compact).toBe('from Scout (to orchestrator):\n\nAlpha headline');
+    expect(compact).toBe('from scout (to orchestrator):\n\nAlpha headline');
 
     const full = senderMod.attributedBody(
       `from Scout — admitted by: ${TO_ORCH}\n\nAlpha headline\nBeta detail`,
       'scout',
       { rule: TO_ORCH, cli: 'claude-code' },
     );
-    expect(full).toBe('from Scout (to orchestrator):\n\nAlpha headline\nBeta detail');
+    expect(full).toBe('from scout (to orchestrator):\n\nAlpha headline\nBeta detail');
 
     const headerless = senderMod.attributedBody('No header line one\nline two', 'scout', {
       rule: TO_ORCH,
@@ -184,7 +184,7 @@ describe('the compact frame is the first content line and the show footer', () =
     ) as { msg_id: string; message: { content: string } };
     expect(frame.msg_id).toBe(id);
     expect(frame.message.content).toBe(
-      'from Scout (to orchestrator):\n\nAlpha headline\n\n↩ team show ab12cd34 · team reply ab12cd34 · team ack ab12cd34',
+      'from scout (to orchestrator):\n\nAlpha headline\n\n↩ team show ab12cd34 · team reply ab12cd34 · team ack ab12cd34',
     );
 
     const human = JSON.parse(
@@ -196,7 +196,7 @@ describe('the compact frame is the first content line and the show footer', () =
         human: true,
       }),
     ) as { message: { content: string } };
-    expect(human.message.content).toBe('from Scout (to orchestrator):\n\nAlpha headline');
+    expect(human.message.content).toBe('from scout (to orchestrator):\n\nAlpha headline');
 
     const plain = JSON.parse(
       frameMod.socketMessageFrame('harbor', 'captain', body, id, {
@@ -206,7 +206,7 @@ describe('the compact frame is the first content line and the show footer', () =
       }),
     ) as { message: { content: string } };
     expect(plain.message.content).toBe(
-      'from Scout (to orchestrator):\n\nAlpha headline\nBeta detail\n\n↩ team reply ab12cd34 "…" · team ack ab12cd34',
+      'from scout (to orchestrator):\n\nAlpha headline\nBeta detail\n\n↩ team reply ab12cd34 "…" · team ack ab12cd34',
     );
   });
 });

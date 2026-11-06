@@ -174,6 +174,11 @@ function clientDisplayName(claimed: string, clientId?: string): string {
   return id;
 }
 
+/** Width and case only. Fullwidth letters fold to ASCII, and letter case folds; homoglyphs and punctuation stay distinct. */
+function normalizedSenderName(name: string): string {
+  return name.normalize('NFKC').toLowerCase();
+}
+
 /** The registry's name for the verified sender, when the record names an agent this home has. */
 function registrySenderName(context: SenderRenderContext): string | null {
   const fromId = context.fromId ?? context.record?.from_id ?? null;
@@ -254,9 +259,11 @@ export function compactSenderHeader(
  * Renders the body of a message with its compact sender header at display time, leaving the
  * stored record's `payload.body` and `payload.rule` untouched on disk.
  *
- * The header is the verified sender and the verified rule. A body that opens with
+ * The header is the verified sender and the verified rule. Its spelling is the display name,
+ * the registry name, or the claimed name, in that order. A body that opens with
  * `from <name> — admitted by: <rule>` does not choose either. That line is dropped from the
- * content only when both parts are the verified ones; any other opening line stays content.
+ * content only when the name matches a verified name after width and case folding and the rule
+ * is the verified rule exactly; any other opening line stays content.
  * A client record (`from_client` or `client:<id>`) renders `Client <Name> (<short rule>):`.
  * When `context.compact` is true, only the first non-empty content line is rendered.
  */
@@ -272,7 +279,7 @@ export function attributedBody(body: string, claimed: string, context: SenderRen
   const registered = registrySenderName(context);
   if (registered !== null && registered !== '') verifiedNames.push(registered);
   const sameSender = (left: string, right: string): boolean =>
-    left.localeCompare(right, undefined, { sensitivity: 'accent' }) === 0;
+    normalizedSenderName(left) === normalizedSenderName(right);
   const openingName = header?.[1] ?? '';
   const openingAgrees = header !== null
     && verifiedNames.some((name) => sameSender(name, openingName))
@@ -291,8 +298,8 @@ export function attributedBody(body: string, claimed: string, context: SenderRen
   const display =
     context.displayName && context.displayName !== ''
       ? context.displayName
-      : openingAgrees
-        ? openingName
+      : registered !== null && registered !== ''
+        ? registered
         : claimed;
   const cli = isSystemOrOwner(claimed, display) ? null : resolveSenderCli(context, claimed);
   return `${compactSenderHeader(display, rule, { cli })}\n\n${rest}`;
