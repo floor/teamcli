@@ -33,7 +33,7 @@ The ordinary legacy Notification filter retains its preexisting stdin read.
 Only fixed refusal receipts enter the private presence status spool. No prompt,
 tool payload, provider identifier or raw error is persisted or published. The
 daemon validates the complete refusal-only shape and current binding/claim again
-before append. Invalid/stale receipts are set aside, not repaired or promoted.
+before append. Invalid/stale receipts are set aside, not repaired or promoted. The set-aside keeps at most 64 files, the same bound as one spool pass. Each file past that is removed and counted.
 
 Each current seat/binding has an isolated candidate and durable publication
 cursor. `status_seq` counts publication attempts in this contract; it is **not**

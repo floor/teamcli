@@ -141,6 +141,44 @@ function receiptOf(value: unknown, identity: Identity, name: string): Receipt | 
 
 export type NativeFeed = { step(): void; codexFrame(identity: Identity, text: string): void; close(): void };
 
+/** The rejected set-aside keeps as many files as one spool pass reads. */
+export const STATUS_REJECTED_CAP = 64;
+
+function rejectedDroppedPath(root: string): string {
+  return join(root, 'status-rejected-dropped.json');
+}
+
+function readRejectedDropped(root: string): number | null {
+  try {
+    const value = boundedJson(rejectedDroppedPath(root));
+    if (!shape(value, ['dropped']) || !Number.isSafeInteger(value.dropped) || (value.dropped as number) < 0) return null;
+    return value.dropped as number;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 0 : null;
+  }
+}
+
+/** Keeps at most `cap` files in `status-rejected` and counts the rest. The counter sits beside
+ *  the directory, so the cap cannot delete it. Returns the count after this trim. */
+export function capRejected(root: string, cap = STATUS_REJECTED_CAP): number {
+  const rejected = join(root, 'status-rejected');
+  let names: string[] = [];
+  try {
+    names = readdirSync(rejected).filter((name) => !name.startsWith('.')).sort();
+  } catch {
+    return readRejectedDropped(root) ?? 0;
+  }
+  const overflow = names.length > cap ? names.length - cap : 0;
+  for (const name of names.slice(0, overflow)) {
+    try { unlinkSync(join(rejected, name)); } catch { /* already gone */ }
+  }
+  const prior = readRejectedDropped(root);
+  if (overflow === 0 || prior === null) return prior ?? 0;
+  const dropped = prior + overflow;
+  try { atomicJson(rejectedDroppedPath(root), { dropped }); } catch { /* the files are already gone */ }
+  return dropped;
+}
+
 /** Created only in the existing --presence branch; driven by its existing pass, with no timer. */
 export function createNativeFeed(input: {
   stateDir: string; session: string; seats: readonly string[]; project: string; root: string; home: string;
@@ -181,6 +219,7 @@ export function createNativeFeed(input: {
     const rejected = join(root, 'status-rejected');
     mkdirSync(rejected, { recursive: true, mode: 0o700 });
     renameSync(path, join(rejected, `${name}.${randomBytes(4).toString('hex')}`));
+    capRejected(root);
   };
   const eventOf = (identity: Identity, record: Receipt, seq: number): EventAppendInput => ({
     ts: record.ts, kind: 'seat.status', session: input.session, seat: identity.seat,
