@@ -1,0 +1,19 @@
+{
+  "acceptanceComplete": false,
+  "realCapturedFixtures": [],
+  "entries": [
+    {
+      "file": "measured-notification-history.json",
+      "evidenceClass": "repository-measured-history",
+      "sourceCommit": "63e07e1d1542ff5b068bd2ae8d450140cca8aa24",
+      "sourcePath": "test/daemon-presence-hook.test.ts",
+      "sourceDescription": "The test comment labels the minimal Notification/permission_prompt object measured; the original capture artifact is not present.",
+      "eventKind": "Notification",
+      "captureSource": null,
+      "cliVersion": null,
+      "captureDate": null,
+      "sanitization": ["Replaced the message body with an explicit benign example stand-in; retained its field and string type."],
+      "countsAsRealCapturedFixture": false
+    }
+  ]
+}
