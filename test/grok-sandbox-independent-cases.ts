@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { executePlan, type Host } from '../src/launch/execute.ts';
+import { hookCommand, readCliHook } from '../src/launch/cli-hook.ts';
 import { upPlan, type Step } from '../src/launch/plan.ts';
 import { shellQuote } from '../src/profiles/profile.ts';
 import { gitEnv } from './helpers.ts';
@@ -206,4 +207,17 @@ test('a header-looking line inside a multiline string is preserved while the rea
   expect(after.notes).toBe(before.notes);
   expectGrants(w);
   expect(ownProfile(w).custom).toBe('real table field');
+});
+
+test('an old hook still writing the flat session file shows that fresh state', () => {
+  const w = world();
+  const agents = join(w.root, '.agents');
+  const session = join(agents, 'seat-state', 'orbit-scene');
+  const held = join(session, 'scout', 'state.json');
+  const flat = join(session, 'scout.json');
+  mkdirSync(join(held, '..'), { recursive: true });
+  writeFileSync(held, '{"state":"idle","since":"2026-11-06T09:00:00Z"}\n');
+  execFileSync('/bin/sh', ['-c', hookCommand(flat, 'working')], { stdio: 'ignore' });
+  expect(readFileSync(flat, 'utf8')).toContain('"working"');
+  expect(readCliHook(agents, 'orbit-scene', 'scout')?.state).toBe('working');
 });
