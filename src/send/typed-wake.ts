@@ -1,7 +1,8 @@
-// The typed wake: one line, one guarded Enter, one acknowledgement. A profile that declares
-// `typed_wake: screen` lets a send type one trigger line into a composer two reads showed as the
-// empty idle prompt; Enter is pressed only while the box still holds exactly that line, and the
-// send is delivered only when the profile's own working screen shows and that line has left the
+// The typed wake: one line, one acknowledgement. A profile that declares `typed_wake: screen`
+// lets a send put one trigger line into a composer two reads showed as the empty idle prompt.
+// `wake: agent-prompt` asks herdr to prompt the agent and types nothing; every other profile
+// types the line and presses Enter only while the box still holds exactly that line. The send
+// is delivered only when the profile's own working screen shows and that line has left the
 // box. A working screen that still holds the line is the CLI busy with other work, not a
 // submission. Nothing else is typed: no
 // draft is moved, cleared or pasted, and a wake that cannot deliver leaves the message where it
@@ -12,7 +13,7 @@
 // The screens are the CLI's own captured frames (`test/fixtures/muse/` and
 // `test/fixtures/cursor/2026.10.22/`): `idle` is the empty box, `unsent` is the box holding the
 // line, and the profile's `working` rule is the acknowledgement.
-import { paneReadAsync, pressEnterAsync, sendKeyAsync, typeTextAsync } from '../herdr.ts';
+import { agentPromptAsync, paneReadAsync, pressEnterAsync, sendKeyAsync, typeTextAsync } from '../herdr.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { profileFor, WAKE_IDLE_SETTLE_FLOOR_MS, WAKE_IDLE_SETTLE_MS } from '../profiles/profile.ts';
 import { MESSAGE_LINE_MAX } from '../settings/message-display.ts';
@@ -47,6 +48,9 @@ export type TypedWakeHost = {
   type(pane: string, text: string): boolean | Promise<boolean>;
   /** One Enter. False when the key was not taken. */
   enter(pane: string): boolean | Promise<boolean>;
+  /** `herdr agent prompt`. A profile whose `wake` is `agent-prompt` uses this instead of
+   *  `type` and `enter`. Absent: that wake is refused and nothing is typed. */
+  prompt?(pane: string, line: string): boolean | Promise<boolean>;
   /** One named key — the profile's return-to-prompt key when the pane is scrolled back. Absent:
    *  a screen read as scrolled back is refused rather than woken. False when the key was not
    *  taken. */
@@ -61,6 +65,7 @@ export function herdrTypedWakeHost(session: string): TypedWakeHost {
     read: (pane) => paneReadAsync(pane, WAKE_LINES, session, { timeoutMs: 10_000 }),
     type: (pane, text) => typeTextAsync(pane, text, session, { timeoutMs: 10_000 }),
     enter: (pane) => pressEnterAsync(pane, session, { timeoutMs: 10_000 }),
+    prompt: (pane, line) => agentPromptAsync(pane, line, session, { timeoutMs: 10_000 }),
     key: (pane, key) => sendKeyAsync(pane, key, session, { timeoutMs: 10_000 }),
     wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   };
@@ -184,6 +189,52 @@ async function pollSubmitted(
  * a wake child killed after typing, an Enter that did not submit — gets the same two spaced
  * looks and the same guarded Enter, and the line is never typed a second time.
  */
+/** One `herdr agent prompt` after the idle guards, then the same working-screen poll an Enter
+ *  uses. Nothing is typed and no Enter is pressed. */
+async function submitByAgentPrompt(
+  host: TypedWakeHost,
+  pane: string,
+  line: string,
+  cli: string,
+  pollMs: number,
+  ackSettleMs: number,
+  verifyMs: number,
+  clock: () => number,
+  keyedReturn: boolean,
+  marks: WakeMarks,
+): Promise<TypedWakeResult> {
+  if (host.prompt === undefined) {
+    return { delivered: false, typed: keyedReturn, tries: 0, reason: 'this host has no agent prompt; nothing was typed' };
+  }
+  if (!(await host.prompt(pane, line))) {
+    return { delivered: false, typed: keyedReturn, tries: 0, reason: 'the pane did not take the agent prompt; nothing was typed' };
+  }
+  const tries = 1;
+  const observe = (read: string | null): void => {
+    if (read === null) return;
+    const kind = readScreen(cli, read).kind;
+    if (kind !== 'working' && kind !== 'idle') return;
+    if (boxHoldsText(cli, line, read)) return;
+    const at = clock();
+    if (marks.submittedAt === undefined) marks.submittedAt = at;
+    if (kind === 'working' && marks.workingAt === undefined) marks.workingAt = at;
+  };
+  await host.wait(ackSettleMs);
+  const after = await host.read(pane);
+  observe(after);
+  if (after !== null && readScreen(cli, after).kind === 'working' && !boxHoldsText(cli, line, after)) {
+    return { delivered: true, typed: true, tries, reason: 'the working screen showed after the agent prompt' };
+  }
+  const ack = await pollSubmitted(host, pane, cli, line, pollMs, verifyMs, observe);
+  if (ack === 'submitted') {
+    return { delivered: true, typed: true, tries, reason: 'the working screen showed after the agent prompt' };
+  }
+  if (ack === 'held') {
+    return { delivered: false, typed: true, tries, reason: 'the working screen showed with the line still in the box after the agent prompt; the line was not submitted' };
+  }
+  return { delivered: false, typed: true, tries, reason: 'no working screen showed after the agent prompt' };
+}
+
 export async function deliverTypedWake(
   host: TypedWakeHost,
   pane: string,
@@ -248,7 +299,11 @@ async function walkTypedWake(
       return { delivered: false, typed: false, tries: 0, reason: `${why} between the two looks; no Enter was pressed` };
     }
     // Two looks, spaced by the settle, agree the box holds exactly the line: the same pair the
-    // typed path waits for before its first Enter.
+    // typed path waits for before its first Enter. A profile that submits by agent prompt does
+    // not press Enter into that line.
+    if (profileFor(cli)?.wake === 'agent-prompt') {
+      return submitByAgentPrompt(host, pane, line, cli, pollMs, ackSettleMs, verifyMs, clock, keyedReturn, marks);
+    }
     screen = reread;
     previous = reread;
     previousHeld = true;
@@ -302,6 +357,9 @@ async function walkTypedWake(
           ? `the screen read ${second} on the second idle read, not an empty idle prompt; nothing was typed`
           : `the second read showed ${second}, not an empty idle prompt; nothing was typed`,
       };
+    }
+    if (profileFor(cli)?.wake === 'agent-prompt') {
+      return submitByAgentPrompt(host, pane, line, cli, pollMs, ackSettleMs, verifyMs, clock, keyedReturn, marks);
     }
     if (!(await host.type(pane, line))) {
       return { delivered: false, typed: keyedReturn, tries: 0, reason: 'the pane did not take the line; nothing was typed' };

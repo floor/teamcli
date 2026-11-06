@@ -125,6 +125,7 @@ describe('checkLogin with fake command results', () => {
       typedWake: null,
       typedWakeSettleMs: null,
       readHint: null,
+      wake: null,
       watchWake: false,
       watchWakeTries: 3,
       delivery: 'none',

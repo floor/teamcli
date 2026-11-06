@@ -73,12 +73,11 @@ delivery: pull-on-turn
 # closing rule. Nothing else is typed, and a wake that cannot deliver leaves the message in the
 # bus inbox. See src/send/typed-wake.ts.
 typed_wake: screen
-# The words the wake appends so the woken turn goes straight to the seat's fastest read path: the
-# inbox registered above. `inbox_check` is the one direct call — it lists the waiting messages
-# with their ids — and `inbox_read`, whose argument is the id inbox_check returned
-# (src/mcp/serve.ts), reads one and marks it read. The typed line never carries the message id,
-# so naming inbox_read alone would earn a refused call.
-read_hint: 'Read it with: call inbox_check now.'
+# Enter does not submit on this CLI. The wake asks herdr to prompt the agent, and still waits
+# for the working screen. Nothing is typed into the pane.
+wake: agent-prompt
+# This seat has no inbox_check tool. The wake tells it to read its drops.
+read_hint: 'Read it with: run team drops --read'
 login:
   check:
     - models

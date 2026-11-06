@@ -58,12 +58,13 @@ function workingHolding(text: string): string {
  *  to read back the line draws the text the wake itself typed. `wait` costs nothing. */
 function wakeFake(
   screen: (read: number, enters: number, typed: readonly string[]) => string | null,
-  options: { typeOk?: boolean; enterOk?: boolean } = {},
-): { host: TypedWakeHost; typed: string[]; enters: number; reads: number } {
+  options: { typeOk?: boolean; enterOk?: boolean; promptOk?: boolean } = {},
+): { host: TypedWakeHost; typed: string[]; prompts: string[]; enters: number; reads: number } {
   const typed: string[] = [];
-  const state = { enters: 0, reads: 0 };
+  const prompts: string[] = [];
+  const state = { enters: 0, prompts: 0, reads: 0 };
   const host: TypedWakeHost = {
-    read: () => screen(state.reads++, state.enters, typed),
+    read: () => screen(state.reads++, state.enters + state.prompts, prompts.length > 0 ? prompts : typed),
     type: (_pane: string, text: string) => {
       typed.push(text);
       return options.typeOk ?? true;
@@ -72,11 +73,17 @@ function wakeFake(
       state.enters += 1;
       return options.enterOk ?? true;
     },
+    prompt: (_pane: string, text: string) => {
+      prompts.push(text);
+      state.prompts += 1;
+      return options.promptOk ?? true;
+    },
     wait: async () => {},
   };
   return {
     host,
     typed,
+    prompts,
     get enters() {
       return state.enters;
     },
@@ -104,9 +111,10 @@ describe('the Grok typed wake: the profile’s own screens gate the keys', () =>
   test('two idle reads, one line, one Enter on the captured frames: the spinner row is the delivery', async () => {
     const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE : holding(typed[typed.length - 1] ?? '')));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'grok', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
-    expect(pane.typed).toEqual([LINE]);
-    expect(pane.enters).toBe(1);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after the agent prompt', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
+    expect(pane.prompts).toEqual([LINE]);
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
   });
 
   test('a working screen that still holds the line is not delivered until the box empties', async () => {
@@ -122,9 +130,10 @@ describe('the Grok typed wake: the profile’s own screens gate the keys', () =>
     });
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'grok', { ...FAST, verifyMs: 3 });
     expect(post).toBe(3);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
-    expect(pane.typed).toEqual([LINE]);
-    expect(pane.enters).toBe(1);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after the agent prompt', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
+    expect(pane.prompts).toEqual([LINE]);
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
   });
 
   test('a working screen that keeps the line through the bound is not delivered', async () => {
@@ -134,10 +143,11 @@ describe('the Grok typed wake: the profile’s own screens gate the keys', () =>
       delivered: false,
       typed: true,
       tries: 1,
-      reason: 'the working screen showed with the line still in the box after 1 Enter; the line was not submitted',
+      reason: 'the working screen showed with the line still in the box after the agent prompt; the line was not submitted',
     });
-    expect(pane.typed).toEqual([LINE]);
-    expect(pane.enters).toBe(1);
+    expect(pane.prompts).toEqual([LINE]);
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
   });
 
   test('a working pane is never typed into', async () => {
@@ -175,8 +185,9 @@ describe('the Grok typed wake: the profile’s own screens gate the keys', () =>
   test('text drawn into the box after the line was typed gets no Enter', async () => {
     const pane = wakeFake((read) => (read < 2 ? IDLE : UNSENT));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'grok', FAST);
-    expect(out).toEqual({ delivered: false, typed: true, tries: 0, reason: 'the box held text other than the line after the line was typed; no Enter was pressed' });
-    expect(pane.typed).toEqual([LINE]);
+    expect(out).toEqual({ delivered: false, typed: true, tries: 1, reason: 'no working screen showed after the agent prompt' });
+    expect(pane.prompts).toEqual([LINE]);
+    expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
   });
 
@@ -185,8 +196,9 @@ describe('the Grok typed wake: the profile’s own screens gate the keys', () =>
     const outSpaces = await deliverTypedWake(spacesOnly.host, 'pane-1', LINE, 'grok', FAST);
     expect(readScreen('grok', holding('    ')).kind).toBe('idle');
     expect(boxHoldsText('grok', LINE, holding('    '))).toBe(false);
-    expect(outSpaces).toEqual({ delivered: false, typed: true, tries: 0, reason: 'the screen read idle after the line was typed; no Enter was pressed' });
-    expect(spacesOnly.typed).toEqual([LINE]);
+    expect(outSpaces).toEqual({ delivered: false, typed: true, tries: 1, reason: 'no working screen showed after the agent prompt', submittedAt: expect.any(Number) });
+    expect(spacesOnly.prompts).toEqual([LINE]);
+    expect(spacesOnly.typed).toEqual([]);
     expect(spacesOnly.enters).toBe(0);
 
     const doubledSpace = LINE.replace(' ', '  ');
@@ -194,8 +206,9 @@ describe('the Grok typed wake: the profile’s own screens gate the keys', () =>
     const outInternal = await deliverTypedWake(internalSpaces.host, 'pane-1', LINE, 'grok', FAST);
     expect(readScreen('grok', holding(doubledSpace)).kind).toBe('unsent');
     expect(boxHoldsText('grok', LINE, holding(doubledSpace))).toBe(false);
-    expect(outInternal).toEqual({ delivered: false, typed: true, tries: 0, reason: 'the box held text other than the line after the line was typed; no Enter was pressed' });
-    expect(internalSpaces.typed).toEqual([LINE]);
+    expect(outInternal).toEqual({ delivered: false, typed: true, tries: 1, reason: 'no working screen showed after the agent prompt' });
+    expect(internalSpaces.prompts).toEqual([LINE]);
+    expect(internalSpaces.typed).toEqual([]);
     expect(internalSpaces.enters).toBe(0);
   });
 
@@ -220,8 +233,9 @@ describe('the Grok typed wake: the profile’s own screens gate the keys', () =>
 
       const afterType = wakeFake((read) => (read < 2 ? IDLE : draft));
       const outAfter = await deliverTypedWake(afterType.host, 'pane-1', LINE, 'grok', FAST);
-      expect(outAfter).toEqual({ delivered: false, typed: true, tries: 0, reason: 'the box held text other than the line after the line was typed; no Enter was pressed' });
-      expect(afterType.typed).toEqual([LINE]);
+      expect(outAfter).toEqual({ delivered: false, typed: true, tries: 1, reason: 'no working screen showed after the agent prompt' });
+      expect(afterType.prompts).toEqual([LINE]);
+      expect(afterType.typed).toEqual([]);
       expect(afterType.enters).toBe(0);
     }
   });
@@ -249,8 +263,9 @@ describe('the Grok typed wake: the profile’s own screens gate the keys', () =>
 
       const afterType = wakeFake((read) => (read < 2 ? IDLE : frame));
       const outAfter = await deliverTypedWake(afterType.host, 'pane-1', LINE, 'grok', FAST);
-      expect(outAfter).toEqual({ delivered: false, typed: true, tries: 0, reason: `the screen read ${kind} after the line was typed; no Enter was pressed` });
-      expect(afterType.typed).toEqual([LINE]);
+      expect(outAfter).toEqual({ delivered: false, typed: true, tries: 1, reason: 'no working screen showed after the agent prompt' });
+      expect(afterType.prompts).toEqual([LINE]);
+      expect(afterType.typed).toEqual([]);
       expect(afterType.enters).toBe(0);
     }
 
@@ -272,13 +287,10 @@ describe('the Grok typed wake: the profile’s own screens gate the keys', () =>
 
       const afterType = wakeFake((read) => (read < 2 ? IDLE : workingFrame));
       const outAfter = await deliverTypedWake(afterType.host, 'pane-1', LINE, 'grok', FAST);
-      expect(outAfter).toEqual({
-        delivered: false,
-        typed: true,
-        tries: 0,
-        reason: 'a working screen showed before any Enter, so the line was not submitted by this wake; no Enter was pressed',
-      });
-      expect(afterType.typed).toEqual([LINE]);
+      expect(outAfter.delivered).toBe(true);
+      expect(outAfter.reason).toBe('the working screen showed after the agent prompt');
+      expect(afterType.prompts).toEqual([LINE]);
+      expect(afterType.typed).toEqual([]);
       expect(afterType.enters).toBe(0);
     }
   });
@@ -308,10 +320,11 @@ describe('team send: the Grok typed wake', () => {
     const io = owner(made.root);
     expect(await runSend(['grok', 'hello'], io, host)).toBe(0);
     expect(withoutSendId(io.out)).toBe('team acme, session "acme"\ngrok: delivered (typed wake)\n');
-    expect(pane.typed).toHaveLength(1);
-    expect(pane.typed[0]).toContain('team drops --read');
-    expect((pane.typed[0] as string).length).toBeLessThanOrEqual(80);
-    expect(pane.enters).toBe(1);
+    expect(pane.prompts).toHaveLength(1);
+    expect(pane.prompts[0]).toContain('team drops --read');
+    expect(pane.prompts[0]!.length).toBeLessThanOrEqual(80);
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
     const drops = join(made.dir, 'send-drops', 'acme', 'grok');
     const records = readdirSync(drops).filter((name) => !name.includes('.'));
     expect(records).toHaveLength(1);
@@ -365,9 +378,10 @@ describe('team send: the Grok typed wake', () => {
     });
     const io = owner(made.root);
     expect(await runSend(['grok', 'check held'], io, host)).toBe(0);
-    expect(io.out).toContain('grok: queued, not woken (drop, 0 ms); queued; the typed wake failed (the working screen showed with the line still in the box after 1 Enter; the line was not submitted)');
-    expect(pane.typed).toHaveLength(1);
-    expect(pane.enters).toBe(1);
+    expect(io.out).toContain('grok: queued, not woken (drop, 0 ms); queued; the typed wake failed (the working screen showed with the line still in the box after the agent prompt; the line was not submitted)');
+    expect(pane.prompts).toHaveLength(1);
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
     const drops = join(made.dir, 'send-drops', 'acme', 'grok');
     const records = readdirSync(drops).filter((name) => !name.includes('.'));
     expect(records).toHaveLength(1);
@@ -380,7 +394,7 @@ describe('team send: the Grok typed wake', () => {
       expect(history.entries).toHaveLength(1);
       expect(history.entries[0]).toMatchObject({ to: 'grok', outcome: 'queued, not woken', via: 'drop' });
       expect(history.entries[0]?.failed).toEqual([
-        'typed: the working screen showed with the line still in the box after 1 Enter; the line was not submitted',
+        'typed: the working screen showed with the line still in the box after the agent prompt; the line was not submitted',
       ]);
     }
 
@@ -397,11 +411,12 @@ describe('team send: the Grok typed wake', () => {
       delivered: false,
       typed: true,
       tries: 1,
-      reason: 'the screen read idle and no working screen showed',
+      reason: 'no working screen showed after the agent prompt',
       submittedAt: expect.any(Number),
     });
-    expect(clearedMidPoll.typed).toEqual([LINE]);
-    expect(clearedMidPoll.enters).toBe(1);
+    expect(clearedMidPoll.prompts).toEqual([LINE]);
+    expect(clearedMidPoll.typed).toEqual([]);
+    expect(clearedMidPoll.enters).toBe(0);
 
     // 3. A partial line left mid-poll (poll 1 sees workingHolding(LINE), poll 2..N sees holding(partial)).
     for (const partial of [LINE.slice(0, 12), LINE.slice(5)]) {
@@ -417,10 +432,11 @@ describe('team send: the Grok typed wake', () => {
         delivered: false,
         typed: true,
         tries: 1,
-        reason: 'the box held text other than the line and no working screen showed',
+        reason: 'no working screen showed after the agent prompt',
       });
-      expect(partialMidPoll.typed).toEqual([LINE]);
-      expect(partialMidPoll.enters).toBe(1);
+      expect(partialMidPoll.prompts).toEqual([LINE]);
+      expect(partialMidPoll.typed).toEqual([]);
+      expect(partialMidPoll.enters).toBe(0);
     }
   });
 });

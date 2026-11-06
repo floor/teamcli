@@ -856,9 +856,11 @@ describe('the typed wake is a profile word', () => {
     // The two profiles whose seats carry an MCP inbox send their woken turn to the one direct
     // call that lists the waiting messages: the typed line never carries the id `inbox_read`
     // takes, so the read is always reached through `inbox_check`.
-    for (const cli of ['antigravity', 'cursor']) {
-      expect(profileFor(cli)?.readHint, cli).toBe('Read it with: call inbox_check now.');
-    }
+    expect(profileFor('cursor')?.readHint).toBe('Read it with: call inbox_check now.');
+    // Antigravity has no inbox_check tool. Its wake names the drops read.
+    expect(profileFor('antigravity')?.readHint).toBe('Read it with: run team drops --read');
+    expect(profileFor('antigravity')?.wake).toBe('agent-prompt');
+    expect(profileFor('grok')?.wake).toBe('agent-prompt');
     // Muse types too, but reads with the drops command: the shipped sentence stands, as it does
     // for a profile that declares no hint at all.
     for (const cli of ['muse', 'claude-code', 'codex', 'grok', 'gemini', 'jules']) {

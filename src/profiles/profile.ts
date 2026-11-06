@@ -195,6 +195,9 @@ export interface Profile {
    *  without keeps the shipped sentence. Null, the default, is the shipped
    *  `Read it with: team drops --read.` (src/settings/message-display.ts). */
   readHint: string | null;
+  /** How the typed wake is handed to the pane. Null types the line and presses Enter.
+   *  `agent-prompt` asks `herdr agent prompt` instead, and still waits for the working screen. */
+  wake: WakeWay | null;
   /** Whether the watch's unread pass may type the same wake a send types, when a message has
    *  gone unread past its window. On by default exactly where the profile declares
    *  `typed_wake`; a profile may turn it off (`watch_wake: off`), and may not turn it on
@@ -288,6 +291,13 @@ export type TypedWake = 'screen';
 
 /** The typed wakes a profile may declare: a closed set, never a guess. */
 export const TYPED_WAKES = ['screen'] as const;
+
+/** How a profile's typed wake is handed to the pane. Absent, the wake types the line and
+ *  presses Enter. `agent-prompt` asks `herdr agent prompt` and does not type or press Enter. */
+export type WakeWay = 'agent-prompt';
+
+/** The wake hands a profile may declare. */
+export const WAKE_WAYS = ['agent-prompt'] as const;
 
 /** The most typed wake attempts the watch's unread pass gives one message: a bound, so a
  *  wake that never lands is a few tries and a report, never a loop. */
@@ -1337,7 +1347,7 @@ const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules',
 // (the delivery CLI a session runs and the public-only declaration the send path proves),
 // `features` (the pinned feature set the launch and the recorded line carry) and the watch
 // retry (`watch_wake`, `watch_wake_tries`).
-const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'session_cli', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'exit_completion', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'settings', 'typed_wake', 'typed_wake_settle_ms', 'read_hint', 'watch_wake', 'watch_wake_tries', 'not_started', 'abandon_answers', 'public_only', 'features'] as const;
+const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'session_cli', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'exit_completion', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'settings', 'typed_wake', 'typed_wake_settle_ms', 'wake', 'read_hint', 'watch_wake', 'watch_wake_tries', 'not_started', 'abandon_answers', 'public_only', 'features'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -1454,6 +1464,14 @@ function deliveryOf(entry: YamlEntry): DeliveryClass {
 
 /** The value of `typed_wake`: one word from the closed set, never a guess. Only a profile whose
  *  own screens were captured may name one: the wake is read back through those screens. */
+function wakeOf(entry: YamlEntry): WakeWay {
+  const value = text(entry, 'wake');
+  if (!(WAKE_WAYS as readonly string[]).includes(value)) {
+    fail(entry.line, `"wake" must be one of: ${WAKE_WAYS.join(', ')}`);
+  }
+  return value as WakeWay;
+}
+
 function typedWakeOf(entry: YamlEntry): TypedWake {
   const value = text(entry, 'typed_wake');
   if (!(TYPED_WAKES as readonly string[]).includes(value)) {
@@ -1865,6 +1883,7 @@ function launchOf(root: YamlNode): Shipped {
   const settingsEntry = optional(entries, 'settings');
   const typedWakeEntry = optional(entries, 'typed_wake');
   const typedWakeSettleMsEntry = optional(entries, 'typed_wake_settle_ms');
+  const wakeEntry = optional(entries, 'wake');
   const readHintEntry = optional(entries, 'read_hint');
   const watchWakeEntry = optional(entries, 'watch_wake');
   const watchWakeTriesEntry = optional(entries, 'watch_wake_tries');
@@ -1899,6 +1918,10 @@ function launchOf(root: YamlNode): Shipped {
   }
   const rules = rulesOf(required(entries, 'rules', root.line).value);
   const typedWake = typedWakeEntry ? typedWakeOf(typedWakeEntry) : null;
+  const wake = wakeEntry ? wakeOf(wakeEntry) : null;
+  if (wake !== null && wakeEntry !== undefined && typedWake === null) {
+    fail(wakeEntry.line, '"wake" needs "typed_wake": the working screen is still how the wake is confirmed');
+  }
   if (typedWakeSettleMsEntry !== undefined && typedWake === null) {
     fail(typedWakeSettleMsEntry.line, '"typed_wake_settle_ms" needs "typed_wake": it spaces the wake\'s two reads');
   }
@@ -1944,6 +1967,7 @@ function launchOf(root: YamlNode): Shipped {
       typedWake,
       typedWakeSettleMs,
       readHint: readHintEntry ? readHintOf(readHintEntry) : null,
+      wake,
       watchWake,
       watchWakeTries,
       delivery: deliveryOf(required(entries, 'delivery', root.line)),

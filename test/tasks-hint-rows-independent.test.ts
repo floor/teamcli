@@ -44,15 +44,21 @@ function makeWakeHarness(screenAt: (readIndex: number, enters: number, typed: re
   readonly enters: number;
 } {
   const typed: string[] = [];
+  const prompts: string[] = [];
   let reads = 0;
   let enters = 0;
   const host: TypedWakeHost = {
-    read: () => screenAt(reads++, enters, typed),
+    read: () => screenAt(reads++, enters, prompts.length > 0 ? prompts : typed),
     type: (_pane, text) => {
       typed.push(text);
       return true;
     },
     enter: () => {
+      enters += 1;
+      return true;
+    },
+    prompt: (_pane, text) => {
+      prompts.push(text);
       enters += 1;
       return true;
     },
@@ -84,11 +90,11 @@ describe('independent verification of exact /tasks hint rows in Antigravity and 
         delivered: true,
         typed: true,
         tries: 1,
-        reason: 'the working screen showed after 1 Enter',
+        reason: 'the working screen showed after the agent prompt',
         submittedAt: expect.any(Number),
         workingAt: expect.any(Number),
       });
-      expect(agyWake.typed).toEqual([WAKE_LINE]);
+      expect(agyWake.typed).toEqual([]);
       expect(agyWake.enters).toBe(1);
 
       // Muse (plain and dim ANSI): exact hint reads idle, box is null, and wake types into it

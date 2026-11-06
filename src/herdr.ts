@@ -1504,6 +1504,26 @@ export function pressEnter(pane: string, session?: string): boolean {
   return sendKey(pane, SUBMIT_ENTER, session);
 }
 
+/** One `herdr agent prompt`: the line is submitted by herdr, not typed into the pane and not
+ *  followed by Enter. False when herdr did not take it. */
+export async function agentPromptAsync(
+  pane: string,
+  line: string,
+  session?: string,
+  options: HerdrReadOptions = {},
+): Promise<boolean> {
+  try {
+    await execText(
+      'herdr',
+      [...(session ? ['--session', session] : []), 'agent', 'prompt', pane, line],
+      { timeoutMs: 10_000, ...options },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function pressEnterAsync(
   pane: string,
   session?: string,

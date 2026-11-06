@@ -57,12 +57,16 @@ rules:
 delivery: pull-on-turn
 # The typed wake, granted on the sanitized 1.0.70 welcome frame in
 # test/fixtures/grok/1.0.70/ and the shipped 1.0.52 frames: a send may type one trigger line
-# into a composer two reads showed as the empty idle prompt, presses Enter only while the box
-# still holds exactly that line, and calls itself delivered only when the `working` screen
-# shows. A working turn, a box that holds text, and the answer widget refuse before a key.
+# into a composer two reads showed as the empty idle prompt. `wake: agent-prompt` below asks
+# herdr to prompt the agent; delivery is still the `working` screen. A working turn, a box
+# that holds text, and the answer widget refuse before a key.
 # Nothing else is typed, and a wake that cannot deliver leaves the message in the bus inbox.
 # See src/send/typed-wake.ts.
 typed_wake: screen
+# Enter does not submit on Grok Build. The wake asks herdr to prompt the agent, and still waits
+# for the working screen. Nothing is typed into the pane. The read hint stays the shipped
+# `Read it with: team drops --read.`
+wake: agent-prompt
 login:
   check:
     - models

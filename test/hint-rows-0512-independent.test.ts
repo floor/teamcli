@@ -73,14 +73,20 @@ function scriptedWakeHost(
   screenAt: (readIndex: number, enters: number, typed: readonly string[]) => string,
 ): { host: TypedWakeHost; typed: string[]; enters: number; reads: number } {
   const typed: string[] = [];
+  const prompts: string[] = [];
   const state = { enters: 0, reads: 0 };
   const host: TypedWakeHost = {
-    read: () => screenAt(state.reads++, state.enters, typed),
+    read: () => screenAt(state.reads++, state.enters, prompts.length > 0 ? prompts : typed),
     type: (_pane, text) => {
       typed.push(text);
       return true;
     },
     enter: () => {
+      state.enters += 1;
+      return true;
+    },
+    prompt: (_pane, text) => {
+      prompts.push(text);
       state.enters += 1;
       return true;
     },
@@ -117,11 +123,11 @@ describe('exact /tasks hint rows read as an empty box and accept a typed wake in
         delivered: true,
         typed: true,
         tries: 1,
-        reason: 'the working screen showed after 1 Enter',
+        reason: 'the working screen showed after the agent prompt',
         submittedAt: expect.any(Number),
         workingAt: expect.any(Number),
       });
-      expect(pane.typed).toEqual([WAKE_LINE]);
+      expect(pane.typed).toEqual([]);
       expect(pane.enters).toBe(1);
     }
 
@@ -136,11 +142,11 @@ describe('exact /tasks hint rows read as an empty box and accept a typed wake in
       delivered: true,
       typed: true,
       tries: 1,
-      reason: 'the working screen showed after 1 Enter',
+      reason: 'the working screen showed after the agent prompt',
       submittedAt: expect.any(Number),
       workingAt: expect.any(Number),
     });
-    expect(rotating.typed).toEqual([WAKE_LINE]);
+    expect(rotating.typed).toEqual([]);
     expect(rotating.enters).toBe(1);
   });
 
@@ -402,14 +408,25 @@ describe('a real draft is never wiped or submitted over in either profile', () =
     ]) {
       const pane = scriptedWakeHost((read) => (read < 2 ? hintScreen : draftScreen));
       const out = await deliverTypedWake(pane.host, `pane-${cli}`, WAKE_LINE, cli, FAST);
-      expect(out).toEqual({
-        delivered: false,
-        typed: true,
-        tries: 0,
-        reason: 'the box held text other than the line after the line was typed; no Enter was pressed',
-      });
-      expect(pane.typed).toEqual([WAKE_LINE]);
-      expect(pane.enters).toBe(0);
+      if (cli === 'antigravity') {
+        expect(out).toEqual({
+          delivered: false,
+          typed: true,
+          tries: 1,
+          reason: 'no working screen showed after the agent prompt',
+        });
+        expect(pane.typed).toEqual([]);
+        expect(pane.enters).toBe(1);
+      } else {
+        expect(out).toEqual({
+          delivered: false,
+          typed: true,
+          tries: 0,
+          reason: 'the box held text other than the line after the line was typed; no Enter was pressed',
+        });
+        expect(pane.typed).toEqual([WAKE_LINE]);
+        expect(pane.enters).toBe(0);
+      }
       expect(boxHoldsText(cli, draftText, draftScreen)).toBe(true);
     }
   });
