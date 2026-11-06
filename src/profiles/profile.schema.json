@@ -186,6 +186,10 @@
       "minimum": 150,
       "description": "optional: the space in milliseconds between the typed wake's two opening reads, never below 150 (one host read on a loaded host); absent, the measured default of 150; refused unless typed_wake is declared"
     },
+    "wake": {
+      "enum": ["agent-prompt"],
+      "description": "optional: how a declared typed wake is handed to the pane; agent-prompt asks herdr to prompt the agent and types nothing and presses no Enter; absent, the wake types the line and presses Enter; refused unless typed_wake is declared"
+    },
     "read_hint": {
       "type": "string", "minLength": 1, "maxLength": 60,
       "pattern": "^\\S(?:[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*\\S)?$",
