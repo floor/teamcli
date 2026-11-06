@@ -144,6 +144,7 @@ export type NativeFeed = { step(): void; codexFrame(identity: Identity, text: st
 /** The rejected set-aside keeps as many files as one spool pass reads. */
 export const STATUS_REJECTED_CAP = 64;
 const STATUS_SPOOL_SWEEP_CAP = 1_024;
+const STATUS_STAGING_KEEP_MS = 5 * 60_000;
 const spoolSweepResume = new Map<string, string>();
 
 function rejectedDroppedPath(root: string): string {
@@ -190,8 +191,8 @@ function isReceiptName(name: string): boolean {
   return name.endsWith('.json') && PRESENCE_ID.test(name.slice(0, -5));
 }
 
-/** Preserve the writer's exact staging names without an age cutoff: a producer may still
- *  rename one onto its receipt. Orphaned staging names are left for separate cleanup. */
+/** The atomic writer's exact staging form. Its own mtime, rather than its receipt id's
+ *  timestamp, sets the sweep's five-minute retention window. */
 function isReceiptStagingName(name: string): boolean {
   const suffix = /\.new\.[a-f0-9]{16}$/.exec(name);
   return suffix !== null && suffix.index + suffix[0].length === name.length
@@ -200,7 +201,7 @@ function isReceiptStagingName(name: string): boolean {
 
 /** Sweeps at most 1,024 names from a sorted directory snapshot per pass. The in-memory
  *  last-name cursor resumes after removed names too, and wraps so persistent entries cannot
- *  starve later junk. Receipts and exact writer staging names are preserved. Listing/sorting
+ *  starve later junk. Receipts and recent writer staging names are preserved. Listing/sorting
  *  still scales with the directory size. No payload is read and no directory is followed
  *  or recursively removed. */
 export function sweepNonId(root: string, directory: string): number {
@@ -224,12 +225,18 @@ export function sweepNonId(root: string, directory: string): number {
     }
     start = low === names.length ? 0 : low;
   }
+  const stagingCutoff = Date.now() - STATUS_STAGING_KEEP_MS;
   let removed = 0;
   for (let scanned = 0; scanned < Math.min(STATUS_SPOOL_SWEEP_CAP, names.length); scanned += 1) {
     const name = names[(start + scanned) % names.length]!;
     spoolSweepResume.set(directory, name);
-    if (isReceiptName(name) || isReceiptStagingName(name)) continue;
+    if (isReceiptName(name)) continue;
     const path = join(directory, name);
+    if (isReceiptStagingName(name)) {
+      // Age the name itself, never a link target. Unknown or future ages retain the name.
+      try { if (!(lstatSync(path).mtimeMs < stagingCutoff)) continue; }
+      catch { continue; }
+    }
     try { unlinkSync(path); removed += 1; }
     catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
