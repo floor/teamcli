@@ -181,11 +181,13 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
   const trace: Trace = { created: [], closed: [], typed: [], runs: [], renamed: [], managed: [] };
   const made = new Map<string, string>();
   const madeSpaces = new Map<string, string[]>();
+  // The verified naming reads the list back after a rename, so the mock records the name here.
+  const named = new Map<string, string>();
   // The CLI the restore left was exited by the run's own typing: the pane is its shell alone
   // from then until the seat's launch command runs in it.
   let exited = false;
   const agents = (): HerdrAgent[] | null => [{
-    name: scene.name === undefined ? null : scene.name,
+    name: named.get(PANE) ?? (scene.name === undefined ? null : scene.name),
     agent: 'codex',
     pane: PANE,
     workspace: WORKSPACE,
@@ -220,6 +222,7 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
     sendKey: () => true,
     renameAgent(_session, pane, name) {
       trace.renamed.push({ pane, name });
+      named.set(pane, name);
       return true;
     },
     closeWorkspace(_session, workspace) {
@@ -337,7 +340,8 @@ test('a named restored Codex seat whose endpoint died is relaunched in place and
   expect(seatRuns(made.trace)[0]?.command).toContain(`resume ${THREAD}`);
   expect(seatRuns(made.trace)[0]?.command).toContain(`--remote ${APP_URL}`);
   expect(made.trace.managed).toEqual([{ dir, seat: SEAT }]);
-  expect(made.trace.renamed).toEqual([{ pane: PANE, name: SEAT }]);
+  // The pane already lists the seat's name, so the verified naming does not rename it again.
+  expect(made.trace.renamed).toEqual([]);
   expect(seatState()?.stage).toBe('ready');
   expect(seatState()?.pane).toBe(PANE);
   expect(seatState()?.workspace).toBe(WORKSPACE);
