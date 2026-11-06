@@ -490,7 +490,7 @@ describe('a reply to the owner goes to its entity owner-reply endpoint', () => {
       cli: 'claude-code',
       launcher: null,
       launch: 'claude',
-      reach: { team: teamIdOf(root), seat: 'lead', session: 'acme', pane: 'w1:p1', address: null },
+      reach: { team: teamIdOf(root), seat: 'lead', session: 'acme', pane: 'pane1', address: null },
       mcp: [],
       skills: [],
       lifecycle: 'running',
@@ -503,7 +503,7 @@ describe('a reply to the owner goes to its entity owner-reply endpoint', () => {
       cli: 'claude-code',
       launcher: null,
       launch: 'claude',
-      reach: { team: 'hq', seat: 'orchestrator', session: 'hq', pane: 'w5:p1', address: null },
+      reach: { team: 'hq', seat: 'orchestrator', session: 'hq', pane: 'pane2', address: null },
       mcp: [],
       skills: [],
       lifecycle: 'running',
@@ -516,7 +516,7 @@ describe('a reply to the owner goes to its entity owner-reply endpoint', () => {
       cli: 'claude-code',
       launcher: null,
       launch: 'claude',
-      reach: { team: 'hq', seat: 'inbox', session: 'hq', pane: 'w6:p1', address: null },
+      reach: { team: 'hq', seat: 'inbox', session: 'hq', pane: 'pane3', address: null },
       mcp: [],
       skills: [],
       lifecycle: 'running',
@@ -540,13 +540,13 @@ describe('a reply to the owner goes to its entity owner-reply endpoint', () => {
     return { hqRoot, leadId: lead.id, orchestratorId: orchestrator.id, inboxId: inbox.id };
   }
 
-  const replying = (): Caller => ({ kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' });
+  const replying = (): Caller => ({ kind: 'seat', name: 'lead', pane: 'pane1', session: 'acme' });
 
   test("a declared endpoint delivers to the entity's orchestrator, across teams, and cites the record", async () => {
     const { hqRoot, leadId, orchestratorId } = endpointWorld();
     const wrote = writePolicySet(home, { level: 'entity', target: 'floor', name: 'owner-reply-to', value: 'orchestrator@hq' }, { now: NOW });
     expect(wrote.ok).toBe(true);
-    place('lead', 'w1:p1');
+    place('lead', 'pane1');
     sentTo('lead', SENT, { from: 'owner' });
     const result = await run([SENT, 'the answer'], replying(), { newId: () => REPLY });
 
@@ -579,7 +579,7 @@ describe('a reply to the owner goes to its entity owner-reply endpoint', () => {
     const { hqRoot, inboxId } = endpointWorld();
     const wrote = writePolicySet(home, { level: 'entity', target: 'floor', name: 'owner-reply-to', value: 'inbox@hq' }, { now: NOW });
     expect(wrote.ok).toBe(true);
-    place('lead', 'w1:p1');
+    place('lead', 'pane1');
     sentTo('lead', SENT, { from: 'owner' });
     const result = await run([SENT, 'the answer'], replying(), { newId: () => REPLY });
 
@@ -601,7 +601,7 @@ describe('a reply to the owner goes to its entity owner-reply endpoint', () => {
     writeFileSync(join(root, '.agents', 'team.yaml'), TEAM.replace('project: acme\n', 'project: acme\nentity: floor\n'));
     const wrote = writePolicySet(home, { level: 'entity', target: 'floor', name: 'owner-reply-to', value: 'orchestrator@nowhere' }, { now: NOW });
     expect(wrote.ok).toBe(true);
-    place('lead', 'w1:p1');
+    place('lead', 'pane1');
     sentTo('lead', SENT, { from: 'owner' });
     const result = await run([SENT, 'hello'], replying());
 
@@ -614,7 +614,7 @@ describe('a reply to the owner goes to its entity owner-reply endpoint', () => {
 
   test('an entity that declares no endpoint is refused, and nothing is written', async () => {
     writeFileSync(join(root, '.agents', 'team.yaml'), TEAM.replace('project: acme\n', 'project: acme\nentity: floor\n'));
-    place('lead', 'w1:p1');
+    place('lead', 'pane1');
     sentTo('lead', SENT, { from: 'owner' });
     const result = await run([SENT, 'hello'], replying());
 
@@ -630,7 +630,7 @@ describe('a reply to the owner goes to its entity owner-reply endpoint', () => {
     writeFileSync(join(root, '.agents', 'team.yaml'), TEAM.replace('project: acme\n', 'project: acme\nentity: floor\n'));
     mkdirSync(join(home, '.config', 'team'), { recursive: true });
     writeFileSync(entitiesPath(home), '- not a map of entities\n');
-    place('lead', 'w1:p1');
+    place('lead', 'pane1');
     sentTo('lead', SENT, { from: 'owner' });
     const result = await run([SENT, 'hello'], replying());
 
