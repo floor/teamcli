@@ -881,6 +881,7 @@
     "test/rules-at-launch.test.ts": 4,
     "test/rules-settings.test.ts": 5,
     "test/runtime-home-independent.test.ts": 3,
+    "test/runtime-trash-guard-independent.test.ts": 4,
     "test/runtime-trash.test.ts": 3,
     "test/s1-caller-once-independent.test.ts": 0,
     "test/s2-events-tail-independent.test.ts": 5,
