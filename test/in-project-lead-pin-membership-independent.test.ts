@@ -1,11 +1,10 @@
-// Membership note: this is the adapted copy of `in-project-lead-pin-independent.test.ts`, kept
-// beside that untouched original. At this integration base a team's project lives on the team
-// record (`teams.yaml` `project_id`); `projects.yaml` `teams[]` is derived and never read for
-// membership. The original's scenes register membership by writing `teams[]` into `projects.yaml`
-// only, which is inert here, so the scenes that claim a registered team record it with
-// `upsertTeam(home, teamIdOf(root), { …, projectId })` and quote the generated team id in YAML
-// (an all-digit id otherwise parses as a number and the registry file is refused). The scenes are
-// otherwise the original's, so the same six checks are exercised against this base.
+// Membership note: the earlier control `in-project-lead-pin-independent.test.ts` is retired.
+// It registered membership by writing `teams[]` into `projects.yaml` only, which this base does
+// not read, so five of its scenes stayed red. A team's project lives on the team record
+// (`teams.yaml` `project_id`); `projects.yaml` `teams[]` is derived. These scenes record a
+// registered team with `upsertTeam(home, teamIdOf(root), { …, projectId })` and quote the
+// generated team id in YAML (an all-digit id otherwise parses as a number and the registry file
+// is refused). The six checks are the original's, exercised against this base.
 //
 // Independent security verification for declared `in_project` lead-chain fallback, `renameSeat`
 // top-level `lead:` rewriting, and `approval.lead` pin forwarding:
