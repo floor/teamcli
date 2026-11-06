@@ -146,6 +146,7 @@
     "test/caller-handoff-independent.test.ts": 1,
     "test/caller-placement-ps-timeout.test.ts": 3,
     "test/caller.test.ts": 3,
+    "test/canonical-also-in-independent.test.ts": 4,
     "test/cascade-legs.test.ts": 0,
     "test/channel-admit.test.ts": 5,
     "test/channel-adoption-membership-independent.test.ts": 0,
