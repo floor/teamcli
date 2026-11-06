@@ -533,8 +533,8 @@ function lastEntry(scene: Scene): Record<string, unknown> {
   return entry as unknown as Record<string, unknown>;
 }
 
-function pointerOf(scene: Scene, sentAt?: string): string {
-  const pointer = pushPointer(MESSAGE_ID, { seat: 'owner', team: teamIdOf(scene.root) }, sentAt);
+function pointerOf(scene: Scene): string {
+  const pointer = pushPointer(MESSAGE_ID, { seat: 'owner', team: teamIdOf(scene.root) });
   if (pointer === null) throw new Error('the pointer could not be built');
   return pointer;
 }
@@ -585,7 +585,7 @@ describe('the ordinary send native leg (Codex)', () => {
 
     // One queue process, bound to the very socket the probe read, under the same thread.
     expect(calls).toEqual([
-      ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene, NOW.toISOString())],
+      ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
     ]);
     expect(server.requests).toEqual([
       { method: 'initialize' },
@@ -644,7 +644,7 @@ describe('the ordinary send native leg (Codex)', () => {
       { method: 'thread/read', threadId: THREAD_ID },
     ]);
     expect(calls).toEqual([
-      ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene, NOW.toISOString())],
+      ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
     ]);
     expect(recordBody(join(scene.dropDir, MESSAGE_ID)).endsWith('hello')).toBe(true);
     expect(markerOf(scene).attempts).toEqual([
@@ -758,7 +758,7 @@ exit 1
 
     expect(code).toBe(0);
     expect(calls).toEqual([
-      ['queue', '--remote', `unix://${socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene, NOW.toISOString())],
+      ['queue', '--remote', `unix://${socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
     ]);
     // The queue refused the pointer, and the drop leg took the send: the line follows the leg
     // actually taken, never the runtime queue the attempt just failed to reach.
@@ -793,7 +793,7 @@ exit 1
     expect(out).not.toContain('queued; its webhook fires');
     expect(out).not.toContain('webhook not delivered');
     expect(calls).toEqual([
-      ['queue', '--remote', `unix://${socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene, NOW.toISOString())],
+      ['queue', '--remote', `unix://${socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
     ]);
   });
 
@@ -852,7 +852,7 @@ exit 1
     expect(err).toBe('');
     expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); woken through its runtime queue\n`);
     expect(calls).toEqual([
-      ['queue', '--remote', `unix://${socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene, NOW.toISOString())],
+      ['queue', '--remote', `unix://${socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
     ]);
     // The probe connected to that same absolute socket.
     expect(server.socketPath).toBe(socketPath);
@@ -1133,7 +1133,7 @@ exit 1
     expect(withoutSendId(sent.out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); woken through its runtime queue\n`);
     // The recorded URL is the one the queue is handed, verbatim, after the probe read that socket.
     expect(sent.calls).toEqual([
-      ['queue', '--remote', `unix://${recordedSocket}`, '--thread', THREAD_ID, '--message', pointerOf(scene, NOW.toISOString())],
+      ['queue', '--remote', `unix://${recordedSocket}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
     ]);
     expect(server.requests).toEqual([
       { method: 'initialize' },
@@ -1218,7 +1218,7 @@ describe('the implied native-first default for a Codex receiver', () => {
     expect(err).toBe('');
     expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); woken through its runtime queue\n`);
     expect(calls).toEqual([
-      ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene, NOW.toISOString())],
+      ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
     ]);
     expect(server.requests).toEqual([
       { method: 'initialize' },
@@ -1274,7 +1274,7 @@ describe('the implied native-first default for a Codex receiver', () => {
     // order also names is what the cascade reaches, and the queue takes the send.
     expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); woken through its runtime queue\n`);
     expect(calls).toEqual([
-      ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene, NOW.toISOString())],
+      ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
     ]);
     expect(server.requests).toEqual([
       { method: 'initialize' },

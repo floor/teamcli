@@ -352,8 +352,8 @@ function queueCalls(file: string): string[][] {
     });
 }
 
-function pointerOf(scene: Scene, sentAt?: string): string {
-  const pointer = pushPointer(REPLY, { seat: 'owner', team: teamIdOf(scene.root) }, sentAt);
+function pointerOf(scene: Scene): string {
+  const pointer = pushPointer(REPLY, { seat: 'owner', team: teamIdOf(scene.root) });
   if (pointer === null) throw new Error('the pointer could not be built');
   return pointer;
 }
@@ -409,7 +409,7 @@ test('a reply to a Codex seat with no live pane takes its runtime queue, as a se
       /^team acme, session "acme"\nnative: queued to its native runtime \(drop \d+ characters\); no receipt within 20 ms\n$/,
     );
     expect(queueCalls(scene.queueLog)).toEqual([
-      ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene, NOW.toISOString())],
+      ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
     ]);
     expect(server.requests).toEqual([
       { method: 'initialize' },
@@ -434,7 +434,7 @@ test('a declared [native, drop] order is walked native first by a reply too', as
     expect(result.code).toBe(0);
     expect(result.err).toBe('');
     expect(queueCalls(scene.queueLog)).toEqual([
-      ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene, NOW.toISOString())],
+      ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
     ]);
     expect(lastEntry(scene)).toMatchObject({ id: REPLY, via: 'native', outcome: 'sent (unconfirmed)' });
   });

@@ -32,7 +32,7 @@ import { currentBriefClaim, isGeneralBriefRecord } from '../launch/general-brief
 import { registeredRootOf } from '../registry/teams.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
 import { namingFor, senderDisplayName } from '../send/names.ts';
-import { alreadyReadSentence, readSealedRecord, recordAuthOfSealed, settledReadOf } from '../send/record.ts';
+import { readSealedRecord, recordAuthOfSealed } from '../send/record.ts';
 import { attributedBody } from '../send/sender-claim.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { readState, type SeatState, type State } from '../state.ts';
@@ -608,18 +608,6 @@ function callTool(params: unknown, serving: Serving): unknown {
       () => serving.alive?.() ?? null,
     );
     if (!read.ok) {
-      if (read.served === 'already-served') {
-        const key = messageKeyState(serving.home);
-        if (key.kind === 'key') {
-          const settled = settledReadOf(
-            serving.dropDir,
-            id,
-            { to: serving.seat, root: serving.root, session: serving.session, lead: serving.team.orchestrator },
-            key.key,
-          );
-          if (settled !== null) return toolText(alreadyReadSentence(id, settled.at, settled.readBy, serving.team.seats.map((one) => one.name)));
-        }
-      }
       // A drop an earlier build wrote is refused like any file that is not a record, but it is not
       // a record that could have been admitted: it is not raised to the owner. A record-shaped file
       // that fails — tampered, truncated or foreign — keeps its refusal and its event.

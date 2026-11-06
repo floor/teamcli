@@ -732,8 +732,6 @@
     "test/name-length.test.ts": 4,
     "test/names-unique-independent.test.ts": 5,
     "test/names-unique.test.ts": 3,
-    "test/native-notify-body-lost.test.ts": 2,
-    "test/native-read-notice.test.ts": 5,
     "test/native-route-acceptance.test.ts": 2,
     "test/native-swap-hold-acceptance.test.ts": 0,
     "test/next.test.ts": 5,

@@ -528,13 +528,9 @@ describe('team drops --read', () => {
     const first = await run(['--read', '--seat', 'lead', '--session', 'acme']);
     expect(first).toEqual({ code: 0, out: 'from lead (team lead):\n\nhello\n', err: '' });
     expectReceipt(D_RECORD);
-    // The receipt is what says it was handed over: the next turn names that read and serves no body.
+    // The receipt is what says it was handed over: the next turn finds nothing waiting.
     const second = await run(['--read', '--seat', 'lead', '--session', 'acme']);
-    expect(second.code).toBe(0);
-    expect(second.err).toBe('');
-    expect(second.out).toContain('no unread drops');
-    expect(second.out).toContain(`${D_RECORD}: already read at`);
-    expect(second.out).not.toContain('hello');
+    expect(second).toEqual({ code: 0, out: '', err: '' });
   });
 
   test('a receipt that does not bind the current claim does not hide the brief’s delivery', async () => {
@@ -575,10 +571,7 @@ describe('team drops --read', () => {
     const context = { to: 'lead', root, session: 'acme' };
     expect(listUnread(dropDir, context, home)).toEqual([]);
     const result = await run(['--read', '--seat', 'lead', '--session', 'acme']);
-    expect(result.code).toBe(0);
-    expect(result.err).toBe('');
-    expect(result.out).toContain('no unread drops');
-    expect(result.out).toContain(`${record.id}: already read at`);
+    expect(result).toEqual({ code: 0, out: '', err: '' });
   });
 
   test('--read is an invocation of the launch line: --seat is required and its own flags are refused', async () => {
@@ -630,12 +623,9 @@ describe('team drops --read', () => {
     const second = await run(['--read', '--seat', 'lead']);
     expect(second.out.split('\n').filter((line) => line.startsWith('message '))).toEqual(['message 1', 'message 0']);
     expect(readdirSync(dropDir).filter((name) => name.endsWith('.read.json'))).toHaveLength(12);
-    // The receipts are what leave nothing behind: a third read names the newest and serves no body.
+    // The receipts are what leave nothing behind: a third read has no body at all.
     const third = await run(['--read', '--seat', 'lead']);
-    expect(third.code).toBe(0);
-    expect(third.err).toBe('');
-    expect(third.out).toContain('no unread drops');
-    expect(third.out).toContain(': already read at');
+    expect(third).toEqual({ code: 0, out: '', err: '' });
   });
 
   test('a plain-text drop an earlier build wrote is skipped and reported, and the signed record behind it is read', async () => {
@@ -692,8 +682,7 @@ describe('team drops --read', () => {
     // The two oldest signed records are what waited, not the old file: it is skipped every turn.
     const second = await run(['--read', '--seat', 'lead']);
     expect(second.out.split('\n').filter((line) => line.startsWith('message '))).toEqual(['message 1', 'message 0']);
-    expect(second.err).toContain('team drops: 1 drop(s) are not signed records and are not served\n');
-    expect(second.err).toContain(': already read at');
+    expect(second.err).toBe('team drops: 1 drop(s) are not signed records and are not served\n');
     expect(readdirSync(dropDir).filter((name) => name.endsWith('.read.json'))).toHaveLength(12);
   });
 
@@ -738,10 +727,7 @@ describe('team drops --read', () => {
     expect(listDrops(dropDir, key.key, context)).toEqual({ kind: 'ok', rows: [] });
     expect(listUnread(dropDir, context, home)).toEqual([]);
     const again = await run(['--read', '--seat', 'lead', '--session', 'acme']);
-    expect(again.code).toBe(0);
-    expect(again.err).toBe('');
-    expect(again.out).toContain('no unread drops');
-    expect(again.out).toContain(`${legacyId}: already read at`);
+    expect(again).toEqual({ code: 0, out: '', err: '' });
   });
 
   test('a file an earlier build wrote is never handed over and gets no receipt', async () => {

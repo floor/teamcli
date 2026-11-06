@@ -564,14 +564,11 @@ difference: lead/m1 does not verify: the record is not a message
     const receipt = readFileSync(receiptPath, 'utf8');
     expect(statusOf(scene.dropDir, ID, scene.context, key)).toBe('read');
 
-    // `team messages` sees the inbox's receipt and shows the id as read, with no body, and it
-    // does not rewrite the receipt.
+    // `team messages` sees the inbox's receipt and finds nothing waiting: it never shows the
+    // message as `sent` again, and it does not rewrite the receipt.
     const result = await run();
     expect(result.code).toBe(0);
-    expect(result.out).toContain(ID);
-    expect(result.out).toContain('read');
-    expect(result.out).not.toContain(BODY);
-    expect(result.out).toContain('1 message\n');
+    expect(result.out).toBe('team acme, session "acme"\n  ID  FROM  TO  SENT  STATUS\n\nnote: nothing is waiting\n\n0 messages\n');
     expect(readFileSync(receiptPath, 'utf8')).toBe(receipt);
     expect(listUnread(scene.dropDir, scene.context, home)).toEqual([]);
   });
@@ -599,11 +596,9 @@ difference: lead/m1 does not verify: the record is not a message
     expect(statusOf(scene.dropDir, ID, scene.context, key)).toBe('read');
     expect(listUnread(scene.dropDir, scene.context, home)).toEqual([]);
 
-    // A second `team messages` shows the same read row and still no body.
+    // A second `team messages` has nothing left to show either.
     const again = await run();
-    expect(again.out).toContain(ID);
-    expect(again.out).toContain('read');
-    expect(again.out).not.toContain(BODY);
+    expect(again.out).toBe('team acme, session "acme"\n  ID  FROM  TO  SENT  STATUS\n\nnote: nothing is waiting\n\n0 messages\n');
   });
 
   test('a read after a receipt already exists never lowers it', async () => {
@@ -665,10 +660,7 @@ difference: lead/m1 does not verify: the record is not a message
 
     const result = await run();
     expect(result.code).toBe(0);
-    expect(result.out).toContain(ID);
-    expect(result.out).toContain('read');
-    expect(result.out).not.toContain(BODY);
-    expect(result.out).toContain('1 message\n');
+    expect(result.out).toBe('team acme, session "acme"\n  ID  FROM  TO  SENT  STATUS\n\nnote: nothing is waiting\n\n0 messages\n');
     expect(result.out).not.toContain(BODY);
     expect(readFileSync(recordReceiptFile(scene.dropDir, ID, 'replied'), 'utf8')).toBe(before);
     expect(existsSync(recordReceiptFile(scene.dropDir, ID, 'read'))).toBe(false);

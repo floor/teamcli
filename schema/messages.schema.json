@@ -93,8 +93,7 @@
             "enum": [
               "shown",
               "refused",
-              "waiting",
-              "read"
+              "waiting"
             ]
           },
           "sender_attribution": {

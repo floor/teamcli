@@ -2000,7 +2000,7 @@ export const MESSAGES_OUTPUT_SCHEMA: CommandSchemaSpec = {
           // `waiting`: a record addressed to another mailbox, listed read-only — no receipt
           // published for it; `body` rides along only in the owner's reading, and a record that
           // does not verify carries none.
-          status: { type: 'string', enum: ['shown', 'refused', 'waiting', 'read'] },
+          status: { type: 'string', enum: ['shown', 'refused', 'waiting'] },
           // What the sender rests on: the shared checkout key every seat can read
           // (`unverified_claim`), the launch's own seat brief bound to the seat's current claim,
           // or nothing at all.
