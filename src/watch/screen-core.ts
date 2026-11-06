@@ -1394,10 +1394,13 @@ function statusLast(
   // wrapped, after a blank line, or beginning with the prompt glyph. None is drawn at the
   // prompt column.
   //
-  // A window that starts at or inside the box, or a visible continuation or prompt row
-  // pressed against the prompt from above, is not the frame the captures draw, and the rows
-  // above it cannot be shown to be outside the box: fail closed rather than take the lowest
-  // prompt row for an input row.
+  // A window that starts inside the box, or a visible continuation or prompt row pressed
+  // against the prompt from above, is not the frame the captures draw, and the rows above it
+  // cannot be shown to be outside the box: fail closed rather than take the lowest prompt row
+  // for an input row. A Cursor window that opens on the prompt row itself is the live
+  // composer: the transcript has left the window and the first row is `  →`, with the status
+  // row under it. That row is the input. Any other profile still fails closed when its window
+  // starts on the prompt.
   let low = status - 1;
   while (low >= 0 && !composer.prompt.test(lines[low] ?? '')) low--;
   if (low < 0) return { kind: 'unknown' };
@@ -1428,6 +1431,9 @@ function statusLast(
     }
   }
   const above = lines[input - 1] ?? '';
+  // The dialect rewrites the arrow in the compiled prompt, so the source does not spell `→`.
+  // The row is the column: two spaces, then the arrow, at the top of the window.
+  const opensOnPrompt = input === 0 && /^ {2}→/u.test(lines[input] ?? '');
   let end = status;
   if (border && input > 0 && border.top.test(above)) {
     if (status - 1 <= input) return { kind: 'unknown' };
@@ -1445,7 +1451,7 @@ function statusLast(
       if ((lines[i] ?? '').trim() !== '') return { kind: 'unknown' };
     }
     end = status - 1;
-  } else if (input === 0 || above.trim() !== '') {
+  } else if (!opensOnPrompt && (input === 0 || above.trim() !== '')) {
     return { kind: 'unknown' };
   }
   // The lowest prompt row above the status line is the input row when it holds text: the

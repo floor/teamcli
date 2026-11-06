@@ -908,14 +908,15 @@ describe('the box\'s top frame (Cursor)', () => {
     expect(d.calls).toEqual([]);
   });
 
-  test('a window whose top frame scrolled off reads unknown', () => {
+  test('a window whose top frame scrolled off is the live composer', () => {
+    // The window opens on the prompt, with the status row and the workspace line under it.
     const lines = fixture('idle').split('\n');
     const at = lines.findIndex((line) => line === '  → Plan, search, build anything');
     const only = lines.slice(at).join('\n');
-    expect(readScreen('cursor', only).kind).toBe('unknown');
+    expect(readScreen('cursor', only).kind).toBe('idle');
     const held = only.replace('  → Plan, search, build anything', '  → Rules.');
-    expect(readScreen('cursor', held).kind).toBe('unknown');
-    expect(boxHoldsText('cursor', 'Rules.', held)).toBe(false);
+    expect(readScreen('cursor', held).kind).toBe('unsent');
+    expect(boxHoldsText('cursor', 'Rules.', held)).toBe(true);
   });
 });
 
