@@ -340,12 +340,13 @@ describe('resolveTarget by the team\'s lead address and by nickname', () => {
     expect(target.error).toContain('signature verification failed');
   });
 
-  test('a project record the roster line never names is still read: the project registry supplies the context', () => {
+  test('a project record the roster line never names is still read: the team record\'s project supplies the context', () => {
     const w = world('alpha', 'alpha', 'atlas', [seatBlock('coordinator', 'atlas', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
     const id = teamIdOf(w.root);
     const atlas = agent(w.home, { name: 'atlas', role: 'coordinator', cli: 'claude-code', team: id, seat: 'atlas', session: 'alpha', pane: 'pane-alpha-atlas' });
     const builder = agent(w.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: id, seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
-    // The team record carries a roster line and names no project; the project registry names it.
+    // The roster line names no project; the team record joins one, and that is the context the
+    // signed project record is read through.
     team(w.home, id, 'alpha', 'alpha', w.root, [
       { agent: atlas.id, seat: 'atlas', role: 'coordinator', leads: true },
       { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false, nickname: 'zeus' },
@@ -355,7 +356,11 @@ describe('resolveTarget by the team\'s lead address and by nickname', () => {
       { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false, nickname: 'zeus' },
     ] });
     expect(record.projectId).toBeNull();
-    upsertProject(w.home, 'acme-proj', { name: 'Acme', teams: [id] });
+    // Membership is stored on the team record: the project side's legacy `teams` list is
+    // diagnostics only, so the join is the team's own write.
+    upsertProject(w.home, 'acme-proj', { name: 'Acme' });
+    const joined = upsertTeam(w.home, id, { projectId: 'acme-proj', projects: ['acme-proj'] });
+    expect(joined.projectId).toBe('acme-proj');
     installKey(w.home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
     // A record at a level the key does not reach is damage the resolution must see, not skip.
     const signed = signConfigRecord(

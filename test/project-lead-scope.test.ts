@@ -20,7 +20,7 @@ import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { readAgents, type Agent } from '../src/registry/agents.ts';
-import { readProjects } from '../src/registry/projects.ts';
+import { get, list } from '../src/registry/projects.ts';
 import { readTeams, teamIdOf } from '../src/registry/teams.ts';
 import { registerLaunch } from '../src/registry/sync.ts';
 import { admitSend, type AdmitContext } from '../src/send/admit.ts';
@@ -241,6 +241,14 @@ function agentOf(seatName: string, root: string): Agent {
   return found;
 }
 
+/** The admission context the send path builds: membership as the registry derives it from the
+ *  team records, not the legacy lists a project file stores. */
+function projectsNow(): AdmitContext['projects'] {
+  const projects: AdmitContext['projects'] = {};
+  for (const project of list(home)) if (project.id !== undefined) projects[project.id] = project;
+  return projects;
+}
+
 function sendHost(): SendHost {
   const native: NativePane = { typeText: () => false, pressEnter: () => false, status: () => null, wait: async () => {} };
   return {
@@ -257,7 +265,7 @@ function sendHost(): SendHost {
 describe('the project lead changes nothing outside its own team', () => {
   test('the registry names this caller the project lead of its project', () => {
     const lead = agentOf('lead', alphaRoot);
-    const project = readProjects(home)[PROJECT];
+    const project = get(home, PROJECT);
     expect(project?.lead).toBe(lead.id);
     expect([...(project?.teams ?? [])].sort()).toEqual([teamIdOf(alphaRoot), teamIdOf(bravoRoot)].sort());
   });
@@ -310,7 +318,7 @@ describe('the project lead changes nothing outside its own team', () => {
 });
 
 describe('the project lead reaches the leads of its teams — by admission alone', () => {
-  const context = (): AdmitContext => ({ projects: readProjects(home), crossTeams: {} });
+  const context = (): AdmitContext => ({ projects: projectsNow(), crossTeams: {} });
 
   test('admission admits the project lead to a lead of its project, by its own rule', () => {
     const records = readTeams(home);

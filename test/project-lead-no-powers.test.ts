@@ -23,7 +23,7 @@ import { runRemove } from '../src/commands/remove.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { Terminal } from '../src/launch/terminal.ts';
 import { registerAgent, type Agent } from '../src/registry/agents.ts';
-import { readProjects, upsertProject } from '../src/registry/projects.ts';
+import { list, upsertProject } from '../src/registry/projects.ts';
 import { readTeams, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { admitSend, PROJECT_RULES, type AdmitContext } from '../src/send/admit.ts';
 import { emptySession, updateState } from '../src/state.ts';
@@ -179,6 +179,14 @@ function register(world: World): { leadA: Agent; leadB: Agent; builderB: Agent; 
     by: 'owner',
   });
   return { leadA: leadARecord, leadB: leadBRecord, builderB: builderBRecord, teamA, teamB };
+}
+
+/** The admission context the send path builds: membership as the registry derives it from the
+ *  team records, not the legacy lists a project file stores. */
+function projectContext(home: string): AdmitContext['projects'] {
+  const projects: AdmitContext['projects'] = {};
+  for (const project of list(home)) if (project.id !== undefined) projects[project.id] = project;
+  return projects;
 }
 
 function launching(onLaunch: () => void): Launch & { closed: number } {
@@ -361,12 +369,12 @@ describe('the one standing the project lead holds: admission', () => {
     const here = world();
     const team = register(here);
     const teams = readTeams(here.home);
-    const context: AdmitContext = { projects: readProjects(here.home), crossTeams: {} };
+    const context: AdmitContext = { projects: projectContext(here.home), crossTeams: {} };
 
     // What the standing stands on: the file's claim, written to the registry as the project's
     // own `lead` — an agent id, and both teams named by the one project.
     expect(context.projects['oak']?.lead).toBe(team.leadA.id);
-    expect(context.projects['oak']?.teams).toEqual([team.teamA, team.teamB]);
+    expect([...(context.projects['oak']?.teams ?? [])].sort()).toEqual([team.teamA, team.teamB].sort());
 
     // The leads pair writes: the project lead reaches its project's team leads.
     expect(admitSend(team.leadA, team.leadB, teams, undefined, context)).toEqual({

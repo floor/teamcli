@@ -35,7 +35,7 @@ import * as projectRegistry from '../registry/projects.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
 import { socketAddressOf, type SocketAddress } from '../send/address.ts';
-import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, unverifiedGrantFor, type AdmitContext, type AdmitTeam, type AdmitTeams, type DeclaredSender, type ReplyContext, type SendSide } from '../send/admit.ts';
+import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, unverifiedGrantFor, type AdmitContext, type AdmitProjects, type AdmitTeam, type AdmitTeams, type DeclaredSender, type ReplyContext, type SendSide } from '../send/admit.ts';
 import { deliverCompose } from '../send/compose.ts';
 import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.ts';
 import { appendHistory } from '../send/history.ts';
@@ -6666,7 +6666,15 @@ export function admissionOf(
   // declaration of that setting yet, so the chain is empty here and each reach stands at its own
   // default: the project's crossing seats off, the entity's lead pair and its main orchestrator's
   // reach on.
-  const context: AdmitContext = { projects: projectRegistry.readProjects(home), crossTeams: {}, ...(reply !== undefined ? { reply } : {}) };
+  // Membership is the registry's derived view: the raw records keep only the legacy stored
+  // `teams` list, which no writer maintains any more, so a project would reach admission naming
+  // no team and its rules would never fire. `list` derives each project's teams from the team
+  // records, the one place membership is stored.
+  const projects: AdmitProjects = {};
+  for (const project of projectRegistry.list(home)) {
+    if (project.id !== undefined) projects[project.id] = project;
+  }
+  const context: AdmitContext = { projects, crossTeams: {}, ...(reply !== undefined ? { reply } : {}) };
   const verdict = admitSend(sender, judged, records, undefined, context);
   if (verdict.ok) return { ok: true, rule: verdict.rule, sender };
   // The grant folder is asked for a recorded sender alone: a grant names an identity, and the
