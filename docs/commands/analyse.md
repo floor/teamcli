@@ -36,6 +36,6 @@ Without a named analyser, `team analyse` refuses before reading any file:
 
 ```console
 $ team analyse . ; echo "exit $?"
-team analyse: no analyser is named for this project; set analyser in entities.yaml or projects.yaml before running team analyse
+team analyse: no analyser is named for this project; set an owner-signed analyser in entities.yaml or projects.yaml before running team analyse
 exit 1
 ```

@@ -53,7 +53,8 @@ seats:
 
 const parsedTeam = validateTeamFile(TEAM_YAML);
 if (!parsedTeam.ok) throw new Error(JSON.stringify(parsedTeam.errors));
-const LEAD_SEAT = parsedTeam.team.seats[0]!;
+const team = parsedTeam.team;
+const LEAD_SEAT = team.seats[0]!;
 const LEAD_TITLE = workspaceLabel(LEAD_SEAT);
 const LEAD_DISPLAY = displayAgent(LEAD_SEAT);
 const DEFAULT_ROWS_WORD = sidebarRowsWord(DEFAULT_SIDEBAR_ROWS);
@@ -93,11 +94,11 @@ function setupWorld(options?: { writeValidConfig?: boolean; recordCurrentReload?
   // The file names no owner-reply endpoint. The check reports that as its own difference, so the
   // sidebar scenes declare one and keep their exit about the sidebar.
   upsertTeam(home, teamIdOf(root), {
-    project: parsedTeam.team.project,
-    session: parsedTeam.team.session,
+    project: team.project,
+    session: team.session,
     root,
     entity: 'acme',
-    roster: parsedTeam.team.seats.map((seat, at) => ({
+    roster: team.seats.map((seat, at) => ({
       agent: `agt_${String(at + 1).padStart(12, '0')}`,
       seat: seat.name,
       role: seat.role,
