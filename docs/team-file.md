@@ -972,3 +972,28 @@ items, one that is unchecked and carries no `claimed:` or `done:` marker; `team 
 idle workers with empty queues, and the unclaimed items left in that backlog, after
 `watch.team_idle`. See [queue reports](commands/watch.md#queue-reports) for the task format and
 unknown readings.
+
+## Grok command deny settings
+
+The signed team policy `grok-command-deny` accepts `off`, `git`, and `git-and-tests`; it is off
+unless declared at team scope. `team policy set team` writes the signed declaration under
+`policies:`. Entity, project, and seat declarations are refused.
+
+For Cursor seats whose declared model is Grok, the generator adds `Shell(git)` to
+`permissions.deny` in the supplied `.cursor/cli.json` object. `git-and-tests` also adds
+`Shell(bun test)`. Existing allow rules, deny rules, and unrelated settings stay in place;
+generation refuses malformed settings, and repeating it adds no duplicate. Turning the policy
+off contributes no rule and removes none of the rules already in a config.
+
+For native Grok, the generator returns repeatable launch arguments: `--deny 'Bash(git)'` and
+`--deny 'Bash(git *)'`, plus `--deny 'Bash(bun test)'` and `--deny 'Bash(bun test *)'` for
+`git-and-tests`. These are adapter inputs tested with synthetic settings. The vendor formats
+are described in [Cursor permissions](https://docs.cursor.com/cli/reference/permissions) and
+[Grok permissions](https://docs.x.ai/build/features/permissions).
+
+This stage does not write a CLI file or attach the generated launch arguments. The placement
+adapter must supply the seat's own folder before installation is wired. `team check` reads
+Cursor's file only in a recorded launch folder and checks native Grok's recorded launch
+arguments. It names the seat and missing rules, or the absence of a recorded folder; it never
+guesses a shared folder or repairs a config. Missing, malformed, linked, or oversized Cursor
+files report a gap. Other models and human or stopped seats are left alone.

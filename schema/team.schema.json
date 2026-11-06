@@ -835,6 +835,58 @@
     },
     "policies": {
       "type": "object",
+      "properties": {
+        "grok-command-deny": {
+          "type": "object",
+          "required": [
+            "value",
+            "setter",
+            "date",
+            "kind",
+            "generation",
+            "signature"
+          ],
+          "properties": {
+            "value": {
+              "enum": [
+                "off",
+                "git",
+                "git-and-tests"
+              ]
+            },
+            "setter": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "expiry": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "enum": [
+                "enforced",
+                "advised"
+              ]
+            },
+            "target": {
+              "type": "string"
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "signature": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "$comment": "team scope only; off by default; denies git or git and test runs for Grok seats"
+        }
+      },
       "additionalProperties": {
         "type": "object",
         "required": [

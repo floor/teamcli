@@ -25,7 +25,7 @@ Every enforced policy comes from the release catalogue (`dev-mode`, `seats-cross
 `daemon.chores-backoff-cap-ms`, `daemon.heartbeat`, `actions-commands`,
 `workspace.sidebar.rows`, `workspace.sidebar.manage`, `workspace.sidebar.status_indicators`,
 `daemon.sidebar-ttl-ms`, `daemon.sidebar-refresh-ms`, `seat.dialog.answer`,
-`seat-health.watchdog.after`, `seat-health.watchdog.auto-restart`).
+`seat-health.watchdog.after`, `seat-health.watchdog.auto-restart`, `grok-command-deny`).
 Inheritance tightens only: a lower level that loosens a higher level is refused at load and before
 writing, naming both levels. Where no level sets a value, the release default applies (`off` for
 gate-lifting policies); an expired value counts as unset at its level.
@@ -38,6 +38,19 @@ whose method is POST, PUT, PATCH or DELETE (`-X` and `--method`; the last verb n
 that counts), and an `api` call that adds
 `-f`, `--field`, `-F`, `--raw-field` or `--input` without an explicit GET. A graphql read stays
 allowed, including a path that ends in `/graphql`. A graphql query that contains `mutation` is refused.
+
+`grok-command-deny` is a team-only word: `off` (the default), `git`, or `git-and-tests`.
+It requests command-deny settings for native Grok seats and Cursor seats whose declared model
+is Grok. The tests word adds the `bun test` command and its argument forms. Other models keep
+their settings. An expired declaration is unset. The owner can declare it with:
+
+    team policy set team grok-command-deny git --file .agents/team.yaml
+    team policy set team grok-command-deny git-and-tests --file .agents/team.yaml
+    team policy unset team grok-command-deny --file .agents/team.yaml
+
+This stage generates adapter settings and makes `team check` name missing rules. It does not
+install either output yet: per-seat file placement and launch integration wait for the seat's
+own-folder placement. See [Grok command deny settings](../team-file.md#grok-command-deny-settings).
 
 `client-grant-max-duration` is how long a new client grant may last: `7d`, `30d`, `90d` or `none` (no
 end date) for every kind of grant, or per kind, `send=30d;up=90d;bundle=none`. Unset it is

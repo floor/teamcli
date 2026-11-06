@@ -36,6 +36,7 @@ import { parseSenderLineValue, senderLineValueProblem } from '../settings/sender
 import { WEBHOOK_SENDER_DEADLINE_MAX_MS, WEBHOOK_SENDER_DEADLINE_MIN_MS, WEBHOOK_SENDER_DEADLINE_MS } from '../settings/webhook-sender.ts';
 import { EVENT_SEGMENT_MB, EVENT_SEGMENT_MB_MAX, EVENT_THRESHOLDS } from './events.ts';
 import { formatModelRule, modelRuleProblem, parseModelRule } from './model-rule.ts';
+import { parseGrokCommandDeny, type GrokCommandDeny } from '../settings/grok-command-deny.ts';
 
 /** The four inheritance levels of Kernel amendment 02 §2.2, outermost first. */
 export type PolicyLevel = 'entity' | 'project' | 'team' | 'seat';
@@ -132,6 +133,7 @@ export const ENFORCED_POLICY_NAMES = [
   'swap-wait-seconds',
   'owner-reply-to',
   'codex-daemon',
+  'grok-command-deny',
   'idle-threshold',
   'watch-read-budget-ms',
   'watch-read-timeout-ms',
@@ -333,6 +335,7 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   swap_wait_seconds: 'swap-wait-seconds',
   owner_reply_to: 'owner-reply-to',
   codex_daemon: 'codex-daemon',
+  grok_command_deny: 'grok-command-deny',
   idle_threshold: 'idle-threshold',
   watch_read_budget_ms: 'watch-read-budget-ms',
   'watch-read-budget': 'watch-read-budget-ms',
@@ -1739,6 +1742,17 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     parseValue: parseOnOff,
     // 'off' is the opt-out and is always within; 'on' is only within an inherited 'on'.
     isWithin: (lower: 'on' | 'off', higher: 'on' | 'off') => lower === 'off' || higher === 'on',
+  },
+  'grok-command-deny': {
+    name: 'grok-command-deny',
+    kind: 'enforced',
+    levels: ['team'],
+    defaultValue: 'off',
+    gateLifting: false,
+    parseValue: parseGrokCommandDeny,
+    valueProblem: () => 'grok-command-deny must be off, git, or git-and-tests',
+    isWithin: (lower: GrokCommandDeny, higher: GrokCommandDeny) =>
+      ['off', 'git', 'git-and-tests'].indexOf(lower) >= ['off', 'git', 'git-and-tests'].indexOf(higher),
   },
   // How long a seat may sit idle before its lead hears about it: a duration with its unit (`5m`,
   // `30s`) or whole seconds, five minutes when nothing declares it, always read as numeric
