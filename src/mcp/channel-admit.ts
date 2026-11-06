@@ -9,7 +9,6 @@ import { projectIdOfTeam } from '../dev_mode.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE } from '../launch/general-brief.ts';
-import { RUNTIME_FROM, RUNTIME_RULE } from '../send/endpoint-notice.ts';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { KeyObject } from 'node:crypto';
@@ -67,13 +66,6 @@ export function admitChannelDelivery(input: {
     && input.payload.rule === GENERAL_BRIEF_RULE
   ) {
     return { ok: true, rule: GENERAL_BRIEF_RULE };
-  }
-  if (
-    input.payload.from === RUNTIME_FROM
-    && input.payload.from_id === null
-    && input.payload.rule === RUNTIME_RULE
-  ) {
-    return { ok: true, rule: RUNTIME_RULE };
   }
   if (input.payload.from_id === null) {
     return { ok: false, why: `the signed record names no agent id for ${JSON.stringify(input.payload.from)}` };
@@ -151,7 +143,7 @@ function judge(
 }
 
 /** Ordinary records bind a named recipient to both the current agent and a unique roster entry.
- *  Only the reserved owner, launch, and runtime principals retain the declared-seat/null-id exceptions. */
+ *  Only the reserved owner/launch principals retain the declared-seat/null-id exceptions. */
 function receivingSide(
   input: { home: string; root: string; session: string; seat: string; team: TeamFile; payload: { from: string; from_id: string | null; rule: string; to_id?: string | null } },
   receivingId: string,
@@ -159,8 +151,7 @@ function receivingSide(
   const holder = currentHolderOf(input.home, receivingId, input.seat);
   const named = input.payload.to_id;
   const reserved = (input.payload.from === OWNER_MAILBOX && input.payload.from_id === null)
-    || (input.payload.from === GENERAL_BRIEF_FROM && input.payload.from_id === null && input.payload.rule === GENERAL_BRIEF_RULE)
-    || (input.payload.from === RUNTIME_FROM && input.payload.from_id === null && input.payload.rule === RUNTIME_RULE);
+    || (input.payload.from === GENERAL_BRIEF_FROM && input.payload.from_id === null && input.payload.rule === GENERAL_BRIEF_RULE);
   if (!reserved && (typeof named !== 'string' || !isAgentId(named))) {
     return { ok: false, why: 'an ordinary channel record must name its recipient agent id' };
   }

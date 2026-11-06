@@ -1,6 +1,6 @@
 // A Codex endpoint that is not listening produces one signed runtime notice for the lead.
 // A later send while it is still down does not write another. Once the endpoint is listening
-// again, the next outage can write one more. Channel admission names that runtime principal.
+// again, the next outage can write one more. The notice stays with the drop readers.
 import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -52,19 +52,11 @@ describe('a blocked Codex endpoint', () => {
     }
   });
 
-  test('channel admission names the runtime principal and refuses any other rule', () => {
+  test('channel admission refuses a runtime notice', () => {
     const dir = world();
     try {
-      expect(admitChannelDelivery({
-        payload: { from: 'runtime', from_id: null, to: 'lead', to_id: null, rule: RUNTIME_RULE },
-        home: dir.home,
-        root: dir.root,
-        session: 'dispatch',
-        seat: 'lead',
-        team,
-      })).toEqual({ ok: true, rule: RUNTIME_RULE });
       const refused = admitChannelDelivery({
-        payload: { from: 'runtime', from_id: null, to: 'lead', to_id: null, rule: 'a seat to its lead' },
+        payload: { from: 'runtime', from_id: null, to: 'lead', to_id: null, rule: RUNTIME_RULE },
         home: dir.home,
         root: dir.root,
         session: 'dispatch',
@@ -72,6 +64,7 @@ describe('a blocked Codex endpoint', () => {
         team,
       });
       expect(refused.ok).toBe(false);
+      if (!refused.ok) expect(refused.why).toContain('must name its recipient agent id');
     } finally {
       rmSync(dir.base, { recursive: true, force: true });
     }

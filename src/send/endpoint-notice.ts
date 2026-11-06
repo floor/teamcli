@@ -1,5 +1,8 @@
 // One signed notice when a Codex endpoint is not listening. A later send to the same blocked
-// endpoint does not write another, until a send finds that endpoint listening again.
+// endpoint does not write another, until a send finds that endpoint listening again and is
+// enqueued. Restoring the team does not clear that mark. The notice reaches the lead through
+// the drop readers. Channel admission does not name this principal: the signature is the shared
+// home key, and it proves only that a seat wrote the record.
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -7,7 +10,7 @@ import { realpathSync } from 'node:fs';
 import { dropMessage } from './native.ts';
 import { signRecord } from './record.ts';
 
-/** The principal a runtime notice is signed as. Channel admission names this principal. */
+/** The principal a runtime notice is signed as. Drop readers print it. Channel admission does not. */
 export const RUNTIME_FROM = 'runtime';
 
 /** The rule on every runtime notice to the lead, including a blocked Codex endpoint. */
