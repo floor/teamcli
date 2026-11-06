@@ -17,7 +17,7 @@ import { StoreChainUnreadable, messagingStoreChainOf } from '../src/send/store.t
 
 const NOW = new Date('2026-11-03T12:00:00Z');
 
-function teamText(extraTop = '', irisExtra = ''): string {
+function teamText(extraTop = '', helperExtra = ''): string {
   return `format: 1
 project: acme
 entity: lab
@@ -34,13 +34,13 @@ seats:
     version: "1"
     launch: claude
   - role: worker
-    name: iris
+    name: helper
     cli: claude-code
     vendor: test
     model: Test
     version: "1"
     launch: claude
-${irisExtra}${extraTop}`;
+${helperExtra}${extraTop}`;
 }
 
 describe('the store chain', () => {
@@ -60,8 +60,8 @@ describe('the store chain', () => {
     rmSync(base, { recursive: true, force: true });
   });
 
-  function file(extraTop = '', irisExtra = ''): TeamFile {
-    const text = teamText(extraTop, irisExtra);
+  function file(extraTop = '', helperExtra = ''): TeamFile {
+    const text = teamText(extraTop, helperExtra);
     writeFileSync(join(root, '.agents', 'team.yaml'), text);
     const result = validateTeamFile(text);
     if (!result.ok) throw new Error(JSON.stringify(result.errors));
@@ -77,10 +77,10 @@ describe('the store chain', () => {
     if (!wrote.ok) throw new Error(wrote.why);
   }
 
-  function chain(team: TeamFile | undefined, projectOfTeam: (id: string) => ProjectRecord | null = () => null, agentId: string | null = 'agent-iris') {
+  function chain(team: TeamFile | undefined, projectOfTeam: (id: string) => ProjectRecord | null = () => null, agentId: string | null = 'agent-helper') {
     return messagingStoreChainOf({
       root,
-      seat: 'iris',
+      seat: 'helper',
       agentId,
       home,
       ...(team === undefined ? {} : { file: team }),
@@ -147,13 +147,13 @@ describe('the store chain', () => {
   test("a seat record that loosens is set aside under the entity's parallel", () => {
     const loaded = file();
     const agent = registerAgent(home, {
-      name: 'iris',
+      name: 'helper',
       signing: { model: 'Test', version: '1', role: 'worker' },
       lab: 'test',
       cli: 'claude-code',
       launcher: null,
       launch: 'claude',
-      reach: { team: teamIdOf(root), seat: 'iris', session: 'acme', pane: null, address: null },
+      reach: { team: teamIdOf(root), seat: 'helper', session: 'acme', pane: null, address: null },
       mcp: [],
       skills: [],
       lifecycle: 'registered',

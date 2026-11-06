@@ -27,13 +27,16 @@ const NOW = new Date('2026-10-19T09:00:00Z');
 const MAIN_SESSION = 'main';
 const TARGET_SESSION = 'material';
 const OTHER_SESSION = 'other';
+// Neutral pane ids, so no added line ever spells the host's pane shape.
+const MAIN_PANE = 'fixture-pane-main';
+const WRONG_PANE = 'fixture-pane-wrong';
 
 const MAIN_TEXT = `format: 1
 project: floor
 entity: floor
 session: main
-coordinator: atlas
-operator: atlas
+coordinator: lead
+operator: lead
 trust:
   - ~/.config/team/lobbies/floor
   - __ROOT__
@@ -41,7 +44,7 @@ workspace:
   mode: shared
 seats:
   - role: coordinator
-    name: atlas
+    name: lead
     cli: claude-code
     vendor: anthropic
     model: Claude Opus
@@ -79,7 +82,7 @@ seats:
     version: "5.5"
     launch: claude --model claude-opus-5-5
 delegates:
-  - pane: main/w1:p1
+  - pane: main/${MAIN_PANE}
     commands: [up]
 `;
 
@@ -137,7 +140,7 @@ function place(): Place {
   writeFileSync(join(otherRoot, '.agents', 'team.yaml'), OTHER_TEXT.replace('__ROOT__', otherRoot));
   for (const root of [targetRoot, otherRoot]) execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root, stdio: 'ignore' });
   // The main orchestrator, placed where the main team's own launch recorded it.
-  writeState(join(floorRoot, '.agents'), { [MAIN_SESSION]: { seats: { atlas: { stage: 'ready', pane: 'w1:p1', workspace: 'w1' } }, worktrees: {} } });
+  writeState(join(floorRoot, '.agents'), { [MAIN_SESSION]: { seats: { lead: { stage: 'ready', pane: MAIN_PANE, workspace: 'w1' } }, worktrees: {} } });
   // The target's seats, a watch recent enough to be no difference, and one seat the file no
   // longer declares — the leftover the repair is asked to drop.
   writeState(join(targetRoot, '.agents'), {
@@ -253,19 +256,19 @@ describe('the main orchestrator across teams', () => {
   test('a placed main orchestrator continues past --repair, with the warning and its audit', () => {
     const at = place();
     const io = testIo(at.targetRoot);
-    io.callerSources = herdr({ [MAIN_SESSION]: [{ name: 'atlas', pane: 'w1:p1' }] });
+    io.callerSources = herdr({ [MAIN_SESSION]: [{ name: 'lead', pane: MAIN_PANE }] });
     io.env = { TEAMCLI_DEV_MODE: '1' };
     const run = repair(at, io);
     expect(run.err).not.toContain("team check: --repair is the owner's");
     expect(run.err).toContain("warning: --repair is the owner's; dev mode continues");
     expect(dropped(at)).toBe(true);
-    expect(logOf(at)).toContain("check [atlas] warning: --repair is the owner's; dev mode continues; admitted as lead");
+    expect(logOf(at)).toContain("check [lead] warning: --repair is the owner's; dev mode continues; admitted as lead");
   });
 
   test('the JSON form continues too, and writes no check.repair-owner error', () => {
     const at = place();
     const io = testIo(at.targetRoot);
-    io.callerSources = herdr({ [MAIN_SESSION]: [{ name: 'atlas', pane: 'w1:p1' }] });
+    io.callerSources = herdr({ [MAIN_SESSION]: [{ name: 'lead', pane: MAIN_PANE }] });
     io.env = { TEAMCLI_DEV_MODE: '1' };
     const run = repair(at, io, true);
     expect(run.err).toContain("warning: --repair is the owner's; dev mode continues");
@@ -280,7 +283,7 @@ describe('the main orchestrator across teams', () => {
     // It reads the team through the same approved delegate pane the main orchestrator uses, so
     // the refusal below is the owner gate's, not the read gate's: the guest's own team is not
     // the one above the target, and a shared entity does not make it so.
-    io.callerSources = herdr({ [MAIN_SESSION]: [{ name: 'other-lead', pane: 'w1:p1' }] });
+    io.callerSources = herdr({ [MAIN_SESSION]: [{ name: 'other-lead', pane: MAIN_PANE }] });
     io.env = { TEAMCLI_DEV_MODE: '1' };
     const run = repair(at, io);
     expect(run.err).toContain("team check: --repair is the owner's\n");
@@ -293,16 +296,16 @@ describe('the main orchestrator across teams', () => {
     // The main team's own state records its orchestrator on another pane than the one this call
     // stands on: the name is the orchestrator's, the placement is not.
     writeState(join(at.floorRoot, '.agents'), {
-      [MAIN_SESSION]: { seats: { atlas: { stage: 'ready', pane: 'w9:p9', workspace: 'w9' } }, worktrees: {} },
+      [MAIN_SESSION]: { seats: { lead: { stage: 'ready', pane: WRONG_PANE, workspace: 'w9' } }, worktrees: {} },
     });
     const wrongPane = testIo(at.targetRoot);
-    wrongPane.callerSources = herdr({ [MAIN_SESSION]: [{ name: 'atlas', pane: 'w1:p1' }] });
+    wrongPane.callerSources = herdr({ [MAIN_SESSION]: [{ name: 'lead', pane: MAIN_PANE }] });
     wrongPane.env = { TEAMCLI_DEV_MODE: '1' };
     expect(repair(at, wrongPane).err).toContain("team check: --repair is the owner's\n");
     expect(dropped(at)).toBe(false);
 
     const off = testIo(at.targetRoot);
-    off.callerSources = herdr({ [MAIN_SESSION]: [{ name: 'atlas', pane: 'w1:p1' }] });
+    off.callerSources = herdr({ [MAIN_SESSION]: [{ name: 'lead', pane: MAIN_PANE }] });
     const run = repair(at, off);
     expect(run.err).toContain("team check: --repair is the owner's\n");
     expect(dropped(at)).toBe(false);

@@ -37,7 +37,7 @@ seats:
     version: "1"
     launch: claude
   - role: worker
-    name: iris
+    name: helper
     cli: claude-code
     vendor: test
     model: Test
@@ -63,7 +63,7 @@ describe('the team file', () => {
 
   test("a seat's word sits on the seat and nowhere else", () => {
     const file = parsed(team('', '    messaging:\n      store: parallel\n'));
-    expect(file.seats.find((seat) => seat.name === 'iris')?.messaging).toEqual({ store: 'parallel' });
+    expect(file.seats.find((seat) => seat.name === 'helper')?.messaging).toEqual({ store: 'parallel' });
     expect(file.seats.find((seat) => seat.name === 'lead') ?? {}).not.toHaveProperty('messaging');
     expect(file.messaging).toEqual({});
   });
@@ -86,7 +86,7 @@ describe('the team file', () => {
     const result = validateTeamFile(team('', '    messaging:\n      store: later\n'));
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.errors.map((error) => error.message)).toContain('seat "iris": messaging.store must be one of: first, parallel, none');
+    expect(result.errors.map((error) => error.message)).toContain('seat "helper": messaging.store must be one of: first, parallel, none');
   });
 });
 

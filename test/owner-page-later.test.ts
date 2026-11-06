@@ -195,7 +195,7 @@ function tcRequest(s: Page, label = 'docs'): { root: string; id: string; params_
 function oaRequest(s: Page, team: string, label: string): { root: string; id: string; params_sha256: string } {
   const root = join(s.base, 'code', label);
   mkdirSync(root, { recursive: true });
-  const created = createOwnerActionRequest(s.home, { actions: ['team-up'], root, team, head: null, args: {}, requestedBy: 'seat:iris' }, s.now());
+  const created = createOwnerActionRequest(s.home, { actions: ['team-up'], root, team, head: null, args: {}, requestedBy: 'seat:helper' }, s.now());
   if (!created.ok) throw new Error(created.why);
   return { root, id: created.record.request_id, params_sha256: created.record.params_sha256 };
 }

@@ -140,7 +140,7 @@ test('refuses every bus-authored kind on the socket while holding message.arrive
   });
 
   // Once the signed drop record exists on disk, `message.arrived` is accepted and takes `from`
-  // from the signed record ('iris'), ignoring the caller's spoofed `from` field.
+  // from the signed record ('helper'), ignoring the caller's spoofed `from` field.
   const payload: RecordPayload = {
     kind: 'message',
     id: 'msg-1',
@@ -150,7 +150,7 @@ test('refuses every bus-authored kind on the socket while holding message.arrive
     session: 'acme',
     at: '2026-11-03T00:01:00.000Z',
     body: 'signed body',
-    from: 'iris',
+    from: 'helper',
     from_id: null,
     rule: 'fixture',
     thread: 'msg-1',
@@ -167,7 +167,7 @@ test('refuses every bus-authored kind on the socket while holding message.arrive
   });
   expect(verified.kind).toBe('published');
   if (verified.kind === 'published') {
-    expect(verified.event.payload.from).toBe('iris');
+    expect(verified.event.payload.from).toBe('helper');
     expect(verified.event.payload.to).toBe('lead');
   }
 
@@ -175,6 +175,6 @@ test('refuses every bus-authored kind on the socket while holding message.arrive
   expect(read.ok).toBe(true);
   if (!read.ok) return;
   expect(read.events.map((e) => `${e.payload.kind}:${e.payload.record_id}:${e.payload.from ?? ''}`)).toEqual([
-    'message.arrived:msg-1:iris',
+    'message.arrived:msg-1:helper',
   ]);
 });

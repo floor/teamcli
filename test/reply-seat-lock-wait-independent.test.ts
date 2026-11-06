@@ -23,9 +23,9 @@ afterEach(() => {
 });
 
 function scene(): World {
-  made = world(null, [{ name: 'iris', role: 'reviewer', cli: 'gemini', launch: 'gemini' }]);
+  made = world(null, [{ name: 'helper', role: 'reviewer', cli: 'gemini', launch: 'gemini' }]);
   plantRecord(made.home, made.root, 'acme', 'owner', SENT, 'question from the seat', {
-    from: 'iris',
+    from: 'helper',
     at: NOW.toISOString(),
   });
   return made;
@@ -93,11 +93,11 @@ function lockCalls(): { file: string; call: string }[] {
 
 test('a lock taker acquires once the holder releases inside the budget', () => {
   const at = scene();
-  const held = acquireSeatLock(at.dir, 'acme', 'iris');
+  const held = acquireSeatLock(at.dir, 'acme', 'helper');
   expect('release' in held).toBe(true);
   if (!('release' in held)) throw new Error('the holder did not take the lock');
   const clock = clockOf(() => held.release());
-  const result = acquireSeatLock(at.dir, 'acme', 'iris', clock.steps, { waitMs: 2_000, pollMs: 25 });
+  const result = acquireSeatLock(at.dir, 'acme', 'helper', clock.steps, { waitMs: 2_000, pollMs: 25 });
   expect('release' in result).toBe(true);
   expect(clock.sleeps).toEqual([25]);
   if ('release' in result) result.release();
@@ -105,19 +105,19 @@ test('a lock taker acquires once the holder releases inside the budget', () => {
 
 test('a spent lock budget leaves the holder untouched and names its pid', () => {
   const at = scene();
-  const held = acquireSeatLock(at.dir, 'acme', 'iris');
+  const held = acquireSeatLock(at.dir, 'acme', 'helper');
   expect('release' in held).toBe(true);
   if (!('release' in held)) throw new Error('the holder did not take the lock');
-  const path = seatLockPath(at.dir, 'acme', 'iris');
+  const path = seatLockPath(at.dir, 'acme', 'helper');
   const before = readFileSync(path, 'utf8');
   try {
     const clock = clockOf();
-    const result = acquireSeatLock(at.dir, 'acme', 'iris', clock.steps, { waitMs: 2_000, pollMs: 25 });
+    const result = acquireSeatLock(at.dir, 'acme', 'helper', clock.steps, { waitMs: 2_000, pollMs: 25 });
     expect(result).toEqual({ held: process.pid, startedAt: Number(before.trim().split(' ')[2]) });
     expect(clock.sleeps).toHaveLength(80);
     expect(clock.sleeps.every((ms) => ms === 25)).toBe(true);
     expect(readFileSync(path, 'utf8')).toBe(before);
-    expect(existsSync(join(recordDir(at.root, 'acme', 'iris'), REPLY))).toBe(false);
+    expect(existsSync(join(recordDir(at.root, 'acme', 'helper'), REPLY))).toBe(false);
   } finally {
     held.release();
   }
@@ -125,14 +125,14 @@ test('a spent lock budget leaves the holder untouched and names its pid', () => 
 
 test('an unreadable lock is refused at once, even with a lock budget', () => {
   const at = scene();
-  const path = seatLockPath(at.dir, 'acme', 'iris');
+  const path = seatLockPath(at.dir, 'acme', 'helper');
   mkdirSync(path, { recursive: true });
   const clock = clockOf();
-  const result = acquireSeatLock(at.dir, 'acme', 'iris', clock.steps, { waitMs: 2_000, pollMs: 25 });
+  const result = acquireSeatLock(at.dir, 'acme', 'helper', clock.steps, { waitMs: 2_000, pollMs: 25 });
   expect(result).toEqual({ held: -1, startedAt: null });
   expect(clock.sleeps).toEqual([]);
   expect(existsSync(path)).toBe(true);
-  expect(existsSync(join(recordDir(at.root, 'acme', 'iris'), REPLY))).toBe(false);
+  expect(existsSync(join(recordDir(at.root, 'acme', 'helper'), REPLY))).toBe(false);
 });
 
 test('every production lock taker stays at zero wait', () => {
@@ -145,11 +145,11 @@ test('every production lock taker stays at zero wait', () => {
   }
 
   const at = scene();
-  const path = seatLockPath(at.dir, 'acme', 'iris');
+  const path = seatLockPath(at.dir, 'acme', 'helper');
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${process.pid} deadbeef\n`);
   const clock = clockOf();
-  const refused = acquireSeatLock(at.dir, 'acme', 'iris', clock.steps);
+  const refused = acquireSeatLock(at.dir, 'acme', 'helper', clock.steps);
   expect(refused).toEqual({ held: process.pid, startedAt: null });
   expect(clock.sleeps).toEqual([]);
   expect(readFileSync(path, 'utf8')).toBe(`${process.pid} deadbeef\n`);

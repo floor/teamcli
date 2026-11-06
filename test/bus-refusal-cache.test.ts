@@ -18,7 +18,7 @@ test('a refusal is kept while the path remains and dropped once the path is gone
   made.push(base);
   const root = join(base, 'acme');
   const home = join(base, 'home');
-  const seat = join(root, '.agents', 'send-drops', 'acme', 'iris');
+  const seat = join(root, '.agents', 'send-drops', 'acme', 'helper');
   mkdirSync(seat, { recursive: true });
   mkdirSync(home, { recursive: true });
   messageKeyOf(home);
@@ -37,7 +37,7 @@ test('a refusal is kept while the path remains and dropped once the path is gone
     onRefused: (refusal) => said.push(refusal.where),
   });
   pass();
-  expect(said).toEqual(['iris/bad-one', 'iris/bad-two']);
+  expect(said).toEqual(['helper/bad-one', 'helper/bad-two']);
   expect(state.refused.has(`record\0${first}`)).toBe(true);
   said.length = 0;
   pass();
@@ -57,8 +57,8 @@ test('evicts refusal cache entries across drop and mailbox trees when repaired o
   made.push(base);
   const root = join(base, 'acme');
   const home = join(base, 'home');
-  const dropSeat = join(root, '.agents', 'send-drops', 'acme', 'iris');
-  const mailboxSeat = join(root, '.agents', 'messages', 'iris');
+  const dropSeat = join(root, '.agents', 'send-drops', 'acme', 'helper');
+  const mailboxSeat = join(root, '.agents', 'messages', 'helper');
   mkdirSync(dropSeat, { recursive: true });
   mkdirSync(mailboxSeat, { recursive: true });
   mkdirSync(home, { recursive: true });
@@ -85,9 +85,9 @@ test('evicts refusal cache entries across drop and mailbox trees when repaired o
 
   pass();
   expect(said).toEqual([
-    'iris/rec-1:the record is not JSON',
-    "iris/mb-1:the record is not signed with this checkout's message key",
-    "iris/mb-1:read:the receipt is not signed with this checkout's message key",
+    'helper/rec-1:the record is not JSON',
+    "helper/mb-1:the record is not signed with this checkout's message key",
+    "helper/mb-1:read:the receipt is not signed with this checkout's message key",
   ]);
   expect(state.refused.size).toBe(3);
 
@@ -101,7 +101,7 @@ test('evicts refusal cache entries across drop and mailbox trees when repaired o
   const validPayload: RecordPayload = {
     kind: 'message',
     id: 'rec-1',
-    to: 'iris',
+    to: 'helper',
     to_id: null,
     root,
     session: 'acme',
@@ -129,6 +129,6 @@ test('evicts refusal cache entries across drop and mailbox trees when repaired o
   // If a corrupt file reappears at the previously evicted mailbox path, it is reported afresh.
   writeFileSync(mailboxRecordPath, 'corrupt-again\n');
   pass();
-  expect(said).toEqual(['iris/mb-1:the record is not JSON']);
+  expect(said).toEqual(['helper/mb-1:the record is not JSON']);
   expect(state.refused.has(`mailbox-record\0${mailboxRecordPath}`)).toBe(true);
 });

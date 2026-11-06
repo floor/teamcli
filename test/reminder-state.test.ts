@@ -162,7 +162,7 @@ describe('the reminder state record', () => {
       finishedAt: '2026-11-02T18:00:03.000Z',
       deliveries: [
         { seat: 'orchestrator', root: '/floor/one', ok: true, id: 'msg-1', why: null, at: '2026-11-02T18:00:02.000Z' },
-        { seat: 'iris', root: '/floor/two', ok: false, id: null, why: 'not admitted', at: '2026-11-02T18:00:03.000Z' },
+        { seat: 'helper', root: '/floor/two', ok: false, id: null, why: 'not admitted', at: '2026-11-02T18:00:03.000Z' },
       ],
     });
     expect(settled).toMatchObject({ ok: true });
@@ -173,7 +173,7 @@ describe('the reminder state record', () => {
         finishedAt: '2026-11-02T18:00:03.000Z',
         deliveries: [
           { seat: 'orchestrator', root: '/floor/one', ok: true, id: 'msg-1', why: null, at: '2026-11-02T18:00:02.000Z' },
-          { seat: 'iris', root: '/floor/two', ok: false, id: null, why: 'not admitted', at: '2026-11-02T18:00:03.000Z' },
+          { seat: 'helper', root: '/floor/two', ok: false, id: null, why: 'not admitted', at: '2026-11-02T18:00:03.000Z' },
         ],
       }),
     );

@@ -111,7 +111,7 @@ seats:
     version: "1"
     launch: claude
   - role: remote
-    name: iris
+    name: helper
     cli: claude-code
     vendor: test
     model: Test
