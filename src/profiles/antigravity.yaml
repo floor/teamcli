@@ -305,6 +305,8 @@ screen:
         - '\bRunning command\.\.\.'
         # Active tool execution
         - '^\s*●\s+Running\b'
+        # The turn footer under the box: `Press esc to interrupt generation.`
+        - '\bPress esc to interrupt\b'
   # The periodic post-turn feedback survey replaces the two-rule composer box at the bottom of
   # the pane (test/fixtures/antigravity/1.4.12/feedback-survey.txt): the question row and its
   # four numbered choices sit as two contiguous rows at the bottom of the pane (with at most the
@@ -352,6 +354,9 @@ screen:
     fold: '^\s*(?:>\s*)?↑\s*([0-9]+)\s+more lines\s*$'
     footers:
       - '\? for shortcuts'
+      # The idle line under the box when the older `? for shortcuts` row is not drawn:
+      # `Press ? to see keyboard shortcuts.`
+      - 'Press \? to see keyboard shortcuts'
       - 'Gemini\s+[0-9]'
       - 'esc to cancel'
       - '>\s*/exit\s+Exit'

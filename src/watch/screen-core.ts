@@ -444,6 +444,10 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
           // An `at_composer` match draws its reset from the same block, so a stale phrase
           // elsewhere on the pane cannot date a wall it does not belong to.
           if (hit) {
+            // A working rule matches a spinner or an interrupt hint on any row of the window,
+            // and this stage runs before the composer. When the box is an empty idle prompt
+            // and that row sits above the live cluster, the match is the previous turn.
+            if (name === 'working' && staleWorkingAboveIdle(data, plain, lines, tick, expectedCwd, home)) continue;
             const block = rule.atComposer ? edge([...(rule.any ?? []), ...(rule.all ?? [])]) : null;
             return asScreen(kind, plain, block === null ? undefined : new Set(block), rule.reason ?? stage.reason);
           }
@@ -1161,6 +1165,45 @@ function placedStatus(data: ScreenData, pattern: RegExp): boolean {
 
 function placedComposer(data: ScreenData): Extract<ScreenData['composer'], { mode: 'status-last' | 'status-then-one' }> {
   return data.composer as Extract<ScreenData['composer'], { mode: 'status-last' | 'status-then-one' }>;
+}
+
+/** Rows above the composer's opening frame that still belong to the live turn. A status row
+ *  or a blank may sit between the spinner and the rule; a spinner further above an empty idle
+ *  prompt is the transcript of the turn that already ended. */
+const WORKING_BESIDE_COMPOSER = 8;
+
+function workingPatterns(data: ScreenData): LinePattern[] {
+  const patterns: LinePattern[] = [];
+  for (const rule of data.working?.rules ?? []) {
+    if (rule.any) patterns.push(...rule.any);
+    if (rule.all) patterns.push(...rule.all);
+  }
+  return patterns;
+}
+
+/** True when a working match is only a transcript row above an empty idle prompt. A composer
+ *  that is not that prompt, a pattern in the cluster beside it, or a read that runs out of
+ *  budget keeps the working classification. */
+function staleWorkingAboveIdle(
+  data: ScreenData,
+  plain: string[],
+  styled: string[],
+  tick: () => boolean,
+  expectedCwd?: string | null,
+  home?: string,
+): boolean {
+  const composed = compose(data, plain, styled, tick, expectedCwd, home);
+  if (composed.kind !== 'idle') return false;
+  const patterns = workingPatterns(data);
+  if (patterns.length === 0) return false;
+  const start = Math.max(0, composed.from - WORKING_BESIDE_COMPOSER);
+  for (let i = start; i < plain.length; i++) {
+    for (const pattern of patterns) {
+      const hit = matches(data, plain, i, pattern, tick, true);
+      if (hit === 'stop' || hit) return false;
+    }
+  }
+  return true;
 }
 
 function matches(data: ScreenData, lines: string[], at: number, pattern: LinePattern, tick: () => boolean, inWindow: boolean): boolean | 'stop' {
