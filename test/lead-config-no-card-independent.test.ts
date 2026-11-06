@@ -313,7 +313,7 @@ describe('1. config set and add admitted for target lead and same-entity main or
     );
     expect(readFileSync(join(fx.acmeRoot, '.agents', 'team.yaml'), 'utf8')).toContain('    model: Claude Sonnet\n');
     expect(teamLog(fx.acmeRoot)).toContain(
-      `config [lead] warning: ${CONFIG_REFUSAL_PREFIX} lead; dev mode continues (dev-mode on at machine level); admitted as orchestrator\n`,
+      `config [lead] warning: ${CONFIG_REFUSAL_PREFIX} lead; dev mode continues (dev-mode on at machine level); admitted as lead\n`,
     );
     expect(pendingCards(fx.home)).toEqual([]);
 
@@ -329,7 +329,7 @@ describe('1. config set and add admitted for target lead and same-entity main or
     expect(readFileSync(join(fx.acmeRoot, '.agents', 'team.yaml'), 'utf8')).toContain('    name: apprentice\n');
     expect(launched.creates).toEqual(['apprentice']);
     expect(teamLog(fx.acmeRoot)).toContain(
-      `add [lead] warning: ${ADD_REFUSAL_PREFIX} lead; dev mode continues (dev-mode on at machine level); admitted as orchestrator\n`,
+      `add [lead] warning: ${ADD_REFUSAL_PREFIX} lead; dev mode continues (dev-mode on at machine level); admitted as lead\n`,
     );
     expect(pendingCards(fx.home)).toEqual([]);
   });
@@ -351,7 +351,7 @@ describe('1. config set and add admitted for target lead and same-entity main or
     );
     expect(readFileSync(join(fx.acmeRoot, '.agents', 'team.yaml'), 'utf8')).toContain('    model: Claude Haiku\n');
     expect(teamLog(fx.acmeRoot)).toContain(
-      `config [atlas] warning: ${CONFIG_REFUSAL_PREFIX} atlas; dev mode continues (dev-mode on at machine level); admitted as orchestrator\n`,
+      `config [atlas] warning: ${CONFIG_REFUSAL_PREFIX} atlas; dev mode continues (dev-mode on at machine level); admitted as lead\n`,
     );
     expect(pendingCards(fx.home)).toEqual([]);
 
@@ -367,7 +367,7 @@ describe('1. config set and add admitted for target lead and same-entity main or
     expect(readFileSync(join(fx.acmeRoot, '.agents', 'team.yaml'), 'utf8')).toContain('    name: scout\n');
     expect(launched.creates).toEqual(['scout']);
     expect(teamLog(fx.acmeRoot)).toContain(
-      `add [atlas] warning: ${ADD_REFUSAL_PREFIX} atlas; dev mode continues (dev-mode on at machine level); admitted as orchestrator\n`,
+      `add [atlas] warning: ${ADD_REFUSAL_PREFIX} atlas; dev mode continues (dev-mode on at machine level); admitted as lead\n`,
     );
     expect(pendingCards(fx.home)).toEqual([]);
   });
