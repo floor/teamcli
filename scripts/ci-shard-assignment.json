@@ -1,6 +1,7 @@
 {
   "shards": 6,
   "units": {
+    "test/0516-closed-seal-retry-independent.test.ts": 1,
     "test/0516-dim-border-independent.test.ts": 1,
     "test/0516-stale-spinner-independent.test.ts": 3,
     "test/0516-wake-authority-independent.test.ts": 0,
