@@ -261,7 +261,7 @@ const LANDING_ESCAPER = (() => {
 /**
  * The turn-start command that hands the seat's waiting drops to the turn. `team drops --read`
  * does the work — it lists the seat's folder, verifies each signed record with the message key,
- * writes the signed `<id>.read.json` receipt before returning a body, and prints at most
+ * writes the signed `<id>.read.json` receipt after the body has been handed over, and prints at most
  * `DROP_READ_BATCH` bodies; this command only turns that text into the one
  * `additionalContext` object the CLI reads. A read that fails or finds nothing prints no object
  * at all. The body is read from the runner's stdout and escaped here, so a body holding quotes,
