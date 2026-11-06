@@ -174,7 +174,7 @@ function clientDisplayName(claimed: string, clientId?: string): string {
   return id;
 }
 
-/** Width and case only. Fullwidth letters fold to ASCII, and letter case folds; homoglyphs and punctuation stay distinct. */
+/** Compatibility forms and case. NFKC folds those forms, and letter case folds; homoglyphs and punctuation stay distinct. */
 function normalizedSenderName(name: string): string {
   return name.normalize('NFKC').toLowerCase();
 }
