@@ -1,0 +1,10 @@
+# Synthetic fixture: an account-identity prefix launcher. The secret is a reference; the
+# store word is invented and resolves nowhere.
+format: 1
+name: org-identity
+kind: identity
+summary: Run under the example organization's account
+env:
+  EXAMPLE_ORG_TOKEN: { secret: { store: example-store, item: example-org-token } }
+  EXAMPLE_GIT_AUTHOR_NAME: example-org
+  EXAMPLE_GIT_AUTHOR_EMAIL: org@example.invalid

@@ -1,0 +1,26 @@
+# Synthetic fixture: a preset with a pinned absolute build and a scrubbed environment
+# (the guarded console seat shape), refusing caller settings overrides and any caller
+# args at all (its adopted wrapper forwarded none).
+format: 1
+name: pinned-console
+kind: preset
+summary: Guarded console seat on a pinned build
+harness: claude-code
+executable: /opt/example/cli-builds/2.1.296/claude
+caller_args: refuse
+writable_folders:
+  - { path: '{root}' }
+  - { path: '{team-home}' }
+args:
+  - --settings
+  - /opt/example/console-settings.json
+arg_policy:
+  settings: refuse
+resume:
+  mode: none
+  precedence: teamcli_wins
+env_policy:
+  mode: scrub
+  keep: [PATH, HOME, TERM, LANG, EXAMPLE_SEAT]
+env:
+  EXAMPLE_SEAT: console

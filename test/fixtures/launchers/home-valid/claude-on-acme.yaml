@@ -1,0 +1,25 @@
+# Synthetic fixture: an endpoint launcher (claude-code on an invented provider), chained
+# under the org-identity prefix.
+format: 1
+name: claude-on-acme
+kind: endpoint
+summary: Claude Code on Acme's Anthropic-compatible endpoint
+harness: claude-code
+prefix: org-identity
+writable_folders:
+  - { path: '{root}' }
+  - { path: '{team-home}', note: team state }
+provider:
+  name: acme
+  base_url: https://api.acme.invalid/anthropic
+  token: { store: example-store, item: acme-api-key }
+  models:
+    default: acme-large-1
+  context_window: 262144
+  effort: high
+args:
+  - --settings
+  - '{"crossSessionInbound":"accept"}'
+arg_policy:
+  model: pass_through
+  settings: refuse

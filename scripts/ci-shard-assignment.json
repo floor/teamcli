@@ -612,6 +612,8 @@
     "test/launch/toml.test.ts": 5,
     "test/launch/unattended-option-forms.test.ts": 5,
     "test/launched-team-writers-independent.test.ts": 4,
+    "test/launchers-resolve.test.ts": 3,
+    "test/launchers-validate.test.ts": 5,
     "test/lead-clear-actor-independent.test.ts": 5,
     "test/lead-clear-independent.test.ts": 0,
     "test/lead-clear-receipt-independent.test.ts": 1,
