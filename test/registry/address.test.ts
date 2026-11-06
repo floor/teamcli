@@ -164,7 +164,8 @@ describe('a recorded address', () => {
     expect(held?.reach).toEqual({ team: 'tm_acme', seat: 'lead', session: SESSION, pane: PANE, address: after });
     expect(held?.launch).toContain('claude --model claude-opus-5-5');
     expect(held?.name).toBe('lead');
-    expect(readdirSync(join(w.home, '.config', 'team', 'agents'))).toHaveLength(1);
+    // One record. `seq` is the folder's write count, not a second agent.
+    expect(readdirSync(join(w.home, '.config', 'team', 'agents')).sort()).toEqual([`${id}.yaml`, 'seq']);
   });
 
   test('is refreshed when its own socket is gone though the pid still runs', () => {
