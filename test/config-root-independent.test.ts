@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { approveOwnerAction } from '../src/client/owner-action.ts';
 import { actionRequestsFolder } from '../src/client/team-create.ts';
 import { realSources, runAdd } from '../src/commands/add.ts';
+import { unreadMachine } from '../src/watch/machine.ts';
 import { runConfig } from '../src/commands/config.ts';
 import { findRoot } from '../src/file/load.ts';
 import { readAgents } from '../src/registry/agents.ts';
@@ -77,7 +78,8 @@ function configSources(at: Place) {
 }
 
 function addSources(at: Place) {
-  return { ...realSources, home: at.home, ownerSeatStore: at.store, now: () => NOW };
+  // The launch guard reads this injected load, one per core, under the start limit.
+  return { ...realSources, home: at.home, ownerSeatStore: at.store, now: () => NOW, machine: () => ({ ...unreadMachine(), loadPerCore: 1 }) };
 }
 
 function requestId(text: string): string {
