@@ -7,7 +7,7 @@
 // Synthetic home, team, and host only.
 import { afterEach, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
@@ -64,7 +64,7 @@ function launcherText(seat: Seat, word: string): string {
   return `format: 1\nname: ${seat.name}-resolved\nkind: custom\nargv:\n  - ${seat.binary}\n  - ${spelled}\n`;
 }
 
-function teamText(root: string, seats: readonly Seat[], named: boolean): string {
+function teamText(root: string, seats: readonly Seat[], named: boolean, start?: string): string {
   const lead = seats.find((seat) => seat.role === 'coordinator')?.name ?? seats[0]?.name ?? 'claude-lead';
   const operator = seats.find((seat) => seat.role === 'operator')?.name ?? lead;
   const rows = seats.map((seat) => [
@@ -72,6 +72,7 @@ function teamText(root: string, seats: readonly Seat[], named: boolean): string 
     `    name: ${seat.name}`,
     `    label: ${seat.name}`,
     `    cli: ${seat.cli}`,
+    ...(seat.cli === 'grok' && start !== undefined ? [`    cwd: ${JSON.stringify(relative(root, start))}`] : []),
     '    vendor: test',
     `    model: "${seat.model}"`,
     `    version: "${seat.version}"`,
@@ -87,8 +88,7 @@ workspace:
   mode: shared
   base: main
 trust:
-  - ${lobbyDir(join(root, '..', 'home'))}
-  - ${root}
+${start === undefined ? `  - ${lobbyDir(join(root, '..', 'home'))}\n  - ${root}` : `  - .\n  - ${JSON.stringify(relative(root, start))}`}
 seats:
 ${rows}
 `;
@@ -138,7 +138,7 @@ function world(): { launch: Launch; runs: { pane: string; command: string }[] } 
   return { launch, runs };
 }
 
-function prepare(seats: readonly Seat[], word = '--from-resolver', named = false): {
+function prepare(seats: readonly Seat[], word = '--from-resolver', named = false, ownStart = false): {
   root: string;
   home: string;
   made: ReturnType<typeof world>;
@@ -148,6 +148,8 @@ function prepare(seats: readonly Seat[], word = '--from-resolver', named = false
   const root = join(scratch, 'repo');
   mkdirSync(lobbyDir(home), { recursive: true, mode: 0o700 });
   mkdirSync(root, { recursive: true });
+  const start = ownStart ? join(scratch, 'grok-hand') : undefined;
+  if (start !== undefined) mkdirSync(start, { mode: 0o700 });
   if (named) {
     const dir = join(root, '.agents', 'launchers');
     mkdirSync(dir, { recursive: true });
@@ -155,7 +157,7 @@ function prepare(seats: readonly Seat[], word = '--from-resolver', named = false
       writeFileSync(join(dir, `${seat.name}-resolved.yaml`), launcherText(seat, word), { mode: 0o600 });
     }
   }
-  const text = teamText(root, seats, named);
+  const text = teamText(root, seats, named, start);
   const file = join(root, '.agents', 'team.yaml');
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, text, { mode: 0o600 });
@@ -213,7 +215,7 @@ function resolvedCommand(root: string, home: string, seat: Seat, seats: readonly
 }
 
 test('flag off gives today\'s argv for claude, codex, grok and agy', async () => {
-  const { root, home, made } = prepare(SEATS);
+  const { root, home, made } = prepare(SEATS, '--from-resolver', false, true);
   const io = testIo(root, { kind: 'owner' });
   const code = await runUp([], io, sources(home, made));
   expect(code, io.out + io.err).toBe(0);
@@ -275,7 +277,7 @@ test('flag on refuses a Grok seat by name and starts nothing', async () => {
   expect(code, said).not.toBe(0);
   expect(said).toContain(`${seat.name}:`);
   // This seat is the only one, so it is the lead and starts at the shared project root.
-  expect(said).toContain('its start folder is the shared project root, which would grant the whole checkout; give the seat its own worktree or clone');
+  expect(said).toContain('cannot start in or grant an ancestor of the shared project root, lobby or team config folder; set the seat cwd to its own worktree or clone, then launch it again');
   expect(made.runs.some((run) => run.command.includes(seat.binary) || run.command.includes(seat.launch))).toBe(false);
 });
 
