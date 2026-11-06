@@ -991,6 +991,7 @@ describe('the chores fleet', () => {
         routeInput(second, policy({ missedBeats: 2 })),
       ],
       log: () => {},
+      cpuTimeOf: flatCpu,
       factory: () => {
         const child = fakeChild(4290 + made2.length * 10);
         made2.push(child);
@@ -1096,6 +1097,7 @@ describe('the chores fleet', () => {
       now: () => new Date(clock.at),
       routes: [routeInput(made.root, policy({ missedBeats: 2 }))],
       log: () => {},
+      cpuTimeOf: flatCpu,
       factory: () => {
         const child = fakeChild(4310 + made2.length);
         made2.push(child);
@@ -1136,8 +1138,8 @@ describe('the chores fleet', () => {
     tickAt(4500);
     expect(made2[0]!.kills).toHaveLength(1);
 
-    // Once the child leaves and a replacement starts, `beats`, `lastBeatMs` and `lastBeatReadMs`
-    // are cleared so the replacement is judged from its own `startedAtMs` until it proves its run.
+    // A proved run is replaced a minute after it ends. That start clears `beats`, `lastBeatMs`
+    // and `lastBeatReadMs`, so the replacement is judged from its own start.
     made2[0]!.leave(null, 'SIGTERM');
     await made2[0]!.child.exited;
     expect(fleet.stateFor(made.root)).toMatchObject({
@@ -1145,7 +1147,7 @@ describe('the chores fleet', () => {
       missed: 0,
       heartbeatAt: null,
     });
-    tickAt(5500);
+    tickAt(64_500);
     expect(made2).toHaveLength(2);
     expect(fleet.stateFor(made.root)).toMatchObject({
       state: 'starting',
@@ -1153,14 +1155,14 @@ describe('the chores fleet', () => {
       missed: 0,
       heartbeatAt: null,
     });
-    const replacementStart = new Date(NOW + 5500).toISOString();
+    const replacementStart = new Date(NOW + 64_500).toISOString();
     made2[1]!.emit({ type: 'ready', pid: 4311, at: replacementStart });
     made2[1]!.emit({ type: 'heartbeat', at: replacementStart, rssBytes: rss, busy: null, markerCache: null });
     made2[1]!.emit({ type: 'heartbeat', at: replacementStart, rssBytes: rss, busy: null, markerCache: null });
-    tickAt(6500);
-    tickAt(7500);
+    tickAt(65_500);
+    tickAt(66_500);
     expect(made2[1]!.kills).toHaveLength(0);
-    tickAt(8500);
+    tickAt(67_500);
     expect(made2[1]!.kills).toHaveLength(1);
     expect(made2[1]!.kills[0]).toContain('missed 2 heartbeats');
   });
