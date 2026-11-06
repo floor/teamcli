@@ -1521,12 +1521,10 @@ describe('the turn-start read, end to end', () => {
     });
     const envelope = JSON.parse(out) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };
     expect(envelope.hookSpecificOutput.hookEventName).toBe('UserPromptSubmit');
-    // The record's own bytes carry the attribution line; the reader serves the compact header.
-    const served = body.replace(
-      'from the owner — admitted by: the owner\n\n',
-      'from the owner (owner):\n\n',
-    );
-    expect(envelope.hookSpecificOutput.additionalContext).toBe(served);
+    // The hook takes the sender from the verified record, not from the body's opening. This
+    // send's claimed from is owner, so the header is `from owner (owner):`. The opening names
+    // "the owner", which is not that name, and the preamble stays content.
+    expect(envelope.hookSpecificOutput.additionalContext).toBe(`from owner (owner):\n\n${body}`);
 
     // The receipt is the seat's proof, at the name, mode and shape the promotion reads: the same
     // signed status receipt the inbox server writes, not a marker of the hook's own.
