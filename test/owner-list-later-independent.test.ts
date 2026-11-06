@@ -666,11 +666,15 @@ describe('feat/owner-list-later independent security verification', () => {
     const jsonIo = testIo(s.root, { kind: 'owner' });
     expect(await runMessages(['--json'], jsonIo, { home: s.home, now: () => s.now() })).toBe(0);
     const parsed = JSON.parse(jsonIo.out) as { rows: Array<{ from: string; to: string; body: string }> };
-    expect(parsed.rows).toHaveLength(1);
-    expect(parsed.rows[0]?.from).toBe('owner page');
-    expect(parsed.rows[0]?.from).not.toBe('owner');
-    expect(parsed.rows[0]?.to).toBe('lead');
-    expect(parsed.rows[0]?.body).toContain(gr.id);
+    expect(parsed.rows).toHaveLength(2);
+    for (const row of parsed.rows) {
+      expect(row.from).toBe('owner page');
+      expect(row.from).not.toBe('owner');
+      expect(row.to).toBe('lead');
+    }
+    const bodies = parsed.rows.map((row) => row.body).join('\n');
+    expect(bodies).toContain(oa.record.request_id);
+    expect(bodies).toContain(gr.id);
 
     // 3. Defer a team-create request (no existing team -> no new note written)
     const tcRoot = join(s.base, 'no-note-repo');
