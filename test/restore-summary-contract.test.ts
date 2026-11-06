@@ -534,7 +534,7 @@ describe('canonical restore-summary line in plain, --json, and team.log', () => 
         '  seat: "builder-2"',
         '  session: "acme-restore"',
         `  agent_session: ${agentSession === null ? 'null' : JSON.stringify(agentSession)}`,
-        '  pane: "w4:p1"',
+        '  pane: "pane-builder"',
         '  address: null',
         'mcp: []',
         'skills: []',
@@ -551,12 +551,25 @@ describe('canonical restore-summary line in plain, --json, and team.log', () => 
     write('agt_000000000001', 'ses-b2', 1);
     write('agt_ffffffffffff', null, 9);
     expect(findAgent(place.home, { team, seat: 'builder-2' })?.id).toBe('agt_000000000001');
+    // The spinner sits on the row above the composer, where a working screen draws it.
+    const working = CLAUDE_IDLE.replace(
+      '\n─────────────────────────────────────────────────────\n',
+      '\n✳ Thinking… (esc to interrupt)\n─────────────────────────────────────────────────────\n',
+    );
     const seeds = healthySeeds(place.home, place.root).map((s) => {
-      if (s.seat === 'builder-2') return { ...s, liveStatus: 'idle' as const, liveScreen: OPUS_WORKING };
-      return s;
+      if (s.seat !== 'builder-2') return s;
+      return {
+        ...s,
+        recordedPane: 'pane-builder',
+        recordedWorkspace: 'ws-builder',
+        livePane: 'pane-builder',
+        liveWorkspace: 'ws-builder',
+        liveStatus: 'idle' as const,
+        liveScreen: working,
+      };
     });
     const world = buildWorld(place, seeds, {
-      preCloseScreenOverride: { 'w4:p1': OPUS_WORKING },
+      preCloseScreenOverride: { 'pane-builder': working },
     });
     const io = testIo(place.root, { kind: 'owner' });
     const exit = await runUp([], io, world.sources);

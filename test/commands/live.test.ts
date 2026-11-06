@@ -6684,7 +6684,7 @@ describe('team up, a ready seat whose model drifted', () => {
         '  seat: "codex-acme"',
         '  session: "acme-web"',
         `  agent_session: ${agentSession === null ? 'null' : JSON.stringify(agentSession)}`,
-        '  pane: "w92:p1"',
+        '  pane: "pane-codex"',
         '  address: null',
         'mcp: []',
         'skills: []',
