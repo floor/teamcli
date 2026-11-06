@@ -10,7 +10,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { acquireSeatLock } from '../src/launch/seat-lock.ts';
 import { SEND_OUTPUT_SCHEMA } from '../src/output/schema.ts';
-import { readPending } from '../src/send/pending.ts';
+import { PENDING_MAX_TRIES, readPending } from '../src/send/pending.ts';
 import type { TypedWakeResult } from '../src/send/typed-wake.ts';
 import type { Live } from '../src/status/compare.ts';
 import { retryHeldDrops, type RetrySources } from '../src/watch/retry.ts';
@@ -135,6 +135,32 @@ test('a seat that returns to idle is offered its queued drop once', async () => 
   await retryHeldDrops(pass.scene);
   await retryHeldDrops(pass.scene);
   expect(pass.wakes).toHaveLength(2);
+});
+
+test('offers stop once the try limit is spent', async () => {
+  const made = world(['drop'], [{ name: SEAT, role: 'implementer', cli: 'antigravity' }]);
+  cleanup = made.cleanup;
+  const id = await queueDrop(made);
+  const dir = dropDir(made.dir, SEAT);
+  const pass = watch(made, 'working');
+
+  for (let n = 1; n <= PENDING_MAX_TRIES; n += 1) {
+    pass.setStatus('working');
+    await retryHeldDrops(pass.scene);
+    pass.setStatus('idle');
+    await retryHeldDrops(pass.scene);
+    expect(pass.wakes).toHaveLength(n);
+  }
+  expect(readPending(dir).map((drop) => [drop.id, drop.tries])).toEqual([[id, PENDING_MAX_TRIES]]);
+
+  pass.setStatus('working');
+  await retryHeldDrops(pass.scene);
+  pass.setStatus('idle');
+  await retryHeldDrops(pass.scene);
+  await retryHeldDrops(pass.scene);
+
+  expect(pass.wakes).toHaveLength(PENDING_MAX_TRIES);
+  expect(readPending(dir)).toEqual([]);
 });
 
 test('a seat that is still working is not offered its queued drop', async () => {

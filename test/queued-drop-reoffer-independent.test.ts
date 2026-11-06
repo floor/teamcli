@@ -39,6 +39,10 @@ function seat(): Seat {
     mode: 'shared',
     parked: false,
     stopped: false,
+    declared: SEAT,
+    count: 1,
+    instance: 1,
+    line: 1,
   };
 }
 

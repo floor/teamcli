@@ -685,9 +685,10 @@ function queuedWakeOn(seat: Seat): boolean {
 
 /**
  * Offers the oldest queued drop through the guarded typed wake, once for this idle stretch.
- * The offer mark is written before the wake. A later pass that still sees idle finds it and
- * offers nothing. Leaving idle clears the mark, so the next return can offer once. The wake
- * itself reads the box twice and types nothing into a pane that is not the empty idle prompt.
+ * The offer mark is written before the wake, and the offer spends one try. A later pass that
+ * still sees idle finds the mark and offers nothing. Leaving idle clears the mark, so the next
+ * return can offer once, until the try limit is spent. The wake itself reads the box twice and
+ * types nothing into a pane that is not the empty idle prompt.
  */
 async function reofferQueuedDrop(
   scene: RetryScene,
@@ -701,6 +702,10 @@ async function reofferQueuedDrop(
   if (wake === undefined || !queuedWakeOn(seat)) return;
   const drop = queued[0];
   if (drop === undefined || !existsSync(join(dropDir, drop.id))) return;
+  if (drop.tries >= PENDING_MAX_TRIES) {
+    giveUpUnread(scene, dropDir, drop, `the seat did not read it in ${String(PENDING_MAX_TRIES)} offers`);
+    return;
+  }
   const lock = acquireSeatLock(scene.dir, scene.session, seat.name);
   if (!('release' in lock)) return;
   try {

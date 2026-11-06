@@ -104,10 +104,11 @@ export function markRedelivered(dropDir: string, drop: PendingDrop, reason: stri
   writePendingDrop(dropDir, { ...drop, redelivered: reason });
 }
 
-/** Records that this idle stretch already offered the queued drop. Written before the wake, so a
- *  second pass of the same stretch — or one that starts after a crash mid-wake — cannot offer again. */
+/** Records that this idle stretch already offered the queued drop, and counts the offer against
+ *  the try limit. Written before the wake, so a second pass of the same stretch — or one that
+ *  starts after a crash mid-wake — cannot offer again. */
 export function markDropOffered(dropDir: string, drop: PendingDrop): void {
-  writePendingDrop(dropDir, { ...drop, offered: true });
+  writePendingDrop(dropDir, { ...drop, tries: drop.tries + 1, offered: true });
 }
 
 /** Clears the idle-stretch mark so the next return to idle can offer the queued drop once. */
