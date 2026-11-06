@@ -10,12 +10,9 @@ import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { Terminal } from '../src/launch/terminal.ts';
 import { loadTeamFile } from '../src/file/load.ts';
-import { discover, resolveLaunch, type LauncherHome, type ResolveContext } from '../src/launchers/resolve.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
-import { shellQuote } from '../src/profiles/profile.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { emptySession, updateState } from '../src/state.ts';
-import { parseYaml, toValue } from '../src/yaml.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { CLAUDE_IDLE, fixtureBase, recordRenames, testIo } from './helpers.ts';
 
@@ -38,6 +35,7 @@ const SESSION = 'scratch';
 const OWNER = { kind: 'owner' } as const;
 const PLACEHOLDER = 'a consumed placeholder requires nonempty inbox or session context';
 const BLANK_SESSION = 'a supplied caller session must be a nonempty string';
+const LAUNCH_WORDS = 'resolve-launch starts the launcher argv alone, and this profile has launch words to place';
 
 type SeatFixture = {
   name: string;
@@ -234,26 +232,6 @@ function sources(home: string, made: ReturnType<typeof world>): UpSources {
   };
 }
 
-function expectedCommand(root: string, home: string, seat: SeatFixture, seats: readonly SeatFixture[]): string {
-  const files: Record<string, unknown> = {};
-  for (const one of seats) {
-    const name = `${one.name}-resolved.yaml`;
-    files[name] = toValue(parseYaml(launcherText(`${one.name}-resolved`, one.binary, '--from-resolver')));
-  }
-  const homeFiles: LauncherHome = { level: 'team', files };
-  const ctx: ResolveContext = {
-    teamRoot: root,
-    teamHome: home,
-    cwd: root,
-    parentEnv: {},
-    existingPaths: [],
-    seatNames: seats.map((one) => one.name),
-  };
-  const resolved = resolveLaunch({ launcher: `${seat.name}-resolved` }, discover([homeFiles]), ctx);
-  expect(resolved.ok).toBe(true);
-  return resolved.argv.map((word) => shellQuote(word)).join(' ');
-}
-
 function alone(seat: SeatFixture): SeatFixture {
   return { ...seat, role: 'coordinator' };
 }
@@ -287,24 +265,15 @@ describe('resolve-launch stays off unless named', () => {
     }
   }, 30000);
 
-  test('flag on runs the resolved argv', async () => {
+  test('flag on refuses a profile that still has launch words to place', async () => {
     for (const seat of CLIS) {
       const one = alone(seat);
       const { root, home, made } = prepare([one]);
       const io = testIo(root, OWNER);
       const code = await runUp(['--resolve-launch'], io, sources(home, made));
-      const resolved = expectedCommand(root, home, one, [one]);
-      const commands = made.runs.map((run) => run.command);
-      const command = commands.find((line) => line.includes(resolved));
-      expect(command, `${seat.name}\n${io.out}${io.err}`).toBeDefined();
-      if (seat.cli === 'codex' || seat.cli === 'antigravity') {
-        expect(command).toContain('standing rules for this session');
-        if (seat.cli === 'antigravity') expect(command).toContain('--prompt-interactive');
-        expect(code, `${seat.name}\n${io.out}${io.err}`).toBe(0);
-      } else if (seat.cli === 'claude-code') {
-        expect(commands).toContain(resolved);
-        expect(code, `${seat.name}\n${io.out}${io.err}`).toBe(0);
-      }
+      expect(code, `${seat.name}\n${io.out}${io.err}`).not.toBe(0);
+      expect(io.out + io.err).toContain(LAUNCH_WORDS);
+      expect(made.runs.some((run) => run.command.includes(seat.binary))).toBe(false);
       release();
     }
   }, 30000);
@@ -355,7 +324,7 @@ describe('team restart uses the same flag', () => {
     };
   }
 
-  test('flag off restarts on today\'s argv and flag on restarts on the resolved argv', async () => {
+  test('flag off restarts on today\'s argv and flag on refuses a profile with launch words', async () => {
     const seat = firstSeat();
     const off = prepare([seat]);
     const offIo = testIo(off.root, OWNER);
@@ -371,7 +340,8 @@ describe('team restart uses the same flag', () => {
     const on = prepare([seat]);
     const onIo = testIo(on.root, OWNER);
     const onCode = await runRestart([seat.name, '--resolve-launch'], onIo, restartSources(on.home, on.made));
-    expect(onCode, onIo.out + onIo.err).toBe(0);
-    expect(on.made.runs.map((run) => run.command)).toContain(expectedCommand(on.root, on.home, seat, [seat]));
+    expect(onCode, onIo.out + onIo.err).not.toBe(0);
+    expect(onIo.out + onIo.err).toContain(LAUNCH_WORDS);
+    expect(on.made.runs.some((run) => run.command.includes(seat.binary))).toBe(false);
   });
 });
