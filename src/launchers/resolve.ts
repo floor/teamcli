@@ -211,13 +211,8 @@ export function resolveLaunch(
       chain: [], diagnostics,
     };
   };
-  // A blank session is refused here, before the chain, argv, or a resume is built.
-  // The repair is to omit the session or pass one that contains a non-space character.
-  if (ctx.sessionArg !== undefined && (typeof ctx.sessionArg !== 'string' || ctx.sessionArg.trim() === '')) {
-    return fail(
-      'a supplied caller session is blank; omit it, or pass a session that contains a non-space character',
-      'E_RESUME_SESSION',
-    );
+  if (ctx.sessionArg !== undefined && (typeof ctx.sessionArg !== 'string' || ctx.sessionArg === '')) {
+    return fail('a supplied caller session must be a nonempty string', 'E_RESUME_SESSION');
   }
   let missingContext = false;
   const expandWord = (word: string): string => {

@@ -1,7 +1,8 @@
 // Independent scenes for the launcher composition: settings fold from the
 // lowest layer to the caller, a fixed resume holds or yields by precedence,
-// a blank caller session is refused before a resume is built, and argv is the
-// executable, the endpoint's fixed words, the preset's fixed words, then the caller.
+// an empty caller session is refused before a resume is built, a whitespace-only
+// session is kept as supplied, and argv is the executable, the endpoint's
+// fixed words, the preset's fixed words, then the caller.
 // Synthetic fixtures only: nothing executes a launch or reads the environment.
 import { expect, test } from 'bun:test';
 import { discover, resolveLaunch, type LauncherHome, type ResolveContext } from '../src/launchers/resolve.ts';
@@ -135,7 +136,21 @@ test('an empty session is refused as a resume and as an argument word', () => {
   expect(blank.resume).toEqual({ kind: 'none' });
   expect(codes(blank.diagnostics)).toContain('E_RESUME_SHAPE');
 
-  for (const sessionArg of ['', '   ', '\t']) {
+  const empty = resolve(
+    [endpoint(), preset({
+      args: ['--resume', '{session}'],
+      resume: { mode: 'fixed', path: 'example-session', precedence: 'teamcli_wins' },
+    })],
+    [],
+    { sessionArg: '' },
+  );
+  expect(empty.ok).toBe(false);
+  expect(empty.resume).toEqual({ kind: 'none' });
+  expect(empty.argv).toEqual([]);
+  expect(codes(empty.diagnostics)).toContain('E_RESUME_SESSION');
+  expect(empty.diagnostics.some((d) => d.message === 'a supplied caller session must be a nonempty string')).toBe(true);
+
+  for (const sessionArg of ['   ', '\t']) {
     const out = resolve(
       [endpoint(), preset({
         args: ['--resume', '{session}'],
@@ -144,11 +159,9 @@ test('an empty session is refused as a resume and as an argument word', () => {
       [],
       { sessionArg },
     );
-    expect(out.ok).toBe(false);
-    expect(out.resume).toEqual({ kind: 'none' });
-    expect(out.argv).toEqual([]);
-    expect(codes(out.diagnostics)).toContain('E_RESUME_SESSION');
-    expect(out.diagnostics.some((d) => d.message === 'a supplied caller session is blank; omit it, or pass a session that contains a non-space character')).toBe(true);
+    expect(out.ok).toBe(true);
+    expect(out.resume).toEqual({ kind: 'teamcli', session: sessionArg });
+    expect(out.argv).toEqual(['claude-code', '--resume', sessionArg]);
   }
 });
 
