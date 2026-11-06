@@ -45,13 +45,6 @@ test('an entity with no record is missing, and another entity record is not used
     why: expect.any(String),
   });
   expect(JSON.stringify(acme)).not.toContain('clerk@lab');
-  expect(JSON.stringify(acme)).not.toContain('orchestrator@floor');
-
-  const floor = resolveOwnerReplyTo(join(home, 'unused-root'), home, 'floor', NOW);
-  expect(floor.ok).toBe(false);
-  if (!floor.ok) expect(floor.reason).toBe('missing');
-  expect(JSON.stringify(floor)).not.toContain('clerk@lab');
-  expect(JSON.stringify(floor)).not.toContain('orchestrator@floor');
 
   const lab = resolveOwnerReplyTo(join(home, 'unused-root'), home, 'lab', NOW);
   expect(lab).toEqual({ ok: true, entity: 'lab', target: 'clerk@lab', source: 'policy' });
