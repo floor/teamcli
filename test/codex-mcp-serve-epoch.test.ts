@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import type { CallerSources } from '../src/caller.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
@@ -112,8 +112,10 @@ ${workerBlock}
 `;
 }
 
-function writeApprovedTeam(cli: 'codex' | 'grok' = 'codex'): string {
-  const text = teamText(cli);
+function writeApprovedTeam(cli: 'codex' | 'grok' = 'codex', ownFolder?: string): string {
+  const text = ownFolder === undefined ? teamText(cli) : teamText(cli)
+    .replace('    cli: grok\n', `    cli: grok\n    cwd: ${JSON.stringify(relative(root, ownFolder))}\n`)
+    .replace('delivery_order:', `trust: [${JSON.stringify(relative(root, ownFolder))}]\ndelivery_order:`);
   const file = join(dir, 'team.yaml');
   writeFileSync(file, text);
   const loaded = loadTeamFile(root, { file, home });
@@ -415,7 +417,9 @@ describe('codex mcp serve epoch across launch, restore, and reload', () => {
   test.each([true, false])(
     'at reload (recordedModel=%s): delivers the general seat brief before registering the inbox so the config carries --epoch',
     async (withRecordedModel) => {
-      const file = writeApprovedTeam('grok');
+      const ownFolder = join(base, 'worker');
+      mkdirSync(ownFolder, { mode: 0o700 });
+      const file = writeApprovedTeam('grok', ownFolder);
       updateState(dir, (state) => {
         const held = (state.sessions[SESSION] ??= emptySession());
         held.seats[SEAT] = {
@@ -423,7 +427,7 @@ describe('codex mcp serve epoch across launch, restore, and reload', () => {
           pane: PANE,
           workspace: WORKSPACE,
           cli: 'grok',
-          start_cwd: lobby,
+          start_cwd: ownFolder,
           launched: LAUNCHED,
           ...(withRecordedModel ? { model: 'Grok', version: '4.7', launch_line: 'grok' } : {}),
         };
@@ -458,7 +462,7 @@ describe('codex mcp serve epoch across launch, restore, and reload', () => {
         renameAgent: () => true,
         closeWorkspace: () => true,
         agentPanes: () => [PANE],
-        agents: () => [{ name: SEAT, agent: 'grok', pane: PANE, workspace: WORKSPACE, status: 'idle', cwd: lobby }],
+        agents: () => [{ name: SEAT, agent: 'grok', pane: PANE, workspace: WORKSPACE, status: 'idle', cwd: ownFolder }],
         paneText: () => GROK_IDLE,
         foreground: () => ['grok'],
         processInfo: () => LIVE_PROCESS,
@@ -482,11 +486,11 @@ describe('codex mcp serve epoch across launch, restore, and reload', () => {
       expect(flag('--epoch')).toBe(claim!.epoch);
 
       const { dropDir, id } = writeSignedDrop('reload message body');
-      const serveIo = testIo(lobby);
+      const serveIo = testIo(ownFolder);
       serveIo.env = { HERDR_PANE_ID: PANE };
       serveIo.callerSources = (asked): CallerSources => ({
         ancestors: () => [{ pid: 302, name: 'node' }, { pid: 301, name: 'grok' }, { pid: 300, name: 'zsh' }, { pid: 10, name: 'herdr' }, { pid: 1, name: 'launchd' }],
-        agents: () => (asked === SESSION ? [{ name: SEAT, agent: 'grok', pane: PANE, workspace: WORKSPACE, status: 'idle', cwd: lobby }] : []),
+        agents: () => (asked === SESSION ? [{ name: SEAT, agent: 'grok', pane: PANE, workspace: WORKSPACE, status: 'idle', cwd: ownFolder }] : []),
         paneRootPid: (pane) => (asked === SESSION && pane === PANE ? 300 : null),
         env: serveIo.env,
         stdinIsTTY: false,
