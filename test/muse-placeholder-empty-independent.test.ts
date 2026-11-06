@@ -68,7 +68,7 @@ function makeWakeHost(
 }
 
 describe('muse faint placeholder vs non-faint draft (independent verification)', () => {
-  test('faint (SGR 2) hint rows — a listed or /command hint reads empty; faint prose reads unsent', () => {
+  test('faint (SGR 2) hint rows read empty, prose included', () => {
     const proseA = 'Ask to monitor a running build or log and get pinged on changes';
     const proseB = 'Describe the bug or paste a stack trace to investigate';
     const slashA = '/tasks shows workflows, subagents and terminals in one place';
@@ -79,22 +79,19 @@ describe('muse faint placeholder vs non-faint draft (independent verification)',
         label: 'whole line faint prose hint (SGR 2..0)',
         frame: museFrame(`\x1b[2m❯ ${proseA}\x1b[0m`),
         text: proseA,
-        empty: false,
-        first: proseA,
+        empty: true,
       },
       {
         label: 'prompt plain + faint prose hint lifted with SGR 22',
         frame: museFrame(`❯ \x1b[2m${proseB}\x1b[22m`),
         text: proseB,
-        empty: false,
-        first: proseB,
+        empty: true,
       },
       {
         label: 'inverse-video cursor on first hint char followed by faint remainder',
         frame: museFrame(`❯ \x1b[7mD\x1b[27;2mescribe the bug or paste a stack trace to investigate\x1b[0m`),
         text: proseB,
-        empty: false,
-        first: proseB,
+        empty: true,
       },
       {
         label: 'faint /tasks hint',
@@ -112,14 +109,12 @@ describe('muse faint placeholder vs non-faint draft (independent verification)',
         label: 'wrapped two-row faint hint where both input and continuation rows are all-faint',
         frame: museFrame(`❯ \x1b[2m${proseA}\x1b[0m`, ['\x1b[2m  when the build finishes\x1b[0m']),
         text: `${proseA} when the build finishes`,
-        empty: false,
-        first: proseA,
+        empty: true,
       },
     ];
 
     for (const item of cases) {
-      // Muse declares `shape: slash-hint`: an all-faint row is the empty box only when it is a
-      // listed hint or a `/command …` hint. Faint prose is text, as plain prose already is.
+      // An all-faint row is the empty box, prose included. A row that is not all faint stays text.
       const kind = item.empty ? 'idle' : 'unsent';
       expect(readScreen('muse', item.frame).kind).toBe(kind);
       expect(classifyComposer('muse', item.frame.split('\n')).kind).toBe(kind);
@@ -245,7 +240,7 @@ describe('muse faint placeholder vs non-faint draft (independent verification)',
     expect(wake.enters).toBe(1);
   });
 
-  test('deliverTypedWake: declared faint hints allow wake delivery, while faint prose or plain or grey non-faint drafts are never wiped or sent', async () => {
+  test('deliverTypedWake: a faint hint, prose included, is typed into, and a plain or non-faint draft is not', async () => {
     const prose = 'Ask to monitor a running build or log and get pinged on changes';
     const faintProse = museFrame(`\x1b[2m❯ ${prose}\x1b[0m`);
     const faintSlash = museFrame('\x1b[2m❯ /tasks shows workflows, subagents and terminals in one place\x1b[0m');
@@ -279,9 +274,15 @@ describe('muse faint placeholder vs non-faint draft (independent verification)',
     expect(wakeRotated.typed).toEqual([TRIGGER_LINE]);
     expect(wakeRotated.enters).toBe(1);
 
-    // 3. Faint prose, grey non-faint text (SGR 90, 38;5;244, an undeclared 38;2;r;g;b) or a plain draft on the first read -> refuses before typing anything
+    // 3. A faint prose hint is the empty box, so the wake types into it.
+    const wakeProse = makeWakeHost((read, enters) => (enters > 0 ? WORKING : read < 2 ? faintProse : holding(TRIGGER_LINE)));
+    const resProse = await deliverTypedWake(wakeProse.host, 'pane-1', TRIGGER_LINE, 'muse', FAST);
+    expect(resProse.delivered).toBe(true);
+    expect(wakeProse.typed).toEqual([TRIGGER_LINE]);
+    expect(wakeProse.enters).toBe(1);
+
+    // 4. Grey non-faint text (SGR 90, 38;5;244, an undeclared 38;2;r;g;b) or a plain draft on the first read refuses before typing anything
     const draftFrames = [
-      faintProse,
       museFrame(`❯ ${prose}`),
       museFrame(`\x1b[90m❯ ${prose}\x1b[0m`),
       museFrame(`❯ \x1b[38;5;244m${prose}\x1b[0m`),
@@ -302,7 +303,7 @@ describe('muse faint placeholder vs non-faint draft (independent verification)',
       expect(refusedHost.enters).toBe(0);
     }
 
-    // 4. A declared hint on read 0, then the user starts typing an undeclared grey/plain draft on read 1 -> refuses on the second read without typing
+    // 5. A declared hint on read 0, then the user starts typing an undeclared grey draft on read 1, refuses on the second read without typing
     const secondReadDraft = makeWakeHost((read) =>
       read === 0 ? faintSlash : museFrame(`\x1b[38;2;120;125;130m❯ ${prose}\x1b[0m`),
     );

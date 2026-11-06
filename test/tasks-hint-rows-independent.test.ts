@@ -179,8 +179,8 @@ describe('independent verification of exact /tasks hint rows in Antigravity and 
     expect(museQueueWake.typed).toEqual([]);
   });
 
-  test('Muse faint /command hints still read as idle via slash-hint while plain non-hint rows and non-faint coloured rows in Muse stay unsent', async () => {
-    // 1. Faint `/command <words>` hints in Muse read as idle via `shape: slash-hint`
+  test('Muse all-faint rows read idle, while plain rows and non-faint coloured rows stay unsent', async () => {
+    // 1. Faint `/command <words>` hints in Muse read as idle
     expect(readScreen('muse', MUSE_DIM_GOAL).kind).toBe('idle');
     expect(readScreen('muse', MUSE_DIM_LOOP).kind).toBe('idle');
     for (const faintSlashHint of [
@@ -209,11 +209,12 @@ describe('independent verification of exact /tasks hint rows in Antigravity and 
     });
     expect(loopWake.typed).toEqual([WAKE_LINE]);
 
-    // 2. Faint rows that are neither a listed placeholder nor `/command <words>` (bare `/command` or non-slash words) stay unsent
-    for (const nonHintDim of ['/tasks', '/exit', 'plain words in dim']) {
-      const dimDraft = museDim(nonHintDim);
-      expect(readScreen('muse', dimDraft).kind).toBe('unsent');
-      expect(boxHoldsText('muse', nonHintDim, dimDraft)).toBe(true);
+    // 2. An all-faint row is the empty box, prose and a bare command included.
+    for (const faintRow of ['/tasks', '/exit', 'plain words in dim']) {
+      const dimHint = museDim(faintRow);
+      expect(readScreen('muse', dimHint).kind).toBe('idle');
+      expect(readBox('muse', dimHint)).toBeNull();
+      expect(boxHoldsText('muse', faintRow, dimHint)).toBe(false);
     }
 
     // 3. Plain non-hint rows AND exact hint words rendered in Muse colour (SGR colour without faint \x1b[2m) stay unsent

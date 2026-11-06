@@ -1508,12 +1508,11 @@ function stripTyped(line: string, composer: { prompt: RegExp; stripSuffix?: RegE
 // 1.4.14 draws its rotating hint in grey with no faint attribute at all. A listed equals line
 // follows the same rule and gets no shortcut of its own: faint or a declared colour, never an
 // undeclared one, so typed text that happens to equal a listed hint stays a draft. A mixed row,
-// a bold word, a cursor cell or an undeclared colour stays text. An all-faint row is
-// the suggestion, unless the composer names `slash-hint`: then the faint row must also be a
-// listed placeholder or a `/command …` hint, so a faint row of other words is text. A line
-// without styling (a plain read) leaves the list to decide, as does a composer
-// without the style. The slash shape is not asked on that plain read: a draft that starts
-// with `/` stays text.
+// a bold word, a cursor cell in the words, or an undeclared colour stays text. An all-faint
+// row is the suggestion, prose included. A composer that names `slash-hint` does not narrow
+// that: a faint sentence and a faint `/command …` hint are both the empty box. A line without
+// styling (a plain read) leaves the list to decide, as does a composer without the style. A
+// draft that starts with `/` stays text on that plain read.
 function placeholder(
   typed: string,
   composer: { prompt: RegExp; placeholders: ScreenData['composer']['placeholders']; placeholderStyle?: ScreenData['composer']['placeholderStyle']; placeholderFg?: string[] },
@@ -1531,18 +1530,9 @@ function placeholder(
       if (colour !== null && composer.placeholderFg.includes(colour)) return true;
     }
     if (!allDimAfter(styledLine, skip)) return false;
-    // A composer that names slash-hint keeps a dim row only when it is a known placeholder or
-    // that hint shape. Every other dim composer still takes any faint row as the suggestion.
-    if (!composer.placeholders.some((entry) => 'shape' in entry && entry.shape === 'slash-hint')) return true;
-    return listed || slashHint(typed);
+    return true;
   }
   return listed;
-}
-
-/** A rotating `/command …` hint: a slash, a command word, and text after it. A bare `/command`
- *  is a draft, and so is any row this does not describe. */
-function slashHint(typed: string): boolean {
-  return /^\/[A-Za-z][A-Za-z0-9-]*\s+\S/.test(typed);
 }
 
 // Rows under the input row that hold only a greyed suggestion: a suggestion longer than the box is
