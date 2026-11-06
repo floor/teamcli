@@ -5,14 +5,14 @@
 //    (unattributed) for a refused one; the served body carries the sender line; JSON rows carry
 //    sender_attribution and no sender_verified or sender_trust.
 // 2. drops: the table marks every named sender, --follow marks its one line, --read marks the
-//    served body, and JSON carries sender_attribution with its three values ('attributed',
+//    served body, and JSON carries sender_attribution with its three values ('unverified_claim',
 //    'launch-brief', 'none').
 // 3. inbox_check and inbox_read mark the same way.
 // 4. a socket frame opens with the attributed sender banner ([attributed sender: <claimed>]).
 // 5. the reconcile pass's owner line reads [unattributed author] and its config.changed event
 //    stamps no sender field.
 // 6. the launch's own general seat brief is marked attributed too, and its JSON basis is
-//    launch-brief; a brief the seat's current claim does not name is attributed.
+//    launch-brief; a brief the seat's current claim does not name is unverified_claim.
 // 7. the docs guard fails when a page says a sender is verified or unverified, and passes across
 //    every page in docs/.
 //
@@ -119,7 +119,7 @@ function canonicalSendBody(fromDisplay = 'orchestrator@acme', rule = RULE, text 
 }
 
 describe('1. team messages — FROM cell, served body mark, and JSON sender_attribution', () => {
-  test('a record signed with the shared key has FROM (unverified claim), the sender line, and JSON sender_attribution: attributed with no legacy fields', async () => {
+  test('a record signed with the shared key has FROM (unverified claim), the sender line, and JSON sender_attribution: unverified_claim with no legacy fields', async () => {
     const f = makeFixture();
     const id = '10000000-0000-4000-8000-000000000001';
     const body = canonicalSendBody();
@@ -175,7 +175,7 @@ describe('1. team messages — FROM cell, served body mark, and JSON sender_attr
     expect(row.from).toBe('orchestrator');
     // The owner reading lists another mailbox read-only, so the row waits.
     expect(row.status).toBe('waiting');
-    expect(row.sender_attribution).toBe('attributed');
+    expect(row.sender_attribution).toBe('unverified_claim');
     expect(row.body).toBe(body);
     expect('sender_verified' in row).toBe(false);
     expect('sender_trust' in row).toBe(false);
@@ -233,7 +233,7 @@ describe('1. team messages — FROM cell, served body mark, and JSON sender_attr
     expect(held).toMatchObject({
       status: 'waiting',
       from: 'owner',
-      sender_attribution: 'attributed',
+      sender_attribution: 'unverified_claim',
       body: heldBody,
     });
     for (const row of doc.rows) {
@@ -324,7 +324,7 @@ describe('1. team messages — FROM cell, served body mark, and JSON sender_attr
     expect(itemSpec.required).not.toContain('sender_trust');
     expect(itemSpec.properties.sender_attribution).toEqual({
       type: 'string',
-      enum: ['attributed', 'launch-brief', 'none'],
+      enum: ['unverified_claim', 'launch-brief', 'none'],
     });
     expect('sender_verified' in itemSpec.properties).toBe(false);
     expect('sender_trust' in itemSpec.properties).toBe(false);
@@ -343,7 +343,7 @@ describe('1. team messages — FROM cell, served body mark, and JSON sender_attr
 });
 
 describe('2. team drops — table, --follow, --read, and --json with all three sender_attribution values', () => {
-  test('table marks a shared-key record (unverified claim), the current launch brief (attributed), a raw drop (unattributed), and a tampered record unknown; --json emits attributed, launch-brief, and none', async () => {
+  test('table marks a shared-key record (unverified claim), the current launch brief (attributed), a raw drop (unattributed), and a tampered record unknown; --json emits unverified_claim, launch-brief, and none', async () => {
     const f = makeFixture();
     // (1) Current launch brief -> sender_attribution: 'launch-brief', table: 'the launch (attributed)'
     const incarnation = 'inc_000000000042';
@@ -374,7 +374,7 @@ describe('2. team drops — table, --follow, --read, and --json with all three s
       } as never;
     });
 
-    // (2) Shared-key record -> sender_attribution: 'attributed', table: 'orchestrator (unverified claim)'
+    // (2) Shared-key record -> sender_attribution: 'unverified_claim', table: 'orchestrator (unverified claim)'
     const idAttr = '20000000-0000-4000-8000-000000000001';
     plantRecord(f.home, f.root, 'acme', 'worker', idAttr, canonicalSendBody(), {
       from: 'orchestrator',
@@ -432,7 +432,7 @@ describe('2. team drops — table, --follow, --read, and --json with all three s
     });
     expect(byPath.get(join(f.dropDir, idAttr))).toMatchObject({
       from: 'orchestrator',
-      sender_attribution: 'attributed',
+      sender_attribution: 'unverified_claim',
     });
     expect(byPath.get(rawPath)).toMatchObject({
       from: 'stranger',
@@ -511,7 +511,7 @@ describe('2. team drops — table, --follow, --read, and --json with all three s
     expect(itemSpec.required).not.toContain('sender_verified');
     expect(itemSpec.properties.sender_attribution).toEqual({
       type: 'string',
-      enum: ['attributed', 'launch-brief', 'none'],
+      enum: ['unverified_claim', 'launch-brief', 'none'],
     });
     expect('sender_verified' in itemSpec.properties).toBe(false);
 
@@ -527,7 +527,7 @@ describe('2. team drops — table, --follow, --read, and --json with all three s
 });
 
 describe('3. inbox_check (listUnread) and inbox_read (readMessage)', () => {
-  test('listUnread emits sender_attribution (attributed, launch-brief, none) with no sender_verified, and readMessage marks the served body', () => {
+  test('listUnread emits sender_attribution (unverified_claim, launch-brief, none) with no sender_verified, and readMessage marks the served body', () => {
     const f = makeFixture();
     // (a) Signed record with a conflicting unsigned `.pending` marker
     const idSigned = '30000000-0000-4000-8000-000000000001';
@@ -576,7 +576,7 @@ describe('3. inbox_check (listUnread) and inbox_read (readMessage)', () => {
     }
     const signedRow = unread.find((u) => u.id === idSigned)!;
     expect(signedRow.from).toBe('owner');
-    expect(signedRow.sender_attribution).toBe('attributed');
+    expect(signedRow.sender_attribution).toBe('unverified_claim');
 
     const tamperedRow = unread.find((u) => u.id === idTampered)!;
     expect(tamperedRow.from).toBe('marker-claim');
@@ -738,7 +738,7 @@ describe('5. reconcile pass owner line reads [unattributed author] and config.ch
 });
 
 describe('6. launch general seat brief attribution — launch-brief when matching current claim, attributed otherwise', () => {
-  test('current brief has JSON basis launch-brief and body mark (attributed); non-matching id, incarnation, digest, null claim, or non-launch rule has basis attributed', async () => {
+  test('current brief has JSON basis launch-brief and body mark (attributed); non-matching id, incarnation, digest, null claim, or non-launch rule has basis unverified_claim', async () => {
     const f = makeFixture();
     const incarnation = 'inc_000000000077';
     const briefRec = generalBriefRecord({
@@ -803,17 +803,17 @@ describe('6. launch general seat brief attribution — launch-brief when matchin
       );
     }
 
-    // Any brief the seat's current claim does not name is `attributed`:
+    // Any brief the seat's current claim does not name is `unverified_claim`:
     // (a) null claim
-    expect(attributeSenderClaim(briefRec, { briefClaim: null })).toBe('attributed');
+    expect(attributeSenderClaim(briefRec, { briefClaim: null })).toBe('unverified_claim');
     // (b) different id
-    expect(attributeSenderClaim({ ...briefRec, id: '60000000-0000-4000-8000-000000000099' }, { briefClaim: claim })).toBe('attributed');
+    expect(attributeSenderClaim({ ...briefRec, id: '60000000-0000-4000-8000-000000000099' }, { briefClaim: claim })).toBe('unverified_claim');
     // (c) different incarnation
-    expect(attributeSenderClaim({ ...briefRec, incarnation: 'inc_000000000001' }, { briefClaim: claim })).toBe('attributed');
+    expect(attributeSenderClaim({ ...briefRec, incarnation: 'inc_000000000001' }, { briefClaim: claim })).toBe('unverified_claim');
     // (d) different brief_sha256
-    expect(attributeSenderClaim({ ...briefRec, brief_sha256: '0'.repeat(64) }, { briefClaim: claim })).toBe('attributed');
+    expect(attributeSenderClaim({ ...briefRec, brief_sha256: '0'.repeat(64) }, { briefClaim: claim })).toBe('unverified_claim');
     // (e) forged `from: "the launch"` under an ordinary rule
-    expect(attributeSenderClaim({ ...briefRec, rule: RULE }, { briefClaim: claim })).toBe('attributed');
+    expect(attributeSenderClaim({ ...briefRec, rule: RULE }, { briefClaim: claim })).toBe('unverified_claim');
   });
 });
 

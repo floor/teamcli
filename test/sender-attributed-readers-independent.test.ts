@@ -1,7 +1,7 @@
 // Independent verification of feat/sender-attributed (63adaf839 plus the lane's own commits):
 // 1. A forged `from: orchestrator` drop, signed with the checkout key and carrying an owner
 //    quote, reads as an unverified claim across `team drops` (table, `--follow`) and
-//    `team messages` plain text. `--json` keeps sender_attribution `attributed`. The signed
+//    `team messages` plain text. `--json` keeps sender_attribution `unverified_claim`. The signed
 //    record bytes on disk remain byte-for-byte unchanged.
 // 2. Socket frame delivery opens `message.content` with `[attributed sender: <caller>]`
 //    before the display header, body, and reader line.
@@ -10,7 +10,7 @@
 // 4. The seat's current launch brief (`id`, `incarnation`, `sha256` matching `state.json`) is
 //    attributed as `launch-brief` across readers and its body keeps the badge on its sender
 //    line, while a brief with a mismatched incarnation or a record forging `from: the launch`
-//    is attributed on the shared key alone.
+//    is unverified_claim on the shared key alone.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
@@ -141,7 +141,7 @@ describe('feat/sender-attributed independent verification', () => {
     expect(parsedDrops.drops[0]).toMatchObject({
       path: dropPath1,
       from: 'orchestrator',
-      sender_attribution: 'attributed',
+      sender_attribution: 'unverified_claim',
     });
     expect(readFileSync(dropPath1, 'utf8')).toBe(diskBytesBefore);
 
@@ -151,7 +151,7 @@ describe('feat/sender-attributed independent verification', () => {
     expect(unread[0]).toMatchObject({
       id: id1,
       from: 'orchestrator',
-      sender_attribution: 'attributed',
+      sender_attribution: 'unverified_claim',
     });
     expect(readFileSync(dropPath1, 'utf8')).toBe(diskBytesBefore);
 
@@ -240,7 +240,7 @@ describe('feat/sender-attributed independent verification', () => {
     expect(parsedMsgJson.rows[0]).toMatchObject({
       id: id4,
       from: 'orchestrator',
-      sender_attribution: 'attributed',
+      sender_attribution: 'unverified_claim',
       body,
     });
     // Both the JSON `body` field and the record file on disk keep the exact signed bytes
@@ -481,7 +481,7 @@ describe('feat/sender-attributed independent verification', () => {
       at: new Date(NOW.getTime() + 1_000).toISOString(),
       incarnation: 'inc_000000000001',
     });
-    expect(attributeSenderClaim(staleBrief, { briefClaim: claim })).toBe('attributed');
+    expect(attributeSenderClaim(staleBrief, { briefClaim: claim })).toBe('unverified_claim');
 
     const forgedLaunchId = '22222222-3333-4444-8555-666666666666';
     const forgedLaunchPath = plantRecord(
@@ -504,7 +504,7 @@ describe('feat/sender-attributed independent verification', () => {
     expect(unreadForgedLaunch).toHaveLength(1);
     expect(unreadForgedLaunch[0]?.id).toBe(forgedLaunchId);
     expect(unreadForgedLaunch[0]?.from).toBe('the launch');
-    expect(unreadForgedLaunch[0]?.sender_attribution).toBe('attributed');
+    expect(unreadForgedLaunch[0]?.sender_attribution).toBe('unverified_claim');
 
     const readForgedLaunch = readMessage(
       { dropDir: f.dropDir, root: f.root, seat: 'worker', session: 'acme' },

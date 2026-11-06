@@ -201,7 +201,7 @@ describe('independent caller mailbox scope verification', () => {
     const docOwner = assertMatchesOutputSchema<MessagesDoc>(resOwner.out, MESSAGES_OUTPUT_SCHEMA);
     expect(docOwner.counts).toEqual({ messages: 1, shown: 1, refused: 0, waiting: 0 });
     expect(docOwner.rows).toEqual([
-      { id: 'owner-1', from: 'orchestrator', to: 'owner', sent: AT, sent_display: '0s ago', status: 'shown', sender_attribution: 'attributed', body: 'SECRET_BODY_OWNER' },
+      { id: 'owner-1', from: 'orchestrator', to: 'owner', sent: AT, sent_display: '0s ago', status: 'shown', sender_attribution: 'unverified_claim', body: 'SECRET_BODY_OWNER' },
     ]);
     expect(existsSync(receiptFile(where, 'owner', 'owner-1'))).toBe(true);
   });
@@ -221,9 +221,9 @@ describe('independent caller mailbox scope verification', () => {
     expect(docA.counts).toEqual({ messages: 3, shown: 1, refused: 0, waiting: 2 });
     expect(docA.differences).toEqual([]);
     expect(docA.rows).toEqual([
-      { id: 'a-clean', from: 'orchestrator', to: 'worker-a', sent: AT, sent_display: '0s ago', status: 'shown', sender_attribution: 'attributed', body: 'clean mail for worker-a' },
+      { id: 'a-clean', from: 'orchestrator', to: 'worker-a', sent: AT, sent_display: '0s ago', status: 'shown', sender_attribution: 'unverified_claim', body: 'clean mail for worker-a' },
       { id: '0000-corrupt', from: null, to: 'worker-b', sent: null, sent_display: '-', status: 'waiting', sender_attribution: 'none' },
-      { id: 'b-clean', from: 'orchestrator', to: 'worker-b', sent: AT, sent_display: '0s ago', status: 'waiting', sender_attribution: 'attributed' },
+      { id: 'b-clean', from: 'orchestrator', to: 'worker-b', sent: AT, sent_display: '0s ago', status: 'waiting', sender_attribution: 'unverified_claim' },
     ]);
 
     // Seat B reads: exits 1, refuses 0000-corrupt and serves b-clean
@@ -233,7 +233,7 @@ describe('independent caller mailbox scope verification', () => {
     expect(docB.counts).toEqual({ messages: 2, shown: 1, refused: 1, waiting: 0 });
     expect(docB.rows).toEqual([
       { id: '0000-corrupt', from: null, to: null, sent: null, sent_display: '-', status: 'refused', sender_attribution: 'none' },
-      { id: 'b-clean', from: 'orchestrator', to: 'worker-b', sent: AT, sent_display: '0s ago', status: 'shown', sender_attribution: 'attributed', body: 'clean mail for worker-b' },
+      { id: 'b-clean', from: 'orchestrator', to: 'worker-b', sent: AT, sent_display: '0s ago', status: 'shown', sender_attribution: 'unverified_claim', body: 'clean mail for worker-b' },
     ]);
     expect(docB.differences).toHaveLength(1);
     expect(statusOf(dirB, 'b-clean', { to: 'worker-b', root: where, session: 'acme' }, messageKey())).toBe('read');
@@ -265,9 +265,9 @@ describe('independent caller mailbox scope verification', () => {
       '3 messages addressed to another mailbox are waiting; they are shown read-only, and no receipts are written for them.',
     ]);
     expect(ownerDoc.rows).toEqual([
-      { id: idA, from: 'orchestrator', to: 'worker-a', sent: AT, sent_display: '0s ago', status: 'waiting', sender_attribution: 'attributed', body: 'VERIFIED_BODY_WORKER_A' },
+      { id: idA, from: 'orchestrator', to: 'worker-a', sent: AT, sent_display: '0s ago', status: 'waiting', sender_attribution: 'unverified_claim', body: 'VERIFIED_BODY_WORKER_A' },
       { id: idTampered, from: null, to: 'worker-a', sent: null, sent_display: '-', status: 'waiting', sender_attribution: 'none' },
-      { id: idB, from: 'orchestrator', to: 'worker-b', sent: AT, sent_display: '0s ago', status: 'waiting', sender_attribution: 'attributed', body: 'VERIFIED_LEGACY_BODY_WORKER_B' },
+      { id: idB, from: 'orchestrator', to: 'worker-b', sent: AT, sent_display: '0s ago', status: 'waiting', sender_attribution: 'unverified_claim', body: 'VERIFIED_LEGACY_BODY_WORKER_B' },
     ]);
     expect(ownerJson.out).not.toContain('TAMPERED_SECRET_BODY');
 
@@ -297,9 +297,9 @@ describe('independent caller mailbox scope verification', () => {
     const seatBDoc = assertMatchesOutputSchema<MessagesDoc>(seatBJson.out, MESSAGES_OUTPUT_SCHEMA);
     expect(seatBDoc.counts).toEqual({ messages: 3, shown: 1, refused: 0, waiting: 2 });
     expect(seatBDoc.rows).toEqual([
-      { id: idA, from: 'orchestrator', to: 'worker-a', sent: AT, sent_display: '0s ago', status: 'waiting', sender_attribution: 'attributed' },
+      { id: idA, from: 'orchestrator', to: 'worker-a', sent: AT, sent_display: '0s ago', status: 'waiting', sender_attribution: 'unverified_claim' },
       { id: idTampered, from: null, to: 'worker-a', sent: null, sent_display: '-', status: 'waiting', sender_attribution: 'none' },
-      { id: idB, from: 'orchestrator', to: 'worker-b', sent: AT, sent_display: '0s ago', status: 'shown', sender_attribution: 'attributed', body: 'VERIFIED_LEGACY_BODY_WORKER_B' },
+      { id: idB, from: 'orchestrator', to: 'worker-b', sent: AT, sent_display: '0s ago', status: 'shown', sender_attribution: 'unverified_claim', body: 'VERIFIED_LEGACY_BODY_WORKER_B' },
     ]);
     expect(seatBJson.out).not.toContain('VERIFIED_BODY_WORKER_A');
     expect(seatBJson.out).not.toContain('TAMPERED_SECRET_BODY');
@@ -312,7 +312,7 @@ describe('independent caller mailbox scope verification', () => {
     const seatADoc = assertMatchesOutputSchema<MessagesDoc>(seatAJson.out, MESSAGES_OUTPUT_SCHEMA);
     expect(seatADoc.counts).toEqual({ messages: 2, shown: 1, refused: 1, waiting: 0 });
     expect(seatADoc.rows).toEqual([
-      { id: idA, from: 'orchestrator', to: 'worker-a', sent: AT, sent_display: '0s ago', status: 'shown', sender_attribution: 'attributed', body: 'VERIFIED_BODY_WORKER_A' },
+      { id: idA, from: 'orchestrator', to: 'worker-a', sent: AT, sent_display: '0s ago', status: 'shown', sender_attribution: 'unverified_claim', body: 'VERIFIED_BODY_WORKER_A' },
       { id: idTampered, from: 'orchestrator', to: 'worker-a', sent: AT, sent_display: '0s ago', status: 'refused', sender_attribution: 'none' },
     ]);
     expect(seatAJson.out).not.toContain('TAMPERED_SECRET_BODY');
