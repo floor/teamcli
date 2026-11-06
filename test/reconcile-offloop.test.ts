@@ -959,7 +959,12 @@ describe('the daemon heartbeat and endpoint supervision', () => {
       expect(starts).toBeGreaterThanOrEqual(3);
       expect(fatal).toHaveLength(1);
       expect(fatal[0]).toContain('failed 2 restarts in a row');
-      const written = readStateOk(home);
+      // The refresh writes the record after it reports the stop, so the scene waits for that row.
+      const written = await waitForValue(() => {
+        const read = readDaemonState(home);
+        if (read.kind !== 'ok') return null;
+        return read.state.roots[0]?.send === 'failed' ? read.state : null;
+      }, 5_000);
       expect(written.roots[0]?.send).toBe('failed');
       expect(written.roots[0]?.sendWhy).toContain('another send server holds the project socket');
       expect(typeof written.roots[0]?.sendFailedAt).toBe('string');
