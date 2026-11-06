@@ -122,7 +122,7 @@ function idPasswdLine(uid: number, accountHome: string): string {
 }
 
 describe('home-derived daemon label and --home install/uninstall', () => {
-  test('a non-account home install skips shuttle retirement and leaves the three shuttle jobs untouched', async () => {
+  test('a non-account home install skips shuttle retirement and leaves the shuttle unit untouched', async () => {
     const accountHome = makeDir('acct-home-');
     const scratchHome = makeDir('scratch-home-');
     const { root, entry } = makeProject(scratchHome);
@@ -178,8 +178,6 @@ describe('home-derived daemon label and --home install/uninstall', () => {
     expect(viaFlagIo.err).toBe('');
     expect(viaFlagCode).toBe(0);
     expect(retiredLabels).toEqual([]);
-    expect(calls.some((line) => line.includes('iris-shuttle'))).toBe(false);
-    expect(calls.some((line) => line.includes('atlas-shuttle'))).toBe(false);
     expect(calls.some((line) => line.includes('desk-shuttle'))).toBe(false);
   });
 

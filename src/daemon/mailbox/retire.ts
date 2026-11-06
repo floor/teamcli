@@ -4,13 +4,9 @@
 // supplies the one call that stops and removes a unit.
 import { readDaemonState } from '../state.ts';
 
-/** The units this step retires. The desk unit is removed with the other two and nothing
- *  replaces it. */
-export const SHUTTLE_UNITS = [
-  'io.teamcli.iris-shuttle',
-  'io.teamcli.atlas-shuttle',
-  'io.teamcli.desk-shuttle',
-] as const;
+/** The unit this step retires. Nothing replaces it. Older per-seat shuttle units are not
+ *  named by the release; a fleet that still carries one removes it by hand. */
+export const SHUTTLE_UNITS = ['io.teamcli.desk-shuttle'] as const;
 
 export type ShuttleRetirement = {
   /** The child is left up whether or not every unit came out. */
