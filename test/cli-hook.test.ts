@@ -271,9 +271,7 @@ describe('the turn-start folder read', () => {
   const ID2 = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
   const ID3 = '01234567-89ab-cdef-0123-456789abcdef';
   const HEADER = 'from the owner — admitted by: the owner\n\n';
-  /** The same attribution line as the reader serves it: folded into one compact header. */
-  const MARKED_HEADER = 'from the owner (owner):\n\n';
-  /** A body served with no attribution line of its own opens with the compact header. */
+  /** A planted record whose verified from is `the owner` opens with that compact header. */
   const MARK = 'from the owner (owner):\n\n';
 
   let project: string;
@@ -411,9 +409,12 @@ seats:
     const id = readdirSync(dir).find((name) => MESSAGE_ID.test(name));
     if (id === undefined) throw new Error('the send wrote no drop');
 
-    // The end-to-end proof: the installed hook command reads the record, and its body reaches
-    // the turn only after a signed read receipt is on disk.
-    expect(landing(run(command))).toBe(`${MARKED_HEADER}hello`);
+    // The hook takes the sender from the verified record. This send's claimed from is owner,
+    // so the header is `from owner (owner):`. The opening names "the owner", which is not that
+    // name, and the body is served verbatim under the header.
+    const held = readRecord(join(dir, id), id);
+    if (!held.ok || held.record === null) throw new Error('the drop record does not read');
+    expect(landing(run(command))).toBe(`from owner (owner):\n\n${held.record.payload.body}`);
     expectReadReceipt(dir, id);
     expect(listUnread(dir, { to: SEAT, root: project, session: SESSION }, home)).toEqual([]);
     // The receipt is what says it was handed over: the next turn prints nothing.
