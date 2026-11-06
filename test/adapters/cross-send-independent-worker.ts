@@ -11,9 +11,9 @@ const base = dirname(home);
 const { runSend } = await import('../../src/commands/send.ts');
 const { runGrant } = await import('../../src/commands/grant.ts');
 const { testIo } = await import('../helpers.ts');
-const { upsertTeam } = await import('../../src/registry/teams.ts');
+const { teamIdOf, upsertTeam } = await import('../../src/registry/teams.ts');
 const { updateState } = await import('../../src/state.ts');
-const { lobbyDir, lobbyTrustEntry } = await import('../../src/lobby/gate.ts');
+const { lobbyDir, lobbyTrustEntry, resolveLobby } = await import('../../src/lobby/gate.ts');
 const { keyOf, signDomain } = await import('../../src/store/keys.ts');
 const { readSendGrants } = await import('../../src/send/grants.ts');
 const now = new Date();
@@ -31,6 +31,10 @@ for (const team of teams) {
   roots[team.name] = root;
   mkdirSync(join(root, '.agents'), { recursive: true });
   execFileSync('git', ['init', '-q'], { cwd: root });
+  // The send loads the design root. Only that team's reach and registry key are teamIdOf(root).
+  // The other teams stay addressable by their project name. Every team keeps its entity.
+  const sender = team.name === 'design';
+  const registryId = sender ? teamIdOf(root) : team.name;
   const roster = team.seats.map((name) => {
     const pane = `pane-${name}`;
     panes.push({ name, pane });
@@ -40,7 +44,7 @@ for (const team of teams) {
     writeFileSync(join(folder, `${id}.yaml`), [
       `id: ${id}`, `name: ${name}`, 'signing:', '  model: Test', '  version: "1"', `  role: ${name === 'architect' ? 'architect' : 'worker'}`,
       'lab: independent', 'cli: codex', 'launcher: null', 'launch: codex',
-      'reach:', `  team: ${team.name}`, `  session: ${team.name}`, `  seat: ${name}`, `  pane: ${pane}`, '  address: null',
+      'reach:', `  team: ${registryId}`, `  session: ${team.name}`, `  seat: ${name}`, `  pane: ${pane}`, '  address: null',
       'mcp: []', 'skills: []', 'lifecycle: running', 'provenance:', '  registered_by: team up',
       `  registered_at: "${now.toISOString()}"`, `  updated_at: "${now.toISOString()}"`, '',
     ].join('\n'));
@@ -48,7 +52,11 @@ for (const team of teams) {
   });
   const seatLines = team.seats.map((name) => `  - role: ${name === 'architect' ? 'architect' : 'worker'}\n    name: ${name}\n    cli: codex\n    vendor: test\n    model: Test\n    version: "1"\n    launch: codex${name === team.lead ? '\n    leads: true' : ''}`).join('\n');
   writeFileSync(join(root, '.agents', 'team.yaml'), `format: 1\nproject: ${team.name}\nentity: ${team.entity}\ncoordinator: ${team.lead}\noperator: ${team.lead}\nsession: ${team.name}\nworkspace:\n  mode: shared\ntrust:\n  - ${root}\n  - ${lobbyTrustEntry(home, { entity: team.entity })}\nseats:\n${seatLines}\ndelivery_order: [drop]\n`);
-  upsertTeam(home, team.name, { project: team.name, entity: team.entity, root, session: team.name, lobby: lobbyDir(home), lifecycle: 'running', by: 'independent', roster });
+  upsertTeam(home, registryId, {
+    project: team.name, entity: team.entity, root, session: team.name,
+    lobby: sender ? resolveLobby(home, { entity: team.entity }) : lobbyDir(home),
+    lifecycle: 'running', by: 'independent', roster,
+  });
   updateState(join(root, '.agents'), (state) => {
     state.sessions[team.name] = { seats: Object.fromEntries(team.seats.map((name) => [name, { stage: 'launched' as const, pane: `pane-${name}`, workspace: 'fixture' }])), worktrees: {} };
   });
