@@ -125,14 +125,17 @@ describe('the seat found without a team record', () => {
     const found = agentIdOf(home, root, SEAT.name);
     expect(found.agentId).toBe(agentId);
   });
+});
 
-  test('derives the project and entity the project registry declares', () => {
+describe('the project and entity the registries declare', () => {
+  test('derives the project from the team record and the entity from the project registry', () => {
     const teamId = teamIdOf(root);
     registerAgent(home, {
       ...init(),
       reach: { team: teamId, seat: SEAT.name, session: 'acme', pane: 'w36:p1', address: null },
     });
-    upsertProject(home, 'acme', { name: 'Acme', teams: [teamId], entity: 'acme-entity' });
+    upsertTeam(home, teamId, { project: 'acme', session: 'acme', root, lobby: '', projectId: 'acme' });
+    upsertProject(home, 'acme', { name: 'Acme', entity: 'acme-entity' });
     const found = agentIdOf(home, root, SEAT.name);
     expect(found.projectId).toBe('acme');
     expect(found.entity).toBe('acme-entity');
@@ -144,9 +147,9 @@ describe('the seat found without a team record', () => {
       ...init(),
       reach: { team: teamId, seat: SEAT.name, session: 'acme', pane: 'w36:p1', address: null },
     });
+    upsertTeam(home, teamId, { project: 'acme', session: 'acme', root, lobby: '', projectId: 'acme' });
     upsertProject(home, 'acme', {
       name: 'Acme',
-      teams: [teamId],
       settings: {
         workspace: { value: 'herdr', setter: 'owner', date: '2026-10-19T08:00:00.000Z', target: 'acme', generation: 2, signature: 'cd' },
       },

@@ -14,7 +14,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { findAgent, getAgent, readAgents, registerAgent } from '../src/registry/agents.ts';
 import { getTeam, readTeams, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
-import { get as getProject, projectIdOf, projectsFile, readProjects, upsertProject } from '../src/registry/projects.ts';
+import { get as getProject, projectIdOf, projectsFile, upsertProject } from '../src/registry/projects.ts';
 import { admitSend, PROJECT_RULES } from '../src/send/admit.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { claudeBox, gitEnv, testIo } from './helpers.ts';
@@ -359,7 +359,8 @@ describe('the project a team leads, read through the launch', () => {
     const projectId = projectIdOf('TeamCLI');
     const held = getProject(fixture.home, projectId);
     if (held === null) throw new Error('the second team joins a project the scene must already have written');
-    upsertProject(fixture.home, projectId, { teams: [...held.teams, teamId] });
+    // Membership is the team record's own: the second team joins by naming the project there.
+    upsertTeam(fixture.home, teamId, { projectId, projects: [projectId] });
     return { teamId, leadId };
   }
 
@@ -419,10 +420,14 @@ describe('the project a team leads, read through the launch', () => {
     // ...and admission reads the record: the pair a stale lead admits is refused now. The stale
     // record is hand-built so the scene shows it was the record, not another rule, doing the work.
     const teams = readTeams(fixture.home);
-    const stored = readProjects(fixture.home);
+    // Admission reads the registry's derived view, not the raw file: membership lives on the
+    // team records, and a raw project record keeps only a legacy stored list.
+    const storedProject = getProject(fixture.home, projectId);
+    if (storedProject === null) throw new Error('the scene must already have written the project');
+    const stored = { [projectId]: storedProject };
     const oldLead = getAgent(fixture.home, leadId)!;
     const otherLead = getAgent(fixture.home, other.leadId)!;
-    const stale = { [projectId]: { ...stored[projectId]!, lead: leadId } };
+    const stale = { [projectId]: { ...storedProject, lead: leadId } };
     expect(admitSend(oldLead, otherLead, teams, undefined, { projects: stale })).toEqual({ ok: true, rule: PROJECT_RULES[0] });
     expect(admitSend(oldLead, otherLead, teams, undefined, { projects: stored }).ok).toBe(false);
   });
