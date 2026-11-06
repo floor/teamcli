@@ -187,7 +187,9 @@ async function pollSubmitted(
  * only then. The bound ending with the line still in the box is not delivered, and the line
  * is not typed again. A box that already holds exactly this line when the wake first looks —
  * a wake child killed after typing, an Enter that did not submit — gets the same two spaced
- * looks and the same guarded Enter, and the line is never typed a second time.
+ * looks and the same guarded Enter, and the line is never typed a second time. A profile that
+ * submits by agent prompt does not prompt into that leftover: the line would stay sitting and
+ * every later wake would prompt again. It refuses, types nothing, and presses no key.
  */
 /** One `herdr agent prompt` after the idle guards, then the same working-screen poll an Enter
  *  uses. Nothing is typed and no Enter is pressed. */
@@ -300,9 +302,15 @@ async function walkTypedWake(
     }
     // Two looks, spaced by the settle, agree the box holds exactly the line: the same pair the
     // typed path waits for before its first Enter. A profile that submits by agent prompt does
-    // not press Enter into that line.
+    // not prompt into that leftover and does not press a key into it. The line stays where an
+    // older wake left it, and this wake types nothing.
     if (profileFor(cli)?.wake === 'agent-prompt') {
-      return submitByAgentPrompt(host, pane, line, cli, pollMs, ackSettleMs, verifyMs, clock, keyedReturn, marks);
+      return {
+        delivered: false,
+        typed: false,
+        tries: 0,
+        reason: 'the box already held the line; the agent prompt was not sent and nothing was typed',
+      };
     }
     screen = reread;
     previous = reread;

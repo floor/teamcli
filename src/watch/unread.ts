@@ -35,7 +35,8 @@
 // profile whose terminal-host status is unreliable is not gated on that status for this leg,
 // because the typed wake reads the composer itself twice and types only into an empty idle
 // prompt. A box that already holds exactly the wake's line is submitted with Enter and not
-// typed again; any other unsent text is left. `watch_wake: off` keeps the drop-file leg for
+// typed again, except a profile that submits by agent prompt: that leftover is not prompted
+// and nothing is typed. Any other unsent text is left. `watch_wake: off` keeps the drop-file leg for
 // that seat.
 //
 // The markers are reservations made before their effect, never reminders written after it:
