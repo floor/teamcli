@@ -153,8 +153,9 @@ export type SeatState = {
    */
   codex_endpoint_unmanaged?: { why: string; at: string };
   /**
-   * Set when a Grok launch's first frames said its sandbox was not applied. The seat is stopped
-   * and nothing is typed into it. Cleared when a later launch reaches ready.
+   * Set when a Grok launch's first frames said its sandbox was not applied. The stop is this
+   * record: the workspace is closed, nothing is typed, and the team file stays as approved.
+   * `team status` and `team check` read it. Cleared when a later launch reaches ready.
    */
   sandbox_unapplied?: { why: string };
   /**

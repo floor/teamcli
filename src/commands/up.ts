@@ -19,8 +19,6 @@ import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { launchTeamFile, TEAM_FILE } from '../file/load.ts';
-import { readTeamText, writeTeamText } from '../file/team-text.ts';
-import { setSeatStopped } from '../file/stopped-mark.ts';
 import { leftoverNote, readTeamConfig } from '../file/team-config.ts';
 import { importForUp } from '../file/team-import.ts';
 import { derivedTrust, migrationText } from '../file/migrate.ts';
@@ -3371,18 +3369,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         return lobbySeen ? recheckLobby(sources.home, lobbySeen, { getuid: sources.getuid, fs: sources.fs, reads: startupReads, lobby: teamLobby }) : null;
       },
       paneRun: launch.paneRun,
-      markStopped(name) {
-        try {
-          const where = { home: sources.home, command: 'up' };
-          const text = readTeamText(loaded.path, where);
-          const edited = setSeatStopped(text, name, true);
-          if (!edited.ok) return false;
-          if (edited.text === text) return true;
-          return writeTeamText(loaded.path, edited.text, where).ok;
-        } catch {
-          return false;
-        }
-      },
       ...(launch.conversationExists === undefined ? {} : { conversationExists: launch.conversationExists }),
       ...(launch.codexEndpoint === undefined
         ? {}

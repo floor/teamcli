@@ -166,8 +166,8 @@ export type Host = {
   ): Promise<boolean | 'no-agent' | Refusal>;
   renameAgent(session: string, pane: string, name: string): boolean;
   closeWorkspace(session: string, workspace: string): boolean;
-  /** Writes `stopped: true` on the seat. False when the file could not be updated. Absent on a
-   *  host that does not edit the team file; the launch still closes the pane without typing. */
+  /** A host may offer a team-file stop. A sandbox warning does not call it: that stop is
+   *  `sandbox_unapplied` on the seat's state, and the approved team file stays byte for byte. */
   markStopped?(seat: string): boolean;
   /** Forgets the bus record once its workspace closed. */
   dropBus?(): void;
@@ -1970,10 +1970,9 @@ export async function executePlan(
           break;
         }
         if (outcome === 'sandbox unapplied') {
-          // The frames already said the sandbox was not applied. The seat is marked stopped,
-          // the workspace is closed, and no key is sent into the pane.
+          // The frames already said the sandbox was not applied. The stop is the seat's state
+          // record. The workspace is closed, no key is sent, and the team file is not rewritten.
           recordSeat(op.seat, { stage: 'launched', sandbox_unapplied: { why: GROK_SANDBOX_UNAPPLIED } });
-          const marked = host.markStopped === undefined ? false : host.markStopped(op.seat);
           const workspace = here.workspace ?? places.get(op.seat)?.workspace;
           const closed = workspace !== undefined && host.closeWorkspace(session, workspace);
           dropped.add(op.seat);
@@ -1982,8 +1981,7 @@ export async function executePlan(
           const detail = closed
             ? '  its workspace was closed without input and the seat left out\n'
             : '  its workspace did not close; nothing was typed\n';
-          const reason = marked ? GROK_SANDBOX_UNAPPLIED : `${GROK_SANDBOX_UNAPPLIED}; the stopped mark was not written`;
-          final(op.seat, { kind: 'left out', reason }, detail);
+          final(op.seat, { kind: 'left out', reason: GROK_SANDBOX_UNAPPLIED }, detail);
           break;
         }
         const workspace = here.workspace ?? places.get(op.seat)?.workspace;
