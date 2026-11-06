@@ -147,6 +147,7 @@ export async function runAnalyse(
     // The gate's canonical signed root binds the reader too: a target that only sits under the
     // lexical root through a symlinked ancestor is refused before any listing, read or git call.
     ...(gate.scopeRoot !== undefined ? { signedRoot: gate.scopeRoot } : {}),
+    ...(gate.canonicalTarget !== undefined ? { canonicalTarget: gate.canonicalTarget } : {}),
     ...(gate.visibilityHint !== undefined ? { visibilityHint: gate.visibilityHint } : {}),
   });
 

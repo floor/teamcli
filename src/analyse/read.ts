@@ -121,6 +121,8 @@ export type ReadProjectOptions = {
    *  read outside the owner's scope after admission, and the check runs before any listing,
    *  read or git call. */
   signedRoot?: string;
+  /** The canonical target used for analyser selection. Refuse an alias retarget before reads. */
+  canonicalTarget?: string;
   /** Reference clock for the 28-day git pace window. */
   now?: Date;
   /** Optional ceiling overrides for testing bounds. */
@@ -469,6 +471,13 @@ export function readProjectFacts(
       ok: false,
       code: 'analyse.unreadable',
       why: `${targetPath}: runtime state under .agents is never analysed`,
+    };
+  }
+  if (options.canonicalTarget !== undefined && rootReal !== options.canonicalTarget) {
+    return {
+      ok: false,
+      code: 'analyse.unreadable',
+      why: `${targetPath}: canonical target changed after analyser selection`,
     };
   }
   // The gate admitted the target under a signed root as written. That root's canonical path is

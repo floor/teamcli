@@ -1,5 +1,5 @@
-// Project analysis gate (`src/analyse/gate.ts`): verifies before any `fs.statSync`,
-// `fs.readFileSync`, or `git` call on `<path>` that an owner-signed analyser is named in the
+// Project analysis gate (`src/analyse/gate.ts`): verifies before any target content read,
+// directory listing or `git` call that an owner-signed analyser is named in the
 // owner's configuration (`projects.yaml`, `entities.yaml`, or `settings.yaml`) with non-empty
 // signed read roots covering `<path>`, that the caller is the owner at a terminal or the named
 // analyser seat, and that a `scope: public` analyser is refused on a non-public project (unless
@@ -9,7 +9,7 @@
 import type { KeyObject } from 'node:crypto';
 import { readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { callerOf, callerStanding, isOwner, standingOf, walkCaller, type Caller } from '../caller.ts';
 import { CONFIG_DOMAIN } from '../config/record.ts';
 import { entitiesPath } from '../entities.ts';
@@ -57,12 +57,10 @@ export type AnalyseGateVerdict =
       ok: true;
       analyser: AnalyserIdentity;
       source: AnalysisSource;
-      /** The canonical path of the signed root the target was admitted under. The reader checks
-       *  the target's own canonical path against it before listing, reading or running git, so a
-       *  symlinked ancestor cannot move the read outside the owner's scope after admission.
-       *  Absent when the signed root cannot be resolved: no target under it can be read either,
-       *  and the reader refuses the target as unreadable on its own. */
+      /** The canonical signed root that governed selection, checked again by the reader. */
       scopeRoot?: string;
+      /** The target identity used to select that analyser; an alias may not retarget the read. */
+      canonicalTarget?: string;
       visibilityHint?: 'public' | 'private';
     }
   | {
@@ -97,22 +95,29 @@ function expandHome(rawPath: string, home: string): string {
   return resolve(home, rawPath);
 }
 
-function matchingRootLength(targetAbs: string, rootPath: string, home: string): number | null {
-  const resolvedRoot = expandHome(rootPath, home);
-  const rel = relative(resolvedRoot, targetAbs);
-  if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) {
-    return resolvedRoot.length;
+/** Resolve existing ancestors even when the leaf is absent. This preserves signed scope and
+ *  public-only refusals for missing targets; the reader still refuses an absent target before
+ *  listing or reading anything. Errors other than absence cannot supply a policy identity. */
+function canonicalPolicyPath(path: string): string {
+  const suffix: string[] = [];
+  let ancestor = path;
+  for (;;) {
+    try {
+      return resolve(realpathSync(ancestor), ...suffix);
+    } catch (error) {
+      const parent = dirname(ancestor);
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || parent === ancestor) throw error;
+      suffix.unshift(basename(ancestor));
+      ancestor = parent;
+    }
   }
-  return null;
 }
 
-/** The one signed root that contains `targetAbs`, most specific first, as written. Null when
- *  none does. The gate checked the same relation to choose its config; this call keeps the root
- *  itself, so its canonical path can travel to the reader. */
+/** Most-specific signed root by canonical identity, never by an alias's lexical length. */
 function bestMatchingRoot(targetAbs: string, roots: readonly string[], home: string): string | null {
   let best: string | null = null;
   for (const rootPath of roots) {
-    const resolvedRoot = expandHome(rootPath, home);
+    const resolvedRoot = canonicalPolicyPath(expandHome(rootPath, home));
     const rel = relative(resolvedRoot, targetAbs);
     if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) {
       if (best === null || resolvedRoot.length > best.length) best = resolvedRoot;
@@ -485,17 +490,21 @@ export function mayAnalyseProject(
 ): AnalyseGateVerdict {
   const home = sources.home ?? io.env.HOME ?? homedir();
   const targetAbs = resolve(io.cwd, targetPath || '.');
+  let canonicalTarget: string | undefined;
+  let unresolvedIdentity = false;
 
   const matchState: {
     resolvedConfig: ParsedAnalyserConfig | null;
     resolvedSource: AnalysisSource;
     bestRootLen: number | null;
+    resolvedRoot: string | null;
     tiedPrincipals: [string, string] | null;
     outOfScopePrincipal: string | null;
   } = {
     resolvedConfig: null,
     resolvedSource: DEFAULT_ANALYSIS_SOURCE,
     bestRootLen: null,
+    resolvedRoot: null,
     tiedPrincipals: null,
     outOfScopePrincipal: null,
   };
@@ -505,27 +514,30 @@ export function mayAnalyseProject(
     source?: AnalysisSource;
   }): void => {
     if (extracted.config === null) return;
-    const roots = extracted.config.roots;
-    let entryBestLen: number | null = null;
-    for (const r of roots) {
-      const len = matchingRootLength(targetAbs, r, home);
-      if (len !== null && (entryBestLen === null || len > entryBestLen)) {
-        entryBestLen = len;
-      }
+    let matchingRoot: string | null;
+    try {
+      canonicalTarget ??= canonicalPolicyPath(targetAbs);
+      matchingRoot = bestMatchingRoot(canonicalTarget, extracted.config.roots, home);
+    } catch {
+      unresolvedIdentity = true;
+      return;
     }
-    if (entryBestLen === null) {
+    if (matchingRoot === null) {
       matchState.outOfScopePrincipal = extracted.config.analyser.principal;
       return;
     }
+    const entryBestLen = matchingRoot.length;
     if (matchState.bestRootLen === null || entryBestLen > matchState.bestRootLen) {
       matchState.bestRootLen = entryBestLen;
       matchState.resolvedConfig = extracted.config;
+      matchState.resolvedRoot = matchingRoot;
       if (extracted.config.source !== undefined) matchState.resolvedSource = extracted.config.source;
       else if (extracted.source !== undefined) matchState.resolvedSource = extracted.source;
       matchState.tiedPrincipals = null;
     } else if (entryBestLen === matchState.bestRootLen && matchState.resolvedConfig !== null) {
       if (extracted.config.analyser.principal === matchState.resolvedConfig.analyser.principal) {
         matchState.resolvedConfig = extracted.config;
+        matchState.resolvedRoot = matchingRoot;
         if (extracted.config.source !== undefined) matchState.resolvedSource = extracted.config.source;
         else if (extracted.source !== undefined) matchState.resolvedSource = extracted.source;
       } else {
@@ -573,6 +585,14 @@ export function mayAnalyseProject(
     }
   }
 
+  if (unresolvedIdentity) {
+    return {
+      ok: false,
+      code: 'analyse.unauthorised',
+      why: 'the target or a signed analyser root cannot be resolved safely',
+    };
+  }
+
   if (matchState.tiedPrincipals !== null) {
     return {
       ok: false,
@@ -599,47 +619,15 @@ export function mayAnalyseProject(
   const finalConfig: ParsedAnalyserConfig = matchState.resolvedConfig;
   const resolvedSource = matchState.resolvedSource;
   const { analyser } = finalConfig;
-  // The lexical match chose the most specific root; the scope that binds the reader is that
-  // root's canonical path. A target that sits under the root only through a symlinked ancestor
-  // resolves outside it, and must not be analysed: the read runs on canonical paths, so the
-  // check is canonical here and the root travels to the reader, which checks the target again
-  // before it lists, reads or runs git.
-  const matchingRoot = bestMatchingRoot(targetAbs, finalConfig.roots, home);
-  if (matchingRoot === null) {
+  // Selection and containment use the same identities. Carry both to the reader so a later
+  // alias retarget cannot substitute another directory, even inside the broad signed root.
+  const scopeRoot = matchState.resolvedRoot;
+  if (scopeRoot === null || canonicalTarget === undefined) {
     return {
       ok: false,
       code: 'analyse.unauthorised',
       why: `target path is outside the read scope of named analyser "${analyser.principal}"`,
     };
-  }
-  let scopeRoot: string | undefined;
-  try {
-    scopeRoot = realpathSync(matchingRoot);
-  } catch {
-    // A signed root that cannot be resolved (a missing folder, a dangling link) has nothing
-    // under it to read: no canonical scope travels to the reader, which refuses the target
-    // itself as unreadable before listing anything.
-    scopeRoot = undefined;
-  }
-  if (scopeRoot !== undefined) {
-    let targetReal: string | null = null;
-    try {
-      targetReal = realpathSync(targetAbs);
-    } catch {
-      // A target that cannot be resolved has nothing to read; the reader reports it unreadable
-      // after checking the same canonical relation on whatever path it does resolve.
-      targetReal = null;
-    }
-    if (targetReal !== null) {
-      const relReal = relative(scopeRoot, targetReal);
-      if (relReal !== '' && (relReal.startsWith('..') || isAbsolute(relReal))) {
-        return {
-          ok: false,
-          code: 'analyse.unauthorised',
-          why: `target path resolves outside the signed read scope of "${analyser.principal}"`,
-        };
-      }
-    }
   }
   const atIndex = analyser.principal.indexOf('@');
   const sessionHint = atIndex >= 0 ? analyser.principal.slice(atIndex + 1) : undefined;
@@ -671,7 +659,8 @@ export function mayAnalyseProject(
     ok: true,
     analyser,
     source: resolvedSource,
-    ...(scopeRoot !== undefined ? { scopeRoot } : {}),
+    scopeRoot,
+    canonicalTarget,
     ...(visibility === 'public' || visibility === 'private' ? { visibilityHint: visibility } : {}),
   };
 }
