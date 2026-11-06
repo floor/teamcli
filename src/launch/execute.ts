@@ -1507,6 +1507,13 @@ export async function executePlan(
         // leaves the seat out. It does not append --no-daemon and continue. A line the plan
         // did not mark stays unmanaged and still launches on the line it had.
         let command = op.command;
+        let startedEndpoint = false;
+        let attachedEndpoint = false;
+        let freshFrom: string | undefined;
+        let launch = { command, sessionId: undefined as string | undefined, notice: undefined as string | undefined };
+        // A resolved argv is the command the pane runs. The adjustments below belong to the
+        // launch line the file already runs, and stay off this path.
+        if (op.resolved !== true) {
         // A Grok seat's sandbox profile is written before its command runs, the same place the
         // plan decided to name it. Grok refuses to start for a profile it cannot find, so a file
         // that cannot be written takes the plan's own `--sandbox` off the line and the seat
@@ -1518,8 +1525,6 @@ export async function executePlan(
             hold(op.seat, `${op.seat}: its sandbox profile was not written: ${written.why}; launched without it\n`);
           }
         }
-        let startedEndpoint = false;
-        let attachedEndpoint = false;
         if (op.codexEndpoint !== undefined) {
           const read = host.managedCodexEndpoint === undefined
             ? { kind: 'unmanaged' as const, why: 'this launch starts no managed Codex endpoint' }
@@ -1541,7 +1546,6 @@ export async function executePlan(
         // A resume of a conversation its CLI never wrote stops at the CLI's own error and leaves
         // the pane at its shell: the seat is launched fresh instead, and says so.
         const resumeTarget = namedResumeTarget(op.cli ?? '', command);
-        let freshFrom: string | undefined;
         if (resumeTarget && op.cwd !== undefined && host.conversationExists?.(op.cli ?? '', op.cwd, resumeTarget) === false) {
           const fresh = withoutResume(op.cli ?? '', command);
           if (fresh !== null) {
@@ -1552,7 +1556,9 @@ export async function executePlan(
         // The session id is minted here, not in the plan: the plan's command stays the
         // deterministic line a dry run prints, and each launch gets its own id. An id that could
         // not be placed where the CLI reads it is not recorded, and the run says so.
-        const launch = withLaunchSession(op.cli ?? '', command);
+        const minted = withLaunchSession(op.cli ?? '', command);
+        launch = { command: minted.command, sessionId: minted.sessionId, notice: minted.notice };
+        }
         if (launch.notice !== undefined) {
           hold(op.seat, `${op.seat}: ${launch.notice}\n`);
           host.log(op.seat, launch.notice);

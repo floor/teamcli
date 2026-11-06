@@ -74,6 +74,7 @@ export const seats: Section = {
         version: { type: 'string', $comment: 'quoted: unquoted, YAML reads 4.10 as the number 4.1' },
         display: { type: 'string', $comment: 'defaults to "model version"; must contain the version as a token of its own' },
         launch: { type: 'string', minLength: 1 },
+        launcher: { type: 'string', minLength: 1, $comment: 'the declarative launcher whose argv this seat runs when the launch is asked to resolve one; omitted, the launch line is unchanged and the digest is unchanged' },
         cwd: { type: 'string', $comment: 'relative to the project, or a trust path' },
         label: { type: 'string', $comment: 'the workspace title when written; left out, the title is the seat name and its role, and this stored value stays the model and version in lowercase' },
         effort: { type: 'string', minLength: 1, $comment: 'optional; a lab with a vocabulary warns when the word is outside it, and check still passes; launch does not read it' },
@@ -181,7 +182,7 @@ function readSeats(
   const assistants: { name: string; line: number }[] = [];
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
-      'role', 'name', 'nickname', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'effort', 'mode',
+      'role', 'name', 'nickname', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'launcher', 'cwd', 'label', 'effort', 'mode',
       'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'watch_wake', 'public_only', 'compact_delivery', 'inbound', 'webhook', 'reach', 'delivery_order', 'sender_name', 'messaging', 'liveness',
     ]);
     if (item.kind !== 'map') continue;
@@ -232,6 +233,7 @@ function readSeats(
     const model = check.required(fields.get('model'), `${at}: model`, line);
     const version = readVersion(fields.get('version'), at, line, check);
     const launch = check.required(fields.get('launch'), `${at}: launch`, line);
+    const launcherName = check.text(fields.get('launcher'), `${at}: launcher`);
     const display = check.text(fields.get('display'), `${at}: display`) ?? (model && version ? `${model} ${version}` : undefined);
     if (display && version && fields.get('display') && !hasVersionToken(display, version)) {
       check.fail(fields.get('display')?.line ?? line, `${at}: display must contain the version "${version}" as a token of its own`);
@@ -328,6 +330,7 @@ function readSeats(
       const suffix = instance === 1 ? '' : `-${instance}`;
       seats.push({
         role, cli, vendor, model, version, display, launch, cwd, parked, stopped, line,
+        ...(launcherName !== undefined ? { launcher: launcherName } : {}),
         name: name + suffix,
         label: (label ?? defaultLabel(model, version)) + suffix,
         ...(label !== undefined ? { labelWritten: true as const } : {}),

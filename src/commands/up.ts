@@ -73,6 +73,7 @@ import { endpointCleanupHost } from '../launch/endpoint-cleanup.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { executePlan, launchKind, restoreSummaryOf, type Report, type RestoreSweepSummary } from '../launch/execute.ts';
+import { loadTeamLaunchers, rawAgentSession } from '../launch/resolve-flag.ts';
 import { channelLobbyFolder } from '../mcp/launch-config.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
 import { isSocketFile, launchCodexEndpoint, processStartOf, recordedEndpointState, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
@@ -432,7 +433,7 @@ export const realSources: UpSources = {
 /** The reason the hold `up --no-launch` places carries. */
 export const QUIET_HOLD_REASON = 'quiet start (team up --no-launch): the watch wakes no seat; release with team hold --release';
 
-export const USAGE = 'Usage: team up [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]\n       team up --all [--dry-run] [--serial] [--no-launch] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--json]\n       team up --general <grant.json> --key <client-key> [--all] [--dry-run] [--serial] [--no-launch] [--json]\n       team up --request [--reason <text>] [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--json]\n\n--all runs the restore pass across every registered team whose session is running in the terminal host with recorded seats, in parent-first then session order, without cold-starting inactive teams.\n\n--no-launch is a quiet start: the seats get their rules only, told to read their inbox and act on what is addressed to them, and not to continue earlier work unless a message asks for it; no general seat brief (the launch message) is dropped or typed, and a team hold stops the watch typing anything automatic until team hold --release.\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
+export const USAGE = 'Usage: team up [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--session <name>] [--file <path>] [--json]\n       team up --all [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --general <grant.json> --key <client-key> [--all] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --request [--reason <text>] [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--resolve-launch] [--json]\n\n--all runs the restore pass across every registered team whose session is running in the terminal host with recorded seats, in parent-first then session order, without cold-starting inactive teams.\n\n--resolve-launch takes each seat\'s pane command from the declarative launcher that seat names. It is off unless named, and a launch without it runs the launch line the file already has. A refused resolution refuses that seat and starts it nowhere.\n\n--no-launch is a quiet start: the seats get their rules only, told to read their inbox and act on what is addressed to them, and not to continue earlier work unless a message asks for it; no general seat brief (the launch message) is dropped or typed, and a team hold stops the watch typing anything automatic until team hold --release.\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
 
 export const up: Command = (argv, io) => runUp(argv, io, realSources);
 export default up;
@@ -717,6 +718,7 @@ function seatPlan(
     name: seat.name,
     cli: seat.cli,
     launch: registry?.launch ?? seat.launch,
+    ...(seat.launcher !== undefined ? { launcher: seat.launcher } : {}),
     cwd: seat.cwd,
     label: workspaceLabel(seat),
     displayAgent: displayAgent(seat),
@@ -1831,7 +1833,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval', 'general', 'reason'], ['dry-run', 'serial', 'json', 'request', 'no-launch', 'all']);
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval', 'general', 'reason'], ['dry-run', 'serial', 'json', 'request', 'no-launch', 'all', 'resolve-launch']);
+  const resolveLaunch = args.flags.has('resolve-launch');
   // The lines plain output writes beside the records ride on the document as notes under
   // `--json`; stdout carries the one document and nothing else.
   const jsonNotes: string[] = [];
@@ -2803,6 +2806,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     : null;
   // Built where it is needed: on a dry run, just below, before anything is made; on a real run,
   // after the lock, so the lobby made there under it is already every lobby seat's `cwd`.
+  if (resolveLaunch) {
+    for (const seat of seats) {
+      const raw = rawAgentSession(dir, session, seat.name);
+      if (raw !== undefined) seat.resolveSession = raw;
+    }
+  }
   const buildPlan = () => upPlan({
     root,
     session,
@@ -2838,6 +2847,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     // start one, and a scene's fake launch must never reach a real process.
     ...(sources.launch?.codexEndpoint === undefined ? {} : { stateDir: dir }),
     ...(sidebar === null ? {} : { sidebar }),
+    ...(resolveLaunch ? { resolveLaunch: true, launcherDiscovery: loadTeamLaunchers(root) } : {}),
   });
 
   /** The legacy watch workspaces this run closes, or would close on a dry run: only when the
