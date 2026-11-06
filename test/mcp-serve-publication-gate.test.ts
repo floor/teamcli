@@ -10,6 +10,7 @@ import * as realFs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Io } from '../src/io.ts';
+import { registerAgent } from '../src/registry/agents.ts';
 import type { BuildIdentity } from '../src/version.ts';
 
 const ID_READ = '5a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
@@ -120,11 +121,29 @@ seats:
     },
   };
   realFs.writeFileSync(join(root, '.agents/team.state.json'), JSON.stringify(state));
-  upsertTeam(home, teamIdOf(root), {
+  const teamId = teamIdOf(root);
+  // A channel push admits the signed record again. An ordinary record has to name the live
+  // recipient and a sender the team file still holds, or the push never starts.
+  const agents = (['lead', 'worker'] as const).map((seat) => registerAgent(home, {
+    name: seat,
+    signing: { model: 'Test', version: '1', role: seat === 'lead' ? 'coordinator' : 'worker' },
+    lab: 'test',
+    cli: 'codex',
+    launcher: null,
+    launch: seat === 'worker' ? launch : 'codex',
+    reach: { team: teamId, seat, session: 'fixture-session', pane: 'fixture-pane', address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'owner',
+  }));
+  const leadId = agents[0]!.id;
+  const workerId = agents[1]!.id;
+  upsertTeam(home, teamId, {
     project: 'fixture-team',
     session: 'fixture-session',
     root,
-    roster: [{ agent: 'agt_000000000001', seat: 'worker', role: 'coordinator' }],
+    roster: agents.map((agent) => ({ agent: agent.id, seat: agent.reach.seat, role: agent.signing.role })),
   });
   const drop = join(root, '.agents/send-drops/fixture-session/worker');
   realFs.mkdirSync(drop, { recursive: true, mode: 0o700 });
@@ -139,14 +158,14 @@ seats:
         kind: 'message',
         id,
         to: 'worker',
-        to_id: null,
+        to_id: workerId,
         root,
         session: 'fixture-session',
         at: '2026-11-02T00:00:00Z',
         body: `SYNTHETIC_MESSAGE:${id}`,
-        from: 'fixture-sender',
-        from_id: null,
-        rule: 'synthetic fixture',
+        from: 'lead',
+        from_id: leadId,
+        rule: 'the owner',
         thread: id,
       }, home);
       realFs.writeFileSync(join(drop, id), JSON.stringify(record), { mode: 0o600 });
