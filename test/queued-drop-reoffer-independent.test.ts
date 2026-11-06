@@ -1,12 +1,14 @@
 // Independent scenes for a queued drop. A seat that goes from working to idle is offered
 // the oldest drop once, through the guarded wake. Staying idle offers nothing more. A seat
 // that is still working is not offered, and nothing is typed. A mid-turn pane is never typed
-// into. No queued drop means no offer. Synthetic homes and a fake pane only.
+// into. A seat that returns to idle unread past the try limit is offered only that many
+// times. No queued drop means no offer. Synthetic homes and a fake pane only.
 import { afterEach, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Seat, TeamFile } from '../src/file/types.ts';
+import { DEFAULT_WATCH_WAKE_TRIES } from '../src/profiles/index.ts';
 import { markPending } from '../src/send/pending.ts';
 import { RECORD_KIND, signRecord, writeRecord, type RecordPayload } from '../src/send/record.ts';
 import { deliverTypedWake, type TypedWakeHost } from '../src/send/typed-wake.ts';
@@ -54,7 +56,7 @@ type Made = {
   enters: () => number;
 };
 
-function open(status: () => string, queued: boolean): Made {
+function open(status: () => string, queued: boolean, one = false): Made {
   const root = mkdtempSync(join(tmpdir(), 'queued-drop-'));
   homes.push(root);
   const home = join(root, 'home');
@@ -101,7 +103,7 @@ function open(status: () => string, queued: boolean): Made {
   };
   if (queued) {
     plant(home, root, 'older-drop', 'alpha', '2026-11-06T14:50:00.000Z');
-    plant(home, root, 'newer-drop', 'beta', '2026-11-06T14:55:00.000Z');
+    if (!one) plant(home, root, 'newer-drop', 'beta', '2026-11-06T14:55:00.000Z');
   }
   return { scene, offers, prompts, typed, enters: () => enters };
 }
@@ -165,6 +167,21 @@ test('a seat that is still working is not offered, and nothing is typed', async 
 test('a mid-turn pane is never typed into', async () => {
   const made = open(() => 'idle', true);
   await retryHeldDrops(made.scene);
+  expect(made.prompts).toEqual([]);
+  expect(made.typed).toEqual([]);
+  expect(made.enters()).toBe(0);
+});
+
+test('a seat that returns to idle unread past the try limit is offered only up to that limit', async () => {
+  let state = 'working';
+  const made = open(() => state, true, true);
+  for (let n = 0; n < DEFAULT_WATCH_WAKE_TRIES + 1; n++) {
+    state = 'working';
+    await retryHeldDrops(made.scene);
+    state = 'idle';
+    await retryHeldDrops(made.scene);
+  }
+  expect(made.offers).toHaveLength(DEFAULT_WATCH_WAKE_TRIES);
   expect(made.prompts).toEqual([]);
   expect(made.typed).toEqual([]);
   expect(made.enters()).toBe(0);

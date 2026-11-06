@@ -3,7 +3,7 @@
 // queued. The wake seam is the one the watch binds (two empty-idle reads, nothing into a
 // working pane). These scenes script that seam and touch no live session.
 import { afterEach, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -161,6 +161,8 @@ test('offers stop once the try limit is spent', async () => {
 
   expect(pass.wakes).toHaveLength(PENDING_MAX_TRIES);
   expect(readPending(dir)).toEqual([]);
+  expect(existsSync(join(dir, id))).toBe(true);
+  expect(existsSync(join(dir, `${id}.read.json`))).toBe(false);
 });
 
 test('a seat that is still working is not offered its queued drop', async () => {
