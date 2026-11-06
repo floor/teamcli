@@ -1271,6 +1271,7 @@
     "test/wrapper-model-shapes-independent.test.ts": 3,
     "test/wrapper-push-independent.test.ts": 5,
     "test/wrapper-push-route.test.ts": 4,
+    "test/yaml-id-quoting-independent.test.ts": 3,
     "test/yaml-own-keys.test.ts": 1,
     "test/yaml.test.ts": 5,
     "test/zz-src-home.test.ts": 5

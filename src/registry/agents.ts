@@ -642,7 +642,7 @@ function emitPolicies(policies: Record<string, YamlValue>): string[] {
     if (isObj(entry)) {
       lines.push(`  ${quote(name)}:`);
       for (const [k, v] of Object.entries(entry)) {
-        lines.push(`    ${k}: ${emitYamlValue(v ?? null)}`);
+        lines.push(`    ${quote(k)}: ${emitYamlValue(v ?? null)}`);
       }
     } else {
       lines.push(`  ${quote(name)}: ${emitYamlValue(entry ?? null)}`);
@@ -660,7 +660,7 @@ function emitSettings(settings: Record<string, YamlValue>): string[] {
     if (isObj(entry)) {
       lines.push(`  ${quote(name)}:`);
       for (const [k, v] of Object.entries(entry)) {
-        lines.push(`    ${k}: ${emitYamlValue(v ?? null)}`);
+        lines.push(`    ${quote(k)}: ${emitYamlValue(v ?? null)}`);
       }
     } else {
       lines.push(`  ${quote(name)}: ${emitYamlValue(entry ?? null)}`);
