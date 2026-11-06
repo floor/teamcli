@@ -8,10 +8,12 @@
 //
 // The wake marker beside the staged copy is the reservation the daemon took before it spawned
 // this child. A marker that reads `sent` or `read` is an earlier wake's: this request is the same
-// wake asked twice and is coalesced with no second child's work. A walk that does not deliver
-// gives the reservation back, so the message keeps its one wake; a delivered one records what it
-// was seen to become. A child killed mid-walk leaves `reserved`, which is what was known at that
-// point, and the watch's own retry in the project's drop folder is still there to wake the seat.
+// wake asked twice and is coalesced with no second child's work. A walk that proves nothing was
+// submitted gives the reservation back, so the message keeps its one wake. A walk that sent a key
+// and cannot prove the line is still unsent keeps the reservation, so a second request for the
+// same id cannot type the line again. A delivered walk records what it was seen to become. A
+// child killed mid-walk leaves `reserved`, which is what was known at that point, and the
+// watch's own retry in the project's drop folder is still there to wake the seat.
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { PaneProcesses } from '../../herdr.ts';
@@ -39,6 +41,20 @@ export type WakeChildOutcome =
   | { outcome: 'delivered'; reason: string }
   | { outcome: 'failed'; reason: string }
   | { outcome: 'coalesced' };
+
+/** True when a key went out and the walk did not prove the line is still unsent. Nothing typed
+ *  is that proof. So is a read-back that the line is still in the box, or the walk's own
+ *  statement that Enter never went out. */
+function submissionUnproven(walk: TypedWakeResult): boolean {
+  if (!walk.typed) return false;
+  const reason = walk.reason;
+  return !(
+    reason.includes('no Enter was pressed')
+    || reason.includes('still in the box')
+    || reason.includes('stayed in the box')
+    || reason.includes('the line was not submitted')
+  );
+}
 
 /**
  * Runs one wake request to its ending and records it. Never throws for a screen the wake could
@@ -153,6 +169,12 @@ export async function serveWakeChild(request: WakeChildRequest, deps: WakeChildD
     const walk = await deps.walk(host, found.pane, request.line, request.cli);
     const ms = Math.max(0, deps.now().getTime() - request.stagedAt);
     if (!walk.delivered) {
+      // A key that went out, with no proof the line is still unsent, may already have been
+      // submitted. The reservation stays, and a second request for this id cannot reserve it.
+      if (submissionUnproven(walk)) {
+        record(walk.reason, false, ms, walk);
+        return { outcome: 'failed', reason: walk.reason };
+      }
       releaseWake(marker);
       record(walk.reason, false, ms, walk);
       return { outcome: 'failed', reason: walk.reason };

@@ -1152,6 +1152,7 @@
     "test/waits-unknown-independent.test.ts": 2,
     "test/waits.test.ts": 2,
     "test/wake-held-line-independent.test.ts": 0,
+    "test/wake-uncertain-ack-independent.test.ts": 0,
     "test/walk-caller-handoff-independent.test.ts": 2,
     "test/walk-caller-handoff.test.ts": 1,
     "test/watch-async-budget.test.ts": 5,
