@@ -22,10 +22,13 @@ A listed Muse hint is the empty box only when it is faint or drawn in the colour
 - **`team drops --read` now checks the caller (affected: 0.5.1 through 0.5.13).** Before this
   release, `team drops --read --seat <seat>` served any seat's waiting messages to any process run
   inside that team's folder, and wrote their signed read receipts. One seat could therefore read
-  another seat's messages and mark them read, so the real recipient never saw them. `--read` now
-  serves a seat's messages only to that seat itself, as the turn-start hook runs it, or to the
-  owner or a lead (the orchestrator or the operator). Every other caller is refused, the
-  refusal is logged, and nothing is receipted. This was local only: the caller had to run on the
+  another seat's messages and mark them read, so the real recipient never saw them. Now only the
+  seat itself writes a read receipt. `--read` serves a seat's messages to that seat, as the
+  turn-start hook runs it, and the owner or a lead (the orchestrator or the operator) may read
+  another seat's drops only as a peek: the body is shown, no receipt is written, nothing is marked
+  read, and the message still waits for its seat. A peek is logged with the reader, the seat and
+  the ids. Every other caller is refused, the refusal is logged, and nothing is receipted. This
+  was local only: the caller had to run on the
   same machine, as the same user, inside a folder holding that team's file. Nothing was reachable
   over the network, and no key or credential was exposed. Upgrade to 0.5.14; no configuration
   change is needed.

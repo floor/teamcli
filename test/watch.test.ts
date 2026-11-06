@@ -2178,9 +2178,15 @@ describe('team watch', () => {
     expect(claim?.superseded).toContain(second.id);
     expect(claim?.superseded).not.toContain(first.id);
 
-    // Read the current brief as the launch hook does. The old signed record cannot be served and
-    // stays on disk without a receipt, but it must no longer appear in the reader's waiting list.
-    const currentRead = testIo(root, { kind: 'owner' });
+    // Read the current brief as the launch hook does, as the seat itself: only the seat that owns
+    // the inbox writes a read receipt, so the fixture records its standing first. The old signed
+    // record cannot be served and stays on disk without a receipt, but it must no longer appear
+    // in the reader's waiting list.
+    updateState(agentsDir, (state) => {
+      const one = (state.sessions[session] ??= emptySession());
+      one.seats = { ...(one.seats ?? {}), [seat]: { stage: 'ready' as const, pane: 'pane-reader' } };
+    });
+    const currentRead = testIo(dir, { kind: 'seat', name: seat, pane: 'pane-reader', session });
     expect(await runDrops(['--read', '--seat', seat, '--session', session], currentRead, { home })).toBe(0);
     expect(currentRead.out).toContain('from the launch');
     expect(existsSync(`${join(agentsDir, 'send-drops', session, seat, third.id)}.read.json`)).toBe(true);
@@ -2190,7 +2196,7 @@ describe('team watch', () => {
     expect(listUnacked(root, session, home).map((message) => message.id)).toContain(first.id);
     expect(listUnread(join(agentsDir, 'send-drops', session, seat), { to: seat, root, session }, home)).toEqual([]);
 
-    const retry = testIo(root, { kind: 'owner' });
+    const retry = testIo(dir, { kind: 'seat', name: seat, pane: 'pane-reader', session });
     expect(await runDrops(['--read', '--seat', seat, '--session', session], retry, { home })).toBe(0);
     expect(retry.out).toBe('');
     expect(retry.err).toBe('');

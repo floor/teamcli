@@ -17,6 +17,7 @@
 // session or the seat refuses service; an id is a lowercase UUID — or the `unread-<uuid>` name a
 // build before 0.5.3 wrote for a runtime report to a lead — and nothing else, so no id can name a
 // path; a drop or receipt that is a link is refused, never followed.
+import type { KeyObject } from 'node:crypto';
 import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -509,6 +510,19 @@ export type InboxRead =
   // receipt-only gate; this version never emits it.
   | { ok: false; reason: string; refusal?: InboxRefusal; superseded?: true; served?: 'already-served' | 'busy' };
 
+/** A record verified as this inbox's mail, with nothing written: the payload, the key it verified
+ *  under, and the launch-brief binding a read publishes on its receipt. */
+type OpenedMessage =
+  | { ok: false; reason: string; refusal?: InboxRefusal; superseded?: true }
+  | {
+      ok: true;
+      payload: RecordPayload;
+      key: KeyObject;
+      launchRecord: boolean;
+      binding: { incarnation: string; sha256: string; epoch: string } | undefined;
+      servedClaim: CurrentBriefClaim | undefined;
+    };
+
 /**
  * The claim a brief's read is served under. `claim` is resolved again immediately before the
  * receipt is written, so a delivery that landed while the record was being verified is seen: its
@@ -559,21 +573,19 @@ export type InboxTarget = { dropDir: string; root: string; seat: string; session
  * the message is spent, which is the at-most-once side to err on. A declaration that changes
  * between the second look and the caller writing the body to its client is the remaining window.
  */
-export function readMessage(
+/** Verifies the record at a message's name as this inbox's mail: the signed envelope, its
+ *  signature under the checkout's message key, and the id, seat, session and root it names. The
+ *  launch's own record is admitted only as the seat's current brief, resolved again after the
+ *  signature so a delivery that landed during the read is noticed. Nothing is written here: this
+ *  is the check a read and a peek both make before a body is shown. */
+function openInboxMessage(
   target: InboxTarget,
   id: string,
   home: string,
-  brief?: BriefRead,
-  guard?: () => string | null,
-): InboxRead {
-  if (!messageNameOk(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
+  brief: BriefRead | undefined,
+): OpenedMessage {
   const at = join(target.dropDir, id);
-  if (heldAt(at).kind !== 'file') return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
-  const atReceipt = heldAt(receiptPath(target.dropDir, id));
-  if (atReceipt.kind !== 'missing' && atReceipt.kind !== 'file') {
-    return { ok: false, reason: 'the receipt path is held by something that is not a file' };
-  }
-  const refused = (rule: InboxRefusal['rule'], reason: string): InboxRead => ({
+  const refused = (rule: InboxRefusal['rule'], reason: string): OpenedMessage => ({
     ok: false,
     reason,
     refusal: { rule, id, seat: target.seat, path: at },
@@ -639,13 +651,33 @@ export function readMessage(
     binding = { incarnation: claim.incarnation, sha256: claim.sha256, epoch: claim.epoch };
     servedClaim = claim;
   }
+  return { ok: true, payload, key: key.key, launchRecord, binding, servedClaim };
+}
+
+export function readMessage(
+  target: InboxTarget,
+  id: string,
+  home: string,
+  brief?: BriefRead,
+  guard?: () => string | null,
+): InboxRead {
+  if (!messageNameOk(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
+  const at = join(target.dropDir, id);
+  if (heldAt(at).kind !== 'file') return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
+  const atReceipt = heldAt(receiptPath(target.dropDir, id));
+  if (atReceipt.kind !== 'missing' && atReceipt.kind !== 'file') {
+    return { ok: false, reason: 'the receipt path is held by something that is not a file' };
+  }
+  const opened = openInboxMessage(target, id, home, brief);
+  if (!opened.ok) return opened;
+  const { payload, key, launchRecord, binding, servedClaim } = opened;
   // Read-once admission. The signed receipt is the per-id gate: a receipt that already verifies
   // under this read's binding proves the content went out, and the read shows nothing. Any other
   // entry at the read or replied receipt name is uncertainty about an earlier exposure, so it is
   // preserved and no body is returned. Otherwise this reader races every other reader to publish
   // the signed receipt with `link`; exactly one wins, and only the winner returns the body.
   const context: StatusContext = { to: target.seat, root: target.root, session: target.session };
-  const receiptHeldNow = (): boolean => isRead(target.dropDir, id, context, key.key, binding);
+  const receiptHeldNow = (): boolean => isRead(target.dropDir, id, context, key, binding);
   const alreadyServed = (): InboxRead => ({
     ok: false,
     reason: `message ${JSON.stringify(id)} was already served in this inbox`,
@@ -734,6 +766,24 @@ export function readMessage(
   const lostAfterReceipt = guard?.();
   if (lostAfterReceipt !== undefined && lostAfterReceipt !== null) return { ok: false, reason: lostAfterReceipt };
   return { ok: true, body: payload.body };
+}
+
+/**
+ * Reads one message for a peek: the same verification a read makes, and the body, with nothing
+ * written. No receipt is published, so the message stays unread and the seat's own read still
+ * serves it; a read or replied receipt an earlier reader left is not consulted, because a peek
+ * neither consumes the message nor claims anything about it. This is how the owner and a lead
+ * look at another seat's waiting mail without hiding it from its seat. `served` is never
+ * returned: a peek does not race a read for anything.
+ */
+export function peekMessage(target: InboxTarget, id: string, home: string, brief?: BriefRead): InboxRead {
+  if (!messageNameOk(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
+  if (heldAt(join(target.dropDir, id)).kind !== 'file') {
+    return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
+  }
+  const opened = openInboxMessage(target, id, home, brief);
+  if (!opened.ok) return opened;
+  return { ok: true, body: opened.payload.body };
 }
 
 /**
