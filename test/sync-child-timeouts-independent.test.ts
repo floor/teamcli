@@ -89,7 +89,7 @@ function withPs(body: string, timeoutMs: string | undefined, run: () => void): v
 
 describe('synchronous child bounds', () => {
   test('a ps that times out during placement refuses and does not place', () => {
-    withPs("printf '1 herdr\\n'", undefined, () => {
+    withPs(`printf '%s\\n' '${process.pid} 1 herdr'`, undefined, () => {
       const placed = placeWithPs();
       expect(placed.kind).toBe('seat');
       if (placed.kind === 'seat') {
