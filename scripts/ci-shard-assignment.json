@@ -1010,6 +1010,8 @@
     "test/team-name-independent.test.ts": 5,
     "test/team-name-resolve.test.ts": 4,
     "test/team-record-measure.test.ts": 1,
+    "test/team-rename-dry-independent.test.ts": 5,
+    "test/team-rename-dry-run.test.ts": 0,
     "test/team-rename.test.ts": 2,
     "test/team-usage-floor-independent.test.ts": 0,
     "test/team-usage-independent.test.ts": 3,
