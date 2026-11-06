@@ -12,8 +12,8 @@ import { runGrant } from '../src/commands/grant.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { issueOwnerGeneralGrant } from '../src/client/general-grant.ts';
 import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
-import { lobbyDir, lobbyTrustEntry } from '../src/lobby/gate.ts';
-import { upsertTeam } from '../src/registry/teams.ts';
+import { lobbyDir, lobbyTrustEntry, resolveLobby } from '../src/lobby/gate.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { readSendGrantReads, readSendGrants } from '../src/send/grants.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { updateState } from '../src/state.ts';
@@ -112,13 +112,15 @@ function world(where: { under?: string } = {}): World {
       { name: 'orchestrator', role: 'lead', cli: 'codex', launch: 'codex -m test' },
     ],
   });
-  const architect = registerSeat('architect', 'architect', 'pane1', { team: 'floor', session: 'studio' });
-  const builder = registerSeat('builder', 'builder', 'pane2', { team: 'floor', session: 'studio' });
+  // The sender's home-chain id is the id the loaded root derives. The project name stays the address.
+  const floorId = teamIdOf(root);
+  const architect = registerSeat('architect', 'architect', 'pane1', { team: floorId, session: 'studio' });
+  const builder = registerSeat('builder', 'builder', 'pane2', { team: floorId, session: 'studio' });
   const lead = registerSeat('lead', 'lead', 'pane3', { team: 'teamcli', session: 'teamcli' });
   const builderOne = registerSeat('builder-1', 'builder', 'pane4', { team: 'teamcli', session: 'teamcli' });
   const orchestrator = registerSeat('orchestrator', 'lead', 'pane5', { team: 'other', session: 'other' });
-  upsertTeam(home, 'floor', {
-    project: 'floor', entity: 'floor', session: 'studio', root, lobby: lobbyDir(home), lifecycle: 'running', by: 'test',
+  upsertTeam(home, floorId, {
+    project: 'floor', entity: 'floor', session: 'studio', root, lobby: resolveLobby(home, { entity: 'floor' }), lifecycle: 'running', by: 'test',
     roster: [
       { agent: architect, seat: 'architect', role: 'architect', leads: true },
       { agent: builder, seat: 'builder', role: 'builder' },
