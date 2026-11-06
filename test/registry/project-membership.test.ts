@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { parkInRuntimeTrash } from '../../src/file/runtime-trash.ts';
 import * as state from '../../src/state.ts';
 import * as projects from '../../src/registry/projects.ts';
 import { forgetTeam, getTeam, noteTeam, teamsFile, teamIdOf, upsertTeam } from '../../src/registry/teams.ts';
@@ -14,7 +14,7 @@ import { withRegistryLock, withTeamProjectsLocks } from '../../src/registry/lock
 let home: string;
 const seed = { project: 'team-x', session: 'team-x', root: '/tmp/root-a' };
 beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'project-membership-')); });
-afterEach(() => { leaveRunMemo(); execFileSync('trash', [home]); });
+afterEach(() => { leaveRunMemo(); parkInRuntimeTrash(home, dirname(home), new Date()); });
 
 test('project views and the command derive home and served membership from teams', async () => {
   projects.upsertProject(home, 'home-a', { name: 'Home A', teams: ['stale-id'] });

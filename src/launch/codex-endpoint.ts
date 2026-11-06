@@ -24,7 +24,7 @@
 // The daemon never starts, stops or removes an endpoint.
 //
 // Measured on this machine (codex-cli 0.161.0):
-//   `CODEX_HOME=<synthetic> codex app-server --listen unix:///private/tmp/<scratch>/app.sock`
+//   `CODEX_HOME=<synthetic> codex app-server --listen unix://<temp>/<scratch>/app.sock`
 //   created that socket within 10 s, its `ps -o comm= -p <pid>` printed `codex`, and SIGTERM
 //   ended it with exit 143 and empty stdout/stderr. The launch spawns the same command with the
 //   state folder's own path, never a path derived from HOME.
@@ -58,7 +58,7 @@ import { execFileSync, spawn as nodeSpawn } from 'node:child_process';
 import { syncChildTimeout } from '../child.ts';
 import { createHash, randomBytes } from 'node:crypto';
 import { sessionList } from '../herdr.ts';
-import { chmodSync, closeSync, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { isPresenceBinding, isPresenceTime, mintPresenceBinding } from '../daemon/presence/contract.ts';
@@ -120,8 +120,20 @@ function endpointFolder(dir: string, session: string, seat: string): string | nu
  *  from the app-server run in other processes, and `TMPDIR` is a per-process reading: a folder
  *  chosen by it could differ between the launch and the reader, while the fixed one cannot. A
  *  machine whose `/tmp` is itself too long for a hashed socket still gets a bindable path. */
+/** Whether two paths name one folder once each parent is resolved. A missing parent stays distinct. */
+function sameFolder(a: string, b: string): boolean {
+  if (a === b) return true;
+  try {
+    return realpathSync(dirname(a)) === realpathSync(dirname(b)) && basename(a) === basename(b);
+  } catch {
+    return false;
+  }
+}
+
 function runtimeFolders(): string[] {
-  return [...new Set([`/tmp/${RUNTIME_FOLDER}`, join(tmpdir(), RUNTIME_FOLDER)])];
+  const fixed = join('/tmp', RUNTIME_FOLDER);
+  const mine = join(tmpdir(), RUNTIME_FOLDER);
+  return sameFolder(fixed, mine) ? [fixed] : [fixed, mine];
 }
 
 /** The runtime socket's name for one seat incarnation: a hash of the state folder, the session,

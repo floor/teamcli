@@ -12,6 +12,7 @@ import {
   chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync,
   utimesSync, writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   appendEvent, appendIndexReads, eventLogPath, resetAppendIndexReads, type EventAppendResult,
@@ -67,7 +68,7 @@ afterEach(() => {
 });
 
 function makeWorld(name: string): World {
-  const base = realpathSync(mkdtempSync(`/private/tmp/bus-append-sealed-${name}-`));
+  const base = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), `bus-append-sealed-${name}-`)));
   dirs.push(base);
   const home = join(base, 'home');
   const root = join(base, 'acme');

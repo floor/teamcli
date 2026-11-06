@@ -8,8 +8,8 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { shortSocketBase } from './helpers.ts';
 import { fileURLToPath } from 'node:url';
 import { startMachineDaemon } from '../src/daemon/host.ts';
 import { darwinServiceManager } from '../src/daemon/service-darwin.ts';
@@ -18,9 +18,8 @@ import { restoreEntryOf, runRestoreSweepInChild } from '../src/daemon/restore/sp
 import { acceptRestoreDoor, discardRestoreInherit, restoreDoorText, writeRestoreDoor } from '../src/daemon/restore/token.ts';
 import { readDaemonState } from '../src/daemon/state.ts';
 
-/** The timed scene runs under /private/tmp where a bun child starts quickly; elsewhere the
- *  system temporary folder. */
-const BASE = existsSync('/private/tmp') ? '/private/tmp' : tmpdir();
+/** The timed scene runs under the short temp folder, where a bun child starts quickly. */
+const BASE = shortSocketBase();
 
 // The restore door binds the child to the parent the system's service manager records. A
 // platform whose product build has no service-manager adapter (src/daemon/service.ts offers the

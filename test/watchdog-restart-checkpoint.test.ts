@@ -9,6 +9,7 @@
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { askCheckpoint } from '../src/checkpoint/checkpoint.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
@@ -80,7 +81,7 @@ afterEach(() => {
 });
 
 function makeFixture(): Fixture {
-  const base = realpathSync(mkdtempSync(join('/private/tmp', 'watchdog-restart-cp-')));
+  const base = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), 'watchdog-restart-cp-')));
   owned.push(base);
   const root = join(base, 'acme');
   const home = join(base, 'home');

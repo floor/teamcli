@@ -8,6 +8,7 @@
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { askCheckpoint } from '../src/checkpoint/checkpoint.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
@@ -63,7 +64,7 @@ const owned: string[] = [];
 afterEach(() => { for (const path of owned.splice(0)) discardFixtures([path]); });
 
 function makeFixture(): Fixture {
-  const base = realpathSync(mkdtempSync(join('/private/tmp', 'restart-checkpoint-')));
+  const base = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), 'restart-checkpoint-')));
   owned.push(base);
   const root = join(base, 'acme');
   const home = join(base, 'home');

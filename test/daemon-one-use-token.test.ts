@@ -9,8 +9,8 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { shortSocketBase } from './helpers.ts';
 import { fileURLToPath } from 'node:url';
 import { choresInheritPath, machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
 import { claimOneUseToken, pidAlive, sweepSpentClaims, type KillProbe, type LivenessProbe } from '../src/daemon/one-use-token.ts';
@@ -18,8 +18,8 @@ import { readChoresInherit, writeChoresInherit } from '../src/daemon/chores/toke
 import { acceptRestoreDoor, restoreDoorText, restoreRequestProblem, writeRestoreDoor } from '../src/daemon/restore/token.ts';
 import type { ChoresChildConfig } from '../src/daemon/chores/protocol.ts';
 
-/** Timed scenes run under /private/tmp where a bun child starts quickly. */
-const BASE = existsSync('/private/tmp') ? '/private/tmp' : tmpdir();
+/** Timed scenes run under the short temp folder, where a bun child starts quickly. */
+const BASE = shortSocketBase();
 
 const ENTRY = fileURLToPath(new URL('../src/daemon/chores/entry.ts', import.meta.url));
 

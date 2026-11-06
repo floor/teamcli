@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCheckpoint } from '../src/commands/checkpoint.ts';
 import type { Io } from '../src/io.ts';
@@ -51,7 +52,7 @@ let home: string;
 let agentsDir: string;
 
 beforeEach(() => {
-  base = realpathSync(mkdtempSync(join('/private/tmp', 'team-checkpoint-cmd-')));
+  base = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), 'team-checkpoint-cmd-')));
   bases.push(base);
   root = join(base, 'alpha');
   home = join(base, 'home');

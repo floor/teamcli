@@ -5,6 +5,7 @@
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import type { DownLaunch } from '../src/commands/down.ts';
@@ -63,7 +64,7 @@ afterEach(() => {
 });
 
 function makeFixture(): Fixture {
-  const base = realpathSync(mkdtempSync(join('/private/tmp', 'restart-resume-pin-')));
+  const base = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), 'restart-resume-pin-')));
   owned.push(base);
   const root = join(base, 'acme');
   const home = join(base, 'home');

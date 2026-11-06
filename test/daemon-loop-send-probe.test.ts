@@ -23,8 +23,8 @@ import {
   existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { connect } from 'node:net';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { shortSocketBase } from './helpers.ts';
 import { fileURLToPath } from 'node:url';
 import { loadTeamFile } from '../src/file/load.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
@@ -113,7 +113,7 @@ esac
 }
 
 function setupWorld() {
-  const short = existsSync('/private/tmp') ? '/private/tmp' : tmpdir();
+  const short = shortSocketBase();
   base = realpathSync(mkdtempSync(join(short, 'talos-loop-send-')));
   const home = join(base, 'home');
   const root = join(base, PROJECT);
