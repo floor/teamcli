@@ -225,13 +225,16 @@ function buildMultiSources(options: {
     return fixturesBySession.has(session) ? 'running' : 'absent';
   };
 
+  const renamedNames = new Map<string, string>();
   const agents = (session: string): HerdrAgent[] | null => {
     if (options.hostDown) return null;
     const fixture = fixturesBySession.get(session);
     if (!fixture || sessionState(session) !== 'running') return [];
-    const name = options.namedOnPane && session in options.namedOnPane
-      ? options.namedOnPane[session]!
-      : null;
+    const name = renamedNames.has(session)
+      ? renamedNames.get(session)!
+      : options.namedOnPane && session in options.namedOnPane
+        ? options.namedOnPane[session]!
+        : null;
     return [
       {
         name,
@@ -262,6 +265,7 @@ function buildMultiSources(options: {
     },
     renameAgent(session, pane, name) {
       trace.renamedBySession.push({ session, pane, name });
+      renamedNames.set(session, name);
       return true;
     },
     closeWorkspace: () => true,
@@ -680,7 +684,11 @@ describe('team up --all single-command multi-team restore', () => {
     expect(callersOfWriteToken).toEqual(['daemon/restore/spawn.ts']);
     expect(callersOfAcceptDoor).toEqual(['daemon/restore/entry.ts']);
     expect(callersOfRestoreInheritPath).toEqual(['daemon/restore/token.ts']);
-    expect(callersOfClaimOneUseToken.sort()).toEqual(['daemon/chores/token.ts', 'daemon/restore/token.ts']);
+    expect(callersOfClaimOneUseToken.sort()).toEqual([
+      'daemon/chores/token.ts',
+      'daemon/restore/token.ts',
+      'daemon/wake/token.ts',
+    ]);
     expect(callersOfSpawnChild).toEqual(['daemon/host.ts']);
     expect(filesWithUpInternal).toEqual(['commands/up.ts']);
     expect(filesWithOldRestoreReader).toEqual([]);
@@ -939,6 +947,7 @@ describe('team up --all single-command multi-team restore', () => {
     const machineUnitRealpath = realpathSync(machineUnitFile);
     const darwinService = systemServiceManager({
       platform: 'darwin',
+      accountHome: home,
       runner: () => ({
         status: 0,
         stdout: `\tpath = ${machineUnitRealpath}\n\tpid = ${String(DAEMON_PID)}\n\tprogram = ${process.execPath}\n`,
