@@ -217,7 +217,7 @@ test('real registry up passes no invented team-file path to its registration', a
 test('a file-team queued swap passes the same named file through the shared restart sequence', async () => {
   const w = world('claude-code', false); remember(w, 'claude-code'); const f = launchFixture(w);
   let old = true, started = false, named = false, shell = false, boxed = CLAUDE_IDLE, clock = NOW.getTime();
-  const agents = () => [...(old ? live(w) : []), ...(started ? [{ name: named ? 'worker' : '', agent: 'grok', pane: 'new-pane', workspace: 'new-workspace', status: 'idle', cwd: w.lobby }] : [])];
+  const agents = () => [...(old ? live(w) : []), ...(started ? [{ name: named ? 'worker' : null, agent: 'grok', pane: 'new-pane', workspace: 'new-workspace', status: 'idle', cwd: w.lobby }] : [])];
   const sleep = async (ms: number) => { clock += ms; };
   f.launch.agents = agents; f.launch.agentPanes = () => agents().map(a => a.pane);
   f.launch.paneRun = (_s, _p, line) => { f.runs.push(line); started = true; return true; };
