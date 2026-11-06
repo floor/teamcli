@@ -53,11 +53,10 @@ export type AdmitTeam = {
 export type AdmitTeams = Record<string, AdmitTeam>;
 
 /** One registered project as admission reads it: the lead, by agent id, and the teams it names.
- *  The project registry's own record (`readProjects`) is wider and satisfies this shape as it
- *  stands. */
+ *  The project registry's public reads derive these memberships from team records. */
 export type AdmitProject = { lead: string | null; teams: string[] };
 
-/** Every registered project, by project id — `readProjects`' own shape. */
+/** Every registered project, keyed by id, with memberships derived from team records. */
 export type AdmitProjects = Record<string, AdmitProject>;
 
 /** The two reply contexts a reply command may hand in: the general open-thread reply, and the
@@ -218,10 +217,8 @@ export function admitSend(
   // The project rules, asked first when the caller's records know their projects: the project
   // record decides its own pairs, and the `leads` capability decides which seat leads a team.
   if (context !== undefined) {
-    const twice = duplicateProjectName(callerTeamId, targetTeamId, context.projects);
-    if (twice !== null) return { ok: false, why: `${seatAt(caller)} may not send to ${seatAt(target)}: ${twice}` };
-    const project = sharedProject(callerTeamId, targetTeamId, context.projects);
-    if (project !== null) {
+    for (const [, project] of projectsNaming(callerTeamId, context.projects)) {
+      if (!project.teams.includes(targetTeamId)) continue;
       const crossing = callerTeamId !== targetTeamId;
       const callerLead = leadSeat(callerTeam);
       const targetLead = leadSeat(targetTeam);
@@ -637,8 +634,8 @@ function entityAssistant(entity: string | null | undefined, teams: AdmitTeams): 
   return null;
 }
 
-/** The registered projects naming a team, in project-id order, with their ids — the reverse index
- *  `ofTeam` reads from the live registry, over the records admission was handed. */
+/** All registered memberships of a team, in project-id order, over the derived records
+ *  admission was handed. Home inheritance is resolved separately by the caller. */
 function projectsNaming(teamId: string, projects: AdmitProjects): [string, AdmitProject][] {
   return Object.keys(projects)
     .sort()
@@ -646,29 +643,6 @@ function projectsNaming(teamId: string, projects: AdmitProjects): [string, Admit
       const project = projects[id];
       return project !== undefined && project.teams.includes(teamId) ? [[id, project] as [string, AdmitProject]] : [];
     });
-}
-
-/** The one project naming both teams, or null — the record a pair's project rules are read from.
- *  A team named by two projects never gets here: `duplicateProjectName` refuses first. A pair
- *  whose teams share no project reaches no project rule at all, so nothing crosses projects. */
-function sharedProject(callerTeamId: string, targetTeamId: string, projects: AdmitProjects): AdmitProject | null {
-  for (const [, project] of projectsNaming(callerTeamId, projects)) {
-    if (project.teams.includes(targetTeamId)) return project;
-  }
-  return null;
-}
-
-/** The refusal when a team of this pair is named by more than one project — the state the project
- *  readers refuse, naming both — so admission refuses it too rather than pick one silently. Null
- *  when neither team is named twice. */
-function duplicateProjectName(callerTeamId: string, targetTeamId: string, projects: AdmitProjects): string | null {
-  for (const teamId of callerTeamId === targetTeamId ? [callerTeamId] : [callerTeamId, targetTeamId]) {
-    const named = projectsNaming(teamId, projects);
-    if (named.length > 1) {
-      return `team ${teamId} is named in ${named.length} projects: ${named.map(([id]) => id).join(', ')}`;
-    }
-  }
-  return null;
 }
 
 /** True when the target is the coordinator of `entity`: the lead seat of the entity's own team,

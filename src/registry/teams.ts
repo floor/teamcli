@@ -391,10 +391,10 @@ export function setTeamProjectMembership(
 
 /**
  * Explicitly re-keys a team record from `oldId` to `newId` when the owner moves a repository root
- * with `--rekey`, updating `teams.yaml` and `projects.yaml` `teams[]` references.
+ * with `--rekey`. Project views derive the new id from the team record's memberships.
  */
 export function rekeyTeamRecord(home: string, oldId: string, newId: string, patch: TeamPatch): TeamRecord {
-  const record = locked(home, () => {
+  return locked(home, () => {
     const teams = readTeams(home);
     const prior = teams[oldId];
     if (!prior) throw new TeamsError(`no team ${oldId} in the registry to re-key`);
@@ -413,12 +413,6 @@ export function rekeyTeamRecord(home: string, oldId: string, newId: string, patc
     write(home, teams);
     return { ...next, id: newId };
   });
-  for (const [projectId, proj] of Object.entries(projects.readProjects(home))) {
-    if (!proj.teams.includes(oldId)) continue;
-    const nextTeams = proj.teams.map((t) => (t === oldId ? newId : t));
-    projects.upsertProject(home, projectId, { teams: Array.from(new Set(nextTeams)) });
-  }
-  return record;
 }
 
 /**

@@ -120,20 +120,21 @@ lowercased, every run of characters outside letters, digits, `.`, `_` and `-` wr
 nothing left at either end: `TeamCLI` is `teamcli`, `Team CLI` is `team-cli`. A team file's
 `in_project` writes the display name, and the id is the key it reaches. The id is minted when the
 project is first written and never moves: a rename writes `name`. The team file's `in_project`
-writes this record — the name, the entity and the team IDs — and a team that sets
+registers its name and entity and writes membership on the team record. A team that sets
 `project_lead: true` beside it supplies `lead` on every launch: the agent of that team's own lead
 seat, so a mark that moves in the file moves the record with it. A file that stops claiming
 `project_lead`, or stops naming the project, clears the lead it set — only while the lead on record
 is one of that team's agents — so an agent the team no longer leads with is not left admitted as
-the project's lead. A team the registry names in two projects is refused by
-[`team check`](../commands/check.md), which names both.
+the project's lead. A team has one home project for inheritance and may serve other projects.
+Membership lives on the team record; every project read derives its team IDs from those records.
+Shared membership supplies project reach under the existing send rules and settings.
 
 | Field | Meaning |
 | --- | --- |
 | `name` | the display name — what people and team files call the project (`TeamCLI`) |
 | `entity` | the entity the project belongs to |
 | `lead` | the project lead, by agent ID — never a seat or a role name: the agent of the lead seat (`leads: true`) of the one team whose file sets `project_lead: true` beside `in_project`, re-resolved on that team's every launch and cleared when that team drops the mark or leaves; a lead seat with no agent yet leaves it `null` |
-| `teams` | the team IDs the project groups |
+| `teams` | the team IDs derived from home and served memberships on team records; never a stored membership authority |
 | `provenance` | who registered the record, and when it was registered and last updated |
 
 ## The id is the identity

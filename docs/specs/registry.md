@@ -284,7 +284,8 @@ roster line, and types nothing into the pane. Its outcomes are the exit-codes re
    `assistant`; a line written before those marks existed MUST read as not known to hold them.
    *Source:* `src/registry/teams.ts` (`RosterEntry`). *Proof:* `test/registry-teams.test.ts`.
 8. **A project id is derived once and never moved; a rename moves `name`.** Two projects MUST NOT
-   share one name, and a team two projects name MUST be refused, naming both. *Source:*
+   share one name. A team MAY belong to several projects, with one home for inheritance;
+   project readers MUST derive membership from team records, never a stored project-side list. *Source:*
    `src/registry/projects.ts` (`projectIdOf`, `byName`, `ofTeam`). *Proof:*
    `test/registry/projects.test.ts`.
 9. **A project's `liveness` holds only the three keys, each a whole number of seconds, at least
