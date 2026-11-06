@@ -820,7 +820,9 @@ describe('the daemon fallback sweep', () => {
         stopping: () => partialStopping,
         yield: async () => {
           partialYields += 1;
-          if (partialYields >= 4) {
+          // The bounded directory reader may yield before it reaches any note. Stop after
+          // observed progress, with a hard ceiling so a broken drain still fails below.
+          if ((partialYields >= 4 && partialPaths.some((path) => !existsSync(path))) || partialYields >= 128) {
             partialStopping = true;
             return false;
           }
