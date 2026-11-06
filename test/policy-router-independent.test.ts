@@ -115,6 +115,8 @@ function makeFixture(sessionName: string = 'beacon'): {
   });
   upsertTeam(home, teamId, {
     project: team.project,
+    projectId: 'beacon',
+    entity: team.entity,
     session: team.session,
     root,
     roster: [
@@ -188,29 +190,36 @@ function setWord(
 }
 
 describe('independent verification of feat/router-policies', () => {
-  test('probe 1: a team cannot retarget an entity alias (release default or entity-added) or touch its fallback', () => {
+  test('probe 1: a team cannot retarget an entity alias or touch its fallback; with no entity word it may add its own', () => {
+    // 1a. The release ships no alias, so a team word for an alias no entity placed is an add:
+    const fxAdd = makeFixture();
+    try {
+      setWord(fxAdd, 'team', 'router.aliases', 'lead=lead@beacon');
+      const read = readMailboxRouterPolicy(fxAdd.root, fxAdd.home, NOW);
+      expect(read.ok).toBe(true);
+      if (read.ok) {
+        expect(read.policy.routes).toEqual([{ alias: 'lead', address: 'lead@beacon', fallback: null }]);
+      }
+    } finally {
+      fxAdd.cleanup();
+    }
+
+    // 1b. Once the entity places the alias, a team retarget is refused:
+    const fxRetarget = makeFixture();
+    try {
+      setWord(fxRetarget, 'entity', 'router.aliases', 'lead=lead@beacon');
+      setWord(fxRetarget, 'team', 'router.aliases', 'lead=worker@beacon');
+      expect(readMailboxRouterPolicy(fxRetarget.root, fxRetarget.home, NOW)).toEqual({
+        ok: false,
+        why: 'router alias "lead" is set by the entity; a team may add an alias, never retarget one',
+      });
+    } finally {
+      fxRetarget.cleanup();
+    }
+
+    // 1c. Entity adds a new alias `hermes=lead@beacon`; team cannot retarget `hermes` or set/clear `hermes`'s fallback:
     const fx = makeFixture();
     try {
-      // 1a. Team retargeting any of the three release-default entity aliases (`iris`, `atlas`, `zeus`) is refused:
-      for (const [alias, target] of [
-        ['iris', 'lead@beacon'],
-        ['atlas', 'lead@beacon'],
-        ['zeus', 'worker@beacon'],
-      ] as const) {
-        const sub = makeFixture();
-        try {
-          setWord(sub, 'team', 'router.aliases', `${alias}=${target}`);
-          const read = readMailboxRouterPolicy(sub.root, sub.home, NOW);
-          expect(read).toEqual({
-            ok: false,
-            why: `router alias "${alias}" is set by the entity; a team may add an alias, never retarget one`,
-          });
-        } finally {
-          sub.cleanup();
-        }
-      }
-
-      // 1b. Entity adds a new alias `hermes=lead@beacon`; team cannot retarget `hermes` or set/clear `hermes`'s fallback:
       setWord(fx, 'entity', 'router.aliases', 'hermes=lead@beacon');
       setWord(fx, 'team', 'router.aliases', 'hermes=worker@beacon');
       expect(readMailboxRouterPolicy(fx.root, fx.home, NOW)).toEqual({
@@ -229,23 +238,24 @@ describe('independent verification of feat/router-policies', () => {
       } finally {
         fxFallback.cleanup();
       }
-
-      // 1c. Team cannot clear an entity alias's fallback (`atlas=none`) or add a fallback to `iris` or `zeus`:
-      for (const entry of ['atlas=none', 'iris=lead@beacon', 'zeus=worker@beacon']) {
-        const sub = makeFixture();
-        try {
-          setWord(sub, 'team', 'router.fallback', entry);
-          const alias = entry.split('=')[0]!;
-          expect(readMailboxRouterPolicy(sub.root, sub.home, NOW)).toEqual({
-            ok: false,
-            why: `router fallback for "${alias}" belongs to the entity; only the entity level may change or clear it`,
-          });
-        } finally {
-          sub.cleanup();
-        }
-      }
     } finally {
       fx.cleanup();
+    }
+
+    // 1d. Team cannot clear an entity alias's fallback (`lead=none`) or add a fallback to `worker`:
+    for (const entry of ['lead=none', 'worker=lead@beacon']) {
+      const sub = makeFixture();
+      try {
+        setWord(sub, 'entity', 'router.aliases', 'lead=lead@beacon,worker=worker@beacon');
+        setWord(sub, 'team', 'router.fallback', entry);
+        const alias = entry.split('=')[0]!;
+        expect(readMailboxRouterPolicy(sub.root, sub.home, NOW)).toEqual({
+          ok: false,
+          why: `router fallback for "${alias}" belongs to the entity; only the entity level may change or clear it`,
+        });
+      } finally {
+        sub.cleanup();
+      }
     }
   });
 
@@ -265,13 +275,13 @@ describe('independent verification of feat/router-policies', () => {
 
       const fallbackDesk = planPolicySet(
         fx.home,
-        { level: 'entity', target: 'floor', name: 'router.fallback', value: 'atlas=desk@beacon' },
+        { level: 'entity', target: 'floor', name: 'router.fallback', value: 'lead=desk@beacon' },
         { now: NOW },
       );
       expect(fallbackDesk.ok).toBe(false);
       if (!fallbackDesk.ok) {
         expect(fallbackDesk.why).toBe(
-          'entity: router fallback for "atlas" targets the desk seat, which no alias may name',
+          'entity: router fallback for "lead" targets the desk seat, which no alias may name',
         );
       }
 
@@ -281,7 +291,7 @@ describe('independent verification of feat/router-policies', () => {
           {
             name: 'router.fallback',
             level: 'entity',
-            value: 'atlas=desk@floor',
+            value: 'lead=desk@acme',
             kind: 'advised',
             setter: 'owner',
             date: NOW.toISOString(),
@@ -296,44 +306,46 @@ describe('independent verification of feat/router-policies', () => {
       expect(fallbackDeskLoad.ok).toBe(false);
 
       // 2b. Empty addresses in both `router.aliases` and `router.fallback` are refused:
-      for (const val of ['atlas=', 'atlas', 'iris=iris@floor,atlas=']) {
+      for (const val of ['lead=', 'lead', 'helper=helper@acme,lead=']) {
         const res = planPolicySet(
           fx.home,
           { level: 'entity', target: 'floor', name: 'router.aliases', value: val },
           { now: NOW },
         );
         expect(res.ok).toBe(false);
-        if (!res.ok) expect(res.why).toContain('router alias "atlas" has no address');
+        if (!res.ok) expect(res.why).toContain('router alias "lead" has no address');
       }
-      for (const val of ['atlas=', 'atlas', 'atlas=iris@floor,zeus=']) {
+      for (const val of ['lead=', 'lead', 'lead=helper@acme,worker=']) {
         const res = planPolicySet(
           fx.home,
           { level: 'entity', target: 'floor', name: 'router.fallback', value: val },
           { now: NOW },
         );
         expect(res.ok).toBe(false);
-        if (!res.ok) expect(res.why).toMatch(/router fallback for "(atlas|zeus)" has no address/);
+        if (!res.ok) expect(res.why).toMatch(/router fallback for "(lead|worker)" has no address/);
       }
 
       // 2c. Self-fallbacks:
-      // - Naming the alias itself (`atlas=atlas`) is refused at write and at load:
+      // - Naming the alias itself (`lead=lead`) is refused at write and at load:
       const selfAlias = planPolicySet(
         fx.home,
-        { level: 'entity', target: 'floor', name: 'router.fallback', value: 'atlas=atlas' },
+        { level: 'entity', target: 'floor', name: 'router.fallback', value: 'lead=lead' },
         { now: NOW },
       );
       expect(selfAlias.ok).toBe(false);
       if (!selfAlias.ok) {
-        expect(selfAlias.why).toBe('entity: router fallback for "atlas" names the alias itself');
+        expect(selfAlias.why).toBe('entity: router fallback for "lead" names the alias itself');
       }
 
-      // - Naming the route's own address (`atlas=iris@floor` while default fallback is `iris@floor`, or team alias `mirror=lead@beacon` with fallback `mirror=lead@beacon`):
+      // - Naming the route's own address (entity alias `lead=lead@beacon` with fallback `lead=lead@beacon`,
+      //   or team alias `mirror=lead@beacon` with fallback `mirror=lead@beacon`):
       const sub1 = makeFixture();
       try {
-        setWord(sub1, 'entity', 'router.aliases', 'atlas=iris@floor');
+        setWord(sub1, 'entity', 'router.aliases', 'lead=lead@beacon');
+        setWord(sub1, 'entity', 'router.fallback', 'lead=lead@beacon');
         expect(readMailboxRouterPolicy(sub1.root, sub1.home, NOW)).toEqual({
           ok: false,
-          why: 'router fallback for "atlas" names the route itself (iris@floor)',
+          why: 'router fallback for "lead" names the route itself (lead@beacon)',
         });
       } finally {
         sub1.cleanup();
@@ -361,8 +373,8 @@ describe('independent verification of feat/router-policies', () => {
 
       // Final route belt checker:
       expect(
-        mailboxRouterPolicyProblem([{ alias: 'atlas', address: 'orchestrator@floor', fallback: 'orchestrator@floor' }]),
-      ).toBe('router fallback for "atlas" names the route itself (orchestrator@floor)');
+        mailboxRouterPolicyProblem([{ alias: 'lead', address: 'lead@acme', fallback: 'lead@acme' }]),
+      ).toBe('router fallback for "lead" names the route itself (lead@acme)');
     } finally {
       fx.cleanup();
     }
@@ -399,7 +411,10 @@ describe('independent verification of feat/router-policies', () => {
     try {
       const initial = readMailboxRouterPolicy(fx.root, fx.home, NOW);
       expect(initial.ok).toBe(true);
-      if (initial.ok) expect(initial.policy.replyBoundSeconds).toBeNull();
+      if (initial.ok) {
+        expect(initial.policy.routes).toEqual([]);
+        expect(initial.policy.replyBoundSeconds).toBeNull();
+      }
 
       setWord(fx, 'entity', 'router.reply-bound', '1s');
       const atEntity1 = readMailboxRouterPolicy(fx.root, fx.home, NOW);
@@ -471,10 +486,10 @@ describe('independent verification of feat/router-policies', () => {
             roster: [{ seat: 'outsider', agent: 'agt_outsider0000', role: 'implementer' }],
             at: NOW.toISOString(),
           });
-          setWord(subFallback, 'entity', 'router.fallback', `atlas=${foreignTarget}`);
+          setWord(subFallback, 'entity', 'router.fallback', `lead=${foreignTarget}`);
           expect(readMailboxRouterPolicy(subFallback.root, subFallback.home, NOW)).toEqual({
             ok: false,
-            why: `router fallback for "atlas" names "${foreignTarget}", which is not a team of this entity`,
+            why: `router fallback for "lead" names "${foreignTarget}", which is not a team of this entity`,
           });
         } finally {
           subFallback.cleanup();
@@ -486,7 +501,7 @@ describe('independent verification of feat/router-policies', () => {
         fxEntityForeign,
         'entity',
         'router.aliases',
-        `by-proj=lead@beacon,by-sess=iris@floor-core,by-id=iris@${fxEntityForeign.floorTeamId}`,
+        `by-proj=lead@beacon,by-sess=worker@floor-core,by-id=worker@${fxEntityForeign.floorTeamId}`,
       );
       const validEntity = readMailboxRouterPolicy(fxEntityForeign.root, fxEntityForeign.home, NOW);
       expect(validEntity.ok).toBe(true);
@@ -495,7 +510,7 @@ describe('independent verification of feat/router-policies', () => {
     }
 
     // 4b. A team alias and a team-added fallback outside its own team (even inside the same entity!) are refused:
-    for (const outsideTarget of ['iris@floor', 'outsider@foreign-entity', 'ghost@beacon']) {
+    for (const outsideTarget of ['outsider@other-team', 'outsider@foreign-entity', 'ghost@beacon']) {
       const subAlias = makeFixture();
       try {
         setWord(subAlias, 'team', 'router.aliases', `helper=${outsideTarget}`);
@@ -523,8 +538,9 @@ describe('independent verification of feat/router-policies', () => {
     // 4c. Team check surfaces broken router words with per-level unset repairs:
     const fxCheck = makeFixture();
     try {
+      setWord(fxCheck, 'entity', 'router.aliases', 'lead=lead@beacon');
       setWord(fxCheck, 'team', 'router.aliases', 'helper=outsider@foreign-entity');
-      setWord(fxCheck, 'team', 'router.fallback', 'atlas=lead@beacon');
+      setWord(fxCheck, 'team', 'router.fallback', 'lead=worker@beacon');
       const io = testIo(fxCheck.root, { kind: 'owner' });
       const code = runTeamCheck({ file: '.agents/team.yaml' }, io, {
         live: () => QUIET_LIVE,
@@ -539,7 +555,7 @@ describe('independent verification of feat/router-policies', () => {
       );
       expect(io.out).toContain('  repair: team policy unset team router.aliases');
       expect(io.out).toContain(
-        'difference: router fallback for "atlas" belongs to the entity; only the entity level may change or clear it',
+        'difference: router fallback for "lead" belongs to the entity; only the entity level may change or clear it',
       );
       expect(io.out).toContain('  repair: team policy unset team router.fallback');
     } finally {
@@ -590,7 +606,7 @@ describe('independent verification of feat/router-policies', () => {
     }
   });
 
-  test('probe 6: an unreadable team file, unreadable registry, or tampered policy source refuses the read (never returning defaults)', () => {
+  test('probe 6: an unreadable team file, unreadable registry, or tampered policy source refuses the read (never returning a guessed map)', () => {
     // 6a. Unreadable / invalid team.yaml refuses:
     const fxTeam = makeFixture();
     try {
@@ -620,7 +636,7 @@ describe('independent verification of feat/router-policies', () => {
     // 6c. Unreadable registry (`teams.yaml` or `projects.yaml` corrupted) when an entity router word is evaluated refuses:
     const fxRegTeams = makeFixture();
     try {
-      setWord(fxRegTeams, 'entity', 'router.aliases', 'atlas=lead@beacon');
+      setWord(fxRegTeams, 'entity', 'router.aliases', 'lead=lead@beacon');
       writeFileSync(join(fxRegTeams.home, '.config', 'team', 'teams.yaml'), 'format: 1\nteams:\n  - [broken\n');
       const read = readMailboxRouterPolicy(fxRegTeams.root, fxRegTeams.home, NOW);
       expect(read.ok).toBe(false);
@@ -633,7 +649,7 @@ describe('independent verification of feat/router-policies', () => {
 
     const fxRegProjects = makeFixture();
     try {
-      setWord(fxRegProjects, 'entity', 'router.fallback', 'atlas=lead@beacon');
+      setWord(fxRegProjects, 'entity', 'router.fallback', 'lead=lead@beacon');
       writeFileSync(join(fxRegProjects.home, '.config', 'team', 'projects.yaml'), 'format: 1\nprojects:\n  - [broken\n');
       const read = readMailboxRouterPolicy(fxRegProjects.root, fxRegProjects.home, NOW);
       expect(read.ok).toBe(false);

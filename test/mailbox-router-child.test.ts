@@ -82,11 +82,11 @@ describe('the mailbox router child', () => {
       kind: 'message',
       message: {
         type: 'ask-result',
-        result: { seat: 'iris@floor', wakeTaken: true, replyVerified: true },
+        result: { seat: 'lead@acme', wakeTaken: true, replyVerified: true },
       },
     });
     expect(router.state().lastAsk).toEqual({
-      seat: 'iris@floor',
+      seat: 'lead@acme',
       wakeTaken: true,
       replyVerified: true,
     });

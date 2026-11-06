@@ -9,9 +9,13 @@ import {
   readMailboxRouterPolicy,
   resolveMailboxRouterPolicy,
 } from '../src/daemon/mailbox/policy.ts';
+import { ROUTER_ALIAS_DEFAULTS, ROUTER_FALLBACK_DEFAULTS } from '../src/policy/types.ts';
 
 describe('the mailbox router policy', () => {
-  test('an empty chain is the release map, and the reply bound is unset', () => {
+  test('a fresh install ships no alias, and the reply bound is unset', () => {
+    expect(ROUTER_ALIAS_DEFAULTS).toEqual({});
+    expect(ROUTER_FALLBACK_DEFAULTS).toEqual({});
+    expect(MAILBOX_ROUTER_DEFAULTS).toEqual({ routes: [], replyBoundSeconds: null });
     const read = resolveMailboxRouterPolicy();
     expect(read).toEqual({ ok: true, policy: MAILBOX_ROUTER_DEFAULTS });
     expect(mailboxRouterPolicyProblem(MAILBOX_ROUTER_DEFAULTS)).toBeNull();
@@ -28,54 +32,64 @@ describe('the mailbox router policy', () => {
     expect(mailboxRouterPolicyProblems(root, home, now, null)).toEqual([]);
   });
 
-  test('the entity level may retarget an alias and clear its fallback', () => {
+  test('the entity level places an alias and its fallback', () => {
     const read = resolveMailboxRouterPolicy({
       aliases: [
-        { level: 'entity', alias: 'iris', address: 'iris@floor', fallback: 'orchestrator@floor' },
-        { level: 'entity', alias: 'atlas', address: 'orchestrator@floor', fallback: null },
+        { level: 'entity', alias: 'lead', address: 'lead@acme', fallback: 'helper@acme' },
+        { level: 'entity', alias: 'helper', address: 'helper@acme', fallback: null },
       ],
     });
     expect(read.ok).toBe(true);
     if (!read.ok) return;
-    expect(read.policy.routes.find((route) => route.alias === 'iris')).toEqual({
-      alias: 'iris',
-      address: 'iris@floor',
-      fallback: 'orchestrator@floor',
+    expect(read.policy.routes.find((route) => route.alias === 'lead')).toEqual({
+      alias: 'lead',
+      address: 'lead@acme',
+      fallback: 'helper@acme',
     });
-    expect(read.policy.routes.find((route) => route.alias === 'atlas')?.fallback).toBeNull();
+    expect(read.policy.routes.find((route) => route.alias === 'helper')).toEqual({
+      alias: 'helper',
+      address: 'helper@acme',
+      fallback: null,
+    });
   });
 
   test('a team may add an alias, and the nearest add wins', () => {
     const read = resolveMailboxRouterPolicy({
       aliases: [
-        { level: 'team', alias: 'helper', address: 'helper@floor', fallback: null },
-        { level: 'seat', alias: 'helper', address: 'helper-seat@floor', fallback: null },
+        { level: 'team', alias: 'helper', address: 'helper@acme', fallback: null },
+        { level: 'seat', alias: 'helper', address: 'helper-seat@acme', fallback: null },
       ],
     });
     expect(read.ok).toBe(true);
     if (!read.ok) return;
     expect(read.policy.routes.find((route) => route.alias === 'helper')).toEqual({
       alias: 'helper',
-      address: 'helper-seat@floor',
+      address: 'helper-seat@acme',
       fallback: null,
     });
-    expect(read.policy.routes.map((route) => route.alias)).toEqual(['iris', 'atlas', 'zeus', 'helper']);
+    expect(read.policy.routes.map((route) => route.alias)).toEqual(['helper']);
   });
 
   test('a team cannot retarget an entity alias or its fallback', () => {
     const address = resolveMailboxRouterPolicy({
-      aliases: [{ level: 'team', alias: 'iris', address: 'other@floor' }],
+      aliases: [
+        { level: 'entity', alias: 'lead', address: 'lead@acme', fallback: null },
+        { level: 'team', alias: 'lead', address: 'other@acme' },
+      ],
     });
     expect(address).toEqual({
       ok: false,
-      why: 'the team level cannot retarget the entity alias iris',
+      why: 'the team level cannot retarget the entity alias lead',
     });
     const fallback = resolveMailboxRouterPolicy({
-      aliases: [{ level: 'project', alias: 'atlas', address: 'orchestrator@floor', fallback: 'zeus@floor' }],
+      aliases: [
+        { level: 'entity', alias: 'helper', address: 'helper@acme', fallback: null },
+        { level: 'project', alias: 'helper', address: 'helper@acme', fallback: 'lead@acme' },
+      ],
     });
     expect(fallback).toEqual({
       ok: false,
-      why: 'the project level cannot change the fallback of the entity alias atlas',
+      why: 'the project level cannot change the fallback of the entity alias helper',
     });
   });
 
@@ -85,25 +99,25 @@ describe('the mailbox router policy', () => {
     });
     expect(missing).toEqual({ ok: false, why: 'helper has no address' });
     const self = mailboxRouterPolicyProblem({
-      routes: [{ alias: 'helper', address: 'helper@floor', fallback: 'helper' }],
+      routes: [{ alias: 'helper', address: 'helper@acme', fallback: 'helper' }],
       replyBoundSeconds: null,
     });
     expect(self).toBe('the fallback for helper names the alias itself');
     const own = mailboxRouterPolicyProblem({
-      routes: [{ alias: 'helper', address: 'helper@floor', fallback: 'helper@floor' }],
+      routes: [{ alias: 'helper', address: 'helper@acme', fallback: 'helper@acme' }],
       replyBoundSeconds: null,
     });
     expect(own).toBe('the fallback for helper names that alias\'s own address');
     const desk = mailboxRouterPolicyProblem({
-      routes: [{ alias: 'iris', address: 'desk@floor', fallback: null }],
+      routes: [{ alias: 'lead', address: 'desk@acme', fallback: null }],
       replyBoundSeconds: null,
     });
-    expect(desk).toBe('iris names the desk seat, which is not a route');
+    expect(desk).toBe('lead names the desk seat, which is not a route');
     const deskFallback = mailboxRouterPolicyProblem({
-      routes: [{ alias: 'atlas', address: 'orchestrator@floor', fallback: 'desk@floor' }],
+      routes: [{ alias: 'lead', address: 'lead@acme', fallback: 'desk@acme' }],
       replyBoundSeconds: null,
     });
-    expect(deskFallback).toBe('the fallback for atlas names the desk seat, which is not a route');
+    expect(deskFallback).toBe('the fallback for lead names the desk seat, which is not a route');
   });
 
   test('the nearest reply bound wins, and a non-positive bound is refused', () => {

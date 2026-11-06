@@ -2,8 +2,9 @@
 // `router.reply-bound` (the mailbox-router design note, with the owner's answers of 2026-11-03). The
 // words live in the catalogue; `src/policy/router.ts` reads them back into the shape the router
 // child consumes, refusing at load with a named error rather than routing a word that broke its
-// rules. The bridge's synchronous 120 s cap and the definite-miss fallback rule are the router's
-// own mechanics and never policy values.
+// rules. The release ships no alias: the map is empty until an entity or team record places a word.
+// The bridge's synchronous 120 s cap and the definite-miss fallback rule are the router's own
+// mechanics and never policy values.
 import { describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -119,6 +120,8 @@ function makeFixture(session: string = 'beacon'): {
   });
   upsertTeam(home, teamId, {
     project: team.project,
+    projectId: 'beacon',
+    entity: team.entity,
     session: team.session,
     root,
     roster: [
@@ -128,7 +131,8 @@ function makeFixture(session: string = 'beacon'): {
     at: NOW.toISOString(),
   });
   // The entity's own team: a second registered team whose record carries the entity, so an
-  // entity-level word may place an alias on it (the beacon team belongs through its project).
+  // entity-level word may place an alias on it (the beacon team carries it too, and joins the
+  // beacon project).
   const floorRoot = join(base, 'floor');
   mkdirSync(floorRoot, { recursive: true });
   upsertTeam(home, teamIdOf(floorRoot), {
@@ -213,24 +217,20 @@ function planWord(
 }
 
 describe('the mailbox router policy words', () => {
-  test('the release defaults answer when no level declares a word', () => {
+  test('a fresh install declares no word, so the map is empty', () => {
     const fx = makeFixture();
     try {
       const read = readMailboxRouterPolicy(fx.root, fx.home, NOW);
       expect(read.ok).toBe(true);
       if (!read.ok) return;
-      expect(read.policy.routes).toEqual([
-        { alias: 'iris', address: 'iris@floor', fallback: null },
-        { alias: 'atlas', address: 'orchestrator@floor', fallback: 'iris@floor' },
-        { alias: 'zeus', address: 'architect@floor', fallback: null },
-      ]);
+      expect(read.policy.routes).toEqual([]);
       expect(read.policy.replyBoundSeconds).toBeNull();
     } finally {
       fx.cleanup();
     }
   });
 
-  test('a team file that cannot be read refuses the whole read, never the defaults', () => {
+  test('a team file that cannot be read refuses the whole read, never a guessed map', () => {
     const fx = makeFixture();
     try {
       writeFileSync(join(fx.root, '.agents', 'team.yaml'), 'format: 1\nseats:\n  - name: [broken\n');
@@ -243,17 +243,18 @@ describe('the mailbox router policy words', () => {
     }
   });
 
-  test('an entity aliases word is sparse: it changes what it names and the release map keeps the rest', () => {
+  test('a team word names only what it moves: the entity map keeps the rest of its aliases', () => {
     const fx = makeFixture();
     try {
-      setWord(fx, 'entity', 'router.aliases', 'atlas=zeus@floor');
+      setWord(fx, 'entity', 'router.aliases', 'lead=lead@beacon,worker=worker@beacon');
+      setWord(fx, 'team', 'router.aliases', 'mirror=lead@beacon');
       const read = readMailboxRouterPolicy(fx.root, fx.home, NOW);
       expect(read.ok).toBe(true);
       if (!read.ok) return;
       expect(read.policy.routes).toEqual([
-        { alias: 'iris', address: 'iris@floor', fallback: null },
-        { alias: 'atlas', address: 'zeus@floor', fallback: 'iris@floor' },
-        { alias: 'zeus', address: 'architect@floor', fallback: null },
+        { alias: 'lead', address: 'lead@beacon', fallback: null },
+        { alias: 'worker', address: 'worker@beacon', fallback: null },
+        { alias: 'mirror', address: 'lead@beacon', fallback: null },
       ]);
     } finally {
       fx.cleanup();
@@ -263,21 +264,21 @@ describe('the mailbox router policy words', () => {
   test('an entity word names a team of the entity, never one outside it', () => {
     const fx = makeFixture();
     try {
-      setWord(fx, 'entity', 'router.aliases', 'pal=iris@foreign');
+      setWord(fx, 'entity', 'router.aliases', 'pal=helper@foreign');
       const read = readMailboxRouterPolicy(fx.root, fx.home, NOW);
       expect(read.ok).toBe(false);
       if (read.ok) return;
-      expect(read.why).toBe('router alias "pal" names "iris@foreign", which is not a team of this entity');
+      expect(read.why).toBe('router alias "pal" names "helper@foreign", which is not a team of this entity');
     } finally {
       fx.cleanup();
     }
     const fx2 = makeFixture();
     try {
-      setWord(fx2, 'entity', 'router.fallback', 'atlas=iris@foreign');
+      setWord(fx2, 'entity', 'router.fallback', 'lead=helper@foreign');
       const moved = readMailboxRouterPolicy(fx2.root, fx2.home, NOW);
       expect(moved.ok).toBe(false);
       if (moved.ok) return;
-      expect(moved.why).toBe('router fallback for "atlas" names "iris@foreign", which is not a team of this entity');
+      expect(moved.why).toBe('router fallback for "lead" names "helper@foreign", which is not a team of this entity');
     } finally {
       fx2.cleanup();
     }
@@ -291,9 +292,6 @@ describe('the mailbox router policy words', () => {
       expect(read.ok).toBe(true);
       if (!read.ok) return;
       expect(read.policy.routes).toEqual([
-        { alias: 'iris', address: 'iris@floor', fallback: null },
-        { alias: 'atlas', address: 'orchestrator@floor', fallback: 'iris@floor' },
-        { alias: 'zeus', address: 'architect@floor', fallback: null },
         { alias: 'mirror', address: 'lead@beacon', fallback: null },
       ]);
     } finally {
@@ -328,14 +326,13 @@ describe('the mailbox router policy words', () => {
   test('a team word that re-declares an entity alias at the same address changes nothing', () => {
     const fx = makeFixture();
     try {
-      setWord(fx, 'team', 'router.aliases', 'atlas=orchestrator@floor');
+      setWord(fx, 'entity', 'router.aliases', 'lead=lead@beacon');
+      setWord(fx, 'team', 'router.aliases', 'lead=lead@beacon');
       const read = readMailboxRouterPolicy(fx.root, fx.home, NOW);
       expect(read.ok).toBe(true);
       if (!read.ok) return;
       expect(read.policy.routes).toEqual([
-        { alias: 'iris', address: 'iris@floor', fallback: null },
-        { alias: 'atlas', address: 'orchestrator@floor', fallback: 'iris@floor' },
-        { alias: 'zeus', address: 'architect@floor', fallback: null },
+        { alias: 'lead', address: 'lead@beacon', fallback: null },
       ]);
     } finally {
       fx.cleanup();
@@ -346,17 +343,18 @@ describe('the mailbox router policy words', () => {
     const fx = makeFixture();
     try {
       // The write lands (the plan checks the value, not the chain); the load refuses it.
-      setWord(fx, 'team', 'router.aliases', 'atlas=iris@floor');
+      setWord(fx, 'entity', 'router.aliases', 'lead=lead@beacon');
+      setWord(fx, 'team', 'router.aliases', 'lead=worker@beacon');
       const read = readMailboxRouterPolicy(fx.root, fx.home, NOW);
       expect(read.ok).toBe(false);
       if (read.ok) return;
-      expect(read.why).toBe('router alias "atlas" is set by the entity; a team may add an alias, never retarget one');
+      expect(read.why).toBe('router alias "lead" is set by the entity; a team may add an alias, never retarget one');
 
       const atLoad = resolvePolicy(
         'router.aliases',
         [
-          { name: 'router.aliases', level: 'entity', value: 'atlas=orchestrator@floor', kind: 'advised', setter: 'owner', date: NOW.toISOString(), expiry: null, signature: 'x', target: 'floor', generation: 1 },
-          { name: 'router.aliases', level: 'team', value: 'atlas=iris@floor', kind: 'advised', setter: 'owner', date: NOW.toISOString(), expiry: null, signature: 'x', target: 'beacon', generation: 2 },
+          { name: 'router.aliases', level: 'entity', value: 'lead=lead@beacon', kind: 'advised', setter: 'owner', date: NOW.toISOString(), expiry: null, signature: 'x', target: 'floor', generation: 1 },
+          { name: 'router.aliases', level: 'team', value: 'lead=worker@beacon', kind: 'advised', setter: 'owner', date: NOW.toISOString(), expiry: null, signature: 'x', target: 'beacon', generation: 2 },
         ],
         { now: NOW },
       );
@@ -387,19 +385,19 @@ describe('the mailbox router policy words', () => {
   test('an alias with no address is refused with a named error, at write and at load', () => {
     const fx = makeFixture();
     try {
-      const empty = planWord(fx, 'entity', 'router.aliases', 'iris=');
+      const empty = planWord(fx, 'entity', 'router.aliases', 'helper=');
       expect(empty.ok).toBe(false);
       if (empty.ok) return;
-      expect(empty.why).toBe('entity: router alias "iris" has no address');
+      expect(empty.why).toBe('entity: router alias "helper" has no address');
 
-      const bare = planWord(fx, 'entity', 'router.aliases', 'iris');
+      const bare = planWord(fx, 'entity', 'router.aliases', 'helper');
       expect(bare.ok).toBe(false);
       if (bare.ok) return;
-      expect(bare.why).toBe('entity: router alias "iris" has no address');
+      expect(bare.why).toBe('entity: router alias "helper" has no address');
 
       const atLoad = resolvePolicy(
         'router.aliases',
-        [{ name: 'router.aliases', level: 'entity', value: 'iris', kind: 'advised', setter: 'owner', date: NOW.toISOString(), expiry: null, signature: 'x', target: 'floor', generation: 1 }],
+        [{ name: 'router.aliases', level: 'entity', value: 'helper', kind: 'advised', setter: 'owner', date: NOW.toISOString(), expiry: null, signature: 'x', target: 'floor', generation: 1 }],
         { now: NOW },
       );
       expect(atLoad.ok).toBe(false);
@@ -407,7 +405,7 @@ describe('the mailbox router policy words', () => {
       const refusal = atLoad.refusals[0];
       expect(refusal?.kind).toBe('invalid-policy');
       if (refusal?.kind !== 'invalid-policy') return;
-      expect(refusal.why).toBe('router alias "iris" has no address');
+      expect(refusal.why).toBe('router alias "helper" has no address');
     } finally {
       fx.cleanup();
     }
@@ -452,10 +450,10 @@ describe('the mailbox router policy words', () => {
   test('a duplicated alias inside one word is refused', () => {
     const fx = makeFixture();
     try {
-      const plan = planWord(fx, 'entity', 'router.aliases', 'iris=iris@floor,iris=helper@floor');
+      const plan = planWord(fx, 'entity', 'router.aliases', 'helper=helper@beacon,helper=lead@beacon');
       expect(plan.ok).toBe(false);
       if (plan.ok) return;
-      expect(plan.why).toBe('entity: router alias "iris" is named twice in one word');
+      expect(plan.why).toBe('entity: router alias "helper" is named twice in one word');
     } finally {
       fx.cleanup();
     }
@@ -464,21 +462,23 @@ describe('the mailbox router policy words', () => {
   test('an entity fallback word may change or clear an entity alias\'s fallback', () => {
     const fx = makeFixture();
     try {
-      setWord(fx, 'entity', 'router.fallback', 'atlas=zeus@floor');
+      setWord(fx, 'entity', 'router.aliases', 'lead=lead@beacon');
+      setWord(fx, 'entity', 'router.fallback', 'lead=worker@beacon');
       const moved = readMailboxRouterPolicy(fx.root, fx.home, NOW);
       expect(moved.ok).toBe(true);
       if (!moved.ok) return;
-      expect(moved.policy.routes.find((r) => r.alias === 'atlas')?.fallback).toBe('zeus@floor');
+      expect(moved.policy.routes.find((r) => r.alias === 'lead')?.fallback).toBe('worker@beacon');
     } finally {
       fx.cleanup();
     }
     const fx2 = makeFixture();
     try {
-      setWord(fx2, 'entity', 'router.fallback', 'atlas=none');
+      setWord(fx2, 'entity', 'router.aliases', 'lead=lead@beacon');
+      setWord(fx2, 'entity', 'router.fallback', 'lead=none');
       const cleared = readMailboxRouterPolicy(fx2.root, fx2.home, NOW);
       expect(cleared.ok).toBe(true);
       if (!cleared.ok) return;
-      expect(cleared.policy.routes.find((r) => r.alias === 'atlas')?.fallback).toBeNull();
+      expect(cleared.policy.routes.find((r) => r.alias === 'lead')?.fallback).toBeNull();
     } finally {
       fx2.cleanup();
     }
@@ -487,10 +487,10 @@ describe('the mailbox router policy words', () => {
   test('a fallback that names the alias itself is refused with a named error', () => {
     const fx = makeFixture();
     try {
-      const plan = planWord(fx, 'entity', 'router.fallback', 'atlas=atlas');
+      const plan = planWord(fx, 'entity', 'router.fallback', 'lead=lead');
       expect(plan.ok).toBe(false);
       if (plan.ok) return;
-      expect(plan.why).toBe('entity: router fallback for "atlas" names the alias itself');
+      expect(plan.why).toBe('entity: router fallback for "lead" names the alias itself');
     } finally {
       fx.cleanup();
     }
@@ -499,11 +499,12 @@ describe('the mailbox router policy words', () => {
   test('a fallback that names the route\'s own address is a self-loop the reader refuses', () => {
     const fx = makeFixture();
     try {
-      setWord(fx, 'entity', 'router.fallback', 'atlas=orchestrator@floor');
+      setWord(fx, 'entity', 'router.aliases', 'lead=lead@beacon');
+      setWord(fx, 'entity', 'router.fallback', 'lead=lead@beacon');
       const read = readMailboxRouterPolicy(fx.root, fx.home, NOW);
       expect(read.ok).toBe(false);
       if (read.ok) return;
-      expect(read.why).toBe('router fallback for "atlas" names the route itself (orchestrator@floor)');
+      expect(read.why).toBe('router fallback for "lead" names the route itself (lead@beacon)');
     } finally {
       fx.cleanup();
     }
@@ -512,11 +513,12 @@ describe('the mailbox router policy words', () => {
   test('a team level may not change or clear an entity alias\'s fallback', () => {
     const fx = makeFixture();
     try {
-      setWord(fx, 'team', 'router.fallback', 'atlas=lead@beacon');
+      setWord(fx, 'entity', 'router.aliases', 'lead=lead@beacon');
+      setWord(fx, 'team', 'router.fallback', 'lead=worker@beacon');
       const read = readMailboxRouterPolicy(fx.root, fx.home, NOW);
       expect(read.ok).toBe(false);
       if (read.ok) return;
-      expect(read.why).toBe('router fallback for "atlas" belongs to the entity; only the entity level may change or clear it');
+      expect(read.why).toBe('router fallback for "lead" belongs to the entity; only the entity level may change or clear it');
     } finally {
       fx.cleanup();
     }
@@ -557,7 +559,7 @@ describe('the mailbox router policy words', () => {
   test('a fallback naming an alias no map holds is refused', () => {
     const fx = makeFixture();
     try {
-      setWord(fx, 'entity', 'router.fallback', 'ghost=iris@floor');
+      setWord(fx, 'entity', 'router.fallback', 'ghost=lead@beacon');
       const read = readMailboxRouterPolicy(fx.root, fx.home, NOW);
       expect(read.ok).toBe(false);
       if (read.ok) return;
@@ -614,28 +616,29 @@ describe('the mailbox router policy words', () => {
 
   test('mailboxRouterPolicyProblem names a route that broke its final shape', () => {
     expect(mailboxRouterPolicyProblem([
-      { alias: 'iris', address: 'iris@floor', fallback: null },
-      { alias: 'iris', address: 'helper@floor', fallback: null },
-    ])).toBe('router alias "iris" is named twice');
+      { alias: 'helper', address: 'helper@acme', fallback: null },
+      { alias: 'helper', address: 'lead@acme', fallback: null },
+    ])).toBe('router alias "helper" is named twice');
 
     expect(mailboxRouterPolicyProblem([
       { alias: 'shadow', address: 'desk@beacon', fallback: null },
     ])).toBe('router alias "shadow" targets the desk seat, which no alias may name');
 
     expect(mailboxRouterPolicyProblem([
-      { alias: 'atlas', address: 'orchestrator@floor', fallback: 'orchestrator@floor' },
-    ])).toBe('router fallback for "atlas" names the route itself (orchestrator@floor)');
+      { alias: 'lead', address: 'lead@acme', fallback: 'lead@acme' },
+    ])).toBe('router fallback for "lead" names the route itself (lead@acme)');
 
     expect(mailboxRouterPolicyProblem([
-      { alias: 'iris', address: 'iris@floor', fallback: null },
-      { alias: 'atlas', address: 'orchestrator@floor', fallback: 'iris@floor' },
+      { alias: 'helper', address: 'helper@acme', fallback: null },
+      { alias: 'lead', address: 'lead@acme', fallback: 'helper@acme' },
     ])).toBeNull();
   });
 
   test('team check names a router word the load refuses', () => {
     const fx = makeFixture();
     try {
-      setWord(fx, 'team', 'router.aliases', 'atlas=iris@floor');
+      setWord(fx, 'entity', 'router.aliases', 'lead=lead@beacon');
+      setWord(fx, 'team', 'router.aliases', 'lead=worker@beacon');
       const io = testIo(fx.root, { kind: 'owner' });
       const code = runTeamCheck({ file: '.agents/team.yaml' }, io, {
         live: () => QUIET_LIVE,
@@ -645,7 +648,7 @@ describe('the mailbox router policy words', () => {
         home: fx.home,
       });
       expect(code, io.err).toBe(1);
-      expect(io.out).toContain('difference: router alias "atlas" is set by the entity');
+      expect(io.out).toContain('difference: router alias "lead" is set by the entity');
       expect(io.out).toContain('  repair: team policy unset team router.aliases');
     } finally {
       fx.cleanup();
