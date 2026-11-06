@@ -898,6 +898,7 @@
     "test/restart-resume-pin.test.ts": 2,
     "test/restart.test.ts": 5,
     "test/restore-abort-hardening-independent.test.ts": 3,
+    "test/restore-far-spinner-independent.test.ts": 0,
     "test/restore-summary-contract.test.ts": 2,
     "test/restore-swapfree-carried.test.ts": 0,
     "test/restored-codex-continuity.test.ts": 3,

@@ -163,7 +163,7 @@ describe('the Grok typed wake: the profile’s own screens gate the keys', () =>
     const frame = lines.findLastIndex((line) => line.includes('╭'));
     lines[frame - 12] = '   ⠸ Waiting for response…        16s ⇣20.7k [stop]';
     const stale = lines.join('\n');
-    expect(readScreen('grok', stale).kind).toBe('idle');
+    expect(readScreen('grok', stale, { working: 'cluster' }).kind).toBe('idle');
     const idlePane = wakeFake(() => stale);
     const woken = await deliverTypedWake(idlePane.host, 'pane-1', LINE, 'grok', FAST);
     expect(woken.delivered).toBe(false);

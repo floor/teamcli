@@ -32,6 +32,13 @@ export type ScreenOptions = {
   cwd?: string | null;
   home?: string;
   clock?: ReadClock;
+  /**
+   * Where a working phrase counts. `anywhere` (the default) means a phrase on any row is a
+   * live turn, so a path that closes, relaunches, or skips a seat as idle never reads a
+   * leftover spinner as the previous turn. `cluster` is the wake's reading only: a phrase
+   * more than eight rows above an empty idle prompt is that previous turn.
+   */
+  working?: 'anywhere' | 'cluster';
 };
 
 function screenClock(options?: ScreenOptions | ReadClock): ReadClock | undefined {
@@ -48,6 +55,12 @@ function screenExpectedCwd(options?: ScreenOptions | ReadClock): string | null |
 function screenHome(options?: ScreenOptions | ReadClock): string | undefined {
   if (!options || 'now' in options || 'budgetMs' in options) return undefined;
   return options.home;
+}
+
+/** The wake asks for the eight-row cluster. Every other read counts a working phrase anywhere. */
+function screenWorking(options?: ScreenOptions | ReadClock): 'anywhere' | 'cluster' {
+  if (!options || 'now' in options || 'budgetMs' in options) return 'anywhere';
+  return options.working ?? 'anywhere';
 }
 
 /**
@@ -393,6 +406,7 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
     const clock = screenClock(clockOrOptions);
     const expectedCwd = screenExpectedCwd(clockOrOptions);
     const home = screenHome(clockOrOptions);
+    const working = screenWorking(clockOrOptions);
     const now = clock?.now ?? Date.now;
     const budget = clock?.budgetMs ?? BUDGET_MS;
     const start = now();
@@ -445,9 +459,15 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
           // elsewhere on the pane cannot date a wall it does not belong to.
           if (hit) {
             // A working rule matches a spinner or an interrupt hint on any row of the window,
-            // and this stage runs before the composer. When the box is an empty idle prompt
-            // and that row sits above the live cluster, the match is the previous turn.
-            if (name === 'working' && staleWorkingAboveIdle(data, plain, lines, tick, expectedCwd, home)) continue;
+            // and this stage runs before the composer. The wake's cluster reading treats a
+            // match above that cluster, over an empty idle prompt, as the previous turn.
+            // Every other read keeps it: a phrase anywhere on the pane is a live turn, and
+            // a close, relaunch, or skip-as-idle must not take the seat.
+            if (
+              name === 'working'
+              && working === 'cluster'
+              && staleWorkingAboveIdle(data, plain, lines, tick, expectedCwd, home)
+            ) continue;
             const block = rule.atComposer ? edge([...(rule.any ?? []), ...(rule.all ?? [])]) : null;
             return asScreen(kind, plain, block === null ? undefined : new Set(block), rule.reason ?? stage.reason);
           }
