@@ -52,6 +52,7 @@ function fixture(): { root: string; home: string } {
   const store = storePath(loaded.team.project, loaded.root, home);
   mkdirSync(store, { recursive: true });
   const record = { ...approvalOf(loaded.team, loaded.root, NOW), format: 1 as const, file: YAML };
+  delete record.lead;
   writeFileSync(join(store, 'approval.json'), `${JSON.stringify(record, null, 2)}\n`);
   return { root, home };
 }

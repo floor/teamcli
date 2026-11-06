@@ -420,6 +420,7 @@ function plantLegacy(fixture: Fixture): void {
   const store = storePath(loaded.team.project, loaded.root, fixture.home);
   mkdirSync(store, { recursive: true });
   const record = { ...approvalOf(loaded.team, loaded.root, NOW), format: 1 as const, file: TEAM_YAML };
+  delete record.lead;
   writeFileSync(join(store, 'approval.json'), `${JSON.stringify(record, null, 2)}\n`);
 }
 

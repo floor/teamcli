@@ -124,6 +124,7 @@ function plantLegacy(fixture: Fixture): { store: string; approval: string; bytes
   const read = loaded(fixture);
   const store = storeOf(fixture);
   const record = { ...approvalOf(read.team, read.root, NOW), format: 1 as const, file: STORED_COPY };
+  delete record.lead;
   const bytes = `${JSON.stringify(record, null, 2)}\n`;
   const approval = join(store, 'approval.json');
   writeFileSync(approval, bytes);

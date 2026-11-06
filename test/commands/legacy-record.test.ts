@@ -64,10 +64,9 @@ function legacy(): void {
   const loaded = loadTeamFile(root, { home });
   if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
   mkdirSync(store(), { recursive: true });
-  writeFileSync(
-    join(store(), 'approval.json'),
-    `${JSON.stringify({ ...approvalOf(loaded.team, loaded.root, NOW), format: 1, file: example }, null, 2)}\n`,
-  );
+  const record = { ...approvalOf(loaded.team, loaded.root, NOW), format: 1 as const, file: example };
+  delete record.lead;
+  writeFileSync(join(store(), 'approval.json'), `${JSON.stringify(record, null, 2)}\n`);
 }
 
 /** Approves as the owner would, signing the record. */
