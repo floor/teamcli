@@ -251,6 +251,16 @@ test('an owner send names its own record id, not the entity’s owner-reply targ
   const made = world(null);
   cleanup = made.cleanup;
   declareEntity(made, 'acme-corp');
+  // The address's team word is this team's own project name, registered so the write passes the
+  // write-time registry check; the scene is about the frame's reader line, not the policy store.
+  upsertTeam(made.home, teamIdOf(made.root), {
+    project: 'acme',
+    entity: 'acme-corp',
+    session: 'acme',
+    root: made.root,
+    roster: [],
+    at: NOW.toISOString(),
+  });
   setOwnerReply(made, 'acme-corp', 'coordinator@acme');
   declare(made, 'accept');
   const frames: string[] = [];

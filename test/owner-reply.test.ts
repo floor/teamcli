@@ -22,6 +22,7 @@ import {
   ownerReplyToValueProblem,
   parseOwnerReplyToValue,
 } from '../src/settings/owner-reply.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { keyOf, signDomain } from '../src/store/keys.ts';
 
 const NOW = new Date('2026-10-19T12:00:00Z');
@@ -66,6 +67,18 @@ function world(entity: string | null = 'floor'): { home: string; root: string } 
   const lobby = entity === null ? lobbyDir(home) : resolveLobby(home, { entity });
   mkdirSync(lobby, { recursive: true });
   writeFileSync(join(root, '.agents/team.yaml'), teamText(root, lobby, entity));
+  // A team that names an entity is registered under that entity, so an `owner-reply-to` address
+  // whose `@team` is the entity word passes the write-time registry check.
+  if (entity !== null) {
+    upsertTeam(home, teamIdOf(root), {
+      project: entity,
+      entity,
+      session: entity,
+      root,
+      roster: [],
+      at: NOW.toISOString(),
+    });
+  }
   return { home, root };
 }
 
