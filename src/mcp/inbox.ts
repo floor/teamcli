@@ -869,7 +869,7 @@ export function readMessage(
 }
 
 /**
- * Reads one message for a peek: the same verification a read makes, and the body, with nothing
+ * Reads one message for a peek: the same verification a read makes, and the same attributed body, with nothing
  * written. No receipt is published, so the message stays unread and the seat's own read still
  * serves it; a read or replied receipt an earlier reader left is not consulted, because a peek
  * neither consumes the message nor claims anything about it. This is how the owner and a lead
@@ -883,7 +883,16 @@ export function peekMessage(target: InboxTarget, id: string, home: string, brief
   }
   const opened = openInboxMessage(target, id, home, brief);
   if (!opened.ok) return opened;
-  return { ok: true, body: opened.payload.body };
+  const payload = opened.payload;
+  return {
+    ok: true,
+    body: attributedBody(payload.body, payload.from, {
+      record: payload,
+      home,
+      root: target.root,
+      rule: payload.rule,
+    }),
+  };
 }
 
 /**
