@@ -280,6 +280,47 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     expect(reads.map((record) => record.payload.record_id)).not.toContain('drop-11:read');
   });
 
+  test('an unsigned receipt raises no read step, least of all a clearance', () => {
+    // A `.read.json` beside a drop is a signed envelope in this build. An unsigned plant whose
+    // bytes this checkout's key never signed proves nothing by its name: it must leave no
+    // clearance some lead wrote, and no read step either, exactly as the settle side reads the
+    // same file.
+    const { root, home } = makeScratch();
+    const seatDir = join(root, '.agents', 'send-drops', 'acme', 'worker-1');
+    mkdirSync(seatDir, { recursive: true });
+    dropRecord({ root, home }, 'worker-1', 'drop-12');
+    dropRecord({ root, home }, 'worker-1', 'drop-13');
+    const forged = (id: string, readBy: string | undefined): string => JSON.stringify({
+      payload: {
+        kind: 'receipt',
+        status: 'read',
+        id,
+        to: 'worker-1',
+        root,
+        session: 'acme',
+        at: '2026-10-18T12:05:00.000Z',
+        ...(readBy === undefined ? {} : { read_by: readBy }),
+      },
+    }, null, 2);
+    writeFileSync(join(seatDir, 'drop-12.read.json'), `${forged('drop-12', 'lead-ack:clerk')}\n`);
+    writeFileSync(join(seatDir, 'drop-13.read.json'), `${forged('drop-13', undefined)}\n`);
+
+    const pass = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      now: new Date('2026-10-18T12:10:00.000Z'),
+    });
+    expect(pass.ok).toBe(true);
+    if (!pass.ok) return;
+    const reads = pass.raised
+      .filter((record) => record.payload.kind === 'message.read')
+      .map((record) => record.payload.record_id);
+    expect(reads).not.toContain('drop-12:read');
+    expect(reads).not.toContain('drop-13:read');
+  });
+
   test('a pass verifies the whole log once, then only the events appended since its last read', () => {
     const { root, home } = makeScratch();
     for (const id of ['seed-1', 'seed-2', 'seed-3']) {

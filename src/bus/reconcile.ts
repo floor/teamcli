@@ -45,7 +45,7 @@ import { markOrphanedSeats } from '../registry/sync.ts';
 import { machineSettingsPath } from '../settings/declared.ts';
 import { HISTORY_KEPT, readHistorySteps, type HistoryEntry } from '../send/history.ts';
 import type { PendingDrop } from '../send/pending.ts';
-import { leadAckActorOf } from '../send/record.ts';
+import { leadAckActorOf, readVerifiedReceipt } from '../send/record.ts';
 import { readState } from '../state.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { compareSeatNames } from '../seat-names.ts';
@@ -151,6 +151,8 @@ type ReceiptEntry = {
   receipt: 'delivered' | 'read' | 'replied';
   id: string;
   at: string;
+  /** A `.read.json` whose envelope this checkout's key did not sign: it raises no step. */
+  unverified?: true;
   /** The lead or owner a lead-ack read receipt names: the step is a clearance, not a seat read. */
   clearedBy?: string;
 };
@@ -329,25 +331,6 @@ function receiptOf(file: string): { receipt: 'delivered' | 'read' | 'replied'; i
     }
   }
   return null;
-}
-
-/** The actor a lead-ack read receipt names, when the file carries one: the one note the receipt
- *  scan takes from a receipt's bytes, since the step must never present a clearance as a read.
- *  The name still decides that a receipt was raised — as it always has — so an unreadable or
- *  forged file raises the same step, only without the note. */
-function leadAckActorAt(path: string): string | null {
-  if (!path.endsWith('.read.json')) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(path, 'utf8'));
-  } catch {
-    return null;
-  }
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-  const payload = (parsed as { payload?: unknown }).payload;
-  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return null;
-  const readBy = (payload as { read_by?: unknown }).read_by;
-  return typeof readBy === 'string' ? leadAckActorOf(readBy) : null;
 }
 
 function fileStampOf(path: string): { stamp: string; mtimeIso: string; size: number } | null {
@@ -939,17 +922,31 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
             yield;
             continue;
           }
-          const clearedBy = receipt.receipt === 'read' ? leadAckActorAt(fullPath) : null;
+          // A `.read.json` receipt is a signed envelope in this build, and its name alone proves
+          // nothing. Verify it exactly as the settle side does before reading `read_by`: a file
+          // this checkout's key never signed is no read, so it raises no step and no clearance.
+          const signed = receipt.receipt === 'read' && file.endsWith('.read.json') && keyState.kind === 'key'
+            ? readVerifiedReceipt(fullPath, receipt.id, 'read', { to: seat, root, session }, keyState.key)
+            : null;
+          const unverified = receipt.receipt === 'read' && file.endsWith('.read.json') && signed === null;
+          const clearedBy = signed === null ? null : leadAckActorOf(signed.payload.read_by);
           entry = {
             kind: 'receipt',
             receipt: receipt.receipt,
             id: receipt.id,
             at: fresh.mtimeIso,
+            ...(unverified ? { unverified: true as const } : {}),
             ...(clearedBy === null ? {} : { clearedBy }),
           };
           storeEntry(state, seatDir, file, fresh.stamp, entry);
         } else {
           stats.filesReused += 1;
+        }
+        // An unverified read receipt raises nothing: neither the read its name claims nor the
+        // clearance its unsigned bytes name.
+        if (entry.unverified === true) {
+          yield;
+          continue;
         }
         // A lead-ack receipt settles only when it names the owner or this team's lead. The
         // receipt is signed with the shared message key every seat holds, so its `read_by` name
