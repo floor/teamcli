@@ -802,6 +802,7 @@
     "test/public-name-policy.test.ts": 1,
     "test/public-names-check.test.ts": 1,
     "test/public-only.test.ts": 2,
+    "test/publication-gate-null-recipient-independent.test.ts": 4,
     "test/question-answer.test.ts": 5,
     "test/queue-status-watch.test.ts": 3,
     "test/queue.test.ts": 5,
