@@ -1,6 +1,6 @@
 // A fake rejected stream past the cap. No signal is installed and no live seat is touched.
 import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { capRejected, STATUS_REJECTED_CAP, sweepNonId } from '../src/daemon/presence/native-feed.ts';
@@ -86,6 +86,33 @@ test('empty planted directories are removed without recursion or following links
     expect(existsSync(join(spool, 'linked'))).toBe(false);
     expect(readFileSync(join(populated, 'inside'), 'utf8')).toBe('keep inside\n');
     expect(readFileSync(outside, 'utf8')).toBe('keep outside\n');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('persistent directories do not starve junk behind the per-pass budget', () => {
+  const root = mkdtempSync(join(tmpdir(), 'status-sweep-fairness-'));
+  try {
+    const spool = join(root, 'spool');
+    mkdirSync(spool, { mode: 0o700 });
+    // Choose the layout from this filesystem's entry order rather than assuming sorted names.
+    for (let i = 0; i < 1_124; i += 1) mkdirSync(join(spool, `entry-${String(i).padStart(4, '0')}`));
+    const names = readdirSync(spool);
+    const persistent = new Set(names.slice(0, 1_100));
+    const junk = names.slice(1_100);
+    for (const name of persistent) writeFileSync(join(spool, name, 'inside'), 'keep inside\n');
+    for (const name of junk) {
+      rmdirSync(join(spool, name));
+      writeFileSync(join(spool, name), 'junk\n');
+    }
+    expect(readdirSync(spool).slice(0, 1_024).every(name => persistent.has(name))).toBe(true);
+    let removed = 0;
+    for (let pass = 0; pass < 4; pass += 1) removed = sweepNonId(root, spool);
+    expect(removed).toBe(junk.length);
+    expect(junk.every(name => !existsSync(join(spool, name)))).toBe(true);
+    expect(readdirSync(spool)).toHaveLength(1_100);
+    expect(readFileSync(join(spool, names[0]!, 'inside'), 'utf8')).toBe('keep inside\n');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
