@@ -4,6 +4,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../../src/approve/approval.ts';
+import { legacyApprovalRecord } from '../legacy-approval.ts';
 import { runAdd, type AddSources } from '../../src/commands/add.ts';
 import { runApprove, type ApproveSources } from '../../src/approve/command.ts';
 import { loadConfig } from '../../src/commands/check.ts';
@@ -2229,8 +2230,7 @@ describe('the upgrade from 0.2.1', () => {
     if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
     const store = storePath(loaded.team.project, loaded.root, home);
     mkdirSync(store, { recursive: true });
-    const record = { ...approvalOf(loaded.team, loaded.root), format: 1 as const, file: text };
-    delete record.lead;
+    const record = legacyApprovalRecord(loaded.team, loaded.root, text);
     writeFileSync(join(store, 'approval.json'), JSON.stringify(record));
   }
 

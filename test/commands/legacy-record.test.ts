@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../../src/approve/approval.ts';
+import { legacyApprovalRecord } from '../legacy-approval.ts';
 import type { Caller } from '../../src/caller.ts';
 import { runAdd, type AddSources } from '../../src/commands/add.ts';
 import { runDoctor, type DoctorSources } from '../../src/commands/doctor.ts';
@@ -64,8 +65,7 @@ function legacy(): void {
   const loaded = loadTeamFile(root, { home });
   if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
   mkdirSync(store(), { recursive: true });
-  const record = { ...approvalOf(loaded.team, loaded.root, NOW), format: 1 as const, file: example };
-  delete record.lead;
+  const record = legacyApprovalRecord(loaded.team, loaded.root, example, NOW);
   writeFileSync(join(store(), 'approval.json'), `${JSON.stringify(record, null, 2)}\n`);
 }
 
