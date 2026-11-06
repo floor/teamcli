@@ -101,6 +101,15 @@ describe('delivery_order', () => {
     expect(resolved.refused).toEqual([]);
   });
 
+  test('a word that is only the retired mcp-inbox name is the drop leg, never a typed wake', () => {
+    expect(deliveryOrder({ seat: ['mcp-inbox'] })).toEqual(['drop']);
+    expect(deliveryOrder({ team: ['mcp-inbox'], seat: ['mcp-inbox'] })).toEqual(['drop']);
+    const resolved = resolveOrderSetting(DELIVERY_ORDER, orderDeclarationsOf(liveOrderRecord({ seat: ['mcp-inbox'] })));
+    expect(resolved.value).not.toContain('typed');
+    expect(resolved.value).toEqual(['drop']);
+    expect(resolved.source).toBe('seat');
+  });
+
   test('drop is in the default order, so a level may name it first', () => {
     expect(DELIVERY_ORDER.fallback).toContain('drop');
     expect(deliveryOrder({ seat: ['drop'] })).toEqual(['drop']);

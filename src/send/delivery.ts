@@ -29,19 +29,20 @@ import { deliveryOrder } from '../settings/resolve.ts';
 /**
  * A chain as the levels that declare an order; a level left out declares nothing. What a level
  * holds is live legs only: the retired `mcp-inbox` alias is dropped before the chain is built
- * (`liveWordOf`), and a level whose word held only aliases is left out entirely — never an
- * empty word, which would read as a declaration and silence the seat's own shape and every
- * implied first leg. The word an older build wrote still reads in the files and records the
- * chain is built from; only the chain itself never carries it.
+ * (`liveWordOf`). A level whose word held only that name is `drop`, the mailbox, so the seat's
+ * shape cannot fill the gap with a typed wake. An empty word is still left out. The word an
+ * older build wrote still reads in the files; the chain never carries the retired name.
  */
 export type DeliveryChain = Partial<Record<SettingLevel, readonly OrderWord[] | undefined>>;
 
-/** One level's word with the retired alias names dropped: `undefined` when the word is absent
- *  or held only aliases, so the level declares nothing wherever the word is used. */
+/** One level's word with the retired alias names dropped. A word that is only the retired name
+ *  is `drop`, so the level is a mailbox and not an absent word the shape would replace with a
+ *  typed wake. `undefined` when the word is absent. */
 function liveWordOf(words: readonly OrderWord[] | null | undefined): readonly DeliveryLeg[] | undefined {
   if (words === undefined || words === null) return undefined;
   const legs = liveOrderWords(words);
-  return legs.length > 0 ? legs : undefined;
+  if (legs.length > 0) return legs;
+  return words.length > 0 ? ['drop'] : undefined;
 }
 
 /**
@@ -147,9 +148,9 @@ export function deliveryChainOf(input: {
 /**
  * One level's signed `delivery-order` word. `undefined` means the level holds no signed record —
  * the legacy word, when it has one, still applies. `null` means it holds one but no word stands:
- * every declaration it holds is expired, a value the catalogue cannot read, or a word whose
- * every name is the retired alias, so the level is silent and the legacy word it shadows does
- * not come back.
+ * every declaration it holds is expired or a value the catalogue cannot read, so the level is
+ * silent and the legacy word it shadows does not come back. A word whose every name is the
+ * retired alias is `drop`: the record still shadows the legacy word, and the walk does not type.
  */
 function signedOrderOf(source: PolicySourceRead | null, now: Date): readonly DeliveryLeg[] | null | undefined {
   if (source === null || !source.ok) return undefined;
@@ -164,9 +165,10 @@ function signedOrderOf(source: PolicySourceRead | null, now: Date): readonly Del
     held = true;
     if (expiredPolicy(policy, now)) continue;
     const parsed = spec?.parseValue(policy.value) as readonly DeliveryLeg[] | null | undefined;
-    // An alias-only signed word declares nothing, but its record still shadows the level's
-    // legacy word: the level is silent (null), never an empty word.
+    // An alias-only signed word is the mailbox. The record still shadows the level's legacy
+    // word, and the walk is drop rather than the typed fallback.
     if (parsed && parsed.length > 0) word = parsed;
+    else if (Array.isArray(parsed) && parsed.length === 0) word = ['drop'];
   }
   if (!held) return undefined;
   return word ?? null;
@@ -193,8 +195,8 @@ function expiredPolicy(policy: Policy, now: Date): boolean {
  * The watcherless shape is read off the chain the wider levels resolve, less the drop leg: the
  * shape says only that this seat reads no drop file, never that a channel leg a word declares is
  * unreachable. Under the default (`typed`, `drop`) the shape is `typed` alone; a team word such
- * as `[socket, typed]` keeps its socket, and a retired `mcp-inbox` word changes nothing — it is
- * dropped before the resolver and the walk never sees it (`src/settings/inherit.ts`).
+ * as `[socket, typed]` keeps its socket. A word that is only the retired `mcp-inbox` name is
+ * already `drop` before this shape is asked (`liveWordOf`), so the shape never types for it.
  */
 function seatDefault(seat: Seat | undefined, wider: DeliveryChain): readonly DeliveryLeg[] | undefined {
   if (seat === undefined) return undefined;

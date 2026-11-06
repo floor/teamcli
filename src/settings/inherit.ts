@@ -301,8 +301,8 @@ export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'typed
  * is an alias that is simply dropped from every parsed order (`src/policy/types.ts`) — reading
  * it is never an error, `team check` names it for removal once per team and seat
  * (`src/check/team.ts`), and writing it anew through `team config` is refused with that reason.
- * The model keeps the word only so the note can see it; every walk and every resolver filters
- * it out with `liveOrderWords`.
+ * The model keeps the word only so the note can see it. A walk filters it out with
+ * `liveOrderWords`; a word that names nothing else resolves to `drop`, never to the typed fallback.
  */
 export type OrderWord = DeliveryLeg | 'mcp-inbox';
 
@@ -315,10 +315,12 @@ export function liveOrderWords(words: readonly OrderWord[]): DeliveryLeg[] {
 }
 
 /**
- * A declared-order record with the retired alias words dropped, ready for the resolver: a level
- * whose word is aliases only declares NOTHING here — it is left out entirely, not passed as an
- * empty word, because an empty word is a set-aside the resolver would report. A level whose word
- * mixes the alias with live legs keeps those legs, exactly as the alias had never been written.
+ * A declared-order record with the retired alias words dropped, ready for the resolver. A level
+ * whose word is only the retired name is `drop`: the mailbox the inbox reader was, which types
+ * nothing. Leaving that level out would make the chain declare nothing and the fallback would
+ * type into the seat. An empty word is still left out, because an empty word is a set-aside the
+ * resolver would report. A level whose word mixes the alias with live legs keeps those legs,
+ * exactly as the alias had never been written.
  */
 export function liveOrderRecord(
   declared: Partial<Record<SettingLevel, readonly OrderWord[] | undefined>>,
@@ -329,6 +331,7 @@ export function liveOrderRecord(
     if (words === undefined) continue;
     const legs = liveOrderWords(words);
     if (legs.length > 0) live[level] = legs;
+    else if (words.length > 0) live[level] = ['drop'];
   }
   return live;
 }
