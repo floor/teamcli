@@ -206,6 +206,24 @@ describe('the wake child runs one wake and records what it saw', () => {
     expect(logOf(made)).toContain(`muse: the typed wake did not land (the box held text other than the line after the line was typed; no Enter was pressed); the drop is at ${request.dropPath}`);
   });
 
+  test('a key that went out with an unreadable acknowledgement keeps the reservation', async () => {
+    const made = scratch();
+    const request = staged(made);
+    reserve(request);
+    const reason = 'the screen could not be read and no working screen showed; no further Enter was pressed';
+    const walked = deps({ result: { delivered: false, typed: true, tries: 1, reason } });
+
+    const out = await serveWakeChild(request, walked);
+
+    expect(out).toEqual({ outcome: 'failed', reason });
+    expect(walked.calls).toHaveLength(1);
+    const marker = wakePath(dirname(request.dropPath), ID);
+    expect(existsSync(marker)).toBe(true);
+    expect(wakeMarkAt(marker)?.state).toBe('reserved');
+    expect(reserveWake(marker, { id: ID, at: NOW.toISOString(), state: 'reserved' })).toBe(false);
+    expect(entriesOf(made)[0]).toMatchObject({ id: ID, outcome: 'unreachable', note: reason, via: 'typed' });
+  });
+
   test('a session that cannot be read refuses before the walk, releases the reservation, and records the reason', async () => {
     const made = scratch();
     const request = staged(made);
