@@ -805,6 +805,7 @@
     "test/question-answer.test.ts": 5,
     "test/queue-status-watch.test.ts": 3,
     "test/queue.test.ts": 5,
+    "test/queued-drop-reoffer.test.ts": 0,
     "test/queued-not-woken.test.ts": 4,
     "test/quota-out-acceptance/acceptance.test.ts": 0,
     "test/quota-out-acceptance/seat-pause.test.ts": 5,
