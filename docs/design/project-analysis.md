@@ -36,7 +36,7 @@ The first pass is deterministic, local, and zero-token (`0 tokens`, `$0.00`), bo
   "schema": { "name": "team.analyse", "version": 1 },
   "format": 1,
   "at": "2026-11-05T19:15:00.000Z",
-  "analyser": { "principal": "yoda@jedi", "authorized_by": "owner", "scope": "full" },
+  "analyser": { "principal": "beta@example", "authorized_by": "owner", "scope": "full" },
   "source": { "name": "teamcli.static", "kind": "teamcli", "level": "default" },
   "analysis_cost": { "duration_ms": 84, "git_walks": 1, "files_read": 14, "bytes_read": 48120, "tokens": 0, "usd": 0 },
   "report": {

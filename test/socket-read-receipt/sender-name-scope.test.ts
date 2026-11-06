@@ -196,11 +196,11 @@ function frameLine(frames: readonly string[]): string {
 }
 
 test('a sender reads its own team nickname ahead of its written label', async () => {
-  const one = scene(null, 'Achilles');
+  const one = scene(null, 'alpha');
   made = one;
 
   expect(await one.run()).toBe(0);
-  expect(frameLine(one.frames)).toBe('from Achilles (project lead):');
+  expect(frameLine(one.frames)).toBe('from alpha (project lead):');
 });
 
 test('a receiving team nickname cannot rename a sender whose own roster lacks its id', async () => {
