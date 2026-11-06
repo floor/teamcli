@@ -713,6 +713,9 @@ describe('sidebar step execution', () => {
     const created: string[] = [];
     const displayCalls: { session: string; pane: string; text: string; ttlMs: number | undefined }[] = [];
     const panes = new Map<string, string>();
+    // A rename the host accepts is listed under that name: the launch proves the listed name
+    // before the seat can reach ready.
+    const names = new Map<string, string>();
     const baseLaunch = (overrides: Partial<Launch> = {}): Launch => ({
       sessionState: () => 'running',
       startServer: () => true,
@@ -724,14 +727,24 @@ describe('sidebar step execution', () => {
         return { pane, workspace: `ws-${String(created.length)}` };
       },
       paneRun: () => true,
-      renameAgent: () => true,
+      renameAgent: (_session, pane, name) => {
+        names.set(pane, name);
+        return true;
+      },
       reportDisplayAgent: (session, pane, text, ttlMs) => {
         displayCalls.push({ session, pane, text, ttlMs });
         return true;
       },
       closeWorkspace: () => true,
       agentPanes: () => [...panes.keys()],
-      agents: () => [],
+      agents: () => [...names].map(([pane, name]) => ({
+        name,
+        agent: 'claude-code',
+        pane,
+        workspace: `ws-${pane.slice('pane-'.length)}`,
+        status: 'idle',
+        cwd: null,
+      })),
       paneText: (_session, pane) => panes.get(pane) ?? CLAUDE_IDLE,
       foreground: () => ['claude', 'codex'],
       shellBack: () => false,
@@ -882,6 +895,9 @@ describe('sidebar step execution', () => {
     );
     const displayCalls: { session: string; pane: string; text: string; ttlMs: number | undefined }[] = [];
     const panes = new Map<string, string>();
+    // A rename the host accepts is listed under that name: the launch proves the listed name
+    // before the seat can reach ready.
+    const names = new Map<string, string>();
     let n = 0;
     const launch: Launch = {
       sessionState: () => 'running',
@@ -894,14 +910,24 @@ describe('sidebar step execution', () => {
         return { pane, workspace: `ws-${String(n)}` };
       },
       paneRun: () => true,
-      renameAgent: () => true,
+      renameAgent: (_session, pane, name) => {
+        names.set(pane, name);
+        return true;
+      },
       reportDisplayAgent: (session, pane, text, ttlMs) => {
         displayCalls.push({ session, pane, text, ttlMs });
         return true;
       },
       closeWorkspace: () => true,
       agentPanes: () => [...panes.keys()],
-      agents: () => [],
+      agents: () => [...names].map(([pane, name]) => ({
+        name,
+        agent: 'claude-code',
+        pane,
+        workspace: `ws-${pane.slice('pane-'.length)}`,
+        status: 'idle',
+        cwd: null,
+      })),
       paneText: (_session, pane) => panes.get(pane) ?? codexIdle,
       foreground: () => ['codex'],
       shellBack: () => false,
@@ -986,6 +1012,7 @@ describe('sidebar step execution', () => {
       };
     });
     const reloadIo = testIo(root, OWNER);
+    const beforeReload = new Set(names.keys());
     const reloadSources: ReloadSources = {
       home,
       now: () => NOW,
@@ -994,6 +1021,16 @@ describe('sidebar step execution', () => {
         ...launch,
         agents: () => [
           { name: 'codex-acme', agent: 'codex', pane: 'pane-0', workspace: 'ws-0', status: 'idle', cwd: root },
+          ...[...names]
+            .filter(([pane]) => !beforeReload.has(pane))
+            .map(([pane, name]) => ({
+              name,
+              agent: 'codex',
+              pane,
+              workspace: `ws-${pane.slice('pane-'.length)}`,
+              status: 'idle',
+              cwd: root,
+            })),
         ],
         workspacePanes: () => ['pane-0'],
         processInfo: () => ({ shell: 100, foreground: [101] }),
