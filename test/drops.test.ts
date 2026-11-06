@@ -920,7 +920,7 @@ describe('team drops --read caller placement', () => {
     plantRecord(home, root, 'acme', 'worker', D_RECORD, 'mail for the worker');
     const workerDir = join(root, '.agents', 'send-drops', 'acme', 'worker');
     const result = await run(['--read', '--seat', 'worker', '--session', 'acme'], { kind: 'owner' });
-    expect(result).toEqual({ code: 0, out: 'mail for the worker\n', err: '' });
+    expect(result).toEqual({ code: 0, out: 'from lead (team lead):\n\nmail for the worker\n', err: '' });
     // A peek serves the body only: the record still waits for its seat, and no receipt stands.
     expect(existsSync(receiptPath(workerDir, D_RECORD))).toBe(false);
     expect(listUnread(workerDir, { to: 'worker', root, session: 'acme' }, home).map((message) => message.id)).toEqual([D_RECORD]);
@@ -934,7 +934,7 @@ describe('team drops --read caller placement', () => {
     placeLead(LEAD_PANE);
     const workerDir = join(root, '.agents', 'send-drops', 'acme', 'worker');
     const result = await run(['--read', '--seat', 'worker', '--session', 'acme'], seatCaller('lead', LEAD_PANE));
-    expect(result).toEqual({ code: 0, out: 'other mail for the worker\n', err: '' });
+    expect(result).toEqual({ code: 0, out: 'from lead (team lead):\n\nother mail for the worker\n', err: '' });
     expect(existsSync(receiptPath(workerDir, D_RECORD_READ))).toBe(false);
     expect(listUnread(workerDir, { to: 'worker', root, session: 'acme' }, home).map((message) => message.id)).toEqual([D_RECORD_READ]);
     expect(readFileSync(join(root, '.agents', 'team.log'), 'utf8')).toContain(`peek [lead] worker: ${D_RECORD_READ}`);

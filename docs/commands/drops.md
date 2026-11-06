@@ -42,7 +42,7 @@ general seat brief, is not a body either and does not use one of the ten. A read
 caller, as the listing does: the launch's hook runs inside the seat's own pane process tree, so
 the pids place it as the seat the launch names. Only the seat itself receipts: the owner and a
 lead (the orchestrator or the operator) may read any seat's drops, but as a peek — the body is
-shown, no receipt is written, nothing is marked read, and the message still waits for its seat.
+shown with the same sender mark a read shows, no receipt is written, nothing is marked read, and the message still waits for its seat.
 A peek is written to the team log with the reader, the seat and the ids it showed, so a look at
 another seat's mail leaves a trace without taking the mail. Every other caller — another seat, a
 pane with no agent name, an unplaced shell — is refused before a record is read: nothing is
