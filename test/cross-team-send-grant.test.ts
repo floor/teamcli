@@ -316,7 +316,8 @@ describe('team send: the entity-bound send grant', () => {
     signSendRecord(w.home, 'builder-to-lead', { from: 'builder@floor', to: 'orchestrator@floor', expires: FUTURE });
     const { code, out, err } = sendAsBuilder(w, 'lead@teamcli');
     expect(await code).toBe(0);
-    expect(err()).toContain('lead: queued, no event adapter');
+    expect(err()).toBe('');
+    expect(out()).toContain('lead@teamcli: queued, not woken');
     expect(out()).toContain('team teamcli, session "teamcli"');
     expect(dropBodies(w.teamcliDir, 'teamcli', 'lead')).toEqual([
       'from builder@floor — admitted by: an owner-signed grant naming send (builder-to-lead)\n\na note',
