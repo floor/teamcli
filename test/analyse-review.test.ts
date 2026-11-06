@@ -1,8 +1,7 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { mayAnalyseProject, signAnalyserSetting } from '../src/analyse/gate.ts';
 import { readProjectFacts } from '../src/analyse/read.ts';
 import { recordText } from '../src/config/team-record.ts';
@@ -12,7 +11,7 @@ import type { Caller } from '../src/caller.ts';
 import type { YamlValue } from '../src/yaml.ts';
 
 const made: string[] = [];
-afterEach(() => { for (const p of made.splice(0)) execFileSync('trash', [p]); });
+afterEach(() => { for (const p of made.splice(0)) rmSync(p, { recursive: true, force: true }); });
 function world() {
   const base = mkdtempSync(join(tmpdir(), 'analysis-review-')); made.push(base);
   const home = join(base, 'home'); const repo = join(base, 'repo');

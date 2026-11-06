@@ -141,6 +141,11 @@ import type { KeyReader } from '../src/release/keychain.ts';
 import { leadPart, outsidePart, scenePart, skipsScene, unknownScenes, wantedScenes } from './exit-filter.ts';
 import { fakeFetch, fixture, happy, json, URLS, type Answers } from './release/world.ts';
 import { runImport } from '../src/commands/import.ts';
+import { runAnalyse } from '../src/commands/analyse.ts';
+import { signAnalyserSetting } from '../src/analyse/gate.ts';
+import { recordText } from '../src/config/team-record.ts';
+import { entitiesPath } from '../src/entities.ts';
+import type { YamlValue } from '../src/yaml.ts';
 import { intoRegistry, realRegistryTouched, storedTeam, underRegistry } from './helpers/registry-team.ts';
 import { runMigrate } from '../src/commands/migrate.ts';
 import { CLAUDE_IDLE, claudeBox, deliverBriefs, fixtureBase, gitEnv, testIo, thisProcessJobRecord, thisProcessUnitRecord } from './helpers.ts';
@@ -8259,6 +8264,41 @@ scene('waits.configuration', async (place) => {
 scene('waits.usage', async (place) => {
   write(place, TEAM);
   return show(await waited(place, ['--all'], leadSeat), 'unknown option');
+});
+
+/** An owner-signed analyser whose read roots are the paths this scene names. The value is the
+ *  same shape the gate verifies: principal, scope and roots, signed under the place's home. */
+function namedAnalyser(place: Place, scope: 'full' | 'public', roots: string[]): void {
+  const signed = signAnalyserSetting(place.home, 'entity', 'acme', {
+    principal: 'owner',
+    scope,
+    roots,
+  });
+  const path = entitiesPath(place.home);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, recordText({ acme: { analyser: signed as unknown as YamlValue } }));
+}
+
+async function analysed(place: Place, argv: string[]): Promise<Ran> {
+  const io = testIo(place.root, owner);
+  return { code: await runAnalyse(argv, io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+}
+
+scene('analyse.invocation', async (place) => show(await analysed(place, ['--nope']), 'unknown option'));
+scene('analyse.unauthorised', async (place) => show(await analysed(place, ['.']), 'no analyser is named'));
+scene('analyse.scope', async (place) => {
+  namedAnalyser(place, 'public', [place.root]);
+  return show(await analysed(place, ['.']), 'scope: public');
+});
+scene('analyse.unreadable', async (place) => {
+  const link = join(place.root, 'linked');
+  symlinkSync(place.root, link);
+  namedAnalyser(place, 'full', [place.root]);
+  return show(await analysed(place, [link]), 'symbolic links are refused');
+});
+scene('analyse.report', async (place) => {
+  namedAnalyser(place, 'full', [place.root]);
+  return show(await analysed(place, ['.']), 'analysis cost:');
 });
 
 // The source probe reads every command file (~2 s); the tree does not change during a run.
