@@ -795,6 +795,13 @@ function recordedPaneOf(stateDir: string, session: string, name: string): string
   }
 }
 
+/** A scene's clock and sleep for the start placement wait. `now` is the clock. Production
+ *  passes neither, and the wait uses `Date.now` and a real timeout. */
+export type PlacementClock = {
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+};
+
 /**
  * The start placement, with its one bounded wait: the first refusal is answered at once unless
  * the environment names the pane the seat's record holds — the one case where the launch's own
@@ -808,7 +815,7 @@ export async function placementAtStart(
   stateDir: string,
   session: string,
   name: string,
-  deps: { sleep?: (ms: number) => Promise<void>; now?: () => number } = {},
+  deps: PlacementClock = {},
 ): Promise<{ ok: true } | { ok: false; why: string }> {
   const first = placementOf(io, stateDir, session, name);
   if (first.ok) return first;
@@ -894,6 +901,7 @@ export async function runMcpServe(
   io: Io,
   streams: ServeStreams = processStreams(),
   host: ServeHost = realServeHost,
+  deps: PlacementClock = {},
 ): Promise<number> {
   const refuse = (message: string): number => {
     io.stderr(`team mcp serve: ${message}\n`);
@@ -931,7 +939,7 @@ export async function runMcpServe(
   // seat on its recorded pane, and the epoch is the claim the state holds now. Both checks run
   // before the inbox folder or the listener is written, so a refused start leaves no trace.
   const stateDir = dirname(loaded.path);
-  const placed = await placementAtStart(io, stateDir, team.session, seat.name);
+  const placed = await placementAtStart(io, stateDir, team.session, seat.name, deps);
   if (!placed.ok) return refuse(placed.why);
   const stale = staleLaunch(generationOf(stateDir, team.session, seat.name), options.epoch, seat.name);
   if (stale !== null) return refuse(stale);
