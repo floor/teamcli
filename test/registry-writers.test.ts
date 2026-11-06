@@ -14,7 +14,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { findAgent, getAgent, readAgents, registerAgent } from '../src/registry/agents.ts';
 import { getTeam, readTeams, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
-import { get as getProject, projectIdOf, projectsFile, readProjects, upsertProject } from '../src/registry/projects.ts';
+import { get as getProject, projectIdOf, projectsFile, upsertProject } from '../src/registry/projects.ts';
 import { admitSend, PROJECT_RULES } from '../src/send/admit.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { claudeBox, gitEnv, testIo } from './helpers.ts';
@@ -348,18 +348,19 @@ describe('the project a team leads, read through the launch', () => {
       lifecycle: 'running',
       by: 'owner',
     }).id;
+    const projectId = projectIdOf('TeamCLI');
+    if (getProject(fixture.home, projectId) === null) {
+      throw new Error('the second team joins a project the scene must already have written');
+    }
     upsertTeam(fixture.home, teamId, {
       project: 'other',
       session: 'other',
       root,
+      projectId,
       roster: [{ agent: leadId, seat: 'lead', role: 'coordinator', leads: true }],
       lifecycle: 'running',
       by: 'owner',
     });
-    const projectId = projectIdOf('TeamCLI');
-    const held = getProject(fixture.home, projectId);
-    if (held === null) throw new Error('the second team joins a project the scene must already have written');
-    upsertProject(fixture.home, projectId, { teams: [...held.teams, teamId] });
     return { teamId, leadId };
   }
 
@@ -419,24 +420,25 @@ describe('the project a team leads, read through the launch', () => {
     // ...and admission reads the record: the pair a stale lead admits is refused now. The stale
     // record is hand-built so the scene shows it was the record, not another rule, doing the work.
     const teams = readTeams(fixture.home);
-    const stored = readProjects(fixture.home);
+    const viewed = getProject(fixture.home, projectId);
+    if (viewed === null) throw new Error('the project view is missing');
     const oldLead = getAgent(fixture.home, leadId)!;
     const otherLead = getAgent(fixture.home, other.leadId)!;
-    const stale = { [projectId]: { ...stored[projectId]!, lead: leadId } };
+    const stale = { [projectId]: { ...viewed, lead: leadId } };
     expect(admitSend(oldLead, otherLead, teams, undefined, { projects: stale })).toEqual({ ok: true, rule: PROJECT_RULES[0] });
-    expect(admitSend(oldLead, otherLead, teams, undefined, { projects: stored }).ok).toBe(false);
+    expect(admitSend(oldLead, otherLead, teams, undefined, { projects: { [projectId]: viewed } }).ok).toBe(false);
   });
 
-  test('a team that leaves the project takes its lead out of the record, and the other teams stay', () => {
+  test('a launch that drops in_project keeps the membership and the lead already recorded', () => {
     const { fixture, input } = leadFixture();
     const lead = input.team.seats.find((seat) => seat.name === 'lead')!;
     const worker = input.team.seats.find((seat) => seat.name === 'worker')!;
     const projectId = projectIdOf('TeamCLI');
     const leadId = (registerLaunch(input, lead, 'pane-l') as { id: string }).id;
-    const other = addOtherLeadTeam(fixture);
     expect(getProject(fixture.home, projectId)?.lead).toBe(leadId);
 
-    // The file stops naming the project; `project_lead` cannot stay without it.
+    // The file stops naming the project. That does not clear a membership the registry holds,
+    // and `project_lead` cannot stay in the file without `in_project`.
     const yaml = readFileSync(fixture.file, 'utf8')
       .replace('in_project: TeamCLI\n', '')
       .replace('project_lead: true\n', '');
@@ -446,8 +448,9 @@ describe('the project a team leads, read through the launch', () => {
     registerLaunch({ ...input, team: parsed.team }, worker, 'pane-w');
 
     const project = getProject(fixture.home, projectId);
-    expect(project?.lead).toBeNull();
-    expect(project?.teams).toEqual([other.teamId]);
+    expect(project?.lead).toBe(leadId);
+    expect(project?.teams).toEqual([teamIdOf(fixture.root)]);
+    expect(getTeam(fixture.home, teamIdOf(fixture.root))?.projectId).toBe(projectId);
   });
 
   test("a leave clears only the leaving team's lead: another team's lead stays on record", () => {

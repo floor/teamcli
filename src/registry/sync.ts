@@ -59,12 +59,15 @@ function ensureTeam(input: RegistryTeam): string | null {
   const { team, root, home, by } = input;
   // `up --session alt` records the session it launches; the file's own session records the same
   // lobby beside it, so a plain `team check` still reads it back.
+  // A file that does not name `in_project` is not an instruction to leave a project. `noteTeam`
+  // treats null as "this team is its own project" and clears `project_id`; omitting the field
+  // leaves a membership the registry already holds.
   const seed = {
     project: team.project,
     entity: team.entity,
     session: input.session ?? team.session,
     lobby: team.lobby,
-    inProject: team.inProject,
+    ...(team.inProject === null ? {} : { inProject: team.inProject }),
     aliasSession: team.session,
   };
   return noteTeam(home, root, seed, 'running', by);
