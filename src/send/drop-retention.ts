@@ -665,17 +665,34 @@ function moveFileBetweenHeldDirs(
   const postChainProblem = verifyHeldDirChain(atFfi, baseHeld, destHeld);
   const postHeld = heldAt(destPath);
   if (postChainProblem !== null || postHeld.kind !== 'file') {
-    undoMovedFile(atFfi, destHeld, srcHeld, fileName);
-    return {
-      ok: false,
-      reason: postChainProblem ?? `${destPath}: a symbolic link was found and not followed`,
-    };
+    const undone = undoMovedFile(atFfi, destHeld, srcHeld, fileName);
+    const why = postChainProblem ?? `${destPath}: a symbolic link was found and not followed`;
+    return { ok: false, reason: undone.ok ? why : `${why}; ${undone.reason}` };
   }
   return { ok: true };
 }
 
-function undoMovedFile(atFfi: RelativeDirOps, destHeld: HeldDir, srcHeld: HeldDir, fileName: string): void {
-  atFfi.renameatReplace(destHeld.fd, fileName, srcHeld.fd, fileName);
+/** Move an archived name back with no replacement. A live file that appeared stays, and so does the archive copy. */
+function undoMovedFile(
+  atFfi: RelativeDirOps,
+  destHeld: HeldDir,
+  srcHeld: HeldDir,
+  fileName: string,
+): { ok: true } | { ok: false; reason: string } {
+  const restored = atFfi.renameatExcl(destHeld.fd, fileName, srcHeld.fd, fileName);
+  if (restored.ok) return { ok: true };
+  const live = join(srcHeld.path, fileName);
+  const archived = join(destHeld.path, fileName);
+  if (restored.errno === EEXIST) {
+    return {
+      ok: false,
+      reason: `${live}: the live file stayed, and the archived copy stayed at ${archived}`,
+    };
+  }
+  return {
+    ok: false,
+    reason: `${live}: the restore failed (errno ${String(restored.errno)}), and the archived copy stayed at ${archived}`,
+  };
 }
 
 function unlinkInHeldDir(atFfi: RelativeDirOps, dirHeld: HeldDir, fileName: string): void {
@@ -1248,11 +1265,18 @@ export function* dropRetirementSteps(
 
   const rollbackAllMoved = (): void => {
     if (atFfi === null) return;
+    const stuck: string[] = [];
     for (let i = movedRecords.length - 1; i >= 0; i -= 1) {
       const rec = movedRecords[i]!;
       for (let j = rec.files.length - 1; j >= 0; j -= 1) {
-        undoMovedFile(atFfi, rec.destHeld, rec.srcHeld, rec.files[j]!);
+        const undone = undoMovedFile(atFfi, rec.destHeld, rec.srcHeld, rec.files[j]!);
+        if (!undone.ok) stuck.push(undone.reason);
       }
+    }
+    if (stuck.length > 0) {
+      const detail = stuck.join('; ');
+      refused = refused === null ? detail : `${refused}; ${detail}`;
+      return;
     }
     movedRecords.length = 0;
     archived.length = 0;
@@ -1282,16 +1306,16 @@ export function* dropRetirementSteps(
     // family escapes or sits without a manifest.
     const dateChainProblem = verifyHeldDirChain(atFfi, sendDropsHeld, archiveDateHeld);
     if (dateChainProblem !== null) {
-      rollbackAllMoved();
       if (refused === null) refused = dateChainProblem;
+      rollbackAllMoved();
       snapshot();
       return;
     }
     for (const rec of movedRecords) {
       const destProblem = verifyHeldDirChain(atFfi, sendDropsHeld, rec.destHeld);
       if (destProblem !== null) {
-        rollbackAllMoved();
         if (refused === null) refused = destProblem;
+        rollbackAllMoved();
         snapshot();
         return;
       }
@@ -1314,8 +1338,8 @@ export function* dropRetirementSteps(
       key,
     );
     if (!wrote.ok) {
-      rollbackAllMoved();
       if (refused === null) refused = wrote.reason;
+      rollbackAllMoved();
       snapshot();
       return;
     }
@@ -1694,10 +1718,12 @@ export function* dropRetirementSteps(
           });
         }
         if (familyFailed !== null) {
+          const stuck: string[] = [];
           for (let i = movedNames.length - 1; i >= 0; i -= 1) {
-            undoMovedFile(atFfi, destHeld, candidate.seatHeld, movedNames[i]!);
+            const undone = undoMovedFile(atFfi, destHeld, candidate.seatHeld, movedNames[i]!);
+            if (!undone.ok) stuck.push(undone.reason);
           }
-          refused = familyFailed;
+          refused = stuck.length === 0 ? familyFailed : `${familyFailed}; ${stuck.join('; ')}`;
           break;
         }
         movedRecords.push({ srcHeld: candidate.seatHeld, destHeld, files: movedNames });
