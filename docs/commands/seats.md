@@ -166,6 +166,7 @@ $ team seats --json ; echo "exit $?"
         "conversation": false,
         "endpoint": false,
         "listener": false,
+        "unread": 0,
         "oldest_unread_seconds": null
       }
     }
