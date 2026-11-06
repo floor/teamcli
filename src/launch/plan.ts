@@ -13,7 +13,7 @@ import { resolvedCommand } from './resolve-flag.ts';
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
-import { shellScriptWordOf } from './cli-scope.ts';
+import { appendPositionalOnLaunchLine, shellScriptWordOf } from './cli-scope.ts';
 import { grokSandboxOf, type GrokSandbox } from './grok-sandbox.ts';
 import { launchedCliBinary } from './line.ts';
 import type { WaitingRecord } from '../state.ts';
@@ -1331,6 +1331,23 @@ export function upPlan(input: UpInput): Step[] {
       }
       command = decided.command;
       fromResolver = true;
+      // A message-mode CLI takes its rules as the launch's initial prompt. The resolved argv
+      // is the program and its own words; the rules line still rides it, the same placement
+      // the default launch uses, so the seat is not left out for rules that ride only a launch.
+      if (rulesLine !== undefined && profile.rulesMode === 'message' && profile.rulesPrompt !== null) {
+        const positional: string[] = [];
+        if (profile.rulesPrompt !== '') positional.push(profile.rulesPrompt);
+        positional.push(rulesLine);
+        const placed = appendPositionalOnLaunchLine(
+          command,
+          positional.map((word) => shellQuote(word)).join(' '),
+          profile.binary,
+        );
+        command = placed.line;
+        if (placed.uncertain) {
+          launchWarnings.push('its launch line could not be read to its end; its rules line is after the line, where the CLI may not read it');
+        }
+      }
     } else {
       const launcher = launchCommandOrRefusal(profile, recordedLine, seat.rules, input.cliHooks?.[seat.name], {
         seat: seat.name,

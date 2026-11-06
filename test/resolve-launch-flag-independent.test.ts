@@ -2,7 +2,7 @@
 // the pane runs the launch line it runs today. With the flag on, the pane runs the resolver's
 // argv. A refused resolution is the resolver's own message, and that seat is not started.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
@@ -19,6 +19,20 @@ import { parseYaml, toValue } from '../src/yaml.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { CLAUDE_IDLE, fixtureBase, recordRenames, testIo } from './helpers.ts';
 
+const IDLE = {
+  claude: CLAUDE_IDLE,
+  codex: readFileSync(new URL('./fixtures/codex/0.161.0/idle.txt', import.meta.url), 'utf8'),
+  grok: readFileSync(new URL('./fixtures/grok/1.0.70/idle.txt', import.meta.url), 'utf8'),
+  agy: readFileSync(new URL('./fixtures/antigravity/1.4.12/idle.txt', import.meta.url), 'utf8'),
+};
+
+function idleFor(command: string): string {
+  if (command.includes('codex')) return IDLE.codex;
+  if (command.includes('grok')) return IDLE.grok;
+  if (command.includes('agy')) return IDLE.agy;
+  return IDLE.claude;
+}
+
 const NOW = new Date('2026-11-06T16:00:00Z');
 const SESSION = 'scratch';
 const OWNER = { kind: 'owner' } as const;
@@ -31,13 +45,15 @@ type SeatFixture = {
   cli: string;
   launch: string;
   binary: string;
+  model: string;
+  version: string;
 };
 
 const CLIS: readonly SeatFixture[] = [
-  { name: 'claude-lead', role: 'coordinator', cli: 'claude-code', launch: 'claude', binary: '/opt/fixture/claude-resolved' },
-  { name: 'codex-op', role: 'operator', cli: 'codex', launch: 'codex', binary: '/opt/fixture/codex-resolved' },
-  { name: 'grok-hand', role: 'implementer', cli: 'grok', launch: 'grok', binary: '/opt/fixture/grok-resolved' },
-  { name: 'agy-hand', role: 'implementer', cli: 'antigravity', launch: 'agy', binary: '/opt/fixture/agy-resolved' },
+  { name: 'claude-lead', role: 'coordinator', cli: 'claude-code', launch: 'claude', binary: '/opt/fixture/claude-resolved', model: 'Example', version: '1' },
+  { name: 'codex-op', role: 'operator', cli: 'codex', launch: 'codex', binary: '/opt/fixture/codex-resolved', model: 'GPT Terra', version: '5.6' },
+  { name: 'grok-hand', role: 'implementer', cli: 'grok', launch: 'grok', binary: '/opt/fixture/grok-resolved', model: 'Example', version: '1' },
+  { name: 'agy-hand', role: 'implementer', cli: 'antigravity', launch: 'agy', binary: '/opt/fixture/agy-resolved', model: 'Gemini Argon', version: '4' },
 ];
 
 let scratch = '';
@@ -70,8 +86,8 @@ function teamText(root: string, seats: readonly SeatFixture[]): string {
     `    label: ${seat.name}`,
     `    cli: ${seat.cli}`,
     '    vendor: example',
-    '    model: Example',
-    '    version: "1"',
+    `    model: "${seat.model}"`,
+    `    version: "${seat.version}"`,
     `    launch: ${seat.launch}`,
     `    launcher: ${seat.name}-resolved`,
   ].join('\n')).join('\n');
@@ -121,13 +137,16 @@ function world(): { launch: Launch; runs: { pane: string; command: string }[] } 
     createWorkspace(_session, _cwd, _label) {
       n += 1;
       const pane = n === 1 ? 'fixture-pane-one' : 'fixture-pane-two';
-      panes.set(pane, { text: CLAUDE_IDLE, agent: false });
+      panes.set(pane, { text: IDLE.claude, agent: false });
       return { pane, workspace: `fixture-ws-${n}` };
     },
     paneRun(_session, pane, command) {
       runs.push({ pane, command });
       const known = panes.get(pane);
-      if (known) known.agent = true;
+      if (known) {
+        known.agent = true;
+        known.text = idleFor(command);
+      }
       return true;
     },
     renameAgent: () => true,
@@ -274,8 +293,18 @@ describe('resolve-launch stays off unless named', () => {
       const { root, home, made } = prepare([one]);
       const io = testIo(root, OWNER);
       const code = await runUp(['--resolve-launch'], io, sources(home, made));
-      expect(made.runs.map((run) => run.command), `${seat.name}\n${io.out}${io.err}`).toContain(expectedCommand(root, home, one, [one]));
-      if (seat.cli === 'claude-code') expect(code, `${seat.name}\n${io.out}${io.err}`).toBe(0);
+      const resolved = expectedCommand(root, home, one, [one]);
+      const commands = made.runs.map((run) => run.command);
+      const command = commands.find((line) => line.includes(resolved));
+      expect(command, `${seat.name}\n${io.out}${io.err}`).toBeDefined();
+      if (seat.cli === 'codex' || seat.cli === 'antigravity') {
+        expect(command).toContain('standing rules for this session');
+        if (seat.cli === 'antigravity') expect(command).toContain('--prompt-interactive');
+        expect(code, `${seat.name}\n${io.out}${io.err}`).toBe(0);
+      } else if (seat.cli === 'claude-code') {
+        expect(commands).toContain(resolved);
+        expect(code, `${seat.name}\n${io.out}${io.err}`).toBe(0);
+      }
       release();
     }
   }, 30000);
