@@ -1,7 +1,7 @@
 // The screen core. Stage order, dialog primitives, the four composer modes and the
 // safety floor live here, never in a profile. A profile is data: it can add a
 // pattern, and it cannot move a stage or turn the floor off.
-import { allDimAfter, colourAfter, hasSgr, oneColourAfter, stripSgr } from '../ansi.ts';
+import { allDimAfter, colourAfter, hasSgr, stripSgr } from '../ansi.ts';
 import type { Reset, Screen } from './screen.ts';
 import type { BlockStep, LinePattern, Rule, ScreenData, TextSpec, Wrap } from './screen-data.ts';
 
@@ -1502,14 +1502,13 @@ function stripTyped(line: string, composer: { prompt: RegExp; stripSuffix?: RegE
 }
 
 // A placeholder, not text. When the composer says its suggestions render dim and the input
-// line carries any styling at all, a row that is not all faint past the prompt is text, except
-// an exact listed equals line whose own text is one non-bold colour: grey with no faint
-// attribute is still that placeholder. A composer that also declares `placeholder_fg` — the
-// foregrounds its CLI draws its rotating hints in, measured off a capture — reads an input row
-// as the empty box when every visible character past the prompt is one of those colours: Muse
-// 1.4.14 draws its rotating hint in grey with no faint attribute at all. Only a declared colour
-// reads that way, so a mixed row, a bold word, a cursor cell or an undeclared colour stays
-// text. An all-faint row is
+// line carries any styling at all, a row that is not all faint past the prompt is text, unless
+// the composer declares `placeholder_fg` — the foregrounds its CLI draws its hints in, measured
+// off a capture — and every visible character past the prompt is one of those colours: Muse
+// 1.4.14 draws its rotating hint in grey with no faint attribute at all. A listed equals line
+// follows the same rule and gets no shortcut of its own: faint or a declared colour, never an
+// undeclared one, so typed text that happens to equal a listed hint stays a draft. A mixed row,
+// a bold word, a cursor cell or an undeclared colour stays text. An all-faint row is
 // the suggestion, unless the composer names `slash-hint`: then the faint row must also be a
 // listed placeholder or a `/command …` hint, so a faint row of other words is text. A line
 // without styling (a plain read) leaves the list to decide, as does a composer
@@ -1522,13 +1521,9 @@ function placeholder(
   styledLine: string | undefined,
 ): boolean {
   const listed = composer.placeholders.some((entry) => ('equals' in entry ? typed === entry.equals : 'prefix' in entry ? typed.startsWith(entry.prefix) : false));
-  const equalsListed = composer.placeholders.some((entry) => 'equals' in entry && entry.equals !== '' && typed === entry.equals);
   if (composer.placeholderStyle === 'dim' && styledLine !== undefined && hasSgr(styledLine)) {
     const hit = composer.prompt.exec(plainLine);
     const skip = hit === null ? 0 : plainLine.slice(0, hit.index + hit[0].length).replace(/\s/g, '').length;
-    // An exact listed placeholder in one non-bold colour is the empty box. A mix of colours,
-    // a cursor cell, a bold word, or a draft that only starts like the line stays text.
-    if (equalsListed && oneColourAfter(styledLine, skip)) return true;
     // A declared hint foreground: the empty box when the row's text past the prompt is exactly
     // one of the colours the capture showed. An undeclared colour is text, as it always was.
     if (composer.placeholderFg !== undefined) {
