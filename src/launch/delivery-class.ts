@@ -298,12 +298,15 @@ export function seatDeliveryClass(input: SeatDeliveryInput): SeatDelivery {
   const recorded = input.state?.watcher;
   const watcher = recorded ?? cliWatcher(cli, launch);
   const channel = cli === 'claude-code' && channelLaunchEnabled(launch);
+  // The declaration is read from the line the seat actually ran, first: a runtime record that
+  // names its own settings file (or a wrapper that hands one) is the argv the session has, while
+  // the file's row is only what a later launch would run. With no runtime line the row stands.
   const inbound = declaredInboundOf({
     dir: input.dir,
     root: input.root,
     session: input.session,
     seat: input.seat,
-    ...(input.declared?.launch !== undefined ? { launch: input.declared.launch } : {}),
+    ...(launch === '' ? {} : { launch }),
   });
   const endpointRecorded = inspectRecordedCodexEndpoint(
     input.state?.codex_endpoint,

@@ -250,9 +250,12 @@ describe('team send: the owner-signed grant on the command path', () => {
     grantFile(home, 'helpers-to-reviewer', 'helper@acme', 'native@other');
     const { code, err, out } = helperSend(root, sockets);
     expect(await code).toBe(0);
-    expect(err()).toContain('native: queued, no event adapter');
+    // One statement for the drop, naming the full address the grant admitted; the bare
+    // `queued, no event adapter` line printed beside it would name the same recipient again.
+    expect(err()).toBe('');
     expect(withoutSendId(out())).toBe(
-      'team other, session "else"\nnative: queued, not woken (drop, 0 ms); queued; native reads it at its next turn, and nothing here gives it one (pull-only)\n',
+      'team other, session "else"\n' +
+      'native@other: queued, not woken (drop, 0 ms); queued; native@other reads it at its next turn, and nothing here gives it one (pull-only)\n',
     );
     const drops = join(otherDir, 'send-drops', 'else', 'native');
     const names = dropNames(drops).filter(
