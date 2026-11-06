@@ -1,17 +1,11 @@
 // The `owner-reply-to` policy's vocabulary: the qualified `seat@team` address an owner-origin
-// message names for the seat that answers it. The policy is entity-level only, and entity
-// `floor` ships a default naming its orchestrator; every other entity must declare its own.
+// message names for the seat that answers it. The policy is entity-level only, and the release
+// ships no target: each entity must declare its own, and none answers before it does.
 // The grammar names both a seat and a team and forbids a colon, so a pane channel can never be
 // a value: only a seat can answer the owner, never a human's pane.
 //
 // This module holds only the vocabulary: the catalogue reads its parser without importing the
 // reader back into itself, the same split `sender-line` keeps.
-
-/** The entity whose owner-reply target the release ships. */
-export const OWNER_REPLY_FLOOR_ENTITY = 'floor';
-
-/** The floor's shipped target: its orchestrator, addressed by seat and team. */
-export const OWNER_REPLY_DEFAULT = 'orchestrator@floor';
 
 /** One seat part and one team part, both starting with a letter or digit; no colon, no space. */
 const QUALIFIED = /^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$/;

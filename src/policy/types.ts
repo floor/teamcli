@@ -1712,10 +1712,9 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     isWithin: (lower: number, higher: number) => lower <= higher,
   },
   // The entity-level address an owner-origin message names for the seat that answers it: one
-  // qualified `seat@team` target. The empty default is no target; entity `floor` alone answers
-  // its shipped `orchestrator@floor`, applied by the reader (`src/policy/owner-reply.ts`) rather
-  // than inherited by every entity as a level default. A signed entity declaration replaces it,
-  // and any other entity without one has no target.
+  // qualified `seat@team` target. The empty default is no target, and the release ships no
+  // entity address: only a signed entity declaration answers, read by `src/policy/owner-reply.ts`,
+  // so an entity without one has no target.
   'owner-reply-to': {
     name: 'owner-reply-to',
     kind: 'enforced',

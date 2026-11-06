@@ -705,6 +705,7 @@
     "test/owner-no-tty.test.ts": 1,
     "test/owner-page-later.test.ts": 4,
     "test/owner-page.test.ts": 3,
+    "test/owner-reply-default-independent.test.ts": 5,
     "test/owner-reply.test.ts": 4,
     "test/owner-seat-command.test.ts": 4,
     "test/owner-seat-helper.test.ts": 5,
