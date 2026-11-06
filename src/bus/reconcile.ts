@@ -151,7 +151,8 @@ type ReceiptEntry = {
   receipt: 'delivered' | 'read' | 'replied';
   id: string;
   at: string;
-  /** A `.read.json` whose envelope this checkout's key did not sign: it raises no step. */
+  /** A receipt whose envelope this checkout's key did not sign: it raises no step, exactly as
+   *  the settle side refuses to read a status from one. */
   unverified?: true;
   /** The lead or owner a lead-ack read receipt names: the step is a clearance, not a seat read. */
   clearedBy?: string;
@@ -287,8 +288,8 @@ function refuseRecord(
 /** The names a record's bookkeeping takes beside it in a drop folder; none of them is a message
  *  any seat was sent. Each is written by a different part of a delivery: a writer's temp
  *  (`.tmp`, and the receipt publisher's `.new`), a send holding or taking the record
- *  (`.pending`, `.taken`), a receipt the pass scans on its own below (`.delivered`, `.read`,
- *  `.replied`, with or without `.json`, and a legacy `.held.json`), the unread watch's two
+ *  (`.pending`, `.taken`), a receipt the pass scans on its own below (`.delivered.json`,
+ *  `.read.json`, `.replied.json`, and a legacy `.held.json`), the unread watch's two
  *  reservations (`.wake`, `.reported`), the channel's push marker (`.channel-push.json`), a
  *  thread's close (`.closed.json`) and a route episode's summary (`.fallback.json`). Every name
  *  here matches a record's own name shape, so a scan that reads one as a record raises an
@@ -322,13 +323,14 @@ function isSideFile(file: string): boolean {
   return SIDE_SUFFIXES.some((suffix) => file.endsWith(suffix));
 }
 
-/** A receipt's own name says what it is and which record it belongs to; its bytes are never
- *  read. Returns null for anything that is not one of the three receipts. */
+/** Every build writes a receipt as a signed envelope under `<id>.<status>.json`, and the pass
+ *  raises a status only from those names. A bare `<id>.<status>` is an older spelling no writer
+ *  produced: the name alone proves nothing, so it raises no step and stays on the side-file
+ *  list. Returns null for anything that is not one of the three receipt names. */
 function receiptOf(file: string): { receipt: 'delivered' | 'read' | 'replied'; id: string } | null {
   for (const receipt of ['delivered', 'read', 'replied'] as const) {
-    for (const suffix of [`.${receipt}.json`, `.${receipt}`]) {
-      if (file.endsWith(suffix)) return { receipt, id: file.slice(0, -suffix.length) };
-    }
+    const suffix = `.${receipt}.json`;
+    if (file.endsWith(suffix)) return { receipt, id: file.slice(0, -suffix.length) };
   }
   return null;
 }
@@ -892,10 +894,12 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
         yield;
       }
 
-      // Check receipts (`.delivered`, `.read`, `.replied`) beside drops. A receipt's stat stamp
-      // is enough to raise it; only a new or touched file is stamped again. The sender comes from
-      // this listing, from the map the preceding pass left, or — after any number of quiet passes,
-      // or a restart — from the arrival event the log still holds for that record.
+      // Check signed receipts (`.delivered.json`, `.read.json`, `.replied.json`) beside drops. A
+      // receipt's stat stamp is enough to raise it; only a new or touched file is stamped again.
+      // The sender comes from this listing, from the map the preceding pass left, or — after any
+      // number of quiet passes, or a restart — from the arrival event the log still holds for
+      // that record.
+      const receiptKey = keyState.kind === 'key' ? keyState.key : null;
       let skippedReceipts = 0;
       for (const file of files) {
         if (file.startsWith('.')) {
@@ -917,11 +921,11 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
         }
         let entry = cachedEntry(state, seatDir, file, stamp);
         if (entry === null || entry.kind !== 'receipt') {
-          // A `.read.json` receipt is a signed envelope in this build, and its name alone proves
-          // nothing. A pass that cannot read the message key cannot check it: that is unchecked,
-          // not unverified, so the file is left for a pass that holds the key — the drop scan
-          // beside it leaves an unverifiable record the same way, storing nothing.
-          if (receipt.receipt === 'read' && file.endsWith('.read.json') && keyState.kind !== 'key') {
+          // Every receipt is a signed envelope in this build, and a name alone proves nothing. A
+          // pass that cannot read the message key cannot check one: that is unchecked, not
+          // unverified, so the file is left for a pass that holds the key — the drop scan beside
+          // it leaves an unverifiable record the same way, storing nothing.
+          if (receiptKey === null) {
             yield;
             continue;
           }
@@ -930,29 +934,27 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
             yield;
             continue;
           }
-          // Verify the receipt exactly as the settle side does before reading `read_by`: a file
-          // this checkout's key never signed is no read, so it raises no step and no clearance.
-          const readJson = receipt.receipt === 'read' && file.endsWith('.read.json');
-          const key = keyState.kind === 'key' ? keyState.key : null;
-          const signed = readJson && key !== null
-            ? readVerifiedReceipt(fullPath, receipt.id, 'read', { to: seat, root, session }, key)
-            : null;
-          const unverified = readJson && signed === null;
-          const clearedBy = signed === null ? null : leadAckActorOf(signed.payload.read_by);
+          // Verify the receipt exactly as the settle side does before it reads a status: a file
+          // this checkout's key never signed — unsigned, tampered, another message's, seat's,
+          // session's or checkout's — is no delivery, no read and no reply, so it raises no step
+          // and no clearance. The same check reads `read_by` back for a lead-ack receipt.
+          const signed = readVerifiedReceipt(fullPath, receipt.id, receipt.receipt, { to: seat, root, session }, receiptKey);
+          const clearedBy = signed === null || receipt.receipt !== 'read' ? null : leadAckActorOf(signed.payload.read_by);
           entry = {
             kind: 'receipt',
             receipt: receipt.receipt,
             id: receipt.id,
             at: fresh.mtimeIso,
-            ...(unverified ? { unverified: true as const } : {}),
+            ...(signed === null ? { unverified: true as const } : {}),
             ...(clearedBy === null ? {} : { clearedBy }),
           };
           storeEntry(state, seatDir, file, fresh.stamp, entry);
         } else {
           stats.filesReused += 1;
         }
-        // An unverified read receipt raises nothing: neither the read its name claims nor the
-        // clearance its unsigned bytes name.
+        // An unverified receipt raises nothing: neither the read, delivery or reply its name
+        // claims nor any clearance its unsigned bytes name, so a planted file can never look like
+        // an answer on the bus.
         if (entry.unverified === true) {
           yield;
           continue;

@@ -72,7 +72,9 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
 - Runs once when `team bus` starts and every `DEFAULT_RECONCILE_INTERVAL_SECONDS` (120s) thereafter.
 - Scans the durable records on disk:
   1. `.agents/send-drops/<session>/<seat>` for drop files (`message.arrived`), `.pending` markers
-     (`message.held`), and `.delivered`/`.read`/`.replied` receipts;
+     (`message.held`), and `.delivered.json`/`.read.json`/`.replied.json` receipts; a delivered or
+     replied receipt raises its step only when the checkout's message key signed it for that
+     message, and a bare `<id>.<status>` name — a spelling no build writes — raises nothing;
   2. `.agents/messages/<seat>` for signed message records (`message.arrived`) and `.read.json`
      receipts (`message.read`); an owner digest record the Runtime itself wrote (`from: runtime`,
      id `digest-<16 hex>`) summarizes events already in the log, so it raises nothing and is never
