@@ -209,8 +209,10 @@ tasks:
   test('the project registry’s word stands under the team file’s, and over auto', () => {
     fresh();
     fileRoot();
-    upsertTeam(home, teamIdOf(root), { project: 'acme', session: 'acme', root, at: AT });
-    upsertProject(home, 'acme', { name: 'Acme', teams: [teamIdOf(root)], senderName: 'seat', at: AT });
+    // The team joins the project on its own record: membership is stored there now, and the
+    // project side's team list is diagnostics only.
+    upsertTeam(home, teamIdOf(root), { project: 'acme', session: 'acme', root, projectId: 'acme', projects: ['acme'], at: AT });
+    upsertProject(home, 'acme', { name: 'Acme', senderName: 'seat', at: AT });
     expect(senderNameModeFor({ home, root })).toBe('seat');
     // The team file's word is nearer than the project's.
     fileRoot(`${TEAM}sender_name: nickname\n`);
@@ -315,12 +317,14 @@ describe('the project record’s sender_name word', () => {
 
   test('a written word reads back, and the record file carries it under sender_name', () => {
     fresh();
-    upsertProject(home, 'acme', { name: 'Acme', teams: ['acme-team'], senderName: 'seat@team', at: AT });
+    // ofTeam answers from the team record's projectId, so the team's own record makes the join.
+    upsertTeam(home, 'acme-team', { project: 'acme-team', session: 'acme-team', root: join(base, 'acme-team'), projectId: 'acme', projects: ['acme'], at: AT });
+    upsertProject(home, 'acme', { name: 'Acme', senderName: 'seat@team', at: AT });
     expect(ofTeam(home, 'acme-team')?.senderName).toBe('seat@team');
     expect(senderNameModeOf(ofTeam(home, 'acme-team'))).toBe('seat@team');
     expect(readFileSync(projectsFile(home), 'utf8')).toContain('sender_name: seat@team');
     // An upsert that names no word keeps the one written.
-    upsertProject(home, 'acme', { teams: ['acme-team', 'other-team'], at: AT });
+    upsertProject(home, 'acme', { at: AT });
     expect(ofTeam(home, 'acme-team')?.senderName).toBe('seat@team');
   });
 
