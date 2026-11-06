@@ -383,12 +383,14 @@ describe('consumed optional placeholder context', () => {
         for (const value of [undefined, null, '', 42, false, {}]) {
           const out = run(raw, { [key]: value }, args);
           expect(out.ok).toBe(false);
-          expect(codes(out.diagnostics)).toContain('E_PLACEHOLDER_CONTEXT');
+          // A supplied session that is not a nonempty string is the session-input refusal.
+          // Undefined is still a missing consumed placeholder.
+          const code = key === 'sessionArg' && value !== undefined ? 'E_RESUME_SESSION' : 'E_PLACEHOLDER_CONTEXT';
+          expect(codes(out.diagnostics)).toContain(code);
           expect(out).toMatchObject({ harness: '', executable: '', argv: [], env: [], chain: [],
             resume: { kind: 'none' }, sandbox: { harness: '', mechanism: '', folders: [] } });
-          const contextError = out.diagnostics.find((d) => d.code === 'E_PLACEHOLDER_CONTEXT');
-          expect(JSON.stringify(contextError)).not.toContain('/srv/example/');
-          expect(JSON.stringify(contextError)).not.toContain(token);
+          expect(JSON.stringify(out.diagnostics)).not.toContain('/srv/example/');
+          expect(JSON.stringify(out.diagnostics)).not.toContain(token);
         }
       });
       test(`${token} valid bytes at ${site} resolve without mutation`, () => {
@@ -456,6 +458,76 @@ describe('consumed optional placeholder context', () => {
     expect(out.argv).toEqual(['claude-code', '--model', 'example-model', '--effort', 'high']);
     expect(out.env).toContainEqual({ name: 'EXAMPLE_LITERAL', value: '{inbox}' });
     expect(out.resume).toEqual({ kind: 'preset_fixed', session: 'example-literal' });
+  });
+});
+
+describe('explicit caller-session input boundary', () => {
+  const modes = ['none', 'inline', 'fixed', 'state_file'] as const;
+  function definition(mode: typeof modes[number], precedence?: string) {
+    return { format: 1, name: 'input-example', kind: 'preset', harness: 'claude-code',
+      args: ['--model', 'example-model'], writable_folders: [{ path: '{root}' }],
+      resume: { mode, ...(mode === 'fixed' ? { path: 'example-fixed' } : {}),
+        ...(mode === 'state_file' ? { path: '{team-home}/lead-session' } : {}),
+        ...(precedence === undefined ? {} : { precedence }) } };
+  }
+  function run(raw: unknown, optional: Record<string, unknown> = {}) {
+    const ctx = Object.freeze({ ...CTX, ...optional }) as ResolveContext;
+    return resolveLaunch({ launcher: 'input-example', args: ['--effort', 'high'] },
+      discover([{ level: 'team', files: { 'input-example.yaml': raw } }]), ctx);
+  }
+  const invalid = ['', null, false, 0, 42, [], {}, () => 'example', Symbol('example')];
+  for (const precedence of [undefined, 'teamcli_wins', 'preset_wins']) {
+    for (const mode of modes) {
+      test(`invalid direct session refuses ${mode}/${precedence ?? 'default'} without a template`, () => {
+        const raw = definition(mode, precedence), before = JSON.stringify(raw);
+        for (const sessionArg of invalid) {
+          const out = run(raw, { sessionArg });
+          expect(out.ok).toBe(false);
+          expect(codes(out.diagnostics)).toContain('E_RESUME_SESSION');
+          expect(out).toMatchObject({ harness: '', executable: '', argv: [], env: [], chain: [],
+            resume: { kind: 'none' }, sandbox: { harness: '', mechanism: '', folders: [] } });
+          expect(out.diagnostics).toContainEqual({ code: 'E_RESUME_SESSION', severity: 'error',
+            launcher: 'input-example', message: 'a supplied caller session must be a nonempty string' });
+          expect(JSON.stringify(raw)).toBe(before);
+        }
+      });
+      test(`valid opaque direct session preserves ${mode}/${precedence ?? 'default'} selection and argv`, () => {
+        for (const sessionArg of ['example-session', '   ', 'Ω {inbox} {session} $& $$ $(literal);']) {
+          const out = run(definition(mode, precedence), { sessionArg });
+          expect(out.ok).toBe(true);
+          if (precedence !== 'preset_wins') expect(out.resume).toEqual({ kind: 'teamcli', session: sessionArg });
+          else expect(out.resume).toMatchObject(mode === 'state_file'
+            ? { kind: 'preset_state_file', path: '/srv/example/team-home/lead-session' }
+            : { kind: mode === 'none' ? 'none' : mode === 'inline' ? 'preset_inline' : 'preset_fixed' });
+          expect(out.argv).toEqual(['claude-code', '--model', 'example-model', '--effort', 'high']);
+        }
+      });
+      test(`omitted and explicit undefined agree for ${mode}/${precedence ?? 'default'}`, () => {
+        const raw = definition(mode, precedence);
+        expect(run(raw, { sessionArg: undefined })).toEqual(run(raw));
+        expect(run(raw).ok).toBe(true);
+      });
+    }
+  }
+  test('non-preset terminal rejects invalid session; absent and valid remain unchanged', () => {
+    const raw = { format: 1, name: 'input-example', kind: 'custom', argv: ['/bin/example'] };
+    for (const sessionArg of invalid) {
+      const out = run(raw, { sessionArg });
+      expect(out.ok).toBe(false);
+      expect(codes(out.diagnostics)).toContain('E_RESUME_SESSION');
+      expect(out.argv).toEqual([]);
+    }
+    expect(run(raw).resume).toEqual({ kind: 'none' });
+    expect(run(raw, { sessionArg: undefined })).toEqual(run(raw));
+    expect(run(raw, { sessionArg: 'Ω {inbox} $&' }).resume).toEqual({ kind: 'teamcli', session: 'Ω {inbox} $&' });
+  });
+  test('invalid supplied input is refused before reference resolution or coercion', () => {
+    const value = Object.freeze({ toString() { throw new Error('must not coerce example input'); } });
+    const out = resolveLaunch({ launcher: 'missing-example', args: ['example-private-argument'] },
+      { launchers: new Map(), diagnostics: [] }, { ...CTX, sessionArg: value } as unknown as ResolveContext);
+    expect(codes(out.diagnostics)).toEqual(['E_RESUME_SESSION']);
+    expect(out.argv).toEqual([]);
+    expect(JSON.stringify(out.diagnostics)).not.toContain('example-private-argument');
   });
 });
 

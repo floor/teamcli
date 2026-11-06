@@ -138,7 +138,7 @@ export type ResolveContext = {
   teamHome: string;
   cwd: string;
   inbox?: string;
-  /** The TeamCLI session argument, when `team up` passes one. */
+  /** Undefined means absent; supplied sessions must be nonempty opaque strings. */
   sessionArg?: string;
   /** The parent process environment, as explicit input (never read from process.env). */
   parentEnv?: Record<string, string>;
@@ -211,6 +211,9 @@ export function resolveLaunch(
       chain: [], diagnostics,
     };
   };
+  if (ctx.sessionArg !== undefined && (typeof ctx.sessionArg !== 'string' || ctx.sessionArg === '')) {
+    return fail('a supplied caller session must be a nonempty string', 'E_RESUME_SESSION');
+  }
   let missingContext = false;
   const expandWord = (word: string): string => {
     const value = expand(word, ctx);
