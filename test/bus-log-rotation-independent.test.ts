@@ -712,4 +712,55 @@ describe('a rotation declares the slot it already removed', () => {
     expect(readFileSync(oldest.path, 'utf8')).not.toBe(oldest.text);
     expect(declaresRange(world, oldest.newestSeq)).toBe(true);
   });
+
+  test('an idle live file still declares the slot a failed rotation removed', () => {
+    const world = makeWorld('idle-age');
+    const oldest = parkOldest(world);
+    const seal = `${oldest.path}${SEAL_SUFFIX}`;
+    rmSync(seal);
+    mkdirSync(seal);
+    const past = new Date(Date.now() - 3_600_000);
+    utimesSync(livePath(world), past, past);
+    pruneEventLog(PROJECT, world.root, world.home, {
+      kept: EARLY.kept,
+      retentionSeconds: 60,
+      maxTotalBytes: EARLY.maxTotalBytes,
+    });
+    expect(declaresRange(world, oldest.newestSeq)).toBe(true);
+  });
+
+  test('an unreadable oldest slot still appends a signed drop', () => {
+    const world = makeWorld('unreadable-range');
+    const oldest = parkOldest(world);
+    writeFileSync(oldest.path, 'not a signed segment\n');
+    const logPath = join(world.root, '.agents', LOG_FILE);
+    const before = existsSync(logPath) ? readFileSync(logPath, 'utf8') : '';
+    const result = appendEvent(
+      PROJECT,
+      world.root,
+      world.home,
+      {
+        ts: NOW.toISOString(),
+        kind: 'message.arrived',
+        session: 'acme',
+        record_id: 'unreadable-range',
+        from: 'lead',
+        to: 'builder',
+        seat: 'lead',
+        reason: 'r'.repeat(280),
+      },
+      EARLY,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const added = readFileSync(logPath, 'utf8').slice(before.length);
+    expect(added).toContain('retention dropped events.jsonl.2');
+    const read = readEvents(PROJECT, world.root, world.home, { kept: EARLY.kept });
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    const drop = read.events.find(
+      (event) => event.payload.kind === DROP_KIND && event.payload.dropped_oldest_seq === undefined,
+    );
+    expect(drop).toBeDefined();
+  });
 });
