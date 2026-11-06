@@ -696,8 +696,11 @@ describe('team up, live', () => {
     // record's waiting entry makes it known. It holds the replacement process, not the launch's.
     made.seed('w9:p1', PERMISSION, true);
     made.launch.processInfo = () => ({ shell: 900, foreground: [900, 901] });
+    // The pane comes from the fixture's own state record, never a pane-shaped literal: the
+    // host's list and the record must name the same pane.
+    const recordedPane = readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme']?.pane ?? '';
     const listed = (): HerdrAgent[] => [
-      { name: made.nameOn('w9:p1'), agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null },
+      { name: made.nameOn(recordedPane), agent: 'claude', pane: recordedPane, workspace: 'w9', status: 'idle', cwd: null },
     ];
     // The recorded pane's entry, plus the names this world's own renames put on the panes it
     // launches in the fresh workspace: the seat's rename is verified against that fresh reading.
@@ -1404,10 +1407,12 @@ describe('team up, live', () => {
     made.session = 'running';
     made.seed('w7:p1', IDLE, true);
     // Herdr's list as the interruption leaves it: the agent on the recorded pane carries no name,
-    // so the state's record is the only thing that knows the pane is this run's own.
+    // so the state's record is the only thing that knows the pane is this run's own. That pane is
+    // read from the record itself, never written as a pane-shaped literal.
+    const launchedPane = readState(join(root, '.agents')).sessions['acme-web']?.seats['deepseek-acme']?.pane ?? '';
     const listed = (): HerdrAgent[] => [
       agent('claude-coordinator-acme', 'w8:p1'),
-      { name: made.nameOn('w7:p1'), agent: 'deepseek', pane: 'w7:p1', workspace: 'w7', status: 'idle', cwd: null },
+      { name: made.nameOn(launchedPane), agent: 'deepseek', pane: launchedPane, workspace: 'w7', status: 'idle', cwd: null },
     ];
     const passed = {
       sessionState: () => 'running' as const,
@@ -2553,12 +2558,17 @@ describe('team up, a session that was restored', () => {
     // The execute pass re-reads the host's agent list directly before the close; once w92 is
     // closed the seat is gone from it, as herdr would report. Names this run's own renames put
     // on the panes it launches ride along: the repaired codex seat is named in its new pane.
+    // The recorded panes are read from the fixture's own state, never written as pane-shaped
+    // literals: the host's list and the records must name the same panes.
+    const recordedSeats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
+    const recordedCodexPane = recordedSeats['codex-acme']?.pane ?? '';
+    const recordedDeepseekPane = recordedSeats['deepseek-acme']?.pane ?? '';
     made.launch.agents = () => [
       ...(made.closes.includes('w92')
         ? []
         : [
-            { ...agent('codex-acme', 'w92:p1', 'idle', 'codex'), session: 'kept' },
-            { ...agent('deepseek-acme', 'w93:p1', 'idle'), session: 'kept' },
+            { ...agent('codex-acme', recordedCodexPane, 'idle', 'codex'), session: 'kept' },
+            { ...agent('deepseek-acme', recordedDeepseekPane, 'idle'), session: 'kept' },
           ]),
       ...liveNames(made),
     ];
@@ -4269,8 +4279,11 @@ describe('team up, the pause', () => {
     }));
     const made = world(IDLE);
     made.session = 'running';
+    // The waiting seat's pane, read from its own record rather than written out: the host's list
+    // and the record must name the same pane.
+    const waitingPane = readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme']?.pane ?? '';
     const listed = (): HerdrAgent[] => [
-      { name: made.nameOn('w9:p1'), agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null },
+      { name: made.nameOn(waitingPane), agent: 'claude', pane: waitingPane, workspace: 'w9', status: 'idle', cwd: null },
       agent('deepseek-acme', 'w2:p1'),
       agent('deepseek-acme-2', 'w3:p1'),
     ];
