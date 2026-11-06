@@ -2241,6 +2241,13 @@
       "provenance": "capture"
     },
     {
+      "file": "claude-code/2.1.319/idle.txt",
+      "cli": "claude-code",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
       "file": "claude-code/2.1.303/unsent-multiline-ansi.txt",
       "cli": "claude-code",
       "classify": "unsent",
