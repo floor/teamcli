@@ -225,7 +225,7 @@ function select(current: ArbitrationView, snapshot: Snapshot): ArbitrationDecisi
       prompt,
       promptCoverage: coverage,
       exit: process.exit,
-      disagreement: process.disagreement ?? disagreement,
+      disagreement,
       processFence: process.fence,
     },
     reason,
@@ -254,7 +254,7 @@ function applyProcess(
   snapshot: Snapshot,
   native: NativeSnap | null,
   gate: PermissionGate | null,
-): { readonly exit: ExitRepresentation; readonly fence: number | null; readonly reason: ArbitrationReason | null; readonly disagreement: ArbitrationReason | null } {
+): { readonly exit: ExitRepresentation; readonly fence: number | null; readonly reason: ArbitrationReason | null } {
   const confirmationNeeded = native !== null && native.processConfirmation === 'needed';
   const supplied = snapshot.process;
   if (supplied === null) {
@@ -262,7 +262,6 @@ function applyProcess(
       exit: confirmationNeeded ? 'confirmation-needed' : 'unproven',
       fence: current.processFence,
       reason: confirmationNeeded ? 'session_end_unconfirmed' : null,
-      disagreement: null,
     };
   }
   if (
@@ -274,7 +273,6 @@ function applyProcess(
       exit: confirmationNeeded && current.exit !== 'exited' ? 'confirmation-needed' : current.exit,
       fence: current.processFence,
       reason: confirmationNeeded && current.exit !== 'exited' ? 'session_end_unconfirmed' : 'process_mismatch',
-      disagreement: null,
     };
   }
   if (current.processFence !== null && supplied.fence <= current.processFence) {
@@ -282,7 +280,6 @@ function applyProcess(
       exit: current.exit,
       fence: current.processFence,
       reason: 'process_stale',
-      disagreement: null,
     };
   }
   if (supplied.exit === 'running') {
@@ -290,19 +287,18 @@ function applyProcess(
       exit: confirmationNeeded ? 'confirmation-needed' : 'unproven',
       fence: supplied.fence,
       reason: confirmationNeeded ? 'session_end_unconfirmed' : null,
-      disagreement: null,
     };
   }
   if (supplied.exit === 'clean') {
     if (gate !== null) {
-      return { exit: 'confirmation-needed', fence: supplied.fence, reason: 'exit_blocked_by_gate', disagreement: null };
+      return { exit: 'confirmation-needed', fence: supplied.fence, reason: 'exit_blocked_by_gate' };
     }
-    return { exit: 'exited', fence: supplied.fence, reason: 'clean_exit', disagreement: null };
+    return { exit: 'exited', fence: supplied.fence, reason: 'clean_exit' };
   }
   if (supplied.exit === 'abnormal') {
-    return { exit: 'unreachable', fence: supplied.fence, reason: 'abnormal_exit', disagreement: null };
+    return { exit: 'unreachable', fence: supplied.fence, reason: 'abnormal_exit' };
   }
-  return { exit: 'unconfirmed', fence: supplied.fence, reason: 'exit_unknown', disagreement: null };
+  return { exit: 'unconfirmed', fence: supplied.fence, reason: 'exit_unknown' };
 }
 
 function matches<T extends { readonly identity: Identity }>(tier: T | null, context: Identity): tier is T {

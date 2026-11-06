@@ -264,6 +264,54 @@ describe('source arbitration', () => {
     expect(arbitrateSources(current, snap({ native: native({ advisory: 'idle' }) })).reason).toBe('unsupported');
   });
 
+  test('a process reason overrides the selection reason while the gated view stays', () => {
+    const opened = run(initialArbitration(), {
+      native: native({ advisory: 'gated', gate: GATE }),
+      process: proc(1, 'running'),
+    });
+    expect(opened.reason).toBe('native_gate');
+    expect(opened.view.advisory).toBe('gated');
+    expect(opened.view.processFence).toBe(1);
+    const stale = arbitrateSources(opened.view, snap({
+      native: native({ advisory: 'gated', gate: GATE }),
+      screen: screen({ prompt: 'permission', advisory: 'quiet' }),
+      process: proc(1, 'clean'),
+    }));
+    expect(stale.reason).toBe('process_stale');
+    expect(stale.view.advisory).toBe('gated');
+    expect(stale.view.source).toBe('native');
+    expect(stale.view.gate).toEqual(GATE);
+    expect(stale.view.prompt).toBe('permission');
+    expect(stale.view.disagreement).toBe('prompt_classified');
+    expect(stale.view.exit).toBe('unproven');
+    expect(stale.view.processFence).toBe(1);
+    expect(stale.applied).toBe(true);
+  });
+
+  test('a foreign native tier is discarded and cannot import or clear a gate', () => {
+    const opened = run(initialArbitration(), {
+      native: native({ advisory: 'gated', gate: GATE }),
+    });
+    const kept = arbitrateSources(opened.view, snap({
+      native: native({ seatId: 'id-b', advisory: 'quiet', gate: null }),
+      host: host({ advisory: 'working' }),
+    }));
+    expect(kept.reason).toBe('native_gate');
+    expect(kept.view.advisory).toBe('gated');
+    expect(kept.view.gate).toEqual(GATE);
+    expect(kept.view.source).toBe('native');
+    const quiet = run(initialArbitration());
+    const fallback = arbitrateSources(quiet.view, snap({
+      native: native({ seatId: 'id-b', advisory: 'gated', gate: GATE }),
+      host: host({ advisory: 'working' }),
+    }));
+    expect(fallback.reason).toBe('host_fallback');
+    expect(fallback.view.source).toBe('host');
+    expect(fallback.view.advisory).toBe('working');
+    expect(fallback.view.gate).toBeNull();
+    expect(fallback.view.disagreement).toBeNull();
+  });
+
   test('leaves its inputs unchanged', () => {
     const current = initialArbitration();
     const input = snap({ native: native({ advisory: 'gated', gate: GATE }) });

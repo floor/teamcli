@@ -16,6 +16,18 @@ immediately. An explicitly current screen prompt may refine native quiet, or nat
 prompt coverage is partial. The winning source and a fixed disagreement reason are both kept. A
 screen prompt classifies; it does not authorize an answer.
 
+The decision reason can name a process fact while the view stays on the
+selected advisory. A stale or mismatched fact, for example, can set the
+reason to that fact even when the view remains gated. The view is the
+shown state. The reason says why this call accepted or refused the fact.
+Neither field carries a seat, incarnation, or process identity.
+
+A native tier whose seat or incarnation differs from the snapshot context
+is discarded before selection. That discard has no reason of its own. An
+open gate already on the view stays open, and the discarded tier cannot
+open or clear one. When no gate is open, host and then screen still apply
+as the current fallback.
+
 ## Gate and process proof
 
 An open native permission gate stays owner-required. Host and screen readings may attach a prompt
