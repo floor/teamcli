@@ -112,6 +112,11 @@ function signedMessage(w: World, id: string) {
     at: NOW.toISOString(), body: 'synthetic body ' + id, from: 'sender-fixture', from_id: null,
     rule: 'synthetic scene', thread: id }, w.home);
 }
+function signedRead(w: World, id: string): string {
+  return JSON.stringify(signReceiptPayload({
+    kind: 'receipt', status: 'read', id, to: 'lead', root: w.root, session: SESSION, at: NOW.toISOString(),
+  }, w.home));
+}
 function events(w: World): SignedEventRecord[] {
   const read = readEvents('meadow', w.root, w.home);
   expect(read.ok).toBe(true);
@@ -189,7 +194,7 @@ test('a changed record under the same name is re-read while its unchanged neighb
   expect(state.stats.filesRead).toBe(13);
   expect(state.stats.filesReused).toBe(0);
   drop(w, 'mutable', 'fresh-sender-with-new-bytes');
-  fs.writeFileSync(join(w.drops, 'mutable.read.json'), '{}');
+  fs.writeFileSync(join(w.drops, 'mutable.read.json'), signedRead(w, 'mutable'));
   const raised = await pass();
   expect(state.stats.filesRead).toBe(1);
   expect(state.stats.filesReused).toBe(12);
@@ -206,7 +211,7 @@ for (const receipt of ['read', 'replied'] as const) {
     const pass = passes(w);
     await pass();
     fs.unlinkSync(original);
-    fs.writeFileSync(join(w.drops, 'late-item.' + receipt + '.json'), '{}');
+    fs.writeFileSync(join(w.drops, 'late-item.' + receipt + '.json'), receipt === 'read' ? signedRead(w, 'late-item') : '{}');
     const raised = await pass();
     expect(raised.filter(event => event.payload.kind === 'message.' + receipt).map(event => ({ id: event.payload.record_id, from: event.payload.from })))
       .toEqual([{ id: 'late-item:' + receipt, from: 'departed-sender' }]);
@@ -525,7 +530,7 @@ for (const receipt of ['read', 'replied'] as const) {
       fs.unlinkSync(original);
       expect(await pass()).toEqual([]);
       expect(await pass()).toEqual([]);
-      fs.writeFileSync(join(w.drops, 'quiet-late.' + receipt + '.json'), '{}');
+      fs.writeFileSync(join(w.drops, 'quiet-late.' + receipt + '.json'), receipt === 'read' ? signedRead(w, 'quiet-late') : '{}');
       const result = restart ? freshProcessPass(w) : { first: await pass(), second: await pass() };
       expect(result.first.filter(event => event.payload.kind === 'message.' + receipt).map(event => ({ id: event.payload.record_id, from: event.payload.from, to: event.payload.to })))
         .toEqual([{ id: 'quiet-late:' + receipt, from: 'durable-sender', to: 'lead' }]);
