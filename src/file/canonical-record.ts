@@ -102,15 +102,16 @@ export function canonicalRecordBytes(value: unknown): Buffer {
   return Buffer.from(canonicalRecord(value), 'utf8');
 }
 
-/** A validated team as a record: the same value without the seats' source positions. An empty
- *  messaging map is the loaded form of a file that writes no messaging word, and it is left out
- *  so that file keeps the digest it had. Pure. */
+/** A validated team as a record: the same value without the seats' source positions. Empty
+ *  messaging and alsoIn are loaded defaults for omitted words; leave them out so old files keep
+ *  their frozen record bytes. Nonempty declarations keep their meaning. Pure. */
 export function teamRecordOf(team: { seats?: readonly object[] } & Record<string, unknown>): Record<string, unknown> {
   const copy: Record<string, unknown> = { ...team };
   const messaging = copy.messaging;
   if (messaging !== null && typeof messaging === 'object' && !Array.isArray(messaging) && Object.keys(messaging).length === 0) {
     delete copy.messaging;
   }
+  if (Array.isArray(copy.alsoIn) && copy.alsoIn.length === 0) delete copy.alsoIn;
   if (!Array.isArray(copy.seats)) return copy;
   return {
     ...copy,
