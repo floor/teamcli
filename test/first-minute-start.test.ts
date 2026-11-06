@@ -104,5 +104,34 @@ describe('team start without the admission door', () => {
     expect(await runStart(['--json'], again, sources)).toBe(0);
     expect(inits).toBe(1);
     expect(sends).toBe(1);
+    expect(noticed).toEqual([root]);
+  });
+
+  test('a folder that already holds a team is left as it is', async () => {
+    const { home, root } = world();
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    const registry = 'teams: {}\n';
+    writeFileSync(join(home, '.config', 'team', 'teams.yaml'), registry);
+    mkdirSync(join(root, '.agents'), { recursive: true });
+    const held = 'format: 1\nproject: real-team\n';
+    writeFileSync(join(root, '.agents', 'team.yaml'), held);
+    const noticed: string[] = [];
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runStart(['--json'], io, {
+      home,
+      loggedIn: (cli: string) => cli === 'grok' || cli === 'cursor',
+      notifyRoot: (path: string) => noticed.push(path),
+      daemonRunning: () => true,
+      init: async () => 0,
+      up: async () => 0,
+      check: () => true,
+      ready: () => ({ lead: true, builder: true }),
+      send: async () => ({ ok: true, id: 'msg-1', arrived: true, read: true, working: true, claimedTask: null }),
+    });
+    expect(readFileSync(join(root, '.agents', 'team.yaml'), 'utf8')).toBe(held);
+    expect(readFileSync(join(home, '.config', 'team', 'teams.yaml'), 'utf8')).toBe(registry);
+    expect(io.err).toContain('this folder already holds a team; run team up');
+    expect(code).toBe(1);
+    expect(noticed).toEqual([]);
   });
 });
