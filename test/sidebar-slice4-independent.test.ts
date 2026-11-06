@@ -266,6 +266,7 @@ describe('sidebar slice 4', () => {
     let session = 'absent' as 'absent' | 'running';
     let n = 0;
     const panes = new Map<string, string>();
+    const named = new Map<string, string>();
     const launch: Launch = {
       sessionState: () => session,
       startServer: () => {
@@ -280,13 +281,17 @@ describe('sidebar slice 4', () => {
         return { pane, workspace: `space-${String(n)}` };
       },
       paneRun: () => true,
-      renameAgent: () => true,
+      renameAgent: (_session, pane, name) => {
+        named.set(pane, name);
+        return true;
+      },
       reportDisplayAgent: report('up'),
       closeWorkspace: () => true,
       agentPanes: () => [...panes.keys()],
       agents: () =>
         [...panes.keys()].map((pane) => ({
-          name: '',
+          // A blank herdr name is null. The rename is listed only after it is recorded.
+          name: named.get(pane) ?? null,
           agent: 'claude',
           pane,
           workspace: 'space-1',
