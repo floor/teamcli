@@ -7,6 +7,8 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { withLauncherCover } from '../src/launch/launcher-cover.ts';
+import { upPlan } from '../src/launch/plan.ts';
+import { loadTeamLaunchers } from '../src/launch/resolve-flag.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
@@ -14,7 +16,7 @@ import type { Terminal } from '../src/launch/terminal.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { emptySession, updateState } from '../src/state.ts';
+import { emptySession, readState, updateState } from '../src/state.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { CLAUDE_IDLE, fixtureBase, recordRenames, testIo } from './helpers.ts';
 
@@ -280,14 +282,59 @@ describe('resolve-launch stays off unless named', () => {
       const { root, home, made } = prepare([one], undefined, true);
       const io = testIo(root, OWNER);
       const code = await runUp(['--resolve-launch'], io, sources(home, made));
+      const said = io.out + io.err;
+      if (seat.cli === 'grok') {
+        expect(code, `${seat.name}\n${said}`).not.toBe(0);
+        expect(said).toContain('no sandbox profile on this path');
+        expect(made.runs.some((run) => run.command.includes(seat.binary))).toBe(false);
+        release();
+        continue;
+      }
       const command = made.runs.map((run) => run.command).find((line) => line.includes(seat.binary));
-      expect(command, `${seat.name}\n${io.out}${io.err}`).toBeDefined();
+      expect(command, `${seat.name}\n${said}`).toBeDefined();
       expect(command).toContain('--from-resolver');
       expect(command).toContain(placedWord(seat.cli));
-      if (seat.cli === 'claude-code') expect(code, `${seat.name}\n${io.out}${io.err}`).toBe(0);
+      if (seat.cli === 'claude-code') {
+        expect(code, `${seat.name}\n${said}`).toBe(0);
+        const recorded = readState(join(root, '.agents')).sessions[SESSION]?.seats[seat.name]?.launch_line;
+        expect(recorded, said).toContain(seat.binary);
+      }
       release();
     }
   }, 30000);
+
+  test('flag on refuses a seat that needs the managed Codex endpoint', () => {
+    const seat = CLIS.find((one) => one.cli === 'codex');
+    if (seat === undefined) throw new Error('a scene names no codex seat');
+    const { root } = prepare([alone(seat)], undefined, true);
+    const steps = upPlan({
+      root,
+      session: SESSION,
+      sessionRunning: true,
+      watchAlive: true,
+      watchLabel: 'watch',
+      stateDir: join(root, '.agents'),
+      resolveLaunch: true,
+      launcherDiscovery: loadTeamLaunchers(root),
+      seats: [{
+        name: seat.name,
+        cli: 'codex',
+        launch: 'codex',
+        launcher: `${seat.name}-resolved`,
+        cwd: root,
+        label: seat.name,
+        stopped: false,
+        rules: 'Rules.',
+        repairLine: 'repair',
+        codexDaemon: 'on',
+        rulesFile: { path: join(root, 'rules.md'), line: 'rules' },
+      }],
+    });
+    const refusal = steps.find((step) => step.do?.do === 'refuse');
+    const why = refusal?.do?.do === 'refuse' ? refusal.do.why : '';
+    expect(why).toContain('managed Codex endpoint');
+    expect(steps.some((step) => step.do?.do === 'launch')).toBe(false);
+  });
 
   test('a missing placeholder refuses the launch and starts nothing', async () => {
     const seat = firstSeat();

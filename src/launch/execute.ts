@@ -885,9 +885,9 @@ export async function executePlan(
   // idle wait that follows reads the line it typed for submission, gives a line still sitting
   // at the prompt one more guarded Enter, and takes its end from the foreground.
   const reusedPanes = new Set<string>();
-  // The base recipe each seat's record keeps when this run records it: the plan's pinned line for
-  // a launched seat, never the expanded command above. A seat this run did not launch has no
-  // entry, so every later record of it keeps what its own earlier launch wrote.
+  // The line each seat's record keeps when this run records it. A resolved launch stores the
+  // plan's command. Every other launch stores the pinned recipe, never the expanded command.
+  // A seat this run did not launch has no entry, so a later record keeps what an earlier launch wrote.
   const recordLines = new Map<string, string>();
   const recordSeat = (seat: string, patch: Parameters<Host['record']>[1]): void => {
     const line = recordLines.get(seat);

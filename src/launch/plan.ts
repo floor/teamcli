@@ -1453,12 +1453,11 @@ export function upPlan(input: UpInput): Step[] {
     const launchWords = cliWordList(profile.cli, command);
     const rulesCarried = rulesLine !== undefined && profile.rulesPrompt !== null
       && launchWords !== null && launchWords.at(-1) === rulesLine;
-    // What the seat's record keeps as its launch line when this run records it: the same base
-    // recipe the record paths store today, with the profile's pins placed where the launch puts
-    // them — before the CLI's first delimiter, inside a proven script that runs the CLI. Never
-    // the expanded command — a dry run prints that and a pane runs it, and the record's line is
-    // the recipe, not the expansion. A profile that pins nothing records its base line unchanged.
-    const recordLine = pinnedRecordLine(profile.cli, seat.launch, profile.features);
+    // What the seat's record keeps as its launch line when this run records it. A resolved
+    // launch records the line the plan built, so check and restart compare that command.
+    // Every other launch keeps the base recipe, with the profile's pins placed where the
+    // launch puts them, never the expanded command.
+    const recordLine = fromResolver ? command : pinnedRecordLine(profile.cli, seat.launch, profile.features);
     // A managed Codex seat's endpoint, decided from the same signed policy that shaped the line:
     // the launch must be the Codex binary itself (a wrapper's own endpoint is not ours to bind),
     // and a `--remote` or `--no-daemon` the file already names is a collision, refused rather
@@ -1473,6 +1472,24 @@ export function upPlan(input: UpInput): Step[] {
       launch: seat.launch,
       command,
     });
+    if (fromResolver && profile.cli === 'grok') {
+      const why = 'resolve-launch refuses a Grok seat: no sandbox profile on this path';
+      steps.push({
+        kind: 'skip',
+        text: `${seat.name}: would refuse: ${why}`,
+        do: { do: 'refuse', seat: seat.name, why },
+      });
+      continue;
+    }
+    if (fromResolver && managedCodex) {
+      const why = 'resolve-launch refuses a seat that needs the managed Codex endpoint';
+      steps.push({
+        kind: 'skip',
+        text: `${seat.name}: would refuse: ${why}`,
+        do: { do: 'refuse', seat: seat.name, why },
+      });
+      continue;
+    }
     // The `waiting` guard is not this condition's alone: §5's seat is never launched again,
     // whatever its live-ness reads, so the wait above is the whole of its plan.
     if (wouldLaunch) {
