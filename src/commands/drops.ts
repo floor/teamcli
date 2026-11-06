@@ -14,8 +14,11 @@
 // inbox's own read (`readMessage`), and only then are their bodies printed. A file an earlier
 // build wrote is plain text no key can verify: it is skipped and counted, never served, and the
 // signed records around it are read as usual. A waiting message whose receipt name is uncertain
-// is named on stderr, one line per message, whether or not another body was served. The hook
-// takes no placed caller.
+// is named on stderr, one line per message, whether or not another body was served. The read
+// admits the seat itself, placed on the pane the state records for it — the turn-start hook runs
+// a shell inside the seat's own pane, so the pids place it as that seat — the owner, and a lead
+// (the orchestrator or the operator) on its own recorded pane. Any other caller is refused
+// before a record is read, so nothing is receipted for it.
 import { type KeyObject } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, watch, type FSWatcher } from 'node:fs';
 import { homedir } from 'node:os';
@@ -27,10 +30,14 @@ import {
   callerVerdict,
   describeCaller,
   judgeCallerOf,
+  mayChangeTeamVerdict,
   noPaneRefusal,
   standingOf,
+  type Caller,
+  type CallerVerdict,
 } from '../caller.ts';
 import { NOT_A_REPO, withoutFileOffer } from '../file/load.ts';
+import type { TeamFile } from '../file/types.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
 import { isBriefEpoch } from '../launch/brief-id.ts';
@@ -79,16 +86,20 @@ Options:
              --session, when given, must be the team file's. A record the
              launch wrote is served only as the seat's current general brief;
              an earlier delivery is skipped, never shown. The launch's
-             turn-start hook runs this, so it takes no placed caller.
+             turn-start hook runs this inside the seat's own pane, so its
+             caller is placed as that seat; the owner and a lead may read any
+             seat's drops. Every other caller is refused before a record is
+             read, so nothing is receipted for it.
   --seat     the seat whose folder --read serves
   --session  the launch's session, which must be the team file's own
   --epoch    the runtime epoch the launch started this reader under; when
              given, only a brief delivered under that epoch is served
 
-Exits 0 when the folder is read, 1 when the caller is not a placed seat of this
-team, the team file can't be read, or the drop folder can't be read or a
-waiting message cannot be read, 2 when the invocation can't be read or this
-folder is neither a checkout nor a team root.
+Exits 0 when the folder is read, 1 when the caller may not read it (the
+listing needs a placed seat of this team; --read needs the seat itself, the
+owner, or a lead), the team file can't be read, or the drop folder can't be
+read or a waiting message cannot be read, 2 when the invocation can't be read
+or this folder is neither a checkout nor a team root.
 `;
 
 /** One waiting drop: its file name (the send's id), the sender the message record names (or, in
@@ -346,6 +357,24 @@ function readOk(): number {
   return 0;
 }
 
+/** Who may read a seat's drops with `--read`: the seat itself, on the pane the state records for
+ *  it — the turn-start hook runs a shell inside the seat's own pane process tree, so the pids
+ *  place it as that seat — the owner, or a lead (the orchestrator or the operator) on its own
+ *  recorded pane. The name alone proves nothing: every seat answer is judged against the state's
+ *  recorded pane, exactly as the listing's is. */
+function readVerdict(
+  caller: Caller,
+  team: Pick<TeamFile, 'orchestrator' | 'operator'>,
+  dir: string,
+  session: string,
+  seat: string,
+): CallerVerdict {
+  if (caller.kind === 'owner') return { kind: 'ok' };
+  if (caller.kind !== 'seat') return { kind: 'refused' };
+  const at = standingOf(dir, session, caller);
+  return caller.name === seat ? callerVerdict(caller, seat, at) : mayChangeTeamVerdict(caller, team, at);
+}
+
 /** The refusal every caller that is not a placed seat of this team gets, and a read that served
  *  nothing: one line per message it names, so several uncertain records each keep their own. */
 function refuse(io: Io, json: boolean, ...messages: string[]): number {
@@ -425,8 +454,11 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
   const session = loaded.team.session;
   if (read) {
     // A launch's own invocation, as `team mcp serve` is: the seat and session are the launch
-    // line's, never a tool argument's, and the read serves exactly one folder. No placed caller
-    // is asked for — a CLI's turn-start hook runs outside any pane.
+    // line's, never a tool argument's, and the read serves exactly one folder. The caller is
+    // placed like the listing's: the turn-start hook runs inside the seat's own pane, so the
+    // pids name that seat; the owner and a lead may read any seat's drops. Every other caller is
+    // refused here, before a record is read, so nothing is receipted for it — and the owner
+    // hears the refusal as the rule and the seat it concerned.
     const readSession = args.values.session ?? session;
     if (readSession !== session) {
       return refuse(io, json, `the team's session is ${JSON.stringify(session)}, not ${JSON.stringify(readSession)}`);
@@ -434,6 +466,22 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     const seatName = args.values.seat as string;
     if (!loaded.team.seats.some((one) => one.name === seatName)) {
       return refuse(io, json, `the team file declares no seat ${JSON.stringify(seatName)}`);
+    }
+    const { caller, shown } = judgeCallerOf(io, readSession);
+    const verdict = readVerdict(caller, loaded.team, dir, readSession, seatName);
+    if (verdict.kind !== 'ok') {
+      raiseRefusalEvent({
+        project: loaded.team.project,
+        root: loaded.root,
+        home: sources.home,
+        session: readSession,
+        kind: 'security.refused',
+        rule: 'placement',
+        object: { seat: seatName },
+      });
+      if (verdict.kind === 'no-pane') return refuse(io, json, noPaneRefusal(verdict.name));
+      if (verdict.kind === 'another-pane') return refuse(io, json, anotherPaneRefusal(verdict.name, verdict.recordedPane));
+      return refuse(io, json, `--read serves the seat itself, the owner, or a lead; this call is ${describeCaller(shown)}`);
     }
     if (!dropFolderReadable(dir, readSession, seatName)) {
       return refuse(io, json, 'the drop folder is not a real folder: a link or a file stands in its path');

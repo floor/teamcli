@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import type { Seen, StoredReading } from '../src/budgets/readings.ts';
@@ -247,6 +248,67 @@ export function capturedProcessInfo(paneId: string, shellPid: number, foreground
     ],
     pane_id: paneId,
     shell_pid: shellPid,
+  };
+}
+
+/** A shell that runs where a seat's own pane runs, for a scene that executes an installed hook
+ *  command in a real subprocess instead of calling the command in-process. A hook is placed by
+ *  the pids it runs under: the walk reads the caller's parents, the server answers for the pane
+ *  the environment names with that pane's root pid, and the session's agent list names the seat
+ *  on that pane. This fixture gives the subprocess all three — a fake server on PATH beside the
+ *  fixture, `HERDR_PANE_ID` naming the pane, and the seat's standing recorded in the state — with
+ *  the pane's root read as the caller's own parent, the shell the pane forked the command under.
+ *  The command then places as the seat the launch named, as a hook inside the seat's pane does. */
+export type PaneShell = {
+  env: NodeJS.ProcessEnv;
+  /** Runs `command` in `cwd` the way the launch's hook does: in a plain shell under the pane. */
+  run(command: string, cwd: string): string;
+};
+
+export function paneShell(options: {
+  /** The folder the fake server lands in; the caller's PATH names it first. */
+  bin: string;
+  /** The team's folder (the one holding the team file), where the standing is recorded. */
+  dir: string;
+  session: string;
+  seat: string;
+  pane: string;
+  home: string;
+}): PaneShell {
+  mkdirSync(options.bin, { recursive: true });
+  // The session's agent list: one seat on the fixture's pane. A field the parser does not read
+  // is left out; the pane id is the one every lookup below uses.
+  const agents = JSON.stringify({
+    result: {
+      agents: [
+        { name: options.seat, agent: 'claude', pane_id: options.pane, workspace_id: 'fixture', agent_status: 'idle', cwd: null },
+      ],
+    },
+  });
+  const path = join(options.bin, 'herdr');
+  writeFileSync(path, `#!/bin/sh
+# Fixture server: the session's agent list, and the root pid of a pane. The pane's root is the
+# caller's own parent — the shell the pane runs the command under — so the pid proof holds.
+case "$*" in
+  *process-info*) printf '{"result":{"process_info":{"shell_pid":%s}}}\\n' "$(ps -o ppid= -p "$PPID" | tr -d ' ')" ;;
+  *agent*) printf '%s\\n' '${agents}' ;;
+  *) printf '{"result":{}}\\n' ;;
+esac
+`);
+  chmodSync(path, 0o755);
+  updateState(options.dir, (state) => {
+    const session = (state.sessions[options.session] ??= emptySession());
+    session.seats[options.seat] = { ...session.seats[options.seat], stage: 'ready', pane: options.pane };
+  });
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: options.home,
+    HERDR_PANE_ID: options.pane,
+    PATH: [options.bin, process.env.PATH].filter(Boolean).join(':'),
+  };
+  return {
+    env,
+    run: (command, cwd) => execFileSync('sh', ['-c', command], { cwd, encoding: 'utf8', env }),
   };
 }
 

@@ -20,7 +20,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readEvents } from '../src/bus/log.ts';
-import type { Caller } from '../src/caller.ts';
+import { placeCaller, type Caller, type CallerSources } from '../src/caller.ts';
 import { listDrops, runDrops, senderOf, USAGE, type DropsSources } from '../src/commands/drops.ts';
 import { plantRecord } from '../src/commands/messages.ts';
 import { generalBriefRecord, GENERAL_BRIEF_SHA256, currentBriefClaim } from '../src/launch/general-brief.ts';
@@ -508,20 +508,20 @@ describe('team drops in a folder that is not a git repository', () => {
   });
 });
 
-describe('team drops --read', () => {
-  /** The signed read receipt beside a message: verified against the checkout's message key,
-   *  bound to this message, seat, checkout and session, and 0600. */
-  function expectReceipt(id: string, seat = 'lead'): void {
-    const at = receiptPath(dropDir, id);
-    const receipt = signedReceiptOf(JSON.parse(readFileSync(at, 'utf8')));
-    const key = messageKeyState(home);
-    if (receipt === null || key.kind !== 'key') throw new Error('no signed receipt or no message key');
-    expect(verifyReceipt(receipt, key.key)).toBe(true);
-    expect(receipt.payload).toMatchObject({ kind: 'receipt', status: 'read', id, to: seat, root, session: 'acme' });
-    expect(statSync(at).mode & 0o777).toBe(0o600);
-  }
+/** The signed read receipt beside a message: verified against the checkout's message key,
+ *  bound to this message, seat, checkout and session, and 0600. */
+function expectReceipt(id: string, seat = 'lead', dir = dropDir): void {
+  const at = receiptPath(dir, id);
+  const receipt = signedReceiptOf(JSON.parse(readFileSync(at, 'utf8')));
+  const key = messageKeyState(home);
+  if (receipt === null || key.kind !== 'key') throw new Error('no signed receipt or no message key');
+  expect(verifyReceipt(receipt, key.key)).toBe(true);
+  expect(receipt.payload).toMatchObject({ kind: 'receipt', status: 'read', id, to: seat, root, session: 'acme' });
+  expect(statSync(at).mode & 0o777).toBe(0o600);
+}
 
-  test('the launch read serves the seat with no placed caller, receipting each record before its body', async () => {
+describe('team drops --read', () => {
+  test('the launch read serves the seat its launch names, receipting each record before its body', async () => {
     plantRecord(home, root, 'acme', 'lead', D_RECORD, 'hello');
     const first = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
     expect(first).toEqual({ code: 0, out: 'hello\n', err: '' });
@@ -572,7 +572,7 @@ describe('team drops --read', () => {
     expect(result).toEqual({ code: 0, out: '', err: '' });
   });
 
-  test('--read is an invocation of the launch line, never a placed caller', async () => {
+  test('--read is an invocation of the launch line: --seat is required and its own flags are refused', async () => {
     const noSeat = await run(['--read']);
     expect(noSeat).toEqual({ code: 2, out: '', err: 'team drops: --read needs --seat <seat>\n' + USAGE });
 
@@ -815,5 +815,121 @@ describe('team drops --read', () => {
       out: '',
       err: 'team drops: the drop folder is not a real folder: a link or a file stands in its path\n',
     });
+  });
+});
+
+// What `--read` admits: the seat itself, placed on the pane the state records for it — the
+// launch's turn-start hook runs a shell inside the seat's own pane process tree, so the pids
+// place it as the seat — the owner, and a lead (the orchestrator or operator) on its own
+// recorded pane. Every other caller is refused before a record is read, so no receipt is
+// written for it, and the owner hears the refusal as one event naming the seat, never a body.
+describe('team drops --read caller placement', () => {
+  const READ = ['--read', '--seat', 'lead', '--session', 'acme'];
+
+  /** The turn-start hook's own process tree: the shell the seat's CLI spawned for the hook, the
+   *  CLI above it, the pane's root shell, and the terminal host's server. The host answers only
+   *  when the session is named, as the hook's own invocation names it; `unanswered` is the host
+   *  that answers nothing, which places no one. */
+  function hookSources(unanswered = false): (session: string | undefined) => CallerSources {
+    const paneRoot = 2_400;
+    return (session) => ({
+      ancestors: () => [
+        { pid: 2_440, name: 'sh' },
+        { pid: 2_420, name: 'claude' },
+        { pid: paneRoot, name: 'zsh' },
+        { pid: 2_000, name: 'herdr' },
+      ],
+      agents: () => (unanswered || session === undefined
+        ? null
+        : [{ name: 'lead', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: root }]),
+      paneRootPid: () => paneRoot,
+      env: { HERDR_PANE_ID: 'w1:p1' },
+      stdinIsTTY: false,
+    });
+  }
+
+  async function runPlaced(
+    argv: string[],
+    sources: (session: string | undefined) => CallerSources,
+  ): Promise<{ code: number; out: string; err: string }> {
+    const io = testIo(root);
+    io.callerSources = sources;
+    const code = await runDrops(argv, io, { home });
+    return { code, out: io.out, err: io.err };
+  }
+
+  test('the turn-start hook places as the seat by its pane process tree, and reads its own drops', async () => {
+    // The placement itself, before the command runs: a shell under the seat's CLI, under the pane
+    // root the host reports, is the seat — never the owner and never unplaced.
+    expect(placeCaller(hookSources()('acme'), 'acme')).toEqual({
+      kind: 'seat',
+      name: 'lead',
+      pane: 'w1:p1',
+      session: 'acme',
+    });
+    plantRecord(home, root, 'acme', 'lead', D_RECORD, 'hello from the launch');
+    const result = await runPlaced(READ, hookSources());
+    expect(result).toEqual({ code: 0, out: 'hello from the launch\n', err: '' });
+    expectReceipt(D_RECORD);
+  });
+
+  test('another seat is refused before a record is read, and nothing is receipted', async () => {
+    plantRecord(home, root, 'acme', 'lead', D_RECORD, 'for the lead only');
+    const result = await run(READ, seatCaller('worker', 'w1:p2'));
+    expect(result).toEqual({
+      code: 1,
+      out: '',
+      err: 'team drops: --read serves the seat itself, the owner, or a lead; this call is worker\n',
+    });
+    // Nothing was handed over and nothing was receipted: the message still waits for its seat.
+    expect(existsSync(receiptPath(dropDir, D_RECORD))).toBe(false);
+    expect(listUnread(dropDir, { to: 'lead', root, session: 'acme' }, home).map((message) => message.id)).toEqual([D_RECORD]);
+    expect(result.out).not.toContain('for the lead only');
+    expect(result.err).not.toContain('for the lead only');
+    // The owner hears the refusal as the rule and the seat, never the body.
+    const events = readEvents('acme', root, home);
+    expect(events.ok).toBe(true);
+    if (!events.ok) return;
+    const refused = events.events.filter((event) => event.payload.kind === 'security.refused');
+    expect(refused).toHaveLength(1);
+    expect(refused[0]!.payload).toMatchObject({ session: 'acme', rule: 'placement', seat: 'lead' });
+    expect(JSON.stringify(events.events)).not.toContain('for the lead only');
+    expect(readFileSync(join(root, '.agents', 'team.log'), 'utf8')).toContain('security.refused placement lead');
+  });
+
+  test('a shell no placement names reads nothing', async () => {
+    plantRecord(home, root, 'acme', 'lead', D_RECORD, 'held for the lead');
+    const result = await runPlaced(READ, hookSources(true));
+    expect(result).toEqual({
+      code: 1,
+      out: '',
+      err: "team drops: --read serves the seat itself, the owner, or a lead; this call is unplaced (it runs under herdr, and herdr doesn't answer)\n",
+    });
+    expect(existsSync(receiptPath(dropDir, D_RECORD))).toBe(false);
+  });
+
+  test('the owner reads any seat’s drops', async () => {
+    plantRecord(home, root, 'acme', 'worker', D_RECORD, 'mail for the worker');
+    const result = await run(['--read', '--seat', 'worker', '--session', 'acme'], { kind: 'owner' });
+    expect(result).toEqual({ code: 0, out: 'mail for the worker\n', err: '' });
+    expectReceipt(D_RECORD, 'worker', join(root, '.agents', 'send-drops', 'acme', 'worker'));
+  });
+
+  test('a lead reads another seat’s drops from its own recorded pane', async () => {
+    plantRecord(home, root, 'acme', 'worker', D_RECORD_READ, 'other mail for the worker');
+    const result = await run(['--read', '--seat', 'worker', '--session', 'acme'], seatCaller('lead', 'w1:p1'));
+    expect(result).toEqual({ code: 0, out: 'other mail for the worker\n', err: '' });
+    expectReceipt(D_RECORD_READ, 'worker', join(root, '.agents', 'send-drops', 'acme', 'worker'));
+  });
+
+  test('a lead on a pane the state does not record for it is refused with the repair', async () => {
+    plantRecord(home, root, 'acme', 'worker', D_RECORD, 'mail for the worker');
+    const result = await run(['--read', '--seat', 'worker', '--session', 'acme'], seatCaller('lead', 'w1:p9'));
+    expect(result).toEqual({
+      code: 1,
+      out: '',
+      err: 'team drops: the state records pane w1:p1 for seat lead in this session, not the pane this call is on: a lead stops the team and starts it again (`team down`, then `team up`)\n',
+    });
+    expect(existsSync(receiptPath(join(root, '.agents', 'send-drops', 'acme', 'worker'), D_RECORD))).toBe(false);
   });
 });
