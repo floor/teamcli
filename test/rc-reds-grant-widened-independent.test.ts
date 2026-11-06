@@ -276,12 +276,13 @@ describe('fix/rc-reds-grant-widened independent verification', () => {
   });
 
   test('probe 4: wildcards admit order and trace immediately and follow the unreleased-ops rule', () => {
-    // 4a. Every command in the dispatcher is in GENERAL_OPS, and no op is unshipped after 0.5.12:
+    // 4a. Every command in the dispatcher is in GENERAL_OPS. An op no release has shipped stays
+    // unreleased, so an older wildcard does not gain it. checkpoint and show have no release yet.
     for (const cmd of Object.keys(commands)) {
       expect(GENERAL_OPS as readonly string[]).toContain(cmd);
     }
     const unreleased = GENERAL_OPS.filter((op: GeneralOp) => OP_FIRST_SHIPPED[op] === null).sort();
-    expect(unreleased).toEqual([]);
+    expect(unreleased).toEqual(['checkpoint', 'show']);
 
     // 4b. A wildcard grant signed at v0.5.11 admits `order` and `trace` right now, and reports the
     // four ops 0.5.12 first shipped as having shipped in a later release:
