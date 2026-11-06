@@ -722,8 +722,6 @@ function declareDrop(
     (drop): drop is DroppedSegment & { oldestSeq: number; newestSeq: number } =>
       drop.oldestSeq !== null && drop.newestSeq !== null,
   );
-  if (named.length === 0) return;
-  const newest = Math.max(...named.map((drop) => drop.newestSeq));
   const byAge = drops.some((drop) => drop.bounds.includes('age'));
   const bySize = drops.some((drop) => drop.bounds.includes('rotation') || drop.bounds.includes('total'));
   const reason = byAge && bySize ? 'age or size' : byAge ? 'age' : 'size';
@@ -732,7 +730,8 @@ function declareDrop(
   // The declared floor is the oldest sequence retention has dropped, carried forward from the
   // declaration records still retained and from those inside the segments this pass removes.
   // Without it, a size-capped log would drop each declaration with the segment that held it and
-  // the older holes would look undeclared.
+  // the older holes would look undeclared. A slot whose range cannot be read still gets a signed
+  // drop: the range fields stay off it, so the hole is declared rather than only a team log line.
   let floor: number | null = null;
   const lower = (value: number | null): void => {
     if (value === null) return;
@@ -748,8 +747,10 @@ function declareDrop(
       lower(record.payload.dropped_oldest_seq ?? null);
     }
   }
-  if (floor === null) return;
-  const oldest: number = floor;
+  const ranged = named.length > 0 && floor !== null;
+  if (named.length > 0 && floor === null) return;
+  const newest = ranged ? Math.max(...named.map((drop) => drop.newestSeq)) : null;
+  const oldest = ranged ? floor : null;
   appendEvent(
     project,
     root,
@@ -758,16 +759,19 @@ function declareDrop(
       ts: new Date().toISOString(),
       kind: 'team.event-log-dropped',
       session,
-      record_id: `retention:${String(oldest)}-${String(newest)}`,
+      record_id: ranged
+        ? `retention:${String(oldest)}-${String(newest)}`
+        : `retention:unreadable:${drops.map((drop) => drop.name).join(',')}`,
       reason,
-      dropped_oldest_seq: oldest,
-      dropped_newest_seq: newest,
+      ...(ranged && oldest !== null && newest !== null
+        ? { dropped_oldest_seq: oldest, dropped_newest_seq: newest }
+        : {}),
     },
     {
       kept,
       deduplicate: true,
       retain: false,
-      ...(retainedNewest === null ? { seqOverride: newest + 1 } : {}),
+      ...(ranged && newest !== null && retainedNewest === null ? { seqOverride: newest + 1 } : {}),
     },
   );
 }
