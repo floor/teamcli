@@ -37,6 +37,7 @@ import { canonicalTeam } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { logLine } from '../log.ts';
+import { LockBusyError } from '../state.ts';
 import { findAgent, getAgent, isAgentId } from '../registry/agents.ts';
 import { readStoredTeamConfig } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
@@ -765,11 +766,19 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
   const bufferLimit = input.bufferLimit ?? DEFAULT_SUBSCRIBER_BUFFER_LIMIT;
   const reconcileIntervalMs = input.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_SECONDS * 1000;
   // Retention before the first event: a team back after an idle month drops its old segments now.
-  pruneEventLog(input.team.project, input.root, home, {
-    kept: input.keptLogFiles,
-    maxTotalBytes: input.maxTotalLogBytes,
-    retentionSeconds: input.retentionSeconds,
-  });
+  // A held key does not pause this start. The reconcile pass retries the whole prune.
+  let pruneDeferred = false;
+  try {
+    pruneEventLog(input.team.project, input.root, home, {
+      kept: input.keptLogFiles,
+      maxTotalBytes: input.maxTotalLogBytes,
+      retentionSeconds: input.retentionSeconds,
+      lockWaitMs: 0,
+    });
+  } catch (error) {
+    if (!(error instanceof LockBusyError)) throw error;
+    pruneDeferred = true;
+  }
   // A store written before seals existed is sealed by the reconcile pass's first read, sliced, so
   // no segment verification runs on the start path before the bus can serve.
   // The sealed set is verified once at start, without reading a sealed segment: a sidecar that
@@ -930,6 +939,7 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
     // large store never blocks the bus's event loop; `reconcileNow` joins a pass already in
     // flight instead of starting a second one over the same records.
     const reconcileState = createReconcileState();
+    if (!pruneDeferred) reconcileState.pruneDone = true;
     // The first pass's own record, kept for a reader that must not be told the bus is caught up
     // while the scan still runs. The state's counters reset at the start of every later pass, so
     // the total is captured when the first pass settles; `doneAt` is the settle marker, and the
