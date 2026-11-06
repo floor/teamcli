@@ -1,0 +1,7 @@
+{
+  "method": "thread/status/changed",
+  "params": {
+    "threadId": "thr_example",
+    "status": { "type": "idle" }
+  }
+}

@@ -1,0 +1,156 @@
+{
+  "acceptanceComplete": false,
+  "positiveLifecycleCoverage": false,
+  "observedTargetMethods": ["thread/started"],
+  "missingTargetMethods": [
+    "thread/status/changed",
+    "turn/started",
+    "turn/completed",
+    "item/started",
+    "item/completed",
+    "serverRequest/resolved",
+    "thread/closed",
+    "item/commandExecution/requestApproval",
+    "item/fileChange/requestApproval",
+    "item/permissions/requestApproval",
+    "item/tool/requestUserInput",
+    "mcpServer/elicitation/request"
+  ],
+  "realCapturedFixtures": [
+    "captured-thread-started-20261106T144757Z.json",
+    "captured-thread-started-20261106T145950Z.json",
+    "captured-turn-start-error.json"
+  ],
+  "entries": [
+    {
+      "file": "measured-status-active.json",
+      "evidenceClass": "repository-measured-history",
+      "sourceCommit": "63e07e1d1542ff5b068bd2ae8d450140cca8aa24",
+      "sourcePath": "test/codex-presence-source.test.ts",
+      "sourceDescription": "Comment records a 2026-10-20 measured shape for thread/status/changed active with an empty activeFlags array. This file uses a synthetic thread id. It is not an original captured payload.",
+      "cliVersion": "0.161.0",
+      "appServerVersion": "0.163.0",
+      "measurementDate": "2026-10-20",
+      "captureSource": null,
+      "captureDate": null,
+      "countsAsRealCapturedFixture": false
+    },
+    {
+      "file": "measured-status-idle.json",
+      "evidenceClass": "repository-measured-history",
+      "sourceCommit": "63e07e1d1542ff5b068bd2ae8d450140cca8aa24",
+      "sourcePath": "test/codex-presence-source.test.ts",
+      "sourceDescription": "Comment records a measured thread/status/changed idle shape. Synthetic thread id. Not an original captured payload. Turn events and waiting flags were not observed.",
+      "cliVersion": "0.161.0",
+      "appServerVersion": "0.163.0",
+      "measurementDate": "2026-10-20",
+      "captureSource": null,
+      "captureDate": null,
+      "countsAsRealCapturedFixture": false
+    },
+    {
+      "file": "measured-thread-started.json",
+      "evidenceClass": "repository-measured-history",
+      "sourceCommit": "63e07e1d1542ff5b068bd2ae8d450140cca8aa24",
+      "sourcePath": "test/codex-presence-source.test.ts",
+      "sourceDescription": "Comment records thread/started with thread.id and status.type idle. This notification frame is a synthetic stand-in for that object shape, not an original capture.",
+      "cliVersion": "0.161.0",
+      "appServerVersion": "0.163.0",
+      "measurementDate": "2026-10-20",
+      "captureSource": null,
+      "captureDate": null,
+      "countsAsRealCapturedFixture": false
+    },
+    {
+      "file": "doc-status-waiting.json",
+      "evidenceClass": "documentation-example",
+      "sourceUrl": "https://learn.chatgpt.com/docs/app-server",
+      "accessed": "2026-11-06",
+      "sourceDescription": "Track thread status changes example: active with activeFlags waitingOnApproval. Documentation example, not a capture.",
+      "captureSource": null,
+      "captureDate": null,
+      "countsAsRealCapturedFixture": false
+    },
+    {
+      "file": "doc-turn-started.json",
+      "evidenceClass": "documentation-example",
+      "sourceUrl": "https://learn.chatgpt.com/docs/app-server",
+      "accessed": "2026-11-06",
+      "sourceDescription": "Message schema notification example for turn/started. Documentation example, not a capture. Local measured history did not observe turn events.",
+      "captureSource": null,
+      "captureDate": null,
+      "countsAsRealCapturedFixture": false
+    },
+    {
+      "file": "doc-thread-closed.json",
+      "evidenceClass": "documentation-example",
+      "sourceUrl": "https://learn.chatgpt.com/docs/app-server",
+      "accessed": "2026-11-06",
+      "sourceDescription": "Unsubscribe section example of thread/closed after notLoaded. Documentation example, not a capture and not process-exit proof.",
+      "captureSource": null,
+      "captureDate": null,
+      "countsAsRealCapturedFixture": false
+    },
+    {
+      "file": "doc-server-request-resolved.json",
+      "evidenceClass": "documentation-example",
+      "sourceUrl": "https://learn.chatgpt.com/docs/app-server",
+      "accessed": "2026-11-06",
+      "sourceDescription": "Approvals section describes serverRequest/resolved as answer or cleanup. The request id here is a synthetic stand-in for that documented shape, not a capture.",
+      "captureSource": null,
+      "captureDate": null,
+      "countsAsRealCapturedFixture": false
+    },
+    {
+      "file": "doc-status-not-loaded.json",
+      "evidenceClass": "documentation-example",
+      "sourceUrl": "https://learn.chatgpt.com/docs/app-server",
+      "accessed": "2026-11-06",
+      "sourceDescription": "Unsubscribe section example of thread/status/changed notLoaded before thread/closed. Documentation example, not a capture.",
+      "captureSource": null,
+      "captureDate": null,
+      "countsAsRealCapturedFixture": false
+    },
+    {
+      "file": "captured-thread-started-20261106T144757Z.json",
+      "evidenceClass": "sanitized-original-capture",
+      "protocol": "app-server stdio",
+      "cliVersion": "0.161.0",
+      "threadCliVersion": "0.161.0",
+      "appServerVersion": null,
+      "captureStart": "2026-11-06T14:47:57.492911Z",
+      "captureEnd": "2026-11-06T14:47:59.098093Z",
+      "sanitizedSha256": "433357bc1e22af60503055e660fbaba17a19d5b48e6a9f3e30b5df10fd7b997a",
+      "sourceDescription": "Sanitized server thread/started from the first stdio capture. Top-level emittedAtMs is the original value. Turn start was rejected with JSON-RPC -32600 before acceptance. Not a lifecycle, gate, or process proof.",
+      "countsAsRealCapturedFixture": true
+    },
+    {
+      "file": "captured-thread-started-20261106T145950Z.json",
+      "evidenceClass": "sanitized-original-capture",
+      "protocol": "app-server stdio",
+      "cliVersion": "0.161.0",
+      "threadCliVersion": "0.161.0",
+      "appServerVersion": null,
+      "captureStart": "2026-11-06T14:59:50.985966Z",
+      "captureEnd": "2026-11-06T14:59:51.647835Z",
+      "sanitizedSha256": "4877d02fc9df74eb60d6284e3949abece0730ec51270dfb754f4daad340bd813",
+      "sourceDescription": "Sanitized server thread/started from the second and final stdio capture. Top-level emittedAtMs is the original value. Turn start was rejected with JSON-RPC -32600 before acceptance. No third capture. Not a lifecycle, gate, or process proof.",
+      "countsAsRealCapturedFixture": true
+    },
+    {
+      "file": "captured-turn-start-error.json",
+      "evidenceClass": "sanitized-original-capture",
+      "protocol": "app-server stdio",
+      "cliVersion": "0.161.0",
+      "threadCliVersion": "0.161.0",
+      "appServerVersion": null,
+      "captureStarts": [
+        "2026-11-06T14:47:57.492911Z",
+        "2026-11-06T14:59:50.985966Z"
+      ],
+      "sanitizedSha256": "f6b0544ee0781bc27dc210ebee47c3ffa34891d2aad5614f7ecdc41f4765e1ef",
+      "sourceDescription": "Sanitized server error response for the rejected turn/start. The sanitized bytes are identical in both captures. This is an error role, not an observed turn, tool, approval, or close.",
+      "countsAsRealCapturedFixture": true
+    }
+  ]
+}
