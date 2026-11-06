@@ -305,6 +305,27 @@ describe('native observation candidate', () => {
     expect(done.outcome.reason).toBe('unsupported');
   });
 
+  test('a throwing accessor is a malformed refusal and the prior state stays', () => {
+    const state = opened();
+    const observationInput = { get source() { throw new Error('synthetic-accessor-error'); } };
+    expect(() => reduceNativeObservation(state, observationInput)).not.toThrow();
+    const reduced = reduceNativeObservation(state, observationInput);
+    expect(reduced.state).toBe(state);
+    expect(reduced.outcome).toEqual({ accepted: false, applied: false, reason: 'malformed' });
+    expect(JSON.stringify(reduced)).not.toContain('synthetic-accessor-error');
+    const initial = initialNativeCandidate();
+    const contextInput = {
+      incarnation: 'inc-a',
+      mainTurn: 'turn-a',
+      get seatId() { throw new Error('synthetic-accessor-error'); },
+    };
+    expect(() => establishContext(initial, contextInput)).not.toThrow();
+    const established = establishContext(initial, contextInput);
+    expect(established.state).toBe(initial);
+    expect(established.outcome).toEqual({ accepted: false, applied: false, reason: 'malformed' });
+    expect(JSON.stringify(established)).not.toContain('synthetic-accessor-error');
+  });
+
   test('leaves its inputs unchanged', () => {
     const state = opened();
     const snapshot = structuredClone(state);

@@ -361,61 +361,83 @@ function copyState(state: NativeCandidateState): NativeCandidateState {
 }
 
 function parseContext(value: unknown): LogicalContext | null {
-  if (!isRecord(value)) return null;
-  const keys = Object.keys(value);
-  if (keys.length !== 3 || !keys.every((key) => key === 'seatId' || key === 'incarnation' || key === 'mainTurn')) {
+  try {
+    const record = ownData(value);
+    if (record === null) return null;
+    const keys = Object.keys(record);
+    if (keys.length !== 3 || !keys.every((key) => key === 'seatId' || key === 'incarnation' || key === 'mainTurn')) {
+      return null;
+    }
+    if (!isToken(record.seatId) || !isToken(record.incarnation) || !isToken(record.mainTurn)) return null;
+    return { seatId: record.seatId, incarnation: record.incarnation, mainTurn: record.mainTurn };
+  } catch {
     return null;
   }
-  if (!isToken(value.seatId) || !isToken(value.incarnation) || !isToken(value.mainTurn)) return null;
-  return { seatId: value.seatId, incarnation: value.incarnation, mainTurn: value.mainTurn };
 }
 
 function parseObservation(input: unknown): Parsed {
-  if (!isRecord(input)) return { ok: false, reason: 'malformed' };
-  for (const key of Object.keys(input)) {
-    if (!FIELDS.has(key)) return { ok: false, reason: 'malformed' };
-  }
-  if (input.source !== 'native') {
-    return { ok: false, reason: typeof input.source === 'string' ? 'unsupported' : 'malformed' };
-  }
-  if (!isSeq(input.seq) || typeof input.kind !== 'string') return { ok: false, reason: 'malformed' };
-  if (!isKind(input.kind)) {
-    return { ok: false, reason: isToken(input.kind) ? 'unsupported' : 'malformed' };
-  }
-  if (!isToken(input.seatId) || !isToken(input.incarnation) || !isToken(input.mainTurn)) {
+  try {
+    const record = ownData(input);
+    if (record === null) return { ok: false, reason: 'malformed' };
+    for (const key of Object.keys(record)) {
+      if (!FIELDS.has(key)) return { ok: false, reason: 'malformed' };
+    }
+    if (record.source !== 'native') {
+      return { ok: false, reason: typeof record.source === 'string' ? 'unsupported' : 'malformed' };
+    }
+    if (!isSeq(record.seq) || typeof record.kind !== 'string') return { ok: false, reason: 'malformed' };
+    if (!isKind(record.kind)) {
+      return { ok: false, reason: isToken(record.kind) ? 'unsupported' : 'malformed' };
+    }
+    if (!isToken(record.seatId) || !isToken(record.incarnation) || !isToken(record.mainTurn)) {
+      return { ok: false, reason: 'malformed' };
+    }
+    if (record.lane !== 'main' && record.lane !== 'subagent') return { ok: false, reason: 'malformed' };
+    const toolId = optionalToken(record.toolId);
+    const gateId = optionalToken(record.gateId);
+    const binding = optionalToken(record.binding);
+    if (!toolId.ok || !gateId.ok || !binding.ok) return { ok: false, reason: 'malformed' };
+    if (record.ownerRequired !== undefined && typeof record.ownerRequired !== 'boolean') {
+      return { ok: false, reason: 'malformed' };
+    }
+    const advisory = parseAdvisory(record.advisory);
+    if (advisory === 'bad') return { ok: false, reason: 'malformed' };
+    if (record.kind === 'candidate-state') {
+      if (advisory === undefined) return { ok: false, reason: 'malformed' };
+    } else if (advisory !== undefined) {
+      return { ok: false, reason: 'malformed' };
+    }
+    return {
+      ok: true,
+      observation: {
+        seq: record.seq,
+        kind: record.kind,
+        seatId: record.seatId,
+        incarnation: record.incarnation,
+        mainTurn: record.mainTurn,
+        lane: record.lane,
+        ...(toolId.token === undefined ? {} : { toolId: toolId.token }),
+        ...(gateId.token === undefined ? {} : { gateId: gateId.token }),
+        ...(binding.token === undefined ? {} : { binding: binding.token }),
+        ...(advisory === undefined ? {} : { advisory }),
+        ...(record.ownerRequired === undefined ? {} : { ownerRequired: record.ownerRequired }),
+      },
+    };
+  } catch {
     return { ok: false, reason: 'malformed' };
   }
-  if (input.lane !== 'main' && input.lane !== 'subagent') return { ok: false, reason: 'malformed' };
-  const toolId = optionalToken(input.toolId);
-  const gateId = optionalToken(input.gateId);
-  const binding = optionalToken(input.binding);
-  if (!toolId.ok || !gateId.ok || !binding.ok) return { ok: false, reason: 'malformed' };
-  if (input.ownerRequired !== undefined && typeof input.ownerRequired !== 'boolean') {
-    return { ok: false, reason: 'malformed' };
+}
+
+/** Own enumerable data properties only. An accessor is refused without being called. */
+function ownData(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) return null;
+  const copied: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) return null;
+    copied[key] = descriptor.value;
   }
-  const advisory = parseAdvisory(input.advisory);
-  if (advisory === 'bad') return { ok: false, reason: 'malformed' };
-  if (input.kind === 'candidate-state') {
-    if (advisory === undefined) return { ok: false, reason: 'malformed' };
-  } else if (advisory !== undefined) {
-    return { ok: false, reason: 'malformed' };
-  }
-  return {
-    ok: true,
-    observation: {
-      seq: input.seq,
-      kind: input.kind,
-      seatId: input.seatId,
-      incarnation: input.incarnation,
-      mainTurn: input.mainTurn,
-      lane: input.lane,
-      ...(toolId.token === undefined ? {} : { toolId: toolId.token }),
-      ...(gateId.token === undefined ? {} : { gateId: gateId.token }),
-      ...(binding.token === undefined ? {} : { binding: binding.token }),
-      ...(advisory === undefined ? {} : { advisory }),
-      ...(input.ownerRequired === undefined ? {} : { ownerRequired: input.ownerRequired }),
-    },
-  };
+  return copied;
 }
 
 function parseAdvisory(value: unknown): ClosedAdvisory | undefined | 'bad' {
