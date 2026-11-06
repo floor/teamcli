@@ -172,7 +172,7 @@ describe('reading a screen of Claude Code', () => {
     const finished = `✻ Churned for 51s · done 9:51 PM\n\n${RULE}\n❯ \n${RULE}\n${STATUS}\n`;
     expect(readScreen('claude-code', finished).kind).toBe('idle');
   });
-  test('a spinner left above an empty idle prompt is the prompt, not a running turn', () => {
+  test('a spinner left above an empty idle prompt is the previous turn only for the wake', () => {
     const transcript = [
       '✶ Transfiguring… (9m 34s · ↓ 64.5k tokens)',
       '',
@@ -191,7 +191,8 @@ describe('reading a screen of Claude Code', () => {
       RULE,
       STATUS,
     ].join('\n');
-    expect(readScreen('claude-code', transcript).kind).toBe('idle');
+    expect(readScreen('claude-code', transcript).kind).toBe('working');
+    expect(readScreen('claude-code', transcript, { working: 'cluster' }).kind).toBe('idle');
     expect(readScreen('claude-code', busy).kind).toBe('working');
   });
 });

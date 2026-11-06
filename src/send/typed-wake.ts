@@ -20,6 +20,9 @@ import { MESSAGE_LINE_MAX } from '../settings/message-display.ts';
 import { readScreen, screenData } from '../watch/screen.ts';
 import { POLL_MS } from './native.ts';
 
+/** The wake keeps the eight-row cluster. A close, relaunch, or skip reads a working phrase anywhere. */
+const WAKE_SCREEN = { working: 'cluster' as const };
+
 /** How long after the line is typed the box is read before the first Enter, and between the two
  *  reads that have to agree before that Enter: the CLI has to have drawn the line and stopped
  *  changing it, or the guard below would press while the row was still rendering. */
@@ -120,7 +123,7 @@ type WakeMarks = { submittedAt?: number; workingAt?: number };
 /** One word for the screen a read showed, for a reason line: the screen reading, or `unreadable`
  *  when the pane could not be read at all. */
 function seenOf(cli: string, screen: string | null): string {
-  return screen === null ? 'unreadable' : readScreen(cli, screen).kind;
+  return screen === null ? 'unreadable' : readScreen(cli, screen, WAKE_SCREEN).kind;
 }
 
 /** The bound ran out on a working screen that still held the wake's line. The Enter did not
@@ -158,7 +161,7 @@ async function pollSubmitted(
     seen?.(screen);
     const holds = boxHoldsText(cli, line, screen);
     lastHolds = holds;
-    const working = readScreen(cli, screen).kind === 'working';
+    const working = readScreen(cli, screen, WAKE_SCREEN).kind === 'working';
     if (working && holds) sawWorkingWhileHeld = true;
     if (working && !holds) return 'submitted';
   }
@@ -214,7 +217,7 @@ async function submitByAgentPrompt(
   const tries = 1;
   const observe = (read: string | null): void => {
     if (read === null) return;
-    const kind = readScreen(cli, read).kind;
+    const kind = readScreen(cli, read, WAKE_SCREEN).kind;
     if (kind !== 'working' && kind !== 'idle') return;
     if (boxHoldsText(cli, line, read)) return;
     const at = clock();
@@ -224,7 +227,7 @@ async function submitByAgentPrompt(
   await host.wait(ackSettleMs);
   const after = await host.read(pane);
   observe(after);
-  if (after !== null && readScreen(cli, after).kind === 'working' && !boxHoldsText(cli, line, after)) {
+  if (after !== null && readScreen(cli, after, WAKE_SCREEN).kind === 'working' && !boxHoldsText(cli, line, after)) {
     return { delivered: true, typed: true, tries, reason: 'the working screen showed after the agent prompt' };
   }
   const ack = await pollSubmitted(host, pane, cli, line, pollMs, verifyMs, observe);
@@ -273,7 +276,7 @@ async function walkTypedWake(
   // an Enter that did not submit. That wake presses Enter into exactly this line and never types
   // it again; the two-look guard below still stands between the look and the key.
   const heldAtFirstLook = firstScreen !== null
-    && readScreen(cli, firstScreen).kind === 'unsent'
+    && readScreen(cli, firstScreen, WAKE_SCREEN).kind === 'unsent'
     && boxHoldsText(cli, line, firstScreen);
   let tries = 0;
   let lineTyped = false;
@@ -288,7 +291,7 @@ async function walkTypedWake(
     if (reread === null) {
       return { delivered: false, typed: false, tries: 0, reason: 'the screen could not be read after the line was found in the box; no Enter was pressed' };
     }
-    const kind = readScreen(cli, reread).kind;
+    const kind = readScreen(cli, reread, WAKE_SCREEN).kind;
     if (kind === 'working') {
       return { delivered: false, typed: false, tries: 0, reason: 'a working screen showed before any Enter, so the line was not submitted by this wake; no Enter was pressed' };
     }
@@ -390,7 +393,7 @@ async function walkTypedWake(
    *  the clock the caller named, and a read before any Enter by this wake stamps nothing. */
   const observe = (read: string | null): void => {
     if (read === null || tries === 0) return;
-    const kind = readScreen(cli, read).kind;
+    const kind = readScreen(cli, read, WAKE_SCREEN).kind;
     if (kind !== 'working' && kind !== 'idle') return;
     if (boxHoldsText(cli, line, read)) return;
     const at = clock();
@@ -409,7 +412,7 @@ async function walkTypedWake(
           : 'the screen could not be read and no working screen showed; no further Enter was pressed',
       };
     }
-    const kind = readScreen(cli, screen).kind;
+    const kind = readScreen(cli, screen, WAKE_SCREEN).kind;
     if (kind === 'working') {
       if (tries === 0) {
         return { delivered: false, typed: putKeys(), tries, reason: 'a working screen showed before any Enter, so the line was not submitted by this wake; no Enter was pressed' };
@@ -464,7 +467,7 @@ async function walkTypedWake(
     const after = await host.read(pane);
     observe(after);
     if (after !== null) {
-      const working = readScreen(cli, after).kind === 'working';
+      const working = readScreen(cli, after, WAKE_SCREEN).kind === 'working';
       const holds = boxHoldsText(cli, line, after);
       if (working && !holds) {
         return { delivered: true, typed: putKeys(), tries, reason: `the working screen showed after ${String(tries)} Enter${tries === 1 ? '' : 's'}` };
