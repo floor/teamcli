@@ -50,6 +50,7 @@ import {
 import { loadTeamFile } from '../file/load.ts';
 import { projectionOf } from '../reach/projection.ts';
 import { currentCodexEndpoint } from '../daemon/presence/endpoint-state.ts';
+import { runningRegistryRoots } from '../daemon/registry-roots.ts';
 import { canonicalRoot, routeId, routeOf } from '../daemon/routes.ts';
 import {
   systemServiceManager,
@@ -61,6 +62,7 @@ import {
 } from '../daemon/service.ts';
 import type { DaemonHost } from '../send/daemon.ts';
 import { readTeamConfig } from '../file/team-config.ts';
+import { readTeams } from '../registry/teams.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { refuse, writeJson, writeJsonError } from '../output/index.ts';
 import { shellQuote } from '../profiles/profile.ts';
@@ -278,7 +280,12 @@ function verbProblem(parsed: Parsed): string | null {
   return null;
 }
 
-function rootsOf(parsed: Parsed, io: Io, home: string): { roots: string[] } | { problem: string } {
+function rootsOf(
+  parsed: Parsed,
+  io: Io,
+  home: string,
+  verb: 'run' | 'install',
+): { roots: string[]; fromRegistry?: boolean } | { problem: string; fromRegistry?: boolean } {
   if (parsed.roots.length > 0) {
     const roots: string[] = [];
     for (const named of parsed.roots) {
@@ -290,6 +297,18 @@ function rootsOf(parsed: Parsed, io: Io, home: string): { roots: string[] } | { 
       if (!roots.includes(loaded.root)) roots.push(loaded.root);
     }
     return { roots };
+  }
+  // A service start names no checkout. The registry's running teams are the hosted set; an
+  // explicit --root above is the manual path and is not rewritten into this list.
+  if (verb === 'run' && parsed.startedBy === 'service-manager') {
+    try {
+      return { roots: runningRegistryRoots(readTeams(home)).map((one) => one.root), fromRegistry: true };
+    } catch (error) {
+      return {
+        problem: error instanceof Error ? error.message : 'the team registry could not be read',
+        fromRegistry: true,
+      };
+    }
   }
   const loaded = readTeamConfig(io.cwd, { home });
   if (!loaded.ok) {
@@ -505,6 +524,9 @@ function rootsSummary(roots: MachineRootStatus[], now: Date = new Date()): strin
     0,
   );
   const parts = [`roots ${String(roots.length)} (send ${String(sendServing)}, bus ${String(busServing)})`];
+  for (const root of roots) {
+    if (root.source === 'registry') parts.push(`${root.root} from the registry`);
+  }
   if (starting > 0) parts.push(`${String(starting)} endpoint${starting === 1 ? '' : 's'} starting`);
   // A daemon-hosted bus serves once its listener is bound, while the first pass still runs; the
   // pass's progress is said here so serving is never read as caught up.
@@ -1255,16 +1277,18 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       // exit: daemon.service-managed.unit
       return 1;
     }
-    const named = rootsOf(parsed, io, home);
+    const named = rootsOf(parsed, io, home, 'run');
     // A named root that cannot be read is refused rather than silently dropped: the service
     // unit's checkout list is validated when it is written, and a missing checkout must be
-    // visible instead of starting a daemon that hosts nothing.
-    if ('problem' in named && parsed.roots.length > 0) {
+    // visible instead of starting a daemon that hosts nothing. A registry the service start
+    // cannot read is the same refusal: hosting nothing would look like a clean empty machine.
+    if ('problem' in named && (parsed.roots.length > 0 || named.fromRegistry === true)) {
       refuse(io, parsed.json, 'daemon', { id: 'daemon.run-root', message: named.problem, repair: null });
       // exit: daemon.run-root
       return 2;
     }
     const roots = 'problem' in named ? [] : named.roots;
+    const fromRegistry = !('problem' in named) && named.fromRegistry === true;
     // A hosted endpoint that cannot be kept alive stops the daemon: this callback ends the
     // foreground run, and the non-zero exit below hands the restart to the service manager.
     let fatalWhy: string | null = null;
@@ -1284,6 +1308,10 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     const started = await (sources.start ?? startMachineDaemon)({
       home,
       roots,
+      ...(fromRegistry ? {
+        rootsFromRegistry: true,
+        runningRoots: () => runningRegistryRoots(readTeams(home)).map((one) => one.root),
+      } : {}),
       startedBy,
       reminders: reminderReader,
       // The same hosted list the reader above was built with, handed to the machine chores
@@ -1448,7 +1476,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   }
 
   // install
-  const named = rootsOf(parsed, io, targetHome);
+  const named = rootsOf(parsed, io, targetHome, 'install');
   if ('problem' in named) {
     refuse(io, parsed.json, 'daemon', { id: 'daemon.no-root', message: named.problem, repair: null });
     // exit: daemon.no-root
