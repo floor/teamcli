@@ -946,14 +946,19 @@ describe('slice 2: hot read paths skip read bodies and cache verified stamps ins
         env: {},
         stdinIsTTY: false,
         stdoutIsTTY: false,
+        // A seat's reading serves its own mailbox; without a placed caller the run is refused
+        // before it lists anything (`messages.caller`), which is the post-0.5.12 rule this scene
+        // did not yet encode.
+        caller: { kind: 'seat', name: 'worker', pane: 'pane-drop-retention-worker', session: 'acme' },
         stdout: (s) => { stdout += s; },
         stderr: () => {},
       },
       { home, now: () => NOW },
     );
     expect(exitCode).toBe(0);
-    const doc = JSON.parse(stdout) as { counts: { messages: number; shown: number; refused: number } };
-    expect(doc.counts).toEqual({ messages: 1, shown: 1, refused: 0 });
+    const doc = JSON.parse(stdout) as { counts: { messages: number; shown: number; refused: number; waiting: number } };
+    // The post-0.5.12 reading counts the other mailboxes' waiting rows beside the shown ones.
+    expect(doc.counts).toEqual({ messages: 1, shown: 1, refused: 0, waiting: 0 });
   });
 
   test('reconcile drop, .pending, and receipt scan caches .pending markers and skips re-reading unchanged files', () => {
