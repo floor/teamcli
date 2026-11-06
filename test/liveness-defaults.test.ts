@@ -14,6 +14,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { upsertProject } from '../src/registry/projects.ts';
+import { upsertTeam } from '../src/registry/teams.ts';
 import { livenessMap, watchWords } from '../src/settings/declared.ts';
 import {
   DEFAULT_LIVENESS_THRESHOLDS,
@@ -312,8 +313,14 @@ describe('the blind threshold is the same liveness default', () => {
   });
 
   test('a project record may tighten it, and the project is the one level that may open it', () => {
+    // Membership is the team record's word; the project record's legacy teams list no longer
+    // links a team, so the scene writes the link the registry actually reads.
     upsertProject(home, 'quiet-project', {
-      name: 'Quiet', teams: ['quiet-team'], liveness: { blind_after_seconds: 60 }, at: '2026-10-17T00:00:00.000Z',
+      name: 'Quiet', liveness: { blind_after_seconds: 60 }, at: '2026-10-17T00:00:00.000Z',
+    });
+    upsertTeam(home, 'quiet-team', {
+      project: 'quiet-project', projectId: 'quiet-project', session: 'quiet-team', root: home,
+      at: '2026-10-17T00:00:00.000Z',
     });
     expect(stateLimitsOf(valid(fileWith('')), home, 'quiet-team').blind_after_seconds).toBe(60);
     // The project is the one level the blind window lets loosen: two hours stands as declared.
@@ -329,7 +336,7 @@ describe('the blind threshold is the same liveness default', () => {
   test('a project record names whole seconds of at least one, and refuses anything else at the record', () => {
     for (const bad of [0, 600.5]) {
       expect(() => upsertProject(home, 'quiet-project', {
-        name: 'Quiet', teams: ['quiet-team'], liveness: { blind_after_seconds: bad }, at: '2026-10-17T00:00:02.000Z',
+        name: 'Quiet', liveness: { blind_after_seconds: bad }, at: '2026-10-17T00:00:02.000Z',
       })).toThrow('liveness "blind_after_seconds" must be a whole number of seconds, at least 1');
     }
   });
