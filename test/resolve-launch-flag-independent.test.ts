@@ -3,10 +3,10 @@
 // line and the profile still places its launch words on it. A refused resolution is the
 // resolver's own message, and that seat is not started. A Grok seat that is the lead starts at
 // the shared project root, and that launch is refused in those words; beside a lead it starts
-// in its own folder under the project, inside the trust grant.
+// in its own folder beside the project, inside the trust grant.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { withLauncherCover } from '../src/launch/launcher-cover.ts';
 import { upPlan } from '../src/launch/plan.ts';
@@ -95,6 +95,7 @@ function teamText(root: string, seats: readonly SeatFixture[], start?: string): 
     `    name: ${seat.name}`,
     `    label: ${seat.name}`,
     `    cli: ${seat.cli}`,
+    ...(seat.cli === 'grok' && start !== undefined ? [`    cwd: ${JSON.stringify(relative(root, start))}`] : []),
     '    vendor: example',
     `    model: "${seat.model}"`,
     `    version: "${seat.version}"`,
@@ -106,12 +107,11 @@ project: acme
 session: ${SESSION}
 coordinator: ${lead}
 operator: ${operator}
-${start === undefined ? '' : `lobby: ${start}\n`}workspace:
+workspace:
   mode: shared
   base: main
 trust:
-  - ${lobbyDir(join(root, '..', 'home'))}
-  - ${root}${start === undefined ? '' : `\n  - ${start}`}
+${start === undefined ? `  - ${lobbyDir(join(root, '..', 'home'))}\n  - ${root}` : `  - .\n  - ${JSON.stringify(relative(root, start))}`}
 watch:
   interval: 120s
   checks:
@@ -220,9 +220,8 @@ function prepare(seats: readonly SeatFixture[], word?: string, covered = false, 
   const root = join(scratch, 'repo');
   mkdirSync(lobbyDir(home), { recursive: true, mode: 0o700 });
   mkdirSync(root, { recursive: true });
-  // The seat's own folder under the project. It is inside the root grant and is not the
-  // shared project root, so a Grok seat that starts here is not refused.
-  const start = ownStart ? join(root, 'worktrees', 'grok-hand') : undefined;
+  // The positive Grok scene gets its own folder beside the protected checkout.
+  const start = ownStart ? join(scratch, 'grok-hand') : undefined;
   if (start !== undefined) mkdirSync(start, { recursive: true, mode: 0o700 });
   writeLaunchers(root, seats, word);
   approve(root, home, teamText(root, seats, start), covered);
@@ -269,7 +268,7 @@ describe('resolve-launch stays off unless named', () => {
   test('flag off runs today\'s argv for claude, codex, grok and agy', async () => {
     for (const seat of CLIS) {
       // A Grok lead starts at the shared project root, which the sandbox refuses. Beside a
-      // lead, this seat starts in its own folder under the project, inside the trust grant.
+      // lead, this seat starts in its own folder beside the project, inside the trust grant.
       const own = seat.cli === 'grok';
       const seats = own ? [firstSeat(), seat] : [alone(seat)];
       const { root, home, made } = prepare(seats, undefined, false, own);
@@ -296,7 +295,7 @@ describe('resolve-launch stays off unless named', () => {
       if (seat.cli === 'grok') {
         // This seat is the lead, so its start folder is the shared project root.
         expect(code, `${seat.name}\n${said}`).not.toBe(0);
-        expect(said).toContain('its start folder is the shared project root, which would grant the whole checkout; give the seat its own worktree or clone');
+        expect(said).toContain('cannot start in or grant an ancestor of the shared project root, lobby or team config folder; set the seat cwd to its own worktree or clone, then launch it again');
         expect(made.runs.some((run) => run.command.includes(seat.binary))).toBe(false);
         release();
         continue;
