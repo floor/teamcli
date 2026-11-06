@@ -164,7 +164,7 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
   test('two idle reads, one line, one Enter on the captured frames: the spinner row is the delivery', async () => {
     const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE : holding(typed[typed.length - 1] ?? '')));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
     expect(pane.typed).toEqual([LINE]);
     expect(pane.enters).toBe(1);
   });
@@ -182,7 +182,7 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
     });
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', { ...FAST, verifyMs: 3 });
     expect(post).toBe(3);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
     expect(pane.typed).toEqual([LINE]);
     expect(pane.enters).toBe(1);
   });
@@ -215,7 +215,7 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
     expect(settleReads).toBe(3);
     expect(readScreen('antigravity', drawn).kind).toBe('unsent');
     expect(boxHoldsText('antigravity', LINE, drawn)).toBe(true);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 2, reason: 'the working screen showed after 2 Enters' });
+    expect(out).toEqual({ delivered: true, typed: true, tries: 2, reason: 'the working screen showed after 2 Enters', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
     expect(pane.typed).toEqual([LINE]);
     expect(pane.enters).toBe(2);
   });
@@ -258,7 +258,7 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
     expect(boxHoldsText('antigravity', LINE, held)).toBe(true);
     const pane = wakeFake((_read, enters) => (enters > 0 ? WORKING : held));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(1);
   });
@@ -269,7 +269,7 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
     expect(boxHoldsText('antigravity', LINE, drawn)).toBe(true);
     const pane = wakeFake((read, enters) => (read < 2 ? IDLE : enters > 0 ? WORKING : drawn));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
     expect(pane.typed).toEqual([LINE]);
     expect(pane.enters).toBe(1);
   });
@@ -289,7 +289,7 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
     const drawn = holdingUnder(LINE, TASKS_HINT);
     const pane = wakeFake((_read, enters) => (enters > 0 ? WORKING : drawn));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(1);
   });
@@ -394,7 +394,7 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
       const screens = [survey, IDLE, IDLE, holding(LINE), holding(LINE), WORKING];
       const pane = wakeFake((read) => screens[Math.min(read, screens.length - 1)] ?? null);
       const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
-      expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+      expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
       expect(pane.keys).toEqual(['0']);
       expect(pane.typed).toEqual([LINE]);
       expect(pane.enters).toBe(1);
@@ -661,6 +661,7 @@ describe('team send: the antigravity typed wake', () => {
       typed: true,
       tries: 1,
       reason: 'the screen read idle and no working screen showed',
+      submittedAt: expect.any(Number),
     });
     expect(clearedMidPoll.typed).toEqual([LINE]);
     expect(clearedMidPoll.enters).toBe(1);
