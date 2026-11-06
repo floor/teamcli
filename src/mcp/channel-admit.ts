@@ -13,9 +13,9 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { KeyObject } from 'node:crypto';
 import { getAgent, isAgentId, type Agent } from '../registry/agents.ts';
-import { readProjects } from '../registry/projects.ts';
+import { list as listProjects } from '../registry/projects.ts';
 import { getTeam, teamIdOf } from '../registry/teams.ts';
-import { admitSend, sendGrantFor, type AdmitContext, type AdmitTeam, type AdmitTeams, type ReplyContext, type SendSide } from '../send/admit.ts';
+import { admitSend, sendGrantFor, type AdmitContext, type AdmitProjects, type AdmitTeam, type AdmitTeams, type ReplyContext, type SendSide } from '../send/admit.ts';
 import { eventThresholdsInForce } from '../policy/thresholds.ts';
 import { readSendGrantReads } from '../send/grants.ts';
 import { closeFile, readClose, readSealedRecord, recordAuthOfSealed, recordNameOk, sameFolder, verifyClose, type RecordPayload } from '../send/record.ts';
@@ -43,9 +43,14 @@ export function admitChannelDelivery(input: {
   const records: AdmitTeams = { [receivingId]: receiving };
   const target = receivingSide(input, receivingId);
   if ('ok' in target) return target;
-  let projects;
+  // Membership is the registry's derived view. The raw records keep only the legacy stored
+  // teams list, which no writer maintains, so a project lead recorded on the team would reach
+  // admission naming no team. `list` derives each project's teams from the team records.
+  const projects: AdmitProjects = {};
   try {
-    projects = readProjects(input.home);
+    for (const project of listProjects(input.home)) {
+      if (project.id !== undefined) projects[project.id] = project;
+    }
   } catch {
     return { ok: false, why: 'the project registry cannot be read' };
   }
