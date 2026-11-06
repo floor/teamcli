@@ -360,20 +360,10 @@ function bindFlock(): Flock | null {
       });
       return (fd, operation) => lib.symbols.flock(fd, operation);
     }
-    const ffi = req('node:ffi') as {
-      dlopen: (
-        library: string,
-        symbols: Record<string, { arguments: string[]; return: string }>,
-      ) => { functions: { flock: Flock } };
-    };
-    const library = process.platform === 'linux' ? 'libc.so.6' : 'libSystem.B.dylib';
-    const lib = ffi.dlopen(library, {
-      flock: { arguments: ['int32', 'int32'], return: 'int32' },
-    });
-    return (fd, operation) => lib.functions.flock(fd, operation);
   } catch {
     return null;
   }
+  return null;
 }
 
 /** Claims this process already holds. A second attempt in the same process cannot wait on its
@@ -822,12 +812,15 @@ export function channelCommitActive(dropDir: string, id: string): boolean {
 export function withChannelCommit<T>(dropDir: string, id: string, work: () => T, hooks?: ChannelCommitHooks): T | 'busy' {
   const path = channelCommitLockPath(dropDir, id);
   let fd: number | 'busy' = 'busy';
-  for (let at = 0; at < 50; at += 1) {
+  // Without flock the reclaim spawns a helper and waits for it. One attempt: repeating that
+  // wait across the live-holder retries would block for the helper's whole window each time.
+  const attempts = flockWorks(hooks) ? 50 : 1;
+  for (let at = 0; at < attempts; at += 1) {
     fd = tryChannelCommit(dropDir, id, at === 0 ? hooks : undefined);
     if (fd !== 'busy') break;
     if (lockHolder(dropDir, id) === process.pid) return 'busy';
     if (!channelCommitActive(dropDir, id)) break;
-    if (at + 1 < 50) pauseMs(20);
+    if (at + 1 < attempts) pauseMs(20);
   }
   if (fd === 'busy') return 'busy';
   try {

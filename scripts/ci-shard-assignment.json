@@ -148,6 +148,7 @@
     "test/channel-adoption-membership-independent.test.ts": 0,
     "test/channel-authority.test.ts": 1,
     "test/channel-bus.test.ts": 1,
+    "test/channel-follow-ups-independent.test.ts": 4,
     "test/channel-launch-config.test.ts": 3,
     "test/channel-leg.test.ts": 1,
     "test/channel-lock-retention.test.ts": 2,

@@ -153,7 +153,12 @@ export function prepareChannelConfig(input: ChannelLaunchScope & { seat: string;
     try { mkdirSync(folder, { mode: 0o700 }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
     const folderSeen = directory(folder);
     const lock = join(folder, '.team-channel.lock');
-    mkdirSync(lock, { mode: 0o700 }); // no stale recovery or foreign lock removal
+    // A lock left by a launch that did not release is not taken and not removed. The hand
+    // cleanup is to remove that .team-channel.lock directory from the seat folder, then launch again.
+    if (present(lock) !== null) {
+      throw new ConfigRefusal('a leftover channel lock is in the seat folder; remove .team-channel.lock by hand and launch again');
+    }
+    mkdirSync(lock, { mode: 0o700 });
     const lockSeen = directory(lock);
     let held = true;
     const configMatches: Array<() => boolean> = [];

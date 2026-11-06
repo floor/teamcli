@@ -931,8 +931,7 @@ function isExpectedSeatDropFile(name: string): boolean {
   if (id === '' || !RECORD_NAME.test(id) || id.startsWith(WORK_PREFIX)) return false;
   if (KNOWN_SIDECAR_SUFFIXES.includes(suffix)) return true;
   if (/^\.channel-commit\.prep-[0-9]+-[0-9a-f]+$/.test(suffix)) return true;
-  if (suffix === '.channel-commit.reclaim' || /^\.channel-commit\.dead-[0-9]+$/.test(suffix)) return true;
-  if (/^\.channel-commit\.reclaim-aside-[0-9]+-[0-9a-f]+$/.test(suffix)) return true;
+  if (suffix === '.channel-commit.reclaim') return true;
   if (suffix === '.channel-commit.reclaim.stall') return true;
   if (FALLBACK_NOTE_SUFFIX.test(suffix) || RECEIPT_TEMP_SUFFIX.test(suffix)) return true;
   return false;
