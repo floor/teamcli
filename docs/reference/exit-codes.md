@@ -761,6 +761,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.delivered` | `send` | 0 | the record is written and the seat's channel took the message | `team send worker hello` |
 | `send.delivered-webhook` | `send` | 0 | the record is written and the seat's webhook adapter took the message | `team send worker hello` |
 | `send.dry-run` | `send` | 0 | the seat and channel were resolved and nothing was written | `team send worker hello --dry-run` |
+| `send.handed` | `send` | 0 | the typed wake was handed to the send daemon, which staged its own durable copy and asked its wake child to run the screen walk; the delivery's history line is the child's, and the id printed is the one it keeps | `team send lead hello` |
 | `send.listed` | `send` | 0 | the addressable seats were printed, nothing was sent | `team send --list` |
 | `send.native` | `send` | 0 | a native handoff was printed for the sender's own SendMessage, and nothing was delivered | `team send worker hello` |
 | `send.queued` | `send` | 0 | the receiver was busy, so the signed copy is stored and nothing was typed; the message is delivered when the seat's lock clears, and the id on the line is the one the delivery keeps | `team send lead hello` |
@@ -865,6 +866,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `team.no-command` | `team` | 2 | no command was given | `team` |
 | `team.restore-entry-refused` | `team` | 2 | the machine daemon's restore child was started without a readable one-use token, so it restored nothing | `the daemon starts its restore child entry` |
 | `team.unknown` | `team` | 2 | the command is unknown | `team nosuch` |
+| `team.wake-entry-refused` | `team` | 2 | the send daemon's typed-wake child was started without a readable one-use token, so it typed nothing | `the daemon starts its typed-wake child entry` |
 | `tempo.set` | `tempo` | 0 | the tempo was written | `team tempo urgent` |
 | `tempo.unchanged` | `tempo` | 0 | the tempo was already that word | `team tempo urgent` |
 | `tempo.detached` | `tempo` | 1 | a run with no terminal | `team tempo urgent` |

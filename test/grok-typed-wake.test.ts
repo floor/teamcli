@@ -104,7 +104,7 @@ describe('the Grok typed wake: the profile’s own screens gate the keys', () =>
   test('two idle reads, one line, one Enter on the captured frames: the spinner row is the delivery', async () => {
     const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE : holding(typed[typed.length - 1] ?? '')));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'grok', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
     expect(pane.typed).toEqual([LINE]);
     expect(pane.enters).toBe(1);
   });
@@ -122,7 +122,7 @@ describe('the Grok typed wake: the profile’s own screens gate the keys', () =>
     });
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'grok', { ...FAST, verifyMs: 3 });
     expect(post).toBe(3);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
     expect(pane.typed).toEqual([LINE]);
     expect(pane.enters).toBe(1);
   });
@@ -398,6 +398,7 @@ describe('team send: the Grok typed wake', () => {
       typed: true,
       tries: 1,
       reason: 'the screen read idle and no working screen showed',
+      submittedAt: expect.any(Number),
     });
     expect(clearedMidPoll.typed).toEqual([LINE]);
     expect(clearedMidPoll.enters).toBe(1);

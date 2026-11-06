@@ -368,6 +368,35 @@ it, and the header says the record is missing; it is never granted. Every other 
 4. The tool never attests a permission mode on a seat's behalf: a CLI process cannot truthfully say
    which mode it runs in, and attesting anyway would be a false statement to another tool's gate.
 
+### The typed wake's handoff
+
+With a send daemon running for the receiving seat's own team and the seat's profile declaring the
+typed wake, the send does not type in its own process. It stages the signed record and hands the
+daemon one request — the id, the trigger line and the staged copy's fields — and ends at
+acceptance with `handed to the daemon for a typed wake` (exit 0, `send.handed`) before any screen
+is read. The daemon writes its own durable copy of the record into its store, takes the wake
+marker beside it (`reserved`), and starts one wake child under a one-use token that names the
+request; a child that outlives its 15-second budget is killed. The child re-reads the seat live —
+one pane, not a bare shell — takes the seat lock, runs the screen walk, and writes the history
+line (`delivered (typed wake)` with `via: typed`, or `unreachable` with the walk's own reason),
+the `leg.tried:typed` trace step and the daily log line before it exits. The marker is the
+record of what was seen: `sent` after a delivered walk, given back after a walk that did not
+deliver, and still `reserved` after a child killed mid-walk. A second request for the same id
+finds the marker already there, in whatever state, and is answered at acceptance with no second
+child and nothing typed over it: the marker is the reservation. A child killed after it typed
+leaves its line in the composer, and the next wake presses Enter into exactly that line rather
+than typing it again. A compose seat, another team's record, a
+`--wait` run, a run whose daemon socket is absent, and a daemon that answers `direct: true`
+because it runs no wake child are all reached directly: the walk then runs in the send's own
+process, exactly once.
+
+The wake's trace step carries the two times the delivery bound is read from, both counted from
+the moment the message was staged: `submit_ms` ends at the first read that showed the wake's line
+gone from the input box after Enter (the gated point — the line has left the box after Enter),
+and `working_ms` ends at the first read that showed the profile's working screen with the line
+gone (reported only, never gated). Either is absent when no read showed it: a wake that pressed
+no Enter, or one whose working screen still held the line, records neither.
+
 ### What `delivered` means
 
 `delivered` means the message reached the seat by a path that reports its own receipt: the

@@ -1619,6 +1619,12 @@ export const TRACE_OUTPUT_SCHEMA: CommandSchemaSpec = {
           outcome: { type: 'string' },
           // Milliseconds the step itself took, as its writer measured them.
           ms: { type: 'number', minimum: 0 },
+          // The two times a typed wake's leg records, counted from the moment the message was
+          // staged: `submit_ms` to the first read that showed its line gone after Enter (the
+          // gated point), `working_ms` to the profile's working screen (reported only). Absent
+          // when the walk saw neither.
+          submit_ms: { type: 'number', minimum: 0 },
+          working_ms: { type: 'number', minimum: 0 },
           reason: { type: 'string' },
           delta_ms: { type: ['integer', 'null'] },
         },

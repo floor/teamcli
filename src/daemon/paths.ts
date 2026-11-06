@@ -84,7 +84,7 @@ export function daemonLockPath(home: string = homedir()): string {
 }
 
 /** The one-use token families: a child's token file is `<kind>.inherit.<nonce>.json`. */
-export const INHERIT_KINDS = ['chores', 'restore'] as const;
+export const INHERIT_KINDS = ['chores', 'restore', 'wake'] as const;
 export type InheritKind = (typeof INHERIT_KINDS)[number];
 
 /** The nonce spelling every token writer uses: 16 random bytes as lowercase hex. */
@@ -110,4 +110,11 @@ export function choresInheritPath(home: string, nonce: string): string {
  *  machine folder and unlinked by the child as it starts, so one token starts one pass. */
 export function restoreInheritPath(home: string, nonce: string): string {
   return join(machineConfigDir(home), inheritTokenName('restore', nonce));
+}
+
+/** One wake child's one-use token: the validated wake request its walk may run. Written 0600
+ *  under the machine folder and unlinked by the child as it starts, so one token starts one
+ *  wake and nothing a seat can write decides the pane or the line. */
+export function wakeInheritPath(home: string, nonce: string): string {
+  return join(machineConfigDir(home), inheritTokenName('wake', nonce));
 }

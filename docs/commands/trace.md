@@ -84,11 +84,15 @@ succeeds.
 
 With `--json` the run prints one pretty-printed `team.trace` document:
 
-    {"schema":{"name":"team.trace","version":1},"format":1,"project":"<project>","session":"<session>","id":"<id>","steps":[{"seq":<n>,"ts":"<ISO-8601>","kind":"<event kind>","record_id":"<id or id:step>","from":"<sender>","to":"<seat>","thread":"<uuid>","via":"<route>","outcome":"<word>","ms":<milliseconds>,"reason":"<text>","delta_ms":<milliseconds or null>}],"summary":"<n> step or <n> steps","unverified":<n>}
+    {"schema":{"name":"team.trace","version":1},"format":1,"project":"<project>","session":"<session>","id":"<id>","steps":[{"seq":<n>,"ts":"<ISO-8601>","kind":"<event kind>","record_id":"<id or id:step>","from":"<sender>","to":"<seat>","thread":"<uuid>","via":"<route>","outcome":"<word>","ms":<milliseconds>,"submit_ms":<milliseconds>,"working_ms":<milliseconds>,"reason":"<text>","delta_ms":<milliseconds or null>}],"summary":"<n> step or <n> steps","unverified":<n>}
 
 A step carries only the optional fields its event has, so a step that named no route has no
 `via` rather than an empty one. `delta_ms` is `null` on the first step and a whole number after
-it. The schema is published at `schema/trace.schema.json`.
+it. A typed wake's `leg.tried` step carries its two times from the moment the message was staged:
+`submit_ms` to the first read that showed the wake's line gone after Enter (the gated point) and
+`working_ms` to the profile's working screen (reported only); either is absent when no read
+showed it, and the MS column stays the step's whole cost. The schema is published at
+`schema/trace.schema.json`.
 
 ## Examples
 

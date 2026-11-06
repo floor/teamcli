@@ -234,6 +234,15 @@ place, so a send no adapter takes ends at the drop leg with the record in the bu
 leg never types: there the run ends `queued, not woken` once the signed record and its marker are
 in place, and no box, status or transcript is read.
 
+The daemon runs the screen walk where it can. With a send daemon running for the receiving seat's
+own team, the send stages the message, hands the daemon the trigger line, and ends at acceptance —
+`handed to the daemon for a typed wake` (exit 0, `send.handed`) — after the daemon has written its
+own durable copy of the record, taken the wake's marker and started one wake child. The child
+re-reads the seat, takes its lock, runs the walk, and writes the history line (`delivered (typed
+wake)` or `unreachable`) and the trace step when it ends; the send never waits for that answer. A
+compose seat, a seat of another team, a `--wait` run, a run with no daemon socket, and a daemon
+that runs no wake child are reached directly instead, in the send's own process and exactly once.
+
 A seat whose live screen is its provider's usage wall is refused before the walk: no leg is
 tried, no drop file or record is written, no socket frame is sent and nothing is typed, whether
 or not the host still reports the seat working — a wall the screen proves holds on its own. The
@@ -744,6 +753,12 @@ deliver, `the typed wake did not run (<reason>)` when the send stopped before th
 live agent carried the seat's name, its pane could not be told apart, it was back at its shell,
 or the trigger outgrew the measured line.
 
+A wake handed to the daemon is its own ending, not one of those class-word lines: the send prints
+`<seat>: handed to the daemon for a typed wake (typed, <n> ms; id <id>)` and exits 0
+(`send.handed`), naming the acceptance and never a delivery. The id on it is the one the child's
+history line keeps; the child writes that line — `delivered (typed wake)` or `unreachable` — with
+the trace step and the log line, and the send itself writes no history line for the handoff.
+
 `<delivery>` below stands for one of those sentences. It is read from the seat's launch as
 the send runs — the watched endpoint, the channel, the seat's webhook adapter, the socket
 route the send itself admits (its cross-session declaration, the team file's own `inbound` word,
@@ -847,8 +862,12 @@ run, and a seat mid-turn is not interrupted), and the sender sends again.
 
 Unsent text is the seat's own, and no send touches it. The typed wake is the only leg that types,
 and it types only into a box it read twice as the empty idle prompt: a box holding unsent text
-gets no line and no Enter, and nothing is copied off, cleared or pasted into. The message waits
-in the record, and the seat reads it on its own turn.
+gets no line and no Enter, and nothing is copied off, cleared or pasted into. The two reads are
+spaced by the wake's own measured settle — one host read on a loaded host plus room for the CLI to
+draw, 150 ms as the shipped default — which a profile may widen (`typed_wake_settle_ms`) and may
+not narrow below that floor; the native delivery's one-second settle was never measured for this
+path and no longer applies to it. The message waits in the record, and the seat reads it on its
+own turn.
 
 `not-submitted` is a line typed and never taken. No send ends here in this build: the shipped
 profiles walk no compose screen, and a typed wake that typed without confirming leaves the

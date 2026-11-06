@@ -104,6 +104,14 @@
             "type": "number",
             "minimum": 0
           },
+          "submit_ms": {
+            "type": "number",
+            "minimum": 0
+          },
+          "working_ms": {
+            "type": "number",
+            "minimum": 0
+          },
           "reason": {
             "type": "string"
           },

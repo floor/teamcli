@@ -28,7 +28,7 @@ const PANE_WRITERS: ReadonlySet<string> = new Set([
   'sendKeyAsync',
 ]);
 function importsPaneWriter(text: string): boolean {
-  for (const match of text.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]\.\.\/herdr\.ts['"]/g)) {
+  for (const match of text.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"](?:\.\.\/)+herdr\.ts['"]/g)) {
     for (const specifier of (match[1] ?? '').split(',')) {
       const name = specifier.trim().replace(/^type\s+/u, '').split(/\s+as\s+/u)[0]?.trim();
       if (name !== undefined && PANE_WRITERS.has(name)) return true;
@@ -43,6 +43,8 @@ test('the pane-writer scan reads an import alias as the writer it names', () => 
   expect(importsPaneWriter("import { typeText as write } from '../herdr.ts';")).toBe(true);
   expect(importsPaneWriter("import {\n  readAnsi,\n  pressEnter as enter,\n} from '../herdr.ts';")).toBe(true);
   expect(importsPaneWriter("import { paneRead, agentList } from '../herdr.ts';")).toBe(false);
+  expect(importsPaneWriter("import { type PaneProcesses } from '../../herdr.ts';")).toBe(false);
+  expect(importsPaneWriter("import { typeText } from '../../herdr.ts';")).toBe(true);
   expect(importsPaneWriter("import { sendKey } from '../other.ts';")).toBe(false);
 });
 
@@ -53,7 +55,7 @@ test('the pane-writer scan reads an import alias as the writer it names', () => 
 const TYPED_WAKE_EXEMPTION = 'src/send/typed-wake.ts';
 
 test('no messaging module types into a pane with herdr directly, except the one profile-gated typed wake', () => {
-  const messaging = [...files(join(root, 'src', 'send')), ...files(join(root, 'src', 'watch')), ...files(join(root, 'src', 'mcp')), join(root, 'src', 'daemon', 'watch-run.ts'), join(root, 'src', 'launch', 'deliver.ts'), join(root, 'src', 'commands', 'send.ts')];
+  const messaging = [...files(join(root, 'src', 'send')), ...files(join(root, 'src', 'watch')), ...files(join(root, 'src', 'mcp')), ...files(join(root, 'src', 'daemon', 'wake')), join(root, 'src', 'daemon', 'watch-run.ts'), join(root, 'src', 'launch', 'deliver.ts'), join(root, 'src', 'commands', 'send.ts')];
   // An allow-list entry that names no file would silently cover nothing.
   expect(existsSync(join(root, TYPED_WAKE_EXEMPTION))).toBe(true);
   const offenders: string[] = [];

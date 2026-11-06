@@ -5289,6 +5289,13 @@
     {
       "code": 0,
       "command": "send",
+      "id": "send.handed",
+      "meaning": "the typed wake was handed to the send daemon, which staged its own durable copy and asked its wake child to run the screen walk; the delivery's history line is the child's, and the id printed is the one it keeps",
+      "trigger": "team send lead hello"
+    },
+    {
+      "code": 0,
+      "command": "send",
       "id": "send.listed",
       "meaning": "the addressable seats were printed, nothing was sent",
       "trigger": "team send --list"
@@ -6014,6 +6021,13 @@
       "id": "team.unknown",
       "meaning": "the command is unknown",
       "trigger": "team nosuch"
+    },
+    {
+      "code": 2,
+      "command": "team",
+      "id": "team.wake-entry-refused",
+      "meaning": "the send daemon's typed-wake child was started without a readable one-use token, so it typed nothing",
+      "trigger": "the daemon starts its typed-wake child entry"
     },
     {
       "code": 0,
