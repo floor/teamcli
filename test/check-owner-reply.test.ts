@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { runTeamCheck } from '../src/check/team.ts';
 import { displayAgent, workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -14,7 +14,7 @@ import { writePolicySet } from '../src/policy/index.ts';
 import { installKey } from '../src/store/keys.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, duringAddressWrite, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-11-06T12:00:00Z');
 const KEY = join(import.meta.dir, 'fixtures', 'key.json');
@@ -113,12 +113,14 @@ function check(root: string, home: string, text: string, now: Date = NOW): { cod
 }
 
 function declare(home: string, entity: string, value: string, expiry?: string): void {
-  const wrote = writePolicySet(
-    home,
-    { level: 'entity', target: entity, name: 'owner-reply-to', value, ...(expiry === undefined ? {} : { expiry }) },
-    { now: NOW },
-  );
-  if (!wrote.ok) throw new Error(wrote.why);
+  duringAddressWrite(home, join(dirname(home), 'acme'), 'acme', entity, NOW, () => {
+    const wrote = writePolicySet(
+      home,
+      { level: 'entity', target: entity, name: 'owner-reply-to', value, ...(expiry === undefined ? {} : { expiry }) },
+      { now: NOW },
+    );
+    if (!wrote.ok) throw new Error(wrote.why);
+  });
 }
 
 const REPAIR = 'team policy set entity owner-reply-to lead@acme --entity lab --dry-run';

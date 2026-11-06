@@ -11,6 +11,7 @@ import { currentBriefClaim, deliverBriefForAttribution } from '../src/launch/gen
 import { rulesText } from '../src/launch/rules.ts';
 import { readMessage } from '../src/mcp/inbox.ts';
 import { readAgents } from '../src/registry/agents.ts';
+import { forgetTeam, getTeam, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { signedRecordOf, type SignedRecord } from '../src/send/record.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 
@@ -379,4 +380,27 @@ export function fixtureBase(prefix: string): string {
     throw new Error(`the fixture scratch root "${real}" is inside the checkout; name a root outside it with TEAMCLI_TEST_SCRATCH`);
   }
   return realpathSync(mkdtempSync(join(real, prefix)));
+}
+
+/** Run `write` while the fixture's team is registered, so an address policy can name it.
+ *  A record this call creates is removed again: a scene that proves an empty registry still
+ *  sees one, and a record already there is left as it was. */
+export function duringAddressWrite(
+  home: string,
+  root: string,
+  project: string,
+  entity: string | null,
+  at: Date,
+  write: () => void,
+): void {
+  const id = teamIdOf(root);
+  const prior = getTeam(home, id);
+  if (prior === null) {
+    upsertTeam(home, id, { project, entity, session: project, root, roster: [], at: at.toISOString() });
+  }
+  try {
+    write();
+  } finally {
+    if (prior === null) forgetTeam(home, id);
+  }
 }
