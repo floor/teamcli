@@ -1741,7 +1741,9 @@ export function* sealUnsealedSegmentsSteps(
             // Another turn in this process takes the busy answer, because the hold is marked
             // yielding for each turn the loop is free. The drop declaration runs later, on the
             // commit turn, which is not yielding, so it still appends under this hold.
-            release = acquireLock(lockDir);
+            // A key already held is busy immediately. Waiting here would pause the loop for the
+            // whole default, so the split waits for the next pass instead.
+            release = acquireLock(lockDir, { waitMs: 0 });
             heldEventLocks.add(lockDir);
             const moved = !sameStamp(openStampAfter, fileStamp(openPath));
             const rechecked = moved ? null : verifyEventLogSeals(project, root, home, { kept });
@@ -1896,8 +1898,10 @@ export function* sealUnsealedSegmentsSteps(
                 }
               }
             }
-          } catch {
-            // A lock or write failure leaves the open log readable for the next pass.
+          } catch (error) {
+            // A write failure leaves the open log readable for the next pass. A busy key is
+            // the caller's to retry; swallowing it would look like a finished attempt.
+            if (error instanceof LockBusyError) throw error;
           } finally {
             if (!openReplaced) {
               for (const slotPath of published) {

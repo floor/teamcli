@@ -8,6 +8,8 @@
 // 5. Events appended during an async subscribe registration are delivered once.
 // 6. Sealing a 22 MB open log writes one segment per turn, and a health probe during that
 //    first reconcile still answers within 500 ms.
+// 7. A holder of the event lock during that seal does not stop a health probe. The commit
+//    defers, and the open log stays in place for the whole hold.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import {
@@ -56,6 +58,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { messageKeyOf, signDomain, type Json } from '../src/store/keys.ts';
 import { storePath } from '../src/store/store.ts';
+import { acquireLock, LockBusyError } from '../src/state.ts';
 
 const PROJECT = ' synth-proj'.trim();
 const SESSION = 'synth-session';
@@ -851,4 +854,75 @@ describe('fix/presence-cold-scan independent verification', () => {
     expect(answered.length).toBeGreaterThanOrEqual(3);
     for (const ans of answered) expect(ans.ms).toBeLessThanOrEqual(500);
   }, 120_000);
+
+  test('a held event lock still lets a health probe answer within 500 ms', async () => {
+    const world = createWorld([50_000], 'seal-lock-held');
+    const root = world.roots[0]!.root;
+    const openPath = eventLogPath(PROJECT, root, world.home);
+    expect(statSync(openPath).size).toBeGreaterThan(2_000_000);
+    const lockDir = join(storePath(PROJECT, root, world.home), 'locks', 'events');
+
+    const socketPath = daemonSocketPath(world.home);
+    const readyPath = join(world.base, 'probe.ready');
+    const stopPath = join(world.base, 'probe.stop');
+    const childScript = fileURLToPath(new URL('./fixtures/cold-read-probe-child.ts', import.meta.url));
+    const prober = Bun.spawn([process.execPath, childScript, socketPath, readyPath, '30000', stopPath], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const readyDeadline = Date.now() + 10_000;
+    while (!existsSync(readyPath)) {
+      if (Date.now() > readyDeadline) throw new Error('probe child did not become ready');
+      await new Promise((r) => setTimeout(r, 10));
+    }
+
+    const started = await startMachineDaemon({
+      home: world.home,
+      roots: [root],
+      version: '0.0.0-probe-cold-scan',
+      heartbeatMs: 200,
+      presenceHosting: false,
+      restoreSweep: false,
+    });
+    if (started.kind !== 'serving') throw new Error(`daemon failed to start: ${started.kind}`);
+    activeDaemons.push(started.daemon);
+
+    const epochNow = (): number => Math.round(performance.timeOrigin + performance.now());
+    let release: (() => void) | null = null;
+    const grabDeadline = Date.now() + 15_000;
+    while (release === null && Date.now() < grabDeadline) {
+      try {
+        const taken = acquireLock(lockDir, { waitMs: 0 });
+        if (statSync(openPath).size <= 2_000_000) {
+          taken();
+          throw new Error('the seal committed before another holder could take the key');
+        }
+        release = taken;
+      } catch (error) {
+        if (!(error instanceof LockBusyError)) throw error;
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    }
+    if (release === null) throw new Error('the event lock stayed busy until the seal had finished');
+    const heldAt = epochNow();
+    try {
+      // Longer than an uncontended seal of this log, so the commit turn is reached while the
+      // key is already held. The open file staying large means that turn deferred.
+      await new Promise((r) => setTimeout(r, 8_000));
+      expect(statSync(openPath).size).toBeGreaterThan(2_000_000);
+    } finally {
+      writeFileSync(stopPath, '');
+      release();
+    }
+    const stdout = await new Response(prober.stdout).text();
+    const stderr = await new Response(prober.stderr).text();
+    const code = await prober.exited;
+    if (code !== 0) throw new Error(`probe child exited ${String(code)}: ${stdout}${stderr}`);
+    const duringHold = readColdProbes(stdout).filter((probe) => probe.epoch + probe.ms >= heldAt);
+    const timeouts = duringHold.filter((probe) => probe.kind === 'unanswered' && probe.reason === 'timeout');
+    expect(timeouts.map((probe) => `+${String(probe.at)} ms waited ${String(probe.ms)} ms`)).toEqual([]);
+    const answered = duringHold.filter((probe) => probe.kind === 'answered');
+    expect(answered.length).toBeGreaterThanOrEqual(1);
+    for (const ans of answered) expect(ans.ms).toBeLessThanOrEqual(500);
+  }, 90_000);
 });

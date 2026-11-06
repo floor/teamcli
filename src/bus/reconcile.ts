@@ -46,7 +46,7 @@ import { machineSettingsPath } from '../settings/declared.ts';
 import { HISTORY_KEPT, readHistorySteps, type HistoryEntry } from '../send/history.ts';
 import type { PendingDrop } from '../send/pending.ts';
 import { leadAckActorOf, readVerifiedReceipt } from '../send/record.ts';
-import { readState } from '../state.ts';
+import { LockBusyError, readState } from '../state.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { compareSeatNames } from '../seat-names.ts';
 import {
@@ -668,14 +668,22 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       // The one-time migration of a store written before seals or under a larger segment bound:
       // each segment is verified in slices and the append lock is held only for the seal write
       // itself, so the bus keeps serving while an old log is sealed.
-      state.sealAttempted = true;
-      yield* sealUnsealedSegmentsSteps(project, root, home, {
-        kept,
-        segmentBytes: options.maxBytes,
-        retentionSeconds: options.retentionSeconds,
-        session,
-        signal: options.signal,
-      });
+      try {
+        yield* sealUnsealedSegmentsSteps(project, root, home, {
+          kept,
+          segmentBytes: options.maxBytes,
+          retentionSeconds: options.retentionSeconds,
+          session,
+          signal: options.signal,
+        });
+        state.sealAttempted = true;
+      } catch (error) {
+        // The key was held, so this pass did not seal. The next pass tries again.
+        if (!(error instanceof LockBusyError)) {
+          state.sealAttempted = true;
+          throw error;
+        }
+      }
     }
   }
 
