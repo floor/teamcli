@@ -1120,6 +1120,7 @@
     "test/up-registry-stopped.test.ts": 4,
     "test/up-repair-own-workspace.test.ts": 3,
     "test/up-workspace-sweep.test.ts": 4,
+    "test/upgrade-0514-independent.test.ts": 0,
     "test/usage-machine-readings.test.ts": 5,
     "test/usage-quota.test.ts": 5,
     "test/usage-review-524.test.ts": 3,
