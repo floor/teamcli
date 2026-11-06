@@ -275,6 +275,11 @@ describe('the run flag reaches the real host, and only when asked', () => {
     expect(serving).not.toBeNull();
     if (serving === null) return;
     await waitUntil(() => (serving.daemon.roots[0]?.watch?.cycles ?? 0) >= 2);
+    // The cycle count moves in the host before the state file's write lands.
+    await waitUntil(() => {
+      const disk = readDaemonState(watchedWorld.home);
+      return disk.kind === 'ok' && (disk.state.roots[0]?.watch?.cycles ?? 0) >= 2;
+    });
     expect(serving.daemon.roots[0]?.watch).toMatchObject({
       // The host's own default: outbound effects stay blocked without a verified sender.
       effects: 'blocked',

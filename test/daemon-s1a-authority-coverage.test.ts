@@ -963,6 +963,8 @@ describe('the daemon heartbeat consumes the request and faults exactly the named
       expect(doc).toMatchObject({ outcome: 'faulted', route_id: world.id, why: FAULT_WHY });
 
       await waitUntil(() => (attempts.get(world.root) ?? 0) >= 2);
+      // The counted failure is in the host before the state file's write lands.
+      await waitUntil(() => watchOf(world.root)?.failures === 1);
       const after = readDaemonState(world.home);
       expect(after.kind).toBe('ok');
       if (after.kind === 'ok') {

@@ -311,7 +311,7 @@ describe('team approve', () => {
     );
     const changed = await approve(['--show'], WORKER);
     expect(changed.out).toContain(
-      '  - 106:     launch: grok --model grok-4.7\n  + 106:     launch: grok --model grok-4.7 --yolo\n',
+      '  -    launch: grok --model grok-4.7\n  +    launch: grok --model grok-4.7 --yolo\n',
     );
     expect(changed.out).toContain('Needs a new approval: `limits` changed; seat grok-acme changed.\n');
     expect(changed.out).toContain('Ceilings approved: 6 seats at most, 2 temporary, openai 1, deepseek 3.\n');

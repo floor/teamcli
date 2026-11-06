@@ -343,6 +343,10 @@ describe('the lead mark: a seat field in the text, the orchestrator section in t
 // The end-to-end runs: a real signed store in a scratch home, the real gate, the real key —
 // only herdr and the state are stood in for, because no scratch test has a live team session.
 const T = new Date('2026-10-07T12:00:00.000Z');
+// The fixture keeps session `acme-web` while the default for this entity and project is `acme`.
+// Approve names that and still seals; the warning is part of the run's stderr.
+const SESSION_DRIFT =
+  'team approve: warning, line 3: session "acme-web" is not the default "acme" for this entity and project: kept as written; a drifted name is how a stale session gets reused\n';
 const TEXT = `format: 1
 project: acme
 session: acme-web
@@ -429,7 +433,7 @@ describe('the delegated approval end to end', () => {
 
     const run = await approveRun(placeOne, [], DELEGATE, connected(placeOne, { ask: neverAsked(), waiting: neverRead }));
     expect(run.code).toBe(0);
-    expect(run.err).toBe('');
+    expect(run.err).toBe(SESSION_DRIFT);
     expect(run.out).toContain('Approved.');
     // The audit line: who (the pane), which act, what changed. Nothing else wrote here.
     const log = join(placeOne.root, '.agents', 'team.log');
@@ -501,7 +505,7 @@ describe('the delegated approval end to end', () => {
 
     const run = await approveRun(placeOne, [], STRANGER, connected(placeOne));
     expect(run.code).toBe(1);
-    expect(run.err).toBe('team approve: only the owner or the approved delegate approves a team file; this call is pilot\n');
+    expect(run.err).toBe(`${SESSION_DRIFT}team approve: only the owner or the approved delegate approves a team file; this call is pilot\n`);
     expect(readApproval(store)).toEqual(before);
   });
 
@@ -510,6 +514,6 @@ describe('the delegated approval end to end', () => {
     approvedPlace(placeOne, TEXT);
     const run = await approveRun(placeOne, ['--file', placeOne.file], DELEGATE, connected(placeOne));
     expect(run.code).toBe(1);
-    expect(run.err).toBe("team approve: --file is the owner's; the approved delegate cannot use it\n");
+    expect(run.err).toBe(`${SESSION_DRIFT}team approve: --file is the owner's; the approved delegate cannot use it\n`);
   });
 });

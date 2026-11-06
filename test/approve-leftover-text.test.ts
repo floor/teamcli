@@ -40,6 +40,36 @@ const EXEMPT: Exemption[] = [
     line: ' * `up`, `down`, `approve` and `reload` call this. It reads the live default file and the approval again on this',
     reason: 'names when the live approval is read, not a step to approve anything',
   },
+  {
+    file: 'src/commands/rename.ts',
+    line: '        `team rename: the approval pinned lead "${approvedPin}", which this file no longer resolves; approve the team again before renaming\\n`,',
+    reason: 'the current team approve, asked before a rename would re-sign a lead the approval no longer resolves',
+  },
+  {
+    file: 'src/commands/rename.ts',
+    line: '        `team rename: the file now leads with "${pinned.team.orchestrator}", but the approval pinned "${approvedPin}"; approve the team again before renaming\\n`,',
+    reason: 'the current team approve, asked before a rename would re-sign a lead the file and the approval disagree on',
+  },
+  {
+    file: 'src/commands/rename.ts',
+    line: '        `team rename: the live chain leads with "${team.orchestrator}", but the approval pinned "${approvedPin}"; approve the team again before renaming\\n`,',
+    reason: 'the current team approve, asked before a rename would re-sign a lead the live chain and the approval disagree on',
+  },
+  {
+    file: 'src/daemon/runtime-migration.ts',
+    line: '  /** Lobby `guard_dir` lines to re-approve in reverse, one per guard refused. */',
+    reason: 'the printed guard_dir line the current approve takes, not a removed step',
+  },
+  {
+    file: 'src/daemon/runtime-migration.ts',
+    line: '  /** Replacement `guard_dir` lines to re-approve, one per moved guard still named old. */',
+    reason: 'the printed guard_dir line the current approve takes, not a removed step',
+  },
+  {
+    file: 'docs/commands/daemon.md',
+    line: 'lane. A moved guard folder prints the exact `guard_dir` line to re-approve and the',
+    reason: 'documents the printed guard_dir line the current approve takes',
+  },
 ];
 
 /** Every run of whitespace as one space, so a phrase wrapped across a line in a help string or a

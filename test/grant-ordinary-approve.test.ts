@@ -15,6 +15,10 @@ import { approvalStanding, readApproval, storePath, writeApproval } from '../src
 import { testIo } from './helpers.ts';
 
 const T = new Date('2026-10-14T12:00:00.000Z');
+// The fixture keeps session `alpha` while the default for this entity and project is `acme`.
+// Approve names that and still seals; the warning is part of the run's stderr.
+const SESSION_DRIFT =
+  'team approve: warning, line 3: session "alpha" is not the default "acme" for this entity and project: kept as written; a drifted name is how a stale session gets reused\n';
 const made: string[] = [];
 afterEach(() => {
   for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -127,7 +131,7 @@ describe('the granted orchestrator approves an ordinary change', () => {
 
     const result = await run(here);
     expect(result.code).toBe(0);
-    expect(result.err).toBe('');
+    expect(result.err).toBe(SESSION_DRIFT);
     expect(result.out).toContain('Approved.');
     expect(readFileSync(join(here.dir, 'team.log'), 'utf8')).toBe(
       `${T.toISOString()} grant [grant] lead approve: \`rules\` changed\n`,
@@ -206,7 +210,7 @@ describe('the granted orchestrator approves an ordinary change', () => {
 
     const result = await run(here, ['--file', foreign]);
     expect(result.code).toBe(1);
-    expect(result.err).toBe(`team approve: --file is the owner's; the granted seat cannot use it\n`);
+    expect(result.err).toBe(`${SESSION_DRIFT}team approve: --file is the owner's; the granted seat cannot use it\n`);
     expect(readFileSync(foreign, 'utf8')).toBe('format: [\n');
     expect(readApproval(storeFile(here, ORDINARY))).toEqual(before);
     expect(existsSync(join(here.dir, 'team.log'))).toBe(false);
