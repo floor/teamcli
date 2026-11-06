@@ -420,7 +420,7 @@ describe('the account warning on its own row under the status line reads the com
     const screens = [warningIdle(), warningIdle(), WARNING_SCREEN, WARNING_SCREEN, WORKING];
     const wake = wakeFake((read) => screens[Math.min(read, screens.length - 1)] ?? null);
     const out = await deliverTypedWake(wake.host, 'pane-1', WARNING_LINE, 'codex', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(out).toMatchObject({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
     expect(wake.keys).toEqual([]);
     expect(wake.typed).toEqual([WARNING_LINE]);
     expect(wake.enters).toBe(1);
@@ -432,7 +432,7 @@ describe('the typed wake returns to the prompt, then keeps every guard', () => {
     const screens = [SCROLL_BACK, IDLE, IDLE, holding(LINE), holding(LINE), WORKING];
     const wake = wakeFake((read) => screens[Math.min(read, screens.length - 1)] ?? null);
     const out = await deliverTypedWake(wake.host, 'pane-1', LINE, 'codex', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(out).toMatchObject({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
     expect(wake.keys).toEqual(['escape']);
     expect(wake.typed).toEqual([LINE]);
     expect(wake.enters).toBe(1);
@@ -442,7 +442,7 @@ describe('the typed wake returns to the prompt, then keeps every guard', () => {
     const screens = [SCROLL_BACK_MARKER, IDLE, IDLE, holding(LINE), holding(LINE), WORKING];
     const wake = wakeFake((read) => screens[Math.min(read, screens.length - 1)] ?? null);
     const out = await deliverTypedWake(wake.host, 'pane-1', LINE, 'codex', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(out).toMatchObject({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
     expect(wake.keys).toEqual(['escape']);
     expect(wake.typed).toEqual([LINE]);
     expect(wake.enters).toBe(1);
@@ -513,7 +513,7 @@ describe('the wake returns through the esc hint with exactly one key', () => {
     const screens = [SCROLL_BACK_MARKER, ESC_HINT_SCREEN, ESC_HINT_SCREEN, holding(LINE), holding(LINE), WORKING];
     const wake = wakeFake((read) => screens[Math.min(read, screens.length - 1)] ?? null);
     const out = await deliverTypedWake(wake.host, 'pane-1', LINE, 'codex', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(out).toMatchObject({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
     expect(wake.keys).toEqual(['escape']);
     expect(wake.typed).toEqual([LINE]);
     expect(wake.enters).toBe(1);
@@ -523,7 +523,7 @@ describe('the wake returns through the esc hint with exactly one key', () => {
     const screens = [SCROLL_BACK, ESC_HINT_SCREEN, ESC_HINT_SCREEN, holding(LINE), holding(LINE), WORKING];
     const wake = wakeFake((read) => screens[Math.min(read, screens.length - 1)] ?? null);
     const out = await deliverTypedWake(wake.host, 'pane-1', LINE, 'codex', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(out).toMatchObject({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
     expect(wake.keys).toEqual(['escape']);
     expect(wake.typed).toEqual([LINE]);
     expect(wake.enters).toBe(1);

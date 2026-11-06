@@ -544,7 +544,6 @@
     "test/idle-autoclaim-acceptance.test.ts": 3,
     "test/idle-status.test.ts": 5,
     "test/in-project-field.test.ts": 2,
-    "test/in-project-lead-pin-independent.test.ts": 3,
     "test/in-project-lead-pin-membership-independent.test.ts": 4,
     "test/inbox-caller-isolation-independent.test.ts": 5,
     "test/inbox-launch-file.test.ts": 4,

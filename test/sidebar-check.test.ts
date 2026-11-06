@@ -16,7 +16,7 @@ import {
 } from '../src/herdr.ts';
 import { sidebarRowsWord, writePolicySet } from '../src/policy/index.ts';
 import { readSidebarReloads, recordSidebarReloads } from '../src/registry/sidebar-reloads.ts';
-import { upsertTeam } from '../src/registry/teams.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { approvalStanding } from '../src/store/store.ts';
@@ -90,6 +90,25 @@ function setupWorld(options?: { writeValidConfig?: boolean; recordCurrentReload?
   mkdirSync(home, { recursive: true });
   execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
   writeFileSync(join(root, '.agents', 'team.yaml'), TEAM_YAML);
+  // The file names no owner-reply endpoint. The check reports that as its own difference, so the
+  // sidebar scenes declare one and keep their exit about the sidebar.
+  upsertTeam(home, teamIdOf(root), {
+    project: parsedTeam.team.project,
+    session: parsedTeam.team.session,
+    root,
+    entity: 'acme',
+    roster: parsedTeam.team.seats.map((seat, at) => ({
+      agent: `agt_${String(at + 1).padStart(12, '0')}`,
+      seat: seat.name,
+      role: seat.role,
+    })),
+  });
+  const reply = writePolicySet(
+    home,
+    { level: 'entity', target: 'acme', name: 'owner-reply-to', value: 'lead@acme-app' },
+    { now: NOW },
+  );
+  if (!reply.ok) throw new Error(reply.why);
 
   updateState(join(root, '.agents'), (state) => {
     const session = (state.sessions['acme-acme-app'] ??= emptySession());

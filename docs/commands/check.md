@@ -474,9 +474,9 @@ seats:
     launch: claude --model deepseek-flash
 ```
 
-The team runs as the file and the state say, so there is nothing to act on (the notes are the
-housekeeping of a role word written the 0.3.5/0.4 way, and each seat's delivery class where no
-socket is live):
+The team runs as the file and the state say. The notes are the housekeeping of a role word
+written the 0.3.5/0.4 way, and each seat's delivery class where no socket is live. The one
+difference is the entity's missing owner-reply endpoint:
 
 ```console
 $ team check ; echo "exit $?"
@@ -487,8 +487,11 @@ note: claude-keeper: no cross-session socket is live, so sends go to its drop fo
 note: claude-beacon: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn — claude-beacon reads it at its next turn, and nothing here gives it one (pull-only)
 note: worker: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn — worker reads it at its next turn, and nothing here gives it one (pull-only)
 note: watch: the recorded process 4242 is gone; the daemon health cannot say whether a hosted watch owns the route
-no differences
-exit 0
+difference: entity "lab" declares no owner-reply-to policy
+  repair: team policy set entity owner-reply-to claude-keeper@beacon --entity lab --dry-run
+  who: the owner
+1 difference, 1 for the owner
+exit 1
 ```
 
 The entity's rule refuses this lab, and the check names each seat of the team it runs in with the
@@ -506,13 +509,16 @@ note: claude-keeper: no cross-session socket is live, so sends go to its drop fo
 note: claude-beacon: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn — claude-beacon reads it at its next turn, and nothing here gives it one (pull-only)
 note: worker: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn — worker reads it at its next turn, and nothing here gives it one (pull-only)
 note: watch: the recorded process 4242 is gone; the daemon health cannot say whether a hosted watch owns the route
+difference: entity "lab" declares no owner-reply-to policy
+  repair: team policy set entity owner-reply-to claude-keeper@beacon --entity lab --dry-run
+  who: the owner
 difference: claude-keeper: declares vendor anthropic, which the entity model rule *=!anthropic refuses; a swap to claude-code DeepSeek Flash 4.0 from beacon/worker is proposed
   repair: team swap queue claude-keeper
   who: the team's lead
 difference: claude-beacon: declares vendor anthropic, which the entity model rule *=!anthropic refuses; a swap to claude-code DeepSeek Flash 4.0 from beacon/worker is proposed
   repair: team swap queue claude-beacon
   who: the team's lead
-2 differences
+3 differences, 1 for the owner
 exit 1
 ```
 
