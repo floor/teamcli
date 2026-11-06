@@ -102,12 +102,19 @@ export function canonicalRecordBytes(value: unknown): Buffer {
   return Buffer.from(canonicalRecord(value), 'utf8');
 }
 
-/** A validated team as a record: the same value without the seats' source positions. Pure. */
+/** A validated team as a record: the same value without the seats' source positions. An empty
+ *  messaging map is the loaded form of a file that writes no messaging word, and it is left out
+ *  so that file keeps the digest it had. Pure. */
 export function teamRecordOf(team: { seats?: readonly object[] } & Record<string, unknown>): Record<string, unknown> {
-  if (!Array.isArray(team.seats)) return { ...team };
+  const copy: Record<string, unknown> = { ...team };
+  const messaging = copy.messaging;
+  if (messaging !== null && typeof messaging === 'object' && !Array.isArray(messaging) && Object.keys(messaging).length === 0) {
+    delete copy.messaging;
+  }
+  if (!Array.isArray(copy.seats)) return copy;
   return {
-    ...team,
-    seats: team.seats.map((seat) =>
+    ...copy,
+    seats: (copy.seats as readonly object[]).map((seat) =>
       Object.fromEntries(Object.entries(seat).filter(([key]) => !SEAT_SOURCE_FIELDS.includes(key))),
     ),
   };
