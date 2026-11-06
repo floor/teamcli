@@ -1,6 +1,6 @@
 // Independent scenes for the false-busy typed wake. The frames are captured Grok panes.
 // An empty idle prompt under a leftover spinner, or under a leftover turn-status line, is
-// still the idle prompt: the wake asks for one agent prompt and types nothing. A pane
+// still the idle prompt: one agent prompt delivers the line, with no typing and no Enter. A pane
 // mid-turn is never typed into. An empty prompt whose box already holds text is not typed
 // over. No herdr runs.
 import { expect, test } from 'bun:test';
@@ -46,7 +46,7 @@ function capture(before: string) {
   let enters = 0;
   const holding = drawn(IDLE, LINE);
   const host: TypedWakeHost = {
-    read: () => (enters > 0 ? WORKING : typed.length > 0 ? holding : before),
+    read: () => (prompts.length > 0 ? WORKING : typed.length > 0 ? holding : before),
     type: (_pane, text) => {
       typed.push(text);
       return true;
@@ -71,14 +71,14 @@ async function wake(before: string) {
 }
 
 const asked = {
-  delivered: false,
-  reason: 'no working screen showed after the agent prompt',
+  delivered: true,
+  reason: 'the working screen showed after the agent prompt',
   typed: [] as string[],
   prompts: [LINE],
   enters: 0,
 };
 
-test('an idle prompt under a stale spinner or status line asks for one agent prompt and types nothing', async () => {
+test('an idle prompt under a stale spinner or status line is delivered by one agent prompt', async () => {
   const spinner = await wake(under(SPINNER));
   const status = await wake(under(STATUS));
   expect({ spinner, status }).toEqual({ spinner: asked, status: asked });
