@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
-import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,7 +13,7 @@ import { getTeam, rekeyTeamRecord, upsertTeam } from '../src/registry/teams.ts';
 const NOW = new Date('2026-11-06T00:00:00Z');
 let home: string;
 beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'project-consumers-')); });
-afterEach(() => { execFileSync('trash', [home]); });
+afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 function agent(team: string, seat: string, session: string, pane: string): Agent {
   return registerAgent(home, {
