@@ -922,6 +922,7 @@
     "test/security-profile.test.ts": 0,
     "test/send-address.test.ts": 1,
     "test/send-admission-matrix.test.ts": 2,
+    "test/send-admission-membership-independent.test.ts": 1,
     "test/send-admit.test.ts": 2,
     "test/send-brief.test.ts": 2,
     "test/send-bus-nudge.test.ts": 0,
