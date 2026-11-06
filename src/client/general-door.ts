@@ -118,7 +118,7 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   release: ['file'],
   reload: ['client', 'file', 'team'],
   remove: ['client', 'file', 'session', 'team'],
-  rename: ['file', 'session'],
+  rename: ['file', 'from', 'in-project', 'session', 'team'],
   reply: [],
   restart: ['client', 'file', 'resume', 'session', 'team'],
   resume: ['client', 'seat', 'team'],

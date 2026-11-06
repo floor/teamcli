@@ -95,6 +95,7 @@ const REACHED = [
   'revoke delegate',
   'revoke grant',
   'route',
+  'show',
   'tempo',
   'trace',
   'unlock',

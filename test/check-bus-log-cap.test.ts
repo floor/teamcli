@@ -10,6 +10,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, truncateSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { EVENT_LOG_TOTAL_BYTES, eventLogPath, retainedLogBytes } from '../src/bus/log.ts';
+import { eventLogSettingsFor } from '../src/bus/log-settings.ts';
 import { busLogSizeNotes } from '../src/bus/notes.ts';
 import { runTeamCheck } from '../src/check/team.ts';
 import { displayAgent, workspaceLabel } from '../src/file/sections/seats.ts';
@@ -185,8 +186,11 @@ describe('team check near the cap', () => {
 
   test("a slot outside the reader's bound is neither read nor counted", () => {
     const world = place();
+    // The bound is the slot count the team's segment size allows. The next index is the first
+    // one the reader does not look at.
+    const outside = eventLogSettingsFor(world.root, world.home).kept;
     held(world, 0, 40_000_000);
-    held(world, 13, 40_000_000);
+    held(world, outside, 40_000_000);
     expect(retainedLogBytes('acme', world.root, world.home)).toBe(40_000_000);
     const ran = check(world);
     expect(ran.out).not.toContain('retained-size cap');

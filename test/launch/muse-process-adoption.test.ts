@@ -222,18 +222,17 @@ describe('the listed-agent path is unchanged', () => {
 });
 
 describe('a rename that fails after the pane was found', () => {
-  test('is retried on a backoff until the wait ends, then leaves the seat at launched, and records no name', async () => {
+  test('is asked once more after the pane is listed, then leaves the seat at launched with no name', async () => {
     const made = await namePane({ listed: [PANE], foreground: ['zsh'], renameFails: true });
-    // The host can refuse a rename while the agent starts, so one refusal is not final: the
-    // call is re-asked inside the wait's 90 s budget rather than ending the seat on the spot.
-    expect(made.calls.renames.length).toBeGreaterThan(1);
-    expect(made.calls.renames.every((call) => call.pane === PANE && call.name === SEAT)).toBe(true);
-    expect(made.clock()).toBe(90_000);
+    // The pane is already in the agent list, so the detect wait does not sleep. A rename that
+    // returns without listing the name is asked once more, and that second miss ends it.
+    expect(made.calls.renames).toEqual([{ pane: PANE, name: SEAT }, { pane: PANE, name: SEAT }]);
+    expect(made.clock()).toBe(0);
     expect(made.report.dropped).toEqual([SEAT]);
     expect(made.calls.records).toEqual([]);
     expect(made.calls.typed).toEqual([]);
     expect(made.calls.said.join('')).toContain(
-      `${SEAT}: left out: was not named in time; left at launched\n`,
+      `${SEAT}: left out: its name was not listed after the rename; left at launched\n`,
     );
   });
 });

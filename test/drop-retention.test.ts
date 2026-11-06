@@ -46,6 +46,7 @@ import {
 import { markPending } from '../src/send/pending.ts';
 import { receiptFile, signClose, signReceiptPayload, writeReceipt } from '../src/send/record.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
+import { testIo } from './helpers.ts';
 
 const TEAM_YAML = `format: 1
 entity: floor
@@ -1032,22 +1033,12 @@ describe('slice 2: hot read paths skip read bodies and cache verified stamps ins
     expect(pass2.result).toEqual(pass1.result);
     expect(pass2.reads.length).toBe(0);
 
-    // Also verify runDrops --read --seat worker serves the unread message and writes its read receipt.
-    let stdout = '';
-    const exitCode = await runDrops(
-      ['--read', '--seat', 'worker'],
-      {
-        cwd: root,
-        env: {},
-        stdinIsTTY: false,
-        stdoutIsTTY: false,
-        stdout: (s) => { stdout += s; },
-        stderr: () => {},
-      },
-      { home },
-    );
-    expect(exitCode).toBe(0);
-    expect(stdout).toContain(`body for ${unreadId}`);
+    // --read serves the seat, the owner, or a lead. This scene is the owner, so the unread
+    // body is served and no receipt is written for the seat.
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runDrops(['--read', '--seat', 'worker'], io, { home })).toBe(0);
+    expect(io.out).toContain(`body for ${unreadId}`);
+    expect(io.err).toBe('');
   });
 });
 

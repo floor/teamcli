@@ -17,7 +17,7 @@ import { lobbyDir } from '../src/lobby/gate.ts';
 import { EVENT_THRESHOLDS } from '../src/policy/events.ts';
 import { writePolicySet } from '../src/policy/index.ts';
 import { registerAgent } from '../src/registry/agents.ts';
-import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { forgetTeam, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { REPLY_RULE } from '../src/send/admit.ts';
 import { readHistory } from '../src/send/history.ts';
 import { signedCloseOf, signedReceiptOf, verifyClose, verifyReceipt } from '../src/send/record.ts';
@@ -599,8 +599,14 @@ describe('a reply to the owner goes to its entity owner-reply endpoint', () => {
 
   test('an endpoint the registry cannot resolve is refused, and nothing is written', async () => {
     writeFileSync(join(root, '.agents', 'team.yaml'), TEAM.replace('project: acme\n', 'project: acme\nentity: floor\n'));
+    const nowhere = join(base, 'nowhere');
+    mkdirSync(nowhere);
+    upsertTeam(home, 'def456def456', { project: 'nowhere', session: 'nowhere', root: nowhere, by: 'test' });
     const wrote = writePolicySet(home, { level: 'entity', target: 'floor', name: 'owner-reply-to', value: 'orchestrator@nowhere' }, { now: NOW });
     expect(wrote.ok).toBe(true);
+    // The address named a registered team when it was stored. Removing that record is the
+    // miss the reply still refuses: a write no longer stores a team the registry does not have.
+    expect(forgetTeam(home, 'def456def456')?.project).toBe('nowhere');
     place('lead', 'pane1');
     sentTo('lead', SENT, { from: 'owner' });
     const result = await run([SENT, 'hello'], replying());
