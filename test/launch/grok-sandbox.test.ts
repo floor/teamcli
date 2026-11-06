@@ -578,17 +578,36 @@ describe('the plan and the launch', () => {
     expect(scene.said.join('')).not.toContain('sandbox profile was not written');
   });
 
-  test('a profile that cannot be written takes the flag off the line and the seat still launches', async () => {
+  test('a profile that cannot be written refuses the seat and launches nothing', async () => {
     const { sandbox } = world();
     const target = join(dir(), 'elsewhere.toml');
     writeFileSync(target, '# untouched\n');
     symlinkSync(target, sandbox.file);
     const scene = execute(sandbox);
     await scene.done;
-    expect(scene.runs).toHaveLength(1);
-    expect(scene.runs[0]).toContain('AGENT_UNATTENDED=1 grok');
-    expect(scene.runs[0]).not.toContain('--sandbox');
-    expect(scene.said.join('')).toContain('its sandbox profile was not written: a symbolic link; launched without it');
+    expect(scene.runs).toEqual([]);
+    const said = scene.said.join('');
+    expect(said).toContain('left out: its sandbox profile was not written: a symbolic link; nothing was launched. Repair the sandbox file, then launch the seat again');
+    expect(said).not.toContain('launched without it');
     expect(readFileSync(target, 'utf8')).toBe('# untouched\n');
+  });
+
+  test('a read-only sandbox file is left as it is and the seat is not launched', async () => {
+    const { sandbox, grokHome } = world();
+    writeFileSync(sandbox.file, 'keep exact bytes\n', { mode: 0o444 });
+    chmodSync(grokHome, 0o555);
+    try {
+      const scene = execute(sandbox);
+      await scene.done;
+      expect(scene.runs).toEqual([]);
+      const said = scene.said.join('');
+      expect(said).toContain('its sandbox profile was not written:');
+      expect(said).toContain('nothing was launched');
+      expect(said).toContain('Repair the sandbox file, then launch the seat again');
+      expect(said).not.toContain('launched without it');
+      expect(readFileSync(sandbox.file, 'utf8')).toBe('keep exact bytes\n');
+    } finally {
+      chmodSync(grokHome, 0o700);
+    }
   });
 });

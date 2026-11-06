@@ -177,7 +177,8 @@ function realFolder(folder: string): string {
  *  is replaced whole through a private temporary file in the same folder, so a failed write leaves
  *  the original as it was; the result is 0600 even when the old file was not. A file that already
  *  holds the profile as this launch would write it is not rewritten, and a symbolic link is not
- *  written through at all: the caller launches without the profile rather than failing the seat. */
+ *  written through at all. A write that fails leaves the file as it was; the caller refuses the
+ *  seat rather than launching it without the profile. */
 export function writeGrokSandbox(sandbox: GrokSandbox): { ok: true } | { ok: false; why: string } {
   try {
     const text = existsSync(sandbox.file) ? readFileSync(sandbox.file, 'utf8') : '';
@@ -197,11 +198,8 @@ export function writeGrokSandbox(sandbox: GrokSandbox): { ok: true } | { ok: fal
  *  prompt is one word: the words inside it are text, not options. */
 const SHELL_WORD = /(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g;
 
-/** The launch line without the `--sandbox <profile>` this run appended: what a launch runs when
- *  its sandbox file could not be written, instead of a line Grok would refuse for a profile it
- *  cannot find. The option is removed as the argv pair it is, never as a substring: the same words
- *  inside a quoted prompt are one argument, and the CLI is asked for exactly what it was asked
- *  before. */
+/** The launch line without the `--sandbox <profile>` pair. The option is removed as the argv
+ *  pair it is, never as a substring: the same words inside a quoted prompt are one argument. */
 export function withoutGrokSandbox(command: string, profile: string): string {
   const words = [...command.matchAll(SHELL_WORD)];
   for (let at = 0; at < words.length; at++) {
@@ -321,7 +319,7 @@ function sameValue(actual: unknown, wanted: unknown): boolean {
 }
 
 /** A sandbox file parsed as a TOML document. A file that does not parse is not written: the
- *  error tells the caller why, and the launch continues without the profile. */
+ *  error tells the caller why, and the seat is refused. */
 function parseSandbox(text: string, prefix = 'the sandbox file is not valid TOML'): Record<string, unknown> {
   try {
     return parseToml(text);

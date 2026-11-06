@@ -94,8 +94,8 @@ export type Op =
       codexEndpoint?: { dir: string };
       /**
        * A Grok seat's sandbox profile, written at launch before the pane's command runs. Set
-       * only when this plan named the profile on the line, so a failure can take the same
-       * `--sandbox` off again instead of launching a line Grok would refuse.
+       * only when this plan named the profile on the line. A file that cannot be written
+       * refuses the seat; the line is not launched without the profile.
        */
       grokSandbox?: GrokSandbox }
   /** `why` is the reason the record and the log carry; `detail`, when the reason has a fuller

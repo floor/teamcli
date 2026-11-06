@@ -262,6 +262,8 @@ is not a sandbox grant when it lies there; the seat is not moved to another fold
 that is the shared project root is refused: that grant would cover `.agents` and the checkout's
 git directory, and the repair is to give the seat its own worktree or clone. The launch also
 removes a leftover `[profiles.team-seat-<project>]` table when it writes the per-seat profile.
+A profile that cannot be written refuses the seat: nothing is launched without the sandbox, and
+the repair is to fix the sandbox file and launch the seat again.
 `extends = "workspace"` is written; what that preset itself grants is unmeasured.
 
 The Cursor profile is tested with CLI 2026.10.01 to 2026.10.22 (`cursor-agent`). The 2026.10.22

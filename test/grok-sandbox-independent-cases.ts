@@ -58,7 +58,7 @@ seats:
   return op;
 }
 function parsed(w: World): any { return Bun.TOML.parse(readFileSync(w.file, 'utf8')); }
-async function launch(w: World, command = 'grok') {
+async function drive(w: World, command = 'grok') {
   const op = planned(w, command), runs: { command: string; argv: string[]; atRun: string | null }[] = [], said: string[] = [], recorded: unknown[] = [];
   const script = join(w.base, 'argv.py'), output = join(w.base, 'argv.json');
   writeFileSync(script, 'import json,sys\nfrom pathlib import Path\nPath(sys.argv[1]).write_text(json.dumps(sys.argv[2:]))\n');
@@ -78,8 +78,12 @@ async function launch(w: World, command = 'grok') {
   };
   const steps: Step[] = [{ kind: 'run', argv: [], do: { ...op, pane: 'owned-pane' } }, { kind: 'skip', text: 'scout ready', do: { do: 'ready', seat: 'scout', rules: 'option' } }];
   await executePlan(steps, 'orbit-scene', host);
-  expect(runs).toHaveLength(1);
-  return { op, run: runs[0]!, said: said.join(''), recorded };
+  return { op, runs, said: said.join(''), recorded };
+}
+async function launch(w: World, command = 'grok') {
+  const out = await drive(w, command);
+  expect(out.runs).toHaveLength(1);
+  return { op: out.op, run: out.runs[0]!, said: out.said, recorded: out.recorded };
 }
 function flag(argv: string[], name: string) { const pair = argv.indexOf(name); return pair < 0 ? argv.find(x => x.startsWith(name + '='))?.slice(name.length + 1) : argv[pair + 1]; }
 function ownProfile(w: World) { return parsed(w).profiles['team-seat-orbit-scout']; }
@@ -136,32 +140,40 @@ for (const header of ['[profiles.team-seat-orbit-scout] # keep this table commen
   expect(ownProfile(w).custom).toBe('kept');
   await launch(w); expectGrants(w); expect(ownProfile(w).custom).toBe('kept');
 });
-for (const location of ['file', 'home', 'ancestor'] as const) test(`a link at the ${location} is never written through and the seat launches with one held report`, async () => {
+for (const location of ['file', 'home', 'ancestor'] as const) test(`a link at the ${location} is never written through and the seat is refused`, async () => {
   const w = world(), target = join(w.base, 'target'); mkdirSync(target);
   let sentinel: string;
   if (location === 'file') { sentinel = join(target, 'sandbox.toml'); writeFileSync(sentinel, '# untouched target\n'); symlinkSync(sentinel, w.file); }
   else if (location === 'home') { process.env.GROK_HOME = join(w.base, 'linked-home'); symlinkSync(target, process.env.GROK_HOME); sentinel = join(target, 'sandbox.toml'); }
   else { const real = join(target, 'nested'); mkdirSync(real); const linked = join(w.home, 'link'); symlinkSync(target, linked); process.env.GROK_HOME = join(linked, 'nested'); sentinel = join(real, 'sandbox.toml'); }
   const before = existsSync(sentinel) ? readFileSync(sentinel) : null;
-  const out = await launch(w);
+  const out = await drive(w);
+  expect(out.runs).toEqual([]);
   expect(existsSync(sentinel) ? readFileSync(sentinel) : null).toEqual(before);
-  expect(flag(out.run.argv, '--sandbox')).toBeUndefined();
   expect(out.said.match(/sandbox profile was not written/g)).toHaveLength(1);
-  expect(out.said).toContain('launched without it');
-  expect(JSON.stringify(out.recorded)).not.toContain('--sandbox team-seat-orbit-scout');
+  expect(out.said).toContain('a symbolic link');
+  expect(out.said).toContain('nothing was launched');
+  expect(out.said).toContain('Repair the sandbox file, then launch the seat again');
+  expect(out.said).not.toContain('launched without it');
+  expect(out.recorded).toEqual([]);
 });
-test('a regular file in the config-home position is reported and the appended flag is removed', async () => {
+test('a regular file in the config-home position is left untouched and the seat is refused', async () => {
   const w = world(), blocked = join(w.base, 'blocked'); writeFileSync(blocked, 'keep exact bytes'); process.env.GROK_HOME = blocked;
-  const out = await launch(w);
-  expect(readFileSync(blocked, 'utf8')).toBe('keep exact bytes'); expect(flag(out.run.argv, '--sandbox')).toBeUndefined(); expect(out.said).toContain('launched without it');
+  const out = await drive(w);
+  expect(out.runs).toEqual([]);
+  expect(readFileSync(blocked, 'utf8')).toBe('keep exact bytes');
+  expect(out.said).toContain('nothing was launched');
+  expect(out.said).toContain('Repair the sandbox file, then launch the seat again');
+  expect(out.said).not.toContain('launched without it');
 });
-test('fallback removes the appended option while preserving a prompt that quotes the same words', async () => {
+test('a write that fails does not run a prompt that quotes the sandbox flag', async () => {
   const w = world(), blocked = join(w.base, 'blocked'); writeFileSync(blocked, 'keep'); process.env.GROK_HOME = blocked;
   const prompt = 'preserve --sandbox team-seat-orbit-scout in this quoted prompt';
-  const out = await launch(w, `grok -p ${shellQuote(prompt)}`);
-  expect(out.run.argv[out.run.argv.indexOf('-p') + 1]).toBe(prompt);
-  expect(flag(out.run.argv, '--sandbox')).toBeUndefined();
-  expect(out.said).toContain('launched without it');
+  const out = await drive(w, `grok -p ${shellQuote(prompt)}`);
+  expect(out.runs).toEqual([]);
+  expect(readFileSync(blocked, 'utf8')).toBe('keep');
+  expect(out.said).toContain('nothing was launched');
+  expect(out.said).not.toContain('launched without it');
 });
 test('linked grant directories are named by their actual targets', async () => {
   const w = world(), actual = join(w.base, 'actual'); mkdirSync(actual);
