@@ -29,7 +29,7 @@ import { daemonDifferences, daemonNotes } from '../src/daemon/health_display.ts'
 import type { DaemonHealth } from '../src/daemon/health.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
 import { readDaemonState } from '../src/daemon/state.ts';
-import { signRecord, type RecordPayload } from '../src/send/record.ts';
+import { signReceiptPayload, signRecord, type RecordPayload } from '../src/send/record.ts';
 import type { SendDaemonHandle } from '../src/send/daemon.ts';
 import { emptySession, LOCK_FILE, updateState } from '../src/state.ts';
 import { messageKeyOf, RECEIPT_DOMAIN, signDomain, type Json } from '../src/store/keys.ts';
@@ -109,6 +109,20 @@ function signedDrop(
     thread: options.thread ?? id,
   };
   writeFileSync(join(dir, id), `${JSON.stringify(signRecord(payload, home), null, 2)}\n`);
+}
+
+/** One receipt as a read or a reply leaves it beside its record: a signed `.json` envelope. */
+function signedReceipt(root: string, home: string, id: string, status: 'read' | 'replied'): void {
+  const receipt = signReceiptPayload({
+    kind: 'receipt',
+    status,
+    id,
+    to: 'worker-1',
+    root,
+    session: 'acme',
+    at: '2026-11-01T00:02:00.000Z',
+  }, home);
+  writeFileSync(join(dropsDir(root), `${id}.${status}.json`), `${JSON.stringify(receipt, null, 2)}\n`);
 }
 
 function raisedKeys(pass: ReconcileResult): string[] {
@@ -286,8 +300,8 @@ describe('the archive findings are regression probes', () => {
     expect(raisedKeys(first)).toContain('message.arrived:rec-late');
     // The record leaves the live tree the way a move does; the receipts are written afterwards.
     unlinkSync(join(dir, 'rec-late'));
-    writeFileSync(join(dir, 'rec-late.read'), '{"ok":true}');
-    writeFileSync(join(dir, 'rec-late.replied'), '{"ok":true}');
+    signedReceipt(root, home, 'rec-late', 'read');
+    signedReceipt(root, home, 'rec-late', 'replied');
     const second = reconcilePass({ project: 'acme', root, session: 'acme', home, state });
     if (!second.ok) throw new Error(second.reason);
     expect(raisedKeys(second)).toContain('message.read:rec-late:read');
@@ -303,7 +317,7 @@ describe('the archive findings are regression probes', () => {
     const { root, home } = scratch();
     const dir = dropsDir(root);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'rec-lone.read'), '{"ok":true}');
+    signedReceipt(root, home, 'rec-lone', 'read');
     const pass = reconcilePass({ project: 'acme', root, session: 'acme', home });
     if (!pass.ok) throw new Error(pass.reason);
     expect(raisedKeys(pass)).toContain('message.read:rec-lone:read');
@@ -322,14 +336,14 @@ describe('the archive findings are regression probes', () => {
     // arrive. The pass's own map has forgotten the sender by now; the log has not.
     unlinkSync(join(dir, 'rec-gap'));
     expect(raisedKeys(reconcilePass({ project: 'acme', root, session: 'acme', home, state }))).toEqual([]);
-    writeFileSync(join(dir, 'rec-gap.replied'), '{"ok":true}');
+    signedReceipt(root, home, 'rec-gap', 'replied');
     const last = reconcilePass({ project: 'acme', root, session: 'acme', home, state });
     if (!last.ok) throw new Error(last.reason);
     expect(raisedKeys(last)).toContain('message.replied:rec-gap:replied');
     expect(last.raised.find((record) => record.payload.record_id === 'rec-gap:replied')?.payload.from)
       .toBe('clerk');
     // A fresh state has no map at all, only the log: the same answer, an event and a restart later.
-    writeFileSync(join(dir, 'rec-gap.read'), '{"ok":true}');
+    signedReceipt(root, home, 'rec-gap', 'read');
     const fresh = reconcilePass({ project: 'acme', root, session: 'acme', home });
     if (!fresh.ok) throw new Error(fresh.reason);
     expect(raisedKeys(fresh)).toContain('message.read:rec-gap:read');
@@ -347,7 +361,7 @@ describe('the archive findings are regression probes', () => {
     // A different sender and thread carry a different signed payload, so the record's own stamp
     // moved: the pass reads it again rather than serving the verdict it cached for the old bytes.
     signedDrop(root, home, 'rec-rewrite', { from: 'alice', thread: 'rewritten-thread' });
-    writeFileSync(join(dir, 'rec-rewrite.read'), '{"ok":true}');
+    signedReceipt(root, home, 'rec-rewrite', 'read');
     const second = reconcilePass({ project: 'acme', root, session: 'acme', home, state });
     if (!second.ok) throw new Error(second.reason);
     expect(state.stats.filesRead).toBe(1);

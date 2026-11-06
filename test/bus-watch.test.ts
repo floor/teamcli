@@ -20,7 +20,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import type { Io } from '../src/io.ts';
 import { registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
-import { signRecord, type RecordPayload } from '../src/send/record.ts';
+import { signReceiptPayload, signRecord, type RecordPayload } from '../src/send/record.ts';
 import { emptySession } from '../src/state.ts';
 import type { CheckContext, Report, SeatObservation } from '../src/watch/check.ts';
 import { attention as checkAttention } from '../src/watch/checks/attention.ts';
@@ -818,6 +818,20 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
     // t1 (during the gap): m-1 gets delivered + read receipts (seq 3..4), and worker-1 returns to idle.
     // `fullReplayFollower` steps at t1 (2 new events <= bufferLimit 2, so no gap); `gapFollower` misses t1.
     const t1Iso = '2026-10-18T12:17:00.000Z';
+    // The bus steps come from the signed envelopes a read leaves; the bare names stay beside
+    // them because this scene also exercises the follower's own disk rebuild, which reads those.
+    for (const status of ['delivered', 'read'] as const) {
+      const receipt = signReceiptPayload({
+        kind: 'receipt',
+        status,
+        id: 'm-1',
+        to: 'worker-1',
+        root: gapRoot,
+        session: 'acme',
+        at: t1Iso,
+      }, gapHome);
+      writeFileSync(join(dropDirWorker1, `m-1.${status}.json`), `${JSON.stringify(receipt, null, 2)}\n`);
+    }
     writeFileSync(join(dropDirWorker1, 'm-1.delivered'), '2026-10-18T12:16:20.000Z\n', { mode: 0o600 });
     writeFileSync(join(dropDirWorker1, 'm-1.read'), '2026-10-18T12:16:40.000Z\n', { mode: 0o600 });
     reconcilePass({ project: 'acme', root: gapRoot, session: 'acme', home: gapHome, now: new Date(t1Iso) });
