@@ -826,7 +826,7 @@ exit 1
     // the bus whose announcement fires it does not serve this root yet. The send's own post was
     // tried first, against the fixture's closed loopback port: it failed, released the claim, and
     // the line says so beside the bus words the released claim keeps true.
-    expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; its webhook fires when the bus takes it; webhook not delivered: could not connect (ConnectionRefused)\n`);
+    expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: queued, not woken (drop, 0 ms); queued; its webhook fires when the bus takes it; webhook not delivered: could not connect (ConnectionRefused)\n`);
     expect(out).not.toContain('woken through its runtime queue');
     expect(err).toContain('queued, no event adapter');
     expect(calls).toHaveLength(1);

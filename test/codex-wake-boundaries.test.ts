@@ -81,7 +81,7 @@ function appServer() {
   });
   return reads;
 }
-async function send() {
+async function send(ending = 'sent (unconfirmed)') {
   const io = owner(at.root);
   const host = fake(at, {
     sendId: () => id, inboxGraceMs: 5,
@@ -91,7 +91,7 @@ async function send() {
   });
   const code = await runSend(['native', 'independent wake body'], io, host);
   expect(code, io.err).toBe(0);
-  expect(io.out).toContain('sent (unconfirmed)');
+  expect(io.out).toContain(ending);
   const drop = join(at.dir, 'send-drops', 'acme', 'native', id);
   expect(existsSync(drop)).toBe(true);
   expect(existsSync(`${drop}.read.json`)).toBe(false);
@@ -112,7 +112,7 @@ for (const withHook of [false, true]) test(`an active Codex runtime accepts exac
 });
 test('webhook-only Codex without a bus keeps the unread drop and makes no wake claim', async () => {
   hook(true);
-  const io = await send();
+  const io = await send('queued, not woken');
   expect(calls()).toEqual([]);
   expect(io.out).toContain('queued; its webhook fires when the bus takes it');
   expect(io.out).not.toContain('woken through');
@@ -130,7 +130,7 @@ test('a real bus announces the Codex drop once to its synthetic webhook', async 
   expect(result.kind).toBe('serving');
   if (result.kind !== 'serving') throw new Error('synthetic bus did not start');
   bus = result.handle;
-  const io = await send();
+  const io = await send('queued, not woken');
   // The bus takes the arrival and posts it. The send's own webhook post was tried first and
   // provably failed (the fixture's closed port), so the released claim lets the bus carry it and
   // the line keeps the queued words.
@@ -142,7 +142,7 @@ test('a real bus announces the Codex drop once to its synthetic webhook', async 
 });
 test('a refused native queue beside a bus-less webhook reports the remaining route', async () => {
   hook(); appServer(); process.env.WAKE_QUEUE_EXIT = '1';
-  const io = await send();
+  const io = await send('queued, not woken');
   expect(calls()).toHaveLength(1);
   expect(io.out).toContain('(drop,');
   expect(io.out).toContain('queued; its webhook fires when the bus takes it');
