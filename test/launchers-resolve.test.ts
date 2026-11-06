@@ -531,6 +531,90 @@ describe('explicit caller-session input boundary', () => {
   });
 });
 
+describe('fixed argument layer order', () => {
+  const endpointArgs = Object.freeze(['--model', 'endpoint-one', 'endpoint positional Ω', '--model', 'endpoint-two',
+    '--settings', '/srv/example/endpoint.json', '--effort', 'low', 'endpoint-tail $&']);
+  const presetArgs = Object.freeze(['--model', 'preset-one', 'preset positional "quoted";', '--model', 'preset-two',
+    '--settings', '/srv/example/preset.json', '--effort', 'high', 'preset-tail literal']);
+  const endpointRest = ['endpoint positional Ω', '--settings', '/srv/example/endpoint.json', '--effort', 'low', 'endpoint-tail $&'];
+  const presetRest = ['preset positional "quoted";', '--settings', '/srv/example/preset.json', '--effort', 'high', 'preset-tail literal'];
+  const ctx: ResolveContext = { ...CTX, existingPaths: ['/opt/example/preset-cli', '/opt/example/endpoint-cli'] };
+  function home(policy = 'pass_through', base: string | undefined = 'order-endpoint'): LauncherHome {
+    return { level: 'team', files: Object.freeze({
+      'order-identity.yaml': Object.freeze({ format: 1, name: 'order-identity', kind: 'identity', env: { EXAMPLE_IDENTITY: 'example-value' } }),
+      'order-endpoint.yaml': Object.freeze({ format: 1, name: 'order-endpoint', kind: 'endpoint', harness: 'claude-code',
+        prefix: 'order-identity', executable: '/opt/example/endpoint-cli', args: endpointArgs,
+        writable_folders: [{ path: '{root}' }],
+        provider: { name: 'example-provider', base_url: 'https://api.example.invalid', token: { store: 'example-store', item: 'example-item' }, models: { default: 'example-model' } } }),
+      'order-preset.yaml': Object.freeze({ format: 1, name: 'order-preset', kind: 'preset', harness: 'claude-code',
+        ...(base === '' ? {} : { base }), executable: '/opt/example/preset-cli', args: presetArgs,
+        writable_folders: [{ path: '{root}' }], arg_policy: { model: policy } }),
+    }) };
+  }
+  function run(policy: string, caller: string[]) {
+    const input = home(policy), before = JSON.stringify(input), callerBefore = [...caller];
+    Object.freeze(caller);
+    const discovered = discover([input]);
+    const out = resolveLaunch({ launcher: 'order-preset', args: caller }, discovered, ctx);
+    expect(JSON.stringify(input)).toBe(before);
+    expect(caller).toEqual(callerBefore);
+    expect([...discovered.launchers.keys()].sort()).toEqual(['order-endpoint', 'order-identity', 'order-preset']);
+    if (out.ok) {
+      expect(out.chain).toEqual(['order-preset', 'order-endpoint', 'order-identity']);
+      expect(out.harness).toBe('claude-code');
+      expect(out.executable).toBe('/opt/example/preset-cli');
+    }
+    return out;
+  }
+  test('endpoint fixed then preset fixed then admitted caller, with internal order and duplicates intact', () => {
+    const out = run('pass_through', ['--model', 'caller-model', 'caller tail Ω']);
+    expect(out.ok).toBe(true);
+    expect(out.argv).toEqual(['/opt/example/preset-cli', ...endpointArgs, ...presetArgs, '--model', 'caller-model', 'caller tail Ω']);
+  });
+  test('caller override removes both layers model flags/values while retaining other word order', () => {
+    const out = run('override', ['--model', 'caller-model', 'caller-tail']);
+    expect(out.ok).toBe(true);
+    expect(out.argv).toEqual(['/opt/example/preset-cli', ...endpointRest, ...presetRest, '--model', 'caller-model', 'caller-tail']);
+  });
+  test('caller strip leaves both fixed layers and appends only admitted words', () => {
+    const out = run('strip', ['--model', 'caller-model', 'caller-tail']);
+    expect(out.ok).toBe(true);
+    expect(out.argv).toEqual(['/opt/example/preset-cli', ...endpointArgs, ...presetArgs, 'caller-tail']);
+    expect(codes(out.diagnostics)).toContain('W_ARG_STRIPPED');
+  });
+  test('refusal stays closed and no-caller override retains both fixed layers', () => {
+    const refused = run('refuse', ['--model', 'caller-model']);
+    expect(refused.ok).toBe(false);
+    expect(refused.argv).toEqual([]);
+    expect(codes(refused.diagnostics)).toContain('E_ARG_REFUSED');
+    const bare = run('override', []);
+    expect(bare.ok).toBe(true);
+    expect(bare.argv).toEqual(['/opt/example/preset-cli', ...endpointArgs, ...presetArgs]);
+  });
+  test('single endpoint, standalone preset and identity-base preset keep their word sequences', () => {
+    const endpoint = resolveLaunch({ launcher: 'order-endpoint', args: ['caller-tail'] }, discover([home()]), ctx);
+    expect(endpoint.ok).toBe(true);
+    expect(endpoint.argv).toEqual(['/opt/example/endpoint-cli', ...endpointArgs, 'caller-tail']);
+    expect(endpoint.chain).toEqual(['order-endpoint', 'order-identity']);
+    for (const base of ['', 'order-identity']) {
+      const out = resolveLaunch({ launcher: 'order-preset', args: ['caller-tail'] }, discover([home('pass_through', base)]), ctx);
+      expect(out.ok).toBe(true);
+      expect(out.argv).toEqual(['/opt/example/preset-cli', ...presetArgs, 'caller-tail']);
+      expect(out.chain).toEqual(base === '' ? ['order-preset'] : ['order-preset', 'order-identity']);
+    }
+  });
+  test('custom argv is not reversed or reclassified into a new layer order', () => {
+    const argv = ['/bin/example', '--model', 'custom-one', 'custom positional Ω', '--model', 'custom-two'];
+    Object.freeze(argv);
+    const raw = Object.freeze({ format: 1, name: 'custom-example', kind: 'custom', argv });
+    const out = resolveLaunch({ launcher: 'custom-example', args: ['caller-tail'] },
+      discover([{ level: 'team', files: { 'custom-example.yaml': raw } }]), ctx);
+    expect(out.ok).toBe(true);
+    expect(out.argv).toEqual([...argv, 'caller-tail']);
+    expect(out.chain).toEqual(['custom-example']);
+  });
+});
+
 describe('sandbox verdicts', () => {
   const { launchers } = discover([VALID]);
   const discovery = { launchers, diagnostics: [] as Diagnostic[] };

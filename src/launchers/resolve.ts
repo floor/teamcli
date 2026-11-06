@@ -470,15 +470,16 @@ export function resolveLaunch(
     });
   }
 
-  // argv: executable + fixed args (chain order, terminal first) + admitted caller args.
+  // argv: executable + endpoint fixed args + preset fixed args + admitted caller args.
   // Folded settings spans and, under D6 override, the whole settings class are absent; every
-  // other word keeps its position and its bytes.
+  // other word keeps its position and its bytes. The chain trace stays terminal-first;
+  // only this copied walk is base-first, so a preset's words follow the endpoint's.
   const argv: string[] = [executable];
   const overriddenClasses = new Set<ArgClass>();
   for (const cls of ['model', 'settings', 'resume', 'mcp', 'effort'] as const) {
     if (policyFor(terminal, cls) === 'override' && caller.some((arg) => arg.cls === cls)) overriddenClasses.add(cls);
   }
-  for (const def of chain) {
+  for (const def of [...chain].reverse()) {
     if (def.kind === 'custom') {
       for (const entry of classifyArgs((def.argv ?? []).slice(1))) argv.push(expandWord(entry.word));
       continue;
