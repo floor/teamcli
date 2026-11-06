@@ -897,8 +897,9 @@ seats:
 
     expect(aliasRun.report.status).toBe('delivered');
     expect(aliasRun.report.delivery).toEqual(plainRun.report.delivery);
-    expect(aliasRun.report.delivery[0]).toEqual({ leg: 'socket', state: 'attempted' });
-    expect(aliasRun.report.delivery.map((d) => d.leg)).toEqual(['socket', 'drop']);
+    expect(aliasRun.report.delivery[0]).toEqual({ leg: 'channel', state: 'skipped', reason: "the receiving seat's launch carries no development channel" });
+    expect(aliasRun.report.delivery[1]).toEqual({ leg: 'socket', state: 'attempted' });
+    expect(aliasRun.report.delivery.map((d) => d.leg)).toEqual(['channel', 'socket', 'drop']);
     expect(aliasRun.history.ok).toBe(true);
     if (!aliasRun.history.ok) throw new Error(aliasRun.history.reason);
     expect(aliasRun.history.entries).toHaveLength(1);

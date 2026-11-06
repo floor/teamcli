@@ -1,6 +1,8 @@
 import { isAbsolute, join, resolve } from 'node:path';
 import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { selfRunner } from '../mcp/register.ts';
+import { channelLobbyFolder, claudeChannelSeat, type ChannelLaunchScope } from '../mcp/launch-config.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
 import { codexDaemonForSeat, type CodexDaemonValue } from '../policy/codex-daemon.ts';
 import { sidebarRowsWord } from '../policy/types.ts';
 import type { SidebarIndicator } from '../settings/sidebar-policy.ts';
@@ -40,7 +42,7 @@ export type Op =
    *  records it. A refusal names the session and fails nothing else: the file holds the layout,
    *  and check names any session without a record. */
   | { do: 'sidebar-reload'; session: string; rows: readonly (readonly string[])[]; indicators: SidebarIndicator }
-  | { do: 'create'; seat: string; label: string; cwd: string; repairLine: string; notice?: string; lobby?: true; watcher?: CliWatcher }
+  | { do: 'create'; seat: string; label: string; cwd: string; repairLine: string; notice?: string; lobby?: true; watcher?: CliWatcher; channel?: ChannelLaunchScope }
   /** The watchdog's workspace: no seat, so no seat repair either. */
   | { do: 'create'; seat?: undefined; label: string; cwd: string; notice?: string; lobby?: undefined; bus?: true }
   /** `cli` and `cwd` let the launch register the seat's team inbox in its folder before the
@@ -66,7 +68,7 @@ export type Op =
        * launch.
        */
       workspace?: string;
-      notice?: string; cli?: string; cwd?: string; teamFile?: string; watcher?: CliWatcher;
+      notice?: string; cli?: string; cwd?: string; teamFile?: string; watcher?: CliWatcher; channel?: ChannelLaunchScope;
       /**
        * The base recipe the seat's record keeps when this run records it: `seat.launch` with the
        * profile's pinned feature words appended, never the expanded command the pane runs (the
@@ -1184,7 +1186,13 @@ export function upPlan(input: UpInput): Step[] {
       });
       continue;
     }
-    const cwd = isAbsolute(seat.cwd) ? seat.cwd : resolve(input.root, seat.cwd);
+    const cwd = claudeChannelSeat(seat) && input.home !== undefined && input.team !== undefined
+      ? channelLobbyFolder(lobbyOf(input.home, input.root, input.team), seat)
+      : isAbsolute(seat.cwd) ? seat.cwd : resolve(input.root, seat.cwd);
+    const channel = claudeChannelSeat(seat)
+      ? { root: input.root, ...(input.home === undefined ? {} : { home: input.home }),
+          ...(input.briefEpochs?.[seat.name] === undefined ? {} : { epoch: input.briefEpochs[seat.name] }) }
+      : undefined;
     // A seat recorded waiting is never launched again: its recorded pane is reused, and the
     // idle step below reads it fresh and asks its owner (§5).
     const waiting = seat.waiting;
@@ -1383,7 +1391,7 @@ export function upPlan(input: UpInput): Step[] {
           ...(said ? { note: `${said}; would launch` } : {}),
           // A seat that waits in the lobby is created in it: the host confirms that folder again
           // directly before this create (`execute.ts`), with nothing in between.
-          do: { do: 'create', seat: seat.name, label: seat.label, cwd, repairLine: seat.repairLine, ...(seat.lobby ? { lobby: true as const } : {}), ...(said ? { notice: said } : {}), watcher },
+          do: { do: 'create', seat: seat.name, label: seat.label, cwd, repairLine: seat.repairLine, ...(seat.lobby ? { lobby: true as const } : {}), ...(said ? { notice: said } : {}), watcher, ...(channel === undefined ? {} : { channel }) },
         });
       }
     }
@@ -1429,7 +1437,7 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
         note: launchNote,
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: reuse?.pane ?? seat.pane, ...(reuse === undefined ? {} : { reuse: reuse.launched, workspace: reuse.workspace }), ...(reuse === undefined && seat.workspace !== undefined ? { workspace: seat.workspace } : {}), cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, recordLine, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}), ...(plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }) },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: reuse?.pane ?? seat.pane, ...(reuse === undefined ? {} : { reuse: reuse.launched, workspace: reuse.workspace }), ...(reuse === undefined && seat.workspace !== undefined ? { workspace: seat.workspace } : {}), cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, recordLine, ...(channel === undefined ? {} : { channel }), ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}), ...(plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }) },
       });
     }
     const rules = profile.rulesMode;

@@ -36,6 +36,7 @@ import { unreadIdle } from './unread.ts';
 import { recordWhat, cleanRecord, classificationOf, type Classification, type FinalRecord, type ProgressState } from './progress.ts';
 import type { LobbyRefusal } from '../lobby/gate.ts';
 import type { InboxRegistration } from '../mcp/register.ts';
+import { prepareChannelConfig } from '../mcp/launch-config.ts';
 import type { SeatState, WaitingRecord } from '../state.ts';
 import { continuitySessionOf } from '../registry/resume.ts';
 import { processStartOf } from '../watch/pane.ts';
@@ -225,6 +226,8 @@ export type Host = {
       workspace?: string;
       rules?: 'option' | 'message' | 'prepend';
       createdWorkspace?: boolean;
+      /** The actual scoped start folder, written only after a channel workspace was created. */
+      start_cwd?: string;
       launched?: LaunchedIdentity;
       /** The pane's own shell pid and that process's start instant, read when the pane was
        *  created: the identity a pane herdr has not named yet is placed by. */
@@ -1291,6 +1294,15 @@ export async function executePlan(
             break;
           }
         }
+        if (op.seat && op.channel !== undefined) {
+          const configured = prepareChannelConfig({ ...op.channel, seat: op.seat, session, cwd: op.cwd });
+          if (!configured.ok) {
+            dropped.add(op.seat);
+            final(op.seat, { kind: 'left out', reason: `the channel config was not prepared: ${configured.reason}` });
+            break;
+          }
+          configured.lease.release();
+        }
         if (op.lobby && host.confirmLobby) {
           // The last look at the starting folder, with nothing between it and the create. The
           // host call takes a path, not a handle, so the multiplexer resolves the path itself:
@@ -1352,6 +1364,7 @@ export async function executePlan(
             pane: made.pane,
             workspace: made.workspace,
             createdWorkspace: true,
+            ...(op.channel === undefined ? {} : { start_cwd: op.cwd }),
             waiting: null,
             ...(shell !== null ? { pane_shell: shell } : {}),
             ...(shellStart !== null ? { pane_shell_start: shellStart } : {}),
@@ -1438,6 +1451,16 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: why });
           break;
         }
+        const channel = op.channel === undefined ? undefined
+          : op.cwd === undefined || !created.has(op.seat)
+            ? { ok: false as const, reason: 'a Claude channel requires a fresh scoped workspace; restart the seat' }
+            : prepareChannelConfig({ ...op.channel, seat: op.seat, session, cwd: op.cwd });
+        if (channel !== undefined && !channel.ok) {
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: `the channel config was not prepared: ${channel.reason}` });
+          break;
+        }
+        try {
         // The seat's inbox is registered before its command runs, in the folder the command
         // starts in, for the session this launch serves and from the team file it read, when it
         // read one. A refused registration is retried once — a CLI's own add can fail
@@ -1537,7 +1560,9 @@ export async function executePlan(
         launchedCommands.set(op.seat, launch.command);
         if (op.recordLine !== undefined) recordLines.set(op.seat, op.recordLine);
         launchedThisRun.add(op.seat);
-        if (!here || !host.paneRun(session, here.pane, launch.command)) {
+        let channelCurrent = true;
+        try { if (channel?.ok) channel.lease.check(); } catch { channelCurrent = false; }
+        if (!here || !channelCurrent || !host.paneRun(session, here.pane, launch.command)) {
           // The fresh-start fallback is logged with its real outcome, never as a launch that
           // did not happen: the terminal's scrollback loses this, so the log keeps the truth.
           if (freshFrom !== undefined) {
@@ -1578,6 +1603,9 @@ export async function executePlan(
         // created workspace to record it with.
         if (op.watcher) recordSeat(op.seat, { stage: 'launched', watcher: op.watcher });
         break;
+        } finally {
+          if (channel?.ok) channel.lease.release();
+        }
       }
       case 'idle': {
         reportProgress(op.seat, 'waiting for its prompt');

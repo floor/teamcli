@@ -388,6 +388,7 @@ describe('the walk records the channel and the legs it skipped', () => {
 
     const doc = JSON.parse(io.out) as { delivery: { leg: string; state: string; reason?: string }[] };
     expect(doc.delivery).toEqual([
+      { leg: 'channel', state: 'skipped', reason: "the receiving seat's launch carries no development channel" },
       { leg: 'socket', state: 'skipped', reason: 'the receiving Claude session does not declare crossSessionInbound accept (human-launched or launch without --settings; owner CLI settings are not read)' },
       { leg: 'drop', state: 'attempted' },
     ]);

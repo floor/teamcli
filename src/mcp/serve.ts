@@ -9,12 +9,12 @@
 //
 // The one push is the development channel: when the launch carries the flag naming this server,
 // the server declares `claude/channel`, pushes each new record as one notification, writes a
-// `<id>.channel-push.json` marker beside it, and writes the seat-signed read receipt as it hands
-// the notification to its client (`read_by: channel-push`). It also serves the `ack` tool, which
-// writes the same receipt with `read_by: channel` for a message the push never carried. Without
+// `<id>.channel-push.json` reservation beside it. Handoff is not a consumer read: the `ack` tool
+// writes the signed read receipt with `read_by: channel` only when the client acknowledges the
+// message. `inbox_read` and reply also settle it through their ordinary read paths. Without
 // the flag, MCP is client-pull and the seat notices a message when it calls `inbox_check`, with
 // the drop-folder watch as the bounded fall-back.
-import { createHash, type KeyObject } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { realpathSync } from 'node:fs';
@@ -31,25 +31,30 @@ import { isBriefEpoch } from '../launch/brief-id.ts';
 import { currentBriefClaim, isGeneralBriefRecord } from '../launch/general-brief.ts';
 import { registeredRootOf } from '../registry/teams.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
+import { namingFor, senderDisplayName } from '../send/names.ts';
 import { readSealedRecord, recordAuthOfSealed } from '../send/record.ts';
-import { wakeHead } from '../send/native.ts';
-import { wakeTrigger } from '../send/wake.ts';
+import { attributedBody } from '../send/sender-claim.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { readState, type SeatState, type State } from '../state.ts';
 import { buildIdentity, installIdentity, version } from '../version.ts';
 import type { BuildIdentity, InstallIdentity } from '../version.ts';
+import { admitChannelDelivery } from './channel-admit.ts';
 import {
   CHANNEL_CAPABILITY,
   CHANNEL_INSTRUCTIONS,
   CHANNEL_METHOD,
-  CHANNEL_PUSH_READ_BY,
   CHANNEL_PUSH_STATUS,
   CHANNEL_READ_BY,
   CHANNEL_SAFETY_MS,
   CHANNEL_TICK_MS,
+  channelAborted,
   channelLaunchEnabled,
+  channelNotified,
   channelPushHeld,
+  markChannelNotified,
+  recordChannelEmitted,
   recordChannelPush,
+  withChannelCommit,
 } from './channel.ts';
 import {
   MESSAGE_ID,
@@ -94,6 +99,9 @@ export type ServeHost = {
   build?: BuildIdentity;
   installed?: () => InstallIdentity;
   restart?: (installed: InstallIdentity) => void;
+  /** Test seam. When set, replaces the completion-flag write. False means the handoff marker
+   *  stays and no read receipt is written. */
+  channelMark?: (dropDir: string, id: string) => boolean;
 };
 
 export const realServeHost: ServeHost = { home: homedir() };
@@ -212,6 +220,8 @@ type Serving = {
   dropDir: string;
   home: string;
   team: TeamFile;
+  /** The team file as it stands now; admission must not use the startup snapshot. */
+  loadTeam: () => TeamFile | null;
   /** True when this seat's launch carries the development channel naming this server. */
   channel: boolean;
   brief?: BriefRead;
@@ -219,6 +229,7 @@ type Serving = {
    *  channel push asks before it exposes a record or writes a receipt: a stopped, replaced or
    *  relaunched seat's left-over process is inert, not a second reader. */
   alive?: () => string | null;
+  channelMark?: (dropDir: string, id: string) => boolean;
 };
 
 /** Whether two roots are the same folder once links are resolved, as the inbox checks do. */
@@ -308,9 +319,8 @@ function negotiate(params: unknown): string {
 
 /** One channel notification: the message-display header, then the signed body whole. The record's
  *  complete raw payload must carry this key's signature before any field is read: a tampered or
- *  unsupported record is shown nowhere, not even as a header. The key that verified the record is
- *  returned too, so the push signs its read with the same key it trusted. */
-function channelPushOf(serving: Serving, id: string): { content: string; meta: Record<string, string>; key: KeyObject } | null {
+ *  unsupported record is shown nowhere, not even as a header. */
+function channelPushOf(serving: Serving, id: string): { content: string; meta: Record<string, string> } | null {
   const looked = readSealedRecord(join(serving.dropDir, id));
   if (!looked.ok || looked.sealed === null) return null;
   const key = messageKeyState(serving.home);
@@ -323,14 +333,41 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
   // brief is served at the turn start under its claim, and an ack here would hold the receipt
   // name that reader needs.
   if (payload.from_client !== undefined || isGeneralBriefRecord(payload)) return null;
-  const sender = wakeTrigger(payload, serving.home, { root: serving.root, session: serving.session, team: serving.team });
-  if (sender === null) return null;
-  const header = wakeHead(sender);
-  if (header === '') return null;
+  const team = serving.loadTeam();
+  if (team === null) return null;
+  const admitted = admitChannelDelivery({
+    payload,
+    home: serving.home,
+    root: serving.root,
+    session: serving.session,
+    seat: serving.seat,
+    team,
+  });
+  if (!admitted.ok) return null;
+  // Render authority independently of content. Only one known stored envelope may be folded:
+  // nested headers are literal message text, including a worker quoting the owner's header.
+  const displayName = payload.from === 'owner' ? 'the owner' : senderDisplayName(
+    { seat: payload.from, id: payload.from_id },
+    namingFor({ home: serving.home, root: serving.root, file: team }),
+  );
+  const leadingClaim = /^from ([^\n]*?) — admitted by: ([^\n]*)\n\n?/;
+  const envelope = leadingClaim.exec(payload.body);
+  const knownEnvelope = envelope !== null
+    && (envelope[1] === payload.from || envelope[1] === displayName)
+    && envelope[2] === payload.rule;
+  const body = knownEnvelope ? payload.body.slice(envelope[0].length) : payload.body;
+  // The renderer receives an empty body so it cannot parse a content line as sender/rule.
+  const content = attributedBody('', payload.from, {
+    record: { ...payload, rule: admitted.rule },
+    home: serving.home,
+    root: serving.root,
+    rule: admitted.rule,
+    displayName,
+  }) + body;
+  if (content.trim() === '') return null;
   return {
-    content: `${header}\n\n${payload.body}`,
+    content,
     meta: { id, from: payload.from, seat: serving.seat, team: serving.project },
-    key: key.key,
   };
 }
 
@@ -338,11 +375,10 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
  * Watches the inbox for signed records that arrive after this server starts, and writes one
  * channel notification per new record. Mail already waiting at startup is left to `inbox_check`,
  * so a fresh session starts quiet. Each push writes its `<id>.channel-push.json` marker before
- * the notification, as the id's exclusive reservation, and then writes the seat-signed read
- * receipt (`read_by: channel-push`) once the notification is handed to the client: the push is
- * where the message is shown, so the seat records the read there. The signed record itself is
- * never touched, and `ack` and `inbox_read` still write their own receipts for a message a push
- * never carried.
+ * the notification, as the id's exclusive reservation. A notification handed to stdio proves no
+ * consumer read, so only an explicit `ack`, `inbox_read` or reply writes a signed read receipt.
+ * An ignored notification stays unread and eligible for the watch's bounded recovery. The signed
+ * record itself is never touched.
  *
  * `notice`, when given, is read at the top of every tick: true means this process has been found
  * to run an install that is no longer on disk, so it stops pushing and never writes another
@@ -386,62 +422,50 @@ function watchChannel(
     // An earlier server may have pushed this id before this one started, and a sender whose own
     // walk takes the message leaves a held marker at the same name: either marker says this id
     // is not to be pushed, and a second notification is a duplicate wake.
-    if (channelPushHeld(serving.dropDir, id)) return;
+    if (channelPushHeld(serving.dropDir, id) || channelNotified(serving.dropDir, id) || channelAborted(serving.dropDir, id)) return;
     const push = channelPushOf(serving, id);
     if (push === null) {
       // Not this seat's signed record yet (or never): a later read may still find it.
       seen.delete(id);
       return;
     }
-    // The declaration is looked at again after the record verified and before the reservation:
-    // a seat stopped, dropped or moved while its record was read pushes nothing and writes no
-    // marker. The last look is before the notification itself; if it refuses there, the marker
-    // stands (it is a reservation, not an exposure) and the body does not leave.
-    const beforeMarker = serving.alive?.();
-    if (beforeMarker !== undefined && beforeMarker !== null) return;
-    // The marker is the reservation: it is written exclusively before the notification, so a
-    // sender's held marker that lands after the check above wins the name and this server
-    // never pushes the id; a marker this server cannot write means no push at all.
-    const reserved = recordChannelPush(serving.dropDir, {
-      v: 1,
-      kind: 'channel-push',
-      id,
-      seat: serving.seat,
-      session: serving.session,
-      root: serving.root,
-      at: new Date().toISOString(),
-      meta: push.meta as { id: string; from: string; seat: string; team: string },
-      content_sha256: createHash('sha256').update(push.content).digest('hex'),
-      status: CHANNEL_PUSH_STATUS,
+    // The abort check, the reservation, the handoff marker, the notification write, and the
+    // completion flag share one lock with the sender's fallback. The handoff marker is written
+    // before the line. If the completion flag cannot be published, the sender sees that marker
+    // and does not start another leg. The record stays unread until ack, inbox read, or reply.
+    // A stream write still does not prove the client processed the line.
+    const committed = withChannelCommit(serving.dropDir, id, () => {
+      if (channelAborted(serving.dropDir, id) || channelNotified(serving.dropDir, id) || channelPushHeld(serving.dropDir, id)) {
+        return 'skip' as const;
+      }
+      const beforeMarker = serving.alive?.();
+      if (beforeMarker !== undefined && beforeMarker !== null) return 'skip' as const;
+      const reserved = recordChannelPush(serving.dropDir, {
+        v: 1,
+        kind: 'channel-push',
+        id,
+        seat: serving.seat,
+        session: serving.session,
+        root: serving.root,
+        at: new Date().toISOString(),
+        meta: push.meta as { id: string; from: string; seat: string; team: string },
+        content_sha256: createHash('sha256').update(push.content).digest('hex'),
+        status: CHANNEL_PUSH_STATUS,
+      });
+      if (!reserved || channelAborted(serving.dropDir, id)) return 'skip' as const;
+      const beforeWrite = serving.alive?.();
+      if (beforeWrite !== undefined && beforeWrite !== null) return 'skip' as const;
+      if (!recordChannelEmitted(serving.dropDir, id, new Date().toISOString())) return 'skip' as const;
+      write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: push }));
+      const marked = serving.channelMark
+        ? serving.channelMark(serving.dropDir, id)
+        : markChannelNotified(serving.dropDir, id);
+      if (!marked) return 'uncertain' as const;
+      return 'pushed' as const;
     });
-    if (!reserved) return;
-    // The body leaves here: the declaration is asked one last time, after the reservation, so a
-    // seat that lost its place during the marker write receives no notification.
-    const beforeWrite = serving.alive?.();
-    if (beforeWrite !== undefined && beforeWrite !== null) return;
-    // What the client shows is the content and its meta; the key that verified the record signs
-    // the read receipt below and never rides in the notification.
-    const { key: signingKey, ...notification } = push;
-    write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: notification }));
-    // The push is the show: the notification is with the client now, so the seat signs its read
-    // receipt here, with the key that verified the record — never the sender. A receipt that
-    // cannot be written leaves the record unread and the watch's ordinary confirmation window
-    // applies. The stream write acknowledges nothing, so a client that never rendered the
-    // notification is indistinguishable at this point; that is the same bound the push already
-    // has, and it is why the receipt is written after the handoff rather than before it.
-    publishRecordRead({
-      dropDir: serving.dropDir,
-      id,
-      to: serving.seat,
-      root: serving.root,
-      session: serving.session,
-      home: serving.home,
-      key: signingKey,
-      at: new Date().toISOString(),
-      readBy: CHANNEL_PUSH_READ_BY,
-      lead: serving.team.orchestrator,
-      ...(serving.brief?.epoch === undefined ? {} : { epoch: serving.brief.epoch }),
-    });
+    if (committed === 'busy') {
+      seen.delete(id);
+    }
   };
   /** The whole inbox, read and verified: the startup prime, the fallback poll without a bus, and
    *  the slow safety pass beside a live one. */
@@ -932,6 +956,7 @@ export async function runMcpServe(
     build: build.build,
     ...(build.head === null ? {} : { head: build.head }),
     ...(channel ? { channel: true as const } : {}),
+    ...(options.epoch === undefined ? {} : { epoch: options.epoch }),
   };
   if (!writeListener(dropDir, listener)) return refuse('the inbox listener marker could not be written');
   // A server keeps the code it started with, and an install neither reloads it nor ends it. The
@@ -977,8 +1002,13 @@ export async function runMcpServe(
     dropDir,
     home: host.home,
     team,
+    loadTeam: () => {
+      const file = readTeam();
+      return file.ok ? file.team : null;
+    },
     channel,
     brief,
+    ...(host.channelMark === undefined ? {} : { channelMark: host.channelMark }),
     // Re-proved on every use, not only at start: the seat may be stopped, replaced or relaunched
     // while this process lives, and a launcher-written config that names it again must not make
     // the old process a reader of the new seat. The team file itself is read again: the

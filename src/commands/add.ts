@@ -75,6 +75,7 @@ import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart, type SeatStart } from '../worktree/place.ts';
 import { registerInbox } from '../mcp/register.ts';
+import { channelLobbyFolder } from '../mcp/launch-config.ts';
 import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
 
 export type AddSources = {
@@ -1183,7 +1184,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // file, the invalid edit, the pretrust question — returned with the folder as it was.
     if (liftAudit !== null) liftAudit();
 
-    const planSeat = verifiedLobby && seatForPlan.lobby ? { ...seatForPlan, cwd: verifiedLobby } : seatForPlan;
+    const planSeat = verifiedLobby && seatForPlan.lobby ? { ...seatForPlan, cwd: channelLobbyFolder(verifiedLobby, seatForPlan) } : seatForPlan;
     const who = clientText ?? describeCaller(caller);
     if (clientRun !== null && built.edited !== original) {
       const said = clientRosterText('add', built.name, clientRun);
@@ -1742,7 +1743,7 @@ function hostOf(input: {
         const last_active = patch.stage === 'ready'
           ? input.now().toISOString()
           : (prior.last_active ?? retained?.last_active);
-        let start_cwd = prior.start_cwd;
+        let start_cwd = patch.start_cwd ?? prior.start_cwd;
         if (!start_cwd && patch.createdWorkspace) {
           if (input.inLobby) {
             if (input.verifiedLobby) start_cwd = input.verifiedLobby;

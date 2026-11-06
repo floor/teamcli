@@ -6,6 +6,7 @@ import { insideTrust, isLegacyTrust, isMigratedTrust, protectedBy } from '../fil
 import { isLeadSeat } from '../file/sections/lead.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
+import { channelLobbyFolder, claudeChannelSeat } from '../mcp/launch-config.ts';
 
 // A task name is one path segment. It is also the last segment of the folder and part of the branch.
 const TASK_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -89,6 +90,11 @@ export function seatStart(
         `the file is legacy: migrate trust to absolute paths including the lobby ${lobby}:\n${migrationText(team, root, home)}`,
       once: true,
     };
+  }
+
+  if (claudeChannelSeat(seat)) {
+    if (!isMigratedTrust(team.trust)) return { problem: 'a Claude channel requires the team lobby in absolute trust configuration' };
+    return { cwd: channelLobbyFolder(verifiedLobby ?? lobbyOf(home, root, team), seat), lobby: true };
   }
 
   if (isLegacyTrust(team.trust)) {

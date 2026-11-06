@@ -1,7 +1,8 @@
 // The delivery report a send prints under `--json`: the resolved walk's legs in order, each
 // attempted, skipped, refused or not reached, with the word that kept it out. A dry run walks
-// nothing, so its entries are candidate or skipped with `eligible`, and the implied socket leg a
-// Claude receiver's files do not let the walk dial is listed too rather than left out. Every scene
+// nothing, so its entries are candidate or skipped with `eligible`. The implied socket leg a
+// Claude receiver's files do not let the walk dial, and the development channel a walk leaves
+// out, are listed too rather than omitted. Every scene
 // is synthetic: a temporary team, a fake pane, a fake socket write and a settings file this test
 // writes itself. No live session is read and nothing real is dialed or written.
 import { afterEach, expect, test } from 'bun:test';
@@ -9,9 +10,9 @@ import { existsSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
-import { SEND_OUTPUT_SCHEMA } from '../src/output/schema.ts';
+import { buildCommandOutputSchema, SEND_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { LOG_FILE } from '../src/state.ts';
-import { assertMatchesOutputSchema } from './helpers/output.ts';
+import { assertMatchesOutputSchema, validateAgainstJsonSchema } from './helpers/output.ts';
 import { dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
 
 let cleanup: () => void = () => {};
@@ -87,6 +88,7 @@ test('a dry run lists the implied socket leg as a candidate when the receiver ma
   // The default order is typed, drop; this CLI declares no wake for the typed leg, so the dry
   // run names the drop alone behind the implied socket candidate.
   expect(deliveryOf(io)).toEqual([
+    { leg: 'channel', state: 'skipped', eligible: false, reason: "the receiving seat's launch carries no development channel" },
     { leg: 'socket', state: 'candidate', eligible: true },
     { leg: 'drop', state: 'candidate', eligible: true },
   ]);
@@ -106,6 +108,7 @@ test('a dry run lists the socket the walk would not dial with its reason instead
 
   expect(code).toBe(0);
   expect(deliveryOf(io)).toEqual([
+    { leg: 'channel', state: 'skipped', eligible: false, reason: "the receiving seat's launch carries no development channel" },
     {
       leg: 'socket',
       state: 'skipped',
@@ -117,6 +120,26 @@ test('a dry run lists the socket the walk would not dial with its reason instead
   expect(host.frames).toEqual([]);
   expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
   expect(existsSync(join(made.dir, LOG_FILE))).toBe(false);
+});
+
+test('the report schema accepts the channel row and still refuses a leg no report names', async () => {
+  const made = world(null);
+  cleanup = made.cleanup;
+  const host = fake(made);
+  const io = owner(made.root);
+
+  expect(await runSend(['lead', 'hello', '--dry-run', '--json'], io, host)).toBe(0);
+  const doc = JSON.parse(io.out) as { delivery: DeliveryEntry[] };
+  const schema = buildCommandOutputSchema(SEND_OUTPUT_SCHEMA);
+  // The development channel is a leg of the report, not of any declared order: the schema must
+  // carry its row, and widening the enum by that one name must not open it to invented legs.
+  expect(validateAgainstJsonSchema(doc, schema)).toEqual([]);
+  const first = doc.delivery[0];
+  if (first === undefined) throw new Error('the dry report carries no delivery row');
+  doc.delivery[0] = { ...first, leg: 'invented' };
+  const violations = validateAgainstJsonSchema(doc, schema).join('\n');
+  expect(violations).toContain('$.delivery[0].leg');
+  expect(violations).toContain('"invented"');
 });
 
 test('a dry run reports the native and typed legs a Codex seat walks, and the native leg a Claude seat cannot', async () => {
