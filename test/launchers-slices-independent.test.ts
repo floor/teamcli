@@ -94,14 +94,15 @@ test('settings merge folds defaults, then the endpoint, the preset and the calle
   expect(defaults).toEqual({ shared: { from: 'defaults', keep: true }, list: ['default'], onlyDefault: 1 });
 });
 
-test('a fixed resume holds when the preset wins and yields when TeamCLI passes a session', () => {
+test('a fixed resume holds its literal when the preset wins and yields when TeamCLI passes a session', () => {
   const fixed = (precedence: string) => preset({
-    resume: { mode: 'fixed', precedence },
+    resume: { mode: 'fixed', path: 'example-session', precedence },
   });
   const held = resolve([endpoint(), fixed('preset_wins')], [], { sessionArg: 'seat-session', existingPaths: [] });
   expect(held.ok).toBe(true);
-  expect(held.resume).toEqual({ kind: 'preset_fixed' });
+  expect(held.resume).toEqual({ kind: 'preset_fixed', session: 'example-session' });
   expect(codes(held.diagnostics)).not.toContain('W_RESUME_STATE_MISSING');
+  expect(JSON.stringify(held.diagnostics)).not.toContain('example-session');
 
   const yielded = resolve([endpoint(), fixed('teamcli_wins')], [], { sessionArg: 'seat-session', existingPaths: [] });
   expect(yielded.ok).toBe(true);
@@ -109,7 +110,7 @@ test('a fixed resume holds when the preset wins and yields when TeamCLI passes a
 
   const alone = resolve([endpoint(), fixed('teamcli_wins')], [], { existingPaths: [] });
   expect(alone.ok).toBe(true);
-  expect(alone.resume).toEqual({ kind: 'preset_fixed' });
+  expect(alone.resume).toEqual({ kind: 'preset_fixed', session: 'example-session' });
   expect(codes(alone.diagnostics)).not.toContain('W_RESUME_STATE_MISSING');
 });
 
@@ -124,16 +125,25 @@ test('an empty session is refused as a resume and as an argument word', () => {
   expect(emptyWord.def).toBeNull();
   expect(codes(emptyWord.diagnostics)).toContain('E_ARG_EMPTY');
 
+  const blank = resolve(
+    [endpoint(), preset({ resume: { mode: 'fixed', path: '   ', precedence: 'teamcli_wins' } })],
+    [],
+    { sessionArg: 'seat-session' },
+  );
+  expect(blank.ok).toBe(false);
+  expect(blank.resume).toEqual({ kind: 'none' });
+  expect(codes(blank.diagnostics)).toContain('E_RESUME_SHAPE');
+
   const out = resolve(
     [endpoint(), preset({
       args: ['--resume', '{session}'],
-      resume: { mode: 'fixed', precedence: 'teamcli_wins' },
+      resume: { mode: 'fixed', path: 'example-session', precedence: 'teamcli_wins' },
     })],
     [],
     { sessionArg: '' },
   );
   expect({ resume: out.resume, emptyArg: out.argv.includes('') }).toEqual({
-    resume: { kind: 'preset_fixed' },
+    resume: { kind: 'preset_fixed', session: 'example-session' },
     emptyArg: false,
   });
 });
