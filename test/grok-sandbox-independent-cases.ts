@@ -216,8 +216,10 @@ test('an old hook still writing the flat session file shows that fresh state', (
   const held = join(session, 'scout', 'state.json');
   const flat = join(session, 'scout.json');
   mkdirSync(join(held, '..'), { recursive: true });
-  writeFileSync(held, '{"state":"idle","since":"2026-11-06T09:00:00Z"}\n');
+  const idle = '{"state":"idle","since":"2026-11-06T09:00:00Z"}\n';
+  writeFileSync(held, idle);
   execFileSync('/bin/sh', ['-c', hookCommand(flat, 'working')], { stdio: 'ignore' });
-  expect(readFileSync(flat, 'utf8')).toContain('"working"');
   expect(readCliHook(agents, 'orbit-scene', 'scout')?.state).toBe('working');
+  expect(readFileSync(flat, 'utf8')).toContain('"working"');
+  expect(readFileSync(held, 'utf8')).toBe(idle);
 });
