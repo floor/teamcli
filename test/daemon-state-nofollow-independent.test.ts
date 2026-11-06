@@ -230,6 +230,43 @@ test('a FIFO at the record path returns and the hook gate stays closed', async (
   }
 }, 20000);
 
+/** Spaces before the closing brace keep the JSON valid, so a full parse would still succeed. */
+function sizedRecord(bytes: number): string {
+  const core = JSON.stringify({
+    format: 1,
+    pid: process.pid,
+    uid: process.getuid?.() ?? 0,
+    since: '2026-11-06T19:00:00.000Z',
+    startedBy: 'manual',
+    version: 'test',
+    heartbeatAt: '2026-11-06T19:00:00.000Z',
+    socket: 'daemon.sock',
+    features: { broker: 'off' },
+    stuck: [],
+    roots: [],
+    nativeFeedOwner: OWNER,
+  });
+  const pad = bytes - core.length;
+  if (pad < 0) throw new Error('the fixture record is already past the bound');
+  return `${core.slice(0, -1)}${' '.repeat(pad)}}`;
+}
+
+test('a record over 64 KiB is refused before it is parsed, and the hook gate stays closed', () => {
+  const fix = world();
+  try {
+    writeFileSync(fix.path, sizedRecord(64 * 1024), { mode: 0o600 });
+    expect(readDaemonState(fix.home)).toMatchObject({ kind: 'ok', state: { pid: process.pid } });
+    writeFileSync(fix.path, sizedRecord(64 * 1024 + 1), { mode: 0o600 });
+    expect(readDaemonState(fix.home)).toEqual({
+      kind: 'unreadable',
+      why: 'the daemon state record exceeds 64 KiB',
+    });
+    expect(fix.gate()).toBe(false);
+  } finally {
+    fix.discard();
+  }
+});
+
 test('a regular record is read and the hook gate opens', () => {
   const fix = world();
   try {
