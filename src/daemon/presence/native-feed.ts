@@ -1,6 +1,6 @@
 // Default-off native feed. Production has no trusted turn/lane/gate registration yet:
 // adapters may refuse, but no payload can enroll itself. Every emitted gate is unknown.
-import { constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, opendirSync, readSync, readdirSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { userInfo } from 'node:os';
@@ -143,6 +143,7 @@ export type NativeFeed = { step(): void; codexFrame(identity: Identity, text: st
 
 /** The rejected set-aside keeps as many files as one spool pass reads. */
 export const STATUS_REJECTED_CAP = 64;
+const STATUS_SPOOL_SWEEP_CAP = 1_024;
 
 function rejectedDroppedPath(root: string): string {
   return join(root, 'status-rejected-dropped.json');
@@ -188,16 +189,27 @@ function isReceiptName(name: string): boolean {
   return name.endsWith('.json') && PRESENCE_ID.test(name.slice(0, -5));
 }
 
-/** Removes spool names that are not receipt ids and counts them. They are never read, and they
- *  sit outside the receipt cap, so a flood of them cannot grow the directory. */
+/** Examines at most 1,024 spool names per pass, removing non-id files, links and empty
+ *  directories. No payload is read and no directory is followed or recursively removed. */
 export function sweepNonId(root: string, directory: string): number {
-  let names: string[] = [];
-  try { names = readdirSync(directory); } catch { return readRejectedDropped(root) ?? 0; }
   let removed = 0;
-  for (const name of names) {
-    if (isReceiptName(name)) continue;
-    try { unlinkSync(join(directory, name)); removed += 1; } catch { /* already gone */ }
-  }
+  try {
+    const names = opendirSync(directory);
+    try {
+      for (let scanned = 0; scanned < STATUS_SPOOL_SWEEP_CAP; scanned += 1) {
+        const entry = names.readSync();
+        if (entry === null) break;
+        if (isReceiptName(entry.name)) continue;
+        const path = join(directory, entry.name);
+        try { unlinkSync(path); removed += 1; }
+        catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== 'EISDIR' && code !== 'EPERM') continue;
+          try { rmdirSync(path); removed += 1; } catch { /* non-empty or already gone */ }
+        }
+      }
+    } finally { names.closeSync(); }
+  } catch { /* absent or unreadable; keep the count of names already removed */ }
   return noteRejectedDropped(root, removed);
 }
 

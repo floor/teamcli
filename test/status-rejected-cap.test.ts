@@ -1,6 +1,6 @@
 // A fake rejected stream past the cap. No signal is installed and no live seat is touched.
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { capRejected, STATUS_REJECTED_CAP, sweepNonId } from '../src/daemon/presence/native-feed.ts';
@@ -36,6 +36,56 @@ test('a flood of non-id names is swept and counted', () => {
     for (let i = 0; i < 70; i += 1) writeFileSync(join(spool, `junk-${String(i)}`), 'x\n');
     expect(sweepNonId(root, spool)).toBe(70);
     expect(readdirSync(spool)).toEqual([id]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('50,000 non-id names drain over passes of at most 1,024 names', () => {
+  const root = mkdtempSync(join(tmpdir(), 'status-sweep-budget-'));
+  try {
+    const spool = join(root, 'spool');
+    mkdirSync(spool, { mode: 0o700 });
+    const id = '2026-11-06T19:00:00.000Z-abcdef12.json';
+    writeFileSync(join(spool, id), '{}\n');
+    for (let i = 0; i < 50_000; i += 1) writeFileSync(join(spool, `junk-${String(i)}`), '');
+    let removed = 0;
+    let passes = 0;
+    while (removed < 50_000 && passes < 100) {
+      const total = sweepNonId(root, spool);
+      expect(total - removed).toBeGreaterThan(0);
+      expect(total - removed).toBeLessThanOrEqual(1_024);
+      expect(readdirSync(spool)).toHaveLength(50_001 - total);
+      removed = total;
+      passes += 1;
+    }
+    expect(removed).toBe(50_000);
+    expect(passes).toBeGreaterThan(1);
+    expect(readdirSync(spool)).toEqual([id]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 60_000);
+
+test('empty planted directories are removed without recursion or following links', () => {
+  const root = mkdtempSync(join(tmpdir(), 'status-sweep-directories-'));
+  try {
+    const spool = join(root, 'spool');
+    mkdirSync(spool, { mode: 0o700 });
+    mkdirSync(join(spool, 'empty-one'));
+    mkdirSync(join(spool, 'empty-two'));
+    const populated = join(spool, 'populated');
+    mkdirSync(populated);
+    writeFileSync(join(populated, 'inside'), 'keep inside\n');
+    const outside = join(root, 'outside');
+    writeFileSync(outside, 'keep outside\n');
+    symlinkSync(outside, join(spool, 'linked'));
+    expect(sweepNonId(root, spool)).toBe(3);
+    expect(existsSync(join(spool, 'empty-one'))).toBe(false);
+    expect(existsSync(join(spool, 'empty-two'))).toBe(false);
+    expect(existsSync(join(spool, 'linked'))).toBe(false);
+    expect(readFileSync(join(populated, 'inside'), 'utf8')).toBe('keep inside\n');
+    expect(readFileSync(outside, 'utf8')).toBe('keep outside\n');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
