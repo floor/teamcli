@@ -15,7 +15,7 @@
 // `~/.grok/sandbox.toml`): a project `.grok/sandbox.toml` would put a machine-specific map
 // inside a repository, and the user-level file is read when the project has none.
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync, type Stats } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { syncChildTimeout } from '../child.ts';
 import { cliHookStatePath } from './cli-hook.ts';
@@ -30,6 +30,9 @@ export interface GrokSandbox {
   file: string;
   /** The absolute folders the profile grants `read_write`, in file order. */
   readWrite: readonly string[];
+  /** The seat's own drop folder, messages folder and seat-state file. The launch creates any
+   *  of these that are missing before it writes the profile. */
+  prepare: readonly string[];
   /** The project-wide profile a 0.5.12–0.5.14 launch wrote, when it is a different table.
    *  Writing this profile removes that table. */
   retire?: string;
@@ -56,13 +59,16 @@ export function grokSandboxProfileName(project: string, seat: string): string {
 
 /** What a Grok seat's launch writes and names. The grant is that seat's worktree, its start
  *  folder, and only these paths of its own: under the git common dir, `objects/`, `refs/`,
- *  `logs/`, `packed-refs` and `worktrees/<that worktree>`; under `.agents`,
+ *  `logs/`, `packed-refs` when that file already exists, and `worktrees/<that worktree>`; under `.agents`,
  *  `send-drops/<session>/<seat>`, `messages/<seat>` and `seat-state/<session>/<seat>.json`.
  *  `hooks/<session>/<seat>.json` is written by the launcher and is not granted. The team config
  *  directory is never granted, nor is the lobby or any other start folder or worktree inside it
  *  (the seat is not moved), nor the `.agents` folder, nor the common dir, nor that dir's
  *  `hooks/`, `config` or `info/`. A path is resolved when it or an ancestor exists, because the
- *  sandbox takes the path literally and a grant to a link's own name would not cover its target. */
+ *  sandbox takes the path literally and a grant to a link's own name would not cover its target.
+ *  Before the profile is written, the launch creates the seat's drop folder, `messages/<seat>`
+ *  and an empty seat-state file, then names a path only when it exists as the type the grant
+ *  needs. A path of the wrong type refuses the launch. */
 export function grokSandboxOf(input: {
   home: string;
   root: string;
@@ -84,13 +90,18 @@ export function grokSandboxOf(input: {
   placeGrant(input.home, worktree, folders);
   if (start !== worktree) placeGrant(input.home, start, folders);
   for (const grant of gitGrants(input.worktree ?? input.cwd ?? input.root)) placeGrant(input.home, grant, folders);
-  for (const grant of agentGrants(input.root, input.session, input.seat)) placeGrant(input.home, grant, folders);
+  const prepare: string[] = [];
+  for (const grant of agentGrants(input.root, input.session, input.seat)) {
+    placeGrant(input.home, grant, folders);
+    placeGrant(input.home, grant, prepare);
+  }
   const profile = grokSandboxProfileName(input.project, input.seat);
   const retire = grokSandboxProfileName(input.project, '');
   return {
     profile,
     file,
     readWrite: [...new Set(folders)],
+    prepare,
     ...(retire === profile ? {} : { retire }),
     guard: grokHome === input.home || grokHome.startsWith(`${input.home}/`) ? input.home : dirname(grokHome),
   };
@@ -129,7 +140,8 @@ function agentGrants(root: string, session: string, seat: string): string[] {
 
 /** `objects/`, `refs/`, `logs/`, `packed-refs`, and this worktree's own `worktrees/<name>`
  *  under the git common dir. The common dir itself, `hooks/`, `config` and `info/` are not
- *  grants. A folder that is not a checkout names nothing. */
+ *  grants. A folder that is not a checkout names nothing. `packed-refs` is a file grant: the
+ *  launch names it only when it already exists as a regular file. */
 function gitGrants(folder: string): string[] {
   const common = gitAnswer(folder, '--git-common-dir');
   if (common === undefined) return [];
@@ -168,6 +180,65 @@ function realFolder(folder: string): string {
     if (parent === folder) return folder;
     const resolved = realFolder(parent);
     return resolved === parent ? folder : join(resolved, basename(folder));
+  }
+}
+
+/** The profile this launch can write. The seat's drop folder, `messages/<seat>` and an empty
+ *  seat-state file are created first, at 0700 and 0600. A path that is not there is left out of
+ *  the list, so a missing `packed-refs` is not granted and `git gc` or `git pack-refs` from the
+ *  seat fails closed. A path that is there as the wrong type refuses the launch. */
+export function settleGrokSandbox(sandbox: GrokSandbox): { ok: true; sandbox: GrokSandbox } | { ok: false; why: string } {
+  const readWrite: string[] = [];
+  for (const path of sandbox.readWrite) {
+    const kind = grantKind(path);
+    if (lstatOrNull(path) === null && sandbox.prepare.includes(path)) {
+      const made = prepareGrant(path, kind);
+      if (!made.ok) return made;
+    }
+    const held = lstatOrNull(path);
+    if (held === null) continue;
+    if (held.isSymbolicLink()) {
+      return { ok: false, why: grantRefusal(path, 'a symbolic link', kind === 'file' ? 'a file' : 'a directory') };
+    }
+    if (kind === 'file' && !held.isFile()) return { ok: false, why: grantRefusal(path, 'a directory', 'a file') };
+    if (kind === 'directory' && !held.isDirectory()) return { ok: false, why: grantRefusal(path, 'a file', 'a directory') };
+    readWrite.push(path);
+  }
+  return { ok: true, sandbox: { ...sandbox, readWrite } };
+}
+
+function grantKind(path: string): 'file' | 'directory' {
+  const name = basename(path);
+  return name === 'packed-refs' || name.endsWith('.json') ? 'file' : 'directory';
+}
+
+function prepareGrant(path: string, kind: 'file' | 'directory'): { ok: true } | { ok: false; why: string } {
+  try {
+    if (kind === 'directory') {
+      mkdirSync(path, { recursive: true, mode: 0o700 });
+      chmodSync(path, 0o700);
+      return { ok: true };
+    }
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    const since = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+    writeFileSync(path, `{"state":"idle","since":"${since}"}\n`, { flag: 'wx', mode: 0o600 });
+    chmodSync(path, 0o600);
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, why: `its sandbox path ${path} could not be created: ${message}; nothing was launched. Repair that path and launch the seat again` };
+  }
+}
+
+function grantRefusal(path: string, found: string, needed: string): string {
+  return `its sandbox grant ${path} is ${found}, and the launch needs ${needed}; nothing was launched. Repair that path and launch the seat again`;
+}
+
+function lstatOrNull(path: string): Stats | null {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
   }
 }
 
@@ -230,7 +301,7 @@ type Field = { key: string; value: string; parsed: unknown };
 
 function mergeProfile(text: string, profile: string, fields: readonly Field[]): string | null {
   // The table is decided by parsing, never by one spelling of its header. A file that does not
-  // parse is left exactly as it is and the launch goes on without the profile: rewriting a broken
+  // parse is left exactly as it is and the seat is refused: rewriting a broken
   // file is not this launch's repair, and appending to it could not be checked.
   const parsed = parseSandbox(text);
   const exists = Object.prototype.hasOwnProperty.call(profileTables(parsed), profile);

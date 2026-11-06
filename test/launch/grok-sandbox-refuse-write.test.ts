@@ -3,7 +3,7 @@
 // Every folder here is synthetic; nothing reads the machine's own Grok home.
 import { afterAll, beforeAll, expect, mock, test } from 'bun:test';
 import * as realFs from 'node:fs';
-import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Host } from '../../src/launch/execute.ts';
@@ -36,6 +36,10 @@ test('an injected writer error refuses the seat and launches nothing', async () 
   mkdirSync(join(home, '.config', 'team'), { recursive: true });
   mkdirSync(join(root, '.agents'), { recursive: true });
   mkdirSync(start, { recursive: true });
+  mkdirSync(join(root, '.agents', 'send-drops', 'acme', 'grok-seat'), { recursive: true });
+  mkdirSync(join(root, '.agents', 'messages', 'grok-seat'), { recursive: true });
+  mkdirSync(join(root, '.agents', 'seat-state', 'acme'), { recursive: true });
+  writeFileSync(join(root, '.agents', 'seat-state', 'acme', 'grok-seat.json'), '{"state":"idle","since":"2026-11-06T00:00:00Z"}\n', { mode: 0o600 });
   mkdirSync(grokHome, { recursive: true });
   const previous = process.env.GROK_HOME;
   process.env.GROK_HOME = grokHome;

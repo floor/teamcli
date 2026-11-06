@@ -71,6 +71,7 @@ function sandboxAt(at: string): GrokSandbox {
   return {
     profile: 'team-seat-acme',
     file: join(at, 'sandbox.toml'),
+    prepare: [],
     guard: at,
     readWrite: ['/synthetic/state', '/synthetic/project'],
   };

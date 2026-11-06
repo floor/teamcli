@@ -15,7 +15,7 @@ import { reportedAgentIsCli, reportedLiveAgent } from './agent.ts';
 import { refusalReport, type Refusal } from './deliver.ts';
 import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeTarget, withoutResume, conversationMissingOnScreen } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
-import { writeGrokSandbox } from './grok-sandbox.ts';
+import { settleGrokSandbox, writeGrokSandbox } from './grok-sandbox.ts';
 import { launchedIdentity, paneHoldsOnlyShell, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
 import { restoreProof } from './restore-proof.ts';
 import type { CliWatcher } from './cli-hook.ts';
@@ -1428,7 +1428,12 @@ export async function executePlan(
         // be written refuses the seat. Nothing is launched without it. The record names the
         // cause and the repair.
         if (op.grokSandbox !== undefined) {
-          const written = writeGrokSandbox(op.grokSandbox);
+          const settled = settleGrokSandbox(op.grokSandbox);
+          if (!settled.ok) {
+            leftOut(op.seat, settled.why);
+            break;
+          }
+          const written = writeGrokSandbox(settled.sandbox);
           if (!written.ok) {
             leftOut(op.seat, `its sandbox profile was not written: ${written.why}; nothing was launched. Repair the sandbox file, then launch the seat again`);
             break;
