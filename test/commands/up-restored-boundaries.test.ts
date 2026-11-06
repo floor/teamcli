@@ -901,6 +901,8 @@ describe('team up, a restored session: boundaries', () => {
       { ...agent('deepseek-acme', 'w99:p1', 'idle'), session: 'kept' },
     ];
     made.launch.agents = live;
+    // The list the test just installed replaced the one that records renames. Wrap it again.
+    recordRenames(made.launch);
     // The moved pane reads the wrapper's drifted banner id — the reading that proves the repair.
     // Both panes under test are read from the scene's own record and agent list, never written.
     const moved = (): string | undefined => live().find((one) => one.name === 'deepseek-acme')?.pane;
@@ -919,7 +921,7 @@ describe('team up, a restored session: boundaries', () => {
         made,
       ),
     );
-    expect(code).toBe(0);
+    expect(code, io.out + io.err).toBe(0);
     // Closed on the pane the seat actually holds now, and relaunched with its conversation.
     expect(made.closes).toEqual(['w99']);
     expect(made.runs.map((run) => run.command).some((command) => command.includes('--resume kept'))).toBe(true);
@@ -1027,6 +1029,8 @@ describe('team up, a restored session: boundaries', () => {
     };
     const live = () => list().filter((item) => item.name !== 'deepseek-acme');
     made.launch.agents = live;
+    // The list the test just installed replaced the one that records renames. Wrap it again.
+    recordRenames(made.launch);
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(
       FILE,
@@ -1041,7 +1045,7 @@ describe('team up, a restored session: boundaries', () => {
         made,
       ),
     );
-    expect(code).toBe(0);
+    expect(code, io.out + io.err).toBe(0);
     // The old workspace is closed after the replacement is ready; it holds only the old pane.
     expect(made.closes).toEqual(['w93']);
     const resumed = made.runs.filter((run) => run.command.includes('--resume kept'));
