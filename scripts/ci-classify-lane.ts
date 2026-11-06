@@ -47,7 +47,7 @@ const dirPrefixes = (dirs: readonly string[]): readonly RegExp[] =>
  * Paths whose changes always require the `careful` lane: CI/workflows, build & toolchain,
  * contracts & schemas, native helpers & packages, core state/locks/signing/security, daemon,
  * broker, bus, launch/herdr, send/mcp, registry, the reach roster, permissions/policy/grants/
- * approvals, watch, workflow, worktree, and their corresponding command entrypoints.
+ * approvals, status, watch, workflow, worktree, and their corresponding command entrypoints.
  *
  * Every individual pattern here is verified against `git ls-files` by `verifyLaneRulesAgainstTree()`.
  */
@@ -138,6 +138,7 @@ export const CAREFUL_RULES: readonly LaneRule[] = [
       'src/send',
       'src/settings',
       'src/signing',
+      'src/status',
       'src/store',
       'src/watch',
       'src/workflow',
