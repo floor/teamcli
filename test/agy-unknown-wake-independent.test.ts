@@ -1,5 +1,7 @@
 // Independent scenes for the Antigravity typed wake. The frames are captured panes.
-// An empty prompt whose footer is the shortcuts line is woken. A working frame is never typed into, and a permission dialog is never typed into.
+// An empty prompt whose footer is the shortcuts line is delivered by one agent prompt:
+// the line goes out on that prompt, nothing is typed, and no Enter is pressed.
+// A working frame is never touched, and a permission dialog is never touched.
 // No herdr runs.
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
@@ -26,10 +28,11 @@ function holding(): string {
 
 function capture(before: string) {
   const typed: string[] = [];
+  const prompts: string[] = [];
   let enters = 0;
   const echoed = holding();
   const host: TypedWakeHost = {
-    read: () => (enters > 0 ? WORKING : typed.length > 0 ? echoed : before),
+    read: () => (prompts.length > 0 ? WORKING : typed.length > 0 ? echoed : before),
     type: (_pane, text) => {
       typed.push(text);
       return true;
@@ -38,24 +41,29 @@ function capture(before: string) {
       enters += 1;
       return true;
     },
+    prompt: (_pane, text) => {
+      prompts.push(text);
+      return true;
+    },
     wait: async () => {},
   };
-  return { host, typed, enters: () => enters };
+  return { host, typed, prompts, enters: () => enters };
 }
 
 async function wake(before: string) {
   const pane = capture(before);
   const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
-  return { delivered: out.delivered, reason: out.reason, typed: pane.typed, enters: pane.enters() };
+  return { delivered: out.delivered, reason: out.reason, typed: pane.typed, prompts: pane.prompts, enters: pane.enters() };
 }
 
-test('an idle agy prompt is woken', async () => {
+test('an idle agy prompt is delivered by one agent prompt', async () => {
   const out = await wake(shortcutsIdle());
   expect(out).toEqual({
     delivered: true,
-    reason: 'the working screen showed after 1 Enter',
-    typed: [LINE],
-    enters: 1,
+    reason: 'the working screen showed after the agent prompt',
+    typed: [],
+    prompts: [LINE],
+    enters: 0,
   });
 });
 
@@ -66,6 +74,7 @@ test('a working agy frame is never typed into', async () => {
   expect(out.enters).toBe(0);
   expect(out.reason).toContain('the first read showed working');
   expect(out.reason).toContain('nothing was typed');
+  expect(out.prompts).toEqual([]);
 });
 
 test('an agy permission dialog is never typed into', async () => {
@@ -75,4 +84,5 @@ test('an agy permission dialog is never typed into', async () => {
   expect(out.enters).toBe(0);
   expect(out.reason).toContain('the first read showed permission');
   expect(out.reason).toContain('nothing was typed');
+  expect(out.prompts).toEqual([]);
 });
