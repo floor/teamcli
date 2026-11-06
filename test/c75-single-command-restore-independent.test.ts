@@ -112,14 +112,26 @@ function runEntry(
  *  manager is never asked. `unitHome`, when given, gets the installed unit the round-5
  *  `job(home)` gate requires, and the record names that unit's real path; `loadedPath` overrides
  *  what the record says so a scene can name another unit (the round-6 gate). */
+/** The account home a unit label is derived from. Darwin reads it the way the service manager
+ *  does, and a failed read is no home. Other hosts have no such lookup; the live service
+ *  manager is absent there, so the name is a fixture home the scene can write. */
+function accountHomeForUnit(): string | null {
+  if (process.platform !== 'darwin') return '/fixture-account';
+  try {
+    const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
+    const account = execFileSync('/usr/bin/id', ['-P', String(uid)], { encoding: 'utf8' });
+    const dir = (account.split('\n')[0] ?? '').split(':')[8] ?? '';
+    return dir.startsWith('/') ? dir : null;
+  } catch {
+    return null;
+  }
+}
+
 function fakeServiceRecord(dir: string, daemonPid: number, unitHome?: string, loadedPath?: string): string {
   mkdirSync(dir, { recursive: true });
   let path = loadedPath ?? '/nonexistent-unit';
   if (unitHome !== undefined) {
-    const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
-    const account = execFileSync('/usr/bin/id', ['-P', String(uid)], { encoding: 'utf8' });
-    const accountHome = (account.split('\n')[0] ?? '').split(':')[8] ?? '';
-    const label = daemonLabel(unitHome, accountHome.startsWith('/') ? accountHome : null);
+    const label = daemonLabel(unitHome, accountHomeForUnit());
     if (label === null) throw new Error('the account home could not be read');
     mkdirSync(join(unitHome, 'Library', 'LaunchAgents'), { recursive: true });
     const unitFile = join(unitHome, 'Library', 'LaunchAgents', `${label}.plist`);
