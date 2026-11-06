@@ -178,11 +178,10 @@ describe('team send --wait on the thread across delivery legs', () => {
       clearTimeout(replyTimer);
 
       expect(code).toBe(0);
-      // A declared `typed` word walks the Codex seat's native runtime queue (no event leg is
-      // typing), so a send it does not take says no event adapter of this seat took it. The
-      // retired inbox word is dropped (ADR D1): that world walks the default order, whose typed
-      // leg gives the same line as the `typed` word.
-      expect(sendIo.err).toBe(leg === 'drop' ? queuedLine('worker') : queuedLine('worker', NO_EVENT_ADAPTER_TOOK_IT));
+      // A declared `typed` word still names an event leg, and a send it does not take says no
+      // event adapter of this seat took it. A word that is only the retired inbox name is the
+      // drop leg, so that world has no event leg and prints the drop line.
+      expect(sendIo.err).toBe(leg === 'typed' ? queuedLine('worker', NO_EVENT_ADAPTER_TOOK_IT) : queuedLine('worker'));
       assertMatchesOutputSchema(sendIo.out, SEND_OUTPUT_SCHEMA);
       const doc = JSON.parse(sendIo.out) as Record<string, unknown>;
       expect(doc).toMatchObject({
