@@ -630,9 +630,15 @@ describe('the plan and the launch', () => {
     const packed = sandbox.readWrite.find((grant) => grant.endsWith('/packed-refs'));
     expect(packed).toBeDefined();
     if (existsSync(packed!)) rmSync(packed!, { recursive: true });
+    const logs = sandbox.readWrite.find((grant) => grant.endsWith('/logs'));
+    if (logs !== undefined && existsSync(logs)) rmSync(logs, { recursive: true });
     const settled = settleGrokSandbox(sandbox);
     if (!settled.ok) throw new Error(settled.why);
     expect(settled.sandbox.readWrite).not.toContain(packed!);
+    if (logs !== undefined) {
+      expect(settled.sandbox.readWrite).toContain(logs);
+      expect(lstatSync(logs).isDirectory()).toBe(true);
+    }
     expect(writeGrokSandbox(settled.sandbox)).toEqual({ ok: true });
     const written = Bun.TOML.parse(readFileSync(sandbox.file, 'utf8')) as { profiles: Record<string, { read_write: string[] }> };
     for (const grant of written.profiles['team-seat-acme-grok-seat']!.read_write) {

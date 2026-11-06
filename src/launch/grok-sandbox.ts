@@ -30,8 +30,9 @@ export interface GrokSandbox {
   file: string;
   /** The absolute folders the profile grants `read_write`, in file order. */
   readWrite: readonly string[];
-  /** The seat's own drop folder, messages folder and seat-state file. The launch creates any
-   *  of these that are missing before it writes the profile. */
+  /** Paths the launch creates when they are missing, before it writes the profile: the seat's
+   *  drop folder, messages folder and seat-state file, and the checkout's `objects/`, `refs/`
+   *  and `logs/` directories. */
   prepare: readonly string[];
   /** The project-wide profile a 0.5.12–0.5.14 launch wrote, when it is a different table.
    *  Writing this profile removes that table. */
@@ -89,8 +90,16 @@ export function grokSandboxOf(input: {
   const start = input.cwd === undefined ? undefined : realFolder(input.cwd);
   placeGrant(input.home, worktree, folders);
   if (start !== worktree) placeGrant(input.home, start, folders);
-  for (const grant of gitGrants(input.worktree ?? input.cwd ?? input.root)) placeGrant(input.home, grant, folders);
   const prepare: string[] = [];
+  for (const grant of gitGrants(input.worktree ?? input.cwd ?? input.root)) {
+    placeGrant(input.home, grant, folders);
+    // `objects/`, `refs/` and `logs/` are directories a commit writes. A missing one is created
+    // before the profile is written. `packed-refs` is a file git replaces by rename, so a missing
+    // one is left unnamed.
+    if (basename(grant) === 'objects' || basename(grant) === 'refs' || basename(grant) === 'logs') {
+      placeGrant(input.home, grant, prepare);
+    }
+  }
   for (const grant of agentGrants(input.root, input.session, input.seat)) {
     placeGrant(input.home, grant, folders);
     placeGrant(input.home, grant, prepare);
@@ -184,9 +193,10 @@ function realFolder(folder: string): string {
 }
 
 /** The profile this launch can write. The seat's drop folder, `messages/<seat>` and an empty
- *  seat-state file are created first, at 0700 and 0600. A path that is not there is left out of
- *  the list, so a missing `packed-refs` is not granted and `git gc` or `git pack-refs` from the
- *  seat fails closed. A path that is there as the wrong type refuses the launch. */
+ *  seat-state file are created first, at 0700 and 0600, and so are a missing `objects/`, `refs/`
+ *  or `logs/`. A path that is still not there is left out of the list, so a missing `packed-refs`
+ *  is not granted and `git gc` or `git pack-refs` from the seat fails closed. A path that is
+ *  there as the wrong type refuses the launch. */
 export function settleGrokSandbox(sandbox: GrokSandbox): { ok: true; sandbox: GrokSandbox } | { ok: false; why: string } {
   const readWrite: string[] = [];
   for (const path of sandbox.readWrite) {

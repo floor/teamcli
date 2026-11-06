@@ -257,9 +257,10 @@ seat's worktree, its start folder, and only these paths of its own: under the gi
 `packed-refs` is named only when it already exists as a regular file. When it does not, the seat's
 `git gc` and `git pack-refs` fail closed, because the seat cannot create that file in the common dir.
 Before the profile is written, the launch creates the seat's drop folder, `messages/<seat>` and an
-empty seat-state file (`{"state":"idle","since":"<time>"}`, mode 0600). A path is named only when it
-exists as the type the grant needs. A path of the wrong type refuses the launch; the repair is to
-fix that path and launch the seat again.
+empty seat-state file (`{"state":"idle","since":"<time>"}`, mode 0600). It also creates a missing
+`objects/`, `refs/` or `logs/` as a directory, because commit and fetch write there. A path is named
+only when it exists as the type the grant needs. A path of the wrong type refuses the launch; the
+repair is to fix that path and launch the seat again.
 The launcher writes `hooks/<session>/<seat>.json` before the pane starts; that file is not granted,
 so the seat cannot rewrite the commands its CLI runs. It grants nothing under `~/.config/team`,
 not the `.agents` folder, and not the common dir's `hooks/`, `config` or `info/`. A Grok seat
