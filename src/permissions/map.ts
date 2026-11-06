@@ -81,6 +81,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-only',
       why: 'writing a team where none exists is the owner\'s act in 0.5.0: no create-bounds exist yet, so no agent holds `create`; since 0.5.7 an owner-signed general grant covering `init` (or every op, `*`) admits it (`team init --general <grant> --key <client.key>`), and a grant that lists entities is refused until 0.5.11',
     },
+    start: {
+      kind: 'owner-only',
+      why: 'an empty account is not admitted; once a durable record exists, only the owner runs the pass, and the lead send stays on the ordinary map',
+    },
     up: {
       kind: 'owner-or-leads',
       why: '`start`: it runs the hash-pinned start command, and an operation is reached only through `leads` held in a role, never through a grant',

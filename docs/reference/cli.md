@@ -3678,6 +3678,32 @@ A run with no terminal is refused: only the owner or a seat of this team runs th
 | --- | --- | --- |
 | `id` | no | no |
 
+## `start`
+
+Hidden: no
+
+Usage:
+
+    team start [--json]
+
+### Who may run it
+
+`owner-only` — an empty account is not admitted; once a durable record exists, only the owner runs the pass, and the lead send stays on the ordinary map
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
 ## `status`
 
 Hidden: no
