@@ -1,10 +1,10 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { boxHoldsOther, boxHoldsText } from '../src/launch/deliver.ts';
 import { deliverTypedWake, MAX_WAKE_ENTERS, type TypedWakeHost } from '../src/send/typed-wake.ts';
 import { composeMessageLine } from '../src/settings/message-display.ts';
-import { listedPlaceholderEquals, readBox, readScreen } from '../src/watch/screen.ts';
+import { listedPlaceholderEquals, readBox, readScreen, type ReadClock, type ScreenOptions } from '../src/watch/screen.ts';
 
 const AGY_DIR = join(import.meta.dir, 'fixtures', 'antigravity', '1.4.12');
 const AGY_142_DIR = join(import.meta.dir, 'fixtures', 'antigravity', '1.4.2');
@@ -22,6 +22,37 @@ const CURSOR_WORKING = readFileSync(join(CURSOR_DIR, 'working.txt'), 'utf8');
 const CURSOR_PERMISSION = readFileSync(join(CURSOR_1014_DIR, 'permission.txt'), 'utf8');
 
 const FAST = { settleMs: 1, enterSettleMs: 1, pollMs: 1, verifyMs: 1 };
+
+// The screen reader spends a real 100 ms budget when no clock is handed in. A frozen clock
+// and an explicit budget make every read in this file finish on the seam, including the
+// reads deliverTypedWake makes through Date.now. Nothing here waits on the wall clock.
+const FROZEN = 1_763_000_000_000;
+const CLOCK: ReadClock = { now: () => FROZEN, budgetMs: 60_000 };
+const READ: ScreenOptions = { clock: CLOCK };
+const realNow = Date.now;
+
+beforeEach(() => {
+  Date.now = CLOCK.now;
+});
+afterEach(() => {
+  Date.now = realNow;
+});
+
+function readScreenAt(cli: string, screen: string) {
+  return readScreen(cli, screen, CLOCK);
+}
+
+function readBoxAt(cli: string, screen: string) {
+  return readBox(cli, screen, READ);
+}
+
+function holdsText(cli: string, text: string, screen: string) {
+  return boxHoldsText(cli, text, screen, READ);
+}
+
+function holdsOther(cli: string, text: string, screen: string) {
+  return boxHoldsOther(cli, text, screen, READ);
+}
 
 const WAKE_LINE = composeMessageLine(
   'Message from owner (owner@acme): hello',
@@ -110,9 +141,9 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
 
     // Antigravity: sitting line is read twice, never typed again, submitted with 1 Enter.
     const agyHeld = agyBox(WAKE_LINE);
-    expect(readScreen('antigravity', agyHeld).kind).toBe('unsent');
-    expect(boxHoldsText('antigravity', WAKE_LINE, agyHeld)).toBe(true);
-    expect(boxHoldsOther('antigravity', WAKE_LINE, agyHeld)).toBeNull();
+    expect(readScreenAt('antigravity', agyHeld).kind).toBe('unsent');
+    expect(holdsText('antigravity', WAKE_LINE, agyHeld)).toBe(true);
+    expect(holdsOther('antigravity', WAKE_LINE, agyHeld)).toBeNull();
 
     const agyScene = makeFakeHost((_read, enters) => (enters > 0 ? AGY_WORKING : agyHeld));
     const agyRes = await deliverTypedWake(agyScene.host, 'pane-agy', WAKE_LINE, 'antigravity', FAST);
@@ -154,9 +185,9 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
 
     // Cursor: sitting line is read twice, never typed again, submitted with 1 Enter.
     const cursorHeld = cursorBox(WAKE_LINE);
-    expect(readScreen('cursor', cursorHeld).kind).toBe('unsent');
-    expect(boxHoldsText('cursor', WAKE_LINE, cursorHeld)).toBe(true);
-    expect(boxHoldsOther('cursor', WAKE_LINE, cursorHeld)).toBeNull();
+    expect(readScreenAt('cursor', cursorHeld).kind).toBe('unsent');
+    expect(holdsText('cursor', WAKE_LINE, cursorHeld)).toBe(true);
+    expect(holdsOther('cursor', WAKE_LINE, cursorHeld)).toBeNull();
 
     const cursorScene = makeFakeHost((_read, enters) => (enters > 0 ? CURSOR_WORKING : cursorHeld));
     const cursorRes = await deliverTypedWake(
@@ -183,8 +214,8 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
     const firstRow = WAKE_LINE.slice(0, splitAt - 1);
     const secondRow = WAKE_LINE.slice(splitAt);
     const cursorWrapped = cursorBox(firstRow, [secondRow]);
-    expect(readScreen('cursor', cursorWrapped).kind).toBe('unsent');
-    expect(boxHoldsText('cursor', WAKE_LINE, cursorWrapped)).toBe(true);
+    expect(readScreenAt('cursor', cursorWrapped).kind).toBe('unsent');
+    expect(holdsText('cursor', WAKE_LINE, cursorWrapped)).toBe(true);
 
     const cursorWrappedScene = makeFakeHost((_read, enters) =>
       enters > 0 ? CURSOR_WORKING : cursorWrapped,
@@ -240,13 +271,13 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
     // 2a. Antigravity: every exact listed hint row under a sitting wake line is submitted with Enter, typing nothing.
     for (const hint of agyHints) {
       const withExactHint = agyBox(WAKE_LINE, [hint]);
-      expect(readScreen('antigravity', withExactHint).kind).toBe('unsent');
-      expect(readBox('antigravity', withExactHint)).toMatchObject({
+      expect(readScreenAt('antigravity', withExactHint).kind).toBe('unsent');
+      expect(readBoxAt('antigravity', withExactHint)).toMatchObject({
         first: WAKE_LINE,
         rows: [`  ${hint}`],
       });
-      expect(boxHoldsText('antigravity', WAKE_LINE, withExactHint)).toBe(true);
-      expect(boxHoldsOther('antigravity', WAKE_LINE, withExactHint)).toBeNull();
+      expect(holdsText('antigravity', WAKE_LINE, withExactHint)).toBe(true);
+      expect(holdsOther('antigravity', WAKE_LINE, withExactHint)).toBeNull();
 
       const sittingScene = makeFakeHost((_read, enters) =>
         enters > 0 ? AGY_WORKING : withExactHint,
@@ -295,9 +326,9 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
     // 2b. Cursor: every exact listed placeholder row under a sitting wake line is submitted with Enter, typing nothing.
     for (const hint of cursorHints) {
       const withExactHint = cursorBox(WAKE_LINE, [hint]);
-      expect(readScreen('cursor', withExactHint).kind).toBe('unsent');
-      expect(boxHoldsText('cursor', WAKE_LINE, withExactHint)).toBe(true);
-      expect(boxHoldsOther('cursor', WAKE_LINE, withExactHint)).toBeNull();
+      expect(readScreenAt('cursor', withExactHint).kind).toBe('unsent');
+      expect(holdsText('cursor', WAKE_LINE, withExactHint)).toBe(true);
+      expect(holdsOther('cursor', WAKE_LINE, withExactHint)).toBeNull();
 
       const sittingScene = makeFakeHost((_read, enters) =>
         enters > 0 ? CURSOR_WORKING : withExactHint,
@@ -331,9 +362,9 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
     ];
     for (const badRow of agyPrefixRows) {
       const frame = agyBox(WAKE_LINE, [badRow]);
-      expect(readScreen('antigravity', frame).kind).toBe('unsent');
-      expect(boxHoldsText('antigravity', WAKE_LINE, frame)).toBe(false);
-      expect(boxHoldsOther('antigravity', WAKE_LINE, frame)).toBe(badRow);
+      expect(readScreenAt('antigravity', frame).kind).toBe('unsent');
+      expect(holdsText('antigravity', WAKE_LINE, frame)).toBe(false);
+      expect(holdsOther('antigravity', WAKE_LINE, frame)).toBe(badRow);
 
       // Present on first read -> refuses immediately, types nothing, presses no Enter.
       const openScene = makeFakeHost(() => frame);
@@ -398,9 +429,9 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
     ];
     for (const badRow of cursorPrefixRows) {
       const frame = cursorBox(WAKE_LINE, [badRow]);
-      expect(readScreen('cursor', frame).kind).toBe('unsent');
-      expect(boxHoldsText('cursor', WAKE_LINE, frame)).toBe(false);
-      expect(boxHoldsOther('cursor', WAKE_LINE, frame)).toBe(badRow);
+      expect(readScreenAt('cursor', frame).kind).toBe('unsent');
+      expect(holdsText('cursor', WAKE_LINE, frame)).toBe(false);
+      expect(holdsOther('cursor', WAKE_LINE, frame)).toBe(badRow);
 
       const openScene = makeFakeHost(() => frame);
       const openOut = await deliverTypedWake(
@@ -454,8 +485,8 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
         ['cursor', CURSOR_IDLE, (t: string) => cursorBox(t), cursorBox(WAKE_LINE)],
       ] as const) {
         const draftFrame = makeBox(draft);
-        expect(readScreen(cli, draftFrame).kind).toBe('unsent');
-        expect(boxHoldsText(cli, WAKE_LINE, draftFrame)).toBe(false);
+        expect(readScreenAt(cli, draftFrame).kind).toBe('unsent');
+        expect(holdsText(cli, WAKE_LINE, draftFrame)).toBe(false);
 
         // 1. Draft present on first read: nothing typed, no Enter pressed.
         const firstRead = makeFakeHost(() => draftFrame);
@@ -554,8 +585,8 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
       // 4a. Extra words on the same row.
       for (const withExtraWords of extraSameRowVariants) {
         const frame = makeBox(withExtraWords);
-        expect(readScreen(cli, frame).kind).toBe('unsent');
-        expect(boxHoldsText(cli, WAKE_LINE, frame)).toBe(false);
+        expect(readScreenAt(cli, frame).kind).toBe('unsent');
+        expect(holdsText(cli, WAKE_LINE, frame)).toBe(false);
 
         // Sitting at the start -> refused on first read, nothing typed, no Enter.
         const startScene = makeFakeHost(() => frame);
@@ -608,9 +639,9 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
 
       // 4b. Exact trigger line on row 1 plus extra words on row 2 inside the box.
       const extraSecondRow = makeBox(WAKE_LINE, ['and run the tests']);
-      expect(readScreen(cli, extraSecondRow).kind).toBe('unsent');
-      expect(boxHoldsText(cli, WAKE_LINE, extraSecondRow)).toBe(false);
-      expect(boxHoldsOther(cli, WAKE_LINE, extraSecondRow)).toBe('and run the tests');
+      expect(readScreenAt(cli, extraSecondRow).kind).toBe('unsent');
+      expect(holdsText(cli, WAKE_LINE, extraSecondRow)).toBe(false);
+      expect(holdsOther(cli, WAKE_LINE, extraSecondRow)).toBe('and run the tests');
 
       const rowScene = makeFakeHost(() => extraSecondRow);
       const rowOut = await deliverTypedWake(rowScene.host, `pane-${cli}`, WAKE_LINE, cli, FAST);
@@ -670,8 +701,8 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
       expect(goesIdle.enters).toBe(1);
 
       // 5c. Working screen shows after Enter, but the box still holds the wake line through verifyMs.
-      expect(readScreen(cli, workingHoldingWake).kind).toBe('working');
-      expect(boxHoldsText(cli, WAKE_LINE, workingHoldingWake)).toBe(true);
+      expect(readScreenAt(cli, workingHoldingWake).kind).toBe('working');
+      expect(holdsText(cli, WAKE_LINE, workingHoldingWake)).toBe(true);
       const workingStillHeld = makeFakeHost((_read, enters) =>
         enters > 0 ? workingHoldingWake : heldWake,
       );
