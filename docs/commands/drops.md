@@ -23,12 +23,16 @@ it also delivers to that seat without relaunching it; `team add`, `team register
 before any launch. A listing shows only the delivery the seat's current claim names: the
 superseded ids its claim records are skipped by name, and a launch record whose digest or
 incarnation is not the claim's is not waiting mail. `team drops --read` serves the same current
-claim — it verifies the record, writes its receipt and prints the brief, and an earlier delivery
+claim — it verifies the record, prints the brief, and writes its receipt after that hand-over, and an earlier delivery
 is skipped without a receipt and without a refusal.
 
 `team drops --read` is the same folder served to the launch's own turn-start hook: the launch
 line names the seat and session, each waiting record is verified with the checkout's message
-key, its body is printed, and its signed `<id>.read.json` receipt is written after that hand-over. At most ten
+key, its body is printed, and its signed `<id>.read.json` receipt is written after that hand-over.
+That read is at-least-once: two racing readers can both print a body, and the exclusive receipt
+still means only one of them writes it. A hand-over that never returns leaves the message unread.
+The inbox server stays receipt-first: `inbox_read` writes the receipt before it returns the body.
+At most ten
 bodies are handed over a run, newest first. A served body is printed with its compact sender header:
 its `from … — admitted by: …` line is folded into `from <name> (<short rule>):` (or `Client <Display> (owner relay):` for a client, or `<Kind> seat <name> (<short rule>):` for a Gemini, Codex or Grok seat), and a body with
 no such line folds its record sender and rule into the same compact header (`from <sender> (<short rule>):` or `from <sender>:`). The words of the message itself are
@@ -54,9 +58,11 @@ disk is the same id, incarnation, digest and epoch, and a process started under 
 runtime serves nothing until its seat is launched again. With no `--epoch` — a read by hand — the
 receipt binds the claim it serves.
 
-A receipt beside a drop says it was handed over, and a drop with one is read and not listed:
-the seat's inbox server writes `<id>.read.json` when an `inbox_read` call returns the message,
-and the turn-start `team drops --read` writes the same receipt before it hands a body over; it
+A receipt beside a drop says it was handed over, and a drop with one is read and not listed.
+The seat's inbox server writes `<id>.read.json` before `inbox_read` returns the body, so that
+path is receipt-first and a second reader is served nothing. The turn-start `team drops --read`
+prints the body and writes the same receipt after that hand-over, so that path is at-least-once
+and two racing readers can both print a body. It
 is the same signed status receipt `team messages` writes, signed with the checkout's message
 key. `team drops` verifies it; a file at that name the key did not sign, or one naming
 another message, seat, checkout or session, proves nothing and the drop is still listed. A
@@ -79,7 +85,7 @@ refusal, its body is not printed, and the file is left in place — only
 | --- | --- | --- |
 | `--follow` | — | keep reading the folder and print one line per new drop, `from <sender> — <path>` (`<sender>` carries `(attributed)`, or `(unattributed)` when no key could vouch for the file), flushed as each is read; Ctrl-C stops it and exits 0 |
 | `--json` | — | print one `team.drops` document (`format: 1`, `project`, `session`, `seat`, `drops`, `counts`) |
-| `--read` | — | hand the seat's waiting messages to the launch's turn: verify each record, write its signed `<id>.read.json` receipt, then print its body; at most ten a run, newest first. `--seat` is required. Only the seat itself receipts; the owner and a lead are served the same bodies as a peek — nothing is written or marked read, and the peek is logged |
+| `--read` | — | hand the seat's waiting messages to the launch's turn: verify each record, print its body, then write its signed `<id>.read.json` receipt after that hand-over; at most ten a run, newest first. Two racing readers can both print a body. `--seat` is required. Only the seat itself receipts; the owner and a lead are served the same bodies as a peek — nothing is written or marked read, and the peek is logged |
 | `--seat` | a seat name | the seat whose folder `--read` serves; only with `--read` |
 | `--session` | a session name | the launch's session, when given; only with `--read`, and it must be the team file's own |
 | `--epoch` | a runtime epoch | the epoch the launch started this reader under; when given, only a brief delivered under that epoch is served; only with `--read` |

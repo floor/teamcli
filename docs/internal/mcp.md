@@ -48,7 +48,10 @@ relaunched while an old process lives is served nothing by it — no list, no bo
 and a push it would have made is not written.
 
 `inbox_read` writes `<id>.read.json` beside the message **before** it returns the body — a read that
-cannot leave that receipt is refused, so the server never hands over a body it did not record. The
+cannot leave that receipt is refused, so the server never hands over a body it did not record.
+That server path stays receipt-first. The CLI mailbox reader, `team drops --read`, prints the body
+first and writes the receipt after the hand-over, so it is at-least-once: two racing readers can
+both print a body. The
 receipt is the signed status receipt `team messages` also writes: `{payload: {kind, status, id, to,
 root, session, at}, signature}`, signed with the checkout's message key, so the inbox, `team
 drops`, `team messages` and the watch all verify the same file rather than trusting its presence.

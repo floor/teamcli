@@ -76,13 +76,16 @@ directory, or bound to another root or session, does not verify.
 
 Writes the signed read receipt beside the record, `<id>.read.json` in the same folder — the older
 store keeps its own receipt shape at `.agents/messages/<seat>/<id>.read.json` — signed with the
-message key under its own domain. For a record in the transport tree the receipt is published
-before the body, through the same `link` the inbox uses, and it is flushed with its folder before
-the body is printed: exactly one reader — this run, `team drops --read` or `inbox_read` — wins
-the id, and a crash after the print leaves the receipt that proves the exposure. A receipt that
-cannot be published prints no body and leaves the id waiting; one that was linked but could not be
-flushed prints no body and spends the id. The older store keeps its original order: the body
-prints first and its receipt is written after `io.stdout` returns.
+message key under its own domain. For a record in the transport tree this run and `inbox_read`
+publish the receipt before the body, through the same `link` the inbox uses, and flush it with
+its folder before the body is printed: exactly one of those readers wins the id, and a crash
+after the print leaves the receipt that proves the exposure. A receipt that cannot be published
+prints no body and leaves the id waiting; one that was linked but could not be flushed prints no
+body and spends the id. `team drops --read` is the other reader of the same folder, and it is
+at-least-once: it prints the body first and writes the receipt after the hand-over returns, so
+two racing readers can both print a body, and a hand-over that never returns leaves the message
+unread. The exclusive receipt still means only one of them writes it. The older store keeps its
+original order: the body prints first and its receipt is written after `io.stdout` returns.
 
 A valid `read` or `replied` receipt at the name means another reader already served the message:
 the run skips it silently, with no row and no body. An entry at the read or replied receipt name
