@@ -68,13 +68,14 @@ function workingHolding(text: string): string {
  *  to read back the line draws the text the wake itself typed. `wait` costs nothing. */
 function wakeFake(
   screen: (read: number, enters: number, typed: readonly string[], keys: readonly string[]) => string | null,
-  options: { typeOk?: boolean; enterOk?: boolean; keyOk?: boolean; key?: boolean } = {},
-): { host: TypedWakeHost; typed: string[]; keys: string[]; enters: number; reads: number } {
+  options: { typeOk?: boolean; enterOk?: boolean; keyOk?: boolean; key?: boolean; promptOk?: boolean } = {},
+): { host: TypedWakeHost; typed: string[]; prompts: string[]; keys: string[]; enters: number; reads: number } {
   const typed: string[] = [];
+  const prompts: string[] = [];
   const keys: string[] = [];
-  const state = { enters: 0, reads: 0 };
+  const state = { enters: 0, prompts: 0, reads: 0 };
   const host: TypedWakeHost = {
-    read: () => screen(state.reads++, state.enters, typed, keys),
+    read: () => screen(state.reads++, state.enters + state.prompts, prompts.length > 0 ? prompts : typed, keys),
     type: (_pane: string, text: string) => {
       typed.push(text);
       return options.typeOk ?? true;
@@ -82,6 +83,11 @@ function wakeFake(
     enter: () => {
       state.enters += 1;
       return options.enterOk ?? true;
+    },
+    prompt: (_pane: string, text: string) => {
+      prompts.push(text);
+      state.prompts += 1;
+      return options.promptOk ?? true;
     },
     wait: async () => {},
   };
@@ -94,6 +100,7 @@ function wakeFake(
   return {
     host,
     typed,
+    prompts,
     keys,
     get enters() {
       return state.enters;
@@ -164,9 +171,10 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
   test('two idle reads, one line, one Enter on the captured frames: the spinner row is the delivery', async () => {
     const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE : holding(typed[typed.length - 1] ?? '')));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
-    expect(pane.typed).toEqual([LINE]);
-    expect(pane.enters).toBe(1);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after the agent prompt', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
+    expect(pane.prompts).toEqual([LINE]);
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
   });
 
   test('a working screen that still holds the line is not delivered until the box empties', async () => {
@@ -182,9 +190,10 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
     });
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', { ...FAST, verifyMs: 3 });
     expect(post).toBe(3);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
-    expect(pane.typed).toEqual([LINE]);
-    expect(pane.enters).toBe(1);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after the agent prompt', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
+    expect(pane.prompts).toEqual([LINE]);
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
   });
 
   test('a working screen that keeps the line through the bound is not delivered', async () => {
@@ -194,10 +203,11 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
       delivered: false,
       typed: true,
       tries: 1,
-      reason: 'the working screen showed with the line still in the box after 1 Enter; the line was not submitted',
+      reason: 'the working screen showed with the line still in the box after the agent prompt; the line was not submitted',
     });
-    expect(pane.typed).toEqual([LINE]);
-    expect(pane.enters).toBe(1);
+    expect(pane.prompts).toEqual([LINE]);
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
   });
 
   test('a drawn line that one Enter leaves unsent is submitted again, and the line is not retyped', async () => {
@@ -212,12 +222,13 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
       return enters === 1 ? drawn : WORKING;
     });
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
-    expect(settleReads).toBe(3);
+    expect(settleReads).toBe(0);
     expect(readScreen('antigravity', drawn).kind).toBe('unsent');
     expect(boxHoldsText('antigravity', LINE, drawn)).toBe(true);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 2, reason: 'the working screen showed after 2 Enters', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
-    expect(pane.typed).toEqual([LINE]);
-    expect(pane.enters).toBe(2);
+    expect(out).toEqual({ delivered: false, typed: true, tries: 1, reason: 'no working screen showed after the agent prompt' });
+    expect(pane.prompts).toEqual([LINE]);
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
   });
 
   test('the compacted-transcript idle frame still types: a long transcript is not a refusal', async () => {
@@ -225,7 +236,9 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
     expect(out.delivered).toBe(true);
     expect(out.tries).toBe(1);
-    expect(pane.typed).toEqual([LINE]);
+    expect(pane.prompts).toEqual([LINE]);
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
   });
 
   test('a working pane is never typed into', async () => {
@@ -275,9 +288,10 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
     expect(boxHoldsText('antigravity', LINE, held)).toBe(true);
     const pane = wakeFake((_read, enters) => (enters > 0 ? WORKING : held));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after the agent prompt', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
+    expect(pane.prompts).toEqual([LINE]);
     expect(pane.typed).toEqual([]);
-    expect(pane.enters).toBe(1);
+    expect(pane.enters).toBe(0);
   });
 
   test('the typed line plus the exact tasks hint row is submitted', async () => {
@@ -286,9 +300,10 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
     expect(boxHoldsText('antigravity', LINE, drawn)).toBe(true);
     const pane = wakeFake((read, enters) => (read < 2 ? IDLE : enters > 0 ? WORKING : drawn));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
-    expect(pane.typed).toEqual([LINE]);
-    expect(pane.enters).toBe(1);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after the agent prompt', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
+    expect(pane.prompts).toEqual([LINE]);
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
   });
 
   test('the typed line plus a row that only starts like the tasks hint gets no Enter', async () => {
@@ -296,9 +311,9 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
     expect(boxHoldsText('antigravity', LINE, drawn)).toBe(false);
     const pane = wakeFake((read) => (read < 2 ? IDLE : drawn));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
-    expect(out.delivered).toBe(false);
-    expect(out.tries).toBe(0);
-    expect(pane.typed).toEqual([LINE]);
+    expect(out).toEqual({ delivered: false, typed: true, tries: 1, reason: 'no working screen showed after the agent prompt' });
+    expect(pane.prompts).toEqual([LINE]);
+    expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
   });
 
@@ -306,9 +321,10 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
     const drawn = holdingUnder(LINE, TASKS_HINT);
     const pane = wakeFake((_read, enters) => (enters > 0 ? WORKING : drawn));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after the agent prompt', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
+    expect(pane.prompts).toEqual([LINE]);
     expect(pane.typed).toEqual([]);
-    expect(pane.enters).toBe(1);
+    expect(pane.enters).toBe(0);
   });
 
   test('a sitting line whose second read is other text gets no Enter', async () => {
@@ -325,8 +341,9 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
   test('an exit-completion frame drawn after the line was typed gets no Enter', async () => {
     const pane = wakeFake((read) => (read < 2 ? IDLE : EXIT_UNSENT));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
-    expect(out).toEqual({ delivered: false, typed: true, tries: 0, reason: 'the box held text other than the line after the line was typed; no Enter was pressed' });
-    expect(pane.typed).toEqual([LINE]);
+    expect(out).toEqual({ delivered: false, typed: true, tries: 1, reason: 'no working screen showed after the agent prompt' });
+    expect(pane.prompts).toEqual([LINE]);
+    expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
   });
 
@@ -334,8 +351,9 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
     const spacesOnly = wakeFake((read) => (read < 2 ? IDLE : holding('    ')));
     const outSpaces = await deliverTypedWake(spacesOnly.host, 'pane-1', LINE, 'antigravity', FAST);
     expect(boxHoldsText('antigravity', LINE, holding('    '))).toBe(false);
-    expect(outSpaces).toEqual({ delivered: false, typed: true, tries: 0, reason: 'the screen read idle after the line was typed; no Enter was pressed' });
-    expect(spacesOnly.typed).toEqual([LINE]);
+    expect(outSpaces).toEqual({ delivered: false, typed: true, tries: 1, reason: 'no working screen showed after the agent prompt', submittedAt: expect.any(Number) });
+    expect(spacesOnly.prompts).toEqual([LINE]);
+    expect(spacesOnly.typed).toEqual([]);
     expect(spacesOnly.enters).toBe(0);
 
     const doubledSpace = LINE.replace(' ', '  ');
@@ -343,8 +361,9 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
     const outInternal = await deliverTypedWake(internalSpaces.host, 'pane-1', LINE, 'antigravity', FAST);
     expect(readScreen('antigravity', holding(doubledSpace)).kind).toBe('unsent');
     expect(boxHoldsText('antigravity', LINE, holding(doubledSpace))).toBe(false);
-    expect(outInternal).toEqual({ delivered: false, typed: true, tries: 0, reason: 'the box held text other than the line after the line was typed; no Enter was pressed' });
-    expect(internalSpaces.typed).toEqual([LINE]);
+    expect(outInternal).toEqual({ delivered: false, typed: true, tries: 1, reason: 'no working screen showed after the agent prompt' });
+    expect(internalSpaces.prompts).toEqual([LINE]);
+    expect(internalSpaces.typed).toEqual([]);
     expect(internalSpaces.enters).toBe(0);
   });
 
@@ -363,14 +382,16 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
 
     const afterPrefix = wakeFake((read) => (read < 2 ? IDLE : holding(prefix)));
     const outPrefix = await deliverTypedWake(afterPrefix.host, 'pane-1', LINE, 'antigravity', FAST);
-    expect(outPrefix).toEqual({ delivered: false, typed: true, tries: 0, reason: 'the box held text other than the line after the line was typed; no Enter was pressed' });
-    expect(afterPrefix.typed).toEqual([LINE]);
+    expect(outPrefix).toEqual({ delivered: false, typed: true, tries: 1, reason: 'no working screen showed after the agent prompt' });
+    expect(afterPrefix.prompts).toEqual([LINE]);
+    expect(afterPrefix.typed).toEqual([]);
     expect(afterPrefix.enters).toBe(0);
 
     const afterSuffix = wakeFake((read) => (read < 2 ? IDLE : holding(suffix)));
     const outSuffix = await deliverTypedWake(afterSuffix.host, 'pane-1', LINE, 'antigravity', FAST);
-    expect(outSuffix).toEqual({ delivered: false, typed: true, tries: 0, reason: 'the box held text other than the line after the line was typed; no Enter was pressed' });
-    expect(afterSuffix.typed).toEqual([LINE]);
+    expect(outSuffix).toEqual({ delivered: false, typed: true, tries: 1, reason: 'no working screen showed after the agent prompt' });
+    expect(afterSuffix.prompts).toEqual([LINE]);
+    expect(afterSuffix.typed).toEqual([]);
     expect(afterSuffix.enters).toBe(0);
   });
 
@@ -399,22 +420,24 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
 
       const afterType = wakeFake((read) => (read < 2 ? IDLE : frame));
       const outAfter = await deliverTypedWake(afterType.host, 'pane-1', LINE, 'antigravity', FAST);
-      expect(outAfter).toEqual({ delivered: false, typed: true, tries: 0, reason: `the screen read ${kind} after the line was typed; no Enter was pressed` });
+      expect(outAfter).toEqual({ delivered: false, typed: true, tries: 1, reason: 'no working screen showed after the agent prompt' });
       expect(afterType.keys).toEqual([]);
-      expect(afterType.typed).toEqual([LINE]);
+      expect(afterType.prompts).toEqual([LINE]);
+      expect(afterType.typed).toEqual([]);
       expect(afterType.enters).toBe(0);
     }
   });
 
   test('the feedback survey is answered once with 0 (Skip), then two idle reads and guarded Enter deliver', async () => {
     for (const survey of [FEEDBACK_SURVEY, BARE_FEEDBACK_SURVEY]) {
-      const screens = [survey, IDLE, IDLE, holding(LINE), holding(LINE), WORKING];
+      const screens = [survey, IDLE, IDLE, WORKING];
       const pane = wakeFake((read) => screens[Math.min(read, screens.length - 1)] ?? null);
       const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
-      expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
+      expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after the agent prompt', submittedAt: expect.any(Number), workingAt: expect.any(Number) });
       expect(pane.keys).toEqual(['0']);
-      expect(pane.typed).toEqual([LINE]);
-      expect(pane.enters).toBe(1);
+      expect(pane.prompts).toEqual([LINE]);
+      expect(pane.typed).toEqual([]);
+      expect(pane.enters).toBe(0);
     }
   });
 
@@ -512,12 +535,12 @@ describe('team send: the antigravity typed wake', () => {
     expect(await runSend(['agy', 'hello'], io, host)).toBe(0);
     // The closing line ends with the record's id; the scene's subject is the outcome, not the id.
     expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nagy: delivered (typed wake)\n');
-    // One line, one Enter, and the line is the trigger that names the seat's own fastest read
-    // path, never the body: an antigravity seat carries an MCP inbox (`mcp_inbox: registered`),
-    // so its profile's `read_hint` sends the woken turn straight to `inbox_check`.
-    expect(pane.typed).toEqual(['Message from owner (owner@acme): hello Read it with: call inbox_check now.']);
-    expect((pane.typed[0] as string).length).toBeLessThanOrEqual(80);
-    expect(pane.enters).toBe(1);
+    // One agent prompt, no typed line and no Enter. The line names the seat's own read path,
+    // never the body: antigravity has no inbox_check tool, so the hint says to run team drops.
+    expect(pane.prompts).toEqual(['Message from owner (owner@acme): hello Read it with: run team drops --read']);
+    expect(pane.prompts[0]!.length).toBeLessThanOrEqual(80);
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
     // The record was written under the seat lock before the line was typed.
     const drops = join(made.dir, 'send-drops', 'acme', 'agy');
     const records = readdirSync(drops).filter((name) => !name.includes('.'));
@@ -603,11 +626,12 @@ describe('team send: the antigravity typed wake', () => {
     expect(await runSend(['agy', 'hello'], io, host)).toBe(0);
     expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nagy: delivered (typed wake)\n');
     expect(pane.keys).toEqual(['0']);
-    expect(pane.typed).toEqual(['Message from owner (owner@acme): hello Read it with: call inbox_check now.']);
-    expect(pane.enters).toBe(1);
+    expect(pane.prompts).toEqual(['Message from owner (owner@acme): hello Read it with: run team drops --read']);
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
   });
 
-  test('a long summary and multi-line body on Antigravity truncates the header to fit <= 80 chars, keeps call inbox_check now whole, and never types the body', async () => {
+  test('a long summary and multi-line body on Antigravity truncates the header to fit <= 80 chars, keeps run team drops --read whole, and never types the body', async () => {
     const made = agyWorld();
     const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE : holding(typed[typed.length - 1] ?? '')));
     const host = fake(made, {
@@ -617,10 +641,12 @@ describe('team send: the antigravity typed wake', () => {
     const longBody = `SUMMARY-${'G'.repeat(120)}\nSECOND-LINE-BODY-SECRET\nTHIRD-LINE-BODY-SECRET`;
     const io = owner(made.root);
     expect(await runSend(['agy', longBody], io, host)).toBe(0);
-    expect(pane.typed).toHaveLength(1);
-    const typedLine = pane.typed[0] as string;
+    expect(pane.prompts).toHaveLength(1);
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
+    const typedLine = pane.prompts[0]!;
     expect(typedLine.length).toBe(80);
-    expect(typedLine.endsWith(' Read it with: call inbox_check now.')).toBe(true);
+    expect(typedLine.endsWith(' Read it with: run team drops --read')).toBe(true);
     expect(typedLine.startsWith('Message from owner (owner@acme): SUMMARY-')).toBe(true);
     expect(typedLine).not.toContain('\n');
     expect(typedLine).not.toContain('SECOND-LINE-BODY-SECRET');
@@ -645,9 +671,10 @@ describe('team send: the antigravity typed wake', () => {
     });
     const io = owner(made.root);
     expect(await runSend(['agy', 'check held'], io, host)).toBe(0);
-    expect(io.out).toContain('agy: queued, not woken (drop, 0 ms); queued; the typed wake failed (the working screen showed with the line still in the box after 1 Enter; the line was not submitted)');
-    expect(pane.typed).toHaveLength(1);
-    expect(pane.enters).toBe(1);
+    expect(io.out).toContain('agy: queued, not woken (drop, 0 ms); queued; the typed wake failed (the working screen showed with the line still in the box after the agent prompt; the line was not submitted)');
+    expect(pane.prompts).toHaveLength(1);
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
     const drops = join(made.dir, 'send-drops', 'acme', 'agy');
     const records = readdirSync(drops).filter((name) => !name.includes('.'));
     expect(records).toHaveLength(1);
@@ -660,7 +687,7 @@ describe('team send: the antigravity typed wake', () => {
       expect(history.entries).toHaveLength(1);
       expect(history.entries[0]).toMatchObject({ to: 'agy', outcome: 'queued, not woken', via: 'drop' });
       expect(history.entries[0]?.failed).toEqual([
-        'typed: the working screen showed with the line still in the box after 1 Enter; the line was not submitted',
+        'typed: the working screen showed with the line still in the box after the agent prompt; the line was not submitted',
       ]);
     }
 
@@ -677,11 +704,12 @@ describe('team send: the antigravity typed wake', () => {
       delivered: false,
       typed: true,
       tries: 1,
-      reason: 'the screen read idle and no working screen showed',
+      reason: 'no working screen showed after the agent prompt',
       submittedAt: expect.any(Number),
     });
-    expect(clearedMidPoll.typed).toEqual([LINE]);
-    expect(clearedMidPoll.enters).toBe(1);
+    expect(clearedMidPoll.prompts).toEqual([LINE]);
+    expect(clearedMidPoll.typed).toEqual([]);
+    expect(clearedMidPoll.enters).toBe(0);
 
     // 3. A partial line left mid-poll (poll 1 sees workingHolding(LINE), poll 2..N sees holding(partial)).
     for (const partial of [LINE.slice(0, 12), LINE.slice(5)]) {
@@ -697,10 +725,11 @@ describe('team send: the antigravity typed wake', () => {
         delivered: false,
         typed: true,
         tries: 1,
-        reason: 'the box held text other than the line and no working screen showed',
+        reason: 'no working screen showed after the agent prompt',
       });
-      expect(partialMidPoll.typed).toEqual([LINE]);
-      expect(partialMidPoll.enters).toBe(1);
+      expect(partialMidPoll.prompts).toEqual([LINE]);
+      expect(partialMidPoll.typed).toEqual([]);
+      expect(partialMidPoll.enters).toBe(0);
     }
   });
 });

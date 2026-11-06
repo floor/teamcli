@@ -94,11 +94,13 @@ test('the appended sentence names the receiving profile’s fastest read path', 
   // The inbox profiles' wake sends the woken turn straight to the tool that lists the waiting
   // messages with their ids: the typed line never carries the id `inbox_read` takes, so naming
   // the read alone would earn a refused call.
-  for (const cli of ['antigravity', 'cursor']) {
-    const line = readTriggerLine('lead', 'acme', sender, cli) as string;
-    expect(line).toBe('Message from tester-2 (tester-2@teamcli): Read it with: call inbox_check now.');
-    expect(line.length).toBeLessThanOrEqual(MESSAGE_LINE_MAX);
-  }
+  expect(readTriggerLine('lead', 'acme', sender, 'cursor')).toBe(
+    'Message from tester-2 (tester-2@teamcli): Read it with: call inbox_check now.',
+  );
+  // Antigravity has no inbox_check tool. Its hint is the drops read, with no trailing period.
+  expect(readTriggerLine('lead', 'acme', sender, 'antigravity')).toBe(
+    'Message from tester-2 (tester-2@teamcli): Read it with: run team drops --read',
+  );
   // A profile with no inbox keeps the shipped drops read, and so does a CLI with no profile and
   // a caller that names none.
   const shipped = 'Message from tester-2 (tester-2@teamcli): Read it with: team drops --read.';
@@ -138,16 +140,23 @@ test('adversarial long summary and multi-line body: cursor, antigravity, and mus
     body: secretBody,
   };
 
-  for (const cli of ['cursor', 'antigravity']) {
-    const line = readTriggerLine('dev', 'teamcli', sender, cli);
-    expect(line).not.toBeNull();
-    expect((line as string).length).toBe(MESSAGE_LINE_MAX);
-    expect((line as string).endsWith(' Read it with: call inbox_check now.')).toBe(true);
-    expect(line as string).not.toContain('\n');
-    expect(line as string).not.toContain('SECOND-LINE-SECRET-PAYLOAD');
-    expect(line as string).not.toContain('THIRD-LINE-NEVER-TYPED');
-    expect(line as string).not.toContain('team drops --read');
-  }
+  const cursorLine = readTriggerLine('dev', 'teamcli', sender, 'cursor');
+  expect(cursorLine).not.toBeNull();
+  expect((cursorLine as string).length).toBe(MESSAGE_LINE_MAX);
+  expect((cursorLine as string).endsWith(' Read it with: call inbox_check now.')).toBe(true);
+  expect(cursorLine as string).not.toContain('\n');
+  expect(cursorLine as string).not.toContain('SECOND-LINE-SECRET-PAYLOAD');
+  expect(cursorLine as string).not.toContain('THIRD-LINE-NEVER-TYPED');
+  expect(cursorLine as string).not.toContain('team drops --read');
+
+  const agyLine = readTriggerLine('dev', 'teamcli', sender, 'antigravity');
+  expect(agyLine).not.toBeNull();
+  expect((agyLine as string).length).toBe(MESSAGE_LINE_MAX);
+  expect((agyLine as string).endsWith(' Read it with: run team drops --read')).toBe(true);
+  expect(agyLine as string).not.toContain('\n');
+  expect(agyLine as string).not.toContain('SECOND-LINE-SECRET-PAYLOAD');
+  expect(agyLine as string).not.toContain('THIRD-LINE-NEVER-TYPED');
+  expect(agyLine as string).not.toContain('inbox_check');
 
   for (const cli of ['muse', 'claude-code', 'codex', undefined]) {
     const line = readTriggerLine('dev', 'teamcli', sender, cli);

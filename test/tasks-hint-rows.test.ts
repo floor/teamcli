@@ -27,14 +27,20 @@ function row(text: string): string {
 
 function wakeFake(screen: (read: number, enters: number, typed: readonly string[]) => string): { host: TypedWakeHost; typed: string[]; enters: number } {
   const typed: string[] = [];
+  const prompts: string[] = [];
   const state = { enters: 0, reads: 0 };
   const host: TypedWakeHost = {
-    read: () => screen(state.reads++, state.enters, typed),
+    read: () => screen(state.reads++, state.enters, prompts.length > 0 ? prompts : typed),
     type: (_pane, text) => {
       typed.push(text);
       return true;
     },
     enter: () => {
+      state.enters += 1;
+      return true;
+    },
+    prompt: (_pane, text) => {
+      prompts.push(text);
       state.enters += 1;
       return true;
     },
@@ -104,10 +110,10 @@ test('the typed wake types into the hint row and waits for the working screen', 
     delivered: true,
     typed: true,
     tries: 1,
-    reason: 'the working screen showed after 1 Enter',
+    reason: 'the working screen showed after the agent prompt',
     submittedAt: expect.any(Number),
     workingAt: expect.any(Number),
   });
-  expect(pane.typed).toEqual([LINE]);
+  expect(pane.typed).toEqual([]);
   expect(pane.enters).toBe(1);
 });

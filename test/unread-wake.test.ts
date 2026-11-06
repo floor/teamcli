@@ -1094,6 +1094,10 @@ describe("the watch's typed wake retry", () => {
         one.screen = working;
         return true;
       },
+      prompt: () => {
+        one.screen = working;
+        return true;
+      },
       wait: async () => {},
     }, paneId, line, cli, { settleMs: 1, enterSettleMs: 1, pollMs: 1, verifyMs: 1 }));
     const said: string[] = [];
@@ -1101,10 +1105,10 @@ describe("the watch's typed wake retry", () => {
     await wakeUnreadDrops(sceneOf(made, team, one, said, { sources, live, now: NOW }), { unreadAfter: N });
 
     expect(keys).toEqual(['0']);
-    expect(typed).toHaveLength(1);
-    expect(enters).toBe(1);
+    expect(typed).toHaveLength(0);
+    expect(enters).toBe(0);
     expect(said).toEqual([
-      'helper: a message from owner was unread and one typed wake line was delivered (the working screen showed after 1 Enter)',
+      'helper: a message from owner was unread and one typed wake line was delivered (the working screen showed after the agent prompt)',
     ]);
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
     const events = readEvents('acme', made.root, made.home);

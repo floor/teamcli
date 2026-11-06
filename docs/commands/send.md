@@ -697,7 +697,8 @@ text and never becomes the header.
 The line a typed wake carries is the rendered header, one space, and a sentence naming the
 seat's fastest read path: the receiving profile's `read_hint` when it declares one — a profile
 whose seats carry an MCP inbox names the inbox tool, `Read it with: call inbox_check now.`,
-because the typed line never carries the id `inbox_read` takes — and the shipped
+because the typed line never carries the id `inbox_read` takes. Antigravity has no such tool,
+so its hint is `Read it with: run team drops --read`. The shipped
 `Read it with: team drops --read.` otherwise. The whole line is one printable line of at most 80
 characters; the sentence is kept whole and the header gives way to it. The template cannot remove
 the sentence — an agent seat always learns where to read the signed record — and no sentence
