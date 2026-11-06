@@ -71,7 +71,7 @@ import {
 } from '../send/record.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
 import { noteUnread } from '../send/unread-hint.ts';
-import { attributedBody, attributeSenderClaim, type SenderAttribution } from '../send/sender-claim.ts';
+import { attributedBody, attributeSenderClaim, senderReading, type SenderAttribution } from '../send/sender-claim.ts';
 
 export const USAGE = `Usage: team messages [--json]
 Usage: team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--follow] [--json]
@@ -490,7 +490,17 @@ export function plantRecord(
 
 type Problem = { kind: 'shape' | 'id' | 'seat' | 'root' | 'session' | 'signature' | 'unsupported'; text: string };
 
-type Verified = { from: string; from_id: string | null; to: string; at: string; body: string; rule?: string };
+type Verified = {
+  from: string;
+  from_id: string | null;
+  to: string;
+  at: string;
+  body: string;
+  rule?: string;
+  id: string;
+  incarnation?: string;
+  brief_sha256?: string;
+};
 
 function recordProblem(candidate: Candidate, root: string, session: string, key: KeyObject): Problem | Verified {
   const where = `${candidate.seat}/${candidate.id}`;
@@ -519,7 +529,17 @@ function recordProblem(candidate: Candidate, root: string, session: string, key:
   if (payload.session !== (candidate.session ?? session)) {
     return { kind: 'session', text: `${where} does not verify: it is bound to session ${JSON.stringify(payload.session)}` };
   }
-  return { from: payload.from, from_id: payload.from_id, to: payload.to, at: payload.at, body: payload.body, rule: payload.rule };
+  return {
+    from: payload.from,
+    from_id: payload.from_id,
+    to: payload.to,
+    at: payload.at,
+    body: payload.body,
+    rule: payload.rule,
+    id: payload.id,
+    ...(payload.incarnation === undefined ? {} : { incarnation: payload.incarnation }),
+    ...(payload.brief_sha256 === undefined ? {} : { brief_sha256: payload.brief_sha256 }),
+  };
 }
 
 function problemOf(candidate: Candidate, root: string, session: string, key: KeyObject): Problem | Verified {
@@ -544,7 +564,7 @@ function problemOf(candidate: Candidate, root: string, session: string, key: Key
     return { kind: 'signature', text: `${where} does not verify: the signature is not the message key's` };
   }
   // The older store never carried the sender's registry id.
-  return { from: payload.from, from_id: null, to: payload.to, at: payload.at, body: payload.body };
+  return { from: payload.from, from_id: null, to: payload.to, at: payload.at, body: payload.body, id: payload.id };
 }
 
 /**
@@ -676,9 +696,9 @@ type MailboxRow = {
    *  the body and publishes no receipt — and a seat's reading never carries another mailbox's
    *  body at all. A record that does not verify carries none, whatever the caller. */
   body?: string;
-  /** How the sender is attributed: on the shared checkout key every seat can read, on the
-   *  launch's own seat brief bound to the seat's current claim, or not at all. A refused row's
-   *  record was not vouched for, so it is never attributed. */
+  /** How the sender is known: `unverified_claim` on the shared checkout key, `launch-brief` when
+   *  the launch's own seat brief is bound to the seat's current claim, or `none`. A refused row's
+   *  record was not vouched for, so it is `none`. */
   sender_attribution: SenderAttribution;
   renderedBody?: string;
 };
@@ -722,6 +742,7 @@ function waitingRow(
   now: Date,
   withBody: boolean,
   home: string,
+  claim: CurrentBriefClaim | null,
 ): MailboxRow {
   const verified = key === null ? null : problemOf(candidate, root, session, key);
   const fields = verified !== null && !('text' in verified) ? verified : null;
@@ -734,7 +755,15 @@ function waitingRow(
     sent: fields?.at ?? null,
     sent_display: formatRelativeTime(fields?.at, now),
     status: 'waiting',
-    sender_attribution: fields === null ? 'none' : 'attributed',
+    sender_attribution: fields === null
+      ? 'none'
+      : attributeSenderClaim({
+          from: fields.from,
+          rule: fields.rule ?? '',
+          id: fields.id,
+          ...(fields.incarnation === undefined ? {} : { incarnation: fields.incarnation }),
+          ...(fields.brief_sha256 === undefined ? {} : { brief_sha256: fields.brief_sha256 }),
+        }, { briefClaim: claim }),
     ...(withBody && fields !== null
       ? {
           body: fields.body,
@@ -969,7 +998,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
     if (candidate.seat !== mailbox) {
       // Addressed to another mailbox: listed, never shown, never receipted. The owner's reading
       // carries the verified body; a seat's never does.
-      rows.push(waitingRow(candidate, root, session, key, now, ownerView, sources.home));
+      rows.push(waitingRow(candidate, root, session, key, now, ownerView, sources.home, claimOf(candidate.seat, candidate.session ?? session)));
       continue;
     }
     // Every record of this mailbox reaching here is the key's to verify: a keyless run with one
@@ -1038,7 +1067,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
     // store's message has no claim fields, so its sender rests on the shared key like every other
     // record.
     const senderAttribution = recordPayload === null
-      ? 'attributed' as const
+      ? 'unverified_claim' as const
       : attributeSenderClaim(recordPayload, { briefClaim: claimOf(candidate.seat, candidate.session ?? session) });
     const row: MailboxRow = {
       id: candidate.id,
@@ -1130,7 +1159,7 @@ function renderMailbox(
   const readableFrom = (row: MailboxRow): string | null => {
     if (row.from === null) return null;
     const name = senderDisplayName({ seat: row.from, id: row.from_id }, naming);
-    return row.sender_attribution === 'none' ? `${name} (unattributed)` : `${name} (attributed)`;
+    return `${name} ${senderReading(row.sender_attribution)}`;
   };
   lines.push(
     ...renderTable({

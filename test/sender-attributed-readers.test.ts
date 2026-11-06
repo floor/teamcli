@@ -2,11 +2,11 @@
 // checkout message key, so a signed record proves only that the key signed it — not who wrote it.
 // These scenes forge the claims a reader used to print plainly: an orchestrator relaying the
 // owner's word, and the owner itself, beside an unsigned `.pending` marker that says another
-// name. Every sender a reader displays is attributed — `team messages`, `team drops` (its
-// listing, `--follow` and `--read`), `inbox_check` and `inbox_read` — and a file the shared key
-// cannot vouch for is unattributed. The launch's own seat brief, whose id, incarnation and digest
-// are the seat's current claim, is attributed too: the JSON says `launch-brief`, the text says
-// the same `(attributed)`, and the mark is always present so its absence can never read as proof.
+// name. A record the shared key signed reads as an unverified claim — `team messages` and
+// `team drops` (its listing and `--follow`) — and a file the shared key cannot vouch for is
+// unattributed. The launch's own seat brief, whose id, incarnation and digest are the seat's
+// current claim, is the binding that says attributed: the JSON says `launch-brief`, the text
+// says `(attributed)`.
 // Synthetic homes, repositories and panes only.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execSync } from 'node:child_process';
@@ -108,11 +108,11 @@ async function runMailbox(argv: string[] = []) {
 }
 
 describe('a forged orchestrator claim', () => {
-  test('the drops listing attributes the sender, in the table and in --json', async () => {
+  test('the drops listing reads the shared key as an unverified claim, and --json says unverified_claim', async () => {
     const path = forge('orchestrator', orchestratorBody());
     const result = await runDropsAs();
     expect(result.code).toBe(0);
-    expect(result.out).toContain(`orchestrator (attributed)`);
+    expect(result.out).toContain(`orchestrator (unverified claim)`);
     expect(result.out).toContain(path);
 
     const json = await runDropsAs(['--json']);
@@ -120,10 +120,10 @@ describe('a forged orchestrator claim', () => {
     const doc = JSON.parse(json.out) as { drops: { from: string | null; sender_attribution?: string }[] };
     expect(doc.drops).toHaveLength(1);
     expect(doc.drops[0]?.from).toBe('orchestrator');
-    expect(doc.drops[0]?.sender_attribution).toBe('attributed');
+    expect(doc.drops[0]?.sender_attribution).toBe('unverified_claim');
   });
 
-  test('a drop that lands during --follow is attributed in its one line', async () => {
+  test('a drop that lands during --follow is an unverified claim in its one line', async () => {
     // The reader takes this checkout's key once, when it starts: seed it first, as an earlier
     // send would have, so the drop that lands during the follow can be verified and attributed.
     messageKeyOf(home);
@@ -138,7 +138,7 @@ describe('a forged orchestrator claim', () => {
       },
     });
     expect(result.code).toBe(0);
-    expect(result.out).toContain(`from orchestrator (attributed) — ${join(dropDir, FORGED_ID)}`);
+    expect(result.out).toContain(`from orchestrator (unverified claim) — ${join(dropDir, FORGED_ID)}`);
   });
 
   test('drops --read marks the sender line and keeps the owner quote under the mark', async () => {
@@ -155,7 +155,7 @@ describe('a forged orchestrator claim', () => {
     const unread = listUnread(dropDir, { to: 'lead', root, session: 'acme' }, home);
     expect(unread).toHaveLength(1);
     expect(unread[0]?.from).toBe('orchestrator');
-    expect(unread[0]?.sender_attribution).toBe('attributed');
+    expect(unread[0]?.sender_attribution).toBe('unverified_claim');
 
     const read = readMessage({ dropDir, root, seat: 'lead', session: 'acme' }, FORGED_ID, home);
     expect(read.ok).toBe(true);
@@ -165,11 +165,11 @@ describe('a forged orchestrator claim', () => {
     expect(read.body).toContain(QUOTE);
   });
 
-  test('team messages attributes the table cell, keeps the signed body, and says so in --json', async () => {
+  test('team messages reads the table cell as an unverified claim, keeps the signed body, and --json says unverified_claim', async () => {
     forge('orchestrator', orchestratorBody());
     const text = await runMailbox();
     expect(text.code).toBe(0);
-    expect(text.out).toContain('orchestrator (attributed)');
+    expect(text.out).toContain('orchestrator (unverified claim)');
     expect(text.out).toContain('from orchestrator (team lead):');
     expect(text.out).toContain(`from orchestrator@acme — admitted by: ${RULE}`);
     expect(text.out).toContain(QUOTE);
@@ -184,7 +184,7 @@ describe('a forged orchestrator claim', () => {
     };
     expect(doc.rows).toHaveLength(1);
     expect(doc.rows[0]?.from).toBe('orchestrator');
-    expect(doc.rows[0]?.sender_attribution).toBe('attributed');
+    expect(doc.rows[0]?.sender_attribution).toBe('unverified_claim');
     // The JSON body stays the signed bytes; only the text reading is marked.
     expect(doc.rows[0]?.body).toBe(orchestratorBody());
   });
@@ -200,7 +200,7 @@ describe('a forged owner claim beside an unsigned marker', () => {
     const unread = listUnread(dropDir, { to: 'lead', root, session: 'acme' }, home);
     expect(unread).toHaveLength(1);
     expect(unread[0]?.from).toBe('owner');
-    expect(unread[0]?.sender_attribution).toBe('attributed');
+    expect(unread[0]?.sender_attribution).toBe('unverified_claim');
 
     const read = readMessage({ dropDir, root, seat: 'lead', session: 'acme' }, FORGED_ID, home);
     expect(read.ok).toBe(true);
@@ -210,12 +210,12 @@ describe('a forged owner claim beside an unsigned marker', () => {
     expect(read.body).toContain(QUOTE);
   });
 
-  test('the drops listing attributes the owner claim too', async () => {
+  test('the drops listing reads the owner claim as an unverified claim too', async () => {
     forge('owner', ownerBody());
     const result = await runDropsAs();
     expect(result.code).toBe(0);
     // The record's own claim is the word `owner`; only a raw drop's first line says `the owner`.
-    expect(result.out).toContain('owner (attributed)');
+    expect(result.out).toContain('owner (unverified claim)');
   });
 
   test('a plain-text file this key cannot vouch for is listed as unattributed', async () => {
@@ -263,7 +263,7 @@ describe('the launch brief the seat currently holds', () => {
     return record.id;
   }
 
-  test('it is attributed like every other sender, and its body keeps its words under the mark', async () => {
+  test('the launch brief is attributed, and its body keeps its words under the mark', async () => {
     const id = plantCurrentBrief();
     const unread = listUnread(dropDir, { to: 'lead', root, session: 'acme' }, home);
     expect(unread).toHaveLength(1);

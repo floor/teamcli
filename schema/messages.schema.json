@@ -99,7 +99,7 @@
           "sender_attribution": {
             "type": "string",
             "enum": [
-              "attributed",
+              "unverified_claim",
               "launch-brief",
               "none"
             ]

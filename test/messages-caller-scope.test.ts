@@ -84,7 +84,7 @@ type MessagesDoc = {
     sent_display: string;
     status: string;
     body?: string;
-    sender_attribution: 'attributed' | 'launch-brief' | 'none';
+    sender_attribution: 'unverified_claim' | 'launch-brief' | 'none';
   }[];
   notes: string[];
   differences: { what: string; repair: string; who: string }[];
@@ -160,9 +160,9 @@ describe('team messages reads only the caller\'s mailbox', () => {
     const doc = assertMatchesOutputSchema<MessagesDoc>(result.out, MESSAGES_OUTPUT_SCHEMA);
     // Candidate order is the seats' own order: lead, orchestrator, worker.
     expect(doc.rows).toEqual([
-      { id: 'a1', from: 'harness', to: 'lead', sent: AT, sent_display: '0s ago', status: 'shown', body: 'for the lead', sender_attribution: 'attributed' },
-      { id: orchestratorId, from: 'harness', to: 'orchestrator', sent: AT, sent_display: '0s ago', status: 'waiting', sender_attribution: 'attributed' },
-      { id: workerId, from: 'harness', to: 'worker', sent: AT, sent_display: '0s ago', status: 'waiting', sender_attribution: 'attributed' },
+      { id: 'a1', from: 'harness', to: 'lead', sent: AT, sent_display: '0s ago', status: 'shown', body: 'for the lead', sender_attribution: 'unverified_claim' },
+      { id: orchestratorId, from: 'harness', to: 'orchestrator', sent: AT, sent_display: '0s ago', status: 'waiting', sender_attribution: 'unverified_claim' },
+      { id: workerId, from: 'harness', to: 'worker', sent: AT, sent_display: '0s ago', status: 'waiting', sender_attribution: 'unverified_claim' },
     ]);
     expect(doc.counts).toEqual({ messages: 3, shown: 1, refused: 0, waiting: 2 });
     expect(doc.notes).toEqual([OTHER_NOTE]);
@@ -212,8 +212,8 @@ describe('team messages reads only the caller\'s mailbox', () => {
     // the whole session: the lead's record carries its verified body, and is still not served —
     // a waiting row publishes no receipt, so the lead's own reader still finds it.
     expect(doc.rows).toEqual([
-      { id: 'a1', from: 'harness', to: 'lead', sent: AT, sent_display: '0s ago', status: 'waiting', body: 'for the lead', sender_attribution: 'attributed' },
-      { id: 'e1', from: 'runtime', to: 'owner', sent: AT, sent_display: '0s ago', status: 'shown', body: 'for the owner', sender_attribution: 'attributed' },
+      { id: 'a1', from: 'harness', to: 'lead', sent: AT, sent_display: '0s ago', status: 'waiting', body: 'for the lead', sender_attribution: 'unverified_claim' },
+      { id: 'e1', from: 'runtime', to: 'owner', sent: AT, sent_display: '0s ago', status: 'shown', body: 'for the owner', sender_attribution: 'unverified_claim' },
     ]);
     expect(doc.counts).toEqual({ messages: 2, shown: 1, refused: 0, waiting: 1 });
     expect(doc.notes).toEqual([OWNER_OTHER_NOTE_ONE]);
@@ -241,7 +241,7 @@ describe('team messages reads only the caller\'s mailbox', () => {
     // Candidate order is the seats' own order: lead before worker.
     expect(doc.rows).toEqual([
       { id: tamperedId, from: null, to: 'lead', sent: null, sent_display: '-', status: 'waiting', sender_attribution: 'none' },
-      { id: workerId, from: 'harness', to: 'worker', sent: AT, sent_display: '0s ago', status: 'waiting', body: 'for the worker', sender_attribution: 'attributed' },
+      { id: workerId, from: 'harness', to: 'worker', sent: AT, sent_display: '0s ago', status: 'waiting', body: 'for the worker', sender_attribution: 'unverified_claim' },
     ]);
     expect(doc.counts).toEqual({ messages: 2, shown: 0, refused: 0, waiting: 2 });
     expect(doc.notes).toEqual([OWNER_OTHER_NOTE_TWO]);
@@ -324,8 +324,8 @@ describe('team messages reads only the caller\'s mailbox', () => {
     const doc = assertMatchesOutputSchema<MessagesDoc>(result.out, MESSAGES_OUTPUT_SCHEMA);
     // Both records live in the older store, which sorts by mailbox name: owner before worker.
     expect(doc.rows).toEqual([
-      { id: 'e1', from: 'runtime', to: 'owner', sent: AT, sent_display: '0s ago', status: 'waiting', sender_attribution: 'attributed' },
-      { id: 'w1', from: 'lead', to: 'worker', sent: AT, sent_display: '0s ago', status: 'shown', body: 'for the worker', sender_attribution: 'attributed' },
+      { id: 'e1', from: 'runtime', to: 'owner', sent: AT, sent_display: '0s ago', status: 'waiting', sender_attribution: 'unverified_claim' },
+      { id: 'w1', from: 'lead', to: 'worker', sent: AT, sent_display: '0s ago', status: 'shown', body: 'for the worker', sender_attribution: 'unverified_claim' },
     ]);
     expect(existsSync(receiptFile(where, 'worker', 'w1'))).toBe(true);
     expect(existsSync(receiptFile(where, 'owner', 'e1'))).toBe(false);

@@ -229,13 +229,13 @@ describe('team drops', () => {
       code: 0,
       out: [
         'team acme, session "acme"',
-        // The signed record is attributed on the shared key; a raw drop's first line is only the
-        // file's word, so it is unattributed.
-        '  FROM                         PATH',
-        `  the owner (unattributed)     ${ownerPath}`,
-        `  orchestrator (unattributed)  ${agentPath}`,
-        `  unknown                      ${headlessPath}`,
-        `  orchestrator (attributed)    ${recordPath}`,
+        // The signed record rests on the shared key, so it is an unverified claim; a raw drop's
+        // first line is only the file's word, so it is unattributed.
+        '  FROM                             PATH',
+        `  the owner (unattributed)         ${ownerPath}`,
+        `  orchestrator (unattributed)      ${agentPath}`,
+        `  unknown                          ${headlessPath}`,
+        `  orchestrator (unverified claim)  ${recordPath}`,
         '',
         '4 drops',
         '',
