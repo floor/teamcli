@@ -3021,7 +3021,7 @@ Hidden: no
 
 Usage:
 
-    team restart <seat> [--abandon] [--fresh] [--resume <cli-session-id>] [--dry-run] [--session <name>] [--file <path>] [--json]
+    team restart <seat> [--abandon] [--fresh] [--resume <cli-session-id>] [--resolve-launch] [--dry-run] [--session <name>] [--file <path>] [--json]
     team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
 
 ### Who may run it
@@ -3041,6 +3041,7 @@ Usage:
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--resolve-launch` | no | no | no |
 | `--resume` | yes | no | no |
 | `--session` | yes | no | no |
 | `--team` | yes | no | no |
@@ -3898,12 +3899,12 @@ Hidden: no
 
 Usage:
 
-    team up [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]
-    team up --all [--dry-run] [--serial] [--no-launch] [--json]
-    team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--json]
-    team up --general <grant.json> --key <client-key> [--all] [--dry-run] [--serial] [--no-launch] [--json]
+    team up [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--session <name>] [--file <path>] [--json]
+    team up --all [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]
+    team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]
+    team up --general <grant.json> --key <client-key> [--all] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]
     team up --request [--reason <text>] [--serial] [--json]
-    team up --approval <request-id> [--dry-run] [--serial] [--json]
+    team up --approval <request-id> [--dry-run] [--serial] [--resolve-launch] [--json]
 
 ### Who may run it
 
@@ -3925,6 +3926,7 @@ Usage:
 | `--no-launch` | no | no | no |
 | `--reason` | yes | no | no |
 | `--request` | no | no | no |
+| `--resolve-launch` | no | no | no |
 | `--serial` | no | no | no |
 | `--session` | yes | no | no |
 | `--team` | yes | no | no |
