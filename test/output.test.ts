@@ -343,6 +343,31 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
       'team.error': [
         jsonError('policy.refused', 'refused', 'team policy unset team dev-mode', 1, 'owner-only'),
       ],
+      'team.analyse': [
+        jsonEnvelope('team.analyse', {
+          format: 1 as const,
+          at: '2026-11-05T19:15:00.000Z',
+          analyser: { principal: 'owner', authorized_by: 'owner' as const, scope: 'full' as const },
+          source: { name: 'teamcli.static', kind: 'teamcli' as const, level: 'default' as const },
+          analysis_cost: { duration_ms: 1, git_walks: 0, files_read: 0, bytes_read: 0, tokens: 0 as const, usd: 0 as const },
+          report: {
+            root: '.',
+            visibility: { value: 'private' as const, source: 'unsigned' },
+            manifests: [],
+            size: { files: 0, lines: 0, mark: 'measured' as const, source: 'walk' },
+            languages: [],
+            stack_skills: [],
+            checks: [],
+            ci: [],
+            release: { tags: false, workflows: [], source: 'none' },
+            pace: { window_days: 28, commits_per_day: 0, active_hours_per_day: 0, rhythm: 'idle' as const, source: 'git' },
+            open_work: { open: 0, blocked: 0, source: 'none' },
+            topology: { parallelizable: [], serial: [] },
+            findings: [],
+          },
+          proposal: null,
+        }),
+      ],
       'team.about': [
         jsonEnvelope('team.about', {
           format: 1 as const,
