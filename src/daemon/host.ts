@@ -55,6 +55,7 @@ import { hostedWatchAuthority } from './watch-authority.ts';
 import { createPresenceIngester, type PresenceIngester } from './presence/ingest.ts';
 import { createPresenceActivity, type PresenceActivityStep } from './presence/activity.ts';
 import { createPresencePublisher, type PresencePublisherStep } from './presence/publish.ts';
+import { createNativeFeed, type NativeFeed } from './presence/native-feed.ts';
 import { createPresenceHeld, type PresenceHeldStep } from './presence/held.ts';
 import { canonicalSeatOf, currentPresenceBinding, presenceBindingFrom } from './presence/reconcile.ts';
 import { codexPresenceFor, codexPresenceTarget } from './presence/codex-source.ts';
@@ -535,6 +536,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const stuckMs = input.stuckMs ?? STUCK_MS;
   const refreshCloseBoundMs = input.refreshCloseBoundMs ?? REFRESH_CLOSE_BOUND_MS;
   const pid = process.pid;
+  const nativeFeedOwner = input.presenceHosting === true ? randomUUID().replaceAll('-', '') : undefined;
   const uid = typeof process.getuid === 'function' ? process.getuid() : -1;
   const socketPath = daemonSocketPath(home);
   const lockPath = daemonLockPath(home);
@@ -613,6 +615,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     ingester: PresenceIngester;
     activity: PresenceActivityStep;
     publisher: PresencePublisherStep;
+    native: NativeFeed;
     /** The held-frame step: the one place a socket frame is seen at a held-message dialog. */
     held: PresenceHeldStep;
     /** One read-only runtime source per managed seat; empty for a hook-only route. */
@@ -853,6 +856,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       pid,
       uid,
       since,
+      ...(closed || nativeFeedOwner === undefined ? {} : { nativeFeedOwner }),
       startedBy,
       version: input.version,
       gitHead: input.gitHead ?? null,
@@ -1150,6 +1154,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // A root with no readable team file or a second spelling of a hosted checkout got no route,
       // so it gets no ingester.
       const stateDir = dirname(loaded.path);
+      const native = createNativeFeed({ stateDir, session: loaded.team.session,
+        seats: loaded.team.seats.map((seat) => seat.name), project: loaded.team.project, root: canonical, home,
+        daemonOwner: nativeFeedOwner! });
       const health = createPresenceChannelHealth(PRESENCE_HEALTH_GRACE_MS, since);
       // Every expected seat is registered before the first pass, so an unsampled seat can never
       // inherit the route's answer. A resolution or start failure is registered as an explicit
@@ -1196,6 +1203,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             policy: 'on',
             feature: true,
             now,
+            frame: (text) => native.codexFrame(read.target, text),
           });
           if (started.kind === 'subscribed') runtimes.push(started.source);
           else unproven.push({ seat: seat.name, why: started.why });
@@ -1242,6 +1250,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       presenceWork.push({
         route,
         stateDir,
+        native,
         ingester: input.presenceIngest?.(route, stateDir)
           ?? createPresenceIngester({ stateDir, session: loaded.team.session }),
         activity: input.presenceActivity?.(route, stateDir)
@@ -1854,6 +1863,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const runPresence = (one: (typeof presenceWork)[number]): Promise<void> => {
     let run: Promise<void>;
     run = (async () => {
+      // Same pass and opt-in as presence; native publication has no dispatch consumer.
+      one.native.step();
       let healthy = false;
       let why: string | null = null;
       try {
@@ -2518,6 +2529,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // quiescence. A close that has not resolved retains ownership below, exactly as a
       // non-quiesced ingester does.
       for (let index = 0; index < presenceWork.length; index += 1) {
+        presenceWork[index]?.native.close();
         admissions.push(closeSources(index).catch(() => undefined));
       }
       for (const one of hostedWatches) {

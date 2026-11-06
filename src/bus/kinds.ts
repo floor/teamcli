@@ -68,6 +68,8 @@ export const EVENT_KINDS = [
   'webhook.posted',
   'leg.tried',
   'wake.retried',
+  // Native status is a record only: no audience, notification or dispatch consumer.
+  'seat.status',
   // Seat lifecycle & state
   'seat.working',
   'seat.idle',

@@ -17,9 +17,11 @@
 // The function returns 0 after a refusal as it does after a stage. The command in the settings
 // file also discards its output and ignores its exit, so a presence fault can never break the
 // turn it observes; the honest record of a refused stage is the missing spool file.
-import { readFileSync } from 'node:fs';
+import { readSync } from 'node:fs';
 import { isPresenceBinding, isPresenceEvent, type PresenceEvent } from './contract.ts';
 import { stagePresenceRecord } from './spool.ts';
+import { nativeHookEnabled, stageNativeHook } from './native-feed.ts';
+import type { Io } from '../../io.ts';
 
 /** The one notification type measured to mean a person is being waited on. The runtime's word is
  *  carried into the record as `raw`, so the log keeps the adapter's own vocabulary. */
@@ -83,18 +85,33 @@ function isPermissionPromptPayload(text: string): boolean {
 function readPayload(): string {
   if (process.stdin.isTTY === true) return '';
   try {
-    return readFileSync(0, 'utf8');
+    const buffer = Buffer.alloc(65_537);
+    let size = 0;
+    while (size < buffer.length) {
+      const count = readSync(0, buffer, size, buffer.length - size, null);
+      if (count === 0) break;
+      size += count;
+    }
+    return buffer.subarray(0, size).toString('utf8');
   } catch {
     return '';
   }
 }
 
-export default function run(argv: readonly string[], readInput: () => string = readPayload): number {
+export default function run(argv: readonly string[], readInput: () => string = readPayload, io?: Io,
+  nativeHome?: () => string): number {
   const parsed = parse(argv);
   // exit: team.presence-hook-invalid
   if (parsed === null) return 1;
+  let payload: string | undefined;
+  const input = (): string => payload ??= readInput();
+  // Without a current daemon marker, preserve the old stdin/staging path exactly. Placement
+  // is checked before the native path can read stdin; no argv token authenticates a caller.
+  const identity = { stateDir: parsed.dir, session: parsed.session, seat: parsed.seat, binding: parsed.binding };
+  const native = io !== undefined && nativeHookEnabled(identity, io, undefined, nativeHome);
+  if (native) stageNativeHook(identity, input(), io!, nativeHome);
   // exit: team.presence-hook-ignored
-  if (parsed.notification !== undefined && !isPermissionPromptPayload(readInput())) return 0;
+  if (parsed.notification !== undefined && !isPermissionPromptPayload(input())) return 0;
   const staged = stagePresenceRecord(parsed.dir, {
     session: parsed.session,
     seat: parsed.seat,

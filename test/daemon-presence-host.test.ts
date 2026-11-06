@@ -28,6 +28,8 @@ import { presencePaths, stagePresenceRecord } from '../src/daemon/presence/spool
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { STATE_FILE } from '../src/state.ts';
+import presenceHook from '../src/daemon/presence/hook.ts';
+import { readEvents } from '../src/bus/log.ts';
 
 const CREW = `format: 1
 project: acme-web
@@ -192,7 +194,51 @@ describe('the presence pass', () => {
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(built).toBe(0);
     expect(steps).toBe(0);
+    expect(existsSync(join(world.root, '.agents', 'presence'))).toBe(false);
     await daemon.close();
+  }, 15_000);
+
+  test('the opted-in host pass owns the hook marker and native bus publication, then removes it on close', async () => {
+    const stateDir = join(world.root, '.agents');
+    const binding = 'prs_0123456789ab';
+    writeFileSync(join(stateDir, STATE_FILE), JSON.stringify({ format: 1, sessions: { crew: { seats: {
+      'worker-1': { stage: 'ready', pane: 'pane-example', presence_binding: binding },
+    }, worktrees: {} } } }));
+    const marker = join(presencePaths(stateDir, 'crew', 'worker-1')!.root, 'status-feed.json');
+    const daemon = await start({ presenceHosting: true, presenceEveryMs: 10, presenceSubscriptions: () => [] });
+    await waitUntil(() => existsSync(marker));
+    let reads = 0;
+    const outcome = presenceHook(['--dir', stateDir, '--session', 'crew', '--seat', 'worker-1', '--binding', binding, '--event', 'turn-start'],
+      () => { reads++; return '{"hook_event_name":"UserPromptSubmit"}'; }, {
+        cwd: world.root, env: { HOME: world.home }, stdinIsTTY: false, stdout: () => {}, stderr: () => {},
+        caller: { kind: 'seat', name: 'worker-1', pane: 'pane-example', session: 'crew' },
+      }, () => world.home);
+    expect(outcome).toBe(0); expect(reads).toBe(1);
+    await waitUntil(() => {
+      const bus = readEvents('acme-web', world.root, world.home);
+      return bus.ok && bus.events.some((record) => record.payload.kind === 'seat.status');
+    });
+    const bus = readEvents('acme-web', world.root, world.home);
+    if (!bus.ok) throw new Error('synthetic native feed did not verify');
+    expect(bus.events.filter((record) => record.payload.kind === 'seat.status').map((record) => record.payload.status_gate)).toEqual(['unknown']);
+    await daemon.close(); expect(existsSync(marker)).toBe(false);
+  }, 15_000);
+
+  test('native owner nonce rotates for an opted-in lifetime and is absent off and after close', async () => {
+    const first = await start({ presenceHosting: true, presenceSubscriptions: () => [] });
+    const read = readDaemonState(world.home);
+    if (read.kind !== 'ok') throw new Error('synthetic daemon state missing');
+    const nonce = read.state.nativeFeedOwner;
+    expect(nonce).toMatch(/^[a-f0-9]{32}$/);
+    await first.close(); expect(readDaemonState(world.home).kind).toBe('missing');
+    const off = await start({ presenceHosting: false });
+    const offState = readDaemonState(world.home);
+    expect(offState.kind === 'ok' && offState.state.nativeFeedOwner === undefined).toBe(true);
+    await off.close();
+    const second = await start({ presenceHosting: true, presenceSubscriptions: () => [] });
+    const next = readDaemonState(world.home);
+    expect(next.kind === 'ok' && next.state.nativeFeedOwner !== nonce).toBe(true);
+    await second.close(); expect(readDaemonState(world.home).kind).toBe('missing');
   }, 15_000);
 
   test('one ingester per canonical route; a duplicate spelling and an unreadable root get none', async () => {
