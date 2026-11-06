@@ -3181,6 +3181,11 @@ function policyCheck(
     }
   }
 
+  if (teamChain.ok) {
+    const pretrust = teamChain.policies.pretrust?.value;
+    if (pretrust === 'off' || pretrust === 'project') notes.push(`pretrust: ${pretrust}`);
+  }
+
   return { differences, notes };
 }
 

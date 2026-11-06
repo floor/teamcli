@@ -86,6 +86,7 @@ import { launchLineFinding, launchedCliBinary } from '../launch/line.ts';
 import { launchRefusal, readEntityModelRule, type EntityModelRule } from '../launch/model-guard.ts';
 import { charterGate } from '../charter/check.ts';
 import { charterFolderPretrust, grantedFolderPretrust, lobbyPretrustLine, projectRootPretrust } from '../launch/pretrust.ts';
+import { pretrustModeOf } from '../policy/first-minute.ts';
 import { codexCommandHasFlag, formatPlan, launchWillRun, managedCodexLaunch, registryLaunches, upPlan, type Op, type UpSeat } from '../launch/plan.ts';
 import { runPause, type PauseHost, type PauseInput } from '../launch/pause.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -2857,15 +2858,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // the records below, after the lobby exists.
   const stampLobbyTrust = (write: boolean) => {
     const now = sources.now?.() ?? new Date();
+    const mode = pretrustModeOf({ home: sources.home, entity: team.entity, teamRoot: root, team, now });
     for (let index = 0; index < seats.length; index++) {
       const seat = seats[index];
       if (!seat) continue;
-      const line = lobbyPretrustLine(seat, sources.home, { write, now });
+      const line = lobbyPretrustLine(seat, sources.home, { write, now, mode });
       if (line) seats[index] = { ...seat, launchProblem: line };
       // The project root, for a seat that starts there: pre-accepted in its CLI's own record.
       // A start folder under a charter root is pre-accepted the same way, wherever it sits.
       else if (write) {
-        projectRootPretrust(seat, sources.home, { now, root });
+        projectRootPretrust(seat, sources.home, { now, root, mode });
         charterFolderPretrust(seat, sources.home, { now, store: sources.ownerSeatStore });
       }
     }
@@ -2878,11 +2880,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   const stampGrantedTrust = () => {
     if (!createGranted || ordinaryAdmitted) return;
     const now = sources.now?.() ?? new Date();
+    const mode = pretrustModeOf({ home: sources.home, entity: team.entity, teamRoot: root, team, now });
     const grant = {
       covers: (folder: string) => entityGrantAdmits(root, io, { home: sources.home, now, cwd: folder }),
       listed: (folder: string) => insideTrust(folder, team.trust ?? [], root, sources.home),
     };
-    for (const seat of seats) grantedFolderPretrust(seat, sources.home, { now, grant });
+    for (const seat of seats) grantedFolderPretrust(seat, sources.home, { now, grant, root, mode });
   };
 
   // Dev mode says the no-approval lines and the caller-placement line once, as a warning,

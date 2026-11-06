@@ -500,6 +500,7 @@
     "test/file/launched-file.test.ts": 1,
     "test/file/team-config-registry.test.ts": 0,
     "test/file/team-config-writers.test.ts": 3,
+    "test/first-minute-pretrust.test.ts": 0,
     "test/fixture-root-independent.test.ts": 0,
     "test/foreground.test.ts": 5,
     "test/forge-path-independent.test.ts": 0,

@@ -160,6 +160,7 @@ export const ENFORCED_POLICY_NAMES = [
   'seat.dialog.answer',
   'seat-health.watchdog.after',
   'seat-health.watchdog.auto-restart',
+  'pretrust',
 ] as const;
 
 export type EnforcedPolicyName = (typeof ENFORCED_POLICY_NAMES)[number];
@@ -2403,6 +2404,19 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: parseWatchdogAuto,
     isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // Captured trust records for a start folder. `project` writes only a record this build has
+  // already captured, and only inside the project. `off` writes none. A lower level may turn
+  // it off; it may not turn it back on.
+  pretrust: {
+    name: 'pretrust',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'project',
+    gateLifting: false,
+    parseValue: (raw: unknown) => (raw === 'off' || raw === 'project' ? raw : null),
+    valueProblem: () => 'policy "pretrust" is off or project',
+    isWithin: (lower: 'off' | 'project', higher: 'off' | 'project') => lower === higher || lower === 'off',
   },
 };
 
