@@ -2271,10 +2271,11 @@ function displayLineMatches(seat: Seat, line: string, screen: string | undefined
 
 /**
  * What the registries say about this team's place (src/registry/projects.ts, src/registry/teams.ts).
- * A team is named in one project at most: `ofTeam` owns that rule and refuses the state where two
- * name it, naming both, and the refusal is repeated here rather than re-derived. A registry that
- * does not read refuses in the same line, so a machine whose registry cannot be read is not read
- * as fine. The team registry is read for every team, a project lead's or not: the roster bridge
+ * Membership is the team records' own: `ofTeam` answers this team's home project from its record,
+ * and a team serving more than one project is the served membership a record may name, not a
+ * difference. A registry that does not read refuses in the same line, so a machine whose registry
+ * cannot be read is not read as fine. The team registry is read for every team, a project lead's
+ * or not: the roster bridge
  * (`src/permissions/who.ts`) answers from it for every seat, so a file it cannot read leaves every
  * team unserved, and the difference is named wherever the check runs. And a project is led by one
  * team: when this team declares `project_lead: true`, the
