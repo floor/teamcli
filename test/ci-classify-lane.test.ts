@@ -162,6 +162,7 @@ describe('ci-classify-lane real-tree verification and fail-closed classification
       'src/launch/session.ts',
       'src/send/native.ts',
       'src/signing/ed25519.ts',
+      'src/status/native-observation.ts',
       'src/watch/loop.ts',
       'src/commands/up.ts',
       'src/commands/send.ts',
