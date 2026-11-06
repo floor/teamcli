@@ -16,6 +16,7 @@ import { runDrops } from '../src/commands/drops.ts';
 import { plantRecord } from '../src/commands/messages.ts';
 import { listUnread, receiptPath } from '../src/mcp/inbox.ts';
 import { signReceiptPayload, writeReceipt, type ReceiptPayload } from '../src/send/record.ts';
+import { updateState } from '../src/state.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
 import { testIo } from './helpers.ts';
 
@@ -61,11 +62,15 @@ function world(): void {
   mkdirSync(home);
   execSync('git init -q -b main', { cwd: root });
   writeFileSync(join(root, '.agents', 'team.yaml'), TEAM);
+  // The seat's standing, as its launch records it: the read places its caller on this pane.
+  updateState(join(root, '.agents'), (state) => {
+    state.sessions.acme = { seats: { lead: { stage: 'ready' as const, pane: 'pane-lead' } } } as never;
+  });
   dropDir = join(root, '.agents', 'send-drops', 'acme', 'lead');
 }
 
 async function run(argv: string[]): Promise<{ code: number; out: string; err: string }> {
-  const io = testIo(root, { kind: 'owner' });
+  const io = testIo(root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
   const code = await runDrops(argv, io, { home });
   return { code, out: io.out, err: io.err };
 }

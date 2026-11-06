@@ -257,6 +257,22 @@ export function registerHelper(made: World, nickname: string | null): Agent {
   return helper;
 }
 
+/** The pane the read scenes place the lead on: a neutral fixture id, never a real session's. */
+export const LEAD_PANE = 'pane-lead';
+
+/** The lead's standing, as its launch records it: the pane the scene's caller runs on. A scene
+ *  that reads as the lead itself (the turn-start read places its caller) records it first — a
+ *  placed seat alone is not the proof the read asks for, the recorded pane is. */
+export function recordLead(made: World): void {
+  updateState(join(made.root, '.agents'), (state) => {
+    const seats = state.sessions.acme?.seats ?? {};
+    state.sessions.acme = {
+      seats: { ...seats, lead: { stage: 'launched', pane: LEAD_PANE, workspace: 'fixture' } },
+      worktrees: state.sessions.acme?.worktrees ?? {},
+    };
+  });
+}
+
 /** The helper's own io: a seat placed on the pane the registry and the state record. */
 export function helperIo(made: World): TestIo {
   return testIo(made.root, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });

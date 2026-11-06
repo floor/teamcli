@@ -18,6 +18,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { readerLine } from '../src/send/frame.ts';
 import { readHistory } from '../src/send/history.ts';
 import { declaredInboundOf, heldSocketPath, recordHeldSocket } from '../src/send/inbound.ts';
+import { emptySession, updateState } from '../src/state.ts';
 import { testIo } from './helpers.ts';
 import { NOW, dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
 import { withoutSendId } from './helpers/output.ts';
@@ -111,6 +112,49 @@ test('an accepting Claude seat with no declared order walks the socket first, af
   expect(atDial.length).toBe(1);
   // The record alone: the fallback episode's marker beside it is a sidecar, never a message.
   expect(readdirSync(drops).filter((name) => !name.includes('.')).length).toBe(1);
+});
+
+test('a runtime launch that names its own accepted settings gets the socket, whatever the file launch would install', async () => {
+  // The line the seat actually ran is what the walk reads. The file's row would
+  // install a generated settings file that declares nothing; the running session names its own
+  // settings file, which declares accept, and the socket is newer than that declaration.
+  const made = world(null);
+  cleanup = made.cleanup;
+  declareEntity(made, 'floor');
+  declareSeat(made, 'lead', null);
+  const runtime = join(made.dir, 'runtime-lead.json');
+  writeFileSync(runtime, JSON.stringify({ crossSessionInbound: 'accept' }));
+  const past = new Date(Date.now() - 60_000);
+  utimesSync(runtime, past, past);
+  const socket = join(made.sockets, '222.sock');
+  writeFileSync(socket, '');
+  updateState(made.dir, (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats.lead = {
+      stage: 'ready',
+      pane: 'fixture-pane-lead',
+      workspace: 'fixture-workspace',
+      cli: 'claude-code',
+      launch_line: `claude --settings ${runtime}`,
+    };
+  });
+  const frames: string[] = [];
+  const host = fake(made, {
+    deliver: async (_path: string, frame: string) => {
+      frames.push(frame);
+      return { ok: true };
+    },
+  });
+
+  const io = owner(made.root);
+  const code = await runSend(['lead', 'a note'], io, host);
+
+  expect(code).toBe(0);
+  expect(host.frames).toEqual([]);
+  expect(frames.length).toBe(1);
+  expect(frames[0]).toContain('a note');
+  expect(io.out).toContain('lead: delivered (socket)');
+  expect(io.err).not.toContain('queued, no event adapter');
 });
 
 // The socket fast path's gate is the seat's lock, not its file. A lock file a dead process left

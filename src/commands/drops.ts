@@ -14,8 +14,13 @@
 // inbox's own read (`readMessage`), and only then are their bodies printed. A file an earlier
 // build wrote is plain text no key can verify: it is skipped and counted, never served, and the
 // signed records around it are read as usual. A waiting message whose receipt name is uncertain
-// is named on stderr, one line per message, whether or not another body was served. The hook
-// takes no placed caller.
+// is named on stderr, one line per message, whether or not another body was served. The read
+// admits the seat itself, placed on the pane the state records for it — the turn-start hook runs
+// a shell inside the seat's own pane, so the pids place it as that seat — the owner, and a lead
+// (the orchestrator or the operator) on its own recorded pane. Only the seat itself receipts:
+// the owner and a lead peek, shown the body with nothing written, so the message still waits for
+// its seat, and the peek is logged with the reader, the seat and the ids. Any other caller is
+// refused before a record is read, so nothing is receipted for it.
 import { type KeyObject } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, watch, type FSWatcher } from 'node:fs';
 import { homedir } from 'node:os';
@@ -27,16 +32,22 @@ import {
   callerVerdict,
   describeCaller,
   judgeCallerOf,
+  logTag,
+  mayChangeTeamVerdict,
   noPaneRefusal,
   standingOf,
+  type Caller,
+  type CallerVerdict,
 } from '../caller.ts';
 import { NOT_A_REPO, withoutFileOffer } from '../file/load.ts';
+import type { TeamFile } from '../file/types.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
 import { isBriefEpoch } from '../launch/brief-id.ts';
 import { briefBindingOf, currentBriefClaim, GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE } from '../launch/general-brief.ts';
 import { heldAt } from '../launch/rules-file.ts';
-import { currentClaimIn, listUnread, readMessage, type BriefRead } from '../mcp/inbox.ts';
+import { logLine } from '../log.ts';
+import { currentClaimIn, listUnread, peekMessage, readMessage, type BriefRead } from '../mcp/inbox.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { readState } from '../state.ts';
 import {
@@ -79,16 +90,23 @@ Options:
              --session, when given, must be the team file's. A record the
              launch wrote is served only as the seat's current general brief;
              an earlier delivery is skipped, never shown. The launch's
-             turn-start hook runs this, so it takes no placed caller.
+             turn-start hook runs this inside the seat's own pane, so its
+             caller is placed as that seat; the owner and a lead may read any
+             seat's drops as a peek: the body is shown, no receipt is written,
+             nothing is marked read, and the peek is logged with the reader,
+             the seat and the ids. Every other caller is refused before a
+             record is read, so nothing is receipted for it.
   --seat     the seat whose folder --read serves
   --session  the launch's session, which must be the team file's own
   --epoch    the runtime epoch the launch started this reader under; when
              given, only a brief delivered under that epoch is served
 
-Exits 0 when the folder is read, 1 when the caller is not a placed seat of this
-team, the team file can't be read, or the drop folder can't be read or a
-waiting message cannot be read, 2 when the invocation can't be read or this
-folder is neither a checkout nor a team root.
+Exits 0 when the folder is read, 1 when the caller may not read it (the
+listing needs a placed seat of this team; --read needs the seat itself, the
+owner, or a lead — the last two peek, and write nothing), the team file
+can't be read, or the drop folder can't be read or a waiting message cannot
+be read, 2 when the invocation can't be read or this folder is neither a
+checkout nor a team root.
 `;
 
 /** One waiting drop: its file name (the send's id), the sender the message record names (or, in
@@ -346,6 +364,25 @@ function readOk(): number {
   return 0;
 }
 
+/** Who may read a seat's drops with `--read`: the seat itself, on the pane the state records for
+ *  it — the turn-start hook runs a shell inside the seat's own pane process tree, so the pids
+ *  place it as that seat — the owner, or a lead (the orchestrator or the operator) on its own
+ *  recorded pane. The name alone proves nothing: every seat answer is judged against the state's
+ *  recorded pane, exactly as the listing's is. Only the seat itself is served as a read that
+ *  receipts; the owner and a lead peek, and nothing is written. */
+function readVerdict(
+  caller: Caller,
+  team: Pick<TeamFile, 'orchestrator' | 'operator'>,
+  dir: string,
+  session: string,
+  seat: string,
+): CallerVerdict {
+  if (caller.kind === 'owner') return { kind: 'ok' };
+  if (caller.kind !== 'seat') return { kind: 'refused' };
+  const at = standingOf(dir, session, caller);
+  return caller.name === seat ? callerVerdict(caller, seat, at) : mayChangeTeamVerdict(caller, team, at);
+}
+
 /** The refusal every caller that is not a placed seat of this team gets, and a read that served
  *  nothing: one line per message it names, so several uncertain records each keep their own. */
 function refuse(io: Io, json: boolean, ...messages: string[]): number {
@@ -425,8 +462,11 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
   const session = loaded.team.session;
   if (read) {
     // A launch's own invocation, as `team mcp serve` is: the seat and session are the launch
-    // line's, never a tool argument's, and the read serves exactly one folder. No placed caller
-    // is asked for — a CLI's turn-start hook runs outside any pane.
+    // line's, never a tool argument's, and the read serves exactly one folder. The caller is
+    // placed like the listing's: the turn-start hook runs inside the seat's own pane, so the
+    // pids name that seat; the owner and a lead may peek at any seat's drops, writing nothing.
+    // Every other caller is refused here, before a record is read, so nothing is receipted for
+    // it — and the owner hears the refusal as the rule and the seat it concerned.
     const readSession = args.values.session ?? session;
     if (readSession !== session) {
       return refuse(io, json, `the team's session is ${JSON.stringify(session)}, not ${JSON.stringify(readSession)}`);
@@ -434,6 +474,26 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     const seatName = args.values.seat as string;
     if (!loaded.team.seats.some((one) => one.name === seatName)) {
       return refuse(io, json, `the team file declares no seat ${JSON.stringify(seatName)}`);
+    }
+    const { caller, shown } = judgeCallerOf(io, readSession);
+    // The seat itself is served as a read: its receipt is the proof the message reached it. The
+    // owner and a lead are served as a peek: the body, no receipt, so a lead's look can never
+    // hide mail from the seat that must answer it.
+    const peek = !(caller.kind === 'seat' && caller.name === seatName);
+    const verdict = readVerdict(caller, loaded.team, dir, readSession, seatName);
+    if (verdict.kind !== 'ok') {
+      raiseRefusalEvent({
+        project: loaded.team.project,
+        root: loaded.root,
+        home: sources.home,
+        session: readSession,
+        kind: 'security.refused',
+        rule: 'placement',
+        object: { seat: seatName },
+      });
+      if (verdict.kind === 'no-pane') return refuse(io, json, noPaneRefusal(verdict.name));
+      if (verdict.kind === 'another-pane') return refuse(io, json, anotherPaneRefusal(verdict.name, verdict.recordedPane));
+      return refuse(io, json, `--read serves the seat itself, the owner, or a lead; this call is ${describeCaller(shown)}`);
     }
     if (!dropFolderReadable(dir, readSession, seatName)) {
       return refuse(io, json, 'the drop folder is not a real folder: a link or a file stands in its path');
@@ -453,6 +513,8 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     const brief: BriefRead = { claim: claimOf, ...(epoch === undefined ? {} : { epoch }) };
     const waiting = listUnread(dropDir, context, sources.home);
     const bodies: string[] = [];
+    // The ids a peek showed: a peek writes no receipt, so the log line below is its only trace.
+    const peeked: string[] = [];
     let superseded = 0;
     let legacy = 0;
     // A refused record: the owner hears its rule and object through the event below, and the turn
@@ -468,9 +530,13 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     // an earlier build wrote is counted and skipped, and the signed records around it are read.
     for (const message of [...waiting].reverse()) {
       if (bodies.length >= DROP_READ_BATCH) break;
-      const got = readMessage({ dropDir, root: loaded.root, seat: seatName, session: readSession }, message.id, sources.home, brief);
+      const target = { dropDir, root: loaded.root, seat: seatName, session: readSession };
+      const got = peek
+        ? peekMessage(target, message.id, sources.home, brief)
+        : readMessage(target, message.id, sources.home, brief);
       if (got.ok) {
         bodies.push(got.body);
+        if (peek) peeked.push(message.id);
       } else if (got.served !== undefined) {
         // Another reader won the receipt name and served this message: there is no body for this
         // run. It is not a refusal and does not use one of the ten; the message has left the
@@ -504,6 +570,11 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       }
     }
     if (bodies.length > 0) io.stdout(`${bodies.join('\n\n')}\n`);
+    if (peeked.length > 0) {
+      // The peek's one trace: who looked, whose mail, and the ids shown — names only, never a
+      // body. A read needs none: its signed receipt is the record of what was served.
+      logLine(dir, 'peek', logTag(shown), `${seatName}: ${peeked.join(' ')}`);
+    }
     if (legacy > 0) {
       // Old drops are reported by count: a file no key can verify is never served, and its
       // content never reaches the turn.

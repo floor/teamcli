@@ -196,7 +196,7 @@ describe('muse faint placeholder vs non-faint draft (independent verification)',
     expect(readBox('muse', mixedRows)).not.toBeNull();
   });
 
-  test('a listed equals placeholder in a non-bold colour reads idle, and the typed wake types into it', async () => {
+  test('a listed equals placeholder in the declared grey reads idle, while an undeclared grey is a draft, and the typed wake types into the declared one', async () => {
     const goal = '/goal pins a session objective with a progress bar';
     const grey = museFrame(`❯ \x1b[90m${goal}\x1b[0m`);
     const truecolor = museFrame(`❯ \x1b[38;2;103;108;116m${goal}\x1b[0m`);
@@ -204,7 +204,8 @@ describe('muse faint placeholder vs non-faint draft (independent verification)',
     const mixed = museFrame(`❯ \x1b[90m/goal pins\x1b[0m \x1b[38;2;103;108;116ma session objective with a progress bar\x1b[0m`);
     const cursor = museFrame(`❯ \x1b[90m/goal \x1b[7mp\x1b[27mins a session objective with a progress bar\x1b[0m`);
     const grokEdge = readFileSync(join(import.meta.dir, 'fixtures', 'grok', '1.0.50', 'idle-ansi.txt'), 'utf8');
-    expect(readScreen('muse', grey).kind).toBe('idle');
+    expect(readScreen('muse', grey).kind).toBe('unsent');
+    expect(boxHoldsText('muse', goal, grey)).toBe(true);
     expect(readScreen('muse', truecolor).kind).toBe('idle');
     expect(readScreen('grok', grokEdge).kind).toBe('idle');
     expect(readScreen('muse', draft).kind).toBe('unsent');
@@ -212,7 +213,7 @@ describe('muse faint placeholder vs non-faint draft (independent verification)',
     expect(readScreen('muse', cursor).kind).toBe('unsent');
     expect(boxHoldsText('muse', `${goal} now`, draft)).toBe(true);
 
-    const wake = makeWakeHost((read, enters) => (enters > 0 ? WORKING : read < 2 ? grey : holding(TRIGGER_LINE)));
+    const wake = makeWakeHost((read, enters) => (enters > 0 ? WORKING : read < 2 ? truecolor : holding(TRIGGER_LINE)));
     const out = await deliverTypedWake(wake.host, 'pane-1', TRIGGER_LINE, 'muse', FAST);
     expect(out).toEqual({
       delivered: true,
