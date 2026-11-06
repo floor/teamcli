@@ -619,7 +619,11 @@ export function parsePsSnapshot(text: string): ReadonlyMap<number, { ppid: numbe
 
 function readPsSnapshot(): ReadonlyMap<number, { ppid: number; name: string }> | null {
   try {
-    const out = execFileSync('ps', ['-ax', '-o', 'pid=,ppid=,comm='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const out = execFileSync('ps', ['-ax', '-o', 'pid=,ppid=,comm='], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: syncChildTimeout(2_000),
+    });
     return parsePsSnapshot(out);
   } catch {
     return null;
