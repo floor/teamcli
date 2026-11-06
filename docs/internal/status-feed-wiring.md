@@ -25,7 +25,7 @@ owner nonce from the machine daemon record outside the checkout. Its location
 comes from the OS-provided account home, never the hook's `HOME` or marker text
 ([Node OS reference](https://nodejs.org/api/os.html#osuserinfooptions)). The
 existing process-placement guard must also place the caller in
-the seat's recorded pane and session. A marker's short lease disables abandoned
+the seat's recorded pane and session. The daemon record is opened once, no-follow, and checked with fstat on that descriptor, so a symlink cannot be swapped in between a check and a second read. A marker's short lease disables abandoned
 markers; it establishes no native freshness or health. The daemon refreshes
 markers only on the existing presence pass and removes its own markers on close.
 The ordinary legacy Notification filter retains its preexisting stdin read.
