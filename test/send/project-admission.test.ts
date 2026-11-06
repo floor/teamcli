@@ -235,9 +235,12 @@ function sceneHost(world: SendWorld): { host: SendHost & { typedInto: (pane: str
 
 describe('the project level admits a pair the team rules refuse', () => {
   test("teamcli's lead reaches teamcli.io's lead by name when both teams are in project TeamCLI", async () => {
-    const { world, cliRoot, cliLead, ioLead, caller } = twoTeams();
-    // The project record: TeamCLI, its lead by agent id (the io team's lead), and both teams.
-    const project = upsertProject(world.home, 'teamcli', { name: 'TeamCLI', entity: 'teamcli', lead: ioLead.id, teams: [teamIdOf(cliRoot), ioLead.reach.team] });
+    const { world, cliId, cliRoot, cliLead, ioLead, caller } = twoTeams();
+    // The project record: TeamCLI, its lead by agent id (the io team's lead). Membership is the
+    // team records' own, so each team joins the project on its own record.
+    upsertTeam(world.home, cliId, { projectId: 'teamcli', projects: ['teamcli'] });
+    upsertTeam(world.home, ioLead.reach.team, { projectId: 'teamcli', projects: ['teamcli'] });
+    const project = upsertProject(world.home, 'teamcli', { name: 'TeamCLI', entity: 'teamcli', lead: ioLead.id });
     expect(project.teams).toContain(teamIdOf(cliRoot));
     const { host, cliPane, ioPane } = sceneHost(world);
 
@@ -265,9 +268,13 @@ describe('the project level admits a pair the team rules refuse', () => {
   });
 
   test('the same pair is refused when no project names both teams', async () => {
-    const { world, cliRoot, ioId, cliLead, ioLead, caller } = twoTeams();
-    // Both teams sit in projects — just never the same one, and no project names teamcli.
-    upsertProject(world.home, 'other', { name: 'Other', teams: [ioId] });
+    const { world, cliId, cliRoot, ioId, cliLead, ioLead, caller } = twoTeams();
+    // Both teams sit in projects — just never the same one: each team record joins a different
+    // project, so no project names both teams.
+    upsertProject(world.home, 'cli-only', { name: 'CliOnly' });
+    upsertTeam(world.home, cliId, { projectId: 'cli-only', projects: ['cli-only'] });
+    upsertProject(world.home, 'other', { name: 'Other' });
+    upsertTeam(world.home, ioId, { projectId: 'other', projects: ['other'] });
     const { host, cliPane, ioPane } = sceneHost(world);
 
     // Nothing in the records moved: the pair is judged as it was, and no rule admits it.
