@@ -6,6 +6,7 @@ import { insideTrust, isLegacyTrust, isMigratedTrust, protectedBy } from '../fil
 import { isLeadSeat } from '../file/sections/lead.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
+import { worktreeOf, type SessionState } from '../state.ts';
 
 // A task name is one path segment. It is also the last segment of the folder and part of the branch.
 const TASK_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -72,12 +73,27 @@ export function protectedLanding(root: string, folder: string, checkouts: readon
   return null;
 }
 
+export type StartFolder = { name: string; cli: string; cwd: string };
+
+/** Occupied start folders come from the placement record, not a later file edit. Worktrees
+ *  keyed by task are included too, even when a single-seat add or restart plans no peers. */
+export function placedStartFolders(
+  seats: readonly StartFolder[], state?: Pick<SessionState, 'seats' | 'worktrees'>,
+): StartFolder[] {
+  return seats.map(seat => ({ ...seat,
+    cwd: state?.seats[seat.name]?.start_cwd ||
+      (seat.cwd === '.' ? worktreeOf(state, seat.name)?.path : undefined) || seat.cwd,
+  }));
+}
+
+export type OwnStartFolderInput = {
+  cli: string; seat: string; cwd: string; root: string; home: string; lobby: string;
+  peers: readonly StartFolder[];
+};
+
 /** Profiles that write their start folder need an explicit own folder, never shared startup
  *  instruction space. Used for Grok's workspace preset and Cursor's project MCP configuration. */
-export function ownStartFolderProblem(input: {
-  cli: string; seat: string; cwd: string; root: string; home: string; lobby: string;
-  peers: readonly { name: string; cwd: string }[];
-}): string | null {
+export function ownStartFolderProblem(input: OwnStartFolderInput): string | null {
   const repair = 'set the seat cwd to its own worktree or clone, then launch it again';
   let start: string;
   try {
@@ -90,14 +106,23 @@ export function ownStartFolderProblem(input: {
     const tail = relative(parent, folder);
     return tail === '' || (!isAbsolute(tail) && tail !== '..' && !tail.startsWith(`..${sep}`));
   };
-  if (start === realLanding(input.root, '.').real ||
-      inside(start, realLanding(input.root, input.lobby).real) ||
-      inside(start, realLanding(input.root, join(input.home, '.config', 'team')).real)) {
-    return `${input.cli} cannot start in the shared project root, lobby or team config folder; ${repair}`;
+  const projectRoot = realLanding(input.root, '.').real;
+  const userHome = realLanding(input.root, input.home).real;
+  const lobby = realLanding(input.root, input.lobby).real;
+  const teamConfig = realLanding(input.root, join(input.home, '.config', 'team')).real;
+  // Granting an ancestor also grants every shared folder below it. A child of the project
+  // root can be a seat's own worktree, but no start may contain that root or the shared state.
+  if (start === dirname(start) || start === userHome || inside(projectRoot, start) ||
+      inside(start, lobby) || inside(lobby, start) ||
+      inside(start, teamConfig) || inside(teamConfig, start)) {
+    return `${input.cli} cannot start in or grant an ancestor of the shared project root, lobby or team config folder; ${repair}`;
   }
   for (const peer of input.peers) {
     if (peer.name === input.seat) continue;
     const other = realLanding(input.root, peer.cwd).real;
+    // A shared-root peer does not claim every worktree below the root. Keep overlap checks
+    // for profile-writing peers and for every peer with a separate start folder.
+    if (peer.cli !== 'grok' && peer.cli !== 'cursor' && other === projectRoot) continue;
     if (inside(start, other) || inside(other, start)) {
       return `${input.cli} start folder overlaps seat ${peer.name}'s start folder; ${repair}`;
     }
@@ -113,7 +138,7 @@ export type SeatStart = { cwd: string; lobby?: true } | { problem: string; once?
 // lobby. In a legacy file, a shared seat starts in its cwd, and a worktree seat starts in the
 // old derived lobby.
 export function seatStart(
-  team: Pick<TeamFile, 'project' | 'session' | 'workspace' | 'trust' | 'seats' | 'entity' | 'lobby' | 'orchestrator' | 'operator'>, seat: Seat, root: string, home: string = homedir(), verifiedLobby?: string, worktree?: string,
+  team: Pick<TeamFile, 'project' | 'session' | 'workspace' | 'trust' | 'seats' | 'entity' | 'lobby' | 'orchestrator' | 'operator'>, seat: Seat, root: string, home: string = homedir(), verifiedLobby?: string, worktree?: string, recorded?: Pick<SessionState, 'seats' | 'worktrees'>,
 ): SeatStart {
   if (!team.trust || team.trust.length === 0) {
     const lobby = lobbyOf(home, root, team);
@@ -131,7 +156,7 @@ export function seatStart(
     // A fresh workspace can use the seat's recorded worktree. An explicit file cwd still
     // stands and is checked, so naming a lobby is refused rather than silently repaired.
     const cwd = seat.cwd === '.' && worktree !== undefined ? worktree : seat.cwd;
-    const problem = ownStartFolderProblem({ cli: seat.cli, seat: seat.name, cwd, root, home, lobby, peers: team.seats });
+    const problem = ownStartFolderProblem({ cli: seat.cli, seat: seat.name, cwd, root, home, lobby, peers: placedStartFolders(team.seats, recorded) });
     if (problem !== null) return { problem: `seat ${seat.name}: ${problem}` };
     const start = realLanding(root, cwd);
     const hit = protectedLanding(root, relative(root, start.logical), team.workspace.protected);

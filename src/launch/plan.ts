@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
-import { ownStartFolderProblem } from '../worktree/place.ts';
+import { ownStartFolderProblem, type StartFolder, type OwnStartFolderInput } from '../worktree/place.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
 import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { selfRunner } from '../mcp/register.ts';
@@ -99,7 +99,9 @@ export type Op =
        * only when this plan named the profile on the line. A file that cannot be written
        * refuses the seat; the line is not launched without the profile.
        */
-      grokSandbox?: GrokSandbox }
+      grokSandbox?: GrokSandbox;
+      /** Placement facts rechecked before each seat operation and again before profile writes. */
+      ownStartFolder?: OwnStartFolderInput }
   /** `why` is the reason the record and the log carry; `detail`, when the reason has a fuller
    *  sentence with a folder in it, is the stderr line said under the record. */
   | { do: 'refuse'; seat: string; why: string; detail?: string }
@@ -595,6 +597,8 @@ export interface UpInput {
   /** Whether the herdr session is already running, empty. */
   sessionRunning: boolean;
   seats: readonly UpSeat[];
+  /** Other seats' actual recorded starts, including peers outside a single-seat plan. */
+  startFolders?: readonly StartFolder[];
   /** The watch's workspace label: the one `watchLabel` makes for this team. */
   watchLabel: string;
   /** The watch is running, so no second watch is started. */
@@ -1264,11 +1268,19 @@ export function upPlan(input: UpInput): Step[] {
       });
       continue;
     }
-    if ((profile.cli === 'grok' || profile.cli === 'cursor') && wouldLaunch && input.home !== undefined && input.team !== undefined) {
-      const lobby = lobbyOf(input.home, input.root, input.team);
-      const problem = ownStartFolderProblem({ cli: profile.cli, seat: seat.name, cwd,
-        root: input.root, home: input.home, lobby, peers: input.seats }) ??
-        (grokSandbox === undefined ? null : grokStartFolderProblem(cwd, grokSandbox, lobby));
+    const ownStartFolder: OwnStartFolderInput | undefined =
+      (profile.cli === 'grok' || profile.cli === 'cursor') && input.home !== undefined && input.team !== undefined
+        ? { cli: profile.cli, seat: seat.name, cwd, root: input.root, home: input.home,
+            lobby: lobbyOf(input.home, input.root, input.team),
+            // Keep occupied records as well as placements planned by this run. Single-seat
+            // commands still compare the complete team, and new peers compare each other.
+            peers: [...(input.startFolders ?? input.team.seats.filter(peer => !input.seats.some(placed => placed.name === peer.name))), ...input.seats.map(peer => ({ ...peer,
+              cwd: peer.cwd === '.' ? peer.worktree ?? peer.cwd : peer.cwd,
+            }))] }
+        : undefined;
+    if (ownStartFolder !== undefined && wouldLaunch) {
+      const problem = ownStartFolderProblem(ownStartFolder) ??
+        (grokSandbox === undefined ? null : grokStartFolderProblem(cwd, grokSandbox, ownStartFolder.lobby));
       if (problem !== null) {
         steps.push({ kind: 'skip', text: `${seat.name}: would refuse: ${problem}`,
           do: { do: 'refuse', seat: seat.name, why: problem } });
@@ -1429,7 +1441,7 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
         note: launchNote,
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: reuse?.pane ?? seat.pane, ...(reuse === undefined ? {} : { reuse: reuse.launched, workspace: reuse.workspace }), ...(reuse === undefined && seat.workspace !== undefined ? { workspace: seat.workspace } : {}), cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, recordLine, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}), ...(plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }) },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: reuse?.pane ?? seat.pane, ...(reuse === undefined ? {} : { reuse: reuse.launched, workspace: reuse.workspace }), ...(reuse === undefined && seat.workspace !== undefined ? { workspace: seat.workspace } : {}), cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, recordLine, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}), ...(plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }), ...(ownStartFolder === undefined ? {} : { ownStartFolder }) },
       });
     }
     const rules = profile.rulesMode;

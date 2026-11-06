@@ -6,17 +6,18 @@
 import { afterAll, afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { registerInbox } from '../../src/mcp/register.ts';
-import { seatStart } from '../../src/worktree/place.ts';
+import { ownStartFolderProblem, seatStart } from '../../src/worktree/place.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import { executePlan, type Host } from '../../src/launch/execute.ts';
 import {
   grokHomeFor, grokSandboxOf, grokSandboxProfileName, settleGrokSandbox, withoutGrokSandbox, writeGrokSandbox, type GrokSandbox,
 } from '../../src/launch/grok-sandbox.ts';
+import { emptySession } from '../../src/state.ts';
 import { upPlan, type Step } from '../../src/launch/plan.ts';
 import { writePrivateAtomic } from '../../src/launch/private-file.ts';
 import { gitEnv } from '../helpers.ts';
@@ -853,4 +854,137 @@ describe('Grok start folders stay within the seat grants', () => {
     expect('problem' in placed).toBe(true);
     if ('problem' in placed) expect(placed.problem).toContain('own worktree');
   });
+});
+
+
+describe('start folders cannot contain shared instruction folders', () => {
+  for (const cli of ['grok', 'cursor']) for (const name of ['home', 'filesystem-root', 'project-parent', 'config-parent', 'custom-lobby-parent', 'linked-home']) {
+    test(`${cli} refuses ${name} as an ancestor grant`, () => {
+      const w = world();
+      let lobby = join(w.home, '.config/team/lobby'); mkdirSync(lobby, { recursive: true });
+      let cwd = name === 'home' ? w.home : name === 'filesystem-root' ? '/' : name === 'config-parent' ? join(w.home, '.config') : w.base;
+      if (name === 'custom-lobby-parent') { cwd = join(w.base, 'shared-start'); lobby = join(cwd, 'lobby'); mkdirSync(lobby, { recursive: true }); }
+      if (name === 'linked-home') { cwd = join(w.base, 'home-alias'); symlinkSync(w.home, cwd); }
+      const problem = ownStartFolderProblem({ cli, seat: 'worker', cwd, root: w.root, home: w.home, lobby, peers: [] });
+      expect(problem).not.toBeNull();
+      expect(problem).toContain('own worktree');
+      expect(existsSync(w.sandbox.file)).toBe(false);
+    });
+  }
+});
+
+
+describe('a non-writing peer at the shared root does not own the worktree', () => {
+  for (const cli of ['grok', 'cursor']) for (const linked of [false, true]) test(`${cli} can start below the project root beside a shared-root peer, alias=${linked}`, () => {
+    const w = world(), lobby = join(w.home, '.config/team/lobby'); mkdirSync(lobby, { recursive: true });
+    let peerCwd = '.';
+    if (linked) { peerCwd = join(w.base, 'root-alias'); symlinkSync(w.root, peerCwd); }
+    expect(ownStartFolderProblem({ cli, seat: 'worker', cwd: w.start, root: w.root, home: w.home, lobby,
+      peers: [{ name: 'lead', cli: 'claude-code', cwd: peerCwd }] })).toBeNull();
+  });
+  for (const peerCli of ['grok', 'cursor', 'claude-code']) test(`overlap with ${peerCli} outside the shared root is still refused`, () => {
+    const w = world(), lobby = join(w.home, '.config/team/lobby'); mkdirSync(lobby, { recursive: true });
+    expect(ownStartFolderProblem({ cli: 'cursor', seat: 'worker', cwd: w.start, root: w.root, home: w.home, lobby,
+      peers: [{ name: 'peer', cli: peerCli, cwd: w.start }] })).not.toBeNull();
+  });
+  test('fresh Grok placement below an unprotected project root keeps its explicit folder', () => {
+    const w = world(), lobby = join(w.home, '.config/team/lobby'); mkdirSync(lobby, { recursive: true });
+    const checked = validateTeamFile(TEAM, { home: w.home, root: w.root }); if (!checked.ok) throw new Error('invalid synthetic team');
+    const team = { ...checked.team, trust: [w.root, lobby], lobby, workspace: { ...checked.team.workspace, protected: [] } };
+    const seat = { ...team.seats.find(s => s.name === 'grok-seat')!, cwd: w.start };
+    expect(seatStart(team, seat, w.root, w.home)).toEqual({ cwd: w.start });
+  });
+});
+
+
+describe('recorded peer placement is part of own-folder checks', () => {
+  for (const cli of ['grok', 'cursor']) for (const source of ['worktree', 'start_cwd']) {
+    test(`${cli} refuses a peer's recorded ${source}, including through an alias`, () => {
+      const w = world();
+      const checked = validateTeamFile(TEAM, { home: w.home, root: w.root });
+      if (!checked.ok) throw new Error('invalid synthetic team');
+      const target = join(w.base, 'occupied'); mkdirSync(target);
+      const alias = join(w.base, 'occupied-link'); symlinkSync(target, alias);
+      const peer = { ...checked.team.seats[0]!, cwd: '.' };
+      const own = { ...checked.team.seats.find(s => s.name === 'grok-seat')!, cli, cwd: alias };
+      const lobby = join(w.home, '.config/team/lobby'); mkdirSync(lobby, { recursive: true });
+      const team = { ...checked.team, trust: [w.root, w.base], lobby, seats: [peer, own] };
+      const state = emptySession();
+      if (source === 'worktree') state.worktrees['assigned-task'] = { seat: peer.name, path: target, branch: 'fix/task', setup: 'ok' };
+      else state.seats[peer.name] = { stage: 'ready', start_cwd: target };
+      const start = seatStart(team, own, w.root, w.home, undefined, undefined, state);
+      expect('problem' in start).toBe(true);
+      if ('problem' in start) expect(start.problem).toContain(`overlaps seat ${peer.name}`);
+    });
+  }
+  for (const cli of ['grok', 'cursor']) test(`a single-seat ${cli} plan checks the other seats' recorded starts`, () => {
+    const w = world();
+    const checked = validateTeamFile(TEAM, { home: w.home, root: w.root });
+    if (!checked.ok) throw new Error('invalid synthetic team');
+    const target = join(w.base, 'occupied'); mkdirSync(target);
+    const own = { name: 'grok-seat', cli, launch: cli === 'grok' ? 'grok' : 'cursor-agent', cwd: target,
+      label: 'grok-seat', stopped: false, rules: 'Rules.', repairLine: 'repair' };
+    const plan = upPlan({ root: w.root, home: w.home, team: checked.team, session: 'acme',
+      sessionRunning: true, watchAlive: true, watchLabel: 'Watch', seats: [own],
+      startFolders: [{ name: 'lead', cli: 'claude-code', cwd: target }] });
+    expect(plan.some(step => step.do?.do === 'refuse')).toBe(true);
+    expect(plan.some(step => step.do?.do === 'launch')).toBe(false);
+  });
+});
+
+
+describe('placement is rechecked before launch writes', () => {
+  for (const cli of ['grok', 'cursor']) for (const change of ['start-before-create', 'lobby-before-create', 'start-after-create', 'lobby-after-inbox']) {
+    test(`${cli} refuses ${change} before inbox, rules, profile or command writes`, async () => {
+      const w = world();
+      const checked = validateTeamFile(TEAM, { home: w.home, root: w.root });
+      if (!checked.ok) throw new Error('invalid synthetic team');
+      const lobby = join(w.base, 'shared-lobby'); mkdirSync(lobby);
+      const team = { ...checked.team, lobby };
+      const plan = upPlan({ root: w.root, home: w.home, team, session: 'acme', sessionRunning: true,
+        watchAlive: true, watchLabel: 'Watch', seats: [{ name: 'grok-seat', cli,
+          launch: cli === 'grok' ? 'grok' : 'cursor-agent', cwd: w.start,
+          label: 'grok-seat', stopped: false, rules: 'Rules.', repairLine: 'repair' }] });
+      expect(plan.some(step => step.do?.do === 'launch')).toBe(true);
+      const substituteStart = () => { renameSync(w.start, w.start + '-before'); symlinkSync(lobby, w.start); };
+      if (change === 'start-before-create') substituteStart();
+      if (change === 'lobby-before-create') { renameSync(lobby, lobby + '-before'); symlinkSync(w.start, lobby); }
+      const writes: string[] = [];
+      const host: Host = {
+        startServer: () => true, sessionUp: () => true,
+        createWorkspace: () => { writes.push('workspace'); if (change === 'start-after-create') substituteStart(); return { pane: 'pane-grok', workspace: 'ws-grok' }; },
+        registerInbox: () => { writes.push('inbox'); if (change === 'lobby-after-inbox') { renameSync(lobby, lobby + '-before'); symlinkSync(w.start, lobby); } return { ok: true }; },
+        deliverRules: async () => { writes.push('rules'); return true; },
+        paneRun: () => { writes.push('command'); return true; },
+        typeLine: () => false, renameAgent: () => true, closeWorkspace: () => { writes.push('close'); return true; },
+        stopSession: () => true, kill: () => true, agentPanes: () => [], classify: () => 'idle',
+        sleep: async () => {}, now: () => 0, allow: () => null, record: () => {}, running: () => {},
+        drop: () => {}, say: () => {}, log: () => {},
+      };
+      const result = await executePlan(plan, 'acme', host);
+      expect(result.dropped).toContain('grok-seat');
+      expect(writes).toEqual(change === 'start-after-create' ? ['workspace'] : change === 'lobby-after-inbox' ? ['workspace', 'inbox'] : []);
+      expect(existsSync(w.sandbox.file)).toBe(false);
+      // Even prepared grants must not be created before the start check.
+      for (const folder of w.sandbox.prepare) expect(existsSync(folder)).toBe(false);
+    });
+  }
+});
+
+
+test('a planned peer worktree replaces its shared-root declaration for overlap checks', () => {
+  const w = world();
+  const checked = validateTeamFile(TEAM, { home: w.home, root: w.root });
+  if (!checked.ok) throw new Error('invalid synthetic team');
+  const other = join(w.base, 'peer-tree'); mkdirSync(other);
+  const team = { ...checked.team, seats: checked.team.seats.map(seat => seat.name === 'lead' ? { ...seat, cli: 'cursor', cwd: '.' } : seat) };
+  const plan = upPlan({ root: w.root, home: w.home, team, session: 'acme', sessionRunning: true,
+    watchAlive: true, watchLabel: 'Watch', seats: [
+      { name: 'lead', cli: 'cursor', launch: 'cursor-agent', cwd: '.', worktree: other, stage: 'ready',
+        label: 'lead', stopped: false, rules: 'Rules.', repairLine: 'repair', pane: 'peer-pane' },
+      { name: 'grok-seat', cli: 'grok', launch: 'grok', cwd: w.start, worktree: w.start,
+        label: 'grok-seat', stopped: false, rules: 'Rules.', repairLine: 'repair' },
+    ] });
+  expect(plan.some(step => step.do?.do === 'refuse' && step.do.seat === 'grok-seat')).toBe(false);
+  expect(plan.some(step => step.do?.do === 'launch' && step.do.seat === 'grok-seat')).toBe(true);
 });

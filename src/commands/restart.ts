@@ -98,7 +98,7 @@ import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
-import { seatStart } from '../worktree/place.ts';
+import { placedStartFolders, seatStart } from '../worktree/place.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
 import { realSources as downSources, stateOfPane } from './down.ts';
 import { stopRunning, type RemoveSources } from './remove.ts';
@@ -876,7 +876,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   for (const problem of placedProblems(team, root, home, undefined, session)) {
     return { kind: 'not-ready', message: problem.message };
   }
-  const start = seatStart({ ...team, session }, next, root, home);
+  const start = seatStart({ ...team, session }, next, root, home, undefined, worktreeOf(recordedSession, next.name)?.path, recordedSession);
   if ('problem' in start) {
     return { kind: 'not-ready', message: start.problem };
   }
@@ -976,6 +976,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       session,
       sessionRunning: true,
       seats: [planSeat],
+      startFolders: placedStartFolders(team.seats, recordedSession),
       watchAlive: true,
       teamFile: launchFile,
       cliHooks: plannedCliHooks(dir, session, [planSeat]),
@@ -1292,6 +1293,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       session,
       sessionRunning: true,
       seats: [planSeat],
+      startFolders: placedStartFolders(team.seats, recordedSession),
       watchAlive: true,
       teamFile: launchFile,
       cliHooks: installed,
