@@ -775,6 +775,44 @@ describe('review: check and inbox refresh share the start-folder rule', () => {
       else { expect(io.out).not.toContain('cannot start in or grant an ancestor'); expect(io.out).not.toContain('start folder overlaps'); }
       expect(readState(dir)).toEqual(before);
     });
+    for (const missingModel of [false, true]) for (const json of [false, true]) {
+      test(`${cli} no-op reload refuses an unknown start folder, missingModel=${missingModel}, json=${json}`, async () => {
+        approve(yaml());
+        if (missingModel) forget('worker');
+        else remember('worker', 'high', '4.7', 'Grok');
+        const own = join(base, 'own-tree'); mkdirSync(own);
+        updateState(dir, state => {
+          const held = state.sessions.alpha!;
+          if (!missingModel) held.seats.worker!.cli = cli;
+          // A recorded worktree cannot prove where a legacy pane actually started.
+          held.worktrees.task = { seat: 'worker', path: own, branch: 'fix/own', setup: 'ok' };
+        });
+        const loaded = loadTeamFile(root, { file: join(dir, 'team.yaml'), home });
+        if (!loaded.ok) throw new Error('invalid synthetic team');
+        const path = rulesFilePath('acme', root, home, 'worker')!;
+        mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+        const rules = rulesOf(loaded.team, loaded.team.seats.find(s => s.name === 'worker')!, root);
+        writeFileSync(path, rules, { mode: 0o600 });
+        const before = readState(dir), run = harness({ text: '' }), calls: string[] = [];
+        run.sources.launch.registerInbox = () => { calls.push('inbox'); return { ok: true }; };
+        const io = testIo(root, OWNER);
+        expect(await runReload(['worker', ...(json ? ['--json'] : [])], io, run.sources), io.out + io.err).toBe(1);
+        if (json) {
+          expect(io.err).toBe('');
+          assertJsonErrorShape(io.out, { id: 'reload.start', messageContains: 'no recorded start folder' });
+          expect(io.out).toContain('restart it in a new workspace');
+        } else {
+          expect(io.err).toContain('no recorded start folder');
+          expect(io.err).toContain('restart it in a new workspace');
+        }
+        expect(calls).toEqual([]);
+        expect(run.closed).toEqual([]); expect(run.commands).toEqual([]);
+        expect(readState(dir)).toEqual(before);
+        expect(readFileSync(path, 'utf8')).toBe(rules);
+        expect(existsSync(join(dir, 'hooks', 'alpha', 'worker.json'))).toBe(false);
+        expect(logText()).toBe('');
+      });
+    }
     test(`${cli} no-op reload refuses a recorded lobby before refreshing its inbox`, async () => {
       approve(yaml()); remember('worker', 'high', '4.7', 'Grok');
       updateState(dir, state => { state.sessions.alpha!.seats.worker!.cli = cli; state.sessions.alpha!.seats.worker!.start_cwd = lobby; });
