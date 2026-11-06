@@ -143,12 +143,19 @@ describe('the typed wake: one line into an empty idle box', () => {
     expect(pane.enters).toBe(1);
   });
 
-  test('a faint prose hint is an empty box: two reads of it, one line, one Enter', async () => {
-    const pane = wakeFake((read, enters) => (enters > 0 ? WORKING : read < 2 ? PROSE : holding(LINE)));
+  test('a faint prose hint is a draft: the wake is refused before any key', async () => {
+    // Muse declares `shape: slash-hint`, so an all-faint row is the empty box only when it is
+    // a listed hint or a `/command …` hint. Faint words are a draft, as plain words are.
+    const pane = wakeFake(() => PROSE);
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
-    expect(pane.typed).toEqual([LINE]);
-    expect(pane.enters).toBe(1);
+    expect(out).toEqual({
+      delivered: false,
+      typed: false,
+      tries: 0,
+      reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed',
+    });
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
   });
 
   test('a line still rendering is not pressed, and an Enter that leaves it unsent is pressed again', async () => {
