@@ -160,6 +160,34 @@ Usage:
 
 None.
 
+## `analyse`
+
+Hidden: no
+
+Usage:
+
+    team analyse [<path>] [--json]
+
+### Who may run it
+
+`any-caller` — the command runs its own analyser gate before any project file or git history is read: only the owner or a seat named in the owner's analyser setting for the target scope is admitted, and a public-only analyser is refused on a non-public project
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `path` | yes | no |
+
 ## `answer`
 
 Hidden: no

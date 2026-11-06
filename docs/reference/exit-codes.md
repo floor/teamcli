@@ -84,6 +84,11 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `agents.registry` | `agents` | 1 | the team registry cannot be read | `team agents prune` |
 | `agents.stale` | `agents` | 1 | the dry run found records to retire | `team agents prune` |
 | `agents.invocation` | `agents` | 2 | the invocation cannot be read | `team agents prune --nope` |
+| `analyse.report` | `analyse` | 0 | the project analysis report was printed | `team analyse .` |
+| `analyse.scope` | `analyse` | 1 | the named analyser has scope: public and the target project is not public | `team analyse .` |
+| `analyse.unauthorised` | `analyse` | 1 | no analyser is named for the target project, or the caller is not the named analyser | `team analyse .` |
+| `analyse.unreadable` | `analyse` | 1 | the target project path cannot be read or is a symbolic link | `team analyse missing-dir` |
+| `analyse.invocation` | `analyse` | 2 | the invocation cannot be read | `team analyse --nope` |
 | `answer.question` | `answer` | 0 | the question dialog was answered: dismissed with the recorded key, and the seat sent the decision line | `team answer lead question` |
 | `answer.ready` | `answer` | 0 | the trust dialog was answered and the seat is ready | `team answer lead trust` |
 | `answer.action` | `answer` | 1 | the recorded key was not sent | `team answer lead trust` |

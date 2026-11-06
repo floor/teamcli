@@ -10,6 +10,7 @@ import { description, homepage, license, version } from './version.ts';
 // Each command is loaded only when it is called. A slice adds its line here. The table is exported
 // so a test can walk it: every command, `--help`, `-h` and a usage line.
 export const commands: Record<string, () => Promise<{ default: Command; USAGE: string }>> = {
+  analyse: () => import('./commands/analyse.ts'),
   brief: () => import('./commands/brief.ts'),
   check: () => import('./commands/check.ts'),
   checkpoint: () => import('./commands/checkpoint.ts'),

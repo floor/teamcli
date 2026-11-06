@@ -69,6 +69,7 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   ack: ['older-than', 'seat'],
   add: ['approval', 'client', 'effort', 'file', 'like', 'model', 'reason', 'session', 'team', 'until', 'worktree'],
   agents: [],
+  analyse: [],
   answer: ['file', 'session'],
   approvals: ['approval', 'reason'],
   archive: ['file', 'older-than', 'out', 'seat', 'session'],

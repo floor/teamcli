@@ -165,6 +165,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'any-caller',
       why: 'it verifies signed ask and marker files under a key the caller already holds: no team file, no seat and no terminal is read',
     },
+    analyse: {
+      kind: 'any-caller',
+      why: 'the command runs its own analyser gate before any project file or git history is read: only the owner or a seat named in the owner\'s analyser setting for the target scope is admitted, and a public-only analyser is refused on a non-public project',
+    },
     broker: {
       kind: 'owner-only',
       why: 'the broker reads the tracker credential from the owner\'s keychain, one per clone, from a terminal outside herdr',
