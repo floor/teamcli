@@ -371,6 +371,7 @@ describe('the send endpoint reads its host off the loop (independent scenes)', (
           // staged drop's path and id, the world's temp folder and its salted store inside it.
           .replaceAll(worldBase, '<base>')
           .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '<id>')
+          .replace(/team (reply|ack|show) [0-9a-f]{8,}/g, 'team $1 <id>')
           .replace(/acme-[0-9a-f]{8,}/g, 'acme-<store>');
         return { response: response === null ? null : scrub(JSON.stringify(response)), lines, frames: frames.map(scrub) };
       };

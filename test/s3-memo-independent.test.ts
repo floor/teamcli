@@ -298,7 +298,7 @@ describe('S3: the legs stage the signed record once, with the same bytes and eve
     // walk's markers are named `<id>.<kind>`): one record file, never a second staged copy.
     const seatDir = dropDir(made.dir, 'lead');
     const entries = readdirSync(seatDir).sort();
-    expect(entries.filter((name) => !name.startsWith(`${id}.`))).toEqual([id]);
+    expect(entries.filter((name) => name !== '.unread.json' && !name.startsWith(`${id}.`))).toEqual([id]);
     const path = join(seatDir, id);
     expect(readFileSync(path, 'utf8')).toBe(staged.record);
 
@@ -343,7 +343,7 @@ describe('S3: the legs stage the signed record once, with the same bytes and eve
     // under `<id>.<kind>`.
     const seatDir = dropDir(made.dir, 'native');
     const entries = readdirSync(seatDir).sort();
-    expect(entries.filter((name) => !name.startsWith(`${id}.`))).toEqual([id]);
+    expect(entries.filter((name) => name !== '.unread.json' && !name.startsWith(`${id}.`))).toEqual([id]);
     const path = join(seatDir, id);
     expect(readFileSync(path, 'utf8')).toBe(staged.record);
 
@@ -384,7 +384,7 @@ describe('S3: the legs stage the signed record once, with the same bytes and eve
     // walk's markers are named `<id>.<kind>`): one record file, never a second staged copy.
     const seatDir = dropDir(made.dir, 'lead');
     const entries = readdirSync(seatDir).sort();
-    expect(entries.filter((name) => !name.startsWith(`${id}.`))).toEqual([id]);
+    expect(entries.filter((name) => name !== '.unread.json' && !name.startsWith(`${id}.`))).toEqual([id]);
     const path = join(seatDir, id);
     expect(readFileSync(path, 'utf8')).toBe(staged.record);
 

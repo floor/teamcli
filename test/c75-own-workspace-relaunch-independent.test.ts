@@ -676,14 +676,15 @@ describe('3. a missing pane is replaced and the old workspace is closed only aft
         : { shell: RECORDED_PIDS.shell, foreground: [RECORDED_PIDS.shell] };
     };
 
-    // Live run executes in strict order: create -> rename -> run -> close, with seat state already ready on NEW_PANE at close time.
+    // A fresh pane is launched before it is named: a name on a pane with no agent is refused,
+    // and the rename step owns naming. The old workspace closes only after the replacement is ready.
     const liveIo = testIo(root, { kind: 'owner' });
     expect(await runUp([], liveIo, world.sources), `${liveIo.out}\n${liveIo.err}`).toBe(0);
 
     expect(world.trace.events).toEqual([
       `create:${NEW_WS}`,
-      `rename:${NEW_PANE}:${SEAT}`,
       `run:${NEW_PANE}`,
+      `rename:${NEW_PANE}:${SEAT}`,
       `close:${OLD_WS}`,
     ]);
     expect(world.trace.closed).toEqual([OLD_WS]);

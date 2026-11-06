@@ -10,7 +10,7 @@ import { devModeFileApproval, devModeState } from '../src/dev_mode.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { projectsFile } from '../src/registry/projects.ts';
-import { teamIdOf } from '../src/registry/teams.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { approvalStanding, readApproval, storePath, writeApproval } from '../src/store/store.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { fixtureBase, gitEnv } from './helpers.ts';
@@ -79,6 +79,12 @@ function projectLead(at: World, word: string): void {
     `    provenance: ${prov}`,
     '',
   ].join('\n'));
+  upsertTeam(at.home, teamIdOf(at.root), {
+    project: 'fixture',
+    session: 'acme',
+    root: at.root,
+    projectId: 'fixture',
+  });
 }
 
 function load(at: World) {
