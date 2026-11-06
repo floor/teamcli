@@ -335,6 +335,14 @@ function moveSeal(
   return sealDigest;
 }
 
+/** The oldest slot is already unlinked, and a later step of that same rotation threw. */
+class RotationRemovedError extends Error {
+  constructor() {
+    super('the event log could not be rotated');
+    this.name = 'RotationRemovedError';
+  }
+}
+
 function rotateEventLog(
   path: string,
   kept: number = EVENT_LOG_KEPT,
@@ -346,10 +354,22 @@ function rotateEventLog(
     if (problem !== null) return problem;
   }
   const oldest = `${path}.${String(kept - 1)}`;
+  let removed = false;
   if (existsSync(oldest)) {
     unlinkSidecars(oldest);
     unlinkSync(oldest);
+    removed = true;
   }
+  try {
+    return rotateSlots(path, kept, signer);
+  } catch (error) {
+    if (removed) throw new RotationRemovedError();
+    throw error;
+  }
+}
+
+/** Shifts every younger slot up once the oldest has been removed. */
+function rotateSlots(path: string, kept: number, signer: SealSigner | undefined): string | null {
   // A moved seal names its predecessor at the new slot: the seal re-signed in the previous
   // iteration. The oldest retained slot's predecessor was just dropped, so its seal keeps the
   // predecessor it already names — a break a retained drop record declares.
@@ -457,7 +477,13 @@ function rotateLive(
     keyState.kind === 'key'
       ? { storeDir, key: keyState.key, keyPrint: keyPrintOfKey(keyState.key) }
       : undefined;
-  const problem = rotateEventLog(path, kept, signer);
+  let problem: string | null;
+  try {
+    problem = rotateEventLog(path, kept, signer);
+  } catch (error) {
+    if (error instanceof RotationRemovedError) return { dropped, problem: error.message };
+    throw error;
+  }
   if (problem !== null) return { dropped: null, problem };
   try {
     sealRotatedSegment(path, kept, storeDir, home, predecessor);
@@ -572,7 +598,7 @@ function sealIdleLiveFile(
   const writtenAt = writtenAtFile(path);
   if (writtenAt === null || writtenAt >= cutoffMs || sizeOfFile(path) === 0) return null;
   const rotated = rotateLive(path, kept, storeDir, home, 'age');
-  if (rotated.problem !== null) throw new Error(rotated.problem);
+  if (rotated.problem !== null && rotated.dropped === null) throw new Error(rotated.problem);
   return rotated.dropped;
 }
 
@@ -3809,8 +3835,9 @@ export function appendEvent(
    *  own declaration. Best effort: retention never fails the caller. */
   const declare = (): void => {
     if (drops.length === 0) return;
+    const pending = drops.splice(0, drops.length);
     try {
-      declareDrop(project, root, home, kept, { ...retention, maxBytes }, drops, input.session);
+      declareDrop(project, root, home, kept, { ...retention, maxBytes }, pending, input.session);
     } catch {
       // The caller's own result stands either way.
     }
@@ -3834,8 +3861,11 @@ export function appendEvent(
           retainedLogBytes(project, root, home, { kept }) < maxTotal;
         if (size > 0 && size >= maxBytes && !unmigratedBelowCap) {
           const rotated = rotateLive(path, kept, storeDir, home, 'rotation');
-          if (rotated.problem !== null) return { ok: false, reason: rotated.problem };
           if (rotated.dropped !== null) drops.push(rotated.dropped);
+          if (rotated.problem !== null) {
+            declare();
+            return { ok: false, reason: rotated.problem };
+          }
           // Leave the new live segment in place, empty. The index built below then reads the set
           // it will keep answering for; its next look reads only this file's appended bytes
           // instead of re-reading the segment the rotation just sealed.
@@ -3847,7 +3877,8 @@ export function appendEvent(
         }
       }
     } catch {
-      // Retention never fails an append: the write below carries on.
+      // Retention never fails an append. A slot this attempt already removed is still declared.
+      declare();
     }
   }
 
@@ -3873,19 +3904,26 @@ export function appendEvent(
   // increment from the highest sequence seen across the retained files.
   const nextSeq = options.seqOverride ?? ((indexed.index.newestSeq ?? 0) + 1);
   const validated = eventPayloadOf(input, nextSeq);
-  if (validated === null) return { ok: false, reason: 'the event payload is invalid' };
+  if (validated === null) {
+    declare();
+    return { ok: false, reason: 'the event payload is invalid' };
+  }
 
   let signature: string;
   try {
     const key = messageKeyOf(home);
     signature = signDomain(EVENT_DOMAIN, validated as unknown as Json, key);
   } catch {
+    declare();
     return { ok: false, reason: 'the event could not be signed with the message key' };
   }
 
   const record: SignedEventRecord = { payload: validated, signature };
   const targetErr = fileProblem(path);
-  if (targetErr !== null) return { ok: false, reason: targetErr };
+  if (targetErr !== null) {
+    declare();
+    return { ok: false, reason: targetErr };
+  }
 
   const line = `${JSON.stringify(record)}\n`;
   const bytes = Buffer.from(line, 'utf8');
@@ -3916,8 +3954,11 @@ export function appendEvent(
           const size = statSync(path).size;
           if (size > 0 && size + bytes.length > maxBytes) {
             const rotated = rotateLive(path, kept, storeDir, home, 'rotation');
-            if (rotated.problem !== null) return { ok: false, reason: rotated.problem };
             if (rotated.dropped !== null) drops.push(rotated.dropped);
+            if (rotated.problem !== null) {
+              declare();
+              return { ok: false, reason: rotated.problem };
+            }
           }
         }
       }
@@ -3926,7 +3967,10 @@ export function appendEvent(
     const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | NOFOLLOW, 0o600);
     try {
       const stat = fstatSync(fd);
-      if (!stat.isFile()) return { ok: false, reason: 'the event log path is not a regular file' };
+      if (!stat.isFile()) {
+        declare();
+        return { ok: false, reason: 'the event log path is not a regular file' };
+      }
       if ((stat.mode & 0o777) !== 0o600) {
         fchmodSync(fd, 0o600);
       }
@@ -3942,21 +3986,11 @@ export function appendEvent(
       } catch {
         // Retention never fails an append: the record is written either way.
       }
-      try {
-        declareDrop(project, root, home, kept, { ...retention, maxBytes }, drops, input.session);
-      } catch {
-        // Retention never fails an append: the record is written either way.
-      }
+      declare();
     }
     return { ok: true, record, duplicate: false, path };
   } catch {
-    if (drops.length > 0) {
-      try {
-        declareDrop(project, root, home, kept, { ...retention, maxBytes }, drops, input.session);
-      } catch {
-        // The append already failed; the declaration is best effort too.
-      }
-    }
+    declare();
     return { ok: false, reason: 'the event log could not be written' };
   }
 }
