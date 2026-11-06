@@ -15,7 +15,7 @@ import { renameSeat } from '../src/file/lines.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { rulesFilePathOf } from '../src/launch/rules-file.ts';
 import { projectsFile } from '../src/registry/projects.ts';
-import { teamIdOf } from '../src/registry/teams.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { approvalStanding, readApproval, storePath, writeApproval } from '../src/store/store.ts';
 import { gitEnv } from './helpers.ts';
 
@@ -70,8 +70,11 @@ function world(options: { mark?: boolean; topLead?: string } = {}): World {
   return { home, root };
 }
 
-/** The project's word: its registry record names the team and carries `lead_seat`. */
+/** The project's word: its registry record carries `lead_seat`, and the team record names it as
+ *  the team's project — membership lives on the team record at this base; `projects.yaml`
+ *  `teams[]` is derived and never read for membership. */
 function projectLead(at: World, word: string): void {
+  upsertTeam(at.home, teamIdOf(at.root), { project: 'acme', session: 'acme', root: at.root, projectId: 'acme' });
   const prov = '{ registered_by: owner, registered_at: "2026-11-05T00:00:00.000Z", updated_at: "2026-11-05T00:00:00.000Z" }';
   const text = [
     'projects:',
@@ -79,7 +82,7 @@ function projectLead(at: World, word: string): void {
     '    name: Acme',
     '    entity: floor',
     '    lead: null',
-    `    teams: [${teamIdOf(at.root)}]`,
+    `    teams: ["${teamIdOf(at.root)}"]`,
     `    lead_seat: ${word}`,
     `    provenance: ${prov}`,
     '',

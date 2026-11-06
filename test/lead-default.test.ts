@@ -92,7 +92,7 @@ function projectLead(world: World, word: string): void {
     '    name: Acme',
     '    entity: floor',
     '    lead: null',
-    `    teams: [${teamIdOf(world.root)}]`,
+    `    teams: ["${teamIdOf(world.root)}"]`,
     `    lead_seat: ${word}`,
     `    provenance: ${prov}`,
     '',

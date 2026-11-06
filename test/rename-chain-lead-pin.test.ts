@@ -14,7 +14,7 @@ import { runRename } from '../src/commands/rename.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { projectsFile } from '../src/registry/projects.ts';
 import { registerLaunch } from '../src/registry/sync.ts';
-import { getTeam, teamIdOf } from '../src/registry/teams.ts';
+import { getTeam, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { approvalStanding, readApproval, storePath, writeApproval } from '../src/store/store.ts';
 import { gitEnv, testIo } from './helpers.ts';
 
@@ -61,7 +61,7 @@ function projectRecord(leadSeat: string, root: string): string {
     '    name: Acme',
     '    entity: floor',
     '    lead: null',
-    `    teams: [${teamIdOf(root)}]`,
+    `    teams: ["${teamIdOf(root)}"]`,
     `    lead_seat: ${leadSeat}`,
     `    provenance: ${PROV}`,
     '',
@@ -80,6 +80,10 @@ function makeWorld(): World {
   writeFileSync(file, teamYaml());
   const teamId = teamIdOf(root);
   writeFileSync(projectsFile(home), projectRecord('lead', root));
+  // Membership at this integration base lives on the team record (`teams.yaml` `project_id`);
+  // `projects.yaml` `teams[]` is derived and never read for membership. Recorded before the
+  // first load: the chain finds the home project through the team record.
+  upsertTeam(home, teamId, { project: 'acme', session: 'acme', root, projectId: 'acme' });
 
   const loaded = loadTeamFile(root, { home });
   if (!loaded.ok) throw new Error(loaded.errors.map((e) => e.message).join('; '));
@@ -91,6 +95,9 @@ function makeWorld(): World {
   // A launch re-writes the project's `lead` through an upsert that does not carry `teams`; the
   // registry's grouping of this team is the owner's, so the scene puts it back before the rename.
   writeFileSync(projectsFile(home), projectRecord('lead', root));
+  // The launch's own upsert clears the team record's `project_id` (this file declares no
+  // `in_project:`), so membership is recorded again before the rename reads the chain.
+  upsertTeam(home, teamId, { project: 'acme', session: 'acme', root, projectId: 'acme' });
   return { base, home, root, file, store, teamId };
 }
 
