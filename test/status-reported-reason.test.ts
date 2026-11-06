@@ -28,8 +28,10 @@ function quoted(text: string): string {
     if (char === '"' || char === '\\') out += `\\${char}`;
     else if (code <= 0x1f || code === 0x7f || (code >= 0x80 && code <= 0x9f) || code === 0x2028 || code === 0x2029
       || code === 0x61c || code === 0x200e || code === 0x200f || (code >= 0x202a && code <= 0x202e)
-      || (code >= 0x2066 && code <= 0x2069)) out += `\\u${code.toString(16).padStart(4, '0')}`;
-    else out += char;
+      || (code >= 0x2066 && code <= 0x2069) || /\p{Cf}/u.test(char)) {
+      const hex = code.toString(16);
+      out += code <= 0xffff ? `\\u${hex.padStart(4, '0')}` : `\\u{${hex}}`;
+    } else out += char;
   }
   return `${out}"`;
 }
@@ -67,6 +69,21 @@ test('a seat name that is not a seat id is left out of the line', () => {
   expect(ownerDeliveryText(event('worker\nfound', reason))).toBe(line);
   expect(line.includes('found')).toBe(false);
   expect(line.includes('\n')).toBe(false);
+});
+
+test('format characters inside the quote are escaped', () => {
+  const reason = 'approve\u200b\u200d\ufeff\u00ad\u2060now';
+  const line = statusEventNote(event(SEAT, reason));
+  expect(line).toBe(ownerDeliveryText(event(SEAT, reason)));
+  expect(line).toBe(`${SEAT} reported ${quoted(reason)}`);
+  for (const raw of ['\u200b', '\u200d', '\ufeff', '\u00ad', '\u2060']) {
+    expect(line.includes(raw)).toBe(false);
+  }
+  expect(line.includes('\\u200b')).toBe(true);
+  expect(line.includes('\\u200d')).toBe(true);
+  expect(line.includes('\\ufeff')).toBe(true);
+  expect(line.includes('\\u00ad')).toBe(true);
+  expect(line.includes('\\u2060')).toBe(true);
 });
 
 test('a reason past the cap is marked cut', () => {
