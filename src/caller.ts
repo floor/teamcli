@@ -2,12 +2,12 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import type { TeamFile } from './file/types.ts';
-import { activeHerdrSnapshotId, agentList, paneRootPid } from './herdr.ts';
-import type { HerdrAgent } from './herdr.ts';
+import { activeHerdrSnapshotId, agentList, paneRootPid, paneProcesses } from './herdr.ts';
+import type { HerdrAgent, PaneProcesses } from './herdr.ts';
 import type { Io } from './io.ts';
 import { readState, type SeatState } from './state.ts';
 import { CLI_PROCESSES, processNameMatches } from './clis.ts';
-import { seatOfManagedEndpoint } from './launch/codex-endpoint.ts';
+import { processStartOf, seatOfManagedEndpoint } from './launch/codex-endpoint.ts';
 
 // Who runs this command, placed by its parent processes, never by its environment. This guards
 // against a mistaken agent, not a hostile one: every seat runs as the owner's user.
@@ -42,6 +42,17 @@ export type Caller =
 
 export type Process = { pid: number; name: string };
 
+/** A seat a session records at a pane, with the shell its launch anchored there: the shell pid
+ *  and, on a record written at create, that process's start instant. `from: 'launched'` is the
+ *  fallback for records written before `pane_shell` existed — the launch identity's own shell,
+ *  with no start instant to compare, so it stands at the named-pane strength. */
+export type SeatAtPane = {
+  name: string;
+  shell: number;
+  from: 'create' | 'launched';
+  start?: number;
+};
+
 export type CallerSources = {
   // The command's parent processes, nearest first, up to the first process of the system; null
   // when the walk stopped before it got there.
@@ -52,7 +63,42 @@ export type CallerSources = {
   stdinIsTTY: boolean;
   /** The seat a managed Codex endpoint at `pid` serves (`seatOfManagedEndpoint`), or null. */
   managedEndpointSeat?(pid: number): { session: string; seat: string; pane?: string } | null;
+  /** The one seat a session's state records at `pane`, with the shell its launch anchored there;
+   *  null when no seat, or more than one, records the pane. Read only to place a caller whose
+   *  listed pane has no herdr name yet. */
+  seatAtPane?(pane: string): SeatAtPane | null;
+  /** A pane's own shell and foreground pids, as herdr reports them; null when it can't be read. */
+  paneProcesses?(pane: string): PaneProcesses | null;
+  /** The instant a process started, in epoch milliseconds; null when it is gone or its start
+   *  line is unreadable. */
+  processStartOf?(pid: number): number | null;
 };
+
+/** Whether a pane herdr lists without a name is the pane the seat's record holds. The proof is
+ *  the shell: the live pane's shell pid must be the shell the launch recorded, that process's
+ *  start instant must equal the one recorded at create (a pid the OS handed to another process
+ *  after the original shell exited is refused; an unreadable start, or a create-time record with
+ *  no start, refuses too), and the shell must be among the caller's ancestors. The ancestor test
+ *  is exactly the named-pane rule: herdr's agent entry for a pane is that pane's own root, so any
+ *  descendant of the recorded shell — however deep, a new CLI on a reused pane included — is in
+ *  the pane. `launched.shell` is the record written before create-time shells existed: it has no
+ *  start instant to compare, so it stands at the named-pane strength and never stronger. The
+ *  agent name and any pane label are never read here: neither is the proof. */
+function placedAtRecordedPane(
+  recorded: SeatAtPane,
+  pane: string,
+  sources: Pick<CallerSources, 'paneProcesses' | 'processStartOf'>,
+  ancestors: ReadonlySet<number>,
+): boolean {
+  const live = sources.paneProcesses?.(pane) ?? null;
+  if (live === null || live.shell !== recorded.shell) return false;
+  if (recorded.from === 'create') {
+    if (recorded.start === undefined) return false;
+    const started = sources.processStartOf?.(live.shell) ?? null;
+    if (started === null || started !== recorded.start) return false;
+  }
+  return ancestors.has(recorded.shell);
+}
 
 // Places the caller by its parent processes. When `session` is given the agent list and the pane
 // roots are read in that session — the caller of `currentCaller(io, session)` — and a seat it
@@ -99,6 +145,15 @@ export function placeCaller(sources: CallerSources, session?: string): Caller {
         return session === undefined
           ? { kind: 'seat', name: agent.name, pane: agent.pane }
           : { kind: 'seat', name: agent.name, pane: agent.pane, session };
+      }
+      // The pane is listed with no agent name: herdr has not detected the CLI yet, which is the
+      // window a seat's MCP server starts in. A seat record that anchors this pane's shell places
+      // the caller as that seat; anything else keeps the refusal it had before this reading.
+      const recorded = sources.seatAtPane?.(agent.pane) ?? null;
+      if (recorded !== null && placedAtRecordedPane(recorded, agent.pane, sources, pids)) {
+        return session === undefined
+          ? { kind: 'seat', name: recorded.name, pane: agent.pane }
+          : { kind: 'seat', name: recorded.name, pane: agent.pane, session };
       }
       return { kind: 'unplaced', reason: `it runs in pane ${agent.pane}, whose agent has no herdr name` };
     }
@@ -625,13 +680,26 @@ const cachedCurrentCallers = new Map<string, Caller>();
 
 // The caller of a command: the one a test handed in, the one test sources place, or the one the
 // processes show. The sources are asked about the session the command asks about, so a test sees
-// the placement the command itself made. Memoized only within an active per-send snapshot.
-export function callerOf(io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>, session?: string): Caller {
+// the placement the command itself made. `extra` merges over those sources (or over the
+// production ones) — a server that has already read the state hands its own `seatAtPane` in.
+// Memoized only within an active per-send snapshot; a call with `extra` is not memoized, since
+// it places by what the caller handed in rather than by the snapshot alone.
+export function callerOf(
+  io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
+  session?: string,
+  extra?: Partial<CallerSources>,
+): Caller {
   if (io.caller !== undefined) return io.caller;
+  const sources = io.callerSources;
+  if (extra !== undefined) {
+    return sources !== undefined
+      ? placeCaller({ ...sources(session), ...extra }, session)
+      : currentCaller(io, session, extra);
+  }
   const snapId = activeHerdrSnapshotId();
-  if (snapId !== cachedCallerSnapshotId || io.callerSources !== cachedCallerSourcesRef) {
+  if (snapId !== cachedCallerSnapshotId || sources !== cachedCallerSourcesRef) {
     cachedCallerSnapshotId = snapId;
-    cachedCallerSourcesRef = io.callerSources;
+    cachedCallerSourcesRef = sources;
     cachedCurrentCallers.clear();
   }
   const key = `${session ?? ''}\0${io.stdinIsTTY ? '1' : '0'}\0${io.env.HERDR_PANE_ID ?? ''}\0${io.env.AGENT_UNATTENDED ?? ''}`;
@@ -639,14 +707,29 @@ export function callerOf(io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerS
     const hit = cachedCurrentCallers.get(key);
     if (hit !== undefined) return hit;
   }
-  const placed = io.callerSources !== undefined
-    ? placeCaller(io.callerSources(session), session)
+  const placed = sources !== undefined
+    ? placeCaller(sources(session), session)
     : currentCaller(io, session);
   if (snapId !== null) cachedCurrentCallers.set(key, placed);
   return placed;
 }
 
-export function currentCaller(io: { env: Record<string, string | undefined>; stdinIsTTY: boolean }, session?: string): Caller {
+export function currentCaller(
+  io: { env: Record<string, string | undefined>; stdinIsTTY: boolean },
+  session?: string,
+  extra?: Partial<CallerSources>,
+): Caller {
+  const sources: CallerSources = {
+    ancestors: () => readAncestors(),
+    agents: () => agentList(session),
+    paneRootPid: (pane) => paneRootPid(pane, session),
+    env: io.env,
+    stdinIsTTY: io.stdinIsTTY,
+    managedEndpointSeat: (pid) => seatOfManagedEndpoint(pid),
+    paneProcesses: (pane) => paneProcesses(pane, session),
+    processStartOf: (pid) => processStartOf(pid),
+  };
+  if (extra !== undefined) return placeCaller({ ...sources, ...extra }, session);
   const snapId = activeHerdrSnapshotId();
   if (snapId !== cachedCallerSnapshotId) {
     cachedCallerSnapshotId = snapId;
@@ -657,14 +740,7 @@ export function currentCaller(io: { env: Record<string, string | undefined>; std
     const hit = cachedCurrentCallers.get(key);
     if (hit !== undefined) return hit;
   }
-  const placed = placeCaller({
-    ancestors: () => readAncestors(),
-    agents: () => agentList(session),
-    paneRootPid: (pane) => paneRootPid(pane, session),
-    env: io.env,
-    stdinIsTTY: io.stdinIsTTY,
-    managedEndpointSeat: (pid) => seatOfManagedEndpoint(pid),
-  }, session);
+  const placed = placeCaller(sources, session);
   if (snapId !== null) cachedCurrentCallers.set(key, placed);
   return placed;
 }

@@ -23,7 +23,7 @@ import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { followBus, followBusRetrying, type BusFollow } from '../bus/follow.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
-import { callerOf, callerVerdict, describeCaller } from '../caller.ts';
+import { callerOf, callerVerdict, describeCaller, type SeatAtPane } from '../caller.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { LoadResult, TeamFile } from '../file/types.ts';
 import type { Io } from '../io.ts';
@@ -35,7 +35,7 @@ import { readSealedRecord, recordAuthOfSealed } from '../send/record.ts';
 import { wakeHead } from '../send/native.ts';
 import { wakeTrigger } from '../send/wake.ts';
 import { messageKeyState } from '../store/keys.ts';
-import { readState, type State } from '../state.ts';
+import { readState, type SeatState, type State } from '../state.ts';
 import { buildIdentity, installIdentity, version } from '../version.ts';
 import type { BuildIdentity, InstallIdentity } from '../version.ts';
 import {
@@ -684,6 +684,31 @@ function registeredRoot(
   }
 }
 
+/** The one seat a session's records hold at `pane`, with the shell its launch anchored there.
+ *  Null when none records the pane, or more than one does: an ambiguous pane proves nothing.
+ *  The shell prefers the create-time `pane_shell`; a record written before it existed falls back
+ *  to the launch identity's shell, which carries no start instant and stands at the named-pane
+ *  strength (`placedAtRecordedPane` in caller.ts). Built from the same state read placement uses,
+ *  so the proof and the refusal read one snapshot. */
+function seatAtPaneOf(seats: Record<string, SeatState>, pane: string): SeatAtPane | null {
+  const found: { name: string; seat: SeatState }[] = [];
+  for (const [name, seat] of Object.entries(seats)) {
+    if (seat.pane === pane) found.push({ name, seat });
+  }
+  if (found.length !== 1) return null;
+  const { name, seat } = found[0]!;
+  if (seat.pane_shell !== undefined) {
+    return {
+      name,
+      shell: seat.pane_shell,
+      from: 'create',
+      ...(seat.pane_shell_start !== undefined ? { start: seat.pane_shell_start } : {}),
+    };
+  }
+  const shell = seat.launched?.shell;
+  return shell === undefined ? null : { name, shell, from: 'launched' };
+}
+
 /**
  * The state's own proof that the caller is the seat this server serves: the caller must place as
  * that seat, on the pane the state records for it in the team's session. The server is started by
@@ -691,8 +716,10 @@ function registeredRoot(
  * inbox is opened, and a seat stopped while its process survives is refused on its next call. The
  * team's session is the one read, never another session's: a seat the state records elsewhere is
  * not this server's seat, and the state's record for the served session is the only standing.
+ * A pane herdr lists with no agent name yet — the window this server starts in — is placed by the
+ * shell the seat's own record anchors there, through the sources read below.
  */
-function placementOf(io: Io, stateDir: string, session: string, name: string): { ok: true } | { ok: false; why: string } {
+export function placementOf(io: Io, stateDir: string, session: string, name: string): { ok: true } | { ok: false; why: string } {
   let sessions: State['sessions'];
   try {
     sessions = readState(stateDir).sessions;
@@ -702,7 +729,8 @@ function placementOf(io: Io, stateDir: string, session: string, name: string): {
   if (sessions[session] === undefined) {
     return { ok: false, why: `the team state records no session ${JSON.stringify(session)}, so this server cannot prove which seat started it` };
   }
-  const caller = callerOf(io, session);
+  const seats = sessions[session]?.seats ?? {};
+  const caller = callerOf(io, session, { seatAtPane: (pane) => seatAtPaneOf(seats, pane) });
   const verdict = callerVerdict(caller, name, { session, recordedPane: sessions[session]?.seats?.[name]?.pane });
   if (verdict.kind === 'ok') return { ok: true };
   // The caller is placed in the served session under this seat's name: the pane is what does not
@@ -722,6 +750,55 @@ function placementOf(io: Io, stateDir: string, session: string, name: string): {
     return { ok: false, why: `this server serves seat ${JSON.stringify(name)} in session ${JSON.stringify(session)}, and this call is placed as seat ${JSON.stringify(caller.name)}${placedIn}` };
   }
   return { ok: false, why: `this server serves seat ${JSON.stringify(name)} and starts inside that seat's own process; this call is ${describeCaller(caller)}` };
+}
+
+/** How long `mcp serve` re-proves its caller's placement at start, and the pause between reads.
+ *  A seat's CLI starts its MCP servers during boot, before herdr has detected an agent in the
+ *  pane and before the launch's own naming step reaches it. The wait is bounded and happens
+ *  once, at start; `alive()` re-proves with a single reading on every use and never waits. */
+export const SERVE_PLACEMENT_WAIT_MS = 5000;
+const SERVE_PLACEMENT_POLL_MS = 250;
+
+/** The pane the state records for a seat, or undefined when the state cannot be read or records
+ *  none; the start's wait is only for a pane this says the server runs in. */
+function recordedPaneOf(stateDir: string, session: string, name: string): string | undefined {
+  try {
+    return readState(stateDir).sessions[session]?.seats?.[name]?.pane;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The start placement, with its one bounded wait: the first refusal is answered at once unless
+ * the environment names the pane the seat's record holds — the one case where the launch's own
+ * name is still arriving. Then placement is re-proved every 250 ms for up to 5 s, and the last
+ * refusal is the one returned. A wait whose record stops naming that pane ends at once: a seat
+ * relaunched elsewhere is not this server's to wait for. `deps` lets a scene hand in its clock
+ * and sleep, so the bound is measured without a real wait.
+ */
+export async function placementAtStart(
+  io: Io,
+  stateDir: string,
+  session: string,
+  name: string,
+  deps: { sleep?: (ms: number) => Promise<void>; now?: () => number } = {},
+): Promise<{ ok: true } | { ok: false; why: string }> {
+  const first = placementOf(io, stateDir, session, name);
+  if (first.ok) return first;
+  const recorded = recordedPaneOf(stateDir, session, name);
+  if (recorded === undefined || io.env.HERDR_PANE_ID !== recorded) return first;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const now = deps.now ?? Date.now;
+  const deadline = now() + SERVE_PLACEMENT_WAIT_MS;
+  let last: { ok: true } | { ok: false; why: string } = first;
+  while (now() < deadline) {
+    await sleep(SERVE_PLACEMENT_POLL_MS);
+    if (io.env.HERDR_PANE_ID !== recordedPaneOf(stateDir, session, name)) return last;
+    last = placementOf(io, stateDir, session, name);
+    if (last.ok) return last;
+  }
+  return last;
 }
 
 /** The launch the seat's state names now: the current brief claim's epoch, no claim, or a state
@@ -828,7 +905,7 @@ export async function runMcpServe(
   // seat on its recorded pane, and the epoch is the claim the state holds now. Both checks run
   // before the inbox folder or the listener is written, so a refused start leaves no trace.
   const stateDir = dirname(loaded.path);
-  const placed = placementOf(io, stateDir, team.session, seat.name);
+  const placed = await placementAtStart(io, stateDir, team.session, seat.name);
   if (!placed.ok) return refuse(placed.why);
   const stale = staleLaunch(generationOf(stateDir, team.session, seat.name), options.epoch, seat.name);
   if (stale !== null) return refuse(stale);
