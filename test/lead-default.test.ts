@@ -22,16 +22,16 @@ const NO_LEAD = 'the file has no seat that leads: put `leads: true` on one seat'
 /** The chain's order, as a plain function: the narrowest declared word wins. */
 describe('the resolution order', () => {
   test('each narrower level overrides the wider one', () => {
-    const all = { universe: 'yoda', entity: 'obi', project: 'rex', team: 'ahsoka' };
-    expect(resolveLead(all)).toEqual({ lead: 'ahsoka', level: 'team' });
-    expect(resolveLead({ ...all, team: undefined })).toEqual({ lead: 'rex', level: 'project' });
-    expect(resolveLead({ universe: 'yoda', entity: 'obi' })).toEqual({ lead: 'obi', level: 'entity' });
-    expect(resolveLead({ universe: 'yoda' })).toEqual({ lead: 'yoda', level: 'universe' });
+    const all = { universe: 'lead', entity: 'alpha', project: 'beta', team: 'gamma' };
+    expect(resolveLead(all)).toEqual({ lead: 'gamma', level: 'team' });
+    expect(resolveLead({ ...all, team: undefined })).toEqual({ lead: 'beta', level: 'project' });
+    expect(resolveLead({ universe: 'lead', entity: 'alpha' })).toEqual({ lead: 'alpha', level: 'entity' });
+    expect(resolveLead({ universe: 'lead' })).toEqual({ lead: 'lead', level: 'universe' });
   });
 
   test('a level that declares nothing is skipped, not invented', () => {
-    expect(resolveLead({ universe: 'yoda', project: 'rex' })).toEqual({ lead: 'rex', level: 'project' });
-    expect(resolveLead({ entity: 'obi', team: 'ahsoka' })).toEqual({ lead: 'ahsoka', level: 'team' });
+    expect(resolveLead({ universe: 'lead', project: 'beta' })).toEqual({ lead: 'beta', level: 'project' });
+    expect(resolveLead({ entity: 'alpha', team: 'gamma' })).toEqual({ lead: 'gamma', level: 'team' });
   });
 
   test('no word at any level resolves to no lead', () => {
@@ -39,7 +39,7 @@ describe('the resolution order', () => {
   });
 
   test('a lead word is one seat name', () => {
-    for (const word of ['yoda', 'obi-wan', 'r2.d2', 'hand_1', 'a']) expect(leadWordProblem(word)).toBeNull();
+    for (const word of ['lead', 'alpha-2', 'r2.d2', 'hand_1', 'a']) expect(leadWordProblem(word)).toBeNull();
     for (const word of ['', 'two words', 'orchestrator lead', '.hidden', 'x'.repeat(65)]) {
       expect(leadWordProblem(word)).not.toBeNull();
     }
@@ -119,7 +119,7 @@ operator: worker
 ${options.lead !== undefined ? `lead: ${options.lead}\n` : ''}workspace:
   mode: shared
 seats:
-${seat('yoda', marked('yoda'))}${seat('obi', marked('obi'))}${seat('rex', marked('rex'))}${seat('ahsoka', marked('ahsoka'))}${seat('worker', marked('worker'))}`;
+${seat('lead', marked('lead'))}${seat('alpha', marked('alpha'))}${seat('beta', marked('beta'))}${seat('gamma', marked('gamma'))}${seat('worker', marked('worker'))}`;
 }
 
 function load(world: World, text = teamText()): ReturnType<typeof validateTeamFile> {
@@ -142,44 +142,44 @@ describe('the default lead, end to end', () => {
 
   test('the universe word alone picks the lead', () => {
     const at = world();
-    universeLead(at.home, 'yoda');
-    expect(leadOf(load(at))).toBe('yoda');
+    universeLead(at.home, 'lead');
+    expect(leadOf(load(at))).toBe('lead');
   });
 
   test('the entity word overrides the universe', () => {
     const at = world();
-    universeLead(at.home, 'yoda');
-    entityLead(at.home, 'obi');
-    expect(leadOf(load(at))).toBe('obi');
+    universeLead(at.home, 'lead');
+    entityLead(at.home, 'alpha');
+    expect(leadOf(load(at))).toBe('alpha');
   });
 
   test('the home project\'s word overrides the entity', () => {
     const at = world();
-    universeLead(at.home, 'yoda');
-    entityLead(at.home, 'obi');
-    projectLead(at, 'rex');
-    expect(leadOf(load(at))).toBe('rex');
+    universeLead(at.home, 'lead');
+    entityLead(at.home, 'alpha');
+    projectLead(at, 'beta');
+    expect(leadOf(load(at))).toBe('beta');
   });
 
   test('the team file\'s `lead:` overrides the project', () => {
     const at = world();
-    universeLead(at.home, 'yoda');
-    entityLead(at.home, 'obi');
-    projectLead(at, 'rex');
-    expect(leadOf(load(at, teamText({ lead: 'ahsoka' })))).toBe('ahsoka');
+    universeLead(at.home, 'lead');
+    entityLead(at.home, 'alpha');
+    projectLead(at, 'beta');
+    expect(leadOf(load(at, teamText({ lead: 'gamma' })))).toBe('gamma');
   });
 
   test('`leads: true` wins over every level, and over the team\'s own word', () => {
     const at = world();
-    universeLead(at.home, 'yoda');
-    entityLead(at.home, 'obi');
-    projectLead(at, 'rex');
-    expect(leadOf(load(at, teamText({ lead: 'ahsoka', mark: 'worker' })))).toBe('worker');
+    universeLead(at.home, 'lead');
+    entityLead(at.home, 'alpha');
+    projectLead(at, 'beta');
+    expect(leadOf(load(at, teamText({ lead: 'gamma', mark: 'worker' })))).toBe('worker');
   });
 
   test('a level that cannot be read refuses rather than falling through', () => {
     const at = world();
-    universeLead(at.home, 'yoda');
+    universeLead(at.home, 'lead');
     writeFileSync(entitiesPath(at.home), 'floor:\n  roots:\n    - ' + base + '\n  lead: two words\n');
     const refused = load(at);
     expect(refused.ok).toBe(false);
@@ -198,7 +198,7 @@ describe('the default lead, end to end', () => {
 
   test('a team `lead:` naming no seat is refused even beside a mark', () => {
     const at = world();
-    const refused = load(at, teamText({ lead: 'nobody', mark: 'yoda' }));
+    const refused = load(at, teamText({ lead: 'nobody', mark: 'lead' }));
     expect(refused.ok).toBe(false);
     if (refused.ok) throw new Error('a typo must never be silently overridden');
     expect(refused.errors.map((problem) => problem.message)).toContain('lead "nobody" names no declared seat');
@@ -214,14 +214,14 @@ describe('the chain reader', () => {
   test('stops at the narrowest word: a wider level that would refuse is never read', () => {
     const at = world();
     writeFileSync(entitiesPath(at.home), 'floor:\n  roots:\n    - ' + base + '\n  lead: two words\n');
-    const read = readLeadChain({ home: at.home, root: at.root, team: 'ahsoka' });
-    expect(read).toEqual({ ok: true, chain: { team: 'ahsoka' } });
+    const read = readLeadChain({ home: at.home, root: at.root, team: 'gamma' });
+    expect(read).toEqual({ ok: true, chain: { team: 'gamma' } });
   });
 
   test('reports the level the word came from', () => {
     const at = world();
-    projectLead(at, 'rex');
-    expect(defaultLeadOf({ home: at.home, root: at.root })).toEqual({ ok: true, lead: { lead: 'rex', level: 'project' } });
+    projectLead(at, 'beta');
+    expect(defaultLeadOf({ home: at.home, root: at.root })).toEqual({ ok: true, lead: { lead: 'beta', level: 'project' } });
   });
 
   test('a project whose `lead_seat` cannot be read refuses, naming the file', () => {

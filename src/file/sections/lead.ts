@@ -60,7 +60,7 @@ export function readLeadField(
   return { kind: 'named', name: mark.name };
 }
 
-/** How each level reads in a refusal: "the home project's lead \"obi\" names no declared seat". */
+/** How each level reads in a refusal: "the home project's lead \"alpha\" names no declared seat". */
 const LEAD_LEVEL_PHRASES: Record<LeadLevel, string> = {
   universe: "the universe's lead",
   entity: "the entity's lead",

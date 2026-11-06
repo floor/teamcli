@@ -217,23 +217,23 @@ describe('independent verification of feat/router-policies', () => {
       fxRetarget.cleanup();
     }
 
-    // 1c. Entity adds a new alias `hermes=lead@beacon`; team cannot retarget `hermes` or set/clear `hermes`'s fallback:
+    // 1c. Entity adds a new alias `alpha=lead@beacon`; team cannot retarget `alpha` or set/clear `alpha`'s fallback:
     const fx = makeFixture();
     try {
-      setWord(fx, 'entity', 'router.aliases', 'hermes=lead@beacon');
-      setWord(fx, 'team', 'router.aliases', 'hermes=worker@beacon');
+      setWord(fx, 'entity', 'router.aliases', 'alpha=lead@beacon');
+      setWord(fx, 'team', 'router.aliases', 'alpha=worker@beacon');
       expect(readMailboxRouterPolicy(fx.root, fx.home, NOW)).toEqual({
         ok: false,
-        why: 'router alias "hermes" is set by the entity; a team may add an alias, never retarget one',
+        why: 'router alias "alpha" is set by the entity; a team may add an alias, never retarget one',
       });
 
       const fxFallback = makeFixture();
       try {
-        setWord(fxFallback, 'entity', 'router.aliases', 'hermes=lead@beacon');
-        setWord(fxFallback, 'team', 'router.fallback', 'hermes=worker@beacon');
+        setWord(fxFallback, 'entity', 'router.aliases', 'alpha=lead@beacon');
+        setWord(fxFallback, 'team', 'router.fallback', 'alpha=worker@beacon');
         expect(readMailboxRouterPolicy(fxFallback.root, fxFallback.home, NOW)).toEqual({
           ok: false,
-          why: 'router fallback for "hermes" belongs to the entity; only the entity level may change or clear it',
+          why: 'router fallback for "alpha" belongs to the entity; only the entity level may change or clear it',
         });
       } finally {
         fxFallback.cleanup();

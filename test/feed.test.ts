@@ -359,7 +359,7 @@ describe('team send history log & team feed', () => {
       project: 'labs',
       session: 'labs',
       root: join(base, 'labs'),
-      roster: [{ agent: 'agt_bbbbbbbbbbbb', seat: 'helper', role: 'implementer', nickname: 'Hermes' }],
+      roster: [{ agent: 'agt_bbbbbbbbbbbb', seat: 'helper', role: 'implementer', nickname: 'Worker' }],
       at: NOW.toISOString(),
     });
     appendHistory('acme', root, home, {
@@ -385,7 +385,7 @@ describe('team send history log & team feed', () => {
     expect(io.out).toContain('helper@labs -> lead');
     expect(io.out).toContain('helper -> lead');
     expect(io.out).not.toContain('Bea');
-    expect(io.out).not.toContain('Hermes');
+    expect(io.out).not.toContain('Worker');
 
     // The document keeps the machine shape: the team on the line that recorded it, nothing on
     // the line that did not.

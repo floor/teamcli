@@ -483,10 +483,10 @@ describe('resolveTarget by @nickname', () => {
     const id = teamIdOf(w.root);
     const atlas = agent(w.home, { name: 'atlas', role: 'coordinator', cli: 'claude-code', team: id, seat: 'atlas', session: 'alpha', pane: 'pane-alpha-atlas' });
     team(w.home, id, 'alpha', 'alpha', w.root, [{ agent: atlas.id, seat: 'atlas', role: 'coordinator', leads: true }]);
-    const [, betaBuilder] = secondTeam(w, 'beta', [{ seat: 'atlas', nickname: 'hera', leads: true }, { seat: 'builder-1', nickname: 'hermes' }], 'alpha');
+    const [, betaBuilder] = secondTeam(w, 'beta', [{ seat: 'atlas', nickname: 'hera', leads: true }, { seat: 'builder-1', nickname: 'worker' }], 'alpha');
     secondTeam(w, 'gamma', [{ seat: 'atlas', nickname: 'ares', leads: true }], 'other');
 
-    const entitySibling = resolveTarget(w.home, '@hermes', { cwd: w.root });
+    const entitySibling = resolveTarget(w.home, '@worker', { cwd: w.root });
     if ('error' in entitySibling) throw new Error(`the entity sibling's nickname did not resolve: ${entitySibling.error}`);
     expect(entitySibling.agent.id).toBe(betaBuilder!.id);
 
@@ -505,8 +505,8 @@ describe('resolveTarget by @nickname', () => {
     const outside = join(w.base, 'nowhere');
     mkdirSync(outside, { recursive: true });
 
-    expect(resolveTarget(w.home, '@hermes', { cwd: w.root })).toEqual({
-      error: '@hermes: no seat carries the nickname "hermes"; `team send --list` shows the addresses',
+    expect(resolveTarget(w.home, '@worker', { cwd: w.root })).toEqual({
+      error: '@worker: no seat carries the nickname "worker"; `team send --list` shows the addresses',
     });
     // Outside any team's folder the caller's own team is unknown, so every registry record is
     // asked; two answers are refused rather than one picked.
@@ -931,7 +931,7 @@ describe('the whole command on a registry-resolved spec', () => {
 });
 
 describe('the whole command from a folder that is no team', () => {
-  /** A team whose lead is `atlas` and whose builder carries the nickname `hermes`. */
+  /** A team whose lead is `atlas` and whose builder carries the nickname `worker`. */
   function teamWorld(): { w: World; lead: Agent; builder: Agent } {
     const w = world('alpha', 'alpha', 'atlas', [seatBlock('coordinator', 'atlas', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
     const id = teamIdOf(w.root);
@@ -939,7 +939,7 @@ describe('the whole command from a folder that is no team', () => {
     const builder = agent(w.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: id, seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
     team(w.home, id, 'alpha', 'alpha', w.root, [
       { agent: lead.id, seat: 'atlas', role: 'coordinator', leads: true, nickname: 'zeus' },
-      { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false, nickname: 'hermes' },
+      { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false, nickname: 'worker' },
     ]);
     return { w, lead, builder };
   }
@@ -961,7 +961,7 @@ describe('the whole command from a folder that is no team', () => {
   test('a full address still resolves: seat@team, nickname@team, the lead address and an agent id', async () => {
     const { w, lead, builder } = teamWorld();
 
-    for (const spec of ['builder-1@alpha', 'hermes@alpha', builder.id]) {
+    for (const spec of ['builder-1@alpha', 'worker@alpha', builder.id]) {
       const sent = await sends(w, spec);
       expect(sent.code).toBe(0);
       const typed = sent.panes['builder-1'].typed;
