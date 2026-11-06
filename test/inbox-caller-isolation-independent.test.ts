@@ -151,9 +151,18 @@ test('correct placement with a stale epoch refuses before opening or writing', a
   message(); epoch(newEpoch); const before = snapshot(rootB);
   expect((await serve(ownOptions(), ioFor().io)).code).toBe(2); expect(snapshot(rootB)).toEqual(before);
 });
-test('a correctly placed server cannot omit the current claim epoch', async () => {
-  message(); const before = snapshot(rootB);
-  expect((await serve({ seat: 'reader', session: 'session-b', file }, ioFor().io)).code).toBe(2);
+test('a correctly placed server with no epoch binds to the current claim, and a later generation refuses', async () => {
+  message();
+  const caller = ioFor();
+  const bound = await serve({ seat: 'reader', session: 'session-b', file }, caller.io);
+  expect(bound.code, caller.error()).toBe(0);
+  expect(JSON.stringify(bound.replies)).toContain('private synthetic body');
+  expect(existsSync(join(drop, id + '.read.json'))).toBe(true);
+  epoch(newEpoch);
+  const before = snapshot(rootB);
+  const later = ioFor();
+  expect((await serve(ownOptions(), later.io)).code).toBe(2);
+  expect(later.error()).toContain('is not the seat\'s current launch epoch');
   expect(snapshot(rootB)).toEqual(before);
 });
 test('a saved epoch whose claim was removed cannot start serving ordinary mail', async () => {
