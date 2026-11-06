@@ -22,10 +22,10 @@
 //   - every `--json` answer matches FEED_OUTPUT_SCHEMA against the actual output.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { appendEvent, pruneEventLog } from '../src/bus/log.ts';
+import { appendEvent, eventLogPath, pruneEventLog } from '../src/bus/log.ts';
 import { runFeed } from '../src/commands/feed.ts';
 import { presenceId, type PresenceEvent } from '../src/daemon/presence/contract.ts';
 import { createPresenceIngester, type PresenceIngester } from '../src/daemon/presence/ingest.ts';
@@ -354,9 +354,14 @@ describe('team feed acceptance over the actual publisher and verified bus', () =
         if (tick === 1) {
           // A second transition in A lands and is then dropped by the bus's own retention
           // before the follower's next read; the declared drop record names the range.
+          // Zero and a negative window are keep-all, so the live segment is aged past a
+          // one-second window and that window is what drops it.
           await publishOne(a, 'turn-end', iso(BASE + 2000));
+          const log = eventLogPath(PROJECT, a.root, together.home);
+          const aged = new Date(Date.now() - 5_000);
+          utimesSync(log, aged, aged);
           pruneEventLog(PROJECT, a.root, together.home, {
-            retentionSeconds: -1, kept: 2, session: SESSION,
+            retentionSeconds: 1, kept: 2, session: SESSION,
           });
         }
         if (tick === 2) await publishOne(a, 'session-end', iso(BASE + 3000));

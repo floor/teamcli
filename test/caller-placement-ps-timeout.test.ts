@@ -62,13 +62,16 @@ function place(ancestors: () => ReturnType<typeof readAncestors>): ReturnType<ty
 
 describe('placement-time process reads', () => {
   test('the walk answers from one table read and refuses a sleeping ps at the bound', () => {
+    // Linux reads /proc for the default walk and never runs ps. The one-table snapshot is the
+    // ps reader, which is the default on every other platform.
+    const read = process.platform === 'linux' ? readWithPs : undefined;
     withPs("printf '%s 1 herdr\\n' \"$PPID\"", undefined, () => {
-      const placed = place(() => readAncestors(process.pid));
+      const placed = place(() => readAncestors(process.pid, read));
       expect(placed).toEqual({ kind: 'seat', name: 'keeper', pane: PANE, session: 'home-session' });
     });
     withPs("sleep 0.35\nprintf '%s 1 herdr\\n' \"$PPID\"", '60', () => {
       const started = performance.now();
-      const placed = place(() => readAncestors(process.pid));
+      const placed = place(() => readAncestors(process.pid, read));
       expect(performance.now() - started).toBeLessThan(250);
       expect(placed).toEqual({ kind: 'unplaced', reason: 'its parent processes can\'t be read to the top' });
     });

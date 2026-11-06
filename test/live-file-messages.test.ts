@@ -124,6 +124,13 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   // beside what the registry's record still proves, never a copy of the live file.
   { literal: /^the approval is still in force: it is signed over the canonical record\\n$/, why: "migrate's line when the approval keeps verifying across the move" },
   { literal: /^migration completed; (?:the team record is unchanged, and the stored approval \$\{state\}|the stored approval describes an earlier team record and \$\{state\}|the stored approval \$\{state\}); \$\{repair\}\\n$/, why: "migrate's line on an approval that stopped verifying across the move" },
+  // Rename refuses to re-sign under a lead the approval did not pin, and refuses to move a team
+  // whose approval or signing key cannot be carried. Each sentence names that refusal.
+  { literal: /^team rename: the approval pinned lead "\$\{approvedPin\}", which this file no longer resolves; approve the team again before renaming\\n$/, why: "rename refuses a file that no longer resolves the lead the approval pinned" },
+  { literal: /^team rename: the file now leads with "\$\{pinned\.team\.orchestrator\}", but the approval pinned "\$\{approvedPin\}"; approve the team again before renaming\\n$/, why: "rename refuses a file whose lead is no longer the one the approval pinned" },
+  { literal: /^team rename: the live chain leads with "\$\{team\.orchestrator\}", but the approval pinned "\$\{approvedPin\}"; approve the team again before renaming\\n$/, why: "rename refuses when the live lead chain is not the lead the approval pinned" },
+  { literal: /^team rename: refused: the owner signing key must be available to preserve approval and re-sign grants \(\$\{reason\}\); restore it before renaming the team\\n$/, why: "rename refuses to move a team when the signing key cannot re-sign the approval" },
+  { literal: /^team rename: refused: approval must be verified before renaming the team\$\{reason\}\\n$/, why: "rename refuses to move a team whose approval does not verify" },
 ];
 
 function sources(dir: string): string[] {

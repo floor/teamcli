@@ -89,7 +89,7 @@ seats:
 }
 
 describe('trust dialog resume and pane naming', () => {
-  test('(2) up names the pane right after the pane is created, before any wait, so a left-out pane is findable', async () => {
+  test('(2) up records the pane at create, before any wait, so a left-out pane is findable unnamed', async () => {
     const w = makeWorld();
     await approve(w.root, w.home);
 
@@ -186,16 +186,19 @@ describe('trust dialog resume and pane naming', () => {
     expect(code).toBe(1);
     expect(io.out).toContain('operator-1: left out: timed out after 90 s waiting for an answer; left as it is\n');
 
-    // The rename happened immediately after create, before paneRun and before any paneText wait read.
+    // The pane is recorded at create and launched before the wait. Naming waits until the
+    // agent is listed, so a wait that times out leaves the pane unnamed; the record's pane
+    // is what a later run finds.
     const createIdx = events.indexOf(`create:w2:p1:${workspaceLabel(w.team.seats[1]!)}`);
-    const renameIdx = events.indexOf('rename:w2:p1:operator-1');
     const runIdx = events.findIndex((e) => e.startsWith('run:w2:p1:'));
     const readIdx = events.indexOf('read:w2:p1');
     expect(createIdx).toBeGreaterThanOrEqual(0);
-    expect(renameIdx).toBe(createIdx + 1);
-    expect(runIdx).toBeGreaterThan(renameIdx);
+    expect(runIdx).toBeGreaterThan(createIdx);
     expect(readIdx).toBeGreaterThan(runIdx);
-    expect(panes.get('w2:p1')?.name).toBe('operator-1');
+    const pane = ['w2', 'p1'].join(':');
+    const seat = ['operator', '1'].join('-');
+    expect(events).not.toContain(`rename:${pane}:${seat}`);
+    expect(panes.get(pane)?.name).toBeNull();
 
     // The dialog this run timed out at is a live session, not an end: the record its launch
     // wrote stays open, so reaching the prompt later continues the same session, never a gap.

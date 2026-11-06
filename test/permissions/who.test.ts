@@ -324,7 +324,7 @@ describe('each mapped row pins the module function its kind names', () => {
     const team = fileTeam(id);
     const rows = Object.entries(COMMAND_GATES).filter(([, gate]) => gate.terminal !== undefined);
     expect(rows.map(([command]) => command).sort()).toEqual([
-      'ack', 'approvals:revoke', 'bus', 'forget', 'pause', 'proc', 'proc:add', 'proc:done', 'resume', 'swap:now', 'watch',
+      'ack', 'approvals:revoke', 'bus', 'forget', 'pause', 'proc', 'proc:add', 'proc:done', 'resume', 'show', 'swap:now', 'watch',
     ]);
     const noTty: Caller = { kind: 'owner-no-tty' };
     for (const [command, gate] of rows) {
