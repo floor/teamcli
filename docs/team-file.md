@@ -255,9 +255,10 @@ seat's worktree, its start folder, and only these paths of its own: under the gi
 `objects/`, `refs/`, `logs/`, `packed-refs` and `worktrees/<that worktree>`; under `.agents`,
 `send-drops/<session>/<seat>`, `messages/<seat>`, `seat-state/<session>/<seat>.json` and
 `hooks/<session>/<seat>.json`. It grants nothing under `~/.config/team`, not the `.agents` folder,
-and not the common dir's `hooks/`, `config` or `info/`. A start folder or worktree inside
-`~/.config/team` is left out. `extends = "workspace"` is written; what that preset itself grants
-is unmeasured.
+and not the common dir's `hooks/`, `config` or `info/`. A Grok seat still starts in its lobby.
+That lobby is under `~/.config/team` and is shared, so the start folder is not a sandbox grant
+when it lies there; the seat is not moved to another folder. `extends = "workspace"` is written;
+what that preset itself grants is unmeasured.
 
 The Cursor profile is tested with CLI 2026.10.01 to 2026.10.22 (`cursor-agent`). The 2026.10.22
 captures are its ready, unsent and working screens; its dialog shapes are those captured at

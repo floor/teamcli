@@ -55,8 +55,9 @@ export function grokSandboxProfileName(project: string, seat: string): string {
  *  folder, and only these paths of its own: under the git common dir, `objects/`, `refs/`,
  *  `logs/`, `packed-refs` and `worktrees/<that worktree>`; under `.agents`,
  *  `send-drops/<session>/<seat>`, `messages/<seat>`, `seat-state/<session>/<seat>.json` and
- *  `hooks/<session>/<seat>.json`. The team config directory is never granted, nor is a start
- *  folder or worktree inside it, nor the `.agents` folder, nor the common dir, nor that dir's
+ *  `hooks/<session>/<seat>.json`. The team config directory is never granted, nor is the lobby
+ *  or any other start folder or worktree inside it (the seat is not moved), nor the `.agents`
+ *  folder, nor the common dir, nor that dir's
  *  `hooks/`, `config` or `info/`. A path is resolved when it or an ancestor exists, because the
  *  sandbox takes the path literally and a grant to a link's own name would not cover its target. */
 export function grokSandboxOf(input: {

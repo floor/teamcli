@@ -153,8 +153,9 @@ describe('the profile name and the file it lives in', () => {
     expect(sandbox.readWrite).not.toContain(join(home, '.config', 'team'));
   });
 
-  test('a start folder inside the team config directory is left out', () => {
+  test('the lobby is not a sandbox grant, and the seat is not moved', () => {
     const { home, root } = world();
+    // The lobby is where a Grok seat starts, under the shared team config directory.
     const lobby = join(home, '.config', 'team', 'lobbies', 'acme');
     mkdirSync(lobby, { recursive: true });
     const sandbox = grokSandboxOf({ home, root, project: 'acme', seat: 'grok-seat', session: 'acme', cwd: lobby });
