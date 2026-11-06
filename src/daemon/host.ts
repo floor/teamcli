@@ -34,7 +34,7 @@ import { plainLine, plainText } from '../launch/plain.ts';
 import type { RestoreSweepResult } from '../launch/restore-sweep.ts';
 import { runRestoreSweepInChild } from './restore/spawn.ts';
 import { spawnWakeChild } from './wake/spawn.ts';
-import { pidAlive } from '../state.ts';
+import { pidAlive, readState, type State } from '../state.ts';
 import { probeDaemonSocket, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
 import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot, type DaemonRequest, type DaemonResponse, type DaemonRootHealthSnapshot } from './protocol.ts';
 import { probeDaemonHealth } from './health.ts';
@@ -56,7 +56,7 @@ import { createPresenceIngester, type PresenceIngester } from './presence/ingest
 import { createPresenceActivity, type PresenceActivityStep } from './presence/activity.ts';
 import { createPresencePublisher, type PresencePublisherStep } from './presence/publish.ts';
 import { createPresenceHeld, type PresenceHeldStep } from './presence/held.ts';
-import { canonicalSeatOf, currentPresenceBinding } from './presence/reconcile.ts';
+import { canonicalSeatOf, currentPresenceBinding, presenceBindingFrom } from './presence/reconcile.ts';
 import { codexPresenceFor, codexPresenceTarget } from './presence/codex-source.ts';
 import {
   PRESENCE_HEALTH_GRACE_MS, adoptPresenceSource, createPresenceChannelHealth, presenceStepHealth,
@@ -731,13 +731,29 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         : closed
           ? 'the daemon is closing'
           : presence.health.reason(at) ?? 'the presence channel is not current';
+      // One read of this route's state for the whole snapshot. The next request reads again.
+      // A seat verdict stays as fresh as a read at the start of this request, and no fresher
+      // file that lands while the seats are walked is mixed into the same answer.
+      const states = new Map<string, State | null>();
+      const stateOf = (dir: string): State | null => {
+        const held = states.get(dir);
+        if (held !== undefined) return held;
+        let state: State | null;
+        try {
+          state = readState(dir);
+        } catch {
+          state = null;
+        }
+        states.set(dir, state);
+        return state;
+      };
       // The route's answer stays the ingest answer. Every declared seat carries its own explicit
       // classification, so a mixed route's hook seat qualifies on fresh ingest while an expected
       // native seat holds, and one seat's unproven channel never marks a sibling pending.
       const seats = route.seats.map((seat) => {
         // Sampled and reconciled at this reading's own instant: an event staged since the last
         // pass holds the seat now, not after the next pump.
-        const verdict = seatVerdict(presence, seat, at);
+        const verdict = seatVerdict(presence, seat, at, stateOf);
         const serving = verdict.why === null;
         return {
           seat,
@@ -763,8 +779,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     });
   };
 
-  const health = (): DaemonHealthSnapshot => {
+  const health = (options?: { roots?: boolean }): DaemonHealthSnapshot => {
     const at = now();
+    // Roots are the per-seat state read. Only an answer that returns them builds the snapshot.
+    const withRoots = options?.roots !== false;
     return snapshotOf({
       pid,
       uid,
@@ -776,7 +794,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       features,
       stuck: stuckNow(),
       ...(heartbeatSeconds === null ? {} : { heartbeatSeconds }),
-      ...(routes.length > 0 ? { roots: rootsSnapshot(at) } : {}),
+      ...(withRoots && routes.length > 0 ? { roots: rootsSnapshot(at) } : {}),
     });
   };
 
@@ -899,7 +917,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (seat === undefined || pane === undefined || principal === undefined || handler === undefined) {
       // No claim, no verifier or no handler: the same refusal the default dispatcher gives, so
       // the seam being closed is indistinguishable from the op never being served here.
-      return answerDaemonRequest(request, health());
+      return answerDaemonRequest(request, health({ roots: false }));
     }
     const at = now();
     let verdict: NextPrincipalVerdict;
@@ -980,7 +998,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         if (request.op === 'next' && request.v === 2) {
           return formatDaemonResponse(await answerNext(request));
         }
-        return formatDaemonResponse(answerDaemonRequest(request, health()));
+        // Only the health answer returns roots. Every other op, including send, skips the
+        // per-seat state read.
+        return formatDaemonResponse(answerDaemonRequest(request, health({ roots: request.op === 'health' })));
       } finally {
         inFlight.delete(request.id);
       }
@@ -1439,10 +1459,21 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
    *  both use. A seat with a source is qualified only while its cached reconciled proof still
    *  matches a fresh source reading and the current binding, so an event staged after the last
    *  pass holds the seat immediately. */
+  const bindingFrom = (
+    one: (typeof presenceWork)[number],
+    seat: string,
+    stateOf?: (dir: string) => State | null,
+  ): string | null => {
+    if (stateOf === undefined) return currentPresenceBinding(one.stateDir, one.route.session, seat);
+    const state = stateOf(one.stateDir);
+    return state === null ? null : presenceBindingFrom(state, one.route.session, seat);
+  };
+
   const seatQualification = (
     one: (typeof presenceWork)[number],
     seat: string,
     at: Date,
+    stateOf?: (dir: string) => State | null,
   ): string | null => {
     if (closed) return 'the daemon is closing';
     if (!one.health.seatHealthy(seat, at)) {
@@ -1459,7 +1490,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     const verdict = reconciledProofHolds({
       proof: one.proofs.get(seat),
       source: reading,
-      currentBinding: currentPresenceBinding(one.stateDir, one.route.session, seat),
+      currentBinding: bindingFrom(one, seat, stateOf),
       epoch: since,
       at,
     });
@@ -1478,6 +1509,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     one: (typeof presenceWork)[number],
     seat: string,
     at: Date,
+    stateOf?: (dir: string) => State | null,
   ): {
     source: 'runtime' | 'hook' | 'unknown';
     binding: string | null;
@@ -1491,7 +1523,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     // standing in for an answer that was never sampled); a hook seat has no sample, so its
     // current state binding is the only incarnation to show.
     const binding = source === undefined
-      ? currentPresenceBinding(one.stateDir, one.route.session, seat)
+      ? bindingFrom(one, seat, stateOf)
       : one.health.seatBinding(seat);
     if (closed) return { source: kind, binding, appliedEventId: null, why: 'the daemon is closing' };
     if (source === undefined) {
@@ -1507,7 +1539,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         : one.health.reason(at) ?? 'the presence channel is not current';
       return { source: kind, binding, appliedEventId: null, why };
     }
-    const why = seatQualification(one, seat, at);
+    const why = seatQualification(one, seat, at, stateOf);
     return {
       source: kind,
       binding,

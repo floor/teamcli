@@ -686,7 +686,20 @@ function isCheckpointRecord(value: unknown, dir: string, seat: string): value is
 
 // The state in `dir` (the folder of the team file). A missing file is an empty state; a file
 // that can't be read as a state is an error, never silently replaced.
-export function readState(dir: string): State {  const path = join(dir, STATE_FILE);
+/** Calls to `readState` since the last reset. A scene wraps one daemon request with it. */
+let readStateCalls = 0;
+
+export function readStateCallCount(): number {
+  return readStateCalls;
+}
+
+export function resetReadStateCallCount(): void {
+  readStateCalls = 0;
+}
+
+export function readState(dir: string): State {
+  readStateCalls += 1;
+  const path = join(dir, STATE_FILE);
   if (!existsSync(path)) return { format: 1, sessions: sessionMap() };
   let parsed: unknown;
   try {

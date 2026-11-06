@@ -284,3 +284,35 @@ test('a full suite keeps the assignment and appends a tracked file it does not n
   const dropped = shardPlan(fullQuery({ allTracked: FULL_FILES.filter((file) => file !== 'test/g.test.ts') }));
   expect(dropped.flatMap((bin) => bin.files)).not.toContain('test/g.test.ts');
 });
+
+const NESTED_JUNIT = `<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="bun test" tests="1" time="1.5">
+  <testsuite name="test/live-delivery-rebind-independent.test.ts" file="test/live-delivery-rebind-independent.test.ts" tests="1" time="1.5">
+    <testcase name="a scene" time="1.5" file="test/live-delivery-rebind-independent.test.ts" />
+  </testsuite>
+  <testsuite name="live-delivery-rebind independent scenes" file="test/live-delivery-rebind-independent.test.ts" tests="1" time="1.5" />
+</testsuites>`;
+
+test('a nested describe suite is not a second unit and does not add its time again', () => {
+  expect(unitTimesFromJunit(NESTED_JUNIT)).toEqual({ 'test/live-delivery-rebind-independent.test.ts': 1500 });
+  expect(unitTimesFromJunit(NESTED_JUNIT, 'test/live-delivery-rebind-independent.test.ts#0/1')).toEqual({
+    'test/live-delivery-rebind-independent.test.ts#0/1': 1500,
+  });
+  const unnamed = `<testsuite name="not a unit path" time="1.0"></testsuite>`;
+  expect(unitTimesFromJunit(unnamed)).toEqual({ 'not a unit path': 1000 });
+});
+
+const DESCRIBES_ONLY_JUNIT = `<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="bun test" tests="2" time="1.5">
+  <testsuite name="first describe" file="test/future-runner.test.ts" tests="1" time="0.8" />
+  <testsuite name="second describe" file="test/future-runner.test.ts" tests="1" time="0.7" />
+</testsuites>`;
+
+test('describe rows without the outer suite add up under their file', () => {
+  // Whatever runner wrote the report, no describe row may mark its file covered: with no outer
+  // suite, the file's time is the describes' sum, and one describe must not hide the others.
+  expect(unitTimesFromJunit(DESCRIBES_ONLY_JUNIT)).toEqual({ 'test/future-runner.test.ts': 1500 });
+  expect(unitTimesFromJunit(DESCRIBES_ONLY_JUNIT, 'test/future-runner.test.ts#0/1')).toEqual({
+    'test/future-runner.test.ts#0/1': 1500,
+  });
+});
