@@ -47,7 +47,7 @@ import { isBriefEpoch } from '../launch/brief-id.ts';
 import { briefBindingOf, currentBriefClaim, GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE } from '../launch/general-brief.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { logLine } from '../log.ts';
-import { currentClaimIn, listUnread, messageNameOk, peekMessage, readMessage, type BriefRead, type InboxMessage } from '../mcp/inbox.ts';
+import { currentClaimIn, listUnread, peekMessage, readMessage, type BriefRead } from '../mcp/inbox.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { attributeSenderClaim, senderReading, type SenderAttribution } from '../send/sender-claim.ts';
 import { readState } from '../state.ts';
@@ -102,9 +102,12 @@ Options:
   --epoch    the runtime epoch the launch started this reader under; when
              given, only a brief delivered under that epoch is served
   --id       read this one id. An id a receipt already settled prints
-             \`<id>: already read at <time> (<read_by>)\` and no body. With
-             nothing unread, the read says \`no unread drops\` and the newest
-             such line.
+             \`<id>: already read at <time> (<reader>)\` and no body. The time
+             is kept only when it is an ISO instant; the reader is a known
+             word or one of this team's seats, never owner, lead or
+             orchestrator, otherwise \`unknown\`. With nothing unread,
+             the read says \`no unread drops\` and the newest such line. A
+             file whose name is not a message id is not served.
 
 Exits 0 when the folder is read, 1 when the caller may not read it (the
 listing needs a placed seat of this team; --read needs the seat itself, the
@@ -464,23 +467,6 @@ function settledFacts(dropDir: string, context: StatusContext, home: string): { 
   return facts.sort((a, b) => (Date.parse(b.at) - Date.parse(a.at)) || a.id.localeCompare(b.id));
 }
 
-/** Signed records whose names are not the UUID the inbox lists. A receipted name is not waiting. */
-function plainWaiting(dropDir: string, settled: ReadonlySet<string>): InboxMessage[] {
-  let names: string[];
-  try {
-    names = readdirSync(dropDir);
-  } catch {
-    return [];
-  }
-  const extra: InboxMessage[] = [];
-  for (const name of names) {
-    if (messageNameOk(name) || name.includes('.') || !recordNameOk(name) || settled.has(name)) continue;
-    if (heldAt(join(dropDir, name)).kind !== 'file') continue;
-    extra.push({ id: name, ts: '1970-01-01T00:00:00.000Z', bytes: 0, sender_attribution: 'none' });
-  }
-  return extra;
-}
-
 /**
  * Reads the caller's own drop folder: the caller must be a seat of this team on the pane the
  * state records for it, and the folder is the one its messages land in. `--json` prints the
@@ -563,7 +549,8 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       return refuse(io, json, `the team's session is ${JSON.stringify(session)}, not ${JSON.stringify(readSession)}`);
     }
     const seatName = args.values.seat as string;
-    if (!loaded.team.seats.some((one) => one.name === seatName)) {
+    const seatNames = loaded.team.seats.map((one) => one.name);
+    if (!seatNames.includes(seatName)) {
       return refuse(io, json, `the team file declares no seat ${JSON.stringify(seatName)}`);
     }
     const { caller, shown } = judgeCallerOf(io, readSession);
@@ -608,14 +595,14 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       const key = messageKeyState(sources.home);
       const settled = key.kind === 'key' ? settledReadOf(dropDir, asked, context, key.key) : null;
       if (peek && settled !== null) {
-        io.stdout(`${alreadyReadSentence(asked, settled.at, settled.readBy)}\n`);
+        io.stdout(`${alreadyReadSentence(asked, settled.at, settled.readBy, seatNames)}\n`);
         return readOk();
       }
       const got = peek
         ? peekMessage(target, asked, sources.home, brief)
         : readMessage(target, asked, sources.home, brief);
       if (!got.ok && got.served === 'already-served') {
-        io.stdout(`${settled === null ? got.reason : alreadyReadSentence(asked, settled.at, settled.readBy)}\n`);
+        io.stdout(`${settled === null ? got.reason : alreadyReadSentence(asked, settled.at, settled.readBy, seatNames)}\n`);
         return readOk();
       }
       if (got.ok) {
@@ -637,10 +624,9 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       return refuse(io, json, got.reason);
     }
     const settled = settledFacts(dropDir, context, sources.home);
-    const waiting = [
-      ...listUnread(dropDir, context, sources.home),
-      ...plainWaiting(dropDir, new Set(settled.map((fact) => fact.id))),
-    ];
+    // Only a name the inbox lists is served. A file whose name is not a message id stays on the
+    // folder listing and is not handed over here.
+    const waiting = listUnread(dropDir, context, sources.home);
     const bodies: string[] = [];
     // The ids a peek showed: a peek writes no receipt, so the log line below is its only trace.
     const peeked: string[] = [];
@@ -666,8 +652,6 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       if (got.ok) {
         bodies.push(got.body);
         if (peek) peeked.push(message.id);
-      } else if (!messageNameOk(message.id)) {
-        // A plain name that does not verify is not mail, and it writes no receipt.
       } else if (got.served !== undefined) {
         // Another reader won the receipt name and served this message: there is no body for this
         // run. It is not a refusal and does not use one of the ten; the message has left the
@@ -728,10 +712,10 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     if (bodies.length === 0 && superseded === 0 && legacy === 0 && receiptRefusals.length === 0 && refusal === null) {
       const lines = ['no unread drops'];
       const newest = settled[0];
-      if (newest !== undefined) lines.push(alreadyReadSentence(newest.id, newest.at, newest.readBy));
+      if (newest !== undefined) lines.push(alreadyReadSentence(newest.id, newest.at, newest.readBy, seatNames));
       io.stdout(`${lines.join('\n')}\n`);
     } else if (bodies.length > 0) {
-      for (const fact of settled) io.stderr(`${alreadyReadSentence(fact.id, fact.at, fact.readBy)}\n`);
+      for (const fact of settled) io.stderr(`${alreadyReadSentence(fact.id, fact.at, fact.readBy, seatNames)}\n`);
     }
     return readOk();
   }

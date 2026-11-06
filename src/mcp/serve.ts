@@ -617,7 +617,7 @@ function callTool(params: unknown, serving: Serving): unknown {
             { to: serving.seat, root: serving.root, session: serving.session, lead: serving.team.orchestrator },
             key.key,
           );
-          if (settled !== null) return toolText(alreadyReadSentence(id, settled.at, settled.readBy));
+          if (settled !== null) return toolText(alreadyReadSentence(id, settled.at, settled.readBy, serving.team.seats.map((one) => one.name)));
         }
       }
       // A drop an earlier build wrote is refused like any file that is not a record, but it is not
