@@ -159,19 +159,24 @@ function holdGrantLock(w: World): string {
 
 /**
  * A second process that moves the seat to a new agent id between the reply's pre-lock binding
- * read and its publication, then releases the lock the test holds. It waits for the client inbox
- * the reply creates first: that folder exists only after the reply has read and bound the record.
- * `withClientGrantLock` sleeps in-process, so the mutation cannot come from this test's own loop.
+ * read and its publication, then releases the lock the test holds. Its imports and its team-file
+ * read happen before it signals `ready`; only then does it wait for the client inbox the reply
+ * creates, which exists only after the reply has read and bound the record. The test starts the
+ * reply only after that signal, so the reply's lock window holds the mutation alone, not a cold
+ * child's start-up. `withClientGrantLock` sleeps in-process, so the mutation cannot come from
+ * this test's own loop.
  */
-function rosterMoveChild(w: World, lockPath: string): Promise<{ code: number | null }> {
+function rosterMoveChild(w: World, lockPath: string, readyPath: string): Promise<{ code: number | null }> {
   const worktree = join(import.meta.dir, '..');
   const script = join(w.base, 'roster-move.ts');
   writeFileSync(script, `
-import { existsSync, unlinkSync } from 'node:fs';
+import { existsSync, unlinkSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-const [worktree, home, teamId, lockPath, inboxPath] = process.argv.slice(2);
+const [worktree, home, teamId, lockPath, inboxPath, readyPath] = process.argv.slice(2);
 const { registerAgent } = await import(pathToFileURL(worktree + '/src/registry/agents.ts').href);
 const { readTeams, upsertTeam } = await import(pathToFileURL(worktree + '/src/registry/teams.ts').href);
+const teams = readTeams(home);
+writeFileSync(readyPath, 'ready\\n');
 const deadline = Date.now() + 10_000;
 while (!inboxPath || !existsSync(inboxPath)) {
   if (Date.now() > deadline) throw new Error('the reply never created its client inbox');
@@ -184,19 +189,28 @@ const fresh = registerAgent(home, {
   reach: { team: teamId, seat: 'orchestrator', session: 'acme', pane: 'fixture:lead', address: null },
   mcp: [], skills: [], lifecycle: 'running', by: 'test',
 });
-const roster = readTeams(home)[teamId].roster.map((entry) => (entry.seat === 'orchestrator' ? { ...entry, agent: fresh.id } : entry));
+const roster = teams[teamId].roster.map((entry) => (entry.seat === 'orchestrator' ? { ...entry, agent: fresh.id } : entry));
 upsertTeam(home, teamId, { roster });
 unlinkSync(lockPath);
 `);
   const child = spawn(
     process.execPath,
-    [script, worktree, w.home, w.teamId, lockPath, clientInboxFolder(w.root, 'acme', 'grok-bot')],
+    [script, worktree, w.home, w.teamId, lockPath, clientInboxFolder(w.root, 'acme', 'grok-bot'), readyPath],
     { stdio: 'ignore' },
   );
   return new Promise((resolve, reject) => {
     child.on('error', reject);
     child.on('exit', (code) => resolve({ code }));
   });
+}
+
+/** Waits for the child's readiness marker, so its start-up is outside the reply's lock window. */
+async function waitForReady(path: string): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (!existsSync(path)) {
+    if (Date.now() > deadline) throw new Error('the child never signalled readiness');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 describe('a bundle-grant client opens a thread and its seat answers', () => {
@@ -271,14 +285,14 @@ describe('a bundle-grant client opens a thread and its seat answers', () => {
 });
 
 describe('the reply publication re-reads the recipient under the grant lock', () => {
-  // Known for 0.5.12.1: spawning a cold child process to mutate the roster while the in-process
-  // reply waits 2000 ms on the grant lock can exceed the wait window on loaded Linux runners.
-  test.skipIf(process.platform !== 'darwin')('a roster change that moves the recipient while the reply waits refuses, and nothing is written', async () => {
+  test('a roster change that moves the recipient while the reply waits refuses, and nothing is written', async () => {
     const w = world({ kind: 'bundle', ops: ['send', 'reply'] });
     const sent = await clientSend(w, 'answer the seat that was');
     expect(sent.code).toBe(0);
     const lockPath = holdGrantLock(w);
-    const moved = rosterMoveChild(w, lockPath);
+    const readyPath = join(w.base, 'roster-move.ready');
+    const moved = rosterMoveChild(w, lockPath, readyPath);
+    await waitForReady(readyPath);
     const reply = await seatReply(w, 'orchestrator', sent.id, 'answered across a roster change');
     expect((await moved).code).toBe(0);
     expect(reply.code).toBe(1);

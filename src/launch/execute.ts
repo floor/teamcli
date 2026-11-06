@@ -11,7 +11,7 @@ function saveTextFile(path: string, text: string): boolean {
     return false;
   }
 }
-import { reportedLiveAgent } from './agent.ts';
+import { reportedAgentIsCli, reportedLiveAgent } from './agent.ts';
 import { refusalReport, type Refusal } from './deliver.ts';
 import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeTarget, withoutResume, conversationMissingOnScreen } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
@@ -64,7 +64,8 @@ export type ScreenKind =
  *  a typed prompt only by the wake's own guarded key — is the `unknown` a launch saw before the
  *  kind existed, so every launch decision keeps its conservative reading of it. */
 export function launchKind(kind: Screen['kind']): ScreenKind {
-  return kind === 'scroll back' ? 'unknown' : kind;
+  if (kind === 'scroll back' || kind === 'feedback survey') return 'unknown';
+  return kind;
 }
 
 /** What a live `up` or `down` can do, apart from deciding it. Tests stand in for all of it. */
@@ -891,8 +892,10 @@ export async function executePlan(
   const liveSession = (seat: string, pane: string, cli: string): string | undefined => {
     const listed = host.agentList?.(session)?.find((agent) => agent.pane === pane
       && (agent.name === null || agent.name === undefined || agent.name === seat));
-    // A reading explicitly attributed to another CLI is never a resume id for this one.
-    if (listed?.agent && !reportedLiveAgent([listed.agent], profileFor(cli)?.processNames ?? [])) return undefined;
+    // A reading explicitly attributed to another CLI is never a resume id for this one. Herdr
+    // names the agent by kind, which is not always the process name (`cursor` for
+    // `cursor-agent`), so the kind is read as either the profile's cli or its process names.
+    if (listed?.agent && !reportedAgentIsCli(listed.agent, cli, profileFor(cli)?.processNames ?? [])) return undefined;
     return listed?.session || undefined;
   };
   const laterLaunchSession = (seat: string, pane: string, cli: string): { agent_session?: string } => {
@@ -1416,8 +1419,9 @@ export async function executePlan(
         }
         // The managed Codex endpoint is started here, after the seat was allowed and its inbox
         // registered: the plan's command stays the deterministic line a dry run prints, and the
-        // attach is added only once an endpoint exists to attach to. A start failure is said
-        // once and the seat launches on the line it had; presence for it is unproven, not guessed.
+        // attach is added only once an endpoint exists to attach to. A start that is not up
+        // leaves the seat out. It does not append --no-daemon and continue. A line the plan
+        // did not mark stays unmanaged and still launches on the line it had.
         let command = op.command;
         // A Grok seat's sandbox profile is written before its command runs, the same place the
         // plan decided to name it. Grok refuses to start for a profile it cannot find, so a file
@@ -1443,7 +1447,8 @@ export async function executePlan(
             attachedEndpoint = true;
             for (const note of read.notes ?? []) hold(op.seat, `${op.seat}: ${note}\n`);
           } else {
-            hold(op.seat, `${op.seat}: the managed Codex endpoint was not started: ${read.why}\n`);
+            leftOut(op.seat, `the managed Codex endpoint was not started: ${read.why}`);
+            break;
           }
         }
         if (op.cli === 'codex' && !attachedEndpoint && !codexCommandHasFlag(command, '--no-daemon')) {
@@ -2324,6 +2329,7 @@ export async function executePlan(
           foreground: host.foreground?.(session, op.pane) ?? null,
           recordedSession: op.session,
           screen: host.paneText?.(session, op.pane) ?? null,
+          ...(op.endpoint === true ? { allowSame: true } : {}),
         });
         // A dead-endpoint relaunch (`op.endpoint`) exists to give the seat a fresh managed
         // server, not to carry a conversation: the weak proof — the CLI alone at an idle

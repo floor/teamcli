@@ -20,7 +20,7 @@ import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneForegroundCwd, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
-import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, wakeableWhileIdle, WEBHOOK_QUEUED_WORDS, type DeliveryClass, type WakeOutcome } from '../launch/delivery-class.ts';
+import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, WEBHOOK_QUEUED_WORDS, type DeliveryClass, type WakeOutcome } from '../launch/delivery-class.ts';
 import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
 import { acquireSeatLock, holderText, seatLockHolder, seatLockPath, type LockHolder } from '../launch/seat-lock.ts';
 import { readState, type SeatState } from '../state.ts';
@@ -61,7 +61,7 @@ import {
   type HeadlessResumeSpawn,
 } from '../send/push-adapters.ts';
 import { bindPane, deliverTrigger, draftNote, showsTranscriptToken, TRIGGER_TAKEN_NOTE, type DeliverResult } from '../send/deliver.ts';
-import { readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
+import { dropMessage, readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { deliverTypedWake, herdrTypedWakeHost, type TypedWakeHost } from '../send/typed-wake.ts';
 import { awaitReceipt, claimBindingIn, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld, type InboxLiveness } from '../mcp/inbox.ts';
 import { channelLaunchEnabled, channelPushed, recordChannelHeld, CHANNEL_HELD_RECEIPT, CHANNEL_PUSH_GRACE_MS, CHANNEL_TICK_MS, CHANNEL_UNCONFIRMED_REASON } from '../mcp/channel.ts';
@@ -170,16 +170,13 @@ skipped with its reason; \`team check\` notes the word. A receipt the inbox's \`
 call leaves on a record the drop leg stored is still the read the watch promotes; the drop
 leg itself waits for no receipt and ends the walk.
 
-Every sent, sent (unconfirmed), sent (channel) and queued (receiver busy) line ends
-with the receiving seat's delivery class in plain words: \`woken through its event
-adapter\` for a seat an event adapter wakes, \`woken through its runtime queue\` for a
-runtime that holds the message between turns, \`queued; <seat> reads it at its next turn,
-and nothing here gives it one (pull-only)\` for a seat that reads its inbox when it takes a
-turn, and \`queued; nothing wakes <seat> while it is idle; a person or a restart must give
-it a turn\` for a launch with no route at all. A profile that declares a typed wake says so
-in the same sentence, and a wake this run tried says what it saw: a wake that ran and did not
-deliver names its reason, and one the run never reached says it did not run. A delivered line
-needs no class: the delivery itself is the answer.
+The summary line is the leg's recorded outcome, not the seat's delivery class. A class
+that names an event adapter is not a leg, so it is never printed as \`woken\`. A channel
+notification marker is not a receipt: that ending says \`notified, not yet read\`. A drop
+that no adapter leg took says \`queued, not woken\`. A profile that declares a typed wake
+says so in the same sentence when that wake ran, and a wake this run tried says what it
+saw: a wake that ran and did not deliver names its reason, and one the run never reached
+says it did not run. A delivered line needs no class: the delivery itself is the answer.
 
 The outcome is one of eight, and none of them is silent:
   delivered    the socket path (exit 0): the frame was taken, printed \`delivered (socket)\`
@@ -523,6 +520,10 @@ type Report = {
    *  summary line. Absent when nothing was posted — no adapter, a route that names nothing usable,
    *  or an id whose record was already there — and the class words then stand as before. */
   webhookPost?: SenderPostOutcome;
+  /** Set when the native route's recorded socket is not listening. The drop ending prints the
+   *  blocked line, the same line is written to the lead, and the history outcome stays
+   *  `queued, not woken`. The value is the probe's own reason. */
+  endpointBlocked?: string;
 };
 
 /** The address as the caller wrote it, kept on the history line beside the resolved seat: the
@@ -620,17 +621,13 @@ function deliveryWordsOf(input: {
  *  post has just made untrue (a claim left in `sent` makes the bus skip the record, so nothing
  *  will fire later), and a failed one says so beside them — the claim is released, and the record
  *  stays where the bus and the seat's pull read it. */
-/** Whether the drop leg's ending left the seat with nothing that wakes it: the class it read is
- *  `pull-on-turn` or `none` (or the seat is a person's, which reads `none`), so the record sits
- *  stored and the seat reads it only at a turn nothing gives it. That ending says `queued, not
- *  woken` — never `sent (unconfirmed)`, which reads like success while the drop waits — and the
- *  word is written the same way on the console line, the JSON status and the history line. Every
- *  other leg wakes the seat itself: a typed trigger starts the turn, native and headless-resume
- *  are the sender's own runtime action, and the channel and socket legs ended the walk before
- *  the drop. A class the run never read is no evidence either way, so the ending keeps the
- *  ordinary `sent (unconfirmed)` there. */
+/** Whether the drop leg's ending woke nobody. The drop stored the record. The class is not
+ *  a leg: a launch that names an event adapter, with no adapter leg recorded, is still
+ *  `queued, not woken` — never `sent (unconfirmed)`, and never `woken`. The word is written
+ *  the same way on the console line, the JSON status and the history line. A class the run
+ *  never read is no evidence either way, so that ending keeps `sent (unconfirmed)`. */
 function dropNotWoken(report: Report): boolean {
-  return report.deliveryClass !== undefined && !wakeableWhileIdle(report.deliveryClass);
+  return report.deliveryClass !== undefined;
 }
 
 /** The send's id on the end of its closing line, so the one thing a sender needs to `team trace`
@@ -655,7 +652,9 @@ function withDelivery(summary: string, report: Report): string {
   const post = report.webhookPost;
   const posted = post?.kind === 'posted' ? post : null;
   const settled = posted !== null || post?.kind === 'unknown';
-  if (report.deliveryWords !== undefined && !(settled && report.deliveryWords === WEBHOOK_QUEUED_WORDS)) {
+  // The class sentence `woken through its event adapter` is not a leg outcome. A leg that
+  // did not record a wake does not get that claim beside its own word.
+  if (report.deliveryWords !== undefined && report.deliveryWords !== 'woken through its event adapter' && !(settled && report.deliveryWords === WEBHOOK_QUEUED_WORDS)) {
     words.push(report.deliveryWords);
   }
   if (posted !== null) words.push(`webhook delivered (${String(posted.ms)} ms)`);
@@ -1660,6 +1659,9 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // recorded first, so the history line the drop leg writes (or the refusal) names what the pane
   // was spared.
   const failures: string[] = [];
+  // The probe's own reason when the recorded socket is not listening. The drop ending prints
+  // it on the blocked line and writes that line to the lead; a later leg that lands clears it.
+  let endpointDown: string | undefined;
   // What this run's typed wake did, once the walk knows: the words a fallback prints must not
   // promise a wake that ran and did not deliver, nor leave out one the run never reached. Absent
   // until the typed leg is reached (or ruled out), which is the truth for a send that ended
@@ -2207,6 +2209,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         // the runtime queue this attempt just failed to reach.
         failures.push(`native: ${attempt.reason}`);
         walkLost.endpoint = true;
+        if (attempt.reason.includes('not listening')) endpointDown = attempt.reason;
         lowerDelivery();
         continue;
       }
@@ -2435,6 +2438,18 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // resort, under every other class (src/send/walk-cascade.ts).
       if (!human && !dry) {
         io.stderr(queuedLine(to.seat, noEventAdapter ? NO_PANE_MESSAGING : NO_EVENT_ADAPTER_TOOK_IT));
+      }
+      if (endpointDown !== undefined) {
+        report.endpointBlocked = endpointDown;
+        writeEndpointBlockedNotice({
+          home: host.home,
+          root: to.root,
+          session: to.session,
+          lead: team.orchestrator,
+          seat: to.seat,
+          reason: endpointDown,
+          at: host.now().toISOString(),
+        });
       }
       return deliverDropped(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, human, wait, timeoutS, callerRoot, note);
     }
@@ -4918,8 +4933,12 @@ export type ReplyWalkResult = {
   /** The reasons legs did not take the reply, and why a walk did not run. */
   failures: readonly string[];
   /** The line the reply prints for the leg that took it; null for the mailbox, whose own
-   *  sentence the reply writes. */
+   *  sentence the reply writes. A missing Codex socket sets this to the blocked line. */
   summary: string | null;
+  /** Set when the native route's recorded socket is not listening. The reply prints the
+   *  blocked line, the same line is written to the lead, and the history outcome stays
+   *  `queued, not woken`. The value is the probe's own reason. */
+  endpointBlocked?: string;
 };
 
 /**
@@ -4987,6 +5006,9 @@ export async function walkReplyDelivery(input: {
     from_team: input.sender.teamId,
   };
   const failures: string[] = [];
+  // The probe's own reason when the recorded socket is not listening. The drop ending prints
+  // the blocked line and writes that line to the lead; a later leg that lands never reaches it.
+  let endpointDown: string | undefined;
   const ended = (result: Omit<ReplyWalkResult, 'failures'>): ReplyWalkResult => ({ ...result, failures });
   // A settings record the store disowns is no declaration to route on: walking the fallback
   // behind it could type into a pane the seat keeps out. The reply's own record stands.
@@ -5032,6 +5054,25 @@ export async function walkReplyDelivery(input: {
     failures.push(error.message);
     return ended({ via: 'drop', walked: false, unconfirmed: false, summary: null });
   }
+  const closeOnDrop = (): ReplyWalkResult => {
+    if (endpointDown === undefined) return ended({ via: 'drop', walked: true, unconfirmed: false, summary: null });
+    writeEndpointBlockedNotice({
+      home: input.host.home,
+      root: input.root,
+      session: input.session,
+      lead: file?.orchestrator ?? '',
+      seat: seatName,
+      reason: endpointDown,
+      at: input.host.now().toISOString(),
+    });
+    return ended({
+      via: 'drop',
+      walked: true,
+      unconfirmed: false,
+      summary: endpointBlockedLine(seatName, endpointDown),
+      endpointBlocked: endpointDown,
+    });
+  };
   const plan = resolveWalkOrder({
     dir: input.dir,
     root: input.root,
@@ -5097,7 +5138,7 @@ export async function walkReplyDelivery(input: {
         continue;
       }
       const ms = input.host.now().getTime() - startedAt;
-      return ended({ via: 'channel', walked: true, unconfirmed: false, summary: `${seatName}: sent (channel) (${String(ms)} ms)` });
+      return ended({ via: 'channel', walked: true, unconfirmed: false, summary: `${seatName}: notified, not yet read (channel, ${String(ms)} ms)` });
     }
     if (leg === 'webhook') {
       const hook = declared.webhook;
@@ -5284,6 +5325,7 @@ export async function walkReplyDelivery(input: {
           });
         }
         failures.push(`native: ${attempt.reason}`);
+        if (attempt.reason.includes('not listening')) endpointDown = attempt.reason;
         continue;
       }
       // Any other CLI has no native route this walk can take. A Claude Code seat's native leg is
@@ -5365,10 +5407,11 @@ export async function walkReplyDelivery(input: {
       failures.push('session: a reply does not create a session; the record waits in the bus inbox');
       continue;
     }
-    // The drop leg closes the walk: the reply's record is already the mailbox's copy.
-    return ended({ via: 'drop', walked: true, unconfirmed: false, summary: null });
+    // The drop leg closes the walk: the reply's record is already the mailbox's copy. A recorded
+    // socket that is not listening reports the same blocked line a send does.
+    return closeOnDrop();
   }
-  return ended({ via: 'drop', walked: true, unconfirmed: false, summary: null });
+  return closeOnDrop();
 }
 
 /** The brief was typed into a compose seat's own box and the CLI never confirmed it. The
@@ -5899,8 +5942,11 @@ function staleSocketReason(to: Aim, path: string, home: string | undefined): str
   // this send returns. The typed-wake exception
   // applies here too: this sentence is read while the typed leg is still ahead of the walk, so a
   // profile that declares a typed wake says the seat reads the message at its next turn rather
-  // than claiming it has no way to be woken.
-  return `the socket recorded for ${to.seat} (${path}) is gone; ${classWords(classWithoutSocket(to, home), to.seat)}`;
+  // than claiming it has no way to be woken. The event-adapter sentence is the class, not a leg
+  // that ran, so a stale socket does not wear it.
+  const words = classWords(classWithoutSocket(to, home), to.seat);
+  const proved = words === 'woken through its event adapter' ? '' : `; ${words}`;
+  return `the socket recorded for ${to.seat} (${path}) is gone${proved}`;
 }
 
 /** Raises the owner's `security.refused` for a denied identity or admission: the rule, the
@@ -6418,10 +6464,54 @@ function deliveredSession(io: Io, seat: string, report: Report, session: string)
  *  while it is idle says `queued, not woken` instead — the same word the history line carries —
  *  because `sent (unconfirmed)` reads like success while the drop waits for a turn nothing gives.
  *  Exit 0, always. */
+/** The one line a missing Codex socket prints, to the sender and to the lead. The probe's
+ *  reason stays on the line. The history outcome stays `queued, not woken`. */
+function endpointBlockedLine(seat: string, reason: string): string {
+  return `${seat}: blocked, its Codex endpoint is not listening; the message is in its bus inbox; team up restores the endpoint (${reason})`;
+}
+
+/** The signed notice the lead's drop folder gets when a Codex seat's recorded socket is not
+ *  listening. The seat's own record stays the mailbox copy; a lead write that fails leaves
+ *  that copy where it is. */
+function writeEndpointBlockedNotice(input: {
+  home: string;
+  root: string;
+  session: string;
+  lead: string;
+  seat: string;
+  reason: string;
+  at: string;
+}): void {
+  if (input.lead === '' || input.lead === input.seat) return;
+  try {
+    const id = randomUUID();
+    const leadDir = join(input.root, '.agents', 'send-drops', input.session, input.lead);
+    const signed = signRecord({
+      kind: 'message',
+      id,
+      to: input.lead,
+      to_id: null,
+      root: realpathSync(input.root),
+      session: input.session,
+      at: input.at,
+      body: endpointBlockedLine(input.seat, input.reason),
+      from: 'runtime',
+      from_id: null,
+      rule: "the team's unread-message report",
+      thread: id,
+    }, input.home);
+    dropMessage(leadDir, id, `${JSON.stringify(signed, null, 2)}\n`);
+  } catch {
+    // The printed line is the notice. A lead drop that cannot be written does not
+    // unsend the seat's own record.
+  }
+}
+
 function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 'drop' | 'typed' | 'native' | 'headless-resume' | 'webhook', note?: string): number {
   const notWoken = leg === 'drop' && dropNotWoken(report);
   const status: 'sent (unconfirmed)' | 'queued, not woken' = notWoken ? 'queued, not woken' : 'sent (unconfirmed)';
-  const summary = withId(withDelivery(`${seat}: ${status} (${leg}, ${String(ms)} ms${note === undefined ? '' : `; ${note}`})`, report), report);
+  const blocked = leg === 'drop' && report.endpointBlocked !== undefined ? endpointBlockedLine(seat, report.endpointBlocked) : undefined;
+  const summary = withId(blocked ?? withDelivery(`${seat}: ${status} (${leg}, ${String(ms)} ms${note === undefined ? '' : `; ${note}`})`, report), report);
   if (report.json) {
     writeAction(io, report, { status, summary, channel: leg });
   } else {
@@ -6431,11 +6521,11 @@ function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 
   return 0; // exit: send.sent-unconfirmed
 }
 
-/** The seat's own server pushed the record into its CLI: the notification was written, and the
- *  channel's own word says so. The push is not a read — the signed receipt that follows is — so
- *  a channel ending is never `delivered (read)`. Exit 0, always. */
+/** The seat's own server wrote the notification. That marker is not a receipt and not a
+ *  turn, so the summary says `notified, not yet read` and never `woken`. The signed receipt
+ *  that follows is what promotes the record. Exit 0, always. */
 function sentChannel(io: Io, seat: string, report: Report, ms: number): number {
-  const summary = withId(withDelivery(`${seat}: sent (channel) (${String(ms)} ms)`, report), report);
+  const summary = withId(withDelivery(`${seat}: notified, not yet read (channel, ${String(ms)} ms)`, report), report);
   if (report.json) {
     writeAction(io, report, { status: 'sent (channel)', summary, channel: 'channel' });
   } else {

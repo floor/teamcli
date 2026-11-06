@@ -201,8 +201,12 @@ function ready(w: World, seats: readonly Ready[]): void {
 }
 
 /** The terminal host's reading: each seat idle on its recorded pane, its processes readable, its
- *  screen the captured idle one. */
-function liveOn(seats: readonly Ready[], options: { screen?: boolean } = {}): Live {
+ *  screen the captured idle one. `sessions` carries the agent session herdr reports for a seat,
+ *  the id a restored pane is proven by. */
+function liveOn(
+  seats: readonly Ready[],
+  options: { screen?: boolean; sessions?: Readonly<Record<string, string>> } = {},
+): Live {
   return {
     running: true,
     agents: seats.map((seat) => ({
@@ -212,6 +216,7 @@ function liveOn(seats: readonly Ready[], options: { screen?: boolean } = {}): Li
       workspace: 'fixture-workspace',
       status: 'idle',
       cwd: null,
+      ...(options.sessions?.[seat.name] === undefined ? {} : { session: options.sessions[seat.name] }),
     })),
     workspaces: [],
     screens: options.screen === false ? {} : Object.fromEntries(seats.map((seat) => [seat.pane, CLAUDE_IDLE])),
@@ -232,8 +237,14 @@ function writeSocket(w: World, seat: Ready, at: Date = new Date()): string {
 }
 
 /** The registry record a plain-name send resolves, carrying the recorded socket address the
- *  delivery class and the send's own leg both read. */
-function register(w: World, seat: Ready, address: string): void {
+ *  delivery class and the send's own leg both read (null for one launched before an address
+ *  was recorded), and the launch's agent session when the record carries one. */
+function register(
+  w: World,
+  seat: Ready,
+  address: string | null,
+  options: { agentSession?: string } = {},
+): void {
   registerAgent(w.home, {
     name: seat.name,
     signing: { model: 'Claude Opus', version: '5.5', role: 'orchestrator' },
@@ -241,7 +252,14 @@ function register(w: World, seat: Ready, address: string): void {
     cli: seat.cli ?? 'claude-code',
     launcher: null,
     launch: seat.launch,
-    reach: { team: teamIdOf(w.root), seat: seat.name, session: 'acme', pane: seat.pane, address },
+    reach: {
+      team: teamIdOf(w.root),
+      seat: seat.name,
+      session: 'acme',
+      pane: seat.pane,
+      address,
+      ...(options.agentSession === undefined ? {} : { agent_session: options.agentSession }),
+    },
     mcp: [],
     skills: [],
     lifecycle: 'running',
@@ -445,6 +463,9 @@ describe('team check names a live seat whose socket a send would skip', () => {
     ready(w, [seat]);
     const { code, out } = check(w, liveOn([seat]));
     expect(out).toContain(`difference: older: ${NOT_SOCKET}: the socket predates the settings that declare it accepts`);
+    // The repair is the load's to refuse: the line names the limit as the machine's own refusal
+    // does, so a refused restart is understood before it is attempted.
+    expect(out).toContain('a restart is refused while the load is above 3 per core (machine.load_start)');
     expect(out).toContain('  repair: team restart older');
     expect(code).toBe(1);
   });
@@ -523,6 +544,130 @@ describe('team check names a live seat whose socket a send would skip', () => {
     expect(out).toContain('difference: ended: its pane runs no CLI (the CLI ended or the session was restored)');
     expect(out).not.toContain(NOT_SOCKET);
     expect(out).not.toContain(NO_SOCKET);
+    expect(code).toBe(1);
+  });
+
+  test('a seat whose socket only its pane proves: the record’s missing address is a difference, and team up records it', () => {
+    const w = world([{ name: 'paneonly', role: 'orchestrator', launch: 'claude', inbound: 'accept', leads: true }]);
+    const seat = { name: 'paneonly', pane: PANE_ONE, launch: 'claude --model claude-opus-5-5', pid: SESSION_PID };
+    declare(w, 'paneonly');
+    // The pane carries the socket and the record names the seat but no address: this check can
+    // read the socket through the pane, while every reader that holds no pane — the send's class
+    // line, `team plan`, the seat's `team next` — reads the seat pull-only.
+    register(w, seat, null);
+    writeSocket(w, seat);
+    ready(w, [seat]);
+    updateState(w.dir, (state) => {
+      state.sessions.acme!.seats.paneonly!.launched = { shell: SHELL_PID, cli: [SESSION_PID] };
+    });
+    const { code, out } = check(w, liveOn([seat]));
+    expect(out).toContain(
+      "difference: paneonly: a reader without its pane sees pull-on-turn, not push: only the socket its pane's processes carry proves it, and its agent record holds no address this session can dial",
+    );
+    // The pane is read and the record's identity is the record's own: recording the address is
+    // `team up`'s write, and nothing relaunches.
+    expect(out).toContain('  repair: team up');
+    expect(out).not.toContain(NOT_SOCKET);
+    expect(code).toBe(1);
+  });
+
+  test('a restored pane the record’s launch does not name: team up adopts it in place, so it is the whole repair', () => {
+    const w = world([{ name: 'restored', role: 'orchestrator', launch: 'claude', inbound: 'accept', leads: true }]);
+    const seat = { name: 'restored', pane: PANE_ONE, launch: 'claude --model claude-opus-5-5', pid: OTHER_PID };
+    declare(w, 'restored');
+    // The record names the process the launch started — a pid that is no longer in front — and
+    // the session herdr reports for the seat. The pane was restored since: herdr still names the
+    // seat there, in the same session, and the process now in front carries the socket.
+    register(w, seat, null, { agentSession: 'ses_keep' });
+    writeSocket(w, seat);
+    ready(w, [seat]);
+    updateState(w.dir, (state) => {
+      state.sessions.acme!.seats.restored!.launched = { shell: SHELL_PID, cli: [SESSION_PID] };
+      state.sessions.acme!.seats.restored!.agent_session = 'ses_keep';
+    });
+    const { code, out } = check(w, liveOn([seat], { sessions: { restored: 'ses_keep' } }));
+    expect(out).toContain('difference: restored: a reader without its pane sees pull-on-turn, not push');
+    // The registry binds the conversation herdr reports for the pane, so `team up`'s own plan
+    // adopts that process in place — its restored step writes the new launch identity before
+    // its address pass reads the pane — and records the address in one run. No restart is
+    // named, and `team register` still refuses the refresh (test/register-refresh.test.ts
+    // pins that refusal).
+    expect(out).not.toContain('  repair: team register restored');
+    expect(out).not.toContain('  repair: team restart restored');
+    expect(out).toContain('  repair: team up');
+    expect(code).toBe(1);
+  });
+
+  test('a replaced pane only the state’s session copy matches: the restart must abandon it, and the line says so', () => {
+    const w = world([{ name: 'doubt', role: 'orchestrator', launch: 'claude', inbound: 'accept', leads: true }]);
+    const seat = { name: 'doubt', pane: PANE_ONE, launch: 'claude --model claude-opus-5-5', pid: OTHER_PID };
+    declare(w, 'doubt');
+    // The registry record names no conversation, so the pane's continuity rests on the state's
+    // copy alone — the reading `paneShowsSeat` admits but a restart refuses to treat as restored:
+    // the registry is the proof it resumes by, and nothing else may bless the process in front.
+    register(w, seat, null);
+    writeSocket(w, seat);
+    ready(w, [seat]);
+    updateState(w.dir, (state) => {
+      state.sessions.acme!.seats.doubt!.launched = { shell: SHELL_PID, cli: [SESSION_PID] };
+      state.sessions.acme!.seats.doubt!.agent_session = 'ses_keep';
+    });
+    const { code, out } = check(w, liveOn([seat], { sessions: { doubt: 'ses_keep' } }));
+    expect(out).toContain("the process in its pane is not the one its record's launch started");
+    expect(out).toContain('the repair starts the seat fresh: it abandons that process, leaving the recorded conversation behind, and is refused while the load is above ');
+    expect(out).not.toContain('  repair: team register doubt');
+    // The restart records the address itself, so no `team up` follows it.
+    expect(out).toContain('  repair: team restart doubt --abandon');
+    expect(out).not.toContain('  repair: team restart doubt --abandon, then team up');
+    expect(code).toBe(1);
+  });
+
+  test('two seats whose records name one pane: the duplicate claim is named once, and neither gets an address repair', () => {
+    const w = world([
+      { name: 'worker', role: 'orchestrator', launch: 'claude', inbound: 'accept', leads: true },
+      { name: 'peer', role: 'implementer', launch: 'claude', inbound: 'accept' },
+    ]);
+    // Both records were left naming the same pane, and herdr lists both seats there: whichever
+    // socket the pane's processes carry, following it from either record would wake one seat for
+    // a send that named the other. Each seat's own binding line would point at the same process.
+    const seat = { name: 'worker', pane: PANE_ONE, launch: 'claude --model claude-opus-5-5', pid: SESSION_PID };
+    const twin = { name: 'peer', pane: PANE_ONE, launch: 'claude --model claude-opus-5-5', pid: SESSION_PID };
+    declare(w, 'worker');
+    declare(w, 'peer');
+    register(w, seat, null);
+    register(w, twin, null);
+    writeSocket(w, seat);
+    ready(w, [seat, twin]);
+    updateState(w.dir, (state) => {
+      state.sessions.acme!.seats.worker!.launched = { shell: SHELL_PID, cli: [SESSION_PID] };
+      state.sessions.acme!.seats.peer!.launched = { shell: SHELL_PID, cli: [SESSION_PID] };
+    });
+    const { code, out } = check(w, liveOn([seat, twin]));
+    expect(out).toContain(
+      `worker, peer: one pane is recorded for more than one seat: their state records all name ${PANE_ONE}`,
+    );
+    // Not one binding repair per seat: `team up` would record the same socket on both records,
+    // and `team register` refuses a pane another declared seat's record holds.
+    expect(out).not.toContain('  repair: team up\n');
+    expect(out).not.toContain('  repair: team register worker');
+    expect(out).not.toContain('  repair: team register peer');
+    // A stop and a start rewrite the recorded panes from the file.
+    expect(out).toContain('  repair: team down, then team up');
+    expect(code).toBe(1);
+  });
+
+  test('the same seat whose record names no process: team register is the repair', () => {
+    const w = world([{ name: 'paneold', role: 'orchestrator', launch: 'claude', inbound: 'accept', leads: true }]);
+    const seat = { name: 'paneold', pane: PANE_ONE, launch: 'claude --model claude-opus-5-5', pid: SESSION_PID };
+    declare(w, 'paneold');
+    // The record predates process identities: `team up` would refuse to name the pane's process,
+    // and `team register` is the read that records both the identity and the address.
+    register(w, seat, null);
+    writeSocket(w, seat);
+    ready(w, [seat]);
+    const { code, out } = check(w, liveOn([seat]));
+    expect(out).toContain('difference: paneold: a reader without its pane sees pull-on-turn, not push');
+    expect(out).toContain('  repair: team register paneold');
     expect(code).toBe(1);
   });
 

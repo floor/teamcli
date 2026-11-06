@@ -399,7 +399,7 @@ describe('a pass of the watch', () => {
     const holding = live({ 'codex-acme': { status: 'idle', screen } });
     expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: holding, machine: fine, now: 0, memory }).reports).toEqual([]);
     expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: holding, machine: fine, now: MIN, memory }).reports.map((report) => report.text))
-      .toEqual(['codex-acme holds text in its input box that was never sent']);
+      .toEqual(['codex-acme: its input box reads as holding text; nothing is typed there']);
   });
 
   test('the checks read the watch values in force, not the file\'s', () => {
@@ -413,12 +413,12 @@ describe('a pass of the watch', () => {
     const inForce = { ...file.watch, unsentAfter: 60 * 60 };
     expect(pass({ team: file, state: emptySession(), live: holding, machine: fine, now: 0, memory, approval: [], watch: inForce }).reports).toEqual([]);
     expect(pass({ team: file, state: emptySession(), live: holding, machine: fine, now: 60 * MIN, memory, approval: [], watch: inForce }).reports.map((report) => report.text))
-      .toEqual(['codex-acme holds text in its input box that was never sent']);
+      .toEqual(['codex-acme: its input box reads as holding text; nothing is typed there']);
     // With the file's own values, the minute is enough.
     const own = newMemory();
     pass({ team: file, watch: file.watch, state: emptySession(), live: holding, machine: fine, now: 0, memory: own, approval: [] });
     expect(pass({ team: file, watch: file.watch, state: emptySession(), live: holding, machine: fine, now: MIN, memory: own, approval: [] }).reports.map((report) => report.text))
-      .toEqual(['codex-acme holds text in its input box that was never sent']);
+      .toEqual(['codex-acme: its input box reads as holding text; nothing is typed there']);
   });
 
   test('a parked seat runs the wrong model: model drift is reported too', () => {
@@ -445,7 +445,7 @@ describe('a pass of the watch', () => {
     const holding = live({ 'codex-acme': { status: 'idle', screen } });
     expect(pass({ team: stoppedTeam(), watch: stoppedTeam().watch, state: emptySession(), live: holding, machine: fine, now: 0, memory }).reports).toEqual([]);
     expect(pass({ team: stoppedTeam(), watch: stoppedTeam().watch, state: emptySession(), live: holding, machine: fine, now: MIN, memory }).reports.map((report) => report.text))
-      .toEqual(['codex-acme holds text in its input box that was never sent']);
+      .toEqual(['codex-acme: its input box reads as holding text; nothing is typed there']);
   });
 
   test('a stopped seat that runs but stays idle is not reported idle', () => {
@@ -546,7 +546,7 @@ describe('a pass of the watch', () => {
     const typed = live({ 'claude-coordinator-acme': { status: 'idle', screen: unsent } });
     expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: typed, machine: fine, now: 0, memory }).reports).toEqual([]);
     expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: typed, machine: fine, now: MIN, memory }).reports.map((report) => report.text)).toEqual([
-      'claude-coordinator-acme holds text in its input box that was never sent',
+      'claude-coordinator-acme: its input box reads as holding text; nothing is typed there',
     ]);
   });
 

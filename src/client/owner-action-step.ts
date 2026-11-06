@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { basename, dirname } from 'node:path';
 import { callerLabel, callerOf, isOwner, type Caller } from '../caller.ts';
+import { syncChildTimeout } from '../child.ts';
 import { charterGate } from '../charter/check.ts';
 import { isSameOrInside } from '../grant.ts';
 import { admitOwnerAction, admitOwnerActionByRule, approveOwnerAction, auditRuleAdmission, boundWords, canonicalRoot, createOwnerActionRequest, listOwnerActionRules, type OwnerAction, type OwnerActionAdmission } from './owner-action.ts';
@@ -41,7 +42,11 @@ export type OwnerSeatStep =
 
 export function headOf(root: string): string | null {
   try {
-    return execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
+    return execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: syncChildTimeout(5_000),
+    }).trim() || null;
   } catch {
     return null;
   }

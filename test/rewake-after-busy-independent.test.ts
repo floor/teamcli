@@ -394,8 +394,8 @@ describe('3. grey draft, bold word, second colour, and inverse cursor stay unsen
       expectedText: 'check the webhook claim state',
     },
     {
-      label: 'grey draft (truecolor 38;2;103;108;116 non-listed prose)',
-      styledInput: '\x1b[38;2;103;108;116mship the patch\x1b[0m',
+      label: 'grey draft (truecolor 38;2;120;125;130, not the declared hint colour)',
+      styledInput: '\x1b[38;2;120;125;130mship the patch\x1b[0m',
       expectedText: 'ship the patch',
     },
     {

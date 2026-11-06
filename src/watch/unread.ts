@@ -628,12 +628,12 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     // its own prompt behind the scroll. Only the typed retry may act on that reading (it sends
     // the return key and reads the box again); a word of working or blocked still refuses it,
     // and every other screen keeps the plain status rule.
-    const scrolledWake = retry !== null && kind === 'scroll back' && status !== 'working' && status !== 'blocked';
+    const scrolledWake = retry !== null && (kind === 'scroll back' || kind === 'feedback survey') && status !== 'working' && status !== 'blocked';
     if ((retry === null || !herdrUnreliable(seat.cli)) && status !== 'idle' && status !== 'done' && !scrolledWake) continue;
-    // A pane scrolled back over its transcript is at its prompt behind the scroll, but only the
-    // typed retry may act on it: that wake sends the profile's return key and reads the box
-    // again. The drop-file leg types into no screen but the visible composer.
-    if (kind !== 'idle' && kind !== 'unsent' && !(retry !== null && kind === 'scroll back')) continue;
+    // A pane scrolled back over its transcript, or at a post-turn feedback survey the profile
+    // skips once, is handled by the typed retry alone: that wake sends the profile's single key
+    // and reads the box again. The drop-file leg types into no screen but the visible composer.
+    if (kind !== 'idle' && kind !== 'unsent' && !(retry !== null && (kind === 'scroll back' || kind === 'feedback survey'))) continue;
     const lock = acquireSeatLock(scene.dir, scene.session, seat.name);
     if (!('release' in lock)) continue;
     try {

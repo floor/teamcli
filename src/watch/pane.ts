@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { syncChildTimeout } from '../child.ts';
 import { paneProcesses, workspaceList, workspacePanes, type PaneProcesses } from '../herdr.ts';
 import { emptySession, readState, updateState } from '../state.ts';
 import { isWatchEpoch } from './epoch.ts';
@@ -268,6 +269,7 @@ export function processCommandOf(pid: number): string | null {
     const line = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: syncChildTimeout(2_000),
     }).trim();
     return line === '' ? null : line;
   } catch {
@@ -284,6 +286,7 @@ export function processStartOf(pid: number): number | null {
     const line = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: syncChildTimeout(2_000),
     }).trim();
     const at = Date.parse(line);
     return Number.isFinite(at) ? at : null;

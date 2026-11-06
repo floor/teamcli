@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startMachineDaemon } from '../src/daemon/host.ts';
-import { DAEMON_LABEL, machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
+import { DAEMON_LABEL, daemonLogPath, machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
 import { restoreEntryOf, runRestoreSweepInChild } from '../src/daemon/restore/spawn.ts';
 import { acceptRestoreDoor, discardRestoreInherit, restoreDoorText, writeRestoreDoor } from '../src/daemon/restore/token.ts';
 import { readDaemonState } from '../src/daemon/state.ts';
@@ -21,9 +21,22 @@ import { readDaemonState } from '../src/daemon/state.ts';
  *  system temporary folder. */
 const BASE = existsSync('/private/tmp') ? '/private/tmp' : tmpdir();
 
-// Known for 0.5.12.1: the real restore child entry verifies its parent through
-// systemServiceManager(), which is implemented for macOS launchctl only.
+// The restore door binds the child to the parent the system's service manager records. A
+// platform whose product build has no service-manager adapter (src/daemon/service.ts offers the
+// darwin one alone) has no such anchor: the real entry refuses there, before it spends its
+// token. The scenes below assert that documented refusal on such a platform — the child exits 2,
+// the token is still there, and no pass line or state change appears — and the pass itself on
+// the primary platform.
 const offDarwin = process.platform !== 'darwin';
+const SERVICE_REFUSAL = "team daemon: the system's service manager records no running machine daemon\n";
+
+/** The real child's documented refusal where the door has no service-manager anchor: exit 2,
+ *  no result line on stdout, and the one reason on stderr. */
+function expectServiceRefusal(ran: { status: number | null; stdout: string; stderr: string }): void {
+  expect(ran.status).toBe(2);
+  expect(ran.stdout).toBe('');
+  expect(ran.stderr).toBe(SERVICE_REFUSAL);
+}
 
 const TEAM = `format: 1
 project: restore-child
@@ -300,9 +313,19 @@ describe("the restore child's authority is the one-use token", () => {
     expect(forged.stderr).toContain('no one-use token names this child');
   });
 
-  test.skipIf(offDarwin)('a replayed token starts no second pass', async () => {
+  test('a replayed token starts no second pass', async () => {
     const { root, home } = scratch();
     const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid });
+    if (offDarwin) {
+      // No service-manager anchor exists here, so the door refuses with its documented error
+      // before it spends the token: a second start cannot be a second pass, and the one-use
+      // token the daemon wrote is still there for a platform that can claim it.
+      const doorText = restoreDoorText(nonce, secret);
+      expectServiceRefusal(await runEntryInBackground(home, ['--inherited', nonce], root, doorText));
+      expectServiceRefusal(await runEntryInBackground(home, ['--inherited', nonce], root, doorText));
+      expect(existsSync(restoreInheritPath(home, nonce))).toBe(true);
+      return;
+    }
     const first = await runEntryInBackground(home, ['--inherited', nonce], root, restoreDoorText(nonce, secret));
     expect(first.status).toBe(0);
     expect(JSON.parse(first.stdout.trim())).toEqual({ ok: true, result: { kind: 'no-recorded-session' } });
@@ -314,8 +337,21 @@ describe("the restore child's authority is the one-use token", () => {
     expect(tokenFiles(home)).toEqual([]);
   });
 
-  test.skipIf(offDarwin)('two children started with one token at once: exactly one runs the pass', async () => {
+  test('two children started with one token at once: exactly one runs the pass', async () => {
     const { root, home } = scratch();
+    if (offDarwin) {
+      // The door cannot admit either child here (the anchor it binds the parent to is absent),
+      // so neither spends the one token: both refuse with the documented error and it remains.
+      const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid });
+      const doorText = restoreDoorText(nonce, secret);
+      const pair = await Promise.all([
+        runEntryInBackground(home, ['--inherited', nonce], root, doorText),
+        runEntryInBackground(home, ['--inherited', nonce], root, doorText),
+      ]);
+      for (const one of pair) expectServiceRefusal(one);
+      expect(existsSync(restoreInheritPath(home, nonce))).toBe(true);
+      return;
+    }
     for (let round = 0; round < 4; round += 1) {
       const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid });
       const doorText = restoreDoorText(nonce, secret);
@@ -336,10 +372,22 @@ describe("the restore child's authority is the one-use token", () => {
     expect(tokenFiles(home)).toEqual([]);
   }, 30_000);
 
-  test.skipIf(offDarwin)('a machine folder this child cannot claim in refuses the token', async () => {
+  test('a machine folder this child cannot claim in refuses the token', async () => {
     const { root, home } = scratch();
     const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid });
     const dir = machineConfigDir(home);
+    if (offDarwin) {
+      // The refusal happens at the anchor this platform does not provide, before the claim is
+      // attempted at all: the folder's mode changes nothing, and the token is not spent.
+      chmodSync(dir, 0o500);
+      try {
+        expectServiceRefusal(await runEntryInBackground(home, ['--inherited', nonce], root, restoreDoorText(nonce, secret)));
+      } finally {
+        chmodSync(dir, 0o700);
+      }
+      expect(existsSync(restoreInheritPath(home, nonce))).toBe(true);
+      return;
+    }
     // Traversal and reading stay possible for this uid; only the claim (a rename in the folder)
     // is not. The token starts nothing.
     chmodSync(dir, 0o500);
@@ -353,21 +401,31 @@ describe("the restore child's authority is the one-use token", () => {
     }
   });
 
-  test.skipIf(offDarwin)('the spawner runs the real pass and leaves no token behind', async () => {
+  test('the spawner runs the real pass and leaves no token behind', async () => {
     const { root, home } = scratch();
     expect(restoreEntryOf()).toBe(ENTRY);
+    if (offDarwin) {
+      // The spawner's real child refuses at the anchor this platform does not provide; the
+      // spawner reports that refusal and discards the token it minted, so no pass is invented.
+      await expect(runRestoreSweepInChild({ home, root, timeoutMs: 60_000 })).rejects.toThrow(
+        `the restore child left before it reported (code 2): ${SERVICE_REFUSAL.trim()}`,
+      );
+      expect(tokenFiles(home)).toEqual([]);
+      return;
+    }
     expect(await runRestoreSweepInChild({ home, root, timeoutMs: 60_000 })).toEqual({ kind: 'no-recorded-session' });
     expect(tokenFiles(home)).toEqual([]);
   }, 30_000);
 });
 
 describe("the daemon's beat while a restore pass runs", () => {
-  test.skipIf(offDarwin)('a terminal host answering in five seconds holds the child, never the heartbeat', async () => {
+  test('a terminal host answering in five seconds holds the child, never the heartbeat', async () => {
     const { base, root, home } = scratch();
     // The route records a seat, so the pass reads the session's state and reaches the terminal
     // host. The fake answers every call after five seconds and logs the call first, so a landed
     // `session list` names the window the pass was inside.
     recordSeat(root);
+    const recordedBefore = readFileSync(join(root, '.agents', 'team.state.json'), 'utf8');
     const bin = join(base, 'bin');
     const herdrLog = join(base, 'herdr.log');
     mkdirSync(bin, { recursive: true });
@@ -412,6 +470,19 @@ echo '{"result":{"sessions":[]}}'
           beats.push(Date.parse(last));
         }
         await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      if (offDarwin) {
+        // This platform has no service-manager anchor for the restore door: the daemon's own
+        // restore child refuses with the documented error before any pass starts, so the
+        // terminal host is never reached and the route's recorded state does not move. The
+        // beat — the reason the child exists — still keeps its cadence through that refusal.
+        expect(existsSync(herdrLog) ? readFileSync(herdrLog, 'utf8') : '').not.toContain('session list');
+        const logged = existsSync(daemonLogPath(home)) ? readFileSync(daemonLogPath(home), 'utf8') : '';
+        expect(logged).toContain("the system's service manager records no running machine daemon");
+        expect(readFileSync(join(root, '.agents', 'team.state.json'), 'utf8')).toBe(recordedBefore);
+        expect(beats.length).toBeGreaterThan(20);
+        expect(tokenFiles(home)).toEqual([]);
+        return;
       }
       // The fake was reached (the pass was inside a five-second call while the beat sampled)…
       expect(existsSync(herdrLog) ? readFileSync(herdrLog, 'utf8') : '').toContain('session list');
@@ -570,7 +641,7 @@ describe('independent adversarial checks: restore spawn abort, deadline, spawn e
     expect(tokenFiles(home)).toEqual([]);
   }, 30_000);
 
-  test.skipIf(offDarwin)('a token for one root never touches a second root, and closing the daemon during a slow herdr call keeps the beat live and leaves no token behind', async () => {
+  test('a token for one root never touches a second root, and closing the daemon during a slow herdr call keeps the beat live and leaves no token behind', async () => {
     const { base, root: rootA, home } = scratch();
     const rootB = join(base, 'repo-b');
     mkdirSync(join(rootB, '.agents'), { recursive: true });
@@ -602,6 +673,52 @@ echo '{"result":{"sessions":[]}}'
     process.env.PATH = `${bin}:${savedPath ?? '/usr/bin:/bin'}`;
     process.env.TEAM_TEST_HERDR_LOG = herdrLog;
     try {
+      if (offDarwin) {
+        // No pass can start here: the direct child and the daemon's own sweep both refuse at
+        // the anchor this platform does not provide. Neither root is read, and no token
+        // outlives the attempts.
+        await expect(runRestoreSweepInChild({ home, root: rootA, timeoutMs: 15_000 })).rejects.toThrow(
+          `the restore child left before it reported (code 2): ${SERVICE_REFUSAL.trim()}`,
+        );
+        expect(existsSync(herdrLog) ? readFileSync(herdrLog, 'utf8') : '').not.toContain('session list');
+        expect(tokenFiles(home)).toEqual([]);
+
+        const started = await startMachineDaemon({
+          home,
+          roots: [rootA],
+          startedBy: 'test',
+          version: '0.6.0-test',
+          heartbeatMs: 150,
+          choresHosting: false,
+        });
+        expect(started.kind).toBe('serving');
+        if (started.kind !== 'serving') return;
+
+        const beats: number[] = [];
+        let last = '';
+        const sampleUntil = Date.now() + 900;
+        while (Date.now() < sampleUntil) {
+          const read = readDaemonState(home);
+          if (read.kind === 'ok' && read.state.heartbeatAt !== last) {
+            last = read.state.heartbeatAt;
+            beats.push(Date.parse(last));
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        expect(beats.length).toBeGreaterThanOrEqual(3);
+        // The daemon's own sweep names the same refusal; wait for that line, then close.
+        const logUntil = Date.now() + 5_000;
+        let logged = '';
+        while (Date.now() < logUntil) {
+          logged = existsSync(daemonLogPath(home)) ? readFileSync(daemonLogPath(home), 'utf8') : '';
+          if (logged.includes("the system's service manager records no running machine daemon")) break;
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        expect(logged).toContain("the system's service manager records no running machine daemon");
+        await started.daemon.close();
+        expect(tokenFiles(home)).toEqual([]);
+        return;
+      }
       // 1. Running a child token scoped to `rootA` only touches `rootA` and never `rootB`.
       const resultA = await runRestoreSweepInChild({ home, root: rootA, timeoutMs: 15_000 });
       expect(resultA).toEqual({ kind: 'not-running', state: 'absent' });

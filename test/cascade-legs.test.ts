@@ -384,7 +384,7 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     expect(await runSend(['cursor', 'second'], io2, host2)).toBe(0);
     expect(hits).toBe(2);
     expect(workingPane.typed).toEqual([]);
-    expect(io2.out).toContain('cursor: sent (unconfirmed) (drop, ');
+    expect(io2.out).toContain('cursor: queued, not woken (drop, ');
     expect(io2.out).toContain('webhook not delivered: HTTP 502');
     const history = readHistory('acme', one.root, host2.home);
     expect(history.ok).toBe(true);
@@ -397,7 +397,7 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
         failed: ['socket: cursor sessions have no cross-session socket', 'webhook: HTTP 503'],
       });
       expect(history.entries[1]?.via).toBe('drop');
-      expect(history.entries[1]?.outcome).toBe('sent (unconfirmed)');
+      expect(history.entries[1]?.outcome).toBe('queued, not woken');
       expect(history.entries[1]?.failed?.[0]).toBe('socket: cursor sessions have no cross-session socket');
       expect(history.entries[1]?.failed?.[1]).toBe('webhook: HTTP 502');
       expect(history.entries[1]?.failed?.[2]).toMatch(/^typed: /);

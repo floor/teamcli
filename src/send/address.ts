@@ -128,6 +128,25 @@ export function paneSocket(pane: string, session?: string, sockets: string | rea
   return socketOfProcesses(paneProcesses(pane, session), sockets);
 }
 
+// The one write both refreshers make: the socket the pane's own processes carry, recorded when it
+// is not the one already held. A reading that never happened is not a change; the caller has
+// already decided that.
+function recordLiveSocket(
+  home: string,
+  id: string,
+  recorded: string | null,
+  processes: PaneProcesses,
+  sockets: string | readonly string[],
+): string | null {
+  const next = liveSocketOf(recorded, processes, sockets);
+  if (next !== recorded) recordAgentAddress(home, id, next);
+  return next;
+}
+
+function registryNote(error: unknown): string {
+  return `registry not written: ${error instanceof Error ? error.message : String(error)}`;
+}
+
 /** The address to record for a launched claude-code seat, refreshed when the pid changed: reads
  *  the pane, writes the record when the socket it should hold is not the one it holds, and returns
  *  it. A pane that cannot be read is not a change — a recorded address is not cleared on a
@@ -145,10 +164,29 @@ export function refreshAgentAddress(
     if (!agent || agent.cli !== 'claude-code' || pane === null) return { address: agent?.reach.address ?? null };
     const processes = paneProcesses(pane, session);
     if (processes === null) return { address: agent.reach.address };
-    const next = liveSocketOf(agent.reach.address, processes, sockets);
-    if (next !== agent.reach.address) recordAgentAddress(home, id, next);
-    return { address: next };
+    return { address: recordLiveSocket(home, id, agent.reach.address, processes, sockets) };
   } catch (error) {
-    return { address: null, note: `registry not written: ${error instanceof Error ? error.message : String(error)}` };
+    return { address: null, note: registryNote(error) };
+  }
+}
+
+/** The same write from a pane reading the caller already made: no herdr read happens here, so a
+ *  run that has the processes in hand — `team up` reads each pane once for the seat's identity —
+ *  records the seat's socket from that one reading. A null reading is not a change, and any seat
+ *  that is not claude-code keeps whatever its record holds. Never throws; the note is for the
+ *  command's log. */
+export function refreshAgentAddressFrom(
+  home: string,
+  id: string,
+  processes: PaneProcesses | null,
+  sockets: string | readonly string[] = defaultSocketsDirs(),
+): { address: string | null; note?: string } {
+  try {
+    const agent = getAgent(home, id);
+    if (!agent || agent.cli !== 'claude-code') return { address: agent?.reach.address ?? null };
+    if (processes === null) return { address: agent.reach.address };
+    return { address: recordLiveSocket(home, id, agent.reach.address, processes, sockets) };
+  } catch (error) {
+    return { address: null, note: registryNote(error) };
   }
 }

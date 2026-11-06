@@ -15,7 +15,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, isAbsolute, relative, resolve } from 'node:path';
 import { notInForce, sessionDefaultMoveNotes } from '../approve/approval.ts';
-import { readRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
+import { inspectRecordedCodexEndpoint, readRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
 import {
   isSocketFile,
   ownedSocketPath,
@@ -23,7 +23,7 @@ import {
   recordStartMatches,
   unmanagedEndpointNotes,
 } from '../launch/codex-endpoint.ts';
-import { codexCommandHasFlag, codexCommandRemoteUrl, codexEndpointConfig } from '../launch/plan.ts';
+import { codexCommandHasFlag, codexCommandRemoteUrl, codexEndpointConfig, managedCodexLaunch } from '../launch/plan.ts';
 import { unfinishedWebhookNotes, webhookDeliveryNotes } from '../bus/webhook-notes.ts';
 import { rulesOriginOf } from '../launch/rules.ts';
 import { declaredUnreadAfter, UNREAD_AFTER_WAKEABLE_SECONDS, unreadWindowSeconds, watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
@@ -57,6 +57,7 @@ import { agentList, foregroundArgv0, PANE_WINDOW, paneProcessesOf, paneProcessIn
 import type { Io } from '../io.ts';
 import { GENERAL_BRIEF_SHA256, briefBindingOf, currentBriefClaim, generalBriefRecord } from '../launch/general-brief.ts';
 import { seatDeliveryClass, wakeableWhileIdle } from '../launch/delivery-class.ts';
+import { seatProcessVerdict } from '../launch/identity.ts';
 import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
 import { listUnread } from '../mcp/inbox.ts';
@@ -89,9 +90,10 @@ import {
   readTeamPolicySource,
   type PolicyLoadRefusal,
 } from '../policy/index.ts';
+import { codexDaemonForSeat } from '../policy/codex-daemon.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { findAgent, updateAgent, type Agent } from '../registry/agents.ts';
-import { continuityIdsOf, continuitySessionOf } from '../registry/resume.ts';
+import { continuityIdsOf, continuitySessionOf, recordedSeatContinuity } from '../registry/resume.ts';
 import { byName, ofTeam, projectIdOf, ProjectsError } from '../registry/projects.ts';
 import { nicknameTakenNotes } from '../registry/names.ts';
 import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
@@ -603,6 +605,10 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // A Codex seat whose last launch fell back to an unmanaged line, in the same words `team
     // status` prints: the fallback is a reading worth acting on, never a silent state.
     ...unmanagedEndpointNotes(team.seats, state),
+    // Every ready Codex seat whose policy would manage an endpoint and whose record is absent,
+    // unusable, or a recorded line carrying --no-daemon. One line, naming each seat and the
+    // restore. A policy that is off, or a file that already names its own remote, stays off it.
+    ...missingEndpointRecordNotes(team, state, dir, root, sources.home, session),
     // A seat whose last webhook delivery did not arrive, in the same words `team status` prints:
     // the send could not have known, so the outcome is read here.
     ...webhookDeliveryNotes(team.seats, state),
@@ -1501,6 +1507,50 @@ function endpointContainsConfig(recorded: readonly string[], needed: readonly st
   return true;
 }
 
+/** One note naming every ready Codex seat whose policy would manage an endpoint and whose
+ *  record is absent, unusable, or a recorded launch line carrying `--no-daemon`. The restore
+ *  is `team up` in that seat's project. A file that already names `--remote` or `--no-daemon`,
+ *  or a policy that is off, is unmanaged and is not listed. */
+function missingEndpointRecordNotes(
+  team: TeamFile,
+  state: SessionState,
+  dir: string,
+  root: string,
+  home: string | undefined,
+  session: string,
+): string[] {
+  if (home === undefined) return [];
+  const gaps: string[] = [];
+  for (const seat of team.seats) {
+    if (seat.cli !== 'codex' || seat.stopped || seat.human === true) continue;
+    const held = state.seats[seat.name];
+    if (held?.stage !== 'ready') continue;
+    const profile = profileFor(seat.cli);
+    if (profile === null) continue;
+    const launch = seat.launch ?? '';
+    const daemon = codexDaemonForSeat({ home, root, team, seat: seat.name, session });
+    if (!managedCodexLaunch({
+      cli: profile.cli,
+      binary: profile.binary,
+      codexDaemon: daemon,
+      stateDir: dir,
+      launch,
+      command: launch,
+    })) continue;
+    const recordedLine = held.launch_line;
+    const noDaemon = recordedLine !== undefined && codexCommandHasFlag(recordedLine, '--no-daemon');
+    const record = inspectRecordedCodexEndpoint(held.codex_endpoint, held.presence_binding);
+    if (record.kind === 'ok' && !noDaemon) continue;
+    const why = noDaemon
+      ? 'launch line carries --no-daemon'
+      : record.kind === 'invalid' ? 'unusable' : 'absent';
+    gaps.push(`${seat.name} (${why})`);
+  }
+  if (gaps.length === 0) return [];
+  gaps.sort();
+  return [`no usable Codex endpoint record: ${gaps.join(', ')}; team up restores the endpoint`];
+}
+
 function unmanagedCodexServerDifferences(
   team: TeamFile,
   state: SessionState,
@@ -1955,13 +2005,20 @@ function deliveryOrderInboxNotes(team: TeamFile): string[] {
  * nor the `typed` wake word chose its routes, and the check calls no choice a skip. Only a pane
  * that still holds the seat is read (`paneShowsSeat`, the gate `compare()` applies): a CLI that
  * ended in a retained pane is named once by the comparison and gains no line here. A seat that
- * opts out in the team file (`inbound` other than accept), a human's pane, and a seat whose
- * class can already be woken while it is idle — through its runtime queue, its push channel, or
- * the socket this leg would dial — keep no promise the socket would keep: none is named. The
- * class reads the same held-frame mark and makes the same address choice as the leg below, so a
- * push class it supplies is that leg's own reading, not a second one that could disagree.
+ * opts out in the team file (`inbound` other than accept), a human's pane, and a seat woken
+ * through its runtime queue or its push channel keep no promise the socket would keep: none is
+ * named. The class reads the same held-frame mark and makes the same address choice as the leg
+ * below, so a push class it supplies is that leg's own reading, not a second one that could
+ * disagree.
  *
- * Four reasons are the team's to fix and each is a difference, like an unread drop — one line
+ * The class here holds the pane's processes, so it can call a seat wakeable on a socket only
+ * those processes prove. Every reader that holds no pane — a send's own class line
+ * (`deliveryWordsOf`), `team plan`, the seat's `team next` — reads the same class without them
+ * and sees that seat pull-only, so the missing address is named too: its agent record holds no
+ * address, and `team up` records it from the pane without a restart (a record that names no
+ * process is `team register`'s read, the same split `team up` itself makes).
+ *
+ * Five reasons are the team's to fix and each is a difference, like an unread drop — one line
  * per seat, the repair named, exit 1:
  *   - the team file neither accepts the frame nor was the declaration generated by this build's
  *     launch: one team-config word admits the route;
@@ -1972,7 +2029,22 @@ function deliveryOrderInboxNotes(team: TeamFile): string[] {
  *     to change first, and a wrapper launch with none gains the generated file from a relaunch;
  *   - the seat's box held a frame its declaration has not been re-confirmed since: a restart
  *     re-confirms it;
- *   - the socket predates the settings that declare accept: a restart writes one that does not.
+ *   - a live seat wakeable only through the socket its pane's processes carry, whose agent
+ *     record holds no address: `team up` records the address from the pane the check read, and
+ *     a record that names no launch identity is `team register`'s. A record whose pane runs a
+ *     process its launch did not start is neither's to re-point — `team register` refuses that
+ *     pane, and `team up` records no address over it. When the registry binds the conversation
+ *     herdr reports for that pane, the seat is restored and `team up` is still the whole
+ *     repair: its own plan adopts the process in place and records the address in one run, so
+ *     no restart is named and the load never enters. Without that binding the pane holds a
+ *     process no command can tie to the record, and the line names the `--abandon` restart —
+ *     it starts the seat fresh, leaving the recorded conversation behind, records the address
+ *     itself, and is refused while the load is above the file's limit (`machine.load_start`,
+ *     per core), which the line names. Two state records naming one pane are named once, for
+ *     the pane — every seat in that dispute would otherwise get a binding repair pointing at
+ *     another seat's process; `team down`, then `team up` rewrites the recorded panes;
+ *   - the socket predates the settings that declare accept: a restart writes one that does not,
+ *     and the line names the load that can refuse it (`machine.load_start`, per core).
  * Otherwise a socket that is nowhere is its class's ordinary state, not a broken promise:
  * absence wins over any gate, and the seat gets a note naming its class, so the exit does not
  * change.
@@ -2001,6 +2073,21 @@ function socketSkippedDeliveries(
     // leans on it names nothing more.
     return { differences, notes };
   }
+  // Every pane a declared, non-human seat's record claims, once per pane: a pane is one seat's,
+  // and two records naming it cannot both be written from what the pane proves — a send that
+  // dialed its socket would wake whatever process the pane holds, not necessarily the seat the
+  // record names. The file is the truth here as it is everywhere in this check: only a seat the
+  // team still declares claims a pane.
+  const claims = new Map<string, string[]>();
+  for (const seat of team.seats) {
+    if (seat.human === true) continue;
+    const pane = state.seats[seat.name]?.pane;
+    if (pane === undefined || pane === '') continue;
+    const claim = claims.get(pane);
+    if (claim === undefined) claims.set(pane, [seat.name]);
+    else claim.push(seat.name);
+  }
+  const disputed = new Set<string>();
   for (const seat of team.seats) {
     if (seat.human === true) continue;
     const recorded = state.seats[seat.name];
@@ -2011,6 +2098,24 @@ function socketSkippedDeliveries(
     // held-prompt reading both apply: a CLI that ended in a retained pane is named once, in the
     // comparison's own line, and a process team did not launch is not read for a skipped socket.
     if (!paneShowsSeat(recorded, listed, live, continuitySessionOf(continuityIds, seat.name, recorded.agent_session))) continue;
+    // Two seats claiming one pane is no missing address a command can write: every seat in the
+    // dispute would get the same binding repair, each pointing at the other's process, and
+    // `team register` refuses both (the pane is taken, or the record names another pane —
+    // src/commands/register.ts). The dispute is named once, for the pane, and none of its seats
+    // gets an address line: a stop and a start rewrite the recorded panes from the file, the
+    // one route that clears a record holding the wrong pane.
+    const claim = claims.get(recorded.pane);
+    if (claim !== undefined && claim.length > 1) {
+      if (!disputed.has(recorded.pane)) {
+        disputed.add(recorded.pane);
+        differences.push({
+          what: `${claim.join(', ')}: one pane is recorded for more than one seat: their state records all name ${recorded.pane}, and a pane is one seat's — a send that dialed its socket would wake whichever process the pane holds, not the seat it names`,
+          repair: 'team down, then team up',
+          needs: 'approve',
+        });
+      }
+      continue;
+    }
     let record: Agent | null;
     try {
       record = agentOf(seat.name);
@@ -2035,11 +2140,69 @@ function socketSkippedDeliveries(
     if (seat.inbound !== undefined && seat.inbound !== 'accept') continue;
     const overrides = resolveSeatOverrides({ home, root, seat: seat.name });
     if (!overrides.ok || overrides.overrides.human === true) continue;
+    // The class a send measures is this same reader with no pane in hand: a send's own class
+    // line (`deliveryWordsOf`), `team plan` and the seat's `team next` hold no processes, so a
+    // socket only this check's pane reading proves is no socket there. That split is the one a
+    // missing address makes, and it is repairable without a restart: the pane already carries
+    // the socket, and the launch that should have recorded it is `team up`'s own write — a
+    // record that names no launch identity, or one the pane no longer holds, is `team
+    // register`'s read, the same split `team up` itself makes. A seat the registry holds no
+    // record of is not named: a plain-name send is refused before any leg, and the roster
+    // difference names it.
+    const withoutPane = seatDeliveryClass({
+      dir, root, session, seat: seat.name, declared: seat, state: recorded, home, sockets,
+    });
     // A seat the class proves can be woken while it is idle keeps the promise without a socket:
-    // its runtime queue, its push channel, or the socket this leg would dial. The class reads
-    // the same held-frame mark and the same address choice the leg does, so its word and the
-    // leg's cannot split.
-    if (wakeableWhileIdle(delivery.class)) continue;
+    // its runtime queue, its push channel, or — when the record carries it — the socket this leg
+    // would dial. The class reads the same held-frame mark and the same address choice the leg
+    // does, so its word and the leg's cannot split.
+    if (wakeableWhileIdle(delivery.class)) {
+      if (!wakeableWhileIdle(withoutPane.class) && record !== null) {
+        const processes = live.processes?.[listed.pane] ?? null;
+        const verdict = seatProcessVerdict(recorded.launched, processes);
+        // The address is written only over a process a command can prove: `team up` records one
+        // on the record it finds, and `team register` refreshes a record whose launch it still
+        // finds in front — it refuses a pane holding another process, so it is never the repair
+        // for one (src/commands/register.ts). A replaced process whose pane herdr reports under
+        // the conversation the registry binds is the restored seat: `team up`'s own plan adopts
+        // that process in place — its restored step writes the new launch identity before its
+        // address pass reads the pane — and records the address in the same run, so the line
+        // names `team up` and nothing else: no restart, and the load never enters. Without that
+        // binding the pane holds a process no command can tie to the record, and the restart
+        // that abandons it and starts the seat fresh is the repair; it records the address
+        // itself (`refreshAgentAddress`, src/commands/restart.ts), so no `team up` follows it,
+        // and it refuses while the load is above the file's limit, which the line names.
+        const bound = recordedSeatContinuity({
+          home, root, herdrSession: session, seat: { name: seat.name, cli: seat.cli }, state: recorded,
+        });
+        const restored = bound.kind === 'bound'
+          && bound.recorded.launch !== ''
+          && listed.session !== undefined && listed.session !== ''
+          && listed.session === bound.recorded.sessionId;
+        const what = `${seat.name}: a reader without its pane sees ${withoutPane.class}, not ${delivery.class}: only the socket its pane's processes carry proves it, and its agent record holds no address this session can dial`;
+        if (verdict === 'replaced') {
+          differences.push(restored
+            ? { what, repair: 'team up' }
+            : {
+                what: `${what}; the process in its pane is not the one its record's launch started, and the record's conversation is not the one herdr reports there, so the repair starts the seat fresh: it abandons that process, leaving the recorded conversation behind, and is refused while the load is above ${team.machine.loadStart} per core (machine.load_start)`,
+                repair: `team restart ${seat.name} --abandon`,
+                // `team restart` refuses while the file's approval is not in force
+                // (src/commands/restart.ts).
+                needs: 'approve',
+              });
+        } else {
+          differences.push({
+            what,
+            // `team up` records an address on the record it finds; a record that names another
+            // session, or no process, is `team register`'s to re-point from the pane.
+            repair: record.reach.session === session && verdict === 'same'
+              ? 'team up'
+              : `team register ${seat.name}`,
+          });
+        }
+      }
+      continue;
+    }
     let order: readonly DeliveryLeg[];
     let declaredOrder: boolean;
     try {
@@ -2140,10 +2303,12 @@ function socketSkippedDeliveries(
       continue;
     }
     // Eligible, and the address a send would dial, but the running session predates the settings
-    // that declare it accepts: a frame sent there would be held.
+    // that declare it accepts: a frame sent there would be held. The restart is the only repair
+    // — the declaration is newer than the socket — and it is the one the load can refuse, so the
+    // line names that limit beside the repair.
     if (!leg.live) {
       differences.push({
-        what: `${seat.name}: sends go to its drop folder, not its socket: the socket predates the settings that declare it accepts`,
+        what: `${seat.name}: sends go to its drop folder, not its socket: the socket predates the settings that declare it accepts; a restart re-reads them, and a restart is refused while the load is above ${team.machine.loadStart} per core (machine.load_start)`,
         repair: `team restart ${seat.name}`,
         needs: 'approve',
       });

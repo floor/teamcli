@@ -201,6 +201,7 @@
                   "drop",
                   "headless-resume",
                   "session",
+                  "channel",
                   "webhook"
                 ]
               },

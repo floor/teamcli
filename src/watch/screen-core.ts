@@ -1,7 +1,7 @@
 // The screen core. Stage order, dialog primitives, the four composer modes and the
 // safety floor live here, never in a profile. A profile is data: it can add a
 // pattern, and it cannot move a stage or turn the floor off.
-import { allDimAfter, hasSgr, oneColourAfter, stripSgr } from '../ansi.ts';
+import { allDimAfter, colourAfter, hasSgr, oneColourAfter, stripSgr } from '../ansi.ts';
 import type { Reset, Screen } from './screen.ts';
 import type { BlockStep, LinePattern, Rule, ScreenData, TextSpec, Wrap } from './screen-data.ts';
 
@@ -452,6 +452,7 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
     }
 
     // Composer stage: comes from hatch OR from data (refused if both at load).
+    if (feedbackSurvey(data, plain, tick)) return { kind: 'feedback survey' };
     const composerFn = getProfileFn(data.profile, 'composer');
     if (composerFn !== undefined) {
       const composed = callComposer(composerFn, plain);
@@ -1503,8 +1504,12 @@ function stripTyped(line: string, composer: { prompt: RegExp; stripSuffix?: RegE
 // A placeholder, not text. When the composer says its suggestions render dim and the input
 // line carries any styling at all, a row that is not all faint past the prompt is text, except
 // an exact listed equals line whose own text is one non-bold colour: grey with no faint
-// attribute is still that placeholder. A second colour, a bold word, or a cursor cell inside
-// the text stays text. An all-faint row is
+// attribute is still that placeholder. A composer that also declares `placeholder_fg` — the
+// foregrounds its CLI draws its rotating hints in, measured off a capture — reads an input row
+// as the empty box when every visible character past the prompt is one of those colours: Muse
+// 1.4.14 draws its rotating hint in grey with no faint attribute at all. Only a declared colour
+// reads that way, so a mixed row, a bold word, a cursor cell or an undeclared colour stays
+// text. An all-faint row is
 // the suggestion, unless the composer names `slash-hint`: then the faint row must also be a
 // listed placeholder or a `/command …` hint, so a faint row of other words is text. A line
 // without styling (a plain read) leaves the list to decide, as does a composer
@@ -1512,7 +1517,7 @@ function stripTyped(line: string, composer: { prompt: RegExp; stripSuffix?: RegE
 // with `/` stays text.
 function placeholder(
   typed: string,
-  composer: { prompt: RegExp; placeholders: ScreenData['composer']['placeholders']; placeholderStyle?: ScreenData['composer']['placeholderStyle'] },
+  composer: { prompt: RegExp; placeholders: ScreenData['composer']['placeholders']; placeholderStyle?: ScreenData['composer']['placeholderStyle']; placeholderFg?: string[] },
   plainLine: string,
   styledLine: string | undefined,
 ): boolean {
@@ -1524,6 +1529,12 @@ function placeholder(
     // An exact listed placeholder in one non-bold colour is the empty box. A mix of colours,
     // a cursor cell, a bold word, or a draft that only starts like the line stays text.
     if (equalsListed && oneColourAfter(styledLine, skip)) return true;
+    // A declared hint foreground: the empty box when the row's text past the prompt is exactly
+    // one of the colours the capture showed. An undeclared colour is text, as it always was.
+    if (composer.placeholderFg !== undefined) {
+      const colour = colourAfter(styledLine, skip);
+      if (colour !== null && composer.placeholderFg.includes(colour)) return true;
+    }
     if (!allDimAfter(styledLine, skip)) return false;
     // A composer that names slash-hint keeps a dim row only when it is a known placeholder or
     // that hint shape. Every other dim composer still takes any faint row as the suggestion.
@@ -1658,6 +1669,40 @@ function scrolledBack(data: ScreenData, plain: string[], tick: () => boolean): b
     return spec.marker.test(line);
   }
   return false;
+}
+
+/** The pane sits at the CLI's post-turn feedback survey: the two declared rows (`prompt`
+ *  immediately above `choices`, on adjacent rows) stand at the bottom of the pane, either as the
+ *  pane's last two non-blank rows or with only the CLI's own `statusFooter` row beneath them.
+ *  Read after every caution stage (`working`, `permission`, `question`, `trust`, `confirmation`,
+ *  `rate_limit`, etc.) so a running turn or any other dialog keeps its own reading, and never
+ *  matched from a transcript row higher up that quotes the survey above a composer or above any
+ *  other row. */
+function feedbackSurvey(data: ScreenData, plain: string[], tick: () => boolean): boolean {
+  const spec = data.feedbackSurvey;
+  if (spec === undefined) return false;
+  let last = -1;
+  for (let i = plain.length - 1; i >= 0; i--) {
+    if (tick()) return false;
+    if ((plain[i] ?? '').trim() === '') continue;
+    last = i;
+    break;
+  }
+  if (last < 1) return false;
+  let choicesAt = last;
+  if (!spec.choices.test(plain[last] ?? '')) {
+    if (spec.statusFooter === undefined || !spec.statusFooter.test(plain[last] ?? '')) return false;
+    choicesAt = -1;
+    for (let i = last - 1; i >= 0; i--) {
+      if (tick()) return false;
+      if ((plain[i] ?? '').trim() === '') continue;
+      choicesAt = i;
+      break;
+    }
+    if (choicesAt < 1 || !spec.choices.test(plain[choicesAt] ?? '')) return false;
+  }
+  if (tick()) return false;
+  return spec.prompt.test(plain[choicesAt - 1] ?? '');
 }
 
 function choiceLine(line: string): boolean {

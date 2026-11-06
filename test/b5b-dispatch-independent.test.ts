@@ -28,6 +28,7 @@ import type { Caller } from '../src/caller.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPlan } from '../src/commands/plan.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
+import { SEND_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { runUp, type UpSources } from '../src/commands/up.ts';
 import { handleNext } from '../src/daemon/next.ts';
 import { routeOf } from '../src/daemon/routes.ts';
@@ -47,6 +48,7 @@ import { storePath, writeApproval } from '../src/store/store.ts';
 import { dispatchIdleWork, forgetIdleEpisodes, type IdleDispatchInput, type WorkPush, type WorkPushRequest } from '../src/watch/dispatch.ts';
 import { idleClaimOf } from '../src/watch/claim.ts';
 import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
+import { assertMatchesOutputSchema } from './helpers/output.ts';
 import { StandInStore, standInKeyText } from './workflow/reservation-stand-in-store.ts';
 import type { ItemIdentity } from '../src/workflow/reservation/index.ts';
 
@@ -178,21 +180,24 @@ afterEach(() => {
 });
 
 describe('the class a send reports for its target', () => {
-  test('a seat whose launch carries the event adapter is woken through it', async () => {
+  test('a seat whose launch carries the event adapter is not woken when only the drop leg runs', async () => {
     made = sendWorld();
     const host = sendHost(made);
     const io = testIo(made.root, { kind: 'owner' });
     const code = await runSend(['push-seat', 'hello'], io, host);
     expect(code).toBe(0);
-    expect(io.out).toContain('push-seat: sent (unconfirmed) (drop, 0 ms); woken through its event adapter');
+    expect(io.out).toContain('push-seat: queued, not woken (drop, 0 ms)');
+    expect(io.out).not.toContain('woken through');
     expect(host.frames).toEqual([]);
   });
 
   test('a codex seat with a bound managed endpoint and its recorded conversation reads at its next turn when the drop takes the send', async () => {
-    made = sendWorld();
+    made = sendWorld(['drop']);
     // The seat records a managed endpoint and the conversation its queue is addressed by, so the
-    // class read before the walk is between-turns. This world's walk carries no native leg: the
-    // drop takes the send, and the line must follow the leg actually taken.
+    // class read before the walk is between-turns. A declared typed word splices the runtime
+    // queue ahead of it, and a socket that is not listening then ends on the blocked line. This
+    // world's order is the drop alone, so that splice does not run: the drop takes the send, and
+    // the line must follow the leg actually taken.
     recordSeat(made, 'codex-seat', {
       id: 'seat_0123456789ab',
       cli: 'codex',
@@ -226,10 +231,10 @@ describe('the class a send reports for its target', () => {
     const io = testIo(made.root, { kind: 'owner' });
     const code = await runSend(['codex-seat', 'hello'], io, sendHost(made));
     expect(code).toBe(0);
-    // Codex declares the typed wake. This fixture names no live agent, so the wake did not run,
+    // Codex declares the typed wake. This order leaves that leg out, so the wake did not run,
     // and the walk never reached the runtime queue the seat records: the drop took the send.
-    // The line says both — the wake that did not run, then the next turn — never a queue nothing addressed.
-    expect(io.out).toContain('codex-seat: queued, not woken (drop, 0 ms); queued; the typed wake did not run (no live agent carries that name in the session); codex-seat reads it at its next turn, and nothing here gives it one (pull-only)');
+    // The line says both — the wake the order left out, then the next turn — never a queue nothing addressed.
+    expect(io.out).toContain('codex-seat: queued, not woken (drop, 0 ms); queued; the typed wake did not run (the delivery order leaves the typed leg out); codex-seat reads it at its next turn, and nothing here gives it one (pull-only)');
   });
 
   test('a codex seat whose endpoint names no conversation is read at its next turn, and the line says so', async () => {
@@ -977,5 +982,65 @@ describe('a recorded socket that is gone is reported, never dialed', () => {
     ]);
     const drops = join(world.dir, 'send-drops', 'acme', 'recorder');
     expect(readdirSync(drops).filter((name) => !name.includes('.')).length).toBe(1);
+  });
+
+  test('a stale socket on a seat whose launch carries the event adapter is not called a wake', async () => {
+    made = sendWorld(['socket', 'typed']);
+    const world = made;
+    const settings = cliHookSettingsPath(world.dir, 'acme', 'push-seat');
+    if (settings === null) throw new Error('the fixture declares no settings path');
+    mkdirSync(join(settings, '..'), { recursive: true });
+    writeFileSync(settings, JSON.stringify({ crossSessionInbound: 'accept' }));
+    const gone = join(world.sockets, '424242.sock');
+    const id = teamIdOf(world.root);
+    const record = registerAgent(world.home, {
+      name: 'push-seat',
+      signing: { model: 'Test', version: '1', role: 'implementer' },
+      lab: 'test-lab',
+      cli: 'claude-code',
+      launcher: null,
+      launch: PUSH_LAUNCH,
+      reach: { team: id, seat: 'push-seat', session: 'acme', pane: 'fixture-pane-push-seat', address: gone },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'up',
+    });
+    upsertTeam(world.home, id, {
+      project: 'acme',
+      entity: 'floor',
+      session: 'acme',
+      root: world.root,
+      lobby: resolveLobby(world.home, { entity: 'floor' }),
+      roster: [{ agent: record.id, seat: 'push-seat', role: 'implementer', leads: false }],
+      lifecycle: 'running',
+    });
+    recordSeat(world, 'push-seat', { cli: 'claude-code', launch_line: PUSH_LAUNCH });
+    let dialed = 0;
+    const io = testIo(world.root, { kind: 'owner' });
+    const host = sendHost(world, {
+      agents: () => [{ name: 'push-seat', pane: 'fixture-pane-push-seat' }],
+      deliver: async () => {
+        dialed += 1;
+        return { ok: true };
+      },
+    });
+    const code = await runSend(['push-seat', 'hello', '--json'], io, host);
+    expect(code).toBe(0);
+    expect(dialed).toBe(0);
+    expect(host.frames).toEqual([]);
+    const doc = assertMatchesOutputSchema<{ delivery?: { leg: string; reason?: string }[] }>(io.out, SEND_OUTPUT_SCHEMA);
+    const reported = doc.delivery?.find((entry) => entry.leg === 'socket');
+    expect(reported?.reason).toContain('is gone');
+    expect(reported?.reason).not.toContain('woken through');
+    const history = readHistory('acme', world.root, world.home);
+    expect(history.ok).toBe(true);
+    if (!history.ok) return;
+    const failed = history.entries.at(-1)?.failed ?? [];
+    const socketLine = failed.find((line) => line.startsWith('socket:'));
+    expect(socketLine).toBeDefined();
+    expect(socketLine).toContain('is gone');
+    expect(socketLine).not.toContain('woken through');
+    expect(failed.join('\n')).not.toContain('woken through');
   });
 });

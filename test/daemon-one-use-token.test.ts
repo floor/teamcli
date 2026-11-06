@@ -118,7 +118,13 @@ describe('one nonce starts one child', () => {
       expect(settledFirst.one.stderr).toContain('no one-use token names this child');
       // The other child claimed the token and is serving, not waiting to refuse.
       expect(winner.proc.exitCode).toBeNull();
-      await until(() => winner.reading().stdout.includes('"type":"ready"'));
+      // The child writes ready and then its first heartbeat as two separate writes, so the
+      // parent can read the first before the second arrives; wait for both, not for the first.
+      await until(() => {
+        const out = winner.reading().stdout;
+        return out.includes('"type":"ready"') && out.includes('"type":"heartbeat"');
+      });
+      expect(winner.reading().stdout).toContain('"type":"ready"');
       expect(winner.reading().stdout).toContain('"type":"heartbeat"');
       // Ending its input is the host's own stop: the child leaves cleanly.
       winner.endInput();

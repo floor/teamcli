@@ -58,7 +58,7 @@ export function cleanClassification(value: unknown): Classification {
  *  record can name either: it is recorded as `unknown`, the word a launch saw before the kind
  *  existed, and a launch never types its rules into it. */
 export function classificationOf(kind: Exclude<Screen['kind'], 'idle' | 'working'>): Classification {
-  if (kind === 'exit question') return 'question';
+  if (kind === 'exit question' || kind === 'feedback survey') return 'question';
   if (kind === 'scroll back') return 'unknown';
   return kind;
 }

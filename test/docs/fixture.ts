@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { syncChildTimeout } from '../../src/child.ts';
 
 export const AGENT_EMAIL = 'agent@example.test';
 export const HUMAN_EMAIL = 'jane@acme.example';
@@ -37,6 +38,8 @@ export function createFixture(project: string, clock: { at: number }): Fixture {
     const result = spawnSync('git', args, {
       cwd: root,
       encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: syncChildTimeout(10_000),
       env: {
         PATH: process.env.PATH,
         HOME: root,
@@ -50,7 +53,8 @@ export function createFixture(project: string, clock: { at: number }): Fixture {
         GIT_COMMITTER_DATE: `${clock.at} +0000`,
       },
     });
-    return { code: result.status ?? 1, stdout: result.stdout.trim(), stderr: result.stderr.trim() };
+    const stderr = (result.stderr ?? '').trim() || (result.error?.message ?? '');
+    return { code: result.error ? 1 : (result.status ?? 1), stdout: (result.stdout ?? '').trim(), stderr };
   };
 
   const run = (args: string[], email: string, input?: string): GitRun => {
@@ -59,6 +63,8 @@ export function createFixture(project: string, clock: { at: number }): Fixture {
       cwd: root,
       encoding: 'utf8',
       input,
+      stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+      timeout: syncChildTimeout(10_000),
       env: {
         PATH: process.env.PATH,
         HOME: root,
@@ -72,12 +78,16 @@ export function createFixture(project: string, clock: { at: number }): Fixture {
         GIT_COMMITTER_DATE: `${clock.at} +0000`,
       },
     });
-    if ((result.status ?? 1) !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr}`);
-    return { code: 0, stdout: result.stdout.trim(), stderr: '' };
+    const stderr = (result.stderr ?? '').trim() || (result.error?.message ?? '');
+    if (result.error || (result.status ?? 1) !== 0) throw new Error(`git ${args.join(' ')}: ${stderr}`);
+    return { code: 0, stdout: (result.stdout ?? '').trim(), stderr: '' };
   };
 
   const init = git('init', '--quiet', '--initial-branch=main');
-  if (init.code !== 0) throw new Error(`git init: ${init.stderr}`);
+  if (init.code !== 0) {
+    rmSync(base, { recursive: true, force: true });
+    throw new Error(`git init: ${init.stderr}`);
+  }
 
   // A page writes its files in the order it shows them. Commands that sort by mtime (team drops)
   // must see that order even when two writes land in the same clock tick.

@@ -16,6 +16,7 @@
 // because a retained copy that was changed must never be run.
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { syncChildTimeout } from '../child.ts';
 import {
   chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync,
   realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync,
@@ -42,7 +43,11 @@ import type {
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
 const realRunner: ServiceRunner = (command, args): ServiceRunResult => {
-  const result = spawnSync(command, args, { encoding: 'utf8' });
+  const result = spawnSync(command, args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: syncChildTimeout(10_000),
+  });
   return {
     status: result.status,
     stdout: result.stdout ?? '',

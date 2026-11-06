@@ -18,7 +18,9 @@ import {
 } from '../src/daemon/presence/contract.ts';
 import { createPresenceIngester, type PresenceIngester } from '../src/daemon/presence/ingest.ts';
 import { createPresenceActivity, type PresenceActivityStep } from '../src/daemon/presence/activity.ts';
+import { createPresencePass } from '../src/daemon/chores/presence.ts';
 import { presencePaths, stagePresenceRecord } from '../src/daemon/presence/spool.ts';
+import { validateTeamFile } from '../src/file/validate.ts';
 import { LOCK_FILE, STATE_FILE, readState } from '../src/state.ts';
 
 const SESSION = 'teamcli';
@@ -319,5 +321,84 @@ describe('the state lock', () => {
     const result = await activityFor(world)(new Date());
     expect(result.failed).not.toBeNull();
     expect(readFileSync(path, 'utf8')).toBe('{"format":1,');
+  }, 15_000);
+});
+
+describe('bounded slices inside the activity step', () => {
+  test('the activity step chunks seats and checks the slice budget inside the step', async () => {
+    const seeds: Record<string, SeatSeed> = {};
+    const seatNames: string[] = [];
+    for (let i = 0; i < 80; i += 1) {
+      const seat = `builder-${String(i).padStart(3, '0')}`;
+      const id = `seat_${i.toString(16).padStart(12, '0')}`;
+      seeds[seat] = { id, binding: BINDING };
+      seatNames.push(seat);
+    }
+    const world = makeWorld(seeds);
+    const ingester = ingesterFor(world);
+    const ts = new Date(Date.now() - 5_000).toISOString();
+    for (const seat of seatNames) {
+      stage(world, 'turn-start', { seat, ts });
+    }
+    await ingester.step();
+    await ingester.step();
+
+    const checked = validateTeamFile([
+      'format: 1',
+      'entity: floor',
+      'project: acme',
+      `session: ${SESSION}`,
+      'coordinator: builder-000',
+      'operator: builder-000',
+      'workspace:',
+      '  mode: shared',
+      'seats:',
+      '  - name: builder-000',
+      '    role: coordinator',
+      '    cli: claude-code',
+      '    vendor: anthropic',
+      '    model: Claude Opus',
+      '    version: "5.5"',
+      '    launch: claude',
+      '',
+    ].join('\n'));
+    if (!checked.ok) throw new Error(JSON.stringify(checked.errors));
+    const route = {
+      root: world.base,
+      team: 'acme',
+      session: SESSION,
+      stateDir: world.stateDir,
+      teamFile: checked.team,
+    };
+    const pass = createPresencePass({
+      version: 1,
+      home: world.base,
+      beatMs: 100,
+      sliceMs: 250,
+      since: ts,
+      routes: [route],
+    });
+    let yields = 0;
+    let stopping = false;
+    await pass.run(route, {
+      at: new Date(),
+      readings: [],
+      slices: {
+        sliceMs: 250,
+        stopping: () => stopping,
+        yield: async () => {
+          yields += 1;
+          stopping = true;
+          return false;
+        },
+      },
+    });
+    // Stopping on the first intra-step yield inside the activity step commits the first chunk
+    // (at most 64 seats) and leaves the remaining seats for the next pass.
+    expect(yields).toBe(1);
+    const sessionState = stateOf(world)!;
+    const appliedSeats = seatNames.filter((seat) => sessionState.seats[seat]?.presence_applied?.seq === 1);
+    expect(appliedSeats.length).toBeGreaterThan(0);
+    expect(appliedSeats.length).toBeLessThanOrEqual(64);
   }, 15_000);
 });

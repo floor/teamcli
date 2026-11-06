@@ -319,9 +319,9 @@ describe('reviewer-agent: a Cursor seat the registry does not bind', () => {
   });
 
   test('a registry binding with the live conversation recognized the pane: Cursor is read like any CLI', async () => {
-    // The Cursor profile keeps no session id of its own at launch, so the registry is the only
-    // record that can tie this restored pane to the seat. When it does, the seat is the seat: the
-    // Cursor idle screen is read as idle, not as a doubt.
+    // A restored pane is tied by the conversation the team's own records name, never by the
+    // pane's screen. This scene pins the registry path alone: the record names the live session,
+    // and the Cursor idle screen is then read as idle, not as a doubt.
     registerSeat('reviewer-agent', 'cursor', 'seat_444444444444', 'fixture:reviewer', 'ses_cursor');
     const { code, doc } = await readSeat('reviewer-agent', live({ cursorSession: 'ses_cursor' }));
     expect(code).toBe(0);

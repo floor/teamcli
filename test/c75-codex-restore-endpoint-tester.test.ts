@@ -313,7 +313,7 @@ test('a name-cleared seat whose endpoint died is relaunched in place without a r
   expect(seatState()?.pane).toBe(PANE);
 });
 
-test('an endpoint that will not start launches the seat with --no-daemon', async () => {
+test('an endpoint that will not start leaves the seat out, with no --no-daemon launch', async () => {
   setup();
   record();
   const made = sources({
@@ -321,15 +321,11 @@ test('an endpoint that will not start launches the seat with --no-daemon', async
     managed: { kind: 'unmanaged', why: 'the app-server could not start' },
   });
   const io = testIo(root, { kind: 'owner' });
-  expect(await runUp([], io, made.sources), said(io)).toBe(0);
+  expect(await runUp([], io, made.sources), said(io)).not.toBe(0);
   expect(made.trace.typed).toEqual(['/exit']);
-  expect(seatRuns(made.trace)).toHaveLength(1);
-  expect(seatRuns(made.trace)[0]?.pane).toBe(PANE);
-  expect(firstWord(seatRuns(made.trace)[0]?.command ?? '')).toBe('codex');
-  expect(seatRuns(made.trace)[0]?.command).toContain('--no-daemon');
-  expect(seatRuns(made.trace)[0]?.command).not.toContain('--remote');
+  expect(seatRuns(made.trace)).toEqual([]);
   expect(said(io)).toContain('the managed Codex endpoint was not started: the app-server could not start');
-  expect(seatState()?.stage).toBe('ready');
+  expect(seatState()?.stage).toBe('launched');
   expect(seatState()?.pane).toBe(PANE);
 });
 
@@ -348,17 +344,19 @@ test('a live endpoint is adopted and never relaunched', async () => {
   expect(seatState()?.pane).toBe(PANE);
 });
 
-test('an absent endpoint record is adopted', async () => {
+test('an absent endpoint record is relaunched onto a fresh one', async () => {
   setup();
   record({ session: null, endpoint: false });
   const made = sources({ name: null, session: null, socket: true, alive: true });
   const io = testIo(root, { kind: 'owner' });
   expect(await runUp([], io, made.sources), said(io)).toBe(0);
-  expect(made.trace.typed).toEqual([]);
-  expect(seatRuns(made.trace)).toEqual([]);
-  expect(made.trace.managed).toEqual([]);
-  expect(made.trace.renamed).toEqual([{ pane: PANE, name: SEAT }]);
+  expect(made.trace.typed).toEqual(['/exit']);
+  expect(seatRuns(made.trace)).toHaveLength(1);
+  expect(seatRuns(made.trace)[0]?.command).toContain(`--remote ${APP_URL}`);
+  expect(seatRuns(made.trace)[0]?.command).not.toContain('--no-daemon');
+  expect(made.trace.managed).toEqual([{ dir, seat: SEAT }]);
   expect(seatState()?.stage).toBe('ready');
+  expect(seatState()?.pane).toBe(PANE);
 });
 
 test('an unreadable endpoint start is adopted', async () => {

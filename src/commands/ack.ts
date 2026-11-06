@@ -21,12 +21,12 @@ import { readArgs } from '../args.ts';
 import { resolveBundleSendTarget } from '../client/bundles.ts';
 import { activeClientUpGrant, clientAdmission, readClientThreadGrant, withClientGrantLock, type ClientUpGrantRecord } from '../client/records.ts';
 import {
-  callerOf,
   callerVerdict,
   describeCaller,
   detachedRefusal,
   judgeCallerIn,
   standingOf,
+  walkCaller,
   type Caller,
   type SeatStanding,
 } from '../caller.ts';
@@ -152,12 +152,13 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
   if (args.rest.length > 1) return usage(io, json, `unexpected "${args.rest[1]}"`);
   if (!recordNameOk(id)) return usage(io, json, `"${id}" is not a record id`);
 
-  const caller = callerOf(io);
-  const detached = detachedRefusal(caller, { who: 'the owner or a seat of this team', where: 'a terminal outside herdr or its own pane' });
+  // The walk decides the one detached refusal — the owner with no terminal. It places a caller
+  // under herdr as `unplaced` without reading a session, so it must never decide who may
+  // acknowledge: the owner-or-seat admission is judged below, on the caller placed in the team's
+  // own session, exactly as `team send` places it (src/commands/send.ts).
+  const walked = walkCaller(io);
+  const detached = detachedRefusal(walked, { who: 'the owner or a seat of this team', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) return refused(io, json, detached);
-  if (caller.kind !== 'owner' && caller.kind !== 'seat') {
-    return refused(io, json, `only the owner or a seat of this team acknowledges a message; this call is ${describeCaller(caller)}`);
-  }
 
   const loaded = readTeamConfig(io.cwd, { home: host.home });
   if (!loaded.ok) {
@@ -174,8 +175,11 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
   // `team reply` reads it: a seat that acknowledged from its own pane is that seat, and a caller
   // of another session is not the addressee here.
   const placed = judged.caller;
-  const me = placed.kind === 'seat' ? placed.name : caller.kind === 'seat' ? caller.name : 'owner';
-  if (caller.kind === 'seat' && (placed.kind !== 'seat' || callerVerdict(placed, me, standing).kind !== 'ok')) {
+  if (placed.kind !== 'owner' && placed.kind !== 'seat') {
+    return refused(io, json, `only the owner or a seat of this team acknowledges a message; this call is ${describeCaller(placed)}`);
+  }
+  const me = placed.kind === 'seat' ? placed.name : 'owner';
+  if (placed.kind === 'seat' && callerVerdict(placed, me, standing).kind !== 'ok') {
     raiseSecurityRefusal(team, root, host.home, dir, placed, 'placement', null, host.now());
     return refused(io, json, `seat ${me} is not this call on its own pane and session; this call is ${describeCaller(placed)}`);
   }

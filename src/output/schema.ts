@@ -201,10 +201,11 @@ const DELIVERY_LEGS_SCHEMA_FRAGMENT: JsonSchema = {
     additionalProperties: false,
     required: ['leg', 'state'],
     properties: {
-      // The report names the sender-posted webhook among the walk's legs. No policy declares
-      // it — the receiving seat's adapter row decides it — so it is added here, where the
-      // report's shape is published, and not to the declared-order schemas below.
-      leg: { type: 'string', enum: [...DELIVERY_LEGS, 'webhook'] },
+      // The report names the channel push and the sender-posted webhook among the walk's
+      // legs. No policy declares either — the seat's own server and its adapter row decide
+      // them — so both are added here, where the report's shape is published, and not to the
+      // declared-order schemas below.
+      leg: { type: 'string', enum: [...DELIVERY_LEGS, 'channel', 'webhook'] },
       state: { type: 'string', enum: ['attempted', 'queued', 'skipped', 'refused', 'not-reached', 'candidate'] },
       eligible: { type: 'boolean' },
       reason: { type: 'string', minLength: 1 },
@@ -301,17 +302,18 @@ const PRESENCE_PROVENANCE_SCHEMA: JsonSchema = {
 
 /** Whether a message can reach a seat while it is idle (src/status/wake.ts): the class a send
  *  measures, and the facts it was read from — the endpoint and the conversation bound to it, the
- *  live inbox listener, and the oldest unread drop's age. */
+ *  live inbox listener, the unread count, and the oldest unread drop's age. */
 const SEAT_WAKE_SCHEMA: JsonSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['class', 'wakeable', 'conversation', 'endpoint', 'listener', 'oldest_unread_seconds'],
+  required: ['class', 'wakeable', 'conversation', 'endpoint', 'listener', 'unread', 'oldest_unread_seconds'],
   properties: {
     class: { type: 'string', enum: ['push', 'between-turns', 'pull-on-turn', 'none'] },
     wakeable: { type: 'boolean' },
     conversation: { type: 'boolean' },
     endpoint: { type: 'boolean' },
     listener: { type: 'boolean' },
+    unread: { type: ['integer', 'null'], minimum: 0 },
     oldest_unread_seconds: { type: ['integer', 'null'] },
   },
 };

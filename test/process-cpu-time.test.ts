@@ -20,19 +20,25 @@ describe('the process adapter CPU-time reading', () => {
     expect(parseCpuTime('-1:00')).toBeNull();
   });
 
-  // Known for 0.5.12.1: Linux ps -o time= reports whole seconds without centiseconds, so a
-  // 50 ms spin does not advance the reading off macOS.
-  test.skipIf(process.platform !== 'darwin')('reads this test process: a number now, and a larger one after it works', async () => {
+  // A system whose process query prints whole seconds leaves the reading unchanged across a
+  // single short spin, so keep spinning in slices until it strictly advances. The bound spans
+  // more than two whole seconds, so even a reading with one-second resolution moves inside it.
+  test('reads this test process: a number now, and a larger one after it works', async () => {
     const first = await processCpuTimeAsync(process.pid);
     expect(first).not.toBeNull();
     expect(first!).toBeGreaterThanOrEqual(0);
-    const until = Date.now() + 50;
+    const until = Date.now() + 2_500;
+    let second = first!;
     let spin = 0;
-    while (Date.now() < until) spin += Math.sqrt(spin + 1);
+    while (Date.now() < until && second <= first!) {
+      const slice = Date.now() + 25;
+      while (Date.now() < slice) spin += Math.sqrt(spin + 1);
+      const reading = await processCpuTimeAsync(process.pid);
+      expect(reading).not.toBeNull();
+      second = reading!;
+    }
     expect(spin).toBeGreaterThan(0);
-    const second = await processCpuTimeAsync(process.pid);
-    expect(second).not.toBeNull();
-    expect(second!).toBeGreaterThan(first!);
+    expect(second).toBeGreaterThan(first!);
   });
 
   test('reads a pid that is not running as no reading', async () => {

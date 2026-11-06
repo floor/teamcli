@@ -696,6 +696,20 @@ export type DeferredNoteDrainReport = {
   scanned: number;
 };
 
+/** How many directory or marker entries an intra-step scan walks before yielding to the slice
+ *  driver's budget check. */
+export const FALLBACK_STEP_CHUNK_ENTRIES = 64;
+
+/** The wall-clock stretch (ms) an intra-step scan may spend before yielding to the slice driver's
+ *  budget check. */
+export const FALLBACK_STEP_CHUNK_MS = 50;
+
+function drainGenerator<T>(steps: Generator<void, T>): T {
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  return step.value;
+}
+
 /**
  * Record the facts a non-blocking `noteTransportSoon` deferred, then remove their notes. Each note is
  * processed under its episode's key lock with `waitMs: 0`: a key another live holder keeps is
@@ -718,6 +732,18 @@ export function drainDeferredNotes(
   ctx: EscalationContext,
   options: { at?: Date; limit?: number; lockWaitMs?: number } = {},
 ): DeferredNoteDrainReport {
+  return drainGenerator(drainDeferredNotesSteps(ctx, options));
+}
+
+/**
+ * The deferred-note drain one work item at a time: it chunks the directory walk and yields before
+ * each note, so a sliced caller checks its budget inside the step instead of only after the whole
+ * batch of notes has been verified, signed and written.
+ */
+export function* drainDeferredNotesSteps(
+  ctx: EscalationContext,
+  options: { at?: Date; limit?: number; lockWaitMs?: number } = {},
+): Generator<void, DeferredNoteDrainReport> {
   const at = options.at ?? ctx.now();
   const limit = options.limit ?? 64;
   const noteOptions = { dedupe: true, ...(options.lockWaitMs === undefined ? {} : { lockWaitMs: options.lockWaitMs }) };
@@ -729,8 +755,10 @@ export function drainDeferredNotes(
     unreadable: [],
     scanned: 0,
   };
-  for (const found of notesUnder(ctx.root)) {
+  const notes = yield* notesUnderSteps(ctx.root, limit);
+  for (const found of notes) {
     if (report.drained.length + report.refused.length + report.deferred.length + report.unreadable.length >= limit) break;
+    yield;
     report.scanned += 1;
     const note = found.text === null || found.text === '' ? null : deferredNoteOf(found.text);
     if (note === null) {
@@ -785,16 +813,34 @@ export function drainDeferredNotes(
 /** Every deferred note under a root's transport tree, sessions and seats sorted so a pass is
  *  ordered. `text` is null when the file cannot be read at all. */
 function notesUnder(root: string): { path: string; text: string | null }[] {
+  return drainGenerator(notesUnderSteps(root));
+}
+
+function* notesUnderSteps(
+  root: string,
+  limit = Number.POSITIVE_INFINITY,
+): Generator<void, { path: string; text: string | null }[]> {
   const found: { path: string; text: string | null }[] = [];
+  if (limit <= 0) return found;
   const base = join(root, '.agents', 'send-drops');
+  let entriesInChunk = 0;
+  let chunkStart = performance.now();
   for (const session of folderNames(base)) {
     const sessionDir = join(base, session);
     for (const seat of folderNames(sessionDir)) {
       const seatDir = join(sessionDir, seat);
       for (const name of fileNames(seatDir)) {
-        if (!DEFERRED_NOTE_NAME.test(name)) continue;
-        const path = join(seatDir, name);
-        found.push({ path, text: readNoFollow(path) });
+        entriesInChunk += 1;
+        if (DEFERRED_NOTE_NAME.test(name)) {
+          const path = join(seatDir, name);
+          found.push({ path, text: readNoFollow(path) });
+          if (found.length >= limit) return found;
+        }
+        if (entriesInChunk >= FALLBACK_STEP_CHUNK_ENTRIES || performance.now() - chunkStart >= FALLBACK_STEP_CHUNK_MS) {
+          entriesInChunk = 0;
+          chunkStart = performance.now();
+          yield;
+        }
       }
     }
   }
@@ -925,8 +971,9 @@ export function* escalationSteps(
   const atIso = at.toISOString();
   const lockWaitMs = options.lockWaitMs ?? 10_000;
   const report: EscalationReport = { escalated: [], refused: [], deferred: [], unreadable: [], scanned: 0 };
+  const markers = yield* markersUnderSteps(ctx.root);
 
-  for (const found of markersUnder(ctx.root)) {
+  for (const found of markers) {
     yield;
     if (found.kind === 'unreadable') {
       report.unreadable.push(found.path);
@@ -1094,40 +1141,57 @@ export type RetirementReport = {
  * there to judge, so a store of delivered and escalated episodes costs no policy read.
  */
 export function planRetirement(ctx: EscalationContext, options: { at?: Date } = {}): RetirementPlan {
+  return drainGenerator(planRetirementSteps(ctx, options));
+}
+
+export function* planRetirementSteps(
+  ctx: EscalationContext,
+  options: { at?: Date } = {},
+): Generator<void, RetirementPlan> {
   const at = options.at ?? ctx.now();
   const plan: RetirementPlan = { at: at.toISOString(), candidates: [], unreadable: [], scanned: 0, retention: null };
   const words = new Map<string, FallbackRetention>();
   const ordered: { order: string; candidate: RetirementCandidate }[] = [];
-  for (const found of markersUnder(ctx.root)) {
+  const markers = yield* markersUnderSteps(ctx.root);
+  let entriesInChunk = 0;
+  let chunkStart = performance.now();
+  for (const found of markers) {
+    entriesInChunk += 1;
     if (found.kind === 'unreadable') {
       plan.unreadable.push(found.path);
-      continue;
-    }
-    plan.scanned += 1;
-    const kind = finishedKind(found.marker);
-    if (kind === null) continue;
-    const { recipient, messageId } = found.marker;
-    const ageSeconds = Math.max(0, Math.round((at.getTime() - Date.parse(found.marker.updatedAt)) / 1000));
-    let eligible = kind !== 'expired';
-    let until: string | null = null;
-    if (kind === 'expired') {
-      const key = fallbackKeyOf(recipient, '');
-      let word = words.get(key);
-      if (word === undefined) {
-        word = fallbackRetentionOf(ctx, recipient, at);
-        words.set(key, word);
+    } else {
+      plan.scanned += 1;
+      const kind = finishedKind(found.marker);
+      if (kind !== null) {
+        const { recipient, messageId } = found.marker;
+        const ageSeconds = Math.max(0, Math.round((at.getTime() - Date.parse(found.marker.updatedAt)) / 1000));
+        let eligible = kind !== 'expired';
+        let until: string | null = null;
+        if (kind === 'expired') {
+          const key = fallbackKeyOf(recipient, '');
+          let word = words.get(key);
+          if (word === undefined) {
+            word = fallbackRetentionOf(ctx, recipient, at);
+            words.set(key, word);
+          }
+          if (plan.retention === null) plan.retention = word;
+          if (word.seconds !== null) {
+            until = new Date(Date.parse(found.marker.updatedAt) + word.seconds * 1000).toISOString();
+            eligible = at.getTime() >= Date.parse(until);
+          }
+          // With an unreadable word, `until` stays null and the episode stays: fail closed.
+        }
+        ordered.push({
+          order: `${found.marker.updatedAt}\u0000${messageId}\u0000${fallbackKeyOf(recipient, messageId)}`,
+          candidate: { messageId, recipient, kind, ageSeconds, eligible, until },
+        });
       }
-      if (plan.retention === null) plan.retention = word;
-      if (word.seconds !== null) {
-        until = new Date(Date.parse(found.marker.updatedAt) + word.seconds * 1000).toISOString();
-        eligible = at.getTime() >= Date.parse(until);
-      }
-      // With an unreadable word, `until` stays null and the episode stays: fail closed.
     }
-    ordered.push({
-      order: `${found.marker.updatedAt}\u0000${messageId}\u0000${fallbackKeyOf(recipient, messageId)}`,
-      candidate: { messageId, recipient, kind, ageSeconds, eligible, until },
-    });
+    if (entriesInChunk >= FALLBACK_STEP_CHUNK_ENTRIES || performance.now() - chunkStart >= FALLBACK_STEP_CHUNK_MS) {
+      entriesInChunk = 0;
+      chunkStart = performance.now();
+      yield;
+    }
   }
   ordered.sort((a, b) => (a.order < b.order ? -1 : a.order > b.order ? 1 : 0));
   plan.candidates = ordered.map((entry) => entry.candidate);
@@ -1184,7 +1248,7 @@ export function* retirementSteps(
   const at = options.at ?? ctx.now();
   const lockWaitMs = options.lockWaitMs ?? 10_000;
   const limit = options.limit ?? Number.POSITIVE_INFINITY;
-  const plan = planRetirement(ctx, { at });
+  const plan = yield* planRetirementSteps(ctx, { at });
   const backlog = plan.candidates.reduce((count, candidate) => count + (candidate.eligible ? 1 : 0), 0);
   const passLimit =
     options.backlogAbove !== undefined && options.backlogLimit !== undefined && backlog > options.backlogAbove
@@ -1366,7 +1430,27 @@ export function* reclaimSteps(
 ): Generator<void, { reclaimed: number; kept: number; scanned: number }> {
   const locksDir = join(dirname(historyPath(ctx.team.project, ctx.root, ctx.home)), 'locks');
   const limit = options.limit ?? 64;
-  const names = folderNames(locksDir).filter((name) => FALLBACK_LOCK_DIR.test(name));
+  let entries: { name: string; isDirectory(): boolean }[] = [];
+  try {
+    entries = readdirSync(locksDir, { withFileTypes: true });
+  } catch {
+    entries = [];
+  }
+  const names: string[] = [];
+  let entriesInChunk = 0;
+  let chunkStart = performance.now();
+  for (const entry of entries) {
+    entriesInChunk += 1;
+    if (entry.isDirectory() && FALLBACK_LOCK_DIR.test(entry.name)) {
+      names.push(entry.name);
+    }
+    if (entriesInChunk >= FALLBACK_STEP_CHUNK_ENTRIES || performance.now() - chunkStart >= FALLBACK_STEP_CHUNK_MS) {
+      entriesInChunk = 0;
+      chunkStart = performance.now();
+      yield;
+    }
+  }
+  names.sort();
   let reclaimed = 0;
   let kept = 0;
   let scanned = 0;
@@ -1768,20 +1852,35 @@ function markerAtCached(path: string): MarkerRead {
 /** All markers under a root's transport tree, sessions and seats sorted so a pass is ordered. A
  *  marker that cannot be trusted is returned as its path, never rewritten from a guess. */
 function markersUnder(root: string): ({ kind: 'ok'; path: string; marker: FallbackMarker } | { kind: 'unreadable'; path: string })[] {
+  return drainGenerator(markersUnderSteps(root));
+}
+
+function* markersUnderSteps(
+  root: string,
+): Generator<void, ({ kind: 'ok'; path: string; marker: FallbackMarker } | { kind: 'unreadable'; path: string })[]> {
   const found: ({ kind: 'ok'; path: string; marker: FallbackMarker } | { kind: 'unreadable'; path: string })[] = [];
   const base = join(root, '.agents', 'send-drops');
   const seen = new Set<string>();
+  let entriesInChunk = 0;
+  let chunkStart = performance.now();
   for (const session of folderNames(base)) {
     const sessionDir = join(base, session);
     for (const seat of folderNames(sessionDir)) {
       const seatDir = join(sessionDir, seat);
       for (const name of fileNames(seatDir)) {
-        if (!name.endsWith('.fallback.json')) continue;
-        const path = join(seatDir, name);
-        seen.add(path);
-        const read = markerAtCached(path);
-        if (read.kind === 'ok') found.push({ kind: 'ok', path, marker: read.marker });
-        else if (read.kind === 'unreadable') found.push({ kind: 'unreadable', path });
+        entriesInChunk += 1;
+        if (name.endsWith('.fallback.json')) {
+          const path = join(seatDir, name);
+          seen.add(path);
+          const read = markerAtCached(path);
+          if (read.kind === 'ok') found.push({ kind: 'ok', path, marker: read.marker });
+          else if (read.kind === 'unreadable') found.push({ kind: 'unreadable', path });
+        }
+        if (entriesInChunk >= FALLBACK_STEP_CHUNK_ENTRIES || performance.now() - chunkStart >= FALLBACK_STEP_CHUNK_MS) {
+          entriesInChunk = 0;
+          chunkStart = performance.now();
+          yield;
+        }
       }
     }
   }
@@ -1789,7 +1888,13 @@ function markersUnder(root: string): ({ kind: 'ok'; path: string; marker: Fallba
   // stamps for the tree it just walked and nothing older.
   const prefix = `${base}${sep}`;
   for (const path of markerCache.keys()) {
+    entriesInChunk += 1;
     if (path.startsWith(prefix) && !seen.has(path)) markerCache.delete(path);
+    if (entriesInChunk >= FALLBACK_STEP_CHUNK_ENTRIES || performance.now() - chunkStart >= FALLBACK_STEP_CHUNK_MS) {
+      entriesInChunk = 0;
+      chunkStart = performance.now();
+      yield;
+    }
   }
   return found;
 }

@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { syncChildTimeout } from '../child.ts';
 
 /** A git command that failed, or a ref that can't be used. */
 export class GitError extends Error {}
@@ -37,7 +38,9 @@ function run(cwd: string, args: string[]): GitResult {
   const result = spawnSync('git', [...CONFIGURATION, ...args], {
     cwd,
     encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
     maxBuffer: 1024 * 1024 * 1024,
+    timeout: syncChildTimeout(15_000),
   });
   if (result.error) throw new GitError(`can't run git: ${result.error.message}`);
   return { status: result.status ?? 1, stdout: result.stdout, stderr: result.stderr };

@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, realpathSync, type Stats } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { syncChildTimeout } from '../child.ts';
 import { type FsReader } from '../lobby/gate.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
 import { protectedLanding } from '../worktree/place.ts';
@@ -103,6 +104,7 @@ export function findRoot(cwd: string): string | null {
       cwd,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: syncChildTimeout(5_000),
     }).trim();
     return common ? dirname(common) : null;
   } catch {

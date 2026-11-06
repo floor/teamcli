@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
+import { syncChildTimeout } from './child.ts';
 import type { TeamFile } from './file/types.ts';
 import { agentList, paneRootPid } from './herdr.ts';
 import type { HerdrAgent } from './herdr.ts';
@@ -116,8 +117,14 @@ export function placeCaller(sources: CallerSources, session?: string): Caller {
 
 /** A caller whose nearest Codex ancestor is a seat's own managed app-server is that seat: the
  *  seat's tools run there once its TUI is attached by `--remote`. When a session is asked about,
- *  the endpoint must serve that session and herdr must still list the seat at its recorded pane. */
-function endpointSeat(ancestors: Process[], sources: Pick<CallerSources, 'managedEndpointSeat' | 'agents'>, session?: string): Caller | null {
+ *  the endpoint must serve that session and herdr must still hold its recorded pane (either
+ *  named for the seat, or unnamed/not-yet-listed while its reported agent is codex or unknown and
+ *  the seat does not already stand on another pane in that session). */
+function endpointSeat(
+  ancestors: Process[],
+  sources: Pick<CallerSources, 'managedEndpointSeat' | 'agents' | 'paneRootPid'>,
+  session?: string,
+): Caller | null {
   if (sources.managedEndpointSeat === undefined) return null;
   const nearest = ancestors.find((process) => processNameMatches(process.name, CLI_PROCESSES));
   if (nearest === undefined || basename(nearest.name) !== 'codex') return null;
@@ -125,8 +132,18 @@ function endpointSeat(ancestors: Process[], sources: Pick<CallerSources, 'manage
   if (served === null || served.pane === undefined) return null;
   if (session !== undefined) {
     if (served.session !== session) return null;
-    const listed = sources.agents()?.find((agent) => agent.pane === served.pane);
-    if (listed?.name !== served.seat) return null;
+    const agents = sources.agents();
+    if (agents === null) return null;
+    const listed = agents.find((agent) => agent.pane === served.pane);
+    if (listed?.name !== served.seat) {
+      if (agents.some((agent) => agent.name === served.seat && agent.pane !== served.pane)) return null;
+      if (listed !== undefined) {
+        if (listed.name !== null) return null;
+        if (listed.agent !== null && listed.agent !== '' && basename(listed.agent) !== 'codex') return null;
+      } else if (sources.paneRootPid(served.pane) === null) {
+        return null;
+      }
+    }
     return { kind: 'seat', name: served.seat, pane: served.pane, session };
   }
   return { kind: 'seat', name: served.seat, pane: served.pane };
@@ -505,7 +522,11 @@ function processName(raw: string): string {
 
 export const readWithPs: ReadProcess = (pid) => {
   try {
-    const line = execFileSync('ps', ['-o', 'ppid=,comm=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const line = execFileSync('ps', ['-o', 'ppid=,comm=', '-p', String(pid)], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: syncChildTimeout(2_000),
+    }).trim();
     const match = /^(\d+)\s+(.+)$/.exec(line);
     return match ? { ppid: Number(match[1]), name: processName(match[2] as string) } : null;
   } catch {

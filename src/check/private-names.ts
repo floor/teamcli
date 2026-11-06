@@ -30,6 +30,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { syncChildTimeout } from '../child.ts';
 
 /** Where a private entry reads: a tracked path, a tracked file's text, or the pre-push diff. */
 export type PrivateScope = 'path' | 'content' | 'diff';
@@ -260,14 +261,22 @@ function scratchRepository(): Scratch {
   } catch {
     return { path: '', problem: 'cannot create the private scan scratch folder' };
   }
-  const init = spawnSync('git', ['init', '--quiet', path], { encoding: 'utf8' });
-  if (init.status !== 0) return { path, problem: 'cannot initialize the private scan scratch repository' };
+  const init = spawnSync('git', ['init', '--quiet', path], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: syncChildTimeout(10_000),
+  });
+  if (init.error !== undefined || init.status !== 0) return { path, problem: 'cannot initialize the private scan scratch repository' };
   return { path };
 }
 
 function addScratch(path: string, files: readonly string[]): boolean {
-  const added = spawnSync('git', ['-C', path, 'add', '--', ...files], { encoding: 'utf8' });
-  return added.status === 0;
+  const added = spawnSync('git', ['-C', path, 'add', '--', ...files], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: syncChildTimeout(15_000),
+  });
+  return added.error === undefined && added.status === 0;
 }
 
 /** Runs the authoritative engine with the pattern on standard input; stderr is never forwarded.
@@ -277,9 +286,11 @@ function grep(repo: string, pattern: string, pathspec: string): { status: number
   const run = spawnSync('git', ['-C', repo, 'grep', '--no-color', '-z', '-n', '-a', '-E', '-f', '-', '--', pathspec], {
     input: `${pattern}\n`,
     encoding: 'utf8',
+    stdio: ['pipe', 'pipe', 'pipe'],
     maxBuffer: 64 * 1024 * 1024,
+    timeout: syncChildTimeout(30_000),
   });
-  return { status: run.status ?? -1, stdout: run.stdout ?? '' };
+  return { status: run.error !== undefined ? -1 : (run.status ?? -1), stdout: run.stdout ?? '' };
 }
 
 /** Validates every rule through the same engine; a failure names only origin, class and ordinal. */
@@ -297,7 +308,12 @@ function validate(rules: readonly PrivateRule[], scratch: string): { problem: st
 }
 
 function trackedFiles(root: string): { files: string[] } | { problem: string } {
-  const listed = spawnSync('git', ['-C', root, 'ls-files', '-z'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  const listed = spawnSync('git', ['-C', root, 'ls-files', '-z'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    maxBuffer: 64 * 1024 * 1024,
+    timeout: syncChildTimeout(15_000),
+  });
   if (listed.error !== undefined || listed.status !== 0) return { problem: `cannot list the tracked files of ${root}` };
   return { files: listed.stdout.split('\0').filter(Boolean) };
 }
@@ -516,7 +532,12 @@ export function privateDiffCorpus(root: string, base: string): { corpus: Private
   const diff = spawnSync(
     'git',
     ['-C', root, 'diff', '--unified=0', '--no-color', '--no-ext-diff', '--no-renames', '--text', base, '--'],
-    { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 },
+    {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: 256 * 1024 * 1024,
+      timeout: syncChildTimeout(30_000),
+    },
   );
   if (diff.error !== undefined || diff.status !== 0) return { problem: `cannot read the diff against ${base}` };
   const lines: string[] = [];
@@ -573,13 +594,17 @@ export function privateDiffCorpus(root: string, base: string): { corpus: Private
 
   const commits = spawnSync('git', ['-C', root, 'log', '--format=%H', `${base}..HEAD`], {
     encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
     maxBuffer: 16 * 1024 * 1024,
+    timeout: syncChildTimeout(15_000),
   });
   if (commits.error !== undefined || commits.status !== 0) return { problem: `cannot read the commits since ${base}` };
   for (const sha of commits.stdout.split('\n').filter(Boolean)) {
     const body = spawnSync('git', ['-C', root, 'cat-file', 'commit', sha], {
       encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
       maxBuffer: 16 * 1024 * 1024,
+      timeout: syncChildTimeout(10_000),
     });
     if (body.error !== undefined || body.status !== 0) return { problem: `cannot read a commit message since ${base}` };
     // `git log --format=%B` stops at a NUL byte in the message; the commit object holds the bytes

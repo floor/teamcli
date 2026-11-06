@@ -149,7 +149,7 @@ function oldPass(
     if (screen.kind === 'unsent') {
       memory.unsentSince[name] ??= now;
       if (now - (memory.unsentSince[name] as number) >= team.watch.unsentAfter * 1000) {
-        once(`unsent:${name}`, `${name} holds text in its input box that was never sent`);
+        once(`unsent:${name}`, `${name}: its input box reads as holding text; nothing is typed there`);
       }
     } else delete memory.unsentSince[name];
 
