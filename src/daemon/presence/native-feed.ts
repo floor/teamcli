@@ -1,6 +1,6 @@
 // Default-off native feed. Production has no trusted turn/lane/gate registration yet:
 // adapters may refuse, but no payload can enroll itself. Every emitted gate is unknown.
-import { constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { constants, closeSync, fstatSync, fsyncSync, mkdirSync, openSync, readSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { userInfo } from 'node:os';
@@ -81,7 +81,6 @@ export function nativeHookEnabled(identity: Identity, io: Io, placed = placement
     // os.userInfo().homedir is OS-provided; tests inject a home without querying the account.
     const home = readHome();
     const daemonPath = daemonStatePath(home);
-    if (lstatSync(daemonPath).isSymbolicLink()) return false;
     const inCheckout = relative(realpathSync(dirname(identity.stateDir)), realpathSync(daemonPath));
     if (inCheckout === '' || (!isAbsolute(inCheckout) && inCheckout !== '..' && !inCheckout.startsWith(`..${sep}`))) return false;
     const daemon = readDaemonState(home);

@@ -1,7 +1,7 @@
 // The one machine daemon's state record (`<home>/.config/team/daemon.state.json`, mode 0600).
 // The daemon writes it at start and refreshes `heartbeatAt` while it serves; `team status`,
 // `team check` and the daemon's own health answer read it through this module.
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { chmod, mkdir, rename, writeFile } from 'node:fs/promises';
 import { pidAlive } from '../state.ts';
 import { DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
@@ -210,6 +210,9 @@ export type DaemonStateRead =
   | { kind: 'unreadable'; why: string }
   | { kind: 'ok'; state: DaemonState };
 
+/** A test swaps the path after the descriptor is open. Production passes none. */
+export type DaemonStateHooks = { afterOpen?: () => void };
+
 /** The machine folder, created 0700 when a daemon writes its record. */
 export function ensureMachineDir(home: string): string {
   const dir = machineConfigDir(home);
@@ -218,22 +221,37 @@ export function ensureMachineDir(home: string): string {
   return dir;
 }
 
-export function readDaemonState(home: string): DaemonStateRead {
+export function readDaemonState(home: string, hooks?: DaemonStateHooks): DaemonStateRead {
   const path = daemonStatePath(home);
-  if (!existsSync(path)) return { kind: 'missing' };
-  let parsed: unknown;
+  let fd: number;
   try {
-    parsed = JSON.parse(readFileSync(path, 'utf8'));
-  } catch {
-    return { kind: 'unreadable', why: 'the daemon state record is not readable JSON' };
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return { kind: 'missing' };
+    return { kind: 'unreadable', why: 'the daemon state record is not a regular file' };
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return { kind: 'unreadable', why: 'the daemon state record is not a JSON object' };
+  try {
+    const held = fstatSync(fd);
+    if (!held.isFile()) return { kind: 'unreadable', why: 'the daemon state record is not a regular file' };
+    if (held.size > 64 * 1024) return { kind: 'unreadable', why: 'the daemon state record exceeds 64 KiB' };
+    hooks?.afterOpen?.();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(fd, 'utf8'));
+    } catch {
+      return { kind: 'unreadable', why: 'the daemon state record is not readable JSON' };
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { kind: 'unreadable', why: 'the daemon state record is not a JSON object' };
+    }
+    const record = parsed as Record<string, unknown>;
+    const state = stateOf(record);
+    if (state === null) return { kind: 'unreadable', why: 'the daemon state record is missing required fields' };
+    return { kind: 'ok', state };
+  } finally {
+    closeSync(fd);
   }
-  const record = parsed as Record<string, unknown>;
-  const state = stateOf(record);
-  if (state === null) return { kind: 'unreadable', why: 'the daemon state record is missing required fields' };
-  return { kind: 'ok', state };
 }
 
 function stateOf(record: Record<string, unknown>): DaemonState | null {
