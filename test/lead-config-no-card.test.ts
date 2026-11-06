@@ -191,7 +191,7 @@ describe('a team record changed without a card', () => {
 
 // --- the main orchestrator above the target --------------------------------------------------
 
-const ATLAS = { kind: 'seat' as const, name: 'atlas', pane: 'synthetic-pane-main', session: 'main' };
+const CEDAR = { kind: 'seat' as const, name: 'cedar', pane: 'synthetic-pane-main', session: 'main' };
 const MILL = { kind: 'seat' as const, name: 'mill', pane: 'synthetic-pane-target', session: 'material' };
 const OUTS = { kind: 'seat' as const, name: 'outs', pane: 'synthetic-pane-outside', session: 'outside' };
 const OTHER_LEAD = { kind: 'seat' as const, name: 'other-lead', pane: 'synthetic-pane-other', session: 'other' };
@@ -242,7 +242,7 @@ function families(): Families {
   const home = join(base, 'home');
   for (const root of [floorRoot, targetRoot, outsideRoot, otherRoot]) mkdirSync(join(root, '.agents'), { recursive: true });
   mkdirSync(home, { recursive: true });
-  writeFileSync(join(floorRoot, '.agents', 'team.yaml'), teamWith('floor', 'floor', 'main', 'atlas', floorRoot));
+  writeFileSync(join(floorRoot, '.agents', 'team.yaml'), teamWith('floor', 'floor', 'main', 'cedar', floorRoot));
   writeFileSync(join(targetRoot, '.agents', 'team.yaml'), teamWith('material', 'floor', 'material', 'mill', targetRoot));
   writeFileSync(join(outsideRoot, '.agents', 'team.yaml'), teamWith('outside', 'outside', 'outside', 'outs', outsideRoot));
   writeFileSync(join(otherRoot, '.agents', 'team.yaml'), teamWith('other', 'outside', 'other', 'other-lead', otherRoot));
@@ -254,12 +254,12 @@ function families(): Families {
       state.sessions[session] = { seats: { [name]: { stage: 'ready', pane } }, worktrees: {} };
     });
   };
-  place(floorRoot, 'main', 'atlas', ATLAS.pane);
+  place(floorRoot, 'main', 'cedar', CEDAR.pane);
   place(targetRoot, 'material', 'mill', MILL.pane);
   place(outsideRoot, 'outside', 'outs', OUTS.pane);
   place(otherRoot, 'other', 'other-lead', OTHER_LEAD.pane);
   for (const [root, project, entity, session, name] of [
-    [floorRoot, 'floor', 'floor', 'main', 'atlas'],
+    [floorRoot, 'floor', 'floor', 'main', 'cedar'],
     [targetRoot, 'material', 'floor', 'material', 'mill'],
     [outsideRoot, 'outside', 'outside', 'outside', 'outs'],
     [otherRoot, 'other', 'outside', 'other', 'other-lead'],
@@ -270,7 +270,7 @@ function families(): Families {
   return { floorRoot, targetRoot, outsideRoot, otherRoot, home };
 }
 
-async function configAt(root: string, home: string, caller: typeof ATLAS, key: string, value: string): Promise<{ code: number; err: string }> {
+async function configAt(root: string, home: string, caller: typeof CEDAR, key: string, value: string): Promise<{ code: number; err: string }> {
   const io = testIo(root, caller);
   io.env = { TEAMCLI_DEV_MODE: '1' };
   const code = await runConfig(['set', key, value], io, { home, env: io.env, now: () => NOW });
@@ -280,21 +280,21 @@ async function configAt(root: string, home: string, caller: typeof ATLAS, key: s
 describe('the main orchestrator and the teams around it', () => {
   test('it changes a team of its own entity under the main folder', async () => {
     const at = families();
-    const ran = await configAt(at.targetRoot, at.home, ATLAS, 'seats.worker.model', 'Claude Sonnet');
+    const ran = await configAt(at.targetRoot, at.home, CEDAR, 'seats.worker.model', 'Claude Sonnet');
     expect(ran.code).toBe(0);
-    expect(ran.err).toBe(`warning: ${CONFIG_LINE} atlas; dev mode continues\n`);
+    expect(ran.err).toBe(`warning: ${CONFIG_LINE} cedar; dev mode continues\n`);
     expect(readFileSync(join(at.targetRoot, '.agents', 'team.yaml'), 'utf8')).toContain('    model: Claude Sonnet\n');
     const log = readFileSync(join(at.targetRoot, '.agents', 'team.log'), 'utf8');
-    expect(log).toContain(`config [atlas] warning: ${CONFIG_LINE} atlas; dev mode continues; admitted as lead\n`);
+    expect(log).toContain(`config [cedar] warning: ${CONFIG_LINE} cedar; dev mode continues; admitted as lead\n`);
   });
 
   test('a team of another entity under the same main folder is refused', async () => {
     const at = families();
     const file = join(at.outsideRoot, '.agents', 'team.yaml');
     const before = readFileSync(file, 'utf8');
-    const ran = await configAt(at.outsideRoot, at.home, ATLAS, 'seats.worker.model', 'Claude Sonnet');
+    const ran = await configAt(at.outsideRoot, at.home, CEDAR, 'seats.worker.model', 'Claude Sonnet');
     expect(ran.code).toBe(1);
-    expect(ran.err).toBe(`team config: ${CONFIG_LINE} atlas\n`);
+    expect(ran.err).toBe(`team config: ${CONFIG_LINE} cedar\n`);
     expect(readFileSync(file, 'utf8')).toBe(before);
     expect(existsSync(join(at.outsideRoot, '.agents', 'team.log'))).toBe(false);
   });
