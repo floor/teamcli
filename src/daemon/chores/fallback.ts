@@ -11,6 +11,7 @@
 // passed, so a restart never rewrites a store's history more often than the daemon did. The
 // interval and the per-pass limit come from the sweep module, one source for both processes.
 import { sealUnsealedSegmentsSteps } from '../../bus/log.ts';
+import { LockBusyError } from '../../state.ts';
 import { type DropRetirementReport, retireDropsSliced } from '../../send/drop-retention.ts';
 import {
   FALLBACK_STORE_PASS_LIMIT,
@@ -124,18 +125,26 @@ export function createFallbackPass(config: ChoresChildConfig): ChoresPass {
           session: route.session,
         });
         let sliceStart = Date.now();
-        for (;;) {
-          if (slices.stopping()) break;
-          const step = sealSteps.next();
-          if (step.done) break;
-          if (Date.now() - sliceStart >= slices.sliceMs) {
-            const more = await slices.yield();
-            if (!more || slices.stopping()) {
-              sealSteps.return([]);
-              break;
+        try {
+          for (;;) {
+            if (slices.stopping()) break;
+            let step: ReturnType<typeof sealSteps.next>;
+            try {
+              step = sealSteps.next();
+            } catch (error) {
+              // A busy key ends this pass. The next housekeeping pass starts the seal again.
+              if (error instanceof LockBusyError) break;
+              throw error;
             }
-            sliceStart = Date.now();
+            if (step.done) break;
+            if (Date.now() - sliceStart >= slices.sliceMs) {
+              const more = await slices.yield();
+              if (!more || slices.stopping()) break;
+              sliceStart = Date.now();
+            }
           }
+        } finally {
+          sealSteps.return([]);
         }
       }
     }

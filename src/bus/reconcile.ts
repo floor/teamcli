@@ -46,7 +46,7 @@ import { machineSettingsPath } from '../settings/declared.ts';
 import { HISTORY_KEPT, readHistorySteps, type HistoryEntry } from '../send/history.ts';
 import type { PendingDrop } from '../send/pending.ts';
 import { leadAckActorOf, readVerifiedReceipt } from '../send/record.ts';
-import { readState } from '../state.ts';
+import { LockBusyError, readState } from '../state.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { compareSeatNames } from '../seat-names.ts';
 import {
@@ -668,14 +668,22 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       // The one-time migration of a store written before seals or under a larger segment bound:
       // each segment is verified in slices and the append lock is held only for the seal write
       // itself, so the bus keeps serving while an old log is sealed.
-      state.sealAttempted = true;
-      yield* sealUnsealedSegmentsSteps(project, root, home, {
-        kept,
-        segmentBytes: options.maxBytes,
-        retentionSeconds: options.retentionSeconds,
-        session,
-        signal: options.signal,
-      });
+      try {
+        yield* sealUnsealedSegmentsSteps(project, root, home, {
+          kept,
+          segmentBytes: options.maxBytes,
+          retentionSeconds: options.retentionSeconds,
+          session,
+          signal: options.signal,
+        });
+        state.sealAttempted = true;
+      } catch (error) {
+        // The key was held, so this pass did not seal. The next pass tries again.
+        if (!(error instanceof LockBusyError)) {
+          state.sealAttempted = true;
+          throw error;
+        }
+      }
     }
   }
 
@@ -1548,14 +1556,17 @@ export async function reconcilePassAsync(options: ReconcileOptions): Promise<Rec
   const sliceMs = options.sliceMs ?? DEFAULT_RECONCILE_SLICE_MS;
   const steps = reconcileSteps({ ...resolved, state, appendWaitMs: 0 });
   activeAsyncPasses += 1;
+  let finished = false;
   try {
     let since = performance.now();
     for (;;) {
       // The slice boundary is also the cancellation point: the caller's abort (a closing bus)
-      // stops the pass before it reads or appends anything else.
+      // stops the pass before it reads or appends anything else. Closing the generator runs the
+      // finally of a seal that is holding the event lock across a yield, so the key is released.
       if (options.signal?.aborted === true) return cancelledResult();
       const next = steps.next();
       if (next.done) {
+        finished = true;
         const result = next.value;
         if (result.ok) {
           await retryDeferredAppends(resolved, state, result.raised);
@@ -1569,6 +1580,13 @@ export async function reconcilePassAsync(options: ReconcileOptions): Promise<Rec
       since = performance.now();
     }
   } finally {
+    if (!finished) {
+      try {
+        steps.return(cancelledResult());
+      } catch {
+        // The generator was already closed.
+      }
+    }
     activeAsyncPasses = Math.max(0, activeAsyncPasses - 1);
   }
 }

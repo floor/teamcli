@@ -34,7 +34,7 @@ import { dirname, join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 import { logLine } from '../log.ts';
 import { ensureStoreLadder, readNoFollow } from '../send/history.ts';
-import { LockBusyError, withLock, writeAtomic } from '../state.ts';
+import { acquireLock, LOCK_FILE, LockBusyError, withLock, writeAtomic } from '../state.ts';
 import {
   messageKeyOf,
   messageKeyState,
@@ -1593,8 +1593,10 @@ export function* sealUnsealedSegmentsSteps(
   }
 
   // An open `events.jsonl` left over from a larger segment bound (`size >= segmentBytes`) is
-  // verified and indexed in slices outside the event lock, then split into sealed `segmentBytes`
-  // segments and a `< segmentBytes` open tail under the lock.
+  // verified and indexed in slices outside the event lock. The chunk bytes are written to pending
+  // names while the lock is held, one segment per turn, and the live names change only in the
+  // commit that follows: until that commit the open file is still the whole readable log. A
+  // crash before the commit leaves that file and names a reader does not look at.
   const openCandidate = checked.open;
   if (
     chainOpen &&
@@ -1614,10 +1616,13 @@ export function* sealUnsealedSegmentsSteps(
       retentionSeconds,
     };
     const openPath = openCandidate.path;
+    const openStamp = fileStamp(openPath);
     const openBytes =
-      segmentBytes > 0 && openCandidate.size >= segmentBytes ? readBytesNoFollow(openPath) : null;
+      segmentBytes > 0 && openCandidate.size >= segmentBytes ? yield* readBytesYielding(openPath) : null;
+    const openStampAfter = fileStamp(openPath);
     if (
       openBytes !== null &&
+      sameStamp(openStamp, openStampAfter) &&
       openBytes.length >= segmentBytes &&
       openBytes[openBytes.length - 1] === BYTE_NEWLINE
     ) {
@@ -1726,136 +1731,192 @@ export function* sealUnsealedSegmentsSteps(
         if (validChunks && !isAborted()) {
           const splitOffset = chunkRanges[chunkRanges.length - 1]!.end;
           const splitSealed: string[] = [];
+          const lockDir = join(storeDir, 'locks', 'events');
+          let release: (() => void) | null = null;
+          const pendingPaths: string[] = [];
+          const published: string[] = [];
+          let openReplaced = false;
           try {
-            withEventLock(storeDir, () => {
-              const currentOpen = readBytesNoFollow(openPath);
-              if (currentOpen === null || currentOpen.length < splitOffset) return;
-              if (!currentOpen.subarray(0, splitOffset).equals(openBytes.subarray(0, splitOffset))) return;
-              const rechecked = verifyEventLogSeals(project, root, home, { kept });
-              if (!rechecked.ok) return;
-              let currentPrev: string | null = null;
+            // The key stays held across the yields below. Another process sees the lock file.
+            // Another turn in this process takes the busy answer, because the hold is marked
+            // yielding for each turn the loop is free. The drop declaration runs later, on the
+            // commit turn, which is not yielding, so it still appends under this hold.
+            // A key already held is busy immediately. Waiting here would pause the loop for the
+            // whole default, so the split waits for the next pass instead.
+            release = acquireLock(lockDir, { waitMs: 0 });
+            heldEventLocks.add(lockDir);
+            const moved = !sameStamp(openStampAfter, fileStamp(openPath));
+            const rechecked = moved ? null : verifyEventLogSeals(project, root, home, { kept });
+            let currentPrev: string | null = null;
+            let chainOpenForSplit = !moved && rechecked !== null && rechecked.ok;
+            if (chainOpenForSplit && rechecked !== null && rechecked.ok) {
               for (const seg of rechecked.segments) {
-                if (seg.state !== 'sealed' || seg.seal === undefined) return;
+                if (seg.state !== 'sealed' || seg.seal === undefined) {
+                  chainOpenForSplit = false;
+                  break;
+                }
                 currentPrev = seg.seal.sealDigest;
               }
-              if (currentPrev !== previous) return;
-
+            }
+            if (chainOpenForSplit && currentPrev === previous) {
               const maxClosed = kept - 1;
               const totalChunks = preparedChunks.length;
               const drops: DroppedSegment[] = [];
               const openMtimeMs = Math.floor(statSync(openPath).mtimeMs);
               const signer: SealSigner = { storeDir, key: keyState.key, keyPrint };
 
-              let chainPredecessor: string | null | undefined = undefined;
-              for (let n = maxClosed; n >= Math.max(1, maxClosed - totalChunks + 1); n--) {
-                const slotPath = `${openPath}.${String(n)}`;
-                if (heldAt(slotPath).kind !== 'file') continue;
-                const existingSeal = readSeal(
-                  slotPath,
-                  `${EVENT_LOG_FILE}.${String(n)}`,
-                  storeDir,
-                  keyPrint,
-                  keyState.key,
-                );
-                const range = verifiedRangeOf(slotPath, home);
-                drops.push({
-                  name: `${EVENT_LOG_FILE}.${String(n)}`,
-                  bytes: sizeOfFile(slotPath),
-                  oldestSeq: range?.oldest ?? null,
-                  newestSeq: range?.newest ?? null,
-                  declaredOldest: range?.declaredOldest ?? null,
-                  bounds: ['rotation'],
-                });
-                chainPredecessor = existingSeal?.sealDigest ?? null;
-                unlinkSidecars(slotPath);
-                unlinkSync(slotPath);
-              }
-
-              for (let n = maxClosed - totalChunks; n >= 1; n--) {
-                const from = `${openPath}.${String(n)}`;
-                const to = `${openPath}.${String(n + totalChunks)}`;
-                if (!existsSync(from)) {
-                  chainPredecessor = undefined;
-                  continue;
-                }
-                renameSync(from, to);
-                chmodSync(to, 0o600);
-                if (existsSync(`${from}${INDEX_SUFFIX}`)) {
-                  renameSync(`${from}${INDEX_SUFFIX}`, `${to}${INDEX_SUFFIX}`);
-                  try {
-                    chmodSync(`${to}${INDEX_SUFFIX}`, 0o600);
-                  } catch {
-                    // The reader's triple check refuses a file it cannot read; the move stands.
-                  }
-                }
-                chainPredecessor = moveSeal(from, to, n, n + totalChunks, signer, chainPredecessor);
-              }
-
-              let pred: string | null = chainPredecessor === undefined ? previous : chainPredecessor;
               for (let i = 0; i < totalChunks; i++) {
+                if (isAborted()) break;
                 const chunk = preparedChunks[i]!;
                 const slot = totalChunks - i;
-                const segmentName = `${EVENT_LOG_FILE}.${String(slot)}`;
-                const fields: SealFields = {
-                  format: SEAL_FORMAT,
-                  keyPrint,
-                  store: storeDir,
-                  segment: segmentName,
-                  firstSeq: chunk.firstSeq,
-                  lastSeq: chunk.lastSeq,
-                  lines: chunk.lines,
-                  bytes: chunk.bytes.length,
-                  digest: chunk.digest,
-                  previous: pred,
-                  sealedAt: openMtimeMs,
-                  index: chunk.index,
-                };
-                const sealDigest = sealDigestOf(fields);
-                pred = sealDigest;
-                if (slot > maxClosed) {
-                  drops.push({
-                    name: `${EVENT_LOG_FILE}.${String(maxClosed)}`,
-                    bytes: chunk.bytes.length,
-                    oldestSeq: chunk.firstSeq,
-                    newestSeq: chunk.lastSeq,
-                    declaredOldest: chunk.declaredOldest,
-                    bounds: ['rotation'],
-                  });
-                  continue;
-                }
-                const slotPath = `${openPath}.${String(slot)}`;
-                const signature = signDomain(SEAL_DOMAIN, sealPayloadOf(fields), keyState.key);
-                writeAtomic(slotPath, chunk.bytes.toString('utf8'));
-                writeAtomic(indexPathOf(slotPath), chunk.indexText);
-                writeAtomic(
-                  sealPathOf(slotPath),
-                  `${JSON.stringify({ ...sealPayloadOf(fields), sealDigest, signature })}\n`,
-                );
-                splitSealed.push(segmentName);
+                if (slot > maxClosed) continue;
+                const pending = `${openPath}.pending-${String(slot)}`;
+                writeAtomic(pending, chunk.bytes.toString('utf8'));
+                writeAtomic(`${pending}${INDEX_SUFFIX}`, chunk.indexText);
+                pendingPaths.push(pending);
+                yield* yieldEventLock(lockDir);
               }
 
-              writeAtomic(openPath, currentOpen.subarray(splitOffset).toString('utf8'));
-              try {
-                drops.push(...pruneSealed(openPath, home, kept, retention));
-              } catch {
-                // Retention never fails the split pass.
+              if (!isAborted()) {
+                let chainPredecessor: string | null | undefined = undefined;
+                for (let n = maxClosed; n >= Math.max(1, maxClosed - totalChunks + 1); n--) {
+                  const slotPath = `${openPath}.${String(n)}`;
+                  if (heldAt(slotPath).kind !== 'file') continue;
+                  const existingSeal = readSeal(
+                    slotPath,
+                    `${EVENT_LOG_FILE}.${String(n)}`,
+                    storeDir,
+                    keyPrint,
+                    keyState.key,
+                  );
+                  const range = verifiedRangeOf(slotPath, home);
+                  drops.push({
+                    name: `${EVENT_LOG_FILE}.${String(n)}`,
+                    bytes: sizeOfFile(slotPath),
+                    oldestSeq: range?.oldest ?? null,
+                    newestSeq: range?.newest ?? null,
+                    declaredOldest: range?.declaredOldest ?? null,
+                    bounds: ['rotation'],
+                  });
+                  chainPredecessor = existingSeal?.sealDigest ?? null;
+                  unlinkSidecars(slotPath);
+                  unlinkSync(slotPath);
+                }
+
+                for (let n = maxClosed - totalChunks; n >= 1; n--) {
+                  const from = `${openPath}.${String(n)}`;
+                  const to = `${openPath}.${String(n + totalChunks)}`;
+                  if (!existsSync(from)) {
+                    chainPredecessor = undefined;
+                    continue;
+                  }
+                  renameSync(from, to);
+                  chmodSync(to, 0o600);
+                  if (existsSync(`${from}${INDEX_SUFFIX}`)) {
+                    renameSync(`${from}${INDEX_SUFFIX}`, `${to}${INDEX_SUFFIX}`);
+                    try {
+                      chmodSync(`${to}${INDEX_SUFFIX}`, 0o600);
+                    } catch {
+                      // The reader's triple check refuses a file it cannot read; the move stands.
+                    }
+                  }
+                  chainPredecessor = moveSeal(from, to, n, n + totalChunks, signer, chainPredecessor);
+                }
+
+                let pred: string | null = chainPredecessor === undefined ? previous : chainPredecessor;
+                for (let i = 0; i < totalChunks; i++) {
+                  const chunk = preparedChunks[i]!;
+                  const slot = totalChunks - i;
+                  const segmentName = `${EVENT_LOG_FILE}.${String(slot)}`;
+                  const fields: SealFields = {
+                    format: SEAL_FORMAT,
+                    keyPrint,
+                    store: storeDir,
+                    segment: segmentName,
+                    firstSeq: chunk.firstSeq,
+                    lastSeq: chunk.lastSeq,
+                    lines: chunk.lines,
+                    bytes: chunk.bytes.length,
+                    digest: chunk.digest,
+                    previous: pred,
+                    sealedAt: openMtimeMs,
+                    index: chunk.index,
+                  };
+                  const sealDigest = sealDigestOf(fields);
+                  pred = sealDigest;
+                  if (slot > maxClosed) {
+                    drops.push({
+                      name: `${EVENT_LOG_FILE}.${String(maxClosed)}`,
+                      bytes: chunk.bytes.length,
+                      oldestSeq: chunk.firstSeq,
+                      newestSeq: chunk.lastSeq,
+                      declaredOldest: chunk.declaredOldest,
+                      bounds: ['rotation'],
+                    });
+                    continue;
+                  }
+                  const slotPath = `${openPath}.${String(slot)}`;
+                  const pending = `${openPath}.pending-${String(slot)}`;
+                  const signature = signDomain(SEAL_DOMAIN, sealPayloadOf(fields), keyState.key);
+                  renameSync(pending, slotPath);
+                  chmodSync(slotPath, 0o600);
+                  published.push(slotPath);
+                  if (existsSync(`${pending}${INDEX_SUFFIX}`)) {
+                    renameSync(`${pending}${INDEX_SUFFIX}`, indexPathOf(slotPath));
+                    try {
+                      chmodSync(indexPathOf(slotPath), 0o600);
+                    } catch {
+                      // The reader's triple check refuses a file it cannot read; the move stands.
+                    }
+                  }
+                  writeAtomic(
+                    sealPathOf(slotPath),
+                    `${JSON.stringify({ ...sealPayloadOf(fields), sealDigest, signature })}\n`,
+                  );
+                  splitSealed.push(segmentName);
+                }
+
+                writeAtomic(openPath, openBytes.subarray(splitOffset).toString('utf8'));
+                openReplaced = true;
+                try {
+                  drops.push(...pruneSealed(openPath, home, kept, retention));
+                } catch {
+                  // Retention never fails the split pass.
+                }
+                try {
+                  declareDrop(
+                    project,
+                    root,
+                    home,
+                    kept,
+                    { ...retention, maxBytes: segmentBytes },
+                    drops,
+                    options.session ?? preparedChunks[preparedChunks.length - 1]!.session,
+                  );
+                } catch {
+                  // Retention never fails the split pass.
+                }
               }
-              try {
-                declareDrop(
-                  project,
-                  root,
-                  home,
-                  kept,
-                  { ...retention, maxBytes: segmentBytes },
-                  drops,
-                  options.session ?? preparedChunks[preparedChunks.length - 1]!.session,
-                );
-              } catch {
-                // Retention never fails the split pass.
+            }
+          } catch (error) {
+            // A write failure leaves the open log readable for the next pass. A busy key is
+            // the caller's to retry; swallowing it would look like a finished attempt.
+            if (error instanceof LockBusyError) throw error;
+          } finally {
+            if (!openReplaced) {
+              for (const slotPath of published) {
+                try { unlinkSync(slotPath); } catch { /* the next pass seals what remains */ }
+                try { unlinkSync(indexPathOf(slotPath)); } catch { /* sidecar of a slot just removed */ }
+                try { unlinkSync(sealPathOf(slotPath)); } catch { /* sidecar of a slot just removed */ }
               }
-            });
-          } catch {
-            // A lock or write failure leaves the store untouched for the next pass.
+              for (const pending of pendingPaths) {
+                try { unlinkSync(pending); } catch { /* already renamed, or never written */ }
+                try { unlinkSync(`${pending}${INDEX_SUFFIX}`); } catch { /* already renamed */ }
+              }
+            }
+            heldEventLocks.delete(lockDir);
+            eventLockYielding.delete(lockDir);
+            if (release !== null) release();
           }
           for (const name of splitSealed) {
             sealed.push(name);
@@ -2787,13 +2848,20 @@ export function resetAppendIndexReads(): void {
  *  the whole reentrancy state: the nested drop declaration's append runs under the lock its
  *  caller already holds instead of waiting on itself. */
 const heldEventLocks = new Set<string>();
+/** Set while a holder has yielded the event loop and still holds the key. A nested append on
+ *  that turn would write into the middle of a seal commit, so it answers busy. A nested call
+ *  on the turn that is not yielding — the drop declaration — still runs under the hold. */
+const eventLockYielding = new Set<string>();
 
 /** Runs `work` under the store's event lock. A call made while this process already holds the
- *  lock — the drop declaration's append, from inside an append or from the prune pass — runs
- *  directly under the lock its caller holds. */
+ *  lock and has not yielded — the drop declaration's append, from inside an append or from the
+ *  prune pass — runs directly under the lock its caller holds. */
 function withEventLock<T>(storeDir: string, work: () => T, lockWaitMs?: number): T {
   const lockDir = join(storeDir, 'locks', 'events');
-  if (heldEventLocks.has(lockDir)) return work();
+  if (heldEventLocks.has(lockDir)) {
+    if (eventLockYielding.has(lockDir)) throw new LockBusyError(join(lockDir, LOCK_FILE), process.pid);
+    return work();
+  }
   return withLock(
     lockDir,
     () => {
@@ -2802,10 +2870,22 @@ function withEventLock<T>(storeDir: string, work: () => T, lockWaitMs?: number):
         return work();
       } finally {
         heldEventLocks.delete(lockDir);
+        eventLockYielding.delete(lockDir);
       }
     },
     lockWaitMs === undefined ? {} : { waitMs: lockWaitMs },
   );
+}
+
+/** Yields one turn while `lockDir` stays held. Other writers in this process answer busy for
+ *  that turn; the key stays on disk, so another process cannot take it either. */
+function* yieldEventLock(lockDir: string): Generator<void, void, void> {
+  eventLockYielding.add(lockDir);
+  try {
+    yield;
+  } finally {
+    eventLockYielding.delete(lockDir);
+  }
 }
 
 function eventKey(payload: Pick<EventPayload, 'kind' | 'record_id' | 'session'>): string {
@@ -2980,6 +3060,37 @@ function indexWantedRecordIdInChunk(
     const lineEnd = newline < 0 ? bytes.length : newline;
     addPlace(into, wantedRecordId, { file, offset: base + lineStart });
     searchFrom = lineEnd + 1;
+  }
+}
+
+/** Reads one whole retained file without following a link, yielding between chunks so a large
+ *  open log does not hold the event loop for the read. Null when it cannot be read that way.
+ *  The descriptor stays open across a yield and closes when the generator finishes or is closed. */
+function* readBytesYielding(path: string): Generator<void, Buffer | null, void> {
+  let fd: number;
+  try {
+    fd = openSync(path, constants.O_RDONLY | NOFOLLOW);
+  } catch {
+    return null;
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) return null;
+    const chunks: Buffer[] = [];
+    const buf = Buffer.allocUnsafe(256 * 1024);
+    let position = 0;
+    for (;;) {
+      const n = readSync(fd, buf, 0, buf.length, position);
+      if (n <= 0) break;
+      chunks.push(Buffer.from(buf.subarray(0, n)));
+      position += n;
+      yield;
+    }
+    return chunks.length === 0 ? Buffer.alloc(0) : Buffer.concat(chunks);
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
   }
 }
 
@@ -3655,8 +3766,10 @@ export function appendEvent(
   // that scan the same newest sequence would otherwise mint it twice, and one of the two records
   // would then be invisible to every cursor reader. A call made from inside this lock (the drop
   // declaration) skips the wrapper below and runs the append under the lock its caller holds.
+  // A holder that has yielded still owns the key; an append from another turn answers busy
+  // instead of writing into that commit.
   const lockDir = join(storeDir, 'locks', 'events');
-  if (!heldEventLocks.has(lockDir)) {
+  if (!heldEventLocks.has(lockDir) || eventLockYielding.has(lockDir)) {
     try {
       return withEventLock(
         storeDir,
