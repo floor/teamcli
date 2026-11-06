@@ -432,16 +432,16 @@ describe('the project a team leads, read through the launch', () => {
     expect(admitSend(oldLead, otherLead, teams, undefined, { projects: stored }).ok).toBe(false);
   });
 
-  test('a team that leaves the project takes its lead out of the record, and the other teams stay', () => {
+  test('a launch that drops in_project keeps the membership and the lead already recorded', () => {
     const { fixture, input } = leadFixture();
     const lead = input.team.seats.find((seat) => seat.name === 'lead')!;
     const worker = input.team.seats.find((seat) => seat.name === 'worker')!;
     const projectId = projectIdOf('TeamCLI');
     const leadId = (registerLaunch(input, lead, 'pane-l') as { id: string }).id;
-    const other = addOtherLeadTeam(fixture);
     expect(getProject(fixture.home, projectId)?.lead).toBe(leadId);
 
-    // The file stops naming the project; `project_lead` cannot stay without it.
+    // The file stops naming the project. That does not clear a membership the registry holds,
+    // and `project_lead` cannot stay in the file without `in_project`.
     const yaml = readFileSync(fixture.file, 'utf8')
       .replace('in_project: TeamCLI\n', '')
       .replace('project_lead: true\n', '');
@@ -451,8 +451,9 @@ describe('the project a team leads, read through the launch', () => {
     registerLaunch({ ...input, team: parsed.team }, worker, 'pane-w');
 
     const project = getProject(fixture.home, projectId);
-    expect(project?.lead).toBeNull();
-    expect(project?.teams).toEqual([other.teamId]);
+    expect(project?.lead).toBe(leadId);
+    expect(project?.teams).toEqual([teamIdOf(fixture.root)]);
+    expect(getTeam(fixture.home, teamIdOf(fixture.root))?.projectId).toBe(projectId);
   });
 
   test("a leave clears only the leaving team's lead: another team's lead stays on record", () => {

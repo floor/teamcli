@@ -681,7 +681,11 @@ describe('team up --all single-command multi-team restore', () => {
     expect(callersOfWriteToken).toEqual(['daemon/restore/spawn.ts']);
     expect(callersOfAcceptDoor).toEqual(['daemon/restore/entry.ts']);
     expect(callersOfRestoreInheritPath).toEqual(['daemon/restore/token.ts']);
-    expect(callersOfClaimOneUseToken.sort()).toEqual(['daemon/chores/token.ts', 'daemon/restore/token.ts']);
+    expect(callersOfClaimOneUseToken.sort()).toEqual([
+      'daemon/chores/token.ts',
+      'daemon/restore/token.ts',
+      'daemon/wake/token.ts',
+    ]);
     expect(callersOfSpawnChild).toEqual(['daemon/host.ts']);
     expect(filesWithUpInternal).toEqual(['commands/up.ts']);
     expect(filesWithOldRestoreReader).toEqual([]);
@@ -940,6 +944,7 @@ describe('team up --all single-command multi-team restore', () => {
     const machineUnitRealpath = realpathSync(machineUnitFile);
     const darwinService = systemServiceManager({
       platform: 'darwin',
+      accountHome: home,
       runner: () => ({
         status: 0,
         stdout: `\tpath = ${machineUnitRealpath}\n\tpid = ${String(DAEMON_PID)}\n\tprogram = ${process.execPath}\n`,

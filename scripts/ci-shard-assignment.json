@@ -805,6 +805,7 @@
     "test/registry-agents.test.ts": 2,
     "test/registry-boundaries.test.ts": 0,
     "test/registry-down-session.test.ts": 2,
+    "test/registry-launch-keeps-membership.test.ts": 1,
     "test/registry-only.test.ts": 1,
     "test/registry-rules-wording.test.ts": 1,
     "test/registry-session-fallback.test.ts": 2,
