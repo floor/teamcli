@@ -38,6 +38,7 @@ import type { LobbyRefusal } from '../lobby/gate.ts';
 import type { InboxRegistration } from '../mcp/register.ts';
 import type { SeatState, WaitingRecord } from '../state.ts';
 import { continuitySessionOf } from '../registry/resume.ts';
+import { processStartOf } from '../watch/pane.ts';
 import { vendorNoticeRange, type Screen } from '../watch/screen.ts';
 import type { SessionEndReason } from '../sessions/registry.ts';
 import { endpointCleanupHost } from './endpoint-cleanup.ts';
@@ -204,6 +205,13 @@ export type Host = {
   agentStatus?(session: string, pane: string): string | null;
   /** The pane's process identity, read to record it for the seat; null when herdr can't tell. */
   processInfo?(session: string, pane: string): PaneProcesses | null;
+  /**
+   * The instant a process started, in epoch milliseconds, or null when it is gone or its start
+   * line does not read. Read once, when the seat's pane is created, to record the pane shell's
+   * start beside its pid: a pid the OS hands to another process after the shell exits is then
+   * told from the same shell. Absent: the run reads the process table itself.
+   */
+  processStartOf?(pid: number): number | null;
   sleep(ms: number): Promise<void>;
   now(): number;
   /** Null when this seat may launch. A string is the reason it may not. */
@@ -217,6 +225,10 @@ export type Host = {
       rules?: 'option' | 'message' | 'prepend';
       createdWorkspace?: boolean;
       launched?: LaunchedIdentity;
+      /** The pane's own shell pid and that process's start instant, read when the pane was
+       *  created: the identity a pane herdr has not named yet is placed by. */
+      pane_shell?: number;
+      pane_shell_start?: number;
       /** The agent session read with the process, stored beside `launched`. */
       agent_session?: string;
       /** The declaration this launch reached the prompt with. `effort: null` clears a stored word. */
@@ -534,12 +546,12 @@ async function until(
   }
 }
 
-/** The naming wait re-asks the host to take a seat's name on a short backoff after a refusal.
- *  The host refuses a rename while the agent's startup is still pending, so the pane's
- *  foreground can name the CLI before the host will; the first pause is short and doubles up to
- *  the cap, and every pause is cut to what is left of the wait, so the retry never runs past it. */
-const RENAME_RETRY_MS = 250;
-const RENAME_RETRY_MAX_MS = 2000;
+/** How long the rename step reads the agent list for the seat's name after a rename call (2 s,
+ *  read every 200 ms), and how long it waits for herdr to detect the CLI as an agent before its
+ *  one retry (10 s). After that the seat is left at launched, with the reason reported. */
+const RENAME_VERIFY_MS = 2000;
+const RENAME_VERIFY_POLL_MS = 200;
+const RENAME_DETECT_MS = 10_000;
 
 /** Whether the host lists the pane under another seat's name now. A rename of it would take that
  *  seat's pane, so the naming stops there; an unreadable list is not such a reading. */
@@ -549,36 +561,35 @@ function namedForAnotherSeat(host: Host, session: string, pane: string, seat: st
     && agents.some((agent) => agent.pane === pane && agent.name !== null && agent.name !== seat);
 }
 
-/** What the naming settled on: the host took the name, the pane turned out to be another
- *  seat's, or the wait ran out (or was cancelled) with the name not taken. */
+/** What the naming settled on: the host holds the name and lists it, the pane turned out to be
+ *  another seat's, or the name was not listed when the attempts ran out. */
 type RenameOutcome = 'named' | 'other seat' | 'not named';
 
-/** Asks the host for the seat's name until it takes it or `leftMs` runs out. It pauses before
- *  the first ask: the call that led here was already made at this instant. A pane the host has
- *  begun naming for another seat ends the naming without a call. */
-async function retryRename(
+/** Reads the agent list until it shows the pane under `seat`, or `ms` runs out. A host with no
+ *  agent list answers at once: the herdr adapter names a pane only after reading the list back
+ *  (herdr.ts, `agentRename`), so its answer is the verified one, and the fake hosts of the suite
+ *  keep that reading. A clock that does not move ends the wait rather than spinning. */
+async function verifiedName(
   host: Host,
   session: string,
   pane: string,
   seat: string,
-  leftMs: number,
+  ms: number,
   sleep: (ms: number) => Promise<void>,
   cancelled: () => boolean,
-): Promise<RenameOutcome> {
-  if (leftMs <= 0) return 'not named';
-  const deadline = host.now() + leftMs;
-  let pause = RENAME_RETRY_MS;
+): Promise<boolean> {
+  if (host.agentList === undefined) return true;
+  const lists = (): boolean =>
+    host.agentList?.(session)?.some((agent) => agent.pane === pane && agent.name === seat) === true;
+  const deadline = host.now() + ms;
   for (;;) {
-    if (cancelled()) return 'not named';
-    const now = host.now();
-    if (now >= deadline) return 'not named';
-    await sleep(Math.min(pause, deadline - now));
-    if (cancelled()) return 'not named';
-    // A clock that does not move would spin. Treat that as the wait running out.
-    if (host.now() <= now) return 'not named';
-    if (namedForAnotherSeat(host, session, pane, seat)) return 'other seat';
-    if (host.renameAgent(session, pane, seat)) return 'named';
-    pause = Math.min(pause * 2, RENAME_RETRY_MAX_MS);
+    if (cancelled()) return false;
+    if (lists()) return true;
+    if (host.now() >= deadline) return false;
+    const before = host.now();
+    await sleep(Math.min(RENAME_VERIFY_POLL_MS, deadline - before));
+    if (cancelled()) return false;
+    if (host.now() <= before) return false;
   }
 }
 
@@ -638,8 +649,6 @@ export async function executePlan(
   const created = new Map<string, { workspace: string; repairLine: string }>();
   /** Seats whose workspace this run closed: no path closes one twice. */
   const closed = new Set<string>();
-  /** Seats whose pane was already named right after creation, before any wait. */
-  const namedAtCreate = new Set<string>();
   /** Whether this run started the session: only then may `q` stop it. */
   let createdSession = false;
   // Restore bookkeeping, only read when the caller passed `restoreSeats`. A seat is repaired
@@ -1322,15 +1331,16 @@ export async function executePlan(
           // repair followed by a create — is not "already closed": the stop pass must close
           // this new workspace too.
           closed.delete(op.seat);
-          // Name the pane right after it is created, before any wait, so a left-out pane is
-          // always findable. A pane the host already lists under another seat's name is not
-          // this seat's to rename: the naming wait below leaves the seat out without touching it.
-          if (!namedForAnotherSeat(host, session, made.pane, op.seat)
-            && host.renameAgent(session, made.pane, op.seat)) {
-            namedAtCreate.add(op.seat);
-          } else {
-            namedAtCreate.delete(op.seat);
-          }
+          // The pane's own shell and its start instant are the identity a caller on this pane is
+          // placed by before herdr names the agent in it: a seat's launch starts its MCP servers
+          // during CLI boot, before any name exists (caller.ts). The shell outlives the CLI it
+          // runs, and the start instant tells a reused pid from the same shell. Both are read
+          // here, beside the create, and written with the pane record; a reading the host cannot
+          // give writes neither, and placement then keeps the refusal it had. The pane is not
+          // named here: herdr refuses a name on a pane with no effective agent, and an answer
+          // nothing verified must never skip the rename step, which owns naming.
+          const shell = host.processInfo?.(session, made.pane)?.shell ?? null;
+          const shellStart = shell === null ? null : (host.processStartOf ?? processStartOf)(shell);
           // A fresh workspace is a fresh seat: any waiting record named an older pane, and is
           // void here. Clearing it in the same write is what makes the whole-team repair
           // (`team down` then `team up`) clear the record the next `up` would otherwise resume.
@@ -1340,6 +1350,8 @@ export async function executePlan(
             workspace: made.workspace,
             createdWorkspace: true,
             waiting: null,
+            ...(shell !== null ? { pane_shell: shell } : {}),
+            ...(shellStart !== null ? { pane_shell_start: shellStart } : {}),
             ...(op.watcher ? { watcher: op.watcher } : {}),
           });
           host.running(op.seat);
@@ -1995,7 +2007,12 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: proof.why });
           break;
         }
-        if (!host.renameAgent(session, op.pane, op.seat)) {
+        // The rename is the host's verified one, and where the host lists its agents the list is
+        // read once more here: a call that returns true but leaves no name listed is held, and
+        // the seat is left as the host restored it.
+        const renamed = host.renameAgent(session, op.pane, op.seat)
+          && await verifiedName(host, session, op.pane, op.seat, RENAME_VERIFY_MS, sharedSleep, () => stopped || closing());
+        if (!renamed) {
           held = true;
           dropped.add(op.seat);
           final(op.seat, { kind: 'left out', reason: 'its pane was not named; left as the host restored it' });
@@ -2037,14 +2054,14 @@ export async function executePlan(
         const listed = (): boolean => host.agentPanes(session)?.includes(here.pane) === true;
         const runsCli = (): boolean =>
           reportedLiveAgent(host.foreground?.(session, here.pane) ?? null, processNames);
-        const namingStarted = host.now();
+        const cancelled = (): boolean => stopped || closing();
         const seen = await until(
           op.seconds,
           2000,
           host,
           () => listed() || runsCli(),
           sharedSleep,
-          () => stopped || closing(),
+          cancelled,
         );
         if (stopped || closing()) {
           // A closing host cancelled the wait: the pane exists but was never read into the agent
@@ -2058,47 +2075,58 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: 'was not in the agent list in time; left at launched' });
           break;
         }
-        // The host refuses a rename while the agent's startup is still pending, and only takes
-        // one for a pane it currently lists as an agent; the pane's foreground can name the CLI
-        // before the host will take the name. One refused call is not the seat's last chance:
-        // the retry keeps this wait's own budget, on a short backoff, until the host takes the
-        // name or the wait runs out — and only the wait running out leaves the seat unnamed.
-        // A pane the host has begun naming for another seat is never renamed here: it is that
-        // seat's, and a rename would take it.
-        let renamed = namedAtCreate.has(op.seat);
-        if (!renamed) {
-          let outcome: RenameOutcome;
-          if (namedForAnotherSeat(host, session, here.pane, op.seat)) {
-            outcome = 'other seat';
-          } else if (host.renameAgent(session, here.pane, op.seat)) {
-            outcome = 'named';
-          } else {
-            outcome = await retryRename(
-              host,
-              session,
-              here.pane,
-              op.seat,
-              op.seconds * 1000 - (host.now() - namingStarted),
-              sharedSleep,
-              () => stopped || closing(),
-            );
-          }
+        // Naming is one call, then one retry, and each answer is verified against the agent
+        // list: a rename that returns true but leaves no name listed is not a name. A pane the
+        // host already lists under the seat's name is not renamed again. A pane the host has
+        // begun naming for another seat is never renamed here: it is that seat's, and a rename
+        // would take it. The retry waits for herdr to detect the CLI as an agent first: its
+        // startup can still be pending when the CLI's own prompt appears. A name that is still
+        // not listed after both attempts leaves the seat at launched, with the reason reported.
+        const listsName = (): boolean =>
+          host.agentList?.(session)?.some((agent) => agent.pane === here.pane && agent.name === op.seat) === true;
+        const verify = (ms: number): Promise<boolean> =>
+          verifiedName(host, session, here.pane, op.seat, ms, sharedSleep, cancelled);
+        let outcome: RenameOutcome;
+        if (namedForAnotherSeat(host, session, here.pane, op.seat)) {
+          outcome = 'other seat';
+        } else if (listsName()) {
+          outcome = 'named';
+        } else if (host.renameAgent(session, here.pane, op.seat) && await verify(RENAME_VERIFY_MS)) {
+          outcome = 'named';
+        } else {
+          // The first answer is not a listed name: wait for herdr to detect the pane as an
+          // agent, then ask once more, and verify that answer the same way.
+          await until(RENAME_DETECT_MS / 1000, RENAME_VERIFY_POLL_MS, host, listed, sharedSleep, cancelled);
           if (stopped || closing()) {
             // A closing host cancelled the naming wait: the seat keeps the stage it had.
             stopped = true;
             abort = true;
             break;
           }
-          if (outcome === 'other seat') {
-            dropped.add(op.seat);
-            final(op.seat, { kind: 'left out', reason: 'its pane is named for another seat; left at launched' });
-            break;
+          if (namedForAnotherSeat(host, session, here.pane, op.seat)) {
+            outcome = 'other seat';
+          } else if (listsName()) {
+            outcome = 'named';
+          } else if (host.renameAgent(session, here.pane, op.seat) && await verify(RENAME_VERIFY_MS)) {
+            outcome = 'named';
+          } else {
+            outcome = 'not named';
           }
-          renamed = outcome === 'named';
         }
-        if (!renamed) {
+        if (stopped || closing()) {
+          // A closing host cancelled the naming wait: the seat keeps the stage it had.
+          stopped = true;
+          abort = true;
+          break;
+        }
+        if (outcome === 'other seat') {
           dropped.add(op.seat);
-          final(op.seat, { kind: 'left out', reason: 'was not named in time; left at launched' });
+          final(op.seat, { kind: 'left out', reason: 'its pane is named for another seat; left at launched' });
+          break;
+        }
+        if (outcome !== 'named') {
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: 'its name was not listed after the rename; left at launched' });
           break;
         }
         recordSeat(op.seat, {

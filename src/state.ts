@@ -113,6 +113,17 @@ export type SeatState = {
    */
   agent_session?: string;
   /**
+   * The pane's own shell pid, and that process's start instant in epoch milliseconds, read when
+   * the workspace was created. A pane herdr has not named yet is placed by this identity: a
+   * caller whose ancestors include that shell — while the live pane's shell still carries that
+   * pid and start — is the seat this record names (`src/caller.ts`). The shell outlives the CLI
+   * it runs, so a resumed pane with a new CLI pid keeps the anchor. Absent on records written
+   * before this build, and on a create whose process herdr could not tell: placement then falls
+   * back to `launched.shell`, at the strength of the named-pane rule.
+   */
+  pane_shell?: number;
+  pane_shell_start?: number;
+  /**
    * The presence runtime incarnation of the seat's current launch (`prs_<12 lowercase hex>`),
    * minted when that launch installs a presence writer and compared whole by the daemon's
    * presence ingester. Presence events carry it, so a late event from a predecessor process
@@ -801,6 +812,19 @@ export function readState(dir: string): State {  const path = join(dir, STATE_FI
       if (seat.agent_session !== undefined && (typeof seat.agent_session !== 'string' || seat.agent_session === '')) {
         delete seat.agent_session;
       }
+      // A pane shell and its start enter from the file like every other value: each must be a
+      // positive integer, and a start with no shell to belong to goes with it. A shell with no
+      // start is kept — placement refuses it, which is the fail-closed reading — because the
+      // two are written together and only a create that could not read the start leaves it out.
+      if (seat.pane_shell !== undefined
+        && !(typeof seat.pane_shell === 'number' && Number.isInteger(seat.pane_shell) && seat.pane_shell > 0)) {
+        delete seat.pane_shell;
+      }
+      if (seat.pane_shell_start !== undefined
+        && !(typeof seat.pane_shell_start === 'number' && Number.isInteger(seat.pane_shell_start) && seat.pane_shell_start > 0)) {
+        delete seat.pane_shell_start;
+      }
+      if (seat.pane_shell === undefined) delete seat.pane_shell_start;
       // A webhook delivery record enters from the file like every other value: one the bus wrote
       // has the closed outcome, a count, a reason and a parseable instant, and anything else is
       // dropped whole rather than printed as a failure the bus never reported.

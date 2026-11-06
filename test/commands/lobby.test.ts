@@ -147,7 +147,7 @@ function world(): {
   /** Every pane the world holds, with an agent in it or not. */
   paneIds(): string[];
 } {
-  const panes = new Map<string, { text: string; agent: boolean }>();
+  const panes = new Map<string, { text: string; agent: boolean; name: string | null }>();
   let n = 0;
   let clock = NOW.getTime();
   const made = {
@@ -169,7 +169,7 @@ function world(): {
     sessionUp: () => made.session === 'running',
     createWorkspace(_session, cwd, label) {
       n++;
-      panes.set(`w${n}:p1`, { text: IDLE, agent: false });
+      panes.set(`w${n}:p1`, { text: IDLE, agent: false, name: null });
       made.workspaces.push({ label, cwd });
       return { pane: `w${n}:p1`, workspace: `w${n}` };
     },
@@ -183,8 +183,12 @@ function world(): {
       made.typed.push(text);
       return true;
     },
-    renameAgent(_session, _pane, name) {
+    // A rename herdr takes is listed under the seat's name afterwards: the naming step proves
+    // that listed name before the seat can reach ready.
+    renameAgent(_session, pane, name) {
       made.renames.push(name);
+      const known = panes.get(pane);
+      if (known) known.name = name;
       return true;
     },
     closeWorkspace(_session, workspace) {
@@ -192,7 +196,14 @@ function world(): {
       return true;
     },
     agentPanes: () => [...panes].filter(([, pane]) => pane.agent).map(([id]) => id),
-    agents: () => [],
+    agents: () => [...panes].flatMap(([id, pane]) => (pane.name === null ? [] : [{
+      name: pane.name,
+      agent: 'claude-code',
+      pane: id,
+      workspace: id.replace(/:p1$/, ''),
+      status: 'idle',
+      cwd: null,
+    }])),
     paneText: (_session, pane) => panes.get(pane)?.text ?? '',
     foreground: () => ['claude', 'codex', 'agy', 'cursor-agent'],
     sleep: async (ms) => {

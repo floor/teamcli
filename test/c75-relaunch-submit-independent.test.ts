@@ -60,6 +60,9 @@ type World = {
 function sceneOf(world: World) {
   const start = 1_000;
   let clock = start;
+  // A host that takes a rename lists the pane under the seat's name afterwards, as herdr does;
+  // the naming step proves that listed name before the seat can reach ready.
+  let named = false;
   const presses: number[] = [];
   const finals: string[] = [];
   const logs: string[] = [];
@@ -72,12 +75,17 @@ function sceneOf(world: World) {
       return true;
     },
     typeLine: () => false,
-    renameAgent: () => true,
+    renameAgent: () => {
+      named = true;
+      return true;
+    },
     closeWorkspace: () => true,
     stopSession: () => true,
     kill: () => true,
     agentPanes: () => [PANE],
-    agentList: () => world.agents?.() ?? [],
+    agentList: () => world.agents?.() ?? (named
+      ? [{ name: 'worker', agent: 'claude', pane: PANE, workspace: WS, status: 'idle', cwd: null }]
+      : []),
     workspacePanes: () => [PANE],
     processInfo: () => world.process?.() ?? ({ shell: SHELL, foreground: [SHELL] }),
     classify: () => world.classify(),

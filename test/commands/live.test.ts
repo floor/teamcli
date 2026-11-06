@@ -116,6 +116,8 @@ type World = {
   terminal: { keys: Key[]; reads: number; drains: number; key(ms: number): Promise<Key>; drain(): void };
   session: 'absent' | 'running' | 'stopped';
   seed(pane: string, text: string, agent: boolean): void;
+  /** The name herdr would list on the pane: null until a rename was taken for it. */
+  nameOn(pane: string): string | null;
 };
 
 function world(text: string | ((pane: string, label: string) => string) = IDLE): World {
@@ -147,13 +149,18 @@ function world(text: string | ((pane: string, label: string) => string) = IDLE):
       },
     },
     session: 'absent',
+    nameOn(pane) {
+      return panes.get(pane)?.name ?? null;
+    },
     seed(pane, shown, agent) {
-      panes.set(pane, { text: shown, agent });
+      // A pane an earlier run left is on herdr's list unnamed, exactly as a launch's pane is
+      // before its rename.
+      panes.set(pane, { text: shown, agent, name: null });
     },
   };
   let clock = NOW.getTime();
   let n = 0;
-  const panes = new Map<string, { text: string; agent: boolean }>();
+  const panes = new Map<string, { text: string; agent: boolean; name: string | null }>();
   // The label each created workspace carries: what `up` passed to createWorkspace, as herdr
   // would report it back in its workspace list.
   const spaces = new Map<string, string>();
@@ -169,7 +176,7 @@ function world(text: string | ((pane: string, label: string) => string) = IDLE):
       n++;
       const pane = `w${n}:p1`;
       const shown = typeof text === 'string' ? text : text(pane, label);
-      panes.set(pane, { text: shown, agent: false });
+      panes.set(pane, { text: shown, agent: false, name: null });
       spaces.set(`w${n}`, label);
       state.creates.push(label);
       return { pane, workspace: `w${n}` };
@@ -180,8 +187,12 @@ function world(text: string | ((pane: string, label: string) => string) = IDLE):
       if (known) known.agent = true;
       return true;
     },
-    renameAgent(_session, _pane, name) {
+    renameAgent(_session, pane, name) {
       state.renames.push(name);
+      // A rename herdr takes is listed under the seat's name afterwards: the naming step proves
+      // that listed name before the seat can reach ready.
+      const known = panes.get(pane);
+      if (known) known.name = name;
       return true;
     },
     closeWorkspace(_session, workspace) {
@@ -191,7 +202,14 @@ function world(text: string | ((pane: string, label: string) => string) = IDLE):
     agentPanes() {
       return [...panes].filter(([, pane]) => pane.agent).map(([id]) => id);
     },
-    agents: () => [],
+    agents: () => [...panes].flatMap(([id, pane]) => (pane.name === null ? [] : [{
+      name: pane.name,
+      agent: 'claude-code',
+      pane: id,
+      workspace: id.replace(/:p1$/, ''),
+      status: 'idle',
+      cwd: null,
+    }])),
     workspacePanes(_session, workspace) {
       const found = [...panes.keys()].filter((p) => p.startsWith(`${workspace}:`));
       return found.length > 0 ? found : [`${workspace}:p1`];
@@ -210,9 +228,30 @@ function world(text: string | ((pane: string, label: string) => string) = IDLE):
     sleep: async (ms) => {
       clock += ms;
     },
+    // The synthetic panes' shells have no start instant on this machine: never read the host's
+    // process table for a fixture pid.
+    processStartOf: () => null,
     now: () => new Date(clock),
   };
   return state;
+}
+
+/** The names this world's own renames put on panes, as herdr's list would give them now: a fake
+ *  host that says yes to a rename must also list the name there, or the naming step cannot
+ *  verify it. Tests that supply their own list add this one to it, so a pane launched and named
+ *  during the run is listed without pretending a pre-existing team the test does not declare. */
+function liveNames(made: World): HerdrAgent[] {
+  return (made.launch.agentPanes('acme-web') ?? []).flatMap((pane) => {
+    const name = made.nameOn(pane);
+    return name === null ? [] : [{
+      name,
+      agent: 'claude',
+      pane,
+      workspace: pane.split(':')[0] ?? pane,
+      status: 'idle',
+      cwd: null,
+    }];
+  });
 }
 
 function sources(extra: Partial<UpSources>, made: World): UpSources {
@@ -297,7 +336,7 @@ describe('team up, live', () => {
     // with — so the no-terminal close of the trust dialog can be proven and happens.
     made.launch.agents = (session) =>
       (made.launch.agentPanes(session) ?? []).map((pane) => ({
-        name: null,
+        name: made.nameOn(pane),
         agent: 'codex',
         pane,
         workspace: pane.split(':')[0] ?? pane,
@@ -335,7 +374,8 @@ describe('team up, live', () => {
       expect(sent).toEqual([]);
       expect(seat).toBeUndefined();
       expect(made.closes).toContain('w2');
-      expect(made.renames).toContain('codex-acme');
+      // The dialog is closed before the naming step: no rename of this seat ever runs.
+      expect(made.renames).not.toContain('codex-acme');
       expect(made.terminal.reads).toBe(0);
       // The record names the reading and why it closed; the close follows it on stderr, and the
       // log keeps the record alone.
@@ -394,7 +434,7 @@ describe('team up, live', () => {
     // with — so the no-terminal close of the trust dialog can be proven and happens.
     made.launch.agents = (session) =>
       (made.launch.agentPanes(session) ?? []).map((pane) => ({
-        name: null,
+        name: made.nameOn(pane),
         agent: 'agy',
         pane,
         workspace: pane.split(':')[0] ?? pane,
@@ -426,7 +466,8 @@ describe('team up, live', () => {
       expect(sent).toEqual([]);
       expect(seat).toBeUndefined();
       expect(made.closes).toContain('w2');
-      expect(made.renames).toContain('gemini-acme');
+      // The dialog is closed before the naming step: no rename of this seat ever runs.
+      expect(made.renames).not.toContain('gemini-acme');
       expect(made.terminal.reads).toBe(0);
       expect(io.out).toContain('gemini-acme: left out: trust (no terminal for owner)\n');
       expect(io.err).toContain('  its workspace was closed without input\n');
@@ -557,7 +598,7 @@ describe('team up, live', () => {
     // its process is the one the dialog was found with — so the close is proven and happens.
     made.launch.agents = (session) =>
       (made.launch.agentPanes(session) ?? []).map((pane) => ({
-        name: null,
+        name: made.nameOn(pane),
         agent: 'claude',
         pane,
         workspace: pane.split(':')[0] ?? pane,
@@ -578,7 +619,8 @@ describe('team up, live', () => {
     );
     expect(made.closes).toEqual(['w1']);
     expect(made.terminal.reads).toBe(0);
-    expect(made.renames).toContain('claude-coordinator-acme');
+    // The dialog is closed before the naming step: no rename of this seat ever runs.
+    expect(made.renames).not.toContain('claude-coordinator-acme');
     expect(made.renames).toContain('deepseek-acme');
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
     expect(seats['claude-coordinator-acme']).toBeUndefined();
@@ -590,7 +632,7 @@ describe('team up, live', () => {
     const made = world((_pane, label) => (label === 'claude-coordinator-acme · project coordinator' ? PERMISSION : IDLE));
     made.launch.agents = (session) =>
       (made.launch.agentPanes(session) ?? []).map((pane) => ({
-        name: null,
+        name: made.nameOn(pane),
         agent: 'claude',
         pane,
         workspace: pane.split(':')[0] ?? pane,
@@ -610,13 +652,14 @@ describe('team up, live', () => {
     expect(io.out).toContain('claude-coordinator-acme: left out: left as it is: its process changed\n');
     expect(made.terminal.reads).toBe(0);
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
-    // The refusal keeps the launch's own reading — the first read, taken when the dialog was
-    // found — so the record holds an identity to compare, never the changed read, which would
-    // bless the replacement.
+    // The refusal keeps the launch's own reading — the read taken when the dialog was found, the
+    // second of this world's reads since the create records its own identity first — so the
+    // record holds an identity to compare, never the changed read, which would bless the
+    // replacement.
     expect(seats['claude-coordinator-acme']).toMatchObject({
       pane: 'w1:p1',
       workspace: 'w1',
-      launched: { shell: 701, cli: [702] },
+      launched: { shell: 702, cli: [703] },
       waiting: { state: 'waiting-owner', classification: 'permission' },
     });
     // A later `up` whose recorded process is gone launches a fresh workspace and leaves this
@@ -654,9 +697,12 @@ describe('team up, live', () => {
     made.seed('w9:p1', PERMISSION, true);
     made.launch.processInfo = () => ({ shell: 900, foreground: [900, 901] });
     const listed = (): HerdrAgent[] => [
-      { name: null, agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null },
+      { name: made.nameOn('w9:p1'), agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null },
     ];
-    made.launch.agents = listed;
+    // The recorded pane's entry, plus the names this world's own renames put on the panes it
+    // launches in the fresh workspace: the seat's rename is verified against that fresh reading.
+    const own = made.launch.agents!;
+    made.launch.agents = () => [...(own('acme-web') ?? []), ...listed()];
     const io = quietIo();
     const code = await runUp(FILE, io, sources({
       agents: listed,
@@ -706,7 +752,10 @@ describe('team up, live', () => {
     const listed = (): HerdrAgent[] => [
       { name: 'claude-coordinator-acme', agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null },
     ];
-    made.launch.agents = listed;
+    // The recorded pane's entry, plus the names this world's own renames put on the panes it
+    // launches in the fresh workspace: the seat's rename is verified against that fresh reading.
+    const own = made.launch.agents!;
+    made.launch.agents = () => [...(own('acme-web') ?? []), ...listed()];
     const io = quietIo();
     const code = await runUp(FILE, io, sources({
       agents: listed,
@@ -789,7 +838,7 @@ describe('team up, live', () => {
     const made = world((_pane, label) => (label === 'claude-coordinator-acme · project coordinator' ? trust : IDLE));
     made.launch.agents = (session) =>
       (made.launch.agentPanes(session) ?? []).map((pane) => ({
-        name: null,
+        name: made.nameOn(pane),
         agent: 'claude',
         pane,
         workspace: pane.split(':')[0] ?? pane,
@@ -807,7 +856,8 @@ describe('team up, live', () => {
     expect(readFileSync(join(root, '.agents/team.log'), 'utf8')).toContain(line);
     expect(made.closes).toEqual(['w1']);
     expect(made.terminal.reads).toBe(0);
-    expect(made.renames).toContain('claude-coordinator-acme');
+    // The dialog is closed before the naming step: no rename of this seat ever runs.
+    expect(made.renames).not.toContain('claude-coordinator-acme');
     expect(made.runs.some((run) => run.command.includes('Yes'))).toBe(false);
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
     expect(seats['claude-coordinator-acme']).toBeUndefined();
@@ -831,7 +881,7 @@ describe('team up, live', () => {
     // launched is on it. The pause verifies the pane is still the seat's before `s` closes it.
     made.launch.agents = (session) =>
       (made.launch.agentPanes(session) ?? []).map((pane) => ({
-        name: null,
+        name: made.nameOn(pane),
         agent: 'claude',
         pane,
         workspace: pane.split(':')[0] ?? pane,
@@ -887,7 +937,9 @@ describe('team up, live', () => {
     expect(io.err).toContain("  | zsh: can't open input file: ../tools/launcher.sh\n");
     expect(io.err).toContain('  run `team up` again to resume it\n');
     expect(made.closes).toEqual([]);
-    expect(made.renames).toEqual(['claude-coordinator-acme', 'deepseek-acme', 'deepseek-acme-2']);
+    // Every pane here times out: a seat that never idles is left at launched, before its
+    // naming step ever runs.
+    expect(made.renames).toEqual([]);
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
     expect(seats['claude-coordinator-acme']?.stage).toBe('launched');
     expect(seats['claude-coordinator-acme']?.pane).toBe('w1:p1');
@@ -1355,7 +1407,7 @@ describe('team up, live', () => {
     // so the state's record is the only thing that knows the pane is this run's own.
     const listed = (): HerdrAgent[] => [
       agent('claude-coordinator-acme', 'w8:p1'),
-      { name: null, agent: 'deepseek', pane: 'w7:p1', workspace: 'w7', status: 'idle', cwd: null },
+      { name: made.nameOn('w7:p1'), agent: 'deepseek', pane: 'w7:p1', workspace: 'w7', status: 'idle', cwd: null },
     ];
     const passed = {
       sessionState: () => 'running' as const,
@@ -2357,7 +2409,9 @@ describe('team up, a session that was restored', () => {
       agent('codex-acme', 'w92:p1', 'idle', 'codex'),
       agent('deepseek-acme', 'w93:p1', 'idle'),
     ];
-    made.launch.agents = () => { calls.push('agents'); return agents; };
+    // The recorded agents, plus the names this run's own renames put on the panes it launches:
+    // the replacement seat's naming step reads them back from here.
+    made.launch.agents = () => { calls.push('agents'); return [...agents, ...liveNames(made)]; };
     // The ordered host calls: the workspaces closed, the workspaces made, the lines run.
     const calls: string[] = [];
     const keys: string[] = [];
@@ -2497,13 +2551,17 @@ describe('team up, a session that was restored', () => {
     made.launch.pressEnter = () => { holding = false; status = 'working'; keys.push('enter'); return true; };
     made.launch.agentStatus = (_session, pane) => (pane === codexPane ? status : 'idle');
     // The execute pass re-reads the host's agent list directly before the close; once w92 is
-    // closed the seat is gone from it, as herdr would report.
-    made.launch.agents = () => (made.closes.includes('w92')
-      ? []
-      : [
-          { ...agent('codex-acme', 'w92:p1', 'idle', 'codex'), session: 'kept' },
-          { ...agent('deepseek-acme', 'w93:p1', 'idle'), session: 'kept' },
-        ]);
+    // closed the seat is gone from it, as herdr would report. Names this run's own renames put
+    // on the panes it launches ride along: the repaired codex seat is named in its new pane.
+    made.launch.agents = () => [
+      ...(made.closes.includes('w92')
+        ? []
+        : [
+            { ...agent('codex-acme', 'w92:p1', 'idle', 'codex'), session: 'kept' },
+            { ...agent('deepseek-acme', 'w93:p1', 'idle'), session: 'kept' },
+          ]),
+      ...liveNames(made),
+    ];
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(
       FILE,
@@ -2632,7 +2690,9 @@ describe('team up, a session that was restored', () => {
       reads += 1;
       return reads === 1 ? null : { shell: gone.shell, foreground: [gone.shell] };
     };
-    made.launch.agents = () => [];
+    // Herdr lists nothing from before; the replacement's name, put there by this run's own
+    // rename, is what the naming step reads back.
+    made.launch.agents = () => liveNames(made);
     made.launch.closeWorkspace = () => false;
     const io = quietIo();
     const code = await runUp(
@@ -2698,7 +2758,9 @@ describe('team up, a session that was restored', () => {
       const seat = Object.values(restoredState).find((item) => item.pane === pane);
       return seat ? { shell: seat.shell, foreground: [seat.shell, seat.cli] } : { shell: 700, foreground: [700, 701] };
     };
-    made.launch.agents = restoredList;
+    // The recorded agents, plus the names this run's own renames put on the panes it launches:
+    // a seat relaunched on a replacement is named there, and its naming step reads it back.
+    made.launch.agents = () => [...restoredList(), ...liveNames(made)];
     return made;
   }
   const restoredSources = (): Partial<UpSources> => ({
@@ -2747,7 +2809,9 @@ describe('team up, a session that was restored', () => {
     // launch line runs there.
     const elsewhere = 'fixture-pane-named';
     const named = () => [{ ...agent('claude-coordinator-acme', elsewhere, 'idle') }, ...restoredList().slice(1)];
-    made.launch.agents = named;
+    // The list herdr gives now, plus every name this world's own renames put on a pane: the
+    // launch at the recorded shell renames that pane, and the naming step verifies it there.
+    made.launch.agents = () => [...named(), ...liveNames(made)];
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources({ ...restoredSources(), agents: named }, made));
     expect(code).toBe(0);
@@ -3023,7 +3087,7 @@ describe('team up, a session that was restored', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(1);
-    expect(io.out).toContain('claude-coordinator-acme: left out: was not named in time; left at launched\n');
+    expect(io.out).toContain('claude-coordinator-acme: left out: its name was not listed after the rename; left at launched\n');
     expect(readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme'])
       .toMatchObject({ stage: 'launched', launched: { shell: 400, cli: [401] } });
   });
@@ -3395,8 +3459,8 @@ describe('team up, a session that was restored', () => {
 // A fake host and an injected terminal throughout: no real session, no pane.
 describe('team up, the pause', () => {
   /** A pane herdr's agent list names before the seat's rename: the pane id, and no name yet. */
-  const listedPane = (pane: string): HerdrAgent => ({
-    name: null,
+  const listedPane = (pane: string, name: string | null): HerdrAgent => ({
+    name,
     agent: 'claude',
     pane,
     workspace: pane.split(':')[0] ?? pane,
@@ -3411,7 +3475,7 @@ describe('team up, the pause', () => {
     return () =>
       (made.launch.agentPanes('acme-web') ?? [])
         .filter((pane) => !made.closes.includes(pane.split(':')[0] ?? pane))
-        .map(listedPane);
+        .map((pane) => listedPane(pane, made.nameOn(pane)));
   }
 
   const prompt = (seat: string, classification: string) =>
@@ -3632,24 +3696,25 @@ describe('team up, the pause', () => {
     // this run's recorded process still holds the pane. Keep those reads in the exact trace.
     const sessionProof = (pane: string | undefined) => [`process:${pane}`, 'agents', 'agent-panes'];
     expect(calls).toEqual([
-      // The fresh reading that stopped the seat, the identity read when the dialog was found
-      // (nothing is recorded for the seat yet), and the entry write's identity read. The create
-      // names the pane, so it reads the agent list first to prove the pane is not another
-      // seat's — this fixture's list is derived from the pane list.
-      'create:claude-coordinator-acme · project coordinator', 'agents', 'agent-panes', `rename:${firstPane}:claude-coordinator-acme`, `run:${firstPane}`, `read:${firstPane}`, `process:${firstPane}`, `process:${firstPane}`,
+      // The create records the launched process identity first, then the launch line runs. The
+      // wait's first read finds the dialog: the identity is read for the reading that stopped
+      // the seat and again for its entry write. The create names nothing; the rename comes after
+      // the wait, below.
+      'create:claude-coordinator-acme · project coordinator', `process:${firstPane}`, `run:${firstPane}`, `read:${firstPane}`, `process:${firstPane}`, `process:${firstPane}`,
       // o: the key, then the lock's own reads (the pane is still the seat's — herdr's list,
       // then the process), the manual write with its identity read, and the focus. No key,
       // no text.
       'key:o', 'agents', 'agent-panes', `process:${firstPane}`, `process:${firstPane}`, `focus:${firstPane}`,
       // The first poll: the sleep (the owner answers), then fresh reads — the pane is idle.
       'sleep:2000', 'agents', 'agent-panes', `process:${firstPane}`, `read:${firstPane}`,
-      // The model and identity/session read, the naming list, then both later session proofs.
-      `read:${firstPane}`, ...sessionProof(firstPane), 'agent-panes', ...sessionProof(firstPane), ...sessionProof(firstPane),
-      // Then the later seats, the same way.
-      'create:deepseek-acme · implementer', 'agents', 'agent-panes', `rename:${secondPane}:deepseek-acme`, `run:${secondPane}`, `read:${secondPane}`, `read:${secondPane}`,
-      ...sessionProof(secondPane), 'agent-panes', ...sessionProof(secondPane), ...sessionProof(secondPane),
-      'create:deepseek-acme-2 · implementer', 'agents', 'agent-panes', `rename:${thirdPane}:deepseek-acme-2`, `run:${thirdPane}`, `read:${thirdPane}`, `read:${thirdPane}`,
-      ...sessionProof(thirdPane), 'agent-panes', ...sessionProof(thirdPane), ...sessionProof(thirdPane),
+      // The model and identity/session read, then the naming step: the detection and
+      // not-another-seat checks against the agent list, the rename, and the list read back after
+      // it proves the name before the record is written. Both later session proofs follow.
+      `read:${firstPane}`, `process:${firstPane}`, 'agents', 'agent-panes', 'agent-panes', 'agents', 'agent-panes', 'agents', 'agent-panes', `rename:${firstPane}:claude-coordinator-acme`, 'agents', 'agent-panes', ...sessionProof(firstPane), ...sessionProof(firstPane),
+      // Then the later seats, the same way: the create and its identity read, the launch line,
+      // the wait's reads, the naming list and rename, and the session proofs.
+      'create:deepseek-acme · implementer', `process:${secondPane}`, `run:${secondPane}`, `read:${secondPane}`, `read:${secondPane}`, ...sessionProof(secondPane), 'agent-panes', 'agents', 'agent-panes', 'agents', 'agent-panes', `rename:${secondPane}:deepseek-acme`, 'agents', 'agent-panes', ...sessionProof(secondPane), ...sessionProof(secondPane),
+      'create:deepseek-acme-2 · implementer', `process:${thirdPane}`, `run:${thirdPane}`, `read:${thirdPane}`, `read:${thirdPane}`, ...sessionProof(thirdPane), 'agent-panes', 'agents', 'agent-panes', 'agents', 'agent-panes', `rename:${thirdPane}:deepseek-acme-2`, 'agents', 'agent-panes', ...sessionProof(thirdPane), ...sessionProof(thirdPane),
       // Then the watch's workspace and its command line, the plan's last step.
       'create:Watch · acme-web', `run:${watchPane}`,
     ]);
@@ -3681,7 +3746,9 @@ describe('team up, the pause', () => {
     expect(code).toBe(1);
     expect(io.err).toContain(prompt('claude-coordinator-acme', 'permission'));
     expect(made.closes).toEqual(['w1']);
-    expect(made.renames).toEqual(['claude-coordinator-acme', 'deepseek-acme', 'deepseek-acme-2']);
+    // The skipped seat is closed at its dialog, before the naming step: the later seats alone
+    // are renamed.
+    expect(made.renames).toEqual(['deepseek-acme', 'deepseek-acme-2']);
     expect(io.out).toContain('claude-coordinator-acme: left out: skipped by owner\n');
     expect(io.out).toContain('deepseek-acme: ready\n');
     expect(io.out).toContain('deepseek-acme-2: ready\n');
@@ -3916,11 +3983,13 @@ describe('team up, the pause', () => {
       'agents', 'process:w1:p1', 'read:w1:p1', 'key:o',
       'agents', 'process:w1:p1', 'process:w1:p1', 'focus:w1:p1',
       'sleep:2000', 'agents', 'process:w1:p1', 'read:w1:p1',
-      `read:${recorded.pane}`, `process:${recorded.pane}`, 'agents', 'agent-panes', 'agents', `rename:${recorded.pane}:${recorded.name}`,
+      // The model and identity/session read, then the naming step: the pane is already listed
+      // under the seat's name, so no rename is made, and the two list reads settle it.
+      `read:${recorded.pane}`, `process:${recorded.pane}`, 'agents', 'agent-panes', 'agents', 'agents',
     ]);
     expect(made.creates).toEqual([]);
     expect(made.runs).toEqual([]);
-    expect(made.renames).toEqual(['claude-coordinator-acme']);
+    expect(made.renames).toEqual([]);
     expect(typed).toEqual([]);
     expect(io.err).toContain(prompt('claude-coordinator-acme', 'trust'));
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
@@ -4077,9 +4146,10 @@ describe('team up, the pause', () => {
     made.seed('w3:p1', IDLE, true);
     made.session = 'running';
     // herdr no longer lists claude's pane: it is gone, whatever the record says. The other
-    // seats' panes are still there, so only that seat is launched again.
+    // seats' panes are still there, so only that seat is launched again. The replacement's
+    // name, once this run renamed it, rides along on the same list.
     const listed = () => [agent('deepseek-acme', 'w2:p1'), agent('deepseek-acme-2', 'w3:p1')];
-    made.launch.agents = listed;
+    made.launch.agents = () => [...listed(), ...liveNames(made)];
     made.launch.processInfo = (_session, pane) =>
       pane === 'w2:p1' ? { shell: 500, foreground: [500, 501] } :
       pane === 'w3:p1' ? { shell: 510, foreground: [510, 511] } : null;
@@ -4131,7 +4201,8 @@ describe('team up, the pause', () => {
       const made = world(IDLE);
       made.session = 'running';
       const others = () => [agent('deepseek-acme', 'w2:p1'), agent('deepseek-acme-2', 'w3:p1')];
-      made.launch.agents = others;
+      // The replacement's name, once this run renamed it, rides along on the same list.
+      made.launch.agents = () => [...others(), ...liveNames(made)];
       made.launch.processInfo = (_session, pane) =>
         pane === 'w2:p1' ? { shell: 500, foreground: [500, 501] } :
         pane === 'w3:p1' ? { shell: 510, foreground: [510, 511] } : null;
@@ -4199,7 +4270,7 @@ describe('team up, the pause', () => {
     const made = world(IDLE);
     made.session = 'running';
     const listed = (): HerdrAgent[] => [
-      { name: null, agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null },
+      { name: made.nameOn('w9:p1'), agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null },
       agent('deepseek-acme', 'w2:p1'),
       agent('deepseek-acme-2', 'w3:p1'),
     ];
@@ -4264,7 +4335,9 @@ describe('team up, the pause', () => {
     }));
     const made = world(IDLE);
     made.session = 'running';
-    made.launch.agents = () => [];
+    // Nothing from before: the four replacement panes are named by this run's own renames, and
+    // each naming step reads the name back from here.
+    made.launch.agents = () => liveNames(made);
     const host = {
       sessionState: () => 'running' as const,
       alive: () => true,
@@ -4360,7 +4433,8 @@ describe('team up, the pause', () => {
     const made = world(IDLE);
     made.session = 'running';
     const others = () => [agent('deepseek-acme', 'w2:p1'), agent('deepseek-acme-2', 'w3:p1')];
-    made.launch.agents = others;
+    // The replacement's name, once this run renamed it, rides along on the same list.
+    made.launch.agents = () => [...others(), ...liveNames(made)];
     made.launch.processInfo = (_session, pane) =>
       pane === 'w2:p1' ? { shell: 500, foreground: [500, 501] } :
       pane === 'w3:p1' ? { shell: 510, foreground: [510, 511] } : null;
@@ -4489,7 +4563,8 @@ describe('team up, the pause', () => {
     if (expectCase === 'drift') {
       expect(code).toBe(1);
       expect(sent).toEqual([]);
-      expect(made.renames).toContain('cursor-acme');
+      // The model check refuses it before the naming step: the seat stays unnamed.
+      expect(made.renames).not.toContain('cursor-acme');
       expect(seat?.stage).toBe('launched');
       expect(io.out).toContain(
         'cursor-acme: left out: runs GPT Sol 5.6; the file says Grok 4.7; left at launched, not named. Add --model grok-4.7-high to its launch, or correct the file\'s model and version\n',
@@ -4499,7 +4574,8 @@ describe('team up, the pause', () => {
     if (expectCase === 'refused') {
       expect(code).toBe(1);
       expect(sent).toEqual([]);
-      expect(made.renames).toContain('cursor-acme');
+      // The idle wait timed out before the naming step: the seat stays unnamed.
+      expect(made.renames).not.toContain('cursor-acme');
       expect(seat?.stage).toBe('launched');
       expect(io.out).toContain('cursor-acme: left out: timeout\n');
       expect(io.err).toContain('timed out after 90 s waiting for its idle prompt; the screen last read unknown; left at launched');
@@ -4521,20 +4597,20 @@ describe('team up, the pause', () => {
       expect(mine).toHaveLength(1);
       expect(mine[0]).toContain('cursor-acme: ready');
       expect(log).not.toContain("doesn't show a model");
-      // The seat's own calls, in order: the wait's read and the model check's read of the
-      // screen, the rename, then the delivery — read, typed, read back, entered — and the ready
-      // report after it. The not-checked note was held when the check made it (before the
+      // The seat's own calls, in order: the create and its launch line, the wait's read and the
+      // model check's read of the screen, then the naming step's agent list and rename, and the
+      // ready report after it. The not-checked note was held when the check made it (before the
       // rename, so the seat is named only after the check has had its say) and is written after
       // the record, as the record's stderr detail.
       const from = calls.indexOf('create:cursor-acme · implementer');
       // No pane messaging: the rules rode the launch line, so nothing is typed or entered.
       expect(calls.slice(from, from + 8)).toEqual([
         'create:cursor-acme · implementer',
-        'renameAgent',
         'paneRun:AGENT_UNATTENDED=1',
         'paneText',
         'paneText',
         'agentPanes',
+        'renameAgent',
         'report',
         'not-checked',
       ]);
@@ -4601,7 +4677,8 @@ test('a mismatched model leaves its pane recorded, and the corrected file lets u
   expect(code).toBe(1);
   expect(pane).not.toBe('');
   expect(workspace).not.toBe('');
-  expect(made.renames).toContain('cursor-acme');
+  // The model check refuses it before the naming step: the pane is recorded, never named.
+  expect(made.renames).not.toContain('cursor-acme');
   expect(io.out).toContain('left at launched, not named');
 
   writeFileSync(path, readFileSync(path, 'utf8').replace(
@@ -4623,7 +4700,10 @@ test('a mismatched model leaves its pane recorded, and the corrected file lets u
     }];
   });
   const seen = listed();
-  made.launch.agents = () => seen;
+  // The state record's panes, plus the names this world's own renames put on its panes: the
+  // second run's rename is verified against that fresh reading, not the snapshot taken here.
+  const own = made.launch.agents!;
+  made.launch.agents = () => [...(own('acme-web') ?? []), ...listed()];
   const next = quietIo();
   const code2 = await runUp(FILE, next, sources({
     agents: () => seen,
@@ -4961,7 +5041,7 @@ describe('team up, delegated', () => {
     const made = world((_pane, label) => (label === 'claude-coordinator-acme · project coordinator' ? screen : IDLE));
     made.launch.agents = (session) =>
       (made.launch.agentPanes(session) ?? []).map((pane) => ({
-        name: null,
+        name: made.nameOn(pane),
         agent: 'claude',
         pane,
         workspace: pane.split(':')[0] ?? pane,
@@ -4999,7 +5079,7 @@ describe('team up, delegated', () => {
     const made = world((_pane, label) => (label === 'codex-acme · implementer' ? fileModel(startup) : IDLE));
     made.launch.agents = (session) =>
       (made.launch.agentPanes(session) ?? []).map((pane) => ({
-        name: null,
+        name: made.nameOn(pane),
         agent: 'codex',
         pane,
         workspace: pane.split(':')[0] ?? pane,
@@ -5024,7 +5104,7 @@ describe('team up, delegated', () => {
     const made = world("❯ zsh ../tools/launcher.sh\nzsh: can't open input file: ../tools/launcher.sh\n~ ❯\n");
     made.launch.agents = (session) =>
       (made.launch.agentPanes(session) ?? []).map((pane) => ({
-        name: null,
+        name: made.nameOn(pane),
         agent: 'claude',
         pane,
         workspace: pane.split(':')[0] ?? pane,
@@ -6789,7 +6869,7 @@ describe('team up, a ready seat whose model drifted', () => {
     made.launch.agents = () => {
       if (made.closes.includes('w92')) {
         return (made.launch.agentPanes('acme-web') ?? []).map((pane) => ({
-          name: null, agent: 'codex', pane, workspace: pane.split(':')[0] ?? pane, status: 'idle', cwd: null,
+          name: made.nameOn(pane), agent: 'codex', pane, workspace: pane.split(':')[0] ?? pane, status: 'idle', cwd: null,
         }));
       }
       return [lead(), codex()];
