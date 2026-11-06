@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
-import { upsertTeam } from '../src/registry/teams.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { readSendGrants } from '../src/send/grants.ts';
 import { updateState } from '../src/state.ts';
@@ -144,7 +144,8 @@ function scripted(samples: string[]): NativePane {
 }
 
 /** The agent record `up` writes for a launched seat, the identity admission reads. A seat of
- *  another team names that team and its session; the caller's own team is the default. */
+ *  another team names that team and its session. The caller's own team is the id the loaded
+ *  root derives, which is what the home chain requires. */
 function registerSeat(
   seat: string,
   role: string,
@@ -168,7 +169,7 @@ function registerSeat(
       'launcher: null',
       'launch: "claude"',
       'reach:',
-      `  team: "${where.team ?? 'acme'}"`,
+      `  team: "${where.team ?? teamIdOf(join(base, 'acme'))}"`,
       `  seat: "${seat}"`,
       `  session: "${where.session ?? 'acme'}"`,
       `  pane: "${pane}"`,
