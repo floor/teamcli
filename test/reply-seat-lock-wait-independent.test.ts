@@ -130,7 +130,7 @@ test('a spent budget leaves the holder untouched and names its pid', async () =>
     const clock = clockOf();
     const result = await reply(at, { steps: clock.steps });
     expect(result.code).toBe(1);
-    expect(result.err).toContain(`iris: another command holds it (pid ${String(process.pid)}); nothing was written`);
+    expect(result.err).toContain(`iris: another command holds it (pid ${String(process.pid)}, started ${new Date(Number(before.trim().split(' ')[2])).toISOString()}); nothing was written`);
     expect(clock.sleeps).toHaveLength(80);
     expect(clock.sleeps.every((ms) => ms === 25)).toBe(true);
     expect(readFileSync(path, 'utf8')).toBe(before);
@@ -147,7 +147,7 @@ test('an unreadable lock is refused at once, even with the reply budget', async 
   const clock = clockOf();
   const result = await reply(at, { steps: clock.steps });
   expect(result.code).toBe(1);
-  expect(result.err).toContain('iris: another command holds it (pid -1); nothing was written');
+  expect(result.err).toContain('iris: another command holds it (an unreadable lock); nothing was written');
   expect(clock.sleeps).toEqual([]);
   expect(existsSync(path)).toBe(true);
   expect(existsSync(join(recordDir(at.root, 'acme', 'iris'), REPLY))).toBe(false);
@@ -171,7 +171,7 @@ test('every taker but the reply target seat stays at zero wait', () => {
   writeFileSync(path, `${process.pid} deadbeef\n`);
   const clock = clockOf();
   const refused = acquireSeatLock(at.dir, 'acme', 'iris', clock.steps);
-  expect(refused).toEqual({ held: process.pid });
+  expect(refused).toEqual({ held: process.pid, startedAt: null });
   expect(clock.sleeps).toEqual([]);
   expect(readFileSync(path, 'utf8')).toBe(`${process.pid} deadbeef\n`);
 });

@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFi
 import { join } from 'node:path';
 import { runCheckpoint } from '../src/commands/checkpoint.ts';
 import type { Io } from '../src/io.ts';
+import { findStore } from '../src/store/store.ts';
 import { CHECKPOINT_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
@@ -470,4 +471,18 @@ describe('team checkpoint (R2)', () => {
     expect(errDoc.error.rule).toBe('owner-or-leads');
     expect(readState(agentsDir).checkpoints?.worker).toBeUndefined();
   });
+});
+
+
+test('dev mode folds unverified checkpoint standing without writing an approval', async () => {
+  expect(findStore(root, home)).toBeNull();
+  const run = makeIo(root, { kind: 'owner' }, { TEAMCLI_DEV_MODE: '1' });
+  expect(await runCheckpoint(['worker'], run.io, {
+    home, now: () => NOW, standing: () => ({ kind: 'refused', why: 'ledger mismatch' }),
+  })).toBe(0);
+  expect(run.err()).toContain("alpha's approval record does not verify: 0 unverified lines");
+  expect(run.err()).toContain('standing cannot be renewed in this build, and the owner is to be told');
+  expect(readState(agentsDir).checkpoints?.worker).toBeDefined();
+  expect(findStore(root, home)).toBeNull();
+  expect(existsSync(join(agentsDir, 'handovers', 'worker-2026-04-11T10-00-00-000Z.md'))).toBe(false);
 });

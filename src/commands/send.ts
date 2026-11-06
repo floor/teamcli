@@ -1099,7 +1099,8 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   // walk tries the channel-class legs first, then the sender-posted webhook, then typed, then
   // the mailbox — and it stops at the first leg taken. The webhook leg exists exactly when the
   // receiving team file declares an adapter row for the seat; no order names it. A retired
-  // `mcp-inbox` word never arrives here: it is dropped before the chain resolves. The
+  // `mcp-inbox` word never arrives here: it is dropped before the chain resolves
+  // (src/send/delivery.ts), so send and reply alike walk an order that never names it. The
   // mailbox sits under all the classes because the signed record is stored before the walk
   // begins.
   // The human ruling keeps every pane route out of a person's walk, and the webhook is not a
@@ -5377,8 +5378,10 @@ export async function walkReplyDelivery(input: {
   const { human, ordered, typingSetAside, typedWake, walkingTyped, socketWord, inbound, heldStanding, chosen } = plan;
   if (!human) {
     for (const leg of typingSetAside) failures.push(`${leg}: ${NO_PANE_MESSAGING}`);
+    // A retired `mcp-inbox` word never reaches this walk either: the chain that feeds
+    // `resolveWalkOrder` drops it (src/send/delivery.ts), so there is no leg to name.
   } else {
-    // The history line's failure list keeps the shipped four a send's walk records; the legs
+    // The history line's failure list keeps the shipped three a send's walk records; the legs
     // the ruling spared beyond them are not this line's to name.
     for (const leg of ordered) {
       const reason = humanSkipReason(leg);

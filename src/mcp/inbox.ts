@@ -1,3 +1,4 @@
+import type { KeyObject } from 'node:crypto';
 // The seat's inbox: the drop folder `team send` already writes, read from the seat's own side.
 //
 // `team send` writes one message per file, whole and 0600, into
@@ -43,6 +44,7 @@ import {
   recordAuthOfSealed,
   signReceiptPayload,
   verifiedRecordAt,
+  verifyRecord,
   type ReceiptPayload,
   type RecordPayload,
   type RecordReader,
@@ -484,7 +486,7 @@ export function listUnread(
   const key = messageKeyState(home);
   const readRecordAt: RecordReader | null = key.kind !== 'key'
     ? null
-    : records ?? ((path, id) => verifiedPayloadAt(path, id, key.key));
+    : records ?? ((path, id) => verifiedRecordAt(path, id, key.key));
   const claim = currentClaimIn(context.root, context.session, context.to);
   const superseded = new Set(claim?.superseded ?? []);
   const messages: InboxMessage[] = [];

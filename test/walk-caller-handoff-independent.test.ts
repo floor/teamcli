@@ -302,7 +302,7 @@ describe('2. end-to-end dev-mode lead lift and refusal preservation across confi
     });
     expect(lift).not.toBeNull();
     expect(lift?.lifted).toBe(true);
-    expect(lift?.role).toBe('orchestrator');
+    expect(lift?.role).toBe('lead');
     expect(lift?.caller).toEqual({ kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
     expect(liftCalls.filter((c) => c.session === undefined && c.op === 'agents')).toEqual([]);
     expect(liftCalls.filter((c) => c.session === undefined)).toEqual([

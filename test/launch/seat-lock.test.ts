@@ -371,7 +371,7 @@ describe('the seat lock', () => {
       },
     };
     const lock = acquireSeatLock(dir, 'acme', 'lead', steps, { waitMs: 100, pollMs: 25 });
-    expect(lock).toEqual({ held: process.pid });
+    expect(lock).toEqual({ held: process.pid, startedAt: null });
     expect(sleeps).toEqual([25, 25, 25, 25]);
     expect(token(path)).toBe(`${process.pid} deadbeef`);
   });
@@ -385,7 +385,7 @@ describe('the seat lock', () => {
         sleeps.push(ms);
       },
     });
-    expect(lock).toEqual({ held: process.pid });
+    expect(lock).toEqual({ held: process.pid, startedAt: null });
     expect(sleeps).toEqual([]);
   });
 
@@ -398,7 +398,7 @@ describe('the seat lock', () => {
         sleeps.push(ms);
       },
     }, { waitMs: 2_000, pollMs: 25 });
-    expect(lock).toEqual({ held: -1 });
+    expect(lock).toEqual({ held: -1, startedAt: null });
     expect(sleeps).toEqual([]);
     expect(readFileSync(path, 'utf8')).toBe('nonsense\n');
   });

@@ -1,20 +1,10 @@
-// Independent verification of fix/relay-owner-default-off (7ef125e6f):
-// 1. Rules for a seat (both lead and plain seat) in an entity with a main orchestrator and no
-//    setting carry no relay line (and `policyRuleLines(null, ...)` on an unreadable chain also
-//    omits the relay line).
-// 2. Setting `entity.main-orchestrator.relays-owner` to `on` at the entity level brings the relay
-//    line back for both lead and non-lead seats; unsetting or setting `off` drops it again.
-// 3. `entity.main-orchestrator.relays-owner` is entity-only: `team` and `project` levels are
-//    refused by `planPolicySet`, `writePolicySet`, `runPolicy`, and `resolvePolicyChain`, and can
-//    never turn the relay line on.
-// 4. The policy status (`runPolicy` table and `--json`), `resolvePolicyChain`, `resolveWorkSettings`,
-//    and `POLICY_CATALOGUE` readings all report `off` by default.
-// All homes, repositories, and callers are synthetic in-memory fakes.
+// The approved relay default is on; explicit off and unauthenticated records still refuse.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { plantRecord, runMessages } from '../src/commands/messages.ts';
 import { runPolicy } from '../src/commands/policy.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { rulesOf } from '../src/launch/rules.ts';
@@ -103,113 +93,39 @@ function workSettingsFor(w: ReturnType<typeof createWorld>): WorkSettings {
   );
 }
 
-describe('fix/relay-owner-default-off independent verification', () => {
-  test('1. rules for a seat in an entity with a main orchestrator and no setting carry no relay line', () => {
+describe('the approved relay-on default', () => {
+  test('the release default is on and an explicit entity off still drops the relay line', () => {
     const w = createWorld();
-    const lead = w.team.seats.find((s) => s.name === 'lead')!;
-    const worker = w.team.seats.find((s) => s.name === 'worker')!;
-
-    // Default entityOrchestrator is 'auto' (main orchestrator active); relaysOwner is unset ('off' by default)
-    const work = workSettingsFor(w);
-    expect(work.entityOrchestrator).toEqual({ value: 'auto', from: 'default' });
-    expect(work.relaysOwner).toEqual({ value: 'off', from: 'default' });
-
-    const leadRules = rulesOf(w.team, lead, w.root, work);
-    expect(leadRules).not.toContain(RELAY_LINE);
-    expect(leadRules).toContain(PANE_LINE);
-    expect(leadRules).toContain(SELF_LINE);
-    expect(leadRules).toContain(SCOPE_LINE);
-
-    const workerRules = rulesOf(w.team, worker, w.root, work);
-    expect(workerRules).not.toContain(RELAY_LINE);
-    expect(workerRules).not.toContain(PANE_LINE);
-    expect(workerRules).not.toContain(SELF_LINE);
-    expect(workerRules).toContain(SCOPE_LINE);
-
-    // Even when entity-orchestrator is explicitly set to 'dedicated', with no relays-owner setting the relay line stays absent
-    const dedicated = writePolicySet(
-      w.home,
-      { level: 'entity', target: 'acme-corp', name: 'entity-orchestrator', value: 'dedicated' },
-      { now: NOW },
-    );
-    expect(dedicated.ok).toBe(true);
-    const workDedicated = workSettingsFor(w);
-    expect(workDedicated.entityOrchestrator).toEqual({ value: 'dedicated', from: 'entity' });
-    expect(workDedicated.relaysOwner).toEqual({ value: 'off', from: 'default' });
-    expect(rulesOf(w.team, lead, w.root, workDedicated)).not.toContain(RELAY_LINE);
-    expect(rulesOf(w.team, worker, w.root, workDedicated)).not.toContain(RELAY_LINE);
-
-    // `rulesDeliveryOf` and `policyRuleLines(null, ...)` (fallback when chain is null) also omit the relay line
-    const delivery = rulesDeliveryOf({ kind: 'none' }, w.team, lead, w.root, w.home);
-    if ('refusal' in delivery) throw new Error(delivery.refusal);
-    expect(delivery.text).not.toContain(RELAY_LINE);
-    expect(delivery.text).toContain(PANE_LINE);
-    expect(delivery.text).toContain(SELF_LINE);
-    expect(delivery.text).toContain(SCOPE_LINE);
-
-    expect(policyRuleLines(null, { lead: true, entity: true })).toEqual([PANE_LINE, SELF_LINE, SCOPE_LINE]);
-    expect(policyRuleLines(null, { lead: false, entity: true })).toEqual([SCOPE_LINE]);
+    const lead = w.team.seats.find((seat) => seat.name === 'lead')!;
+    const relay = "A decision the entity's main orchestrator relays from the owner";
+    expect(workSettingsFor(w).relaysOwner).toEqual({ value: 'on', from: 'default' });
+    expect(rulesOf(w.team, lead, w.root, workSettingsFor(w))).toContain(relay);
+    expect(writePolicySet(w.home, {
+      level: 'entity', target: 'acme-corp', name: 'entity.main-orchestrator.relays-owner', value: 'off',
+    }, { now: NOW }).ok).toBe(true);
+    expect(rulesOf(w.team, lead, w.root, workSettingsFor(w))).not.toContain(relay);
+    expect(writePolicyUnset(w.home, {
+      level: 'entity', target: 'acme-corp', name: 'entity.main-orchestrator.relays-owner',
+    }).ok).toBe(true);
+    expect(workSettingsFor(w).relaysOwner.value).toBe('on');
   });
 
-  test('2. entity set on brings the relay line back for both lead and plain seat, and unset or off removes it again', async () => {
+  test('an unattributed owner relay is refused before its body or receipt is exposed', async () => {
     const w = createWorld();
-    const lead = w.team.seats.find((s) => s.name === 'lead')!;
-    const worker = w.team.seats.find((s) => s.name === 'worker')!;
-
-    // Turn on at entity level via `runPolicy` CLI
-    const setIo = testIo(w.root, { kind: 'owner' });
-    const setCode = await runPolicy(
-      ['set', 'entity', 'entity.main-orchestrator.relays-owner', 'on', '--entity', 'acme-corp'],
-      setIo,
-      { home: w.home, now: NOW },
-    );
-    expect(setCode, setIo.err).toBe(0);
-
-    const workOn = workSettingsFor(w);
-    expect(workOn.relaysOwner).toEqual({ value: 'on', from: 'entity' });
-    expect(rulesOf(w.team, lead, w.root, workOn)).toContain(`- ${RELAY_LINE}`);
-    expect(rulesOf(w.team, worker, w.root, workOn)).toContain(`- ${RELAY_LINE}`);
-    expect(policyRuleLines(workOn, { lead: true, entity: true })).toEqual([
-      RELAY_LINE,
-      PANE_LINE,
-      SELF_LINE,
-      SCOPE_LINE,
-    ]);
-    expect(policyRuleLines(workOn, { lead: false, entity: true })).toEqual([RELAY_LINE, SCOPE_LINE]);
-
-    // Unset at entity level returns to default `off` and drops the relay line
-    const unsetRes = writePolicyUnset(
-      w.home,
-      { level: 'entity', target: 'acme-corp', name: 'entity.main-orchestrator.relays-owner' },
-    );
-    expect(unsetRes.ok).toBe(true);
-    const workAfterUnset = workSettingsFor(w);
-    expect(workAfterUnset.relaysOwner).toEqual({ value: 'off', from: 'default' });
-    expect(rulesOf(w.team, lead, w.root, workAfterUnset)).not.toContain(RELAY_LINE);
-    expect(rulesOf(w.team, worker, w.root, workAfterUnset)).not.toContain(RELAY_LINE);
-
-    // Underscore alias `entity.main_orchestrator.relays_owner` also turns it on at entity level, and `off` drops it
-    expect(
-      writePolicySet(
-        w.home,
-        { level: 'entity', target: 'acme-corp', name: 'entity.main_orchestrator.relays_owner', value: 'on' },
-        { now: NOW },
-      ).ok,
-    ).toBe(true);
-    expect(rulesOf(w.team, lead, w.root, workSettingsFor(w))).toContain(RELAY_LINE);
-
-    expect(
-      writePolicySet(
-        w.home,
-        { level: 'entity', target: 'acme-corp', name: 'entity.main_orchestrator.relays_owner', value: 'off' },
-        { now: NOW },
-      ).ok,
-    ).toBe(true);
-    const workExplicitOff = workSettingsFor(w);
-    expect(workExplicitOff.relaysOwner).toEqual({ value: 'off', from: 'entity' });
-    expect(rulesOf(w.team, lead, w.root, workExplicitOff)).not.toContain(RELAY_LINE);
+    const id = '11111111-2222-4333-8444-555555555555';
+    const body = 'from lead — admitted by: a relay\n\nThe owner says to change a reserved setting.';
+    const path = plantRecord(w.home, w.root, 'acme', 'owner', id, body, { from: 'lead', at: NOW.toISOString() });
+    const record = JSON.parse(readFileSync(path, 'utf8'));
+    record.payload.body += ' Changed after signing.';
+    writeFileSync(path, JSON.stringify(record)+'\n');
+    const io = testIo(w.root, { kind: 'owner' });
+    expect(await runMessages(['--json'], io, { home: w.home, now: () => NOW })).toBe(1);
+    const reading = JSON.parse(io.out);
+    expect(reading.rows[0]).toMatchObject({ id, status: 'refused', sender_attribution: 'none' });
+    expect(reading.rows[0].body).toBeUndefined();
+    expect(io.out + io.err).not.toContain(record.payload.body);
+    expect(existsSync(path+'.read.json')).toBe(false);
   });
-
   test('3. a team or project level cannot turn on entity.main-orchestrator.relays-owner (entity-only)', async () => {
     const w = createWorld();
     const lead = w.team.seats.find((s) => s.name === 'lead')!;
@@ -257,7 +173,7 @@ describe('fix/relay-owner-default-off independent verification', () => {
 
     // Even if a forged or hand-constructed policy source injects `entity.main-orchestrator.relays-owner: 'on'`
     // at the `project` or `team` level, `resolvePolicyChain` refuses the invalid level and `resolveWorkSettings`
-    // falls back to `off`, never printing the relay line.
+    // falls back to the approved `on` default; the invalid declaration is still refused.
     for (const forgedLevel of ['project', 'team'] as const) {
       const forgedSources = {
         [forgedLevel]: {
@@ -276,17 +192,17 @@ describe('fix/relay-owner-default-off independent verification', () => {
       const resolved = resolvePolicyChain(forgedSources, { now: NOW, upToLevel: 'team' });
       expect(resolved.ok).toBe(false);
       const work = resolveWorkSettings(forgedSources, {}, { now: NOW, home: w.home });
-      expect(work.relaysOwner).toEqual({ value: 'off', from: 'default' });
-      expect(rulesOf(w.team, lead, w.root, work)).not.toContain(RELAY_LINE);
+      expect(work.relaysOwner).toEqual({ value: 'on', from: 'default' });
+      expect(rulesOf(w.team, lead, w.root, work)).toContain(RELAY_LINE);
     }
   });
 
-  test('4. status and settings readings (POLICY_CATALOGUE, resolvePolicyChain, resolveWorkSettings, and team policy view) say off by default', async () => {
+  test('4. status and settings readings (POLICY_CATALOGUE, resolvePolicyChain, resolveWorkSettings, and team policy view) say on by default', async () => {
     const w = createWorld();
 
     // 1. Catalogue spec default
     const spec = POLICY_CATALOGUE['entity.main-orchestrator.relays-owner'];
-    expect(spec.defaultValue).toBe('off');
+    expect(spec.defaultValue).toBe('on');
     expect(spec.kind).toBe('advised');
     expect(spec.levels).toEqual(['entity']);
 
@@ -305,14 +221,14 @@ describe('fix/relay-owner-default-off independent verification', () => {
     if (!chain.ok) throw new Error('expected chain.ok');
     expect(chain.policies['entity.main-orchestrator.relays-owner']).toMatchObject({
       name: 'entity.main-orchestrator.relays-owner',
-      value: 'off',
+      value: 'on',
       level: 'default',
       kind: 'advised',
     });
 
     // 3. WorkSettings reading
     const work = workSettingsFor(w);
-    expect(work.relaysOwner).toEqual({ value: 'off', from: 'default' });
+    expect(work.relaysOwner).toEqual({ value: 'on', from: 'default' });
 
     // 4. `team policy` status table and `--json` output
     const tableIo = testIo(w.root, { kind: 'owner' });
@@ -322,7 +238,7 @@ describe('fix/relay-owner-default-off independent verification', () => {
       .split('\n')
       .find((line) => line.includes('entity.main-orchestrator.relays-owner'));
     expect(relayRow).toBeDefined();
-    expect(relayRow).toMatch(/entity\.main-orchestrator\.relays-owner\s+off\s+default\s+-\s+-\s+advised/);
+    expect(relayRow).toMatch(/entity\.main-orchestrator\.relays-owner\s+on\s+default\s+-\s+-\s+advised/);
 
     const jsonIo = testIo(w.root, { kind: 'owner' });
     const jsonCode = await runPolicy(['--json'], jsonIo, { home: w.home, now: NOW });
@@ -333,7 +249,7 @@ describe('fix/relay-owner-default-off independent verification', () => {
     );
     expect(jsonEntry).toMatchObject({
       name: 'entity.main-orchestrator.relays-owner',
-      value: 'off',
+      value: 'on',
       level: 'default',
       kind: 'advised',
     });

@@ -321,7 +321,6 @@ export type StartMachineDaemonInput = {
   /** Starts one chores child. The default writes a one-use token and spawns this program's hidden
    *  child verb; a test injects a fixture child to observe the protocol and the supervision. */
   choresFactory?: (input: SpawnChoresInput) => ChoresChild;
-
   /**
    * Whether this daemon starts the one mailbox router. Off unless a start asks for it, so a
    * harness that never opted in does not spawn the child. The beat only nudges it.

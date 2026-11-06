@@ -1,6 +1,8 @@
 import { homedir } from 'node:os';
 import { dirname } from 'node:path';
 import { notInForce } from '../approve/approval.ts';
+import { unverifiedRecordSentence } from '../approve/unverified-record.ts';
+import { devModeState } from '../dev_mode.ts';
 import { readArgs } from '../args.ts';
 import {
   anotherPaneRefusal,
@@ -31,7 +33,7 @@ import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { readTeams, teamIdOf } from '../registry/teams.ts';
 import type { CheckpointRecord } from '../state.ts';
-import { approvalStanding, type Standing } from '../store/store.ts';
+import { approvalStanding, findStore, readApproval, type Standing } from '../store/store.ts';
 
 export const USAGE = `Usage: team checkpoint <seat> [--session <name>] [--file <path>] [--json]
 
@@ -139,7 +141,12 @@ export async function runCheckpoint(
 
   const standing = sources.standing?.(root) ?? approvalStanding(root, home);
   if (standing.kind !== 'verified' && standing.kind !== 'none') {
-    return callerRefused(out, json, notInForce(standing));
+    const dev = devModeState(io, { home, team, root, now });
+    if (!dev.on) return callerRefused(out, json, notInForce(standing));
+    const store = findStore(root, home);
+    const file = store === null ? '' : (readApproval(store)?.file ?? '');
+    const sentence = unverifiedRecordSentence(`${team.project}'s approval record`, file);
+    out.stderr(`team checkpoint: ${plainText(sentence)}\n`);
   }
 
   const mayCheckpoint = verdictOf(caller, standingOf(dir, session, caller));

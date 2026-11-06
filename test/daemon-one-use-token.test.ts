@@ -211,7 +211,7 @@ describe('the claimed copies a process left when it died between claim and unlin
     const folder = join(dir, `restore.inherit.${'9'.repeat(32)}.json.claim.${DEAD}`);
     mkdirSync(folder);
 
-    writeRestoreInherit({ version: 1, home, root }, { isAlive: aliveOnly(LIVE) });
+    writeRestoreDoor({ version: 1, home, root }, { isAlive: aliveOnly(LIVE) });
 
     // The dead process's claimed copy is the only thing the write removed.
     expect(existsSync(stale)).toBe(false);
@@ -235,7 +235,7 @@ describe('the claimed copies a process left when it died between claim and unlin
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const path = join(dir, name);
     writeFileSync(path, 'x\n');
-    writeRestoreInherit({ version: 1, home, root }, { isAlive: noneAlive });
+    writeRestoreDoor({ version: 1, home, root }, { isAlive: noneAlive });
     return existsSync(path);
   }
 
@@ -264,7 +264,7 @@ describe('the claimed copies a process left when it died between claim and unlin
       // The process exists; this uid is simply not allowed to signal it.
       throw Object.assign(new Error('not permitted'), { code: 'EPERM' });
     };
-    writeRestoreInherit({ version: 1, home, root }, { isAlive: (pid) => pidAlive(pid, kill) });
+    writeRestoreDoor({ version: 1, home, root }, { isAlive: (pid) => pidAlive(pid, kill) });
     expect(existsSync(stale)).toBe(true);
     expect(asked).toEqual([[protectedPid, 0]]);
   });
@@ -371,7 +371,7 @@ describe('the claimed copies a process left when it died between claim and unlin
       throw new Error(`unexpected pid probed: ${pid}`);
     };
 
-    const restoreNonce = writeRestoreInherit(
+    const { nonce: restoreNonce } = writeRestoreDoor(
       { version: 1, home, root },
       { isAlive: (pid) => pidAlive(pid, fakeKill) },
     );

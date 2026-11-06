@@ -97,7 +97,7 @@ export function resolveWorkSettings(
     landingMode: effective<LandingMode>(chain, 'landing-mode', 'batch'),
     vaultRoot: vault.value === '' ? { value: null, from: vault.from } : { value: expandVaultRoot(vault.value, options.home), from: vault.from },
     entityOrchestrator: effective<EntityOrchestrator>(chain, 'entity-orchestrator', 'auto'),
-    relaysOwner: effective<OnOff>(chain, 'entity.main-orchestrator.relays-owner', 'off'),
+    relaysOwner: effective<OnOff>(chain, 'entity.main-orchestrator.relays-owner', 'on'),
     paneActions: effective<OnOff>(chain, 'leads.pane-actions', 'on'),
     leadSelfService: effective<OnOff>(chain, 'leads.self-service', 'on'),
     ownerReservedScope: { value: withReservedFloor(reserved.value), from: reserved.from },

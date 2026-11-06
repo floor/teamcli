@@ -145,6 +145,7 @@ function receiptPath(session: string, seat: string, id: string, status: 'read' |
 export async function runAck(argv: string[], io: Io, host: AckHost): Promise<number> {
   // Raw argv, before the parser: `--nope --json` must still answer with the structured document.
   const json = hasJsonFlag(argv);
+  if (io.general !== undefined && scopedAck(argv)) return refused(io, json, 'a client acknowledgement needs an exact UUID; scoped acknowledgement is for seats and the owner');
   if (scopedAck(argv)) return await runScopedAck(argv, io, host, json);
   const args = readArgs(argv, [], ['json']);
   if (args.error) return usage(io, json, args.error);
@@ -152,6 +153,9 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
   if (id === undefined) return usage(io, json, '<id> is required');
   if (args.rest.length > 1) return usage(io, json, `unexpected "${args.rest[1]}"`);
   if (!recordNameOk(id)) return usage(io, json, `"${id}" is not a record id`);
+  if (io.general !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    return refused(io, json, 'a client acknowledgement needs an exact UUID; short prefixes are for seats and the owner');
+  }
 
   // The walk decides the one detached refusal — the owner with no terminal. It places a caller
   // under herdr as `unplaced` without reading a session, so it must never decide who may

@@ -12,7 +12,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startMachineDaemon } from '../src/daemon/host.ts';
-import { DAEMON_LABEL, machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
+import { darwinServiceManager } from '../src/daemon/service-darwin.ts';
+import { DAEMON_LABEL, daemonLabel, machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
 import { restoreEntryOf, runRestoreSweepInChild } from '../src/daemon/restore/spawn.ts';
 import { acceptRestoreDoor, discardRestoreInherit, restoreDoorText, writeRestoreDoor } from '../src/daemon/restore/token.ts';
 import { readDaemonState } from '../src/daemon/state.ts';
@@ -64,10 +65,11 @@ function scratch(): { base: string; root: string; home: string; bin: string } {
   // reach the live system service manager and always report this test runner process as the
   // daemon job loaded from `home`'s own unit path.
   mkdirSync(join(home, 'Library', 'LaunchAgents'), { recursive: true });
-  const unitFile = join(home, 'Library', 'LaunchAgents', `${DAEMON_LABEL}.plist`);
+  const label = daemonLabel(home, darwinServiceManager().accountHome?.() ?? null) ?? DAEMON_LABEL;
+  const unitFile = join(home, 'Library', 'LaunchAgents', `${label}.plist`);
   writeFileSync(
     unitFile,
-    `<plist version="1.0"><dict><key>Label</key><string>${DAEMON_LABEL}</string></dict></plist>\n`,
+    `<plist version="1.0"><dict><key>Label</key><string>${label}</string></dict></plist>\n`,
     { mode: 0o600 },
   );
   const unitRealpath = realpathSync(unitFile);
@@ -669,9 +671,9 @@ describe('independent adversarial checks: restore spawn abort, deadline, spawn e
       okClaimedEntry,
       [
         `import { writeFileSync } from 'node:fs';`,
-        `import { readRestoreInherit } from ${JSON.stringify(tokenModule)};`,
+        `import { acceptRestoreDoor, readRestoreDoor } from ${JSON.stringify(tokenModule)};`,
         `const at = process.argv.indexOf('--inherited');`,
-        `readRestoreInherit(process.env.HOME ?? '', process.argv[at + 1] ?? '');`,
+        `acceptRestoreDoor({ home: process.env.HOME ?? '', nonce: process.argv[at + 1] ?? '', text: readRestoreDoor() });`,
         `process.on('SIGTERM', () => { writeFileSync(${JSON.stringify(okClaimedMark)}, 'ended\\n'); process.exit(0); });`,
         `process.stdout.write(JSON.stringify({ ok: true, result: { kind: 'no-recorded-session' } }) + '\\n');`,
         `await new Promise((resolve) => setTimeout(resolve, 10_000));`,
@@ -691,9 +693,9 @@ describe('independent adversarial checks: restore spawn abort, deadline, spawn e
       failEmptyReasonEntry,
       [
         `import { writeFileSync } from 'node:fs';`,
-        `import { readRestoreInherit } from ${JSON.stringify(tokenModule)};`,
+        `import { acceptRestoreDoor, readRestoreDoor } from ${JSON.stringify(tokenModule)};`,
         `const at = process.argv.indexOf('--inherited');`,
-        `readRestoreInherit(process.env.HOME ?? '', process.argv[at + 1] ?? '');`,
+        `acceptRestoreDoor({ home: process.env.HOME ?? '', nonce: process.argv[at + 1] ?? '', text: readRestoreDoor() });`,
         `process.on('SIGTERM', () => { writeFileSync(${JSON.stringify(failEmptyReasonMark)}, 'ended\\n'); process.exit(0); });`,
         `process.stdout.write(JSON.stringify({ ok: false, reason: '' }) + '\\n');`,
         `await new Promise((resolve) => setTimeout(resolve, 10_000));`,

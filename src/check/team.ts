@@ -22,7 +22,6 @@ import { readRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts
 import {
   isSocketFile,
   ownedSocketPath,
-  processStartOf,
   recordStartMatches,
   unmanagedEndpointNotes,
 } from '../launch/codex-endpoint.ts';
@@ -107,7 +106,16 @@ import { deliveryChainOf } from '../send/delivery.ts';
 import { launchWords, socketEligible } from '../send/inbound.ts';
 import { SOCKET_SEND } from '../send/uds.ts';
 import { messagingStoreChainOf } from '../send/store.ts';
-import { DELIVERY_ORDER, liveOrderRecord, liveOrderWords, orderDeclarationsOf, type DeliveryLeg, type OrderWord, type MessagingStore, type SettingLevel } from '../settings/inherit.ts';
+import {
+  DELIVERY_ORDER,
+  liveOrderRecord,
+  liveOrderWords,
+  orderDeclarationsOf,
+  type DeliveryLeg,
+  type MessagingStore,
+  type OrderWord,
+  type SettingLevel,
+} from '../settings/inherit.ts';
 import { deliveryOrder, resolveOrderSetting } from '../settings/resolve.ts';
 import { emptySession, liveHold, pidAlive, readState, seatOfFile, updateState, type SeatState, type SessionState, type State } from '../state.ts';
 import { compare, orderAndAnnotateDifferences, paneShowsSeat, seatRecordsOf, socketLegOf, type Difference, type Live } from '../status/compare.ts';
@@ -126,6 +134,7 @@ import { EVENT_LOG_TOTAL_BYTES } from '../bus/kinds.ts';
 import { retainedLogBytes } from '../bus/log.ts';
 import { busLogSizeNotes, busProblemNotes } from '../bus/notes.ts';
 import { pingpongLegDifferences } from './pingpong-legs.ts';
+import { closeOrphans, orphanReading, type OrphanCloseSources, type OrphanProcessSources, type OrphanReading } from './orphans.ts';
 import {
   EMPTY_SIDEBAR_REPAIR,
   readSeatPaneDisplays,
@@ -138,8 +147,6 @@ import { attentionOf } from '../watch/pass.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
 
 export type { CheckSidebarSources };
-
-import { closeOrphans, orphanReading, type OrphanCloseSources, type OrphanProcessSources, type OrphanReading } from './orphans.ts';
 
 /** The team check's own arguments: the owner's aimed/repair flags, the lead's or owner's close, and
  *  optional `--json`. */
@@ -222,7 +229,7 @@ function heldIn(session: string): ReadonlySet<number> | null {
   if (agents === null) return null;
   const held = new Set<number>();
   for (const agent of agents) {
-    const processes = paneProcessesOf(paneProcessInfo(agent.pane, session));
+    const processes = paneProcesses(agent.pane, session);
     if (processes === null) return null;
     held.add(processes.shell);
     for (const pid of processes.foreground) held.add(pid);
