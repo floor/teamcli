@@ -898,7 +898,9 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
     expect(unit).toContain('run');
     expect(unit).toContain('--started-by');
     expect(unit).toContain('service-manager');
-    expect(unit).toContain('/repo');
+    // The unit names no checkout. A service start reads the registry, so yesterday's root is not frozen in.
+    expect(unit).not.toContain('--root');
+    expect(unit).not.toContain('/repo');
     expect(unit).toContain('RunAtLoad');
     expect(unit).toContain('KeepAlive');
     expect(calls[0]?.[0]).toBe('launchctl');
