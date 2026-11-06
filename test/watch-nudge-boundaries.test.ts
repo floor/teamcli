@@ -23,7 +23,7 @@ import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { watchLabel } from '../src/watch/pane.ts';
 import { newMemory, NUDGE_TEXT, pass } from '../src/watch/pass.ts';
-import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, testIo, recordRenames } from './helpers.ts';
 
 // The example with an operator seat of its own, so the leads are two named seats and the workers
 // stand apart: the file's `operator` names the operator, not the coordinator.
@@ -312,6 +312,8 @@ function world(): {
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(launch);
   return { launch, creates, runs };
 }
 

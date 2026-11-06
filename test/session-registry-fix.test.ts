@@ -20,7 +20,7 @@ import type { Terminal } from '../src/launch/terminal.ts';
 import { beginSession, SESSIONS_FILE, readStoreSessions } from '../src/sessions/registry.ts';
 import { readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, recordRenames, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-19T03:00:00Z');
 const OWNER = { kind: 'owner' as const };
@@ -220,6 +220,7 @@ function makeWorld(root: string): World {
     sleep: async () => {},
     now: () => NOW,
   };
+  recordRenames(launch);
   return { launch, slots, procs, runs, session, reporting, screens };
 }
 

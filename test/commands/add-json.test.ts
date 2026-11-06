@@ -16,7 +16,7 @@ import { emptySession, readState, updateState } from '../../src/state.ts';
 import { approvalOf } from '../../src/approve/approval.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
 import type { Machine } from '../../src/watch/machine.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo, recordRenames } from '../helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from '../helpers/output.ts';
 
 const NOW = new Date('2026-10-03T14:02:00Z');
@@ -131,6 +131,8 @@ function world(): { launch: Launch; creates: string[]; renames: string[]; sessio
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(made.launch);
   return made;
 }
 

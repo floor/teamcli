@@ -25,7 +25,7 @@ import type { HerdrAgent } from '../../src/herdr.ts';
 import { GENERAL_BRIEF_SHA256, generalBriefBody, generalBriefId } from '../../src/launch/general-brief.ts';
 import { lobbyDir } from '../../src/lobby/gate.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
-import { CLAUDE_IDLE, claudeBox, testIo, type TestIo } from '../helpers.ts';
+import { CLAUDE_IDLE, claudeBox, testIo, type TestIo, recordRenames } from '../helpers.ts';
 
 const SESSION = 'acme-web';
 const OTHER = 'other-web';
@@ -1018,6 +1018,8 @@ function upHost(): { counts: Record<'starts' | 'creates' | 'runs' | 'renames' | 
     sleep: async () => {},
     now: () => new Date(0),
   };
+
+  recordRenames(launch);
   return { counts, launch };
 }
 

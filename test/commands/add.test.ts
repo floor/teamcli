@@ -20,7 +20,7 @@ import { loadTeamFile } from '../../src/file/load.ts';
 import { seatIsStopped, takeOut } from '../../src/file/lines.ts';
 import { currentBriefClaim } from '../../src/launch/general-brief.ts';
 import { writePolicySet } from '../../src/policy/index.ts';
-import { CLAUDE_IDLE, deliverBriefs, gitEnv, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, gitEnv, testIo, recordRenames } from '../helpers.ts';
 import type { Machine } from '../../src/watch/machine.ts';
 import { profileFor, resolveEffortOverride, resolveModelOverride, withLaunchOverrides } from '../../src/profiles/profile.ts';
 
@@ -188,6 +188,7 @@ function world(): { launch: Launch; creates: string[]; renames: string[]; sessio
     },
     now: () => new Date(clock),
   };
+  recordRenames(made.launch);
   return made;
 }
 

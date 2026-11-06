@@ -33,7 +33,7 @@ import { brokerSocket } from '../src/broker/protocol.ts';
 import { approvalStanding, readApproval, storePath, writeApproval } from '../src/store/store.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
-import { claudeBox, gitEnv, testIo } from './helpers.ts';
+import { claudeBox, gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T09:00:00Z');
 
@@ -191,6 +191,9 @@ describe('every owner-gated command refuses the run with no terminal, through th
       sleep: async () => {},
       now: () => NOW,
     };
+
+
+    recordRenames(launch);
     return { launch, created: () => made };
   }
 

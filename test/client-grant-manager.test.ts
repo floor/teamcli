@@ -64,7 +64,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { LOG_FILE, readState } from '../src/state.ts';
 import { keyOf, signDomain } from '../src/store/keys.ts';
 import { storePath } from '../src/store/store.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const made: string[] = [];
 const realTmp = process.env.TMPDIR;
@@ -317,6 +317,8 @@ function launchOf(now: () => Date): Made {
     sleep: async () => {},
     now,
   };
+
+  recordRenames(made.launch);
   return made;
 }
 

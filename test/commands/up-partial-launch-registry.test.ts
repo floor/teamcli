@@ -32,7 +32,7 @@ import { teamIdOf } from '../../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
 import type { HerdrAgent, HerdrWorkspace, PaneProcesses } from '../../src/herdr.ts';
-import { gitEnv, testIo } from '../helpers.ts';
+import { gitEnv, testIo, recordRenames } from '../helpers.ts';
 
 const NOW = new Date('2026-10-22T05:40:00Z');
 const SESSION = 'acme';
@@ -293,6 +293,8 @@ function sources(opts: {
     sleep: async () => {},
     now: () => NOW,
   };
+
+  recordRenames(launch);
   const doctor: DoctorSources = {
     version: () => '2.1.288',
     onPath: () => true,

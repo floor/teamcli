@@ -19,7 +19,7 @@ import type { HerdrAgent } from '../src/herdr.ts';
 import { LOG_FILE, emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import type { Screen } from '../src/watch/screen.ts';
-import { claudeBox, testIo } from './helpers.ts';
+import { claudeBox, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-15T10:00:00.000Z');
 const SEAT = (name: string, role: string): string => `  - role: ${role}
@@ -154,6 +154,8 @@ function addWorld(make: boolean): AddSources {
     sleep: async () => {},
     now: () => NOW,
   };
+
+  recordRenames(launch);
   const doctor = (): DoctorSources => ({
     version: () => '2.1.288',
     onPath: () => true,

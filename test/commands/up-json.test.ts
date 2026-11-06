@@ -12,7 +12,7 @@ import { runUp, type Launch, type UpSources } from '../../src/commands/up.ts';
 import type { Terminal } from '../../src/launch/terminal.ts';
 import { UP_OUTPUT_SCHEMA } from '../../src/output/schema.ts';
 import type { Machine } from '../../src/watch/machine.ts';
-import { CLAUDE_IDLE, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, recordRenames, testIo } from '../helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from '../helpers/output.ts';
 
 const NOW = new Date('2026-10-17T09:00:00Z');
@@ -60,7 +60,7 @@ function launching(onLaunch: () => void): Launch {
   let n = 0;
   let session: 'absent' | 'running' = 'absent';
   const panes = new Map<string, { text: string; agent: boolean }>();
-  return {
+  const host: Launch = {
     sessionState: () => session,
     startServer() {
       session = 'running';
@@ -88,6 +88,8 @@ function launching(onLaunch: () => void): Launch {
     sleep: async () => {},
     now: () => NOW,
   };
+  recordRenames(host);
+  return host;
 }
 
 function sources(home: string, launch: Launch, terminal: Terminal): UpSources {

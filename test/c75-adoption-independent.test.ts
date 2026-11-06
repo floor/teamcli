@@ -19,7 +19,7 @@ import { agentsDir, registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState, type SeatState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { gitEnv, testIo } from './helpers.ts';
+import { gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-11-05T01:30:00.000Z');
 const SESSION = 'restore-scene';
@@ -273,6 +273,8 @@ function makeHarness(options: HarnessOptions = {}): { sources: UpSources; trace:
     sleep: async () => {},
     now: () => NOW,
   };
+
+  recordRenames(launch);
   const doctor: DoctorSources = {
     version: () => '0.161.0',
     onPath: () => true,

@@ -17,7 +17,7 @@ import { getTeam, readTeams, teamIdOf, upsertTeam } from '../src/registry/teams.
 import { get as getProject, projectIdOf, projectsFile, upsertProject } from '../src/registry/projects.ts';
 import { admitSend, PROJECT_RULES } from '../src/send/admit.ts';
 import { emptySession, updateState } from '../src/state.ts';
-import { claudeBox, gitEnv, testIo } from './helpers.ts';
+import { claudeBox, gitEnv, testIo, recordRenames } from './helpers.ts';
 import { intoRegistry, storedTeam, underRegistry } from './helpers/registry-team.ts';
 
 const NOW = new Date('2026-10-16T02:00:00Z');
@@ -770,6 +770,8 @@ function makeHarness(fixture: Fixture): { sources: RestartSources } {
     sleep: async () => {},
     now: () => NOW,
   };
+
+  recordRenames(upLaunch);
 
   const doctor: DoctorSources = {
     version: () => '2.1.288',

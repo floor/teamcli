@@ -18,7 +18,7 @@ import { findAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T09:00:00Z');
 const IDLE = CLAUDE_IDLE;
@@ -184,6 +184,8 @@ function harness(options: { status?: string; text?: string; create?: boolean; pr
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(launch);
   return { sources: { launch, home, now: () => new Date(clock) }, closed, commands };
 }
 

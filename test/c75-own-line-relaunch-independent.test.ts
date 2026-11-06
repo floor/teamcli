@@ -21,7 +21,7 @@ import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, recordRenames, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-11-05T02:10:00Z');
 const SESSION = 'acme';
@@ -228,6 +228,7 @@ function world(scene: Scene = {}): { sources: UpSources; trace: Trace } {
     sleep: async () => {},
     now: () => NOW,
   };
+  recordRenames(launch);
   const doctor: DoctorSources = {
     version: () => '2.1.288',
     onPath: () => true,

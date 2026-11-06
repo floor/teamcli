@@ -26,7 +26,7 @@ import { findAgent, registerAgent, updateAgent } from '../../src/registry/agents
 import { teamIdOf } from '../../src/registry/teams.ts';
 import type { Key } from '../../src/launch/terminal.ts';
 import { UP_OUTPUT_SCHEMA } from '../../src/output/schema.ts';
-import { CLAUDE_IDLE, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, testIo, recordRenames } from '../helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from '../helpers/output.ts';
 
 const EXAMPLE = readFileSync(join(import.meta.dir, '../fixtures/example.yaml'), 'utf8').replace('parked: true', 'stopped: true');
@@ -188,6 +188,8 @@ function world(): World {
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(state.launch);
   return state;
 }
 

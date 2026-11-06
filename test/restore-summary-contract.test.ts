@@ -23,7 +23,7 @@ import { UP_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import type { Machine } from '../src/watch/machine.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, testIo, recordRenames } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-21T18:00:00Z');
@@ -343,6 +343,8 @@ function buildWorld(
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(launch);
 
   const doctor: DoctorSources = {
     version: () => '2.1.288',

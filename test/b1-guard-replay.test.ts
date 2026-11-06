@@ -18,7 +18,7 @@ import { loadTeamFile } from '../src/file/load.ts';
 import { writePolicySet } from '../src/policy/index.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
-import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-22T10:00:00Z');
 const FILE = ['--file', '.agents/team.yaml'];
@@ -140,6 +140,9 @@ describe('a recorded pane with no live agent under the entity model rule', () =>
       sleep: async () => {},
       now: () => NOW,
     };
+
+
+    recordRenames(w.launch);
     return w;
   }
 

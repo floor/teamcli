@@ -25,7 +25,7 @@ import { ensureSeatLine } from '../src/registry/sync.ts';
 import { getTeam, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo, recordRenames } from './helpers.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { intoRegistry, storedTeam, underRegistry } from './helpers/registry-team.ts';
 
@@ -139,6 +139,8 @@ function cursorWorld(home: string, root: string): {
     sleep: async () => {},
     now: () => NOW,
   };
+
+  recordRenames(world.launch);
   return world;
 }
 

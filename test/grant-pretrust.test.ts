@@ -14,7 +14,7 @@ import type { Terminal } from '../src/launch/terminal.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { readState } from '../src/state.ts';
 import type { Machine } from '../src/watch/machine.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-16T11:00:00Z');
 const FUTURE = '2026-12-31T23:59:59Z';
@@ -160,6 +160,8 @@ function dialogHost(home: string) {
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(host);
   return host;
 }
 

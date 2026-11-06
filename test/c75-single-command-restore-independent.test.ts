@@ -45,7 +45,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { installKey } from '../src/store/keys.ts';
-import { fixtureBase, gitEnv, testIo } from './helpers.ts';
+import { fixtureBase, gitEnv, recordRenames, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-11-05T04:15:00Z');
 const DAY_MS = 86_400_000;
@@ -388,6 +388,7 @@ function fakeWorld(options: {
     sleep: async () => {},
     now: () => NOW,
   };
+  recordRenames(launch);
 
   const doctor: DoctorSources = {
     version: () => '2.1.288',

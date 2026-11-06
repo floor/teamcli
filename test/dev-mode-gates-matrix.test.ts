@@ -40,7 +40,7 @@ import { installSlice } from '../src/tasks/slice-handler.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import type { Screen } from '../src/watch/screen.ts';
 import { config } from './check/fixtures.ts';
-import { claudeBox, CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
+import { claudeBox, CLAUDE_IDLE, gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const IDLE = CLAUDE_IDLE;
 const NOW = new Date('2026-10-15T12:00:00Z');
@@ -175,6 +175,8 @@ function upWorld(): { launch: Launch; runs: { pane: string; command: string }[] 
     sleep: async () => {},
     now: () => NOW,
   };
+
+  recordRenames(launch);
   return { launch, runs };
 }
 
