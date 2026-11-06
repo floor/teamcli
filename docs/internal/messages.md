@@ -112,9 +112,9 @@ Under `--json` the reading is one `team.messages` v1 document on stdout, its `sc
 `format`, `project`, `session`, every row as
 `{ id, from, to, sent, sent_display, status, sender_attribution, body? }` — `sent` the
 exact ISO string `SENT` renders as an age, `body` only on a row that verified, and the body stays
-the signed bytes even when the text reading marks it; `sender_attribution` is `attributed` for a
-record the shared checkout key verified, `launch-brief` for the seat's current general seat brief
-bound to its claim, and `none` for a row that was not vouched for; status is `shown`, `refused` or `waiting`, and an owner reading may carry another mailbox's verified body read-only — then
+the signed bytes even when the text reading marks it; `sender_attribution` is `unverified_claim`
+for a record only the shared checkout key verified, `launch-brief` for the seat's current general
+seat brief bound to its claim, and `none` for a row that was not vouched for; status is `shown`, `refused` or `waiting`, and an owner reading may carry another mailbox's verified body read-only — then
 `notes`, `differences` (each `{ what, repair, who }`), `summary` (the `differences` and
 `owner_differences` counts every reading envelope carries) and `counts` (`messages`, `shown`,
 `refused`, `waiting`, the table's own closing figures). An empty mailbox's document carries no
@@ -128,7 +128,7 @@ A note for a reader of an older build: `sender_verified` and `sender_trust` were
 0.5.13's development builds and never reached a release. They are replaced by
 `sender_attribution`. Map the old pair forward as an old `sender_verified: true` was
 `launch-brief`; an old `sender_verified: false` with `sender_trust: shared-key-only` was a record
-the key did verify, now `attributed`, or a claim nothing could vouch for, now `none`. The trust
+the key did verify, now `unverified_claim`, or a claim nothing could vouch for, now `none`. The trust
 word is no longer emitted. A `config.changed` event the reconcile pass raised in an earlier build
 of this development line carried `sender_verified: "false"`; the event writer no longer stamps
 it, and a bus log line still carrying it is counted unverified and skipped until the log's

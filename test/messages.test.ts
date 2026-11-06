@@ -451,7 +451,7 @@ difference: lead/m1 does not verify: the record is not a message
       sent_display: '0s ago',
       status: 'shown',
       // The JSON body stays the signed bytes; the attribution rides on the row's own field.
-      sender_attribution: 'attributed',
+      sender_attribution: 'unverified_claim',
       body: BODY,
     }]);
     expect(doc.summary).toEqual({ differences: 0, owner_differences: 0 });

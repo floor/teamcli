@@ -14,13 +14,13 @@ import { GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE, type CurrentBriefClaim } from '
 import { getAgent } from '../registry/agents.ts';
 import type { RecordPayload } from './record.ts';
 
-/** What a reader knows about a record's sender. `attributed` rests on the shared checkout key
- *  alone, which a text reader prints as an unverified claim; `launch-brief` is the launch's
+/** What a reader knows about a record's sender. `unverified_claim` rests on the shared checkout
+ *  key alone, which a text reader prints as an unverified claim; `launch-brief` is the launch's
  *  delivery bound to the seat's current claim, which the text reader prints as attributed;
  *  `none` is no attribution at all — an unsigned file, a marker's word, or a record no key could
  *  vouch for. A row may name a sender and still be `none`: the name is then what the file says,
  *  not who it is. */
-export type SenderAttribution = 'attributed' | 'launch-brief' | 'none';
+export type SenderAttribution = 'unverified_claim' | 'launch-brief' | 'none';
 
 /** The parenthetical a text reader appends to a sender name. The JSON field keeps its own words. */
 export function senderReading(attribution: SenderAttribution): string {
@@ -64,9 +64,9 @@ export type SenderRenderContext = {
  * record, and any brief the claim does not name, rests on the shared key.
  */
 export function attributeSenderClaim(
-  payload: RecordPayload,
+  payload: Pick<RecordPayload, 'from' | 'rule' | 'id'> & Partial<Pick<RecordPayload, 'incarnation' | 'brief_sha256'>>,
   context: SenderClaimContext = {},
-): 'attributed' | 'launch-brief' {
+): 'unverified_claim' | 'launch-brief' {
   const claim = context.briefClaim ?? null;
   const launch = payload.from === GENERAL_BRIEF_FROM && payload.rule === GENERAL_BRIEF_RULE;
   if (claim !== null && launch
@@ -75,7 +75,7 @@ export function attributeSenderClaim(
     && payload.brief_sha256 === claim.sha256) {
     return 'launch-brief';
   }
-  return 'attributed';
+  return 'unverified_claim';
 }
 
 /** The sender header every sent body opens with: `from <claimed> — admitted by: <rule>`, then the

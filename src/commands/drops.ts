@@ -120,9 +120,9 @@ export type DropRow = {
   /** The sender's registry id when the drop is a signed record; the table resolves it to the
    *  project's readable name. A raw drop has no id, and its first line is already a headline. */
   from_id: string | null;
-  /** How the sender is attributed: on the shared checkout key every seat can read, on the
-   *  launch's own seat brief bound to the seat's current claim, or not at all (a raw drop's first
-   *  line, or a file no key could vouch for). */
+  /** How the sender is known: `unverified_claim` on the shared checkout key, `launch-brief` when
+   *  the launch's own seat brief is bound to the seat's current claim, or `none` (a raw drop's
+   *  first line, or a file no key could vouch for). */
   sender_attribution: SenderAttribution;
   received: string;
   path: string;

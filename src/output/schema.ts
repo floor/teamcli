@@ -2001,9 +2001,10 @@ export const MESSAGES_OUTPUT_SCHEMA: CommandSchemaSpec = {
           // published for it; `body` rides along only in the owner's reading, and a record that
           // does not verify carries none.
           status: { type: 'string', enum: ['shown', 'refused', 'waiting'] },
-          // What the sender rests on: the shared checkout key every seat can read, the launch's
-          // own seat brief bound to the seat's current claim, or nothing at all.
-          sender_attribution: { type: 'string', enum: ['attributed', 'launch-brief', 'none'] },
+          // What the sender rests on: the shared checkout key every seat can read
+          // (`unverified_claim`), the launch's own seat brief bound to the seat's current claim,
+          // or nothing at all.
+          sender_attribution: { type: 'string', enum: ['unverified_claim', 'launch-brief', 'none'] },
           body: { type: 'string' },
         },
       },
@@ -2106,9 +2107,9 @@ export const DROPS_OUTPUT_SCHEMA: CommandSchemaSpec = {
           // The sender the record's payload names — or, in a raw file an earlier build wrote, its
           // first line; null when neither names one.
           from: { type: ['string', 'null'] },
-          // What the sender rests on: the shared checkout key, the seat's current general seat
-          // brief, or nothing at all.
-          sender_attribution: { type: 'string', enum: ['attributed', 'launch-brief', 'none'] },
+          // What the sender rests on: the shared checkout key (`unverified_claim`), the seat's
+          // current general seat brief, or nothing at all.
+          sender_attribution: { type: 'string', enum: ['unverified_claim', 'launch-brief', 'none'] },
           received: { type: 'string', minLength: 1 },
           path: { type: 'string', minLength: 1 },
         },

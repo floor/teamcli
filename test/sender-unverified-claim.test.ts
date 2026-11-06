@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDrops } from '../src/commands/drops.ts';
 import { plantRecord, recordDir, runMessages } from '../src/commands/messages.ts';
+import { listUnread } from '../src/mcp/inbox.ts';
 import { generalBriefRecord, GENERAL_BRIEF_SHA256 } from '../src/launch/general-brief.ts';
 import { signRecord, writeRecord } from '../src/send/record.ts';
 import { updateState } from '../src/state.ts';
@@ -110,5 +111,32 @@ describe('a shared checkout key is an unverified claim', () => {
     expect(io.out).toContain('orchestrator (unverified claim)');
     expect(io.out).not.toContain('orchestrator (attributed)');
     expect(io.out).toContain('the launch (attributed)');
+  });
+
+  test('team messages --json emits unverified_claim for a shared-key record', async () => {
+    plantSharedKey();
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runMessages(['--json'], io, { home, now: () => new Date(NOW) });
+    expect(code).toBe(0);
+    const doc = JSON.parse(io.out) as { rows: { sender_attribution?: string }[] };
+    expect(doc.rows[0]?.sender_attribution).toBe('unverified_claim');
+    expect(io.out).not.toContain('"attributed"');
+  });
+
+  test('team drops --json and inbox_check emit unverified_claim for a shared-key record and launch-brief for the bound brief', async () => {
+    plantSharedKey();
+    plantCurrentBrief();
+    const io = testIo(root, { kind: 'seat', name: 'lead', pane: 'fixture-pane-lead', session: 'acme' });
+    const code = await runDrops(['--json'], io, { home });
+    expect(code).toBe(0);
+    const doc = JSON.parse(io.out) as { drops: { from: string | null; sender_attribution?: string }[] };
+    const shared = doc.drops.find((row) => row.from === 'orchestrator');
+    const brief = doc.drops.find((row) => row.from === 'the launch');
+    expect(shared?.sender_attribution).toBe('unverified_claim');
+    expect(brief?.sender_attribution).toBe('launch-brief');
+
+    const unread = listUnread(join(root, '.agents', 'send-drops', 'acme', 'lead'), { to: 'lead', root, session: 'acme' }, home);
+    expect(unread.find((row) => row.from === 'orchestrator')?.sender_attribution).toBe('unverified_claim');
+    expect(unread.find((row) => row.from === 'the launch')?.sender_attribution).toBe('launch-brief');
   });
 });

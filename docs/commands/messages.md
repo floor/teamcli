@@ -84,7 +84,7 @@ for the file. A printed body is rendered the same way [`team drops --read`](drop
 renders one: its `from … — admitted by: …` line is folded into the compact header (`from <name> (<short rule>):`, `Client <Display> (owner relay):`, or `<Kind> seat <name> (<short rule>):` for a non-Claude seat), and a
 body with no such line folds its record sender and rule into the same compact header (`from <sender> (<short rule>):` or `from <sender>:`), the message's own words
 untouched. `--json` carries the record's own `from` with `sender_attribution` beside it
-(`attributed`, `launch-brief`, or `none`), its `body` stays the signed bytes — only the text
+(`unverified_claim`, `launch-brief`, or `none`), its `body` stays the signed bytes — only the text
 reading marks it — and the signed record keeps the sender's registry id apart from it.
 A `waiting` row writes no
 receipt: it says the record is there for its own mailbox's reader, and a seat's run carries no

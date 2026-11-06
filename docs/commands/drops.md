@@ -160,9 +160,9 @@ one line, `from <sender> — <path>`, for each drop that appears, with `<sender>
 | the invocation can't be read, `--follow` and `--json` are both given, `--read` is given without `--seat` or with `--follow` or `--json`, or this folder is neither a checkout nor a team root | `team drops: <problem>`, with the usage for the invocation | 2 |
 
 The `--json` document is `{"schema": {"name": "team.drops", "version": 1}, "format": 1, "project": …, "session": …, "seat": …, "drops": [{"from": …, "sender_attribution": …, "received": …, "path": …}], "counts": {"drops": …}}`.
-`received` is the file's modification time, ISO 8601; `sender_attribution` is `attributed` for a
-record the shared checkout key verified, `launch-brief` for the seat's current general seat brief
-bound to its claim, and `none` for a raw drop or a record no key could vouch for.
+`received` is the file's modification time, ISO 8601; `sender_attribution` is `unverified_claim`
+for a record only the shared checkout key verified, `launch-brief` for the seat's current general
+seat brief bound to its claim, and `none` for a raw drop or a record no key could vouch for.
 
 ## Example
 

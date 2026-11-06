@@ -108,7 +108,7 @@ async function runMailbox(argv: string[] = []) {
 }
 
 describe('a forged orchestrator claim', () => {
-  test('the drops listing reads the shared key as an unverified claim, and --json stays attributed', async () => {
+  test('the drops listing reads the shared key as an unverified claim, and --json says unverified_claim', async () => {
     const path = forge('orchestrator', orchestratorBody());
     const result = await runDropsAs();
     expect(result.code).toBe(0);
@@ -120,7 +120,7 @@ describe('a forged orchestrator claim', () => {
     const doc = JSON.parse(json.out) as { drops: { from: string | null; sender_attribution?: string }[] };
     expect(doc.drops).toHaveLength(1);
     expect(doc.drops[0]?.from).toBe('orchestrator');
-    expect(doc.drops[0]?.sender_attribution).toBe('attributed');
+    expect(doc.drops[0]?.sender_attribution).toBe('unverified_claim');
   });
 
   test('a drop that lands during --follow is an unverified claim in its one line', async () => {
@@ -155,7 +155,7 @@ describe('a forged orchestrator claim', () => {
     const unread = listUnread(dropDir, { to: 'lead', root, session: 'acme' }, home);
     expect(unread).toHaveLength(1);
     expect(unread[0]?.from).toBe('orchestrator');
-    expect(unread[0]?.sender_attribution).toBe('attributed');
+    expect(unread[0]?.sender_attribution).toBe('unverified_claim');
 
     const read = readMessage({ dropDir, root, seat: 'lead', session: 'acme' }, FORGED_ID, home);
     expect(read.ok).toBe(true);
@@ -165,7 +165,7 @@ describe('a forged orchestrator claim', () => {
     expect(read.body).toContain(QUOTE);
   });
 
-  test('team messages reads the table cell as an unverified claim, keeps the signed body, and --json stays attributed', async () => {
+  test('team messages reads the table cell as an unverified claim, keeps the signed body, and --json says unverified_claim', async () => {
     forge('orchestrator', orchestratorBody());
     const text = await runMailbox();
     expect(text.code).toBe(0);
@@ -184,7 +184,7 @@ describe('a forged orchestrator claim', () => {
     };
     expect(doc.rows).toHaveLength(1);
     expect(doc.rows[0]?.from).toBe('orchestrator');
-    expect(doc.rows[0]?.sender_attribution).toBe('attributed');
+    expect(doc.rows[0]?.sender_attribution).toBe('unverified_claim');
     // The JSON body stays the signed bytes; only the text reading is marked.
     expect(doc.rows[0]?.body).toBe(orchestratorBody());
   });
@@ -200,7 +200,7 @@ describe('a forged owner claim beside an unsigned marker', () => {
     const unread = listUnread(dropDir, { to: 'lead', root, session: 'acme' }, home);
     expect(unread).toHaveLength(1);
     expect(unread[0]?.from).toBe('owner');
-    expect(unread[0]?.sender_attribution).toBe('attributed');
+    expect(unread[0]?.sender_attribution).toBe('unverified_claim');
 
     const read = readMessage({ dropDir, root, seat: 'lead', session: 'acme' }, FORGED_ID, home);
     expect(read.ok).toBe(true);
