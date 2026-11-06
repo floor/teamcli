@@ -773,9 +773,18 @@ describe('team send: --list', () => {
   test("with no projects source injected, the registry the host's home holds places the team", async () => {
     const { root, sockets } = world();
     const io = owner(root);
-    // Written through the registry's own writer, under the home the host carries: the reading that
-    // finds it is the one bound to that home, not to wherever the process runs.
-    upsertProject(join(base, 'home'), '4f2a1b7c9d0e', { name: 'TeamCLI', entity: 'floor', lead: 'agt_2b9f', teams: [teamIdOf(root)] });
+    // Written through the registry's own writers, under the home the host carries: the reading that
+    // finds it is the one bound to that home, not to wherever the process runs. Membership is the
+    // team record's own, so the join is written there; the project side keeps no team list.
+    const home = join(base, 'home');
+    upsertProject(home, '4f2a1b7c9d0e', { name: 'TeamCLI', entity: 'floor', lead: 'agt_2b9f' });
+    upsertTeam(home, teamIdOf(root), {
+      project: 'acme',
+      session: 'acme',
+      root,
+      projectId: '4f2a1b7c9d0e',
+      projects: ['4f2a1b7c9d0e'],
+    });
 
     const code = await runSend(['--list'], io, fake(sockets));
 
