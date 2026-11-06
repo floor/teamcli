@@ -6,6 +6,7 @@ import {
   assignmentProblems,
   assignmentWeights,
   plan,
+  readTimings,
   shardPlan,
   shardUnits,
   timingsFromLog,
@@ -173,6 +174,10 @@ const JUNIT = `<?xml version="1.0" encoding="UTF-8"?>
 test('a JUnit report gives each file its suite time, and a label the sum for a split part', () => {
   expect(unitTimesFromJunit(JUNIT)).toEqual({ 'test/a.test.ts': 1234, 'test/b.test.ts': 500 });
   expect(unitTimesFromJunit(JUNIT, 'test/exit-codes.test.ts#0/4')).toEqual({ 'test/exit-codes.test.ts#0/4': 1734 });
+  const subMs = `<testsuite name="test/fast.test.ts" time="0.000100"></testsuite>`;
+  expect(unitTimesFromJunit(subMs)).toEqual({ 'test/fast.test.ts': 1 });
+  expect(weights(['test/fast.test.ts'], { 'test/fast.test.ts': 0 }, () => 100).get('test/fast.test.ts')).toBe(1);
+  expect(Object.entries(readTimings()).filter(([, ms]) => ms < 1)).toEqual([]);
 });
 
 const FULL_FILES = [
