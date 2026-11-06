@@ -877,7 +877,7 @@ describe('team drops --read caller placement', () => {
     placeLead(LEAD_PANE);
     plantRecord(home, root, 'acme', 'lead', D_RECORD, 'hello from the launch');
     const result = await runPlaced(READ, hookSources());
-    expect(result).toEqual({ code: 0, out: 'hello from the launch\n', err: '' });
+    expect(result).toEqual({ code: 0, out: 'from lead (team lead):\n\nhello from the launch\n', err: '' });
     expectReceipt(D_RECORD);
   });
 

@@ -259,7 +259,9 @@ describe('the delivery', () => {
     const io = testIo(root, { kind: 'seat', name: 'lead', pane: 'pane-reader', session: 'acme' });
     const code = await runDrops(['--read', '--seat', 'lead'], io, { home });
     expect(code).toBe(0);
-    expect(io.out).toBe(`${generalBriefBody()}\n`);
+    // The stored record keeps the admitted-by line. The seat's read shows the compact header,
+    // the same substitution the attributed-reader scene already expects, plus the command's newline.
+    expect(io.out).toBe(`${generalBriefBody().replace(/^from the launch — admitted by: [^\n]+/, 'from the launch (launch brief):')}\n`);
     const context = { to: 'lead', root, session: 'acme' };
     expect(receiptHeld(dropDir('lead'), claim.id, context, home)).toBe(true);
     const receipt = signedReceiptOf(JSON.parse(readFileSync(receiptFile(dropDir('lead'), claim.id, 'read'), 'utf8')));
