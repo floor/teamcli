@@ -172,11 +172,33 @@ export function capRejected(root: string, cap = STATUS_REJECTED_CAP): number {
   for (const name of names.slice(0, overflow)) {
     try { unlinkSync(join(rejected, name)); } catch { /* already gone */ }
   }
+  return noteRejectedDropped(root, overflow);
+}
+
+function noteRejectedDropped(root: string, count: number): number {
   const prior = readRejectedDropped(root);
-  if (overflow === 0 || prior === null) return prior ?? 0;
-  const dropped = prior + overflow;
+  if (prior === null) return 0;
+  if (count <= 0) return prior;
+  const dropped = prior + count;
   try { atomicJson(rejectedDroppedPath(root), { dropped }); } catch { /* the files are already gone */ }
   return dropped;
+}
+
+function isReceiptName(name: string): boolean {
+  return name.endsWith('.json') && PRESENCE_ID.test(name.slice(0, -5));
+}
+
+/** Removes spool names that are not receipt ids and counts them. They are never read, and they
+ *  sit outside the receipt cap, so a flood of them cannot grow the directory. */
+export function sweepNonId(root: string, directory: string): number {
+  let names: string[] = [];
+  try { names = readdirSync(directory); } catch { return readRejectedDropped(root) ?? 0; }
+  let removed = 0;
+  for (const name of names) {
+    if (isReceiptName(name)) continue;
+    try { unlinkSync(join(directory, name)); removed += 1; } catch { /* already gone */ }
+  }
+  return noteRejectedDropped(root, removed);
 }
 
 /** Created only in the existing --presence branch; driven by its existing pass, with no timer. */
@@ -288,8 +310,9 @@ export function createNativeFeed(input: {
               atomicJson(cursorPath, cursor);
             }
           }
+          sweepNonId(one.root, one.spool);
           let names: string[];
-          try { names = readdirSync(one.spool).filter((name) => PRESENCE_ID.test(name.slice(0, -5)) && name.endsWith('.json')).sort().slice(0, 64); }
+          try { names = readdirSync(one.spool).filter((name) => isReceiptName(name)).sort().slice(0, 64); }
           catch { continue; }
           for (const name of names) {
             const path = join(one.spool, name);

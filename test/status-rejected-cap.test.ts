@@ -3,7 +3,7 @@ import { expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { capRejected, STATUS_REJECTED_CAP } from '../src/daemon/presence/native-feed.ts';
+import { capRejected, STATUS_REJECTED_CAP, sweepNonId } from '../src/daemon/presence/native-feed.ts';
 
 test('a rejected stream past the cap keeps the bound and counts the rest', () => {
   const root = mkdtempSync(join(tmpdir(), 'status-rejected-'));
@@ -21,6 +21,21 @@ test('a rejected stream past the cap keeps the bound and counts the rest', () =>
     writeFileSync(join(dir, 'file-9999.json'), '{}\n');
     expect(capRejected(root)).toBe(extra + 1);
     expect(readdirSync(dir)).toHaveLength(STATUS_REJECTED_CAP);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a flood of non-id names is swept and counted', () => {
+  const root = mkdtempSync(join(tmpdir(), 'status-rejected-'));
+  try {
+    const spool = join(root, 'spool');
+    mkdirSync(spool, { mode: 0o700 });
+    const id = '2026-11-06T19:00:00.000Z-abcdef12.json';
+    writeFileSync(join(spool, id), '{}\n');
+    for (let i = 0; i < 70; i += 1) writeFileSync(join(spool, `junk-${String(i)}`), 'x\n');
+    expect(sweepNonId(root, spool)).toBe(70);
+    expect(readdirSync(spool)).toEqual([id]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
