@@ -27,8 +27,9 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, tes
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import * as realHerdr from '../src/herdr.ts';
+import { sidebarPolicy } from '../src/settings/sidebar-policy.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 
 const SESSION = 'acme-restore-check';
@@ -280,11 +281,19 @@ beforeAll(() => {
   });
 });
 
+let savedConfigHome: string | undefined;
+
 beforeEach(() => {
   seq += 1;
   home = join(base, `home-${seq}`);
   lobby = join(home, '.config', 'team', 'lobby');
   mkdirSync(home, { recursive: true });
+  savedConfigHome = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = join(home, '.config');
+  const layout = sidebarPolicy({ home, root, team: null, now: NOW });
+  const configPath = realHerdr.hostConfigPath(home);
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, `${realHerdr.renderSidebarTomlBlock(layout.rows, layout.indicators)}\n`);
   writeFileSync(join(dir, 'team.yaml'), teamYaml());
   updateState(dir, (state) => {
     state.sessions = {};
@@ -292,6 +301,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (savedConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = savedConfigHome;
   realHerdr.setHerdrRun(null);
   realHerdr.setPaneExec(null);
   fakeSessionRunning = true;
