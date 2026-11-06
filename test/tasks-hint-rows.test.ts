@@ -71,7 +71,7 @@ function musePlain(text: string): string {
   return MUSE_PLAIN.replace('❯ /goal pins a session objective with a progress bar', `❯ ${text}`);
 }
 
-test('a plain Muse tasks hint is the empty box, and the same words with more text are a draft', () => {
+test('a plain Muse tasks hint is the empty box, while the same words in an undeclared colour or with more text are a draft', () => {
   expect(readScreen('muse', MUSE_PLAIN).kind).toBe('idle');
   for (const hint of [OPEN, WORKFLOWS]) {
     const exact = musePlain(hint);
@@ -87,7 +87,9 @@ test('a plain Muse tasks hint is the empty box, and the same words with more tex
   const colored = MUSE_DIM
     .replace('/goal pins a session objective with a progress bar', OPEN)
     .replace('\u001b[2m', '\u001b[38;5;245m');
-  expect(readScreen('muse', colored).kind).toBe('idle');
+  expect(readScreen('muse', colored).kind).toBe('unsent');
+  expect(readBox('muse', colored)?.first).toBe(OPEN);
+  expect(boxHoldsText('muse', OPEN, colored)).toBe(true);
   const mixed = MUSE_DIM
     .replace('/goal pins a session objective with a progress bar', `/tasks shows\u001b[39m your open tasks`)
     .replace('\u001b[2m', '\u001b[38;5;245m');

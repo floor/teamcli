@@ -237,7 +237,7 @@ describe('exact /tasks hint rows plus extra words and /tasks shows the queue sta
     }
   });
 
-  test('Muse keeps every hint-plus-extra-words row, /tasks shows the queue, and two-colour hint words as unsent while one-colour hint words read idle', async () => {
+  test('Muse keeps every hint-plus-extra-words row, /tasks shows the queue, and one-colour and two-colour undeclared hint words as unsent', async () => {
     for (const draft of nonPlaceholderRows) {
       const screen = museBox(draft);
       expect(readScreen('muse', screen)).toEqual({ kind: 'unsent' });
@@ -273,12 +273,13 @@ describe('exact /tasks hint rows plus extra words and /tasks shows the queue sta
       expect(secondReadPane.reads).toBe(2);
     }
 
-    // Exact hint words drawn in one non-bold colour in Muse read as an idle placeholder, while the
-    // same words split across two colours stay unsent text and are never typed over.
+    // Exact hint words drawn in an undeclared colour in Muse stay unsent text and are never typed
+    // over, whether the words are one colour or split across two; only faint text or the declared
+    // grey is the empty box.
     for (const hint of [OPEN_HINT, WORKFLOWS_HINT]) {
       const oneColour = museDimBox(hint).replace('\u001b[2m', '\u001b[38;5;245m');
-      expect(readScreen('muse', oneColour)).toEqual({ kind: 'idle' });
-      expect(boxHoldsText('muse', hint, oneColour)).toBe(false);
+      expect(readScreen('muse', oneColour)).toEqual({ kind: 'unsent' });
+      expect(boxHoldsText('muse', hint, oneColour)).toBe(true);
 
       const splitHint = hint.replace('/tasks shows ', '/tasks shows\u001b[39m ');
       const twoColour = museDimBox(splitHint).replace('\u001b[2m', '\u001b[38;5;245m');

@@ -218,8 +218,8 @@ function startHookServer(answer: (hit: HookHit) => Response = () => new Response
   return state;
 }
 
-describe('1. busy Muse seat going idle with grey /goal placeholder wakes within the unread window', () => {
-  test('wakeUnreadDrops skips while Muse seat is working, then drives deliverTypedWake when idle with grey /goal placeholder', async () => {
+describe('1. busy Muse seat going idle with a declared-grey /goal placeholder wakes within the unread window', () => {
+  test('wakeUnreadDrops skips while Muse seat is working, then drives deliverTypedWake when idle with a declared-grey /goal placeholder', async () => {
     const { made, team } = makeWorld();
     const dropDir = seedUnreadDrop(
       made,
@@ -230,7 +230,7 @@ describe('1. busy Muse seat going idle with grey /goal placeholder wakes within 
     );
     seedSendHistory(made, 'helper', MSG_A, { via: 'typed' });
 
-    const greyGoalIdle = museHolding(`\x1b[90m${GOAL_PLACEHOLDER}\x1b[0m`);
+    const greyGoalIdle = museHolding(`\x1b[38;2;103;108;116m${GOAL_PLACEHOLDER}\x1b[0m`);
     let seatBusy = true;
 
     const fake = makeFakeWakeHost((_readIdx, enters, typed) => {
@@ -273,7 +273,7 @@ describe('1. busy Muse seat going idle with grey /goal placeholder wakes within 
     expect(wakeMarkerOf(made, 'helper', MSG_A)).toBeNull();
     expect(existsSync(wakeTryPath(dropDir, MSG_A))).toBe(false);
 
-    // Pass 2: Seat finishes its turn and goes idle with the grey `/goal` placeholder.
+    // Pass 2: Seat finishes its turn and goes idle with the declared-grey `/goal` placeholder.
     seatBusy = false;
     await wakeUnreadDrops(
       {
@@ -327,17 +327,25 @@ describe('1. busy Muse seat going idle with grey /goal placeholder wakes within 
     expect(fake.enters).toBe(1);
   });
 
-  test('256-colour (38;5;244) and truecolor (38;2;103;108;116) grey Muse listed placeholders also read idle and wake', async () => {
-    const palettes = [
-      `\x1b[90m${GOAL_PLACEHOLDER}\x1b[0m`,
-      `\x1b[38;5;244m${GOAL_PLACEHOLDER}\x1b[0m`,
-      `\x1b[38;2;103;108;116m${GOAL_PLACEHOLDER}\x1b[39m`,
-      '\x1b[90m/tasks shows your open tasks\x1b[0m',
-      '\x1b[38;5;244m/tasks shows workflows, subagents and terminals in one place\x1b[0m',
-      '\x1b[38;2;103;108;116mTab queues or steers while a run is active\x1b[0m',
+  test('the declared truecolor grey Muse listed placeholders read idle and wake, while undeclared greys stay text and are refused', async () => {
+    const declared = [
+      { styled: `\x1b[38;2;103;108;116m${GOAL_PLACEHOLDER}\x1b[39m`, text: GOAL_PLACEHOLDER },
+      {
+        styled: '\x1b[38;2;103;108;116mTab queues or steers while a run is active\x1b[0m',
+        text: 'Tab queues or steers while a run is active',
+      },
+    ];
+    const undeclared = [
+      { styled: `\x1b[90m${GOAL_PLACEHOLDER}\x1b[0m`, text: GOAL_PLACEHOLDER },
+      { styled: `\x1b[38;5;244m${GOAL_PLACEHOLDER}\x1b[0m`, text: GOAL_PLACEHOLDER },
+      { styled: '\x1b[90m/tasks shows your open tasks\x1b[0m', text: '/tasks shows your open tasks' },
+      {
+        styled: '\x1b[38;5;244m/tasks shows workflows, subagents and terminals in one place\x1b[0m',
+        text: '/tasks shows workflows, subagents and terminals in one place',
+      },
     ];
 
-    for (const styled of palettes) {
+    for (const { styled } of declared) {
       const frame = museHolding(styled);
       expect(readScreen('muse', frame).kind).toBe('idle');
       expect(classifyComposer('muse', frame.split('\n')).kind).toBe('idle');
@@ -359,6 +367,30 @@ describe('1. busy Muse seat going idle with grey /goal placeholder wakes within 
       expect(res.typed).toBe(true);
       expect(fake.typed).toEqual(['Read /t/mail/msg-01 and act on it.']);
       expect(fake.enters).toBe(1);
+    }
+
+    for (const { styled, text } of undeclared) {
+      const frame = museHolding(styled);
+      expect(readScreen('muse', frame).kind).toBe('unsent');
+      expect(classifyComposer('muse', frame.split('\n')).kind).toBe('unsent');
+      expect(boxHoldsText('muse', text, frame)).toBe(true);
+
+      const fake = makeFakeWakeHost(() => frame);
+      const res = await deliverTypedWake(
+        fake.host,
+        'pane-muse',
+        'Read /t/mail/msg-01 and act on it.',
+        'muse',
+        FAST,
+      );
+      expect(res).toEqual({
+        delivered: false,
+        typed: false,
+        tries: 0,
+        reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed',
+      });
+      expect(fake.typed).toEqual([]);
+      expect(fake.enters).toBe(0);
     }
   });
 });
