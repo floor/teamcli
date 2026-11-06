@@ -433,8 +433,12 @@ screen:
     # Explicit subscription labels from the configurable quota status line; context percentages
     # and transcript text are not quota. The constructed fixture documents this format.
     status: '\b[LW]: [0-9]+% \((?:[0-9hm]+|[+\-±][0-9.]+%\))'
+    # The quota row names the model. The four subscription names are the frames captured
+    # through 2.1.302. A 2.1.319 frame from the Kimi launcher writes `k3-256k` in that
+    # cell. Without it, a box whose opening rule has scrolled off the window is not a box
+    # the reader can recognise.
     footers:
-      - '^\s{2,}.*·.*(?:Opus|Sonnet|Haiku|Fable)\s+[0-9]+.*$'
+      - '^\s{2,}.*·.*(?:(?:Opus|Sonnet|Haiku|Fable)\s+[0-9]+|k[0-9]+-[0-9]+k).*$'
       - '^\s{2,}(?:(?:⏵⏵\s+)?bypass permissions|⏸\s+manual mode)\b.*$'
     # Claude Code greys every suggestion it shows — "Try …", "Resume briefly.", any other —
     # with faint styling, while typed text carries none. The list below stays the fallback

@@ -1,7 +1,7 @@
 // The screen core. Stage order, dialog primitives, the four composer modes and the
 // safety floor live here, never in a profile. A profile is data: it can add a
 // pattern, and it cannot move a stage or turn the floor off.
-import { allDimAfter, colourAfter, hasSgr, stripSgr } from '../ansi.ts';
+import { allDimAfter, colourAfter, dropPlainTail, hasSgr, stripSgr } from '../ansi.ts';
 import type { Reset, Screen } from './screen.ts';
 import type { BlockStep, LinePattern, Rule, ScreenData, TextSpec, Wrap } from './screen-data.ts';
 
@@ -1515,7 +1515,7 @@ function stripTyped(line: string, composer: { prompt: RegExp; stripSuffix?: RegE
 // draft that starts with `/` stays text on that plain read.
 function placeholder(
   typed: string,
-  composer: { prompt: RegExp; placeholders: ScreenData['composer']['placeholders']; placeholderStyle?: ScreenData['composer']['placeholderStyle']; placeholderFg?: string[] },
+  composer: { prompt: RegExp; placeholders: ScreenData['composer']['placeholders']; placeholderStyle?: ScreenData['composer']['placeholderStyle']; placeholderFg?: string[]; stripSuffix?: RegExp | null },
   plainLine: string,
   styledLine: string | undefined,
 ): boolean {
@@ -1523,16 +1523,27 @@ function placeholder(
   if (composer.placeholderStyle === 'dim' && styledLine !== undefined && hasSgr(styledLine)) {
     const hit = composer.prompt.exec(plainLine);
     const skip = hit === null ? 0 : plainLine.slice(0, hit.index + hit[0].length).replace(/\s/g, '').length;
+    // The frame's own closing edge is not text. The same suffix the plain read drops is left
+    // out of the faint and colour checks, so a border drawn in the frame's colour does not
+    // turn an empty box, or a faint hint inside it, into a draft.
+    const judged = withoutFrameSuffix(styledLine, plainLine, composer.stripSuffix);
     // A declared hint foreground: the empty box when the row's text past the prompt is exactly
     // one of the colours the capture showed. An undeclared colour is text, as it always was.
     if (composer.placeholderFg !== undefined) {
-      const colour = colourAfter(styledLine, skip);
+      const colour = colourAfter(judged, skip);
       if (colour !== null && composer.placeholderFg.includes(colour)) return true;
     }
-    if (!allDimAfter(styledLine, skip)) return false;
+    if (!allDimAfter(judged, skip)) return false;
     return true;
   }
   return listed;
+}
+
+function withoutFrameSuffix(styled: string, plain: string, suffix: RegExp | null | undefined): string {
+  if (suffix === null || suffix === undefined) return styled;
+  const matched = plain.match(suffix);
+  if (matched === null || matched.index === undefined || matched.index + matched[0].length !== plain.length) return styled;
+  return dropPlainTail(styled, plain.length - matched.index);
 }
 
 // Rows under the input row that hold only a greyed suggestion: a suggestion longer than the box is

@@ -229,6 +229,10 @@ screen:
     # column only. The empty box reads `  │ ❯` + padding + the edge, whose trimmed remainder is
     # the edge alone — the placeholder.
     strip_suffix: '\s*│$'
+    # A faint row in the box is the empty box's hint. Typed text carries no faint
+    # attribute, so a draft stays text. A plain read has no styling: the equals list
+    # below is the only fallback, and an unlisted sentence on that read stays a draft.
+    placeholder_style: dim
     # The status row under the closing rule, from the same 1.0.60 run as the quota block above:
     # the footer's quota cell `Weekly limit left: 0% · `, painted under the rule in a session.
     # The grammar pins the row by its own words; the read takes the last row under the rule that

@@ -10,6 +10,8 @@ import { readScreen } from '../src/watch/screen.ts';
 
 const claude = (name: string): string => readFileSync(new URL(`./fixtures/claude-code/2.1.289/${name}.txt`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const exitTyping = (name: string): string => readFileSync(new URL(`./fixtures/exit-typing/${name}.txt`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const grokIdle = (): string => readFileSync(new URL('./fixtures/grok/1.0.50/idle-ansi.txt', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const kimiIdle = (): string => readFileSync(new URL('./fixtures/claude-code/2.1.319/idle.txt', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 const ESC = '\x1b';
 const FAINT = `${ESC}[0m${ESC}[2m`;
@@ -91,6 +93,35 @@ describe('a faint suggestion is an empty box', () => {
     expect(other).not.toBe(idle);
     expect(readScreen('cursor', other).kind).toBe('idle');
     expect(boxHoldsText('cursor', 'Rules.', other)).toBe(false);
+  });
+
+  test('Grok: a faint hint in the empty box is idle, and the same words without faint are a draft', () => {
+    const idle = grokIdle();
+    expect(readScreen('grok', idle).kind).toBe('idle');
+    const at = idle.indexOf('\u276f ');
+    expect(at).toBeGreaterThan(0);
+    // The faint bytes are the suggestion's own attribute, set where the empty box's padding starts.
+    const hint = idle.slice(0, at + 2) + `${FAINT}Build anything${RESET}` + idle.slice(at + 2);
+    expect(hint).not.toBe(idle);
+    expect(readScreen('grok', hint).kind).toBe('idle');
+    expect(boxHoldsText('grok', 'Rules.', hint)).toBe(false);
+    const draft = idle.slice(0, at + 2) + 'Build anything' + idle.slice(at + 2);
+    expect(readScreen('grok', draft).kind).toBe('unsent');
+    expect(readScreen('grok', stripSgr(hint)).kind).toBe('unsent');
+  });
+
+  test('Claude Code: the captured Kimi hint is idle, including once its opening rule has scrolled off', () => {
+    const idle = kimiIdle();
+    expect(readScreen('claude-code', idle).kind).toBe('idle');
+    const rows = idle.split('\n');
+    const input = rows.findIndex((row) => row.startsWith('\u276f'));
+    const close = rows.findIndex((row, index) => index > input && /^[─]+$/.test(row));
+    const scrolled = [rows[input] ?? '', rows[close] ?? '', ...rows.slice(close + 1).filter((row) => row.trim())].join('\n');
+    expect(scrolled).not.toBe(idle);
+    expect(readScreen('claude-code', scrolled).kind).toBe('idle');
+    const typed = (rows[input] ?? '').replace('Try "how do I log an error?"', 'Fix the failing test');
+    rows[input] = typed;
+    expect(readScreen('claude-code', rows.join('\n')).kind).toBe('unsent');
   });
 
   test('Cursor: text under the cursor cell is text', () => {
