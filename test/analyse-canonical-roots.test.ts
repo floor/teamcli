@@ -15,7 +15,7 @@ import type { YamlValue } from '../src/yaml.ts';
 const made: string[] = [];
 const SENTINEL = 'CANONICAL_PRIVATE_SENTINEL';
 afterEach(() => {
-  for (const path of made.splice(0)) childProcess.execFileSync('trash', [path]);
+  for (const path of made.splice(0)) fs.rmSync(path, { recursive: true, force: true });
 });
 
 function world() {
