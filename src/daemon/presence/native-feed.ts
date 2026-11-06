@@ -1,6 +1,6 @@
 // Default-off native feed. Production has no trusted turn/lane/gate registration yet:
 // adapters may refuse, but no payload can enroll itself. Every emitted gate is unknown.
-import { constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, opendirSync, readSync, readdirSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { userInfo } from 'node:os';
@@ -144,6 +144,7 @@ export type NativeFeed = { step(): void; codexFrame(identity: Identity, text: st
 /** The rejected set-aside keeps as many files as one spool pass reads. */
 export const STATUS_REJECTED_CAP = 64;
 const STATUS_SPOOL_SWEEP_CAP = 1_024;
+const spoolSweepResume = new Map<string, string>();
 
 function rejectedDroppedPath(root: string): string {
   return join(root, 'status-rejected-dropped.json');
@@ -189,27 +190,44 @@ function isReceiptName(name: string): boolean {
   return name.endsWith('.json') && PRESENCE_ID.test(name.slice(0, -5));
 }
 
-/** Examines at most 1,024 spool names per pass, removing non-id files, links and empty
- *  directories. No payload is read and no directory is followed or recursively removed. */
+/** Sweeps at most 1,024 names from a sorted directory snapshot per pass. The in-memory
+ *  last-name cursor resumes after removed names too, and wraps so persistent entries cannot
+ *  starve later junk. Listing/sorting still scales with the directory size. No payload is read
+ *  and no directory is followed or recursively removed. */
 export function sweepNonId(root: string, directory: string): number {
+  let names: string[];
+  try { names = readdirSync(directory).sort(); }
+  catch { spoolSweepResume.delete(directory); return readRejectedDropped(root) ?? 0; }
+  if (names.length === 0) {
+    spoolSweepResume.delete(directory);
+    return readRejectedDropped(root) ?? 0;
+  }
+  const last = spoolSweepResume.get(directory);
+  let start = 0;
+  if (last !== undefined) {
+    // Upper bound, rather than indexOf: the last examined name may have been removed.
+    let low = 0;
+    let high = names.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (names[middle]! <= last) low = middle + 1;
+      else high = middle;
+    }
+    start = low === names.length ? 0 : low;
+  }
   let removed = 0;
-  try {
-    const names = opendirSync(directory);
-    try {
-      for (let scanned = 0; scanned < STATUS_SPOOL_SWEEP_CAP; scanned += 1) {
-        const entry = names.readSync();
-        if (entry === null) break;
-        if (isReceiptName(entry.name)) continue;
-        const path = join(directory, entry.name);
-        try { unlinkSync(path); removed += 1; }
-        catch (error) {
-          const code = (error as NodeJS.ErrnoException).code;
-          if (code !== 'EISDIR' && code !== 'EPERM') continue;
-          try { rmdirSync(path); removed += 1; } catch { /* non-empty or already gone */ }
-        }
-      }
-    } finally { names.closeSync(); }
-  } catch { /* absent or unreadable; keep the count of names already removed */ }
+  for (let scanned = 0; scanned < Math.min(STATUS_SPOOL_SWEEP_CAP, names.length); scanned += 1) {
+    const name = names[(start + scanned) % names.length]!;
+    spoolSweepResume.set(directory, name);
+    if (isReceiptName(name)) continue;
+    const path = join(directory, name);
+    try { unlinkSync(path); removed += 1; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'EISDIR' && code !== 'EPERM') continue;
+      try { rmdirSync(path); removed += 1; } catch { /* non-empty or already gone */ }
+    }
+  }
   return noteRejectedDropped(root, removed);
 }
 
@@ -283,7 +301,12 @@ export function createNativeFeed(input: {
         // Remove predecessors before writing a marker for this pass's managed launch.
         removeMarker(seat);
         const identity = current(seat);
-        if (identity === null) { owned.delete(seat); candidates.delete(seat); continue; }
+        if (identity === null) {
+          owned.delete(seat); candidates.delete(seat);
+          const stale = paths({ ...input, seat });
+          if (stale !== null) spoolSweepResume.delete(stale.spool);
+          continue;
+        }
         candidateOf(identity);
         const one = paths(identity);
         const held = launch(identity);
@@ -349,6 +372,10 @@ export function createNativeFeed(input: {
     close() {
       closed = true;
       for (const seat of owned.keys()) removeMarker(seat, true);
+      for (const seat of input.seats) {
+        const one = paths({ ...input, seat });
+        if (one !== null) spoolSweepResume.delete(one.spool);
+      }
       owned.clear();
       candidates.clear();
     },

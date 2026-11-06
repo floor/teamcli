@@ -108,11 +108,15 @@ test('persistent directories do not starve junk behind the per-pass budget', () 
     }
     expect(readdirSync(spool).slice(0, 1_024).every(name => persistent.has(name))).toBe(true);
     let removed = 0;
-    for (let pass = 0; pass < 4; pass += 1) removed = sweepNonId(root, spool);
+    for (let pass = 0; pass < Math.ceil(names.length / 1_024); pass += 1) removed = sweepNonId(root, spool);
     expect(removed).toBe(junk.length);
     expect(junk.every(name => !existsSync(join(spool, name)))).toBe(true);
     expect(readdirSync(spool)).toHaveLength(1_100);
     expect(readFileSync(join(spool, names[0]!, 'inside'), 'utf8')).toBe('keep inside\n');
+    writeFileSync(join(spool, '000-wrap-junk'), 'junk before the cursor\n');
+    for (let pass = 0; pass < Math.ceil((persistent.size + 1) / 1_024); pass += 1) removed = sweepNonId(root, spool);
+    expect(removed).toBe(junk.length + 1);
+    expect(existsSync(join(spool, '000-wrap-junk'))).toBe(false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
