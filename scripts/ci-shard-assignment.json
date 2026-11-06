@@ -1051,6 +1051,7 @@
     "test/status-live-async.test.ts": 2,
     "test/status-permission-boundaries.test.ts": 0,
     "test/status-plain.test.ts": 3,
+    "test/status-probe-plan.test.ts": 0,
     "test/status-reach.test.ts": 1,
     "test/status-readonly.test.ts": 2,
     "test/status-reporter-compatibility.test.ts": 0,
