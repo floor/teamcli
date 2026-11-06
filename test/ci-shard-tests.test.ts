@@ -152,3 +152,20 @@ test('a JUnit report gives each file its suite time, and a label the sum for a s
   expect(unitTimesFromJunit(JUNIT)).toEqual({ 'test/a.test.ts': 1234, 'test/b.test.ts': 500 });
   expect(unitTimesFromJunit(JUNIT, 'test/exit-codes.test.ts#0/4')).toEqual({ 'test/exit-codes.test.ts#0/4': 1734 });
 });
+
+const NESTED_JUNIT = `<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="bun test" tests="1" time="1.5">
+  <testsuite name="test/live-delivery-rebind-independent.test.ts" file="test/live-delivery-rebind-independent.test.ts" tests="1" time="1.5">
+    <testcase name="a scene" time="1.5" file="test/live-delivery-rebind-independent.test.ts" />
+  </testsuite>
+  <testsuite name="live-delivery-rebind independent scenes" file="test/live-delivery-rebind-independent.test.ts" tests="1" time="1.5" />
+</testsuites>`;
+
+test('a nested describe suite is not a second unit and does not add its time again', () => {
+  expect(unitTimesFromJunit(NESTED_JUNIT)).toEqual({ 'test/live-delivery-rebind-independent.test.ts': 1500 });
+  expect(unitTimesFromJunit(NESTED_JUNIT, 'test/live-delivery-rebind-independent.test.ts#0/1')).toEqual({
+    'test/live-delivery-rebind-independent.test.ts#0/1': 1500,
+  });
+  const unnamed = `<testsuite name="not a unit path" time="1.0"></testsuite>`;
+  expect(unitTimesFromJunit(unnamed)).toEqual({ 'not a unit path': 1000 });
+});

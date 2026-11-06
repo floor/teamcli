@@ -260,18 +260,49 @@ export function timingsFromLog(log: string): Record<string, number> {
   return Object.fromEntries(Object.entries({ ...out, ...direct }).sort(([a], [b]) => (a < b ? -1 : 1)));
 }
 
-/** A unit's measured time in a JUnit report: each `<testsuite>` names its file and its seconds. */
+/** A unit path: a test file, or one split part of a file. */
+const UNIT_PATH = /^test\/\S+?\.(?:test|spec)\.ts(?:#\d+\/\d+)?$/;
+
+/**
+ * A unit's measured time in a JUnit report. Bun nests a suite per top-level describe under the
+ * file suite, and both carry the file. The file suite is the unit. A later suite for a file
+ * already counted is the describe, and its time is already inside the file suite, so it is not
+ * added again. A suite whose name is not a unit path and whose file attribute is not one either
+ * stays under that name, and the caller refuses it.
+ */
 export function unitTimesFromJunit(xml: string, label?: string): Record<string, number> {
   const times: Record<string, number> = {};
+  const covered = new Set<string>();
   let sum = 0;
+  const rows: { name: string; file?: string; ms: number }[] = [];
   for (const m of xml.matchAll(/<testsuite\s[^>]*>/g)) {
     const tag = m[0];
     const name = /\bname="([^"]+)"/.exec(tag)?.[1];
+    const file = /\bfile="([^"]+)"/.exec(tag)?.[1];
     const seconds = /\btime="([0-9.]+)"/.exec(tag)?.[1];
     if (name === undefined || seconds === undefined) continue;
-    const ms = Math.round(Number(seconds) * 1000);
-    if (label === undefined) times[name] = (times[name] ?? 0) + ms;
+    rows.push({ name, ...(file === undefined ? {} : { file }), ms: Math.round(Number(seconds) * 1000) });
+  }
+  const add = (unit: string, ms: number): void => {
+    if (label === undefined) times[unit] = (times[unit] ?? 0) + ms;
     else sum += ms;
+  };
+  for (const row of rows) {
+    if (!UNIT_PATH.test(row.name)) continue;
+    covered.add(row.name);
+    if (row.file !== undefined) covered.add(row.file);
+    add(row.name, row.ms);
+  }
+  for (const row of rows) {
+    if (UNIT_PATH.test(row.name)) continue;
+    const file = row.file !== undefined && UNIT_PATH.test(row.file) ? row.file : null;
+    if (file !== null) {
+      if (covered.has(file)) continue;
+      covered.add(file);
+      add(file, row.ms);
+      continue;
+    }
+    add(row.name, row.ms);
   }
   if (label !== undefined) times[label] = sum;
   return times;
@@ -326,7 +357,7 @@ if (import.meta.main) {
     const label = get('--label');
     const times = unitTimesFromJunit(readFileSync(path, 'utf8'), label);
     for (const [unit, ms] of Object.entries(times)) {
-      if (!/^test\/\S+?\.(?:test|spec)\.ts(?:#\d+\/\d+)?$/.test(unit)) {
+      if (!UNIT_PATH.test(unit)) {
         console.error(`ci:shard: --junit read '${unit}', which is not a unit path`);
         process.exit(1);
       }
