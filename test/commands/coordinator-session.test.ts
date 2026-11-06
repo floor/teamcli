@@ -1302,7 +1302,7 @@ function launching(): Launch {
   let n = 0;
   let running = false;
   const panes = new Map<string, { text: string; agent: boolean; cli: string; status: string }>();
-  return {
+  const launch: Launch = {
     sessionState: () => (running ? 'running' : 'absent'),
     startServer() {
       running = true;
@@ -1351,6 +1351,9 @@ function launching(): Launch {
     sleep: async () => {},
     now: () => new Date(0),
   };
+  // A rename the host accepts is listed back, which is what the launch reads before it calls the seat ready.
+  recordRenames(launch);
+  return launch;
 }
 
 type UpState = {
