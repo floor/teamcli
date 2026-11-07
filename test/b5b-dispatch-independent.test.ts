@@ -21,7 +21,7 @@ import {
   existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { approvalOf } from '../src/approve/approval.ts';
 import type { Caller } from '../src/caller.ts';
@@ -774,22 +774,26 @@ afterEach(() => {
 });
 
 function upTeam(leadCli: string, leadLaunch: string, reviewer: { cli: string; launch: string } | null = null): string {
+  const own = reviewer !== null && (reviewer.cli === 'cursor' || reviewer.cli === 'grok');
+  if (own) mkdirSync(join(dirname(upRoot), 'own-checker'), { recursive: true });
   const checker = reviewer === null ? '' : `  - role: reviewer
     name: checker
     cli: ${reviewer.cli}
     vendor: test
     model: Test
     version: "1"
-    launch: ${reviewer.launch}
+    launch: ${reviewer.launch}${own ? '\n    cwd: ../own-checker' : ''}
 `;
+  const trust = own
+    ? `  - .\n  - ../own-checker`
+    : `  - ${lobbyDir(upHome)}\n  - ${upRoot}`;
   return `format: 1
 project: acme
 coordinator: lead
 operator: lead
 session: acme
 trust:
-  - ${lobbyDir(upHome)}
-  - ${upRoot}
+${trust}
 workspace:
   mode: shared
 seats:

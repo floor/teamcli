@@ -9,7 +9,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import type { Caller } from '../src/caller.ts';
 import { runAdd, type AddSources } from '../src/commands/add.ts';
@@ -66,8 +66,27 @@ function scratch(prefix: string): { base: string; root: string; home: string } {
   return { base, root, home };
 }
 
+/** A folder label that does not spell a seat's name when that name reads like a person.
+ *  `helper` stays; the foreign cursor seat does not lend its name to the path. */
+function ownLabel(seat: string): string {
+  return seat === 'stranger' ? 'cursor' : seat;
+}
+
+/** A real sibling of the checkout. The seat's cwd is the relative path, and trust names that
+ *  same relative path: the loader matches trust in relative form. */
+function ownFolder(root: string, seat: string): string {
+  const dir = join(dirname(root), `own-${ownLabel(seat)}`);
+  mkdirSync(dir, { recursive: true });
+  return `../own-${ownLabel(seat)}`;
+}
+
 function withTrust(text: string, root: string): string {
   return text.replace('workspace:\n', `trust:\n  - ~/.config/team/lobby\n  - ${root}\nworkspace:\n`);
+}
+
+function withOwnTrust(text: string, seats: readonly string[]): string {
+  const lines = ['.', ...seats.map((seat) => `../own-${ownLabel(seat)}`)].map((entry) => `  - ${entry}`).join('\n');
+  return text.replace('workspace:\n', `trust:\n${lines}\nworkspace:\n`);
 }
 
 function rosterSeats(home: string, root: string): string[] {
@@ -168,6 +187,7 @@ function upSources(home: string, world: ReturnType<typeof cursorWorld>): UpSourc
 }
 
 function registryTeam(root: string, home: string, seats: readonly string[]): void {
+  const owned: string[] = [];
   const blocks = seats.map((name) => name === 'lead'
     ? `  - role: coordinator
     name: lead
@@ -178,15 +198,19 @@ function registryTeam(root: string, home: string, seats: readonly string[]): voi
     launch: claude
     human: true
 `
-    : `  - role: worker
+    : (() => {
+      owned.push(name);
+      return `  - role: worker
     name: ${name}
     cli: cursor
     vendor: test
     model: Gemini Argon
     version: "4"
     launch: cursor-agent --model gemini-4-argon-high
-`).join('');
-  const text = withTrust(`format: 1
+    cwd: ${ownFolder(root, name)}
+`;
+    })()).join('');
+  const text = withOwnTrust(`format: 1
 project: acme
 coordinator: ${seats[0]}
 operator: ${seats[0]}
@@ -194,7 +218,7 @@ session: acme
 workspace:
   mode: shared
 seats:
-${blocks}`, root);
+${blocks}`, owned);
   writeFileSync(join(root, '.agents', 'team.yaml'), text);
   intoRegistry(root, home);
   upsertTeam(home, teamIdOf(root), {
@@ -433,7 +457,7 @@ describe('declared-seat roster', () => {
 
   test('a team-file launch registers from the file, with no roster line ahead of the inbox', async () => {
     const { root, home } = scratch('file-launch-');
-    const text = withTrust(`format: 1
+    const text = withOwnTrust(`format: 1
 project: acme
 coordinator: lead
 operator: lead
@@ -456,7 +480,8 @@ seats:
     model: Gemini Argon
     version: "4"
     launch: cursor-agent --model gemini-4-argon-high
-`, root);
+    cwd: ${ownFolder(root, 'helper')}
+`, ['helper']);
     writeFileSync(join(root, '.agents', 'team.yaml'), text);
     const loaded = loadTeamFile(root, { home });
     if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
