@@ -35,6 +35,7 @@ import { eventThresholdsInForce, DAEMON_HEARTBEAT_SECONDS } from '../policy/inde
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { RestoreSweepResult } from '../launch/restore-sweep.ts';
 import { runRestoreSweepInChild } from './restore/spawn.ts';
+import { restoreLifecycleProblem } from '../launch/restore-lifecycle.ts';
 import { spawnWakeChild } from './wake/spawn.ts';
 import { pidAlive, readState, type State } from '../state.ts';
 import { probeDaemonSocket, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
@@ -276,7 +277,8 @@ export type StartMachineDaemonInput = {
    * shutdown machinery are wired, one guarded pass per canonical route repairs the seats its
    * recorded session lost. On by default, because a host restart is exactly when it is needed;
    * `false` turns it off, and a function replaces the runner for a test that must observe the
-   * schedule without launching. A route with no recorded seats, or whose session is not running,
+   * schedule without launching. Registered stopped, defined and archived teams are excluded.
+   * A route with no recorded seats, or whose session is not running,
    * is skipped, and the sweep never cold-starts a team.
    */
   restoreSweep?: boolean | ((root: string, teamFile: string | undefined) => Promise<RestoreSweepResult>);
@@ -2798,6 +2800,11 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         if (closed) return;
         const entry = routeTeams.get(route.root);
         if (entry === undefined) continue;
+        const lifecycleProblem = restoreLifecycleProblem(home, route.root, route.team);
+        if (lifecycleProblem !== null) {
+          logLine(`restore ${route.root}: ${lifecycleProblem}`);
+          continue;
+        }
         try {
           const result = await runner(route.root, entry.file);
           if (result.kind === 'ran') {
@@ -2863,6 +2870,11 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           if (closed || restoreAbort.signal.aborted) return;
           const entry = routeTeams.get(route.root);
           if (entry === undefined) continue;
+          const lifecycleProblem = restoreLifecycleProblem(home, route.root, route.team);
+          if (lifecycleProblem !== null) {
+            logLine(`restore ${route.root}: ${lifecycleProblem}`);
+            continue;
+          }
           try {
             const result = await runner(route.root, entry.file);
             if (result.kind === 'ran') {

@@ -40,6 +40,11 @@ If a stored root is unavailable, the lobby is tried too. A team whose lobby-only
 be resolved is named as `skipped team <name> (<session>): <reason>` by `status`,
 with the same details in `skippedTeams` in JSON. An unreadable registry is reported explicitly.
 
+Endpoint hosting does not make a stopped or defined team eligible for automatic seat restore.
+The startup scheduler and restore child check the registry lifecycle before any launch; the
+child checks again under the session run lock, and restore retries recheck it too. A different
+declared session does not bypass a stopped team's lifecycle.
+
 ## The subcommands
 
 `status` reads the daemon's state record, probes the machine socket and prints one line:

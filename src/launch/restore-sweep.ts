@@ -16,6 +16,7 @@ import { readState } from '../state.ts';
 import { realSources, runUp, type UpSources } from '../commands/up.ts';
 import { restoreSummaryOf, type Report, type RestoreSweepSummary } from './execute.ts';
 import { acquireRunLock } from './run-lock.ts';
+import { restoreLifecycleProblem } from './restore-lifecycle.ts';
 
 /** The ownership the sweep judged the route as, as the owner of the machine's daemon. The
  *  sweep's caller is the daemon's own, never a seat's: it launches no seat under a seat name. */
@@ -114,6 +115,8 @@ export async function runRestoreSweepForRoute(input: RestoreSweepInput): Promise
   const { team } = loaded;
   const session = team.session;
   const dir = dirname(loaded.path);
+  const lifecycleProblem = restoreLifecycleProblem(sources.home, loaded.root, team.project);
+  if (lifecycleProblem !== null) return { kind: 'refused', exit: 1, detail: lifecycleProblem };
   // The first read: a route with no recorded session is cold or deliberately downed, and the
   // sweep is never the command that brings it back. A state file that will not parse is a
   // refusal, not a reason to launch anything.
@@ -134,6 +137,8 @@ export async function runRestoreSweepForRoute(input: RestoreSweepInput): Promise
     }
     const state = stateOf(sources, session);
     if (state !== 'running') return { kind: 'not-running', state };
+    const currentProblem = restoreLifecycleProblem(sources.home, loaded.root, team.project);
+    if (currentProblem !== null) return { kind: 'refused', exit: 1, detail: currentProblem };
     // The run's own writers are captured, not printed: the daemon logs the one summary line, and
     // a refusal carries the run's last line into the same log. The injected caller is the owner
     // and the run is marked non-interactive, so no dialog is ever prompted from this process.
