@@ -53,6 +53,21 @@ function makeExample(basePath: string, rootPath: string, text: string = EXAMPLE)
   );
 }
 
+// Cursor writes its start folder. The seat gets a real sibling of the project, named as its
+// cwd, and the same relative trust entry. The loader matches that form.
+function cursorOwnFolder(text: string): string {
+  mkdirSync(join(base, 'own-cursor-acme'));
+  return text
+    .replace(
+      '    launch: cursor-agent\n    mode: shared\n',
+      '    launch: cursor-agent\n    mode: shared\n    cwd: ../own-cursor-acme\n',
+    )
+    .replace(
+      /trust:[\s\S]*?\nworkspace:/,
+      'trust:\n  - .\n  - ../worktrees/acme-web/*\n  - ../own-cursor-acme\n\nworkspace:',
+    );
+}
+
 beforeEach(() => {
   base = realpathSync(mkdtempSync(join(tmpdir(), 'team-live-')));
   root = join(base, 'acme-web');
@@ -4505,12 +4520,12 @@ describe('team up, the pause', () => {
       '    launch: cursor-agent',
       '    mode: shared',
     ].join('\n');
-    writeFileSync(path, makeExample(base, root, EXAMPLE
+    writeFileSync(path, cursorOwnFolder(makeExample(base, root, EXAMPLE
       .replace(
         '    count: 2                   # deepseek-acme, deepseek-acme-2\n',
         '    count: 2\n    stopped: true\n',
       )
-      .replace(/  - role: implementer\n    name: codex-acme[\s\S]*?stopped: true\n/, `${cursorSeat}\n`)));
+      .replace(/  - role: implementer\n    name: codex-acme[\s\S]*?stopped: true\n/, `${cursorSeat}\n`))));
     await approve();
     const home = readFileSync(join(import.meta.dir, '../fixtures/cursor/2026.10.01/idle.txt'), 'utf8');
     const footer = '  Grok 4.7 256K High                 Run Everything';
@@ -4608,9 +4623,10 @@ describe('team up, the pause', () => {
       return;
     }
     if (expectCase === 'unchecked') {
-      // The screen read idle and the model check found nothing to read: the seat is not left
-      // unnamed — it is renamed and given its rules like any other seat, and the report says the
-      // model was not checked.
+      // The version row is not a status token, so the composer reads unknown. The idle wait takes
+      // the pane host's idle word only on a second reading in a row, then the model check reads once more
+      // and finds nothing: the seat is renamed and given its rules, and the report says the model
+      // was not checked.
       expect(code).toBe(0);
       expect(seat).toMatchObject({ stage: 'ready', rules: 'message' });
       expect(made.renames).toContain('cursor-acme');
@@ -4623,16 +4639,17 @@ describe('team up, the pause', () => {
       expect(mine).toHaveLength(1);
       expect(mine[0]).toContain('cursor-acme: ready');
       expect(log).not.toContain("doesn't show a model");
-      // The seat's own calls, in order: the create and its launch line, the wait's read and the
-      // model check's read of the screen, then the naming step's agent list and rename, and the
-      // ready report after it. The not-checked note was held when the check made it (before the
-      // rename, so the seat is named only after the check has had its say) and is written after
-      // the record, as the record's stderr detail.
+      // The seat's own calls, in order: the create and its launch line, the idle wait's two
+      // unknown readings (the pane host's idle word on the second), the model check's read, then the
+      // naming step's agent list and rename, and the ready report after it. The not-checked note
+      // was held when the check made it (before the rename, so the seat is named only after the
+      // check has had its say) and is written after the record, as the record's stderr detail.
       const from = calls.indexOf('create:cursor-acme · implementer');
       // No pane messaging: the rules rode the launch line, so nothing is typed or entered.
-      expect(calls.slice(from, from + 8)).toEqual([
+      expect(calls.slice(from, from + 9)).toEqual([
         'create:cursor-acme · implementer',
         'paneRun:AGENT_UNATTENDED=1',
+        'paneText',
         'paneText',
         'paneText',
         'agentPanes',
@@ -4663,12 +4680,12 @@ test('a mismatched model leaves its pane recorded, and the corrected file lets u
     '    launch: cursor-agent',
     '    mode: shared',
   ].join('\n');
-  writeFileSync(path, makeExample(base, root, EXAMPLE
+  writeFileSync(path, cursorOwnFolder(makeExample(base, root, EXAMPLE
     .replace(
       '    count: 2                   # deepseek-acme, deepseek-acme-2\n',
       '    count: 2\n    stopped: true\n',
     )
-    .replace(/  - role: implementer\n    name: codex-acme[\s\S]*?stopped: true\n/, `${cursorSeat}\n`)));
+    .replace(/  - role: implementer\n    name: codex-acme[\s\S]*?stopped: true\n/, `${cursorSeat}\n`))));
   await approve();
   const shown = readFileSync(join(import.meta.dir, '../fixtures/cursor/2026.10.01/gpt-sol-idle.txt'), 'utf8');
   const made = world((_pane, label) => (label === 'cursor-acme · implementer' ? shown : IDLE));
