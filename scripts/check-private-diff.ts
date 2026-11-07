@@ -41,8 +41,8 @@ const TRAILER_LINE = /^[A-Za-z0-9-]+\s*:\s*\S/;
 // This commit-message-only rule catches numbered role IDs and named review-role IDs.
 // It does not replace the private-names prepush scan, which still covers personal and
 // persona names. Ordinary role words and hyphenated descriptions remain valid.
-const NUMBERED_ROLE_TOKEN = /(^|[^A-Za-z0-9_-])(?:builder|operator|tester)-[0-9]+(?=$|[^A-Za-z0-9_-])/i;
-const NAMED_REVIEW_TOKEN = /(^|[^A-Za-z0-9_-])reviewer-([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)(?=$|[^A-Za-z0-9_-])/gi;
+const NUMBERED_ROLE_TOKEN = /(^|[^A-Za-z0-9_])(?:builder|operator|tester)-[0-9]+(?=$|[^A-Za-z0-9_])/i;
+const NAMED_REVIEW_TOKEN = /(^|[^A-Za-z0-9_])reviewer-([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)(?=$|[^A-Za-z0-9_])/gi;
 const REVIEW_PROSE_SUFFIXES = new Set(['requested', 'approved', 'side']);
 
 function namesInternalSeat(line: string): boolean {
