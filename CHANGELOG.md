@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Prepared releases check operation rows against the dated release heading before tagging; development can keep operations declared unshipped.
+- Prepared releases check operation rows against the dated release heading before tagging; development can keep operations declared unshipped. New release rows use the release day’s end in UTC as a conservative widening boundary.
 
 ## [0.5.17] - 2026-11-07
 

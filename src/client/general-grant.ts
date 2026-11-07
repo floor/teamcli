@@ -263,9 +263,10 @@ export function admitGeneral(home: string, grantPath: string, keyPath: string, o
  * `down --abandon` at v0.1.0. A release candidate is not a release, so `-rc.` tags are skipped.
  * `tag` is the provenance of `at`. The newest entry may name the release being cut, whose tag is
  * created only after its release commit. During preparation, the package version has a real dated
- * CHANGELOG heading and no tag yet; rows first shipped by that version use that release date in
- * `at`. Between releases a route may remain declared unshipped with no row. Historical rows keep
- * their measured tag times; no landing-time or provisional release timestamp is invented.
+ * CHANGELOG heading and no tag yet; rows first shipped by that version use its heading date at
+ * T23:59:59Z in `at`, a conservative boundary that can over-note grants signed on release day.
+ * Between releases a route may remain declared unshipped with no row. Existing historical rows
+ * keep their measured tag times; no landing-time or provisional tag instant is guessed.
  */
 type OpRelease = { tag: string; at: string };
 export const OP_RELEASE_GROUPS: readonly { tag: string; at: string; ops: readonly GeneralOp[] }[] = [

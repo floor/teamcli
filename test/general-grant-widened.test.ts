@@ -172,8 +172,8 @@ function releaseOpProblems(
       if (refused.has(op)) continue;
       const row = firstShipped[op];
       if (row == null) problems.push(`${candidate} ships unmeasured op ${op}`);
-      else if (row.tag === release && (Number.isNaN(Date.parse(row.at)) || row.at.slice(0, 10) !== date)) {
-        problems.push(`${candidate} first-shipped row for ${op} must use release date ${date}`);
+      else if (row.tag === release && Date.parse(row.at) !== Date.parse(`${date}T23:59:59Z`)) {
+        problems.push(`${candidate} first-shipped row for ${op} must use release boundary ${date}T23:59:59Z`);
       }
     }
   }
@@ -212,12 +212,22 @@ test('a prepared untagged package release needs a row with its real heading date
   expect(execFileSync('git', ['tag', '--list', 'v9.8.7'], { cwd: repo, encoding: 'utf8' })).toBe('');
   expect(releaseOpProblems(repo, ['pending'], rows)).toEqual(['v9.8.7 (package.json) ships unmeasured op pending']);
   expect(releaseOpProblems(repo, [], { config: rows.config })).toEqual(['v9.8.7 (package.json) ships unmeasured op pending']);
-  const row = { tag: 'v9.8.7', at: '2026-11-07T09:00:00+01:00' };
+  const row = { tag: 'v9.8.7', at: '2026-11-07T23:59:59Z' };
   expect(releaseOpProblems(repo, [], { ...rows, pending: row })).toEqual([]);
   expect(releaseOpProblems(repo, [], { ...rows, pending: { ...row, at: '2026-11-06T09:00:00+01:00' } })).toEqual([
-    'v9.8.7 (package.json) first-shipped row for pending must use release date 2026-11-07',
+    'v9.8.7 (package.json) first-shipped row for pending must use release boundary 2026-11-07T23:59:59Z',
   ]);
   expect(releaseOpProblems(repo, [], { config: rows.config }, new Set(['pending']))).toEqual([]);
+});
+
+test('a prepared row uses the conservative end-of-day instant', () => {
+  const { repo, rows } = candidateRepo();
+  writeFileSync(join(repo, 'CHANGELOG.md'), '## [9.8.7] - 2026-11-07\n');
+  const row = { tag: 'v9.8.7', at: '2026-11-07T06:00:00Z' };
+  expect(releaseOpProblems(repo, [], { ...rows, pending: row })).toEqual([
+    'v9.8.7 (package.json) first-shipped row for pending must use release boundary 2026-11-07T23:59:59Z',
+  ]);
+  expect(releaseOpProblems(repo, [], { ...rows, pending: { ...row, at: '2026-11-07T23:59:59Z' } })).toEqual([]);
 });
 
 test('an unprepared package may keep its new route declared unshipped', () => {
