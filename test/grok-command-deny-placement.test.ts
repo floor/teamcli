@@ -144,14 +144,16 @@ test('native deny argv is inserted before the delimiter and never taken from pro
   expect(grokCommandDenyLine('git', 'grok --future-option value').ok).toBe(false);
 });
 
-function signed(w: ReturnType<typeof world>, cli: 'cursor' | 'grok', mode: GrokCommandDeny = 'git-and-tests', model = 'Grok') {
+function signed(w: ReturnType<typeof world>, cli: 'cursor' | 'grok', mode: GrokCommandDeny | 'unset' = 'git-and-tests', model = 'Grok') {
   mkdirSync(join(w.root, '.agents')); execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: w.root, env: gitEnv() });
   const text = `format: 1\nproject: acme\nsession: morning\ncoordinator: captain\noperator: captain\nworkspace:\n  mode: shared\nseats:\n  - name: captain\n    role: coordinator\n    cli: claude-code\n    vendor: test\n    model: Test\n    version: "1"\n    launch: claude\n    human: true\n  - name: worker\n    role: implementer\n    cli: ${cli}\n    vendor: test\n    model: ${model}\n    version: "4.7"\n    launch: ${cli === 'grok' ? 'grok' : 'cursor-agent'}\n    cwd: worker\n`;
   const file = join(w.root, '.agents', 'team.yaml'); writeFileSync(file, text);
   const checked = validateTeamFile(text, { home: w.home, root: w.root }); if (!checked.ok) throw new Error(JSON.stringify(checked.errors));
   writeApproval(storePath('acme', w.root, w.home), { approval: approvalOf(checked.team, w.root, NOW), file: text }, checked.team.seats, w.home, NOW);
-  const wrote = writePolicySet(w.home, { level: 'team', target: teamIdOf(w.root), teamRoot: w.root, name: 'grok-command-deny', value: mode }, { now: NOW });
-  if (!wrote.ok) throw new Error(wrote.why);
+  if (mode !== 'unset') {
+    const wrote = writePolicySet(w.home, { level: 'team', target: teamIdOf(w.root), teamRoot: w.root, name: 'grok-command-deny', value: mode }, { now: NOW });
+    if (!wrote.ok) throw new Error(wrote.why);
+  }
   const loaded = readTeamConfig(w.root, { home: w.home, source: 'file' }); if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
   return { team: loaded.team, file };
 }
@@ -212,3 +214,64 @@ for (const cli of ['cursor', 'grok'] as const) {
     expect(readFileSync(w.config, 'utf8')).toBe('{broken');
   });
 }
+
+// Run the actual source under plain Node, without inherited runtime options or CLI homes.
+function plainNodeLaunch(mode: GrokCommandDeny | 'unset') {
+  const w = world(); signed(w, 'cursor', mode);
+  mkdirSync(dirname(w.config));
+  const bytes = JSON.stringify({ editor: 'kept', permissions: { deny: ['Shell(rm)'] } });
+  writeFileSync(w.config, bytes);
+  const script = join(w.base, 'plain-node-launch.mjs');
+  const imports = [
+    ['readTeamConfig', '../src/file/team-config.ts'],
+    ['upPlan', '../src/launch/plan.ts'],
+    ['executePlan', '../src/launch/execute.ts'],
+    ['getRelativeDirOps', '../src/send/drop-retention.ts'],
+  ].map(([name, path]) => `import { ${name} } from ${JSON.stringify(new URL(path!, import.meta.url).href)};`).join('\n');
+  writeFileSync(script, `${imports}
+const {root,home,cwd}=JSON.parse(process.argv[2]);
+const loaded=readTeamConfig(root,{home,source:'file'});
+if(!loaded.ok) throw new Error('synthetic team did not load');
+const input={root,home,team:loaded.team,session:'morning',sessionRunning:true,watchAlive:true,watchLabel:'Watch',seats:[{name:'worker',cli:'cursor',model:'Grok',launch:'cursor-agent',cwd,label:'worker',stopped:false,rules:'Rules.',repairLine:'repair'}]};
+const plan=upPlan(input);
+const launch=plan.find(step=>step.do?.do==='launch')?.do;
+const baseline=upPlan({...input,team:undefined}).find(step=>step.do?.do==='launch')?.do;
+const commands=[],said=[];
+const host={startServer:()=>true,sessionUp:()=>true,createWorkspace:()=>({pane:'plain-node-pane',workspace:'plain-node-space'}),paneRun:(_session,_pane,command)=>{commands.push(command);return true;},typeLine:()=>false,deliverRules:async()=>true,renameAgent:()=>true,closeWorkspace:()=>true,stopSession:()=>true,kill:()=>true,agentPanes:()=>[],foreground:()=>['cursor-agent'],classify:()=>'idle',sleep:async()=>{},now:()=>0,allow:()=>null,record:()=>{},running:()=>{},drop:()=>{},say:line=>said.push(line),log:()=>{}};
+const executed=await executePlan(plan,'morning',host);
+console.log(JSON.stringify({runtime:process.release.name,execArgv:process.execArgv,relativeAvailable:getRelativeDirOps()!==null,commands,said,dropped:executed.dropped,marker:launch?.cursorCommandDeny??null,command:launch?.command,baseline:baseline?.command,recordLine:launch?.recordLine,baselineRecord:baseline?.recordLine}));
+`);
+  const output = execFileSync('node', [script, JSON.stringify({ root: w.root, home: w.home, cwd: w.cwd })], {
+    cwd: w.root, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: w.home, USERPROFILE: w.home, TMPDIR: process.env.TMPDIR, NODE_ENV: 'test', LC_ALL: 'C', LANG: 'C', TZ: 'UTC' },
+  });
+  return { result: JSON.parse(output) as { runtime: string; execArgv: string[]; relativeAvailable: boolean; commands: string[]; said: string[]; dropped: string[]; marker: string | null; command: string; baseline: string; recordLine: string; baselineRecord: string }, bytes, after: readFileSync(w.config, 'utf8') };
+}
+
+for (const mode of ['unset', 'off'] as const) {
+  test(`plain Node launches Cursor with policy ${mode} exactly as the existing launch`, () => {
+    const { result, bytes, after } = plainNodeLaunch(mode);
+    expect(result.runtime).toBe('node');
+    expect(result.execArgv).toEqual([]);
+    expect(result.relativeAvailable).toBe(false);
+    expect(result.marker).toBeNull();
+    expect(result.command).toBe(result.baseline);
+    expect(result.recordLine).toBe(result.baselineRecord);
+    expect(result.commands).toEqual([result.baseline]);
+    expect(result.dropped, JSON.stringify(result)).toEqual([]);
+    expect(after).toBe(bytes);
+  });
+}
+
+test('plain Node refuses enabled Cursor placement with the reason and runtime repair in one line', () => {
+  const { result, bytes, after } = plainNodeLaunch('git');
+  expect(result.runtime).toBe('node');
+  expect(result.execArgv).toEqual([]);
+  expect(result.relativeAvailable).toBe(false);
+  expect(result.marker).toBe('git');
+  expect(result.commands).toEqual([]);
+  expect(result.dropped).toContain('worker');
+  expect(after).toBe(bytes);
+  const refusal = result.said.find(line => line.includes('relative file operations are unavailable'));
+  expect(refusal).toContain('run team on Bun or Node with --experimental-ffi');
+  expect(refusal?.trimEnd()).not.toContain('\n');
+});

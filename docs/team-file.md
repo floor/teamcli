@@ -993,6 +993,11 @@ option value ends. These adapter inputs are tested with synthetic settings. The 
 are described in [Cursor permissions](https://docs.cursor.com/cli/reference/permissions) and
 [Grok permissions](https://docs.x.ai/build/features/permissions).
 
+These first-word rules are a guardrail for routine commands. Wrapper commands, aliases, and
+absolute executable paths may match differently; these synthetic tests do not measure the
+vendors’ matchers. Keep the narrowed Grok sandbox enabled: command denies do not replace its
+filesystem restrictions.
+
 Cursor placement requires the same own-folder proof as the launch. It merges through held
 directories, refuses links and malformed or oversized files, publishes the whole file, then
 verifies it before starting the command. A failure leaves the seat out. The relative-file

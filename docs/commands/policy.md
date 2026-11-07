@@ -51,7 +51,8 @@ their settings. An expired declaration is unset. The owner can declare it with:
 
 Every launch and restart merges and verifies Cursor's file in the seat's own guarded start
 folder, or places native Grok's deny arguments on its launch. A placement or verification failure
-leaves the seat out. `team check` names missing rules. A Cursor seat can loosen its writable
+leaves the seat out. Cursor seats need Bun or Node `--experimental-ffi` when `grok-command-deny`
+is on. `team check` names missing rules. A Cursor seat can loosen its writable
 file until the next launch regenerates it; changing that file cannot remove native Grok's argv
 rules. See [Grok command deny settings](../team-file.md#grok-command-deny-settings).
 

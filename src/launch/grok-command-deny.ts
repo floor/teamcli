@@ -18,7 +18,7 @@ export function writeCursorCommandDeny(mode: GrokCommandDeny, place: OwnStartFol
   const problem = ownStartFolderProblem(place);
   if (problem !== null) return { ok: false, why: problem };
   const ops = supplied === undefined ? getRelativeDirOps() : supplied;
-  if (ops === null) return { ok: false, why: 'relative file operations are unavailable; no command-deny file was written' };
+  if (ops === null) return { ok: false, why: 'relative file operations are unavailable; run team on Bun or Node with --experimental-ffi' };
   let rootFd: number | undefined, folderFd: number | undefined, tempFd: number | undefined;
   let temp: string | undefined;
   try {
