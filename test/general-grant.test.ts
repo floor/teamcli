@@ -22,6 +22,18 @@ function world() {
 }
 const later = (days: number) => new Date(Date.now() + days * 86_400_000);
 
+test('owner issuance refuses unavailable operation names before publishing', () => {
+  const w = world();
+  for (const op of ['start', 'outside-vocabulary']) {
+    const made = issueOwnerGeneralGrant(w.home, { clientId: 'a', publicKey: w.a.pub, entities: ['*'], ops: [op as GeneralOp], mayIssue: false, expires: later(1) });
+    expect(made.ok, op).toBe(false);
+    if (!made.ok) expect(made.why).toContain(op);
+  }
+  for (const ops of [['send'], ['*']] as GrantOp[][]) {
+    expect(issueOwnerGeneralGrant(w.home, { clientId: 'a', publicKey: w.a.pub, entities: ['*'], ops, mayIssue: false, expires: later(1) }).ok).toBe(true);
+  }
+});
+
 test('an owner-signed general grant admits its ops on any entity, and nothing else', () => {
   const w = world();
   const g = issueOwnerGeneralGrant(w.home, { clientId: 'a', publicKey: w.a.pub, entities: ['*'], ops: ['config', 'restart'], mayIssue: true, expires: later(30) });
@@ -62,7 +74,7 @@ test('a child grant never names an unavailable or out-of-scope op', () => {
   for (const [parent, op] of [[all.path, 'start'], [all.path, 'forget'], [send.path, 'config']] as const) {
     const child = issueHeldGeneralGrant(w.home, parent, w.a.path, { clientId: 'b', publicKey: w.b.pub, entities: ['*'], ops: [op as GeneralOp], mayIssue: false, expires: later(1) });
     expect(child.ok, op).toBe(false);
-    if (!child.ok) expect(child.why).toContain('outside the parent grant');
+    if (!child.ok) expect(child.why).toContain(op === 'start' ? 'not an issuable general-grant op' : 'outside the parent grant');
   }
 });
 

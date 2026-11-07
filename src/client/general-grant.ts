@@ -10,6 +10,8 @@ import { keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/k
 import { CLIENT_PUBLIC_KEY_PATTERN, publicKeyObject, readClientPrivateKey } from './records.ts';
 
 export const GENERAL_GRANT_DOMAIN = 'team-general-grant-v1';
+/** Dispatcher commands explicitly refused by the general door, outside its op vocabulary. */
+export const GENERAL_REFUSED_COMMANDS: ReadonlySet<string> = new Set([]);
 // Every command's op: the first nine since 0.5.6, then (0.5.8) every other command the dispatcher's
 // general door admits, so a listed grant may name any of them. `abandon` is `down --abandon`'s.
 // A command added later is covered by the wildcard at once, and by name once it is listed here
@@ -108,7 +110,7 @@ export function withinScope(child: Pick<GeneralGrant, 'entities' | 'ops' | 'expi
   }
   if (child.ops.includes(ALL_OPS) && !parent.ops.includes(ALL_OPS)) return 'the child names every op; the parent does not cover every op';
   for (const op of child.ops) {
-    if (op !== ALL_OPS && (!(GENERAL_OPS as readonly string[]).includes(op) || !opsCover(parent.ops, op))) return `op "${op}" is outside the parent grant`;
+    if (op !== ALL_OPS && (GENERAL_REFUSED_COMMANDS.has(op) || !(GENERAL_OPS as readonly string[]).includes(op) || !opsCover(parent.ops, op))) return `op "${op}" is outside the parent grant`;
   }
   if (Date.parse(child.expires) > Date.parse(parent.expires)) return 'the child would outlive the parent grant';
   if (child.may_issue && !parent.may_issue) return 'the parent grant may not issue grants that issue';
@@ -130,6 +132,11 @@ function publish(home: string, g: GeneralGrant, signature: string): R<{ path: st
 export type IssueInput = { clientId: string; publicKey: string; entities: string[]; ops: GrantOp[]; mayIssue: boolean; expires: Date };
 
 function fresh(input: IssueInput, parent: string | null, now: Date): GeneralGrant | string {
+  for (const op of input.ops) {
+    if (op !== ALL_OPS && (GENERAL_REFUSED_COMMANDS.has(op) || !(GENERAL_OPS as readonly string[]).includes(op))) {
+      return `op "${op}" is not an issuable general-grant op`;
+    }
+  }
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(input.clientId)) return `"${input.clientId}" is not a client id`;
   if (!CLIENT_PUBLIC_KEY_PATTERN.test(input.publicKey)) return 'the public key is not a raw Ed25519 key';
   if (!(input.expires.getTime() > now.getTime())) return 'the expiry is not in the future';
