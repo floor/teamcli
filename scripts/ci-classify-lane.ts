@@ -96,6 +96,7 @@ export const CAREFUL_RULES: readonly LaneRule[] = [
       'src/client-cli.ts',
       'src/index.ts',
       'src/state.ts',
+      'src/file-write.ts',
       'src/caller.ts',
       'src/herdr.ts',
       'src/child.ts',
