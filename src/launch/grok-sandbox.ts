@@ -292,6 +292,29 @@ export function writeGrokSandbox(sandbox: GrokSandbox): { ok: true } | { ok: fal
   }
 }
 
+/** The words Grok prints when it did not apply the sandbox it was asked for. */
+export const GROK_SANDBOX_UNAPPLIED = 'sandbox could not be applied';
+
+/** Grok's own warning line, never a phrase in an echoed launch or a model answer. Synthetic
+ *  frames exercise the same line match without starting a CLI. */
+export function grokSandboxUnapplied(text: string): boolean {
+  return /^\s*warning: sandbox could not be applied\b/im.test(text);
+}
+
+/** The line `team status` and `team check` show for a seat stopped on that refusal. The words
+ *  are fixed: a stored reason is not copied onto the line. */
+export function sandboxUnappliedNotes(
+  seats: readonly { name: string }[],
+  state: { seats: Readonly<Record<string, { sandbox_unapplied?: { why: string } } | undefined>> },
+): string[] {
+  const notes: string[] = [];
+  for (const seat of seats) {
+    if (state.seats[seat.name]?.sandbox_unapplied === undefined) continue;
+    notes.push(`${seat.name}: stopped: ${GROK_SANDBOX_UNAPPLIED}`);
+  }
+  return notes;
+}
+
 /** The shell words of a launch line, each with the quotes and escapes that spell it. A quoted
  *  prompt is one word: the words inside it are text, not options. */
 const SHELL_WORD = /(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g;

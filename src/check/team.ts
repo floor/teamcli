@@ -27,6 +27,7 @@ import {
 } from '../launch/codex-endpoint.ts';
 import { codexCommandHasFlag, codexCommandRemoteUrl, codexEndpointConfig, managedCodexLaunch } from '../launch/plan.ts';
 import { unfinishedWebhookNotes, webhookDeliveryNotes } from '../bus/webhook-notes.ts';
+import { sandboxUnappliedNotes } from '../launch/grok-sandbox.ts';
 import { rulesOriginOf } from '../launch/rules.ts';
 import { declaredUnreadAfter, UNREAD_AFTER_WAKEABLE_SECONDS, unreadWindowSeconds, watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
 import { callerLabel, fileOwnerRefusal, isOwner, readAncestors, sessionOwnerRefusal, walkCaller } from '../caller.ts';
@@ -850,6 +851,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // A Codex seat whose last launch fell back to an unmanaged line, in the same words `team
     // status` prints: the fallback is a reading worth acting on, never a silent state.
     ...unmanagedEndpointNotes(team.seats, state),
+    ...sandboxUnappliedNotes(team.seats, state),
     // Every ready Codex seat whose policy would manage an endpoint and whose record is absent,
     // unusable, or a recorded line carrying --no-daemon. One line, naming each seat and the
     // restore. A policy that is off, or a file that already names its own remote, stays off it.

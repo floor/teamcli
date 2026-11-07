@@ -125,8 +125,8 @@ Read-only project analysis, checkpoint requests, named launchers, and guarded st
   separate project MCP configurations. Reload refuses a missing or unsafe recorded start folder
   before refreshing those files.
 
-- If Grok cannot apply its sandbox for a reason outside the narrowed grants, it may still run
-  unsandboxed. If a Grok seat’s pane shows "sandbox could not be applied", stop that seat.
+- A Grok launch stops when its own pane reports "sandbox could not be applied". The stop is
+  recorded in seat state and shown by status and checks; the team file is left unchanged.
 
 - Set-aside status records are kept to the newest 64; older records are removed and counted. The
   count is informational, and a valid record for the current binding can still be published.

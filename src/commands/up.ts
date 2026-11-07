@@ -3583,6 +3583,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
           // either refuse a healthy seat or adopt a stranger. A patch that names the new
           // identity writes it; one that does not leaves the field empty until the pane is read.
           if (patch.pane && prior.pane && patch.pane !== prior.pane && rest.launched === undefined) delete seat.launched;
+          if (patch.stage === 'ready' && patch.sandbox_unapplied === undefined) delete seat.sandbox_unapplied;
           current.seats[name] = seat;
           if (patch.pane) {
             replaced = prior.pane !== patch.pane ? prior.pane : undefined;

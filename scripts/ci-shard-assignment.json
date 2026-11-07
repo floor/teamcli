@@ -554,6 +554,8 @@
     "test/green-slices.test.ts": 3,
     "test/grok-sandbox-independent.test.ts": 1,
     "test/grok-sandbox-replace-independent.test.ts": 4,
+    "test/grok-sandbox-unapplied-independent.test.ts": 3,
+    "test/grok-sandbox-unapplied.test.ts": 4,
     "test/grok-status-restored-tester.test.ts": 2,
     "test/grok-typed-wake.test.ts": 4,
     "test/hatch-compile-diag-independent.test.ts": 1,

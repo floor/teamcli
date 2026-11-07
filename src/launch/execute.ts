@@ -16,7 +16,7 @@ import { refusalReport, type Refusal } from './deliver.ts';
 import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeTarget, withoutResume, conversationMissingOnScreen } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
 import { ownStartFolderProblem } from '../worktree/place.ts';
-import { grokStartFolderProblem, settleGrokSandbox, writeGrokSandbox } from './grok-sandbox.ts';
+import { GROK_SANDBOX_UNAPPLIED, grokSandboxUnapplied, grokStartFolderProblem, settleGrokSandbox, writeGrokSandbox } from './grok-sandbox.ts';
 import { launchedIdentity, paneHoldsOnlyShell, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
 import { restoreProof } from './restore-proof.ts';
 import type { CliWatcher } from './cli-hook.ts';
@@ -167,6 +167,9 @@ export type Host = {
   ): Promise<boolean | 'no-agent' | Refusal>;
   renameAgent(session: string, pane: string, name: string): boolean;
   closeWorkspace(session: string, workspace: string): boolean;
+  /** A host may offer a team-file stop. A sandbox warning does not call it: that stop is
+   *  `sandbox_unapplied` on the seat's state, and the approved team file stays byte for byte. */
+  markStopped?(seat: string): boolean;
   /** Forgets the bus record once its workspace closed. */
   dropBus?(): void;
   stopSession(session: string): boolean;
@@ -243,6 +246,8 @@ export type Host = {
       launch_line?: string;
       /** A waiting record to write, or null to remove the seat's waiting field. */
       waiting?: WaitingRecord | null;
+      /** A Grok launch whose frames said the sandbox was not applied. */
+      sandbox_unapplied?: { why: string };
       /** How this launch leaves the seat watching for drops (`CliWatcher`). */
       watcher?: CliWatcher;
     },
@@ -1762,7 +1767,7 @@ export async function executePlan(
         let freshAfterMissing = false;
         let herdrIdleBefore = false;
         const pollMs = IDLE_POLL_MS;
-        let outcome: 'idle' | 'permission' | 'plan approval' | 'confirmation' | 'login' | 'trust' | 'question' | 'vendor notice' | 'provider error' | 'rate limit' | 'ended' | 'timeout' = 'timeout';
+        let outcome: 'idle' | 'permission' | 'plan approval' | 'confirmation' | 'login' | 'trust' | 'question' | 'vendor notice' | 'provider error' | 'rate limit' | 'ended' | 'timeout' | 'sandbox unapplied' = 'timeout';
         let last: ScreenKind = 'unknown';
         let endedRead: string | null = null;
         let endedFor = 0;
@@ -1813,6 +1818,15 @@ export async function executePlan(
           }
           const kind = host.classify(session, here.pane, op.cli);
           last = kind;
+          // The first frames are the pane text. Grok draws `sandbox could not be applied` there
+          // (the same words it writes to stderr). Seen once, the wait stops before any key.
+          if (op.cli === 'grok') {
+            const frames = host.paneText?.(session, here.pane) ?? null;
+            if (frames !== null && grokSandboxUnapplied(frames)) {
+              outcome = 'sandbox unapplied';
+              break;
+            }
+          }
           // The pane's shell, read once this poll: the relaunch below types a line, and the ended
           // read further down reads the same evidence.
           const back = host.shellBack?.(session, here.pane) ?? null;
@@ -1983,6 +1997,21 @@ export async function executePlan(
         }
         if (outcome === 'idle') {
           idleOnwards();
+          break;
+        }
+        if (outcome === 'sandbox unapplied') {
+          // The frames already said the sandbox was not applied. The stop is the seat's state
+          // record. The workspace is closed, no key is sent, and the team file is not rewritten.
+          recordSeat(op.seat, { stage: 'launched', sandbox_unapplied: { why: GROK_SANDBOX_UNAPPLIED } });
+          const workspace = here.workspace ?? places.get(op.seat)?.workspace;
+          const closed = workspace !== undefined && host.closeWorkspace(session, workspace);
+          dropped.add(op.seat);
+          if (!closed) held = true;
+          host.log(op.seat, GROK_SANDBOX_UNAPPLIED);
+          const detail = closed
+            ? '  its workspace was closed without input and the seat left out\n'
+            : '  its workspace did not close; nothing was typed\n';
+          final(op.seat, { kind: 'left out', reason: GROK_SANDBOX_UNAPPLIED }, detail);
           break;
         }
         const workspace = here.workspace ?? places.get(op.seat)?.workspace;

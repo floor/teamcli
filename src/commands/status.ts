@@ -39,6 +39,7 @@ import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { declaredUnreadAfter, unreadWindowSeconds, watchInForceWithPace, watchPaceOf } from '../watch/rhythm.ts';
 import { unmanagedEndpointNotes } from '../launch/codex-endpoint.ts';
+import { sandboxUnappliedNotes } from '../launch/grok-sandbox.ts';
 import { unfinishedWebhookNotes, webhookDeliveryNotes } from '../bus/webhook-notes.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { PresenceObservation, SeatStateWord, StateSource } from '../labels/state.ts';
@@ -735,6 +736,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // A Codex seat whose last launch fell back to an unmanaged line says so here, with the reason:
   // the fallback is a reading worth acting on, never a silent state.
   comparison.notes.push(...unmanagedEndpointNotes(team.seats, state));
+  comparison.notes.push(...sandboxUnappliedNotes(team.seats, state));
   // A seat whose last webhook delivery did not arrive, in the same words `team check` prints.
   comparison.notes.push(...webhookDeliveryNotes(team.seats, state));
   // A send's webhook post left in flight with no bus serving the root to finish it: a reading,

@@ -153,6 +153,12 @@ export type SeatState = {
    */
   codex_endpoint_unmanaged?: { why: string; at: string };
   /**
+   * Set when a Grok launch's first frames said its sandbox was not applied. The stop is this
+   * record: the workspace is closed, nothing is typed, and the team file stays as approved.
+   * `team status` and `team check` read it. Cleared when a later launch reaches ready.
+   */
+  sandbox_unapplied?: { why: string };
+  /**
    * The daemon's activity reconciler's fence: the newest applied presence line of the seat's
    * current runtime binding that the canonical state has reconciled. `seq` must equal the current
    * projection's sequence for a consumer to treat the reading as known; while either side is
