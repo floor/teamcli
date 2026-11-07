@@ -10,6 +10,7 @@ import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts'
 import type { Io } from '../src/io.ts';
 import { installKey } from '../src/store/keys.ts';
 import { fixtureBase } from './helpers.ts';
+import { upsertTeam, readTeams } from '../src/registry/teams.ts';
 
 const base = fixtureBase('.gg-test-door-');
 const home = join(base, 'home');
@@ -158,6 +159,29 @@ test('the grant-issuing command takes no --general', async () => {
   const ran = await run(['client', 'general-grant', '--to', 'x', '--public-key', 'p', '--general', all, '--key', a.path]);
   expect(ran.code).toBe(2);
   expect(ran.err).toContain('issues grants');
+});
+
+test('forget keeps a wildcard out and still runs with an explicit grant', async () => {
+  const id = 'forget-explicit-control';
+  upsertTeam(home, id, { project: id, session: id, root: cwd, lifecycle: 'stopped' });
+  const refused = await run(['forget', id, '--general', all, '--key', a.path]);
+  expect(refused.code).toBe(1);
+  expect(refused.err).toContain('explicit');
+  expect(refused.err).toContain('--request');
+  expect(refused.err).toContain('--approval');
+  expect(readTeams(home)[id]).toBeDefined();
+  const { generalDoor } = await import('../src/client/general-door.ts');
+  const { runForget } = await import('../src/commands/forget.ts');
+  let err = '';
+  const io: Io = { stdout: () => {}, stderr: (text) => { err += text; }, cwd, env: { HOME: home }, stdinIsTTY: false, caller: inPane };
+  const door = generalDoor('forget', [id, '--general', grant(['forget']), '--key', a.path], io);
+  expect(door.kind).toBe('admitted');
+  if (door.kind !== 'admitted') throw new Error('explicit grant was refused');
+  expect(await runForget(door.argv, door.io, { home }), err).toBe(0);
+  expect(readTeams(home)[id]).toBeUndefined();
+  upsertTeam(home, id, { project: id, session: id, root: cwd, lifecycle: 'stopped' });
+  expect(await runForget([id], { ...io, caller: { kind: 'owner' }, stdinIsTTY: true }, { home }), err).toBe(0);
+  expect(readTeams(home)[id]).toBeUndefined();
 });
 
 test('every command of the table is a general-grant op', () => {

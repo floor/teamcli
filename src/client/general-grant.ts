@@ -25,12 +25,14 @@ export const GENERAL_OPS = [
   'sessions', 'settings', 'setup', 'show', 'status', 'swap', 'tempo', 'trace', 'unlock', 'usage', 'waits', 'watch', 'workflow', 'worktree',
 ] as const;
 export type GeneralOp = (typeof GENERAL_OPS)[number];
-/** Every op, now and later: signed as the literal `*`, so one owner signature covers ops added after it. */
+/** Delegable ops, now and later, except those requiring an explicit name. Signed as literal `*`. */
 export const ALL_OPS = '*' as const;
 export type GrantOp = GeneralOp | typeof ALL_OPS;
+/** A wildcard never includes these ops, including when its holder issues a child grant. */
+export const EXPLICIT_GENERAL_OPS: ReadonlySet<GeneralOp> = new Set(['forget']);
 /** Whether a signed op list covers `op`. */
 export function opsCover(ops: readonly string[], op: GeneralOp): boolean {
-  return ops.includes(ALL_OPS) || ops.includes(op);
+  return ops.includes(op) || (ops.includes(ALL_OPS) && !EXPLICIT_GENERAL_OPS.has(op));
 }
 
 /**
@@ -104,9 +106,9 @@ export function withinScope(child: Pick<GeneralGrant, 'entities' | 'ops' | 'expi
     if (child.entities.includes('*')) return 'the child names every entity; the parent does not cover every entity';
     for (const e of child.entities) if (!parent.entities.includes(e)) return `entity "${e}" is outside the parent grant`;
   }
-  if (!parent.ops.includes(ALL_OPS)) {
-    if (child.ops.includes(ALL_OPS)) return 'the child names every op; the parent does not cover every op';
-    for (const o of child.ops) if (!parent.ops.includes(o)) return `op "${o}" is outside the parent grant`;
+  if (child.ops.includes(ALL_OPS) && !parent.ops.includes(ALL_OPS)) return 'the child names every op; the parent does not cover every op';
+  for (const op of child.ops) {
+    if (op !== ALL_OPS && (!(GENERAL_OPS as readonly string[]).includes(op) || !opsCover(parent.ops, op))) return `op "${op}" is outside the parent grant`;
   }
   if (Date.parse(child.expires) > Date.parse(parent.expires)) return 'the child would outlive the parent grant';
   if (child.may_issue && !parent.may_issue) return 'the parent grant may not issue grants that issue';
@@ -234,6 +236,9 @@ export function grantIsWildcard(grant: GeneralGrant): GrantVerdict {
 
 /** The grant covers the op the line reaches. */
 export function grantCoversOp(grant: GeneralGrant, op: GeneralOp): GrantVerdict {
+  if (EXPLICIT_GENERAL_OPS.has(op) && !grant.ops.includes(op)) {
+    return { ok: false, why: `${op} needs an explicit grant naming ${op}, or a per-use approval from the owner (--request/--approval); a wildcard grant does not cover it` };
+  }
   if (!opsCover(grant.ops, op)) return { ok: false, why: `general grant ${grant.grant_id} does not cover ${op}` };
   return { ok: true };
 }
@@ -336,7 +341,7 @@ export function wildcardGrantsWidened(home: string, now: Date = new Date()): Wid
     }
     const ops = GENERAL_OPS.filter((op) => {
       const release = OP_FIRST_SHIPPED[op];
-      return release !== null && Date.parse(release.at) > at;
+      return !EXPLICIT_GENERAL_OPS.has(op) && release !== null && Date.parse(release.at) > at;
     });
     if (ops.length > 0) out.push({ grant, signed: grant.issued, ops });
   }

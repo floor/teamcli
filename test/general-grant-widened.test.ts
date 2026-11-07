@@ -169,12 +169,12 @@ test('a wildcard grant signed before a release reaches the ops that release ship
   expect(widened[0]?.grant.grant_id).toBe(grant.grant_id);
   expect(widened[0]?.signed).toBe('2026-10-27T12:00:00.000Z');
   expect(widened[0]?.ops).toEqual([
-    'agents', 'analyse', 'approvals', 'batch', 'checkpoint', 'fallback', 'forget', 'order', 'peek', 'setup', 'show', 'trace', 'waits',
+    'agents', 'analyse', 'approvals', 'batch', 'checkpoint', 'fallback', 'order', 'peek', 'setup', 'show', 'trace', 'waits',
   ]);
   const note = widenedGrantNote(widened[0]!);
   expect(note).toContain(grant.grant_id);
   expect(note).toContain('signed 2026-10-27');
-  expect(note).toContain('agents, analyse, approvals, batch, checkpoint, fallback, forget, order, peek, setup, show, trace, waits');
+  expect(note).toContain('agents, analyse, approvals, batch, checkpoint, fallback, order, peek, setup, show, trace, waits');
   expect(note).toContain('re-sign the grant to stop this note');
   expect(widenedGrantNotes(w.home, NOW)).toEqual([note]);
 });

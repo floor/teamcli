@@ -1,7 +1,7 @@
 import { afterAll, expect, test } from 'bun:test';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { admitGeneral, GENERAL_OPS, type GeneralOp, generalGrantPath, issueHeldGeneralGrant, issueOwnerGeneralGrant, parseOps, readGeneralGrant, SCOPED_GRANT_REFUSAL } from '../src/client/general-grant.ts';
+import { admitGeneral, GENERAL_OPS, type GeneralOp, generalGrantPath, issueHeldGeneralGrant, issueOwnerGeneralGrant, parseOps, readGeneralGrant, SCOPED_GRANT_REFUSAL, type GrantOp } from '../src/client/general-grant.ts';
 import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
 import { installKey } from '../src/store/keys.ts';
 import { fixtureBase } from './helpers.ts';
@@ -30,6 +30,40 @@ test('an owner-signed general grant admits its ops on any entity, and nothing el
   expect(admitGeneral(w.home, g.path, w.a.path, 'config', null).ok).toBe(true);
   expect(admitGeneral(w.home, g.path, w.a.path, 'up', 'material').ok).toBe(false);
   expect(admitGeneral(w.home, g.path, w.b.path, 'config', 'material').ok).toBe(false);
+});
+
+test('forget requires an explicit op and cannot be widened through a wildcard holder', () => {
+  const w = world();
+  const all = issueOwnerGeneralGrant(w.home, { clientId: 'a', publicKey: w.a.pub, entities: ['*'], ops: ['*'], mayIssue: true, expires: later(5) });
+  const named = issueOwnerGeneralGrant(w.home, { clientId: 'a', publicKey: w.a.pub, entities: ['*'], ops: ['forget'], mayIssue: true, expires: later(5) });
+  if (!all.ok || !named.ok) throw new Error('issue');
+  const refused = admitGeneral(w.home, all.path, w.a.path, 'forget', 'floor');
+  expect(refused.ok).toBe(false);
+  if (!refused.ok) {
+    expect(refused.why).toContain('explicit');
+    expect(refused.why).toContain('--request');
+    expect(refused.why).toContain('--approval');
+  }
+  expect(admitGeneral(w.home, named.path, w.a.path, 'forget', 'floor').ok).toBe(true);
+  for (const ops of [['forget'], ['*', 'forget']] as GrantOp[][]) {
+    const child = { clientId: 'b', publicKey: w.b.pub, entities: ['*'], ops, mayIssue: false, expires: later(1) };
+    expect(issueHeldGeneralGrant(w.home, all.path, w.a.path, child).ok).toBe(false);
+  }
+  const child = issueHeldGeneralGrant(w.home, named.path, w.a.path, { clientId: 'b', publicKey: w.b.pub, entities: ['*'], ops: ['forget'], mayIssue: false, expires: later(1) });
+  expect(child.ok).toBe(true);
+  if (child.ok) expect(admitGeneral(w.home, child.path, w.b.path, 'forget', 'floor').ok).toBe(true);
+});
+
+test('a child grant never names an unavailable or out-of-scope op', () => {
+  const w = world();
+  const all = issueOwnerGeneralGrant(w.home, { clientId: 'a', publicKey: w.a.pub, entities: ['*'], ops: ['*'], mayIssue: true, expires: later(5) });
+  const send = issueOwnerGeneralGrant(w.home, { clientId: 'a', publicKey: w.a.pub, entities: ['*'], ops: ['send'], mayIssue: true, expires: later(5) });
+  if (!all.ok || !send.ok) throw new Error('issue');
+  for (const [parent, op] of [[all.path, 'start'], [all.path, 'forget'], [send.path, 'config']] as const) {
+    const child = issueHeldGeneralGrant(w.home, parent, w.a.path, { clientId: 'b', publicKey: w.b.pub, entities: ['*'], ops: [op as GeneralOp], mayIssue: false, expires: later(1) });
+    expect(child.ok, op).toBe(false);
+    if (!child.ok) expect(child.why).toContain('outside the parent grant');
+  }
 });
 
 test('a listed-entity grant is refused until 0.5.11, with the one sentence, whatever entity the run names', () => {
@@ -111,15 +145,15 @@ test('parseOps defaults to the wildcard and still refuses unknown ops', () => {
   expect(typeof parseOps('create')).toBe('string');
 });
 
-test('the wildcard admits every op of today\'s vocabulary, init included, on every entity and on none', () => {
+test('the wildcard admits ordinary ops on every entity and leaves forget explicit', () => {
   const w = world();
   const g = issueOwnerGeneralGrant(w.home, { clientId: 'a', publicKey: w.a.pub, entities: ['*'], ops: ['*'], mayIssue: true, expires: later(30) });
   if (!g.ok) throw new Error(g.why);
   expect(GENERAL_OPS).toContain('init');
   for (const op of GENERAL_OPS) {
-    expect(admitGeneral(w.home, g.path, w.a.path, op, 'floor').ok).toBe(true);
-    expect(admitGeneral(w.home, g.path, w.a.path, op, 'material').ok).toBe(true);
-    expect(admitGeneral(w.home, g.path, w.a.path, op, null).ok).toBe(true);
+    expect(admitGeneral(w.home, g.path, w.a.path, op, 'floor').ok).toBe(op !== 'forget');
+    expect(admitGeneral(w.home, g.path, w.a.path, op, 'material').ok).toBe(op !== 'forget');
+    expect(admitGeneral(w.home, g.path, w.a.path, op, null).ok).toBe(op !== 'forget');
   }
 });
 

@@ -290,7 +290,7 @@ describe('team checkpoint', () => {
     if (!issued.ok) throw new Error(issued.why);
     const shipped = GENERAL_OPS.filter((op) => {
       const release = OP_FIRST_SHIPPED[op];
-      return release !== null && Date.parse(release.at) > Date.parse(SIGNED);
+      return op !== 'forget' && release !== null && Date.parse(release.at) > Date.parse(SIGNED);
     });
     expect(shipped).toContain('checkpoint');
 

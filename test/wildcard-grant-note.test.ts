@@ -140,7 +140,7 @@ function check(root: string, home: string, json = false): { code: number; out: s
   return { code, out: `${io.out}${io.err}`, stdout: io.out };
 }
 
-const SHIPPED = 'agents, analyse, approvals, batch, checkpoint, fallback, forget, order, peek, setup, show, trace, waits';
+const SHIPPED = 'agents, analyse, approvals, batch, checkpoint, fallback, order, peek, setup, show, trace, waits';
 
 describe('team check names a wildcard grant that reaches newer ops', () => {
   test('one note per grant, not a difference, exit unchanged', () => {
