@@ -295,3 +295,25 @@ test('a client grant acknowledges an exact UUID and never a short prefix or a sc
   expect(await runAck([SENT], io, host())).toBe(0);
   expect(existsSync(receiptFile(recordDir(root, 'acme', 'owner'), SENT, 'read'))).toBe(true);
 });
+
+
+for (const suffix of ['reported', 'wake', 'json', 'new']) {
+  test(`a short id ignores its ${suffix} sidecar`, async () => {
+    sentTo('owner', SENT);
+    const marker = join(recordDir(root, 'acme', 'owner'), `${SENT}.${suffix}`);
+    const bytes = JSON.stringify({ id: SENT, state: 'reported', unsigned: true });
+    writeFileSync(marker, bytes);
+    const result = await run([SENT.slice(0, 8)]);
+    expect(result.code, result.err).toBe(0);
+    expect(result.out).toContain(`${SENT}: read`);
+    expect(readFileSync(marker, 'utf8')).toBe(bytes);
+  });
+}
+
+test('a short id still refuses a corrupt record sharing its prefix', async () => {
+  sentTo('owner', SENT);
+  writeFileSync(join(recordDir(root, 'acme', 'owner'), SENT + '-corrupt'), '{}');
+  const result = await run([SENT.slice(0, 8)]);
+  expect(result.code).toBe(1);
+  expect(result.err).toContain('cannot be read');
+});

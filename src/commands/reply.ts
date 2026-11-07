@@ -180,7 +180,9 @@ export function landsWhereRead(home: string, folder: string, id: string, root: s
 
 /** The marker names a send leaves beside a record; none of them is a message record. */
 function isMarkerName(name: string): boolean {
-  return name.endsWith('.pending') || name.endsWith('.taken') || name.endsWith('.read') || name.endsWith('.json');
+  return name.endsWith('.pending') || name.endsWith('.taken') || name.endsWith('.read')
+    || name.endsWith('.wake') || name.endsWith('.woken') || name.endsWith('.reported')
+    || name.endsWith('.json') || name.endsWith('.new');
 }
 
 /**
