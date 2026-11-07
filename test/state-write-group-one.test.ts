@@ -1,5 +1,5 @@
 // Every path and transport in these scenes is synthetic; no live inbox or endpoint is used.
-import { afterEach, expect, test } from 'bun:test';
+import { afterEach, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -8,7 +8,7 @@ import { readStateFile, writeStateFile } from '../src/file-write.ts';
 import { postArrivalWebhook } from '../src/bus/webhook.ts';
 import { deferredNotePathOf, fallbackKeyOf, noteTransportSoon, type TransportFact } from '../src/send/fallback-events.ts';
 import { historyPath } from '../src/send/history.ts';
-import { noteUnread, readUnreadHint } from '../src/send/unread-hint.ts';
+import { clearUnread, noteUnread, readUnreadHint } from '../src/send/unread-hint.ts';
 import { signRecord } from '../src/send/record.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 
@@ -131,3 +131,28 @@ for (const dangling of [false, true]) {
     expect(noteTransportSoon(ctx, fact).ok).toBe(false); unchanged();
   });
 }
+
+test('an explicit root accepts an alias only above it and refuses links at or below it', () => {
+  const at = fixture(); const physical = join(at.base, 'physical'); const root = join(physical, 'project');
+  mkdirSync(join(root, 'state'), { recursive: true });
+  const alias = join(at.base, 'alias-above'); symlinkSync(physical, alias);
+  writeStateFile(join(alias, 'project', 'state', 'record'), 'allowed', { root: join(alias, 'project') });
+  expect(readFileSync(join(root, 'state', 'record'), 'utf8')).toBe('allowed');
+  const linkedRoot = join(at.base, 'linked-root'); symlinkSync(root, linkedRoot);
+  expect(() => writeStateFile(join(linkedRoot, 'record'), 'refused', { root: linkedRoot })).toThrow();
+  const outside = join(at.base, 'outside-folder'); mkdirSync(outside); mkdirSync(join(outside, 'nested'));
+  symlinkSync(outside, join(root, 'linked-child'));
+  expect(() => writeStateFile(join(root, 'linked-child', 'nested', 'record'), 'refused', { root })).toThrow();
+  expect(existsSync(join(outside, 'nested', 'record'))).toBe(false);
+});
+test('unread writes report one refusal and return its visible outcome', () => {
+  const at = fixture(); const unchanged = planted(at.base, join(at.drop, '.unread.json'), false);
+  const say = spyOn(process.stderr, 'write').mockImplementation(() => true);
+  try {
+    for (let n = 0; n < 2; n++) {
+      expect(noteUnread(at.drop, 'lead', 'record', '2026-11-07T00:00:00.000Z', { held: true })).toEqual({ ok: false, kind: 'refused', reason: 'the unread hint could not be written safely' });
+      expect(clearUnread(at.drop, 'record')).toEqual({ ok: false, kind: 'refused', reason: 'the unread hint could not be written safely' });
+    }
+    expect(say).toHaveBeenCalledTimes(1); expect(String(say.mock.calls[0]?.[0])).toContain('unread hint'); unchanged();
+  } finally { say.mockRestore(); }
+});

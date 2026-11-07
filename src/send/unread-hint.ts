@@ -19,6 +19,19 @@ import { readStateFile, writeStateFile } from '../file-write.ts';
 import { basename, dirname, join } from 'node:path';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 
+export type UnreadHintOutcome =
+  | { ok: true; kind: 'written' | 'unchanged' | 'skipped' }
+  | { ok: false; kind: 'refused'; reason: string };
+const reported = new Set<string>();
+function refused(dropDir: string): UnreadHintOutcome {
+  const path = unreadHintPath(dropDir);
+  if (!reported.has(path)) {
+    reported.add(path);
+    process.stderr.write('unread hint: write refused; check the recipient state folder\n');
+  }
+  return { ok: false, kind: 'refused', reason: 'the unread hint could not be written safely' };
+}
+
 /** A seat name this file can name: the shape a record's sender carries. */
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 
@@ -57,9 +70,10 @@ function dropFolder(dropDir: string): { dir: string; session: string; seat: stri
 /** The map as it is on disk, or an empty one when there is no readable map. A file that is not
  *  this shape is treated as absent: a hint is re-derived by the next drop, never repaired. */
 function readMap(dropDir: string): HintMap {
+  const text = readStateFile(unreadHintPath(dropDir), undefined, dropFolder(dropDir)?.dir);
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readStateFile(unreadHintPath(dropDir), undefined, dropFolder(dropDir)?.dir) ?? '');
+    parsed = JSON.parse(text ?? '');
   } catch {
     return { v: 1, unread: {} };
   }
@@ -91,7 +105,9 @@ function readMap(dropDir: string): HintMap {
  *  the send path makes; each entry is still only a hint, verified against its record. */
 export function readUnreadHint(dropDir: string, peer: string): UnreadHintEntry[] {
   if (!NAME.test(peer)) return [];
-  const entries = readMap(dropDir).unread[peer]?.entries ?? [];
+  let entries: UnreadHintEntry[];
+  try { entries = readMap(dropDir).unread[peer]?.entries ?? []; }
+  catch { return []; }
   // The instant the sweep's rule names, newest first; an equal instant keeps the greater id, the
   // same order the tree walk settled ties in.
   return [...entries].sort((a, b) => {
@@ -112,7 +128,7 @@ function writeMap(dropDir: string, map: HintMap): void {
  * the later instant; a lock another command holds never blocks the drop — the write is atomic on
  * its own and the sweep verifies the entry it finds, so the worst a race costs is one hint.
  * `held` is for a caller that already holds this folder's seat lock (a reply writes its record
- * and its hint under one lock). Never throws: a hint that cannot be written is a hint missing.
+ * and its hint under one lock). A refused write reports once and returns its outcome; it never throws into the send.
  */
 export function noteUnread(
   dropDir: string,
@@ -120,12 +136,12 @@ export function noteUnread(
   id: string,
   at: string,
   options: { held?: boolean } = {},
-): void {
+): UnreadHintOutcome {
   try {
-    if (!NAME.test(peer) || !NAME.test(id)) return;
-    if (Number.isNaN(Date.parse(at))) return;
+    if (!NAME.test(peer) || !NAME.test(id)) return { ok: true, kind: 'skipped' };
+    if (Number.isNaN(Date.parse(at))) return { ok: true, kind: 'skipped' };
     const folder = dropFolder(dropDir);
-    if (folder === null) return;
+    if (folder === null) return { ok: true, kind: 'skipped' };
     // The lock is best effort: another command holding it, or a tree this drop cannot lock in,
     // never costs the entry. The write is atomic on its own, and a race can only lose a hint —
     // which the sweep settles by verifying whatever it finds.
@@ -140,7 +156,7 @@ export function noteUnread(
     try {
       const map = readMap(dropDir);
       const current = map.unread[peer]?.entries ?? [];
-      if (current.some((entry) => entry.id === id)) return;
+      if (current.some((entry) => entry.id === id)) return { ok: true, kind: 'unchanged' };
       // Newest first, the same order the sweep reads: the later instant, then the greater id when
       // two share one (the order the tree walk settled ties in).
       const entries = [...current, { id, at }]
@@ -151,11 +167,12 @@ export function noteUnread(
         .slice(0, HINTS_PER_SENDER);
       map.unread[peer] = { entries };
       writeMap(dropDir, map);
+      return { ok: true, kind: 'written' };
     } finally {
       if (lock !== null && 'release' in lock) lock.release();
     }
   } catch {
-    // A hint is an optimisation of the sweep, never a step of the send or the read.
+    return refused(dropDir);
   }
 }
 
@@ -166,9 +183,9 @@ export function noteUnread(
  * read-receipt sink; a map that cannot be read or written is left as it is, and the sweep's own
  * verification still settles the stale entry correctly (it marks nothing).
  */
-export function clearUnread(dropDir: string, id: string): void {
+export function clearUnread(dropDir: string, id: string): UnreadHintOutcome {
   try {
-    if (!NAME.test(id)) return;
+    if (!NAME.test(id)) return { ok: true, kind: 'skipped' };
     // Lock when the folder's seat lock is free, like the drop-side write: the clear and a landing
     // drop then serialise, and a read that races one still ends with the hint verifying correctly
     // (the sweep marks nothing for an id that is already read).
@@ -192,10 +209,11 @@ export function clearUnread(dropDir: string, id: string): void {
         else map.unread[peer] = { entries };
       }
       if (changed) writeMap(dropDir, map);
+      return { ok: true, kind: changed ? 'written' : 'unchanged' };
     } finally {
       if (lock !== null && 'release' in lock) lock.release();
     }
   } catch {
-    // The receipt is the message's proof; the hint's leftover is settled by the next sweep.
+    return refused(dropDir);
   }
 }
