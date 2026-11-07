@@ -15,7 +15,7 @@ import { acquireRunLock } from '../src/launch/run-lock.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { readScreen } from '../src/watch/screen.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T09:00:00Z');
 const IDLE = CLAUDE_IDLE;
@@ -164,6 +164,8 @@ function harness(options: { workerPane?: string; present?: boolean; workingFromR
     sleep: async () => {},
     now: () => NOW,
   };
+
+  recordRenames(launch);
   return { sources: { launch, home, now: () => NOW }, closed };
 }
 

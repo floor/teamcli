@@ -3,6 +3,7 @@ import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, ren
 import { join } from 'node:path';
 import type { StoredReading, StoredSpend } from './budgets/readings.ts';
 import { BRIEF_ID_PATTERN, isBriefEpoch, isBriefId, isBriefIncarnation } from './launch/brief-id.ts';
+import { handoverPath } from './handover/paths.ts';
 import { folderProblem, heldAt } from './held.ts';
 import { validLockName } from './lock/name.ts';
 import type { CliWatcher } from './launch/cli-hook.ts';
@@ -112,6 +113,17 @@ export type SeatState = {
    */
   agent_session?: string;
   /**
+   * The pane's own shell pid, and that process's start instant in epoch milliseconds, read when
+   * the workspace was created. A pane herdr has not named yet is placed by this identity: a
+   * caller whose ancestors include that shell — while the live pane's shell still carries that
+   * pid and start — is the seat this record names (`src/caller.ts`). The shell outlives the CLI
+   * it runs, so a resumed pane with a new CLI pid keeps the anchor. Absent on records written
+   * before this build, and on a create whose process herdr could not tell: placement then falls
+   * back to `launched.shell`, at the strength of the named-pane rule.
+   */
+  pane_shell?: number;
+  pane_shell_start?: number;
+  /**
    * The presence runtime incarnation of the seat's current launch (`prs_<12 lowercase hex>`),
    * minted when that launch installs a presence writer and compared whole by the daemon's
    * presence ingester. Presence events carry it, so a late event from a predecessor process
@@ -140,6 +152,12 @@ export type SeatState = {
    * a seat no managed launch has fallen back for, and on every record an older build wrote.
    */
   codex_endpoint_unmanaged?: { why: string; at: string };
+  /**
+   * Set when a Grok launch's first frames said its sandbox was not applied. The stop is this
+   * record: the workspace is closed, nothing is typed, and the team file stays as approved.
+   * `team status` and `team check` read it. Cleared when a later launch reaches ready.
+   */
+  sandbox_unapplied?: { why: string };
   /**
    * The daemon's activity reconciler's fence: the newest applied presence line of the seat's
    * current runtime binding that the canonical state has reconciled. `seq` must equal the current
@@ -275,6 +293,27 @@ export type QueuedSwap = {
    */
   handover?: string;
   forced?: { by: string; at: string };
+};
+
+/**
+ * One checkpoint ask for a seat (context reset R2): the handover path the old conversation is
+ * asked to write before `deadline`, named by `team checkpoint` and read by `restart`. The record
+ * is the project's, like the hold and the pause; a new ask for the same seat replaces it, and it
+ * is offered only inside the terminal-host session that asked. The record names no file's
+ * content — the seat writes the handover, and only a file already at the path is ever used.
+ */
+export type CheckpointRecord = {
+  /** Who asked for the checkpoint: the caller `team checkpoint` judged. */
+  by: string;
+  /** The handover file the seat is asked to write; the swap queue mints the same shape. */
+  path: string;
+  /** The terminal-host session the ask belongs to; another session's ask is not offered. */
+  session: string;
+  /** ISO 8601 instant the ask was made. */
+  at: string;
+  /** ISO 8601 instant after which the seat's write is late. A restart still uses a file that is
+   *  there; a missing one past the deadline is the stale-checkpoint case the lead is told of. */
+  deadline: string;
 };
 
 /**
@@ -452,6 +491,13 @@ export type State = {
    * by `team swap` and carried out by the watch. A seat keeps no new task while its entry stands.
    */
   swaps?: Record<string, QueuedSwap>;
+  /**
+   * The checkpoint asks, by seat (context reset R2): the project's record, written by
+   * `team checkpoint` and read by `restart`. Like the queue it outlives `down` and `up`; a seat's
+   * new ask replaces its old one, and the record never claims a file — only the seat writes the
+   * handover.
+   */
+  checkpoints?: Record<string, CheckpointRecord>;
   sessions: Record<string, SessionState>;
 };
 
@@ -636,6 +682,23 @@ function isQueuedSwap(value: unknown): value is QueuedSwap {
   return true;
 }
 
+/** Whether a value from the state file is the record `team checkpoint` writes: a caller, the
+ *  handover path an ask mints for this seat at its own instant, a terminal-host session, and
+ *  instants that parse. Anything else is dropped at the read door, so a hand-edited file can
+ *  never offer a path it made up. */
+function isCheckpointRecord(value: unknown, dir: string, seat: string): value is CheckpointRecord {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Partial<CheckpointRecord>;
+  if (typeof record.by !== 'string' || record.by === '') return false;
+  if (typeof record.path !== 'string' || record.path === '') return false;
+  if (typeof record.session !== 'string' || record.session === '') return false;
+  if (typeof record.at !== 'string' || Number.isNaN(Date.parse(record.at))) return false;
+  if (typeof record.deadline !== 'string' || Number.isNaN(Date.parse(record.deadline))) return false;
+  // The path is not free text: the ask mints it from the seat and the instant, so a made-up path
+  // — another folder, another seat's name — does not pass the door however well-formed it is.
+  return record.path === handoverPath(dir, seat, new Date(record.at));
+}
+
 // The state in `dir` (the folder of the team file). A missing file is an empty state; a file
 // that can't be read as a state is an error, never silently replaced.
 /** Calls to `readState` since the last reset. A scene wraps one daemon request with it. */
@@ -705,6 +768,16 @@ export function readState(dir: string): State {
   } else if (state.swaps !== undefined) {
     delete state.swaps;
   }
+  // The checkpoint asks pass the same door: a key that is not a name by the lock's rule is
+  // dropped, and so is a record that is not the one `team checkpoint` writes. Only that command
+  // writes a key, so a key that survives is a seat name a reader prints.
+  if (state.checkpoints && typeof state.checkpoints === 'object') {
+    for (const [seat, record] of Object.entries(state.checkpoints)) {
+      if (!validLockName(seat) || !isCheckpointRecord(record, dir, seat)) delete state.checkpoints[seat];
+    }
+  } else if (state.checkpoints !== undefined) {
+    delete state.checkpoints;
+  }
   for (const session of Object.values(state.sessions)) {
     session.seats ??= {};
     session.worktrees ??= {};
@@ -767,6 +840,19 @@ export function readState(dir: string): State {
       if (seat.agent_session !== undefined && (typeof seat.agent_session !== 'string' || seat.agent_session === '')) {
         delete seat.agent_session;
       }
+      // A pane shell and its start enter from the file like every other value: each must be a
+      // positive integer, and a start with no shell to belong to goes with it. A shell with no
+      // start is kept — placement refuses it, which is the fail-closed reading — because the
+      // two are written together and only a create that could not read the start leaves it out.
+      if (seat.pane_shell !== undefined
+        && !(typeof seat.pane_shell === 'number' && Number.isInteger(seat.pane_shell) && seat.pane_shell > 0)) {
+        delete seat.pane_shell;
+      }
+      if (seat.pane_shell_start !== undefined
+        && !(typeof seat.pane_shell_start === 'number' && Number.isInteger(seat.pane_shell_start) && seat.pane_shell_start > 0)) {
+        delete seat.pane_shell_start;
+      }
+      if (seat.pane_shell === undefined) delete seat.pane_shell_start;
       // A webhook delivery record enters from the file like every other value: one the bus wrote
       // has the closed outcome, a count, a reason and a parseable instant, and anything else is
       // dropped whole rather than printed as a failure the bus never reported.
@@ -1117,7 +1203,10 @@ function lockFolderAt(dir: string): { held: ReturnType<typeof heldAt>; problem: 
 // taken over, and `onStale` is told. `waitMs: 0` tries once and throws `LockBusyError` at the
 // first held lock instead of pausing, so a caller on a scheduler tick can defer the same work to
 // a later tick without blocking its event loop.
-export function withLock<T>(dir: string, work: () => T, options: { waitMs?: number; onStale?: (pid: number) => void } = {}): T {
+//
+// `acquireLock` returns the release. The caller holds the key until it calls that release,
+// including across an await. `withLock` is the same acquire around one synchronous `work`.
+export function acquireLock(dir: string, options: { waitMs?: number; onStale?: (pid: number) => void } = {}): () => void {
   const path = join(dir, LOCK_FILE);
   const waitMs = options.waitMs ?? 5000;
   const deadline = Date.now() + waitMs;
@@ -1173,7 +1262,13 @@ export function withLock<T>(dir: string, work: () => T, options: { waitMs?: numb
       const fd = openSync(path, 'wx');
       writeFileSync(fd, `${process.pid}\n`);
       closeSync(fd);
-      break;
+      return () => {
+        try {
+          unlinkSync(path);
+        } catch {
+          // A release that loses the race with a reclaimer has nothing left to drop.
+        }
+      };
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       // A create can meet a folder removed under it as ENOENT; the platform also reported EINVAL
@@ -1251,12 +1346,15 @@ export function withLock<T>(dir: string, work: () => T, options: { waitMs?: numb
       }
     }
   }
+}
+
+/** Runs `work` while this call holds `dir`'s lock, and releases the key when `work` returns. */
+export function withLock<T>(dir: string, work: () => T, options: { waitMs?: number; onStale?: (pid: number) => void } = {}): T {
+  const release = acquireLock(dir, options);
   try {
     return work();
   } finally {
-    try {
-      unlinkSync(path);
-    } catch {}
+    release();
   }
 }
 

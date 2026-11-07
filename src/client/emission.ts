@@ -21,7 +21,7 @@ import { charterLifetime } from '../charter/check.ts';
 import { findTeam } from '../registry/teams.ts';
 import { loadAndResolvePolicyChain } from '../policy/sources.ts';
 import { keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
-import { readOwnerSeat, signOwnerAnswer, systemOwnerSeatKeyStore, verifyOwnerAnswer, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
+import { answerDeadline, readOwnerSeat, signOwnerAnswer, systemOwnerSeatKeyStore, verifyOwnerAnswer, type AnswerWindow, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
 import type { Fingerprints } from '../approve/fingerprint.ts';
 import { CLIENT_EXPIRY_MAX_MS, canonicalTeamOps, resolveEntityCoordinator, teamGrantLabel, planClientGrant, planClientUpGrant, planClientBundleGrant, writeClientBundleGrant, writeClientGrant, writeClientUpGrant, type ClientBundleGrantRequest, type ClientGrantRequest, type ClientGrantRecord, type ClientGrantScope, type ClientTeamOp, type ClientUpGrantRecord, type ClientUpGrantRequest } from './records.ts';
 import { upBindingProblem } from './up-grant.ts';
@@ -308,6 +308,70 @@ export function answerChoiceOf(word: string): 'once' | 'always' | 'deny' | null 
   return null;
 }
 
+/** The offset a bare `later` means. The other words land on 08:00 local. */
+const LATER_OFFSET_MS = 4 * 60 * 60 * 1000;
+const WEEKDAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+type WallClock = { year: number; month: number; day: number; hours: number; minutes: number; seconds: number };
+
+/** The wall-clock reading of `at` in `zone`; `null` when the zone is not one this build reads. */
+function wallClockOf(at: number, zone: string): WallClock | null {
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+    }).formatToParts(new Date(at));
+    const read = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+    const wall = { year: read('year'), month: read('month'), day: read('day'), hours: read('hour'), minutes: read('minute'), seconds: read('second') };
+    return Object.values(wall).every((n) => Number.isFinite(n)) ? wall : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The instant whose wall clock in `zone` reads the given date at 08:00. */
+function eightOClockLocal(year: number, month: number, day: number, zone: string): number {
+  const target = Date.UTC(year, month - 1, day, 8, 0, 0);
+  let guess = target;
+  for (let i = 0; i < 3; i++) {
+    const wall = wallClockOf(guess, zone);
+    if (wall === null) return NaN;
+    const correction = target - Date.UTC(wall.year, wall.month - 1, wall.day, wall.hours, wall.minutes, wall.seconds);
+    if (correction === 0) break;
+    guess += correction;
+  }
+  return guess;
+}
+
+/**
+ * The return instant a later word means, or `null` for a word this list does not name: `later` is
+ * four hours on; `tomorrow` and a weekday name land at 08:00 local (a weekday still ahead at 08:00
+ * means today, one already past means next week). Case and surrounding spaces do not matter.
+ */
+export function deferUntilOf(word: string, from: Date, zone: string = Intl.DateTimeFormat().resolvedOptions().timeZone): Date | null {
+  const w = word.trim().toLowerCase();
+  if (w === 'later') return new Date(from.getTime() + LATER_OFFSET_MS);
+  const wall = wallClockOf(from.getTime(), zone);
+  if (wall === null) return null;
+  const today = Date.UTC(wall.year, wall.month - 1, wall.day);
+  let target: number;
+  if (w === 'tomorrow') {
+    target = today + 24 * 60 * 60 * 1000;
+  } else {
+    const weekday = WEEKDAY_NAMES.indexOf(w);
+    if (weekday < 0) return null;
+    const ahead = (weekday - new Date(today).getUTCDay() + 7) % 7;
+    target = today + ahead * 24 * 60 * 60 * 1000;
+    if (ahead === 0 && eightOClockLocal(new Date(target).getUTCFullYear(), new Date(target).getUTCMonth() + 1, new Date(target).getUTCDate(), zone) <= from.getTime()) {
+      target += 7 * 24 * 60 * 60 * 1000;
+    }
+  }
+  const date = new Date(target);
+  const instant = eightOClockLocal(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate(), zone);
+  if (!Number.isFinite(instant)) return null;
+  return instant > from.getTime() ? new Date(instant) : null;
+}
+
 /** The confirmation line the owner reads for a request. */
 export function confirmationLine(requestId: string, p: PendingGrantParams, now: Date, home?: string): string {
   return `Grant request ${requestId}: ${pendingSummary(p, now, home).text} Authorized? reply oui/approved, always, or non/deny (team grant --answer ${requestId} <oui|always|non>)`;
@@ -318,7 +382,7 @@ export function confirmationLine(requestId: string, p: PendingGrantParams, now: 
  * answer names the request id and its parameter hash and is signed with the owner key, so it
  * approves exactly that request. One answer per request.
  */
-export function answerPendingGrant(home: string, requestId: string, word: string, now: Date = new Date()): { ok: true; choice: 'once' | 'always' | 'deny'; summary: string } | { ok: false; why: string } {
+export function answerPendingGrant(home: string, requestId: string, word: string, now: Date = new Date(), store?: OwnerSeatKeyStore): { ok: true; choice: 'once' | 'always' | 'deny'; summary: string } | { ok: false; why: string } {
   if (!GRANT_REQUEST_ID_PATTERN.test(requestId)) return { ok: false, why: `"${requestId}" is not a grant request id` };
   const choice = answerChoiceOf(word);
   if (choice === null) return { ok: false, why: `"${word}" is not an answer: oui/approved/yes, always, or non/deny` };
@@ -326,7 +390,8 @@ export function answerPendingGrant(home: string, requestId: string, word: string
   if (key === null) return { ok: false, why: 'the owner signing key is absent or unreadable' };
   const record = readPending(home, requestId, key);
   if (typeof record === 'string') return { ok: false, why: record };
-  if (Date.parse(record.expires_at) <= now.getTime()) return { ok: false, why: `request ${requestId} expired at ${record.expires_at}` };
+  const deadline = answerDeadline(home, grantRequestsFolder(home), requestId, windowOf(record), store ?? systemOwnerSeatKeyStore(), now, GRANT_REQUEST_TTL_MS, record.params.entity);
+  if (deadline <= now.getTime()) return { ok: false, why: `request ${requestId} expired at ${record.expires_at}` };
   if (choice === 'always' && record.params.allow_grant) return { ok: false, why: 'a master grant is never approved always; answer oui to approve it once' };
   if (choice === 'always' && record.params.up) return { ok: false, why: UP_NEVER_ALWAYS };
   if (choice === 'always' && record.params.expires_never === true) return { ok: false, why: NO_END_NEVER_ALWAYS };
@@ -371,7 +436,8 @@ export function approveAsOwnerSeat(
   if (key === null) return { ok: false, why: 'the owner signing key is absent or unreadable: the pending request cannot be read' };
   const record = readPending(home, requestId, key);
   if (typeof record === 'string') return { ok: false, why: record };
-  if (Date.parse(record.expires_at) <= now.getTime()) return { ok: false, why: `request ${requestId} expired at ${record.expires_at}` };
+  const deadline = answerDeadline(home, grantRequestsFolder(home), requestId, windowOf(record), store, now, GRANT_REQUEST_TTL_MS, record.params.entity);
+  if (deadline <= now.getTime()) return { ok: false, why: `request ${requestId} expired at ${record.expires_at}` };
   if (choice === 'always' && record.params.allow_grant) return { ok: false, why: 'a master grant is never approved always; answer oui to approve it once' };
   if (choice === 'always' && record.params.up) return { ok: false, why: UP_NEVER_ALWAYS };
   if (choice === 'always' && record.params.expires_never === true) return { ok: false, why: NO_END_NEVER_ALWAYS };
@@ -415,7 +481,8 @@ function readOwnerSeatAnswer(home: string, record: PendingGrantRecord, store: Ow
   if (answer.kind !== 'grant' || answer.request_id !== record.request_id || answer.params_sha256 !== record.params_sha256) {
     return { ok: false, why: `the owner-seat answer is not bound to request ${record.request_id} and its parameters` };
   }
-  if (!(Date.parse(answer.at) <= Date.parse(record.expires_at))) return { ok: false, why: `the owner-seat answer to ${record.request_id} was given after the request expired` };
+  const deadline = answerDeadline(home, grantRequestsFolder(home), record.request_id, windowOf(record), store, now, GRANT_REQUEST_TTL_MS, record.params.entity);
+  if (!(Date.parse(answer.at) <= deadline)) return { ok: false, why: `the owner-seat answer to ${record.request_id} was given after the request expired` };
   return answer.choice === 'once' || answer.choice === 'always' || answer.choice === 'deny' ? { ok: true, choice: answer.choice } : { ok: false, why: 'the owner-seat answer carries no choice' };
 }
 
@@ -443,6 +510,11 @@ function readOwnerAnswer(home: string, record: PendingGrantRecord, key: KeyObjec
 
 export function grantRequestsFolder(home: string = homedir()): string {
   return join(home, '.config', 'team', 'grant-requests');
+}
+
+/** The binding a deferral must name and the window an extension counts from. */
+function windowOf(record: PendingGrantRecord): AnswerWindow {
+  return { params_sha256: record.params_sha256, created: record.created, expires_at: record.expires_at };
 }
 
 export function grantEmissionAuditFolder(home: string = homedir()): string {
@@ -586,14 +658,16 @@ export function executePendingGrant(
   }
   const emission = grantEmissionOf(home, record.params.entity, now);
   if (emission.mode !== 'conversational') return { ok: false, why: `grant-emission for entity "${record.params.entity}" is owner-terminal` };
-  if (Date.parse(record.expires_at) <= now.getTime()) return { ok: false, why: `request ${input.requestId} expired at ${record.expires_at}` };
+  const seatStore = options.ownerSeatStore ?? systemOwnerSeatKeyStore();
+  const deadline = answerDeadline(home, grantRequestsFolder(home), input.requestId, windowOf(record), seatStore, now, GRANT_REQUEST_TTL_MS, record.params.entity);
+  if (deadline <= now.getTime()) return { ok: false, why: `request ${input.requestId} expired at ${record.expires_at}` };
   // With no code, the approval is the owner seat's answer (signed by its credential-store key)
   // when one was given, and otherwise the owner's terminal answer, both bound to this id and hash.
   let viaSeat = false;
   if (input.code === undefined) {
     const folder = grantRequestsFolder(home);
     const seat = existsSync(join(folder, `${record.request_id}.seat-answer.json`))
-      ? readOwnerSeatAnswer(home, record, options.ownerSeatStore ?? systemOwnerSeatKeyStore(), now)
+      ? readOwnerSeatAnswer(home, record, seatStore, now)
       : null;
     if (seat !== null && seat.ok) {
       if (seat.choice === 'deny') return { ok: false, why: `the owner seat denied request ${input.requestId}` };

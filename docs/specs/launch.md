@@ -60,9 +60,17 @@ Then, in this order:
 | Part | Written from |
 |---|---|
 | the profile's own rules | the profile's `standing_rules`, a safety line the CLI makes necessary; often empty |
+| the entity's rules | `<entity>.rules` in `~/.config/team/entities.yaml` when the team belongs to an entity that declares rules |
+| the home project's rules | `projects.<id>.rules` in `~/.config/team/projects.yaml` for the team's **home** project only (`in_project` / `project_id`; served projects do not apply) |
 | the file's rules | the team file's `rules` list |
 | the signature lines | two lines, from the file's signature templates and the seat |
 | the workspace lines | the protected checkouts, and the worktree or shared-folder line |
+
+When entity rules or home-project rules are present, each present part (`Entity rules (<entity>):`,
+`Project rules (<project>):`, `Team rules:`) sits under its own short heading so a seat sees where a
+line came from. Rules are text: there is no precedence, override, or merge; order is the whole
+meaning, and a team cannot drop an entity rule. One text, one hash, and one delivery cover the
+composed sequence, and `team status` / `team doctor` check the rules file against the composed text.
 
 The signature lines:
 
@@ -177,6 +185,7 @@ fields:
 | `unattended` | string[] | options that run the CLI without approvals |
 | `rules` | `first-message` \| `prepend` \| `{ option: <flag> }` | the delivery: `first-message` reads as `message`, `{ option }` as `option` |
 | `delivery` | `push` \| `between-turns` \| `pull-on-turn` \| `none` | the measured way an idle seat of this CLI is reached: an event adapter that wakes it (the development channel, the cross-session socket), its runtime's own queue between turns, an MCP inbox read when it takes a turn, or nothing; the launch refines it (`src/launch/delivery-class.ts`) |
+| `wake` | `agent-prompt` | how a declared typed wake is handed to the pane; absent, the wake types the line and presses Enter; `agent-prompt` asks the terminal host to prompt the agent and types nothing; refused unless `typed_wake` is declared (`src/profiles/profile.ts`) |
 | `standing_rules` | string[] | rules for every seat of this CLI, over the file's |
 | `public_only` | boolean | every seat of this CLI is public-only: no rules are prepended to its briefs, and a send reads the body against the machine's private lists before the CLI's session call; the session's target repository must also be proven public by one credential-free read of the forge's own record (`src/send/repo-visibility.ts`); absent reads as false (`src/send/public-only.ts`) |
 | `login.check`, `login.hint` | string[] / string | the arguments that exit 0 only when logged in, and the login command |

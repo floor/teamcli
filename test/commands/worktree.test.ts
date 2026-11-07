@@ -537,6 +537,9 @@ describe('team worktree and the live file', () => {
     record.format = 1;
     delete record.generation;
     delete record.signature;
+    // `lead` and `actor` belong to a signed record. A legacy record is that shape without them.
+    delete record.lead;
+    delete record.actor;
     writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`);
     const io = await run(['new', 'select-width', '--kind', 'fix']);
     expect(io.code).toBe(1);

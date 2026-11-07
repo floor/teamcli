@@ -2,8 +2,11 @@ import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { profileFor } from '../profiles/index.ts';
-import { lobbyPath } from '../worktree/place.ts';
+import { lobbyPath, seatStart } from '../worktree/place.ts';
+import { worktreeOf, type SessionState } from '../state.ts';
 import { shellScriptWordOf } from './cli-scope.ts';
+import { channelLobbyFolder, claudeChannelSeat } from '../mcp/launch-config.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
 import { shellWordsReason, shellWordSources } from './shell-words.ts';
 
 // A launch line is not shell-parsed: `team` splits it the way it always has, on whitespace, and
@@ -88,6 +91,8 @@ export type LineSources = {
    *  path this is also the executability test main's launcher check used: `accessSync(…, X_OK)`. */
   onPath(binary: string): boolean;
   home: string;
+  /** Recorded starts used by the same placement gate as the launch. */
+  state?: Pick<SessionState, 'seats' | 'worktrees'>;
 };
 
 function miss(why: string, record?: string): LineFinding {
@@ -307,6 +312,12 @@ export function launchLineFinding(
   sources: LineSources,
   start?: { cwd: string; folder: string },
 ): LineFinding | null {
+  if (seat.cli === 'grok' || seat.cli === 'cursor') {
+    const placed = seatStart(team, start === undefined ? seat : { ...seat, cwd: start.cwd }, root, sources.home,
+      undefined, start === undefined ? worktreeOf(sources.state, seat.name)?.path : undefined, sources.state);
+    if ('problem' in placed) return miss(placed.problem);
+    start = { cwd: resolve(root, placed.cwd), folder: placed.cwd };
+  }
   const launch = seat.launch;
   // A line whose quoting never closes is not a command any shell can read: it is refused in
   // plain words, before any of the readings below guess at its words. A line a shell can run
@@ -318,7 +329,8 @@ export function launchLineFinding(
   const words = launch.trim().split(/\s+/).filter((word) => word !== '');
   const program = launchBinary(launch);
   if (program === null) return note('its launch line names no command');
-  const folder = start?.folder ?? startFolder(team, seat);
+  const folder = start?.folder ?? (claudeChannelSeat(seat)
+    ? channelLobbyFolder(lobbyOf(sources.home, root, team), seat) : startFolder(team, seat));
   const cwd = start?.cwd ?? resolve(root, folder);
   const naked = nakedWord(program);
   const missing = programFinding(naked, program, profileFor(seat.cli)?.binary ?? null, cwd, folder, sources);

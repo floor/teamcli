@@ -118,6 +118,7 @@ async function runWith(
     io,
     {
       home,
+      accountHome: home,
       service: manager,
       start: async (input) => {
         started.push(input);

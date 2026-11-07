@@ -23,13 +23,20 @@ it also delivers to that seat without relaunching it; `team add`, `team register
 before any launch. A listing shows only the delivery the seat's current claim names: the
 superseded ids its claim records are skipped by name, and a launch record whose digest or
 incarnation is not the claim's is not waiting mail. `team drops --read` serves the same current
-claim — it verifies the record, writes its receipt and prints the brief, and an earlier delivery
+claim — it verifies the record, prints the brief, and writes its receipt after that hand-over, and an earlier delivery
 is skipped without a receipt and without a refusal.
 
 `team drops --read` is the same folder served to the launch's own turn-start hook: the launch
 line names the seat and session, each waiting record is verified with the checkout's message
-key, its signed `<id>.read.json` receipt is written before its body is printed, and at most ten
-bodies are handed over a run, newest first. A plain-text drop an earlier build wrote cannot be
+key, its body is printed, and its signed `<id>.read.json` receipt is written after that hand-over.
+That read is at-least-once: two racing readers can both print a body, and the exclusive receipt
+still means only one of them writes it. A hand-over that never returns leaves the message unread.
+The inbox server stays receipt-first: `inbox_read` writes the receipt before it returns the body.
+At most ten
+bodies are handed over a run, newest first. A served body is printed with its compact sender header:
+its `from … — admitted by: …` line is folded into `from <name> (<short rule>):` (or `Client <Display> (owner relay):` for a client, or `<Kind> seat <name> (<short rule>):` for a Gemini, Codex or Grok seat), and a body with
+no such line folds its record sender and rule into the same compact header (`from <sender> (<short rule>):` or `from <sender>:`). The words of the message itself are
+never rewritten. A plain-text drop an earlier build wrote cannot be
 verified at all: the read skips it, reports it by count on stderr, and leaves it in place, and it
 does not use one of the ten. A signed record an earlier build wrote under the `unread-<uuid>`
 name it gave a runtime report to the team's lead is served and receipted like any other record:
@@ -39,7 +46,7 @@ general seat brief, is not a body either and does not use one of the ten. A read
 caller, as the listing does: the launch's hook runs inside the seat's own pane process tree, so
 the pids place it as the seat the launch names. Only the seat itself receipts: the owner and a
 lead (the orchestrator or the operator) may read any seat's drops, but as a peek — the body is
-shown, no receipt is written, nothing is marked read, and the message still waits for its seat.
+shown with the same sender mark a read shows, no receipt is written, nothing is marked read, and the message still waits for its seat.
 A peek is written to the team log with the reader, the seat and the ids it showed, so a look at
 another seat's mail leaves a trace without taking the mail. Every other caller — another seat, a
 pane with no agent name, an unplaced shell — is refused before a record is read: nothing is
@@ -51,9 +58,11 @@ disk is the same id, incarnation, digest and epoch, and a process started under 
 runtime serves nothing until its seat is launched again. With no `--epoch` — a read by hand — the
 receipt binds the claim it serves.
 
-A receipt beside a drop says it was handed over, and a drop with one is read and not listed:
-the seat's inbox server writes `<id>.read.json` when an `inbox_read` call returns the message,
-and the turn-start `team drops --read` writes the same receipt before it hands a body over; it
+A receipt beside a drop says it was handed over, and a drop with one is read and not listed.
+The seat's inbox server writes `<id>.read.json` before `inbox_read` returns the body, so that
+path is receipt-first and a second reader is served nothing. The turn-start `team drops --read`
+prints the body and writes the same receipt after that hand-over, so that path is at-least-once
+and two racing readers can both print a body. It
 is the same signed status receipt `team messages` writes, signed with the checkout's message
 key. `team drops` verifies it; a file at that name the key did not sign, or one naming
 another message, seat, checkout or session, proves nothing and the drop is still listed. A
@@ -74,9 +83,9 @@ refusal, its body is not printed, and the file is left in place — only
 
 | Flag | Value | Effect |
 | --- | --- | --- |
-| `--follow` | — | keep reading the folder and print one line per new drop, `from <sender> — <path>`, flushed as each is read; Ctrl-C stops it and exits 0 |
+| `--follow` | — | keep reading the folder and print one line per new drop, `from <sender> — <path>` (`<sender>` carries `(unverified claim)` for a shared-key record, `(attributed)` for the launch brief, or `(unattributed)` when no key could vouch for the file), flushed as each is read; Ctrl-C stops it and exits 0 |
 | `--json` | — | print one `team.drops` document (`format: 1`, `project`, `session`, `seat`, `drops`, `counts`) |
-| `--read` | — | hand the seat's waiting messages to the launch's turn: verify each record, write its signed `<id>.read.json` receipt, then print its body; at most ten a run, newest first. `--seat` is required. Only the seat itself receipts; the owner and a lead are served the same bodies as a peek — nothing is written or marked read, and the peek is logged |
+| `--read` | — | hand the seat's waiting messages to the launch's turn: verify each record, print its body, then write its signed `<id>.read.json` receipt after that hand-over; at most ten a run, newest first. Two racing readers can both print a body. `--seat` is required. Only the seat itself receipts; the owner and a lead are served the same bodies as a peek — nothing is written or marked read, and the peek is logged |
 | `--seat` | a seat name | the seat whose folder `--read` serves; only with `--read` |
 | `--session` | a session name | the launch's session, when given; only with `--read`, and it must be the team file's own |
 | `--epoch` | a runtime epoch | the epoch the launch started this reader under; when given, only a brief delivered under that epoch is served; only with `--read` |
@@ -131,11 +140,15 @@ A reading prints the context line (`team <project>, session "<session>"`), the t
 with one row per waiting drop, then one summary line, `<n> drop` or `<n> drops`. `FROM` is the
 sender the record names — `the owner`, a seat's name, or a registered name — or, in a raw body
 file an earlier build wrote, the sender its first line names. It reads `unknown` when there is
-neither, and when a record does not verify against the message key. `PATH` is the file's absolute
-path.
+neither, and when a record does not verify against the message key. A named sender carries
+`(unverified claim)` when only the shared checkout key verified the record, `(attributed)` when
+the launch's current general seat brief is bound to the seat's own claim, and `(unattributed)`
+otherwise: a raw drop's first line is only the file's word, and a record this key cannot vouch
+for is no one's. `PATH` is the file's absolute path.
 
 A follow prints nothing at start: the drops already on disk are waiting, not new. Then it prints
-one line, `from <sender> — <path>`, for each drop that appears, and Ctrl-C stops it with exit 0.
+one line, `from <sender> — <path>`, for each drop that appears, with `<sender>` marked
+`(unverified claim)`, `(attributed)`, or `(unattributed)` as in the table, and Ctrl-C stops it with exit 0.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
@@ -152,8 +165,10 @@ one line, `from <sender> — <path>`, for each drop that appears, and Ctrl-C sto
 | `--read` named another session, or a seat the file does not declare | `team drops: the team's session is "…", not "…"`, or `team drops: the team file declares no seat "…"` | 1 |
 | the invocation can't be read, `--follow` and `--json` are both given, `--read` is given without `--seat` or with `--follow` or `--json`, or this folder is neither a checkout nor a team root | `team drops: <problem>`, with the usage for the invocation | 2 |
 
-The `--json` document is `{"schema": {"name": "team.drops", "version": 1}, "format": 1, "project": …, "session": …, "seat": …, "drops": [{"from": …, "received": …, "path": …}], "counts": {"drops": …}}`.
-`received` is the file's modification time, ISO 8601.
+The `--json` document is `{"schema": {"name": "team.drops", "version": 1}, "format": 1, "project": …, "session": …, "seat": …, "drops": [{"from": …, "sender_attribution": …, "received": …, "path": …}], "counts": {"drops": …}}`.
+`received` is the file's modification time, ISO 8601; `sender_attribution` is `unverified_claim`
+for a record only the shared checkout key verified, `launch-brief` for the seat's current general
+seat brief bound to its claim, and `none` for a raw drop or a record no key could vouch for.
 
 ## Example
 
@@ -205,8 +220,8 @@ orchestrator: read the review note, then report.
 ```console caller=claude-keeper
 $ team drops ; echo "exit $?"
 team beacon, session "beacon"
-  FROM          PATH
-  orchestrator  ./.agents/send-drops/beacon/claude-keeper/3b3e9a27-e222-4e2e-90d9-95f4273e319d
+  FROM                         PATH
+  orchestrator (unattributed)  ./.agents/send-drops/beacon/claude-keeper/3b3e9a27-e222-4e2e-90d9-95f4273e319d
 
 1 drop
 exit 0
@@ -222,9 +237,9 @@ an older build left this body with no sender line
 ```console caller=claude-keeper
 $ team drops ; echo "exit $?"
 team beacon, session "beacon"
-  FROM          PATH
-  orchestrator  ./.agents/send-drops/beacon/claude-keeper/3b3e9a27-e222-4e2e-90d9-95f4273e319d
-  unknown       ./.agents/send-drops/beacon/claude-keeper/0a5b7c1d-8e2f-4a6b-9c3d-1e2f3a4b5c6d
+  FROM                         PATH
+  orchestrator (unattributed)  ./.agents/send-drops/beacon/claude-keeper/3b3e9a27-e222-4e2e-90d9-95f4273e319d
+  unknown                      ./.agents/send-drops/beacon/claude-keeper/0a5b7c1d-8e2f-4a6b-9c3d-1e2f3a4b5c6d
 
 2 drops
 exit 0

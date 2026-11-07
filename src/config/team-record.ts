@@ -163,7 +163,8 @@ function scalar(value: string | number | boolean | null): string {
 }
 
 function key(name: string): string {
-  return /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(name) ? name : JSON.stringify(name);
+  const bare = /^[A-Za-z_./@~][A-Za-z0-9_./@~+-]*$/.test(name) && !RESERVED.test(name);
+  return bare ? name : JSON.stringify(name);
 }
 
 function emptyOrScalar(value: YamlValue): string | null {

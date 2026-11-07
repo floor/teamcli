@@ -428,7 +428,10 @@ describe('a message-transport full brief sent end to end', () => {
     const readIo = testIo(w.root, { kind: 'seat', name: SEAT, pane: 'pane-reader', session: SESSION });
     const read = await runDrops(['--read', '--seat', SEAT, '--session', SESSION], readIo, { home: w.home });
     expect(read, readIo.err).toBe(0);
-    expect(readIo.out).toBe(`${HEADER}\n\n${text}\n`);
+    // The read opens with the compact sender header. The owner's stored opening is `the owner`,
+    // which the owner claim does not fold into, so both lines stand: the header, then the body
+    // with the stored opening it already carried.
+    expect(readIo.out).toBe(`from owner (owner):\n\n${HEADER}\n\n${text}\n`);
     expect(readIo.err).toBe('');
     const at = receiptPath(dropDir, rec.id);
     const receipt = signedReceiptOf(JSON.parse(readFileSync(at, 'utf8')));
@@ -445,10 +448,14 @@ describe('a message-transport full brief sent end to end', () => {
       session: SESSION,
     });
 
-    // Write-once: the next turn finds nothing waiting, so the full body is not served twice.
+    // Write-once: the next turn names that read on stderr and serves no body.
     const againIo = testIo(w.root, { kind: 'seat', name: SEAT, pane: 'pane-reader', session: SESSION });
     const again = await runDrops(['--read', '--seat', SEAT, '--session', SESSION], againIo, { home: w.home });
     expect(again, againIo.err).toBe(0);
     expect(againIo.out).toBe('');
+    expect(againIo.out).not.toContain(text);
+    expect(againIo.out).not.toContain(HEADER);
+    expect(againIo.err).toContain('no unread drops');
+    expect(againIo.err).toContain(`${rec.id}: already read at`);
   });
 });

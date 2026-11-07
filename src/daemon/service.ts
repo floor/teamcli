@@ -210,9 +210,20 @@ export type ServiceRestartSuccess = {
 
 export type ServiceRestartResult = ServiceRestartSuccess | ServiceRestartFailure;
 
+/** One loaded unit's own program words, from the manager's records. */
+export type LoadedServiceProgram = { label: string; program: readonly string[] };
+
 export type ServiceManager = {
   readonly kind: 'system-service-manager';
+  /** The login account home directory read by the adapter, or null when it cannot be read. */
+  accountHome?(): string | null;
   unitPath(home: string): string;
+  /**
+   * Every loaded unit's label and program words, when the adapter can read them. Used only
+   * to hold a runtime-home folder a loaded unit still names — never to stop anything.
+   * Absent: no folder is held on a unit's word.
+   */
+  loadedPrograms?(home: string): LoadedServiceProgram[];
   plan(home: string, program: ServiceProgram): ServicePlan;
   /**
    * The manager's own record of the job under the daemon's label: the pid it started and the
@@ -245,6 +256,12 @@ export type ServiceManager = {
    * growing retries answers `refused` with no daemon running.
    */
   restart(home: string): ServiceRestartResult;
+  /**
+   * Stops and removes one shuttle unit. Optional: a manager that does not carry shuttle units
+   * omits it, and a test double that never retires omits it too. A unit that is not loaded is
+   * still retired when its definition is gone. Nothing starts the unit again.
+   */
+  retireUnit?(home: string, label: string): { ok: true } | { ok: false; why: string };
 };
 
 export type ServiceManagerOptions = {
@@ -252,6 +269,8 @@ export type ServiceManagerOptions = {
   runner?: ServiceRunner;
   /** The user the unit starts for; defaults to this process's uid. */
   uid?: number;
+  /** Injected for a synthetic-home test so the derivation treats that home as the account home. */
+  accountHome?: string;
   platform?: NodeJS.Platform;
   /** Injected clock for the adapter's own log lines, when it writes any. */
   now?: () => Date;

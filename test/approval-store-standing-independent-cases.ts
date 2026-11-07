@@ -54,7 +54,7 @@ async function up(w: World, dev: boolean) {
     closeWorkspace: () => { throw new Error('synthetic launch must become ready'); }, agentPanes: () => agents().map(a => a.pane), agents, paneText: () => CLAUDE_IDLE, foreground: () => ['claude'], agentStatus: () => 'idle', processInfo: () => ({ shell: 601, foreground: [602] }), now, sleep };
   const machine = () => ({ loadPerCore: 0.1, memoryFree: 80, diskFree: 1024 ** 4, swapTotal: 1024 ** 3, swapFree: 1024 ** 3, swapUsed: 0, pressure: 'normal' as const });
   const sources: UpSources = { home: w.home, sessionRunning: () => false, sessionState: () => 'absent', agents: () => [], alive: () => false, now, sleep, machine, launch,
-    doctor: { home: w.home, version: () => '2.1.302', onPath: () => true, loggedIn: () => true, herdrVersion: () => '0.7.1', sessionRunning: () => false, now, machine } };
+    doctor: { home: w.home, version: () => '2.1.302', onPath: () => true, loggedIn: () => true, herdrVersion: () => '0.7.1', sessionRunning: () => false, now } };
   const io = testIo(w.root, { kind: 'owner' }); if (dev) io.env[['TEAMCLI','DEV','MODE'].join('_')] = '1';
   const prior = process.env.TEAM_CONFIG_SOURCE; process.env.TEAM_CONFIG_SOURCE = 'file';
   try { return { code: await runUp([], io, sources), io, launches, hostEffects }; }

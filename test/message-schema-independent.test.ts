@@ -19,6 +19,8 @@ import { version } from '../src/version.ts';
 
 const ID = '7e845e08-8fe7-49f0-8ae2-c01c59496110';
 const BODY = 'Synthetic message body for the independent schema matrix.';
+/** The body as the reader serves it: nothing attests the fixture's claim, so it opens marked. */
+const SERVED = `from worker (a synthetic worker to its declared lead):\n\n${BODY}`;
 const SESSION = 'acme';
 const EPOCH = 'run_123456abcdef';
 // The earlier signer accepts the first two arguments and ignores options. Keeping the same
@@ -94,7 +96,7 @@ describe('independent signed message schema matrix', () => {
       const payload = { ...at.payload, ...(subject === undefined ? {} : { subject }) };
       const signed = at.put(payload);
       expect(verifyDomain(MESSAGE_DOMAIN, payload, signed.signature, at.key)).toBe(true);
-      expect(at.read()).toEqual({ ok: true, body: BODY });
+      expect(at.read()).toEqual({ ok: true, body: SERVED });
       expect(verifyReceipt(at.parsedReceipt(), at.key)).toBe(true);
       const before = readFileSync(at.receipt, 'utf8');
       expect(at.read()).toMatchObject({ ok: false, served: 'already-served' });
@@ -201,7 +203,7 @@ describe('independent signed message schema matrix', () => {
   test('the reader signs its version, process id and supplied runtime epoch into the receipt', () => {
     const at = scene();
     at.put(at.payload);
-    expect(readMessage(at.target, ID, at.home, { claim: () => null, epoch: EPOCH })).toEqual({ ok: true, body: BODY });
+    expect(readMessage(at.target, ID, at.home, { claim: () => null, epoch: EPOCH })).toEqual({ ok: true, body: SERVED });
     const raw = JSON.parse(readFileSync(at.receipt, 'utf8'));
     expect(raw.payload.writer).toEqual({ version: version(), pid: process.pid, epoch: EPOCH });
     expect(verifyReceipt(at.parsedReceipt(), at.key)).toBe(true);
@@ -210,7 +212,7 @@ describe('independent signed message schema matrix', () => {
   test('a reader with no runtime epoch does not invent one', () => {
     const at = scene();
     at.put(at.payload);
-    expect(at.read()).toEqual({ ok: true, body: BODY });
+    expect(at.read()).toEqual({ ok: true, body: SERVED });
     const raw = JSON.parse(readFileSync(at.receipt, 'utf8'));
     expect(raw.payload.writer).toEqual({ version: version(), pid: process.pid });
   });

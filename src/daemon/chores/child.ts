@@ -17,10 +17,15 @@
 // The child leaves when its host asks it to and when its input ends — a daemon that died closes
 // the pipe, so a child never outlives the daemon that started it.
 import { markerCacheStats } from '../../send/fallback-events.ts';
+import type { ReminderProvider } from '../../reminder/provider.ts';
+import type { ReminderSend, ReminderSpec } from '../../reminder/run.ts';
 import { createFallbackPass } from './fallback.ts';
 import { createPresencePass, type ChoresPresencePass } from './presence.ts';
+import { createSidebarPass } from './sidebar.ts';
 import type { ChoresWatch, ChoresWatchInput } from './watch.ts';
 import type { WatchSources } from '../../commands/watch.ts';
+import { runWatchdogSlice, watchdogState, type WatchdogSeat, type WatchdogState } from '../../seat-health/pass.ts';
+import type { RestartReady } from '../../seat-health/restart.ts';
 import {
   CHORES_FRAME_LIMIT,
   parseChoresFrame,
@@ -57,15 +62,27 @@ export type ServeChoresChildInput = {
   stdout: NodeJS.WritableStream;
   now?: () => Date;
   /** The real chores. The default is the fallback sweep this step moved here; the presence
-   *  steps are the second set. A test injects its own to observe the budget and the notes. */
+   *  steps are the second set, and the sidebar display refresh is the third. A test injects its
+   *  own to observe the budget and the notes. */
   pass?: ChoresPass;
+  /** The sidebar display-agent TTL refresh pass. A test injects its own; when `pass` is
+   *  injected alone to observe slice scheduling, this is skipped unless explicitly provided. */
+  sidebar?: ChoresPass;
   /** The presence steps (activity, reconcile, publisher). A test injects its own. */
   presence?: ChoresPresencePass;
+  /** The machine reminder's own seams: the list reader and the transport. A test injects its
+   *  own so a scene drives the beat without a machine folder or a socket; production builds the
+   *  reader from the token's hosted checkouts and the transport from the verified daemon
+   *  sender, which proves the daemon this child runs under before every leg. */
+  reminder?: { provider?: ReminderProvider; send?: ReminderSend };
   /** Builds the hosted watches a token's routes name. The default loads the production module
    *  only when a route carries a watch; a test injects its own to observe the frames. */
   watchFactory?: (input: ChoresWatchInput) => ChoresWatch;
   /** Test seam: the read sources the injected or real watches run over. */
   watchBase?: WatchSources;
+  /** The seat-health watchdog. A test injects one. When the token asks for it and nothing is
+   *  injected, the child builds the real one after its first heartbeat. */
+  watchdog?: SeatHealthPorts;
   /** The marker cache whose counts ride the heartbeat. The default is this process's own, which
    *  is the cache the fallback sweep fills; a test injects a quiet reading so its scene never
    *  depends on another test's files. */
@@ -75,6 +92,16 @@ export type ServeChoresChildInput = {
    *  child that does not leave within its kill grace. The program entry sets this; a test does
    *  not, because a test process must not install handlers it cannot take back. */
   signals?: boolean;
+};
+
+/** One root's watchdog: the seats it sees, the restart it starts, and the lead message it sends.
+ *  The restart's promise is not awaited by the slice. */
+export type SeatHealthPorts = {
+  seats(route: ChoresChildRoute): Promise<readonly WatchdogSeat[]>;
+  restart(route: ChoresChildRoute, seat: string, args: readonly string[]): Promise<RestartReady | { kind: 'failed' }>;
+  lead(route: ChoresChildRoute, text: string): void;
+  /** The wait and the restart count. Absent, the release defaults apply. */
+  limits?(route: ChoresChildRoute): { afterMs: number; autoRestart: number };
 };
 
 /** The chore the child's pass runs. The one implementation is the fallback sweep (`fallback.ts`);
@@ -95,7 +122,20 @@ export function choresConfigProblem(raw: unknown): string | null {
   if (readMillis(config.beatMs) === null) return 'the token names no heartbeat interval';
   if (readMillis(config.sliceMs) === null) return 'the token names no slice budget';
   if (typeof config.since !== 'string' || config.since === '') return 'the token names no start instant';
-  if (!Array.isArray(config.routes) || config.routes.length === 0) return 'the token names no roots';
+  const machine = config.machine;
+  if (machine !== undefined) {
+    if (!machine || typeof machine !== 'object' || Array.isArray(machine)) return 'the token names a malformed machine chore';
+    const reminders = (machine as Record<string, unknown>).reminders;
+    if (!reminders || typeof reminders !== 'object' || Array.isArray(reminders)) return 'the token names a machine chore without its reminders';
+    const hosted = (reminders as Record<string, unknown>).hosted;
+    if (!Array.isArray(hosted) || hosted.some((root) => typeof root !== 'string' || root === '')) {
+      return 'the token names reminders without their hosted checkouts';
+    }
+  }
+  // A child may serve no routes when it carries the machine chores: the reminder's recipients
+  // span roots, so its worker is the machine's, not one root's.
+  if (!Array.isArray(config.routes)) return 'the token names no roots';
+  if (config.routes.length === 0 && machine === undefined) return 'the token names no roots';
   for (const item of config.routes) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return 'the token names a malformed root';
     const route = item as Record<string, unknown>;
@@ -132,6 +172,7 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
   const { config } = input;
   const now = input.now ?? (() => new Date());
   const pass = input.pass ?? createFallbackPass(config);
+  const sidebar = input.sidebar ?? (input.pass === undefined ? createSidebarPass(config) : null);
   const presence = input.presence ?? createPresencePass(config);
   const stdout = input.stdout;
   const stdin = input.stdin;
@@ -174,6 +215,50 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
     }),
   };
 
+  /** The machine reminder beat this token carries, or null. Its list read — the entity record,
+   *  the registry and every addressed team file — and each send walk run on this child's loop,
+   *  never the daemon's; the beat is driven by the host's ticks, exactly as the daemon's own
+   *  beat drove it. One tick at a time is not enforced here: the tick module skips a reminder
+   *  whose earlier walk is still running, so a tick that lands mid-walk leaves it and the next
+   *  tick notices whatever is still due. */
+  let reminderBeat: (() => void) | null = null;
+  if (config.machine !== undefined) {
+    // The reminder modules load only for a token that carries machine work: a per-root child's
+    // cold start is unchanged, and the send command's own module is not paid for by children
+    // that never send.
+    const [{ realHost }, { sendDaemonDirect }, { createReminderProvider }, { reminderTick }] = await Promise.all([
+      import('../../commands/send.ts'),
+      import('../../reminder/direct-send.ts'),
+      import('../../reminder/provider.ts'),
+      import('../../reminder/run.ts'),
+    ]);
+    const hosted = config.machine.reminders.hosted;
+    const provider = input.reminder?.provider ?? createReminderProvider({ home: config.home, hosted });
+    // Every line the beat writes crosses as its own frame: stdout carries frames only, so the
+    // run's words take the protocol, and the daemon logs each as the line it is.
+    const note = (line: string): void => {
+      for (const one of line.split('\n')) {
+        const text = one.trimEnd();
+        if (text !== '') write({ type: 'reminder-note', text });
+      }
+    };
+    const send: ReminderSend = input.reminder?.send ?? ((context, request) =>
+      sendDaemonDirect(context, request, { ...realHost, home: config.home }, { stdout: note, stderr: note }));
+    reminderBeat = (): void => {
+      let specs: readonly ReminderSpec[];
+      try {
+        specs = provider(note);
+      } catch (error) {
+        note(`reminders: the configured list could not be read — ${error instanceof Error ? error.message : String(error)}; nothing fires this beat`);
+        return;
+      }
+      if (specs.length === 0) return;
+      void reminderTick({ home: config.home, now: now(), specs, send, log: note }).catch((error: unknown) => {
+        note(`reminders: the beat failed — ${error instanceof Error ? error.message : String(error)}`);
+      });
+    };
+  }
+
   /** The next root whose pass may start: its own turn in round-robin order, with a pass
    *  requested and none in flight. */
   const eligible = (): ChoresChildRoute | undefined => {
@@ -190,9 +275,13 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
    *  never delays the report another root has already finished. */
   const runOne = (route: ChoresChildRoute, at: string): Promise<void> => (async (): Promise<void> => {
     const startedAt = now().getTime();
+    const instant = new Date(at);
     let notes: string[];
     try {
-      notes = await pass({ route, at: new Date(at), slices });
+      notes = [...(await pass({ route, at: instant, slices }))];
+      if (sidebar !== null && !slices.stopping()) {
+        notes.push(...(await sidebar({ route, at: instant, slices })));
+      }
     } catch (error) {
       // One root's failure is that root's own: the sibling roots still run, and the daemon log
       // names this one through the note list.
@@ -351,6 +440,44 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
     });
   }
 
+  const healthStates = new Map<string, WatchdogState>();
+  const healthRuns = new Set<string>();
+  let health = input.watchdog ?? null;
+  if (health === null && config.seatHealth === true) {
+    try {
+      const live = await import('../../seat-health/live.ts');
+      health = live.liveSeatHealth(config);
+    } catch (error) {
+      write({ type: 'note', text: `seat health could not start: ${error instanceof Error ? error.message : 'the reader failed'}` });
+    }
+  }
+  const runHealth = (route: ChoresChildRoute): void => {
+    if (health === null || stopping || healthRuns.has(route.root)) return;
+    const ports = health;
+    healthRuns.add(route.root);
+    void (async (): Promise<void> => {
+      try {
+        const seats = await ports.seats(route);
+        let state = healthStates.get(route.root);
+        if (state === undefined) {
+          state = watchdogState();
+          healthStates.set(route.root, state);
+        }
+        await runWatchdogSlice(state, {
+          seats,
+          now: now().getTime(),
+          ...(ports.limits === undefined ? {} : { limits: ports.limits(route) }),
+          restart: (seat, args) => ports.restart(route, seat, args),
+          lead: (text) => ports.lead(route, text),
+        });
+      } catch (error) {
+        write({ type: 'note', text: `seat health: ${error instanceof Error ? error.message : 'the slice failed'}` });
+      } finally {
+        healthRuns.delete(route.root);
+      }
+    })();
+  };
+
   let buffer = '';
   let overflow = false;
   stdin.setEncoding('utf8');
@@ -378,6 +505,13 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
       }
       if (message.type === 'tick') {
         enqueue();
+        // The machine chores ride the same nudge: through a whole daemon stall the child was
+        // never asked, and the tick after it is where the reminder notices what is still due.
+        // The seat-health slice starts here and returns while a restart is still running.
+        if (!stopping) {
+          reminderBeat?.();
+          for (const route of config.routes) runHealth(route);
+        }
       } else if (message.type === 'presence') {
         runPresence(message);
       } else if (message.type === 'watch-beat') {

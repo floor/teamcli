@@ -3,7 +3,13 @@ import { dirname, join } from 'node:path';
 import type { JsonSchema } from '../file/sections/section.ts';
 import { CONFIG_KEYS, CONFIG_LEVELS } from '../config/registry.ts';
 import { PRESENCE_EVENTS, PRESENCE_STATES, PRESENCE_WRITER_SOURCES } from '../daemon/presence/contract.ts';
-import { DELIVERY_LEGS, SENDER_NAME_MODES } from '../settings/inherit.ts';
+import { DELIVERY_LEGS, LEGACY_ORDER_WORDS, SENDER_NAME_MODES } from '../settings/inherit.ts';
+
+/** The words a stored or file-held order may still carry in a read-back: the live legs, and the
+ *  retired `mcp-inbox` alias, which records and files written before the name left the vocabulary
+ *  still hold. The walk's own report enum carries only the live legs (`DELIVERY_LEGS`): no walk
+ *  this build makes ever attempts or skips the retired name. */
+const ORDER_WORDS_READBACK: readonly string[] = [...DELIVERY_LEGS, ...LEGACY_ORDER_WORDS];
 import { DIFFERENCE_WHO_VALUES, SEVERITY_LABELS, SEVERITY_LEVELS } from './text.ts';
 
 /** The `source` words a settings row prints: a signed record's level, the team file's entry,
@@ -201,10 +207,10 @@ const DELIVERY_LEGS_SCHEMA_FRAGMENT: JsonSchema = {
     additionalProperties: false,
     required: ['leg', 'state'],
     properties: {
-      // The report names the channel push and the sender-posted webhook among the walk's
-      // legs. No policy declares either — the seat's own server and its adapter row decide
-      // them — so both are added here, where the report's shape is published, and not to the
-      // declared-order schemas below.
+      // The report names two legs no declared order may carry: the sender-posted webhook, which
+      // the receiving seat's adapter row decides, and the development channel, which the
+      // receiver's launch flag, live listener and listener declaration decide. Both belong here,
+      // where the report's shape is published, and not to the declared-order schemas below.
       leg: { type: 'string', enum: [...DELIVERY_LEGS, 'channel', 'webhook'] },
       state: { type: 'string', enum: ['attempted', 'queued', 'skipped', 'refused', 'not-reached', 'candidate'] },
       eligible: { type: 'boolean' },
@@ -412,7 +418,7 @@ export const STATUS_OUTPUT_SCHEMA: CommandSchemaSpec = {
     {
       type: 'object',
       additionalProperties: false,
-      required: ['schema', 'format', 'project', 'teams'],
+      required: ['schema', 'format', 'project', 'teams', 'active_agents'],
       properties: {
         schema: schemaTagFragment('team.status.project', 1),
         format: { type: 'integer', const: 1 },
@@ -422,15 +428,54 @@ export const STATUS_OUTPUT_SCHEMA: CommandSchemaSpec = {
           items: {
             type: 'object',
             additionalProperties: false,
-            required: ['name', 'session', 'lifecycle', 'seats'],
+            required: ['name', 'membership', 'session', 'lifecycle', 'seats', 'running', 'active', 'roster'],
             properties: {
               name: { type: 'string' },
+              // Where the team stands in the project: its home (the one its chain inherits
+              // from), or a project it serves (item 0's many-to-many membership).
+              membership: { type: 'string', enum: ['home', 'serves'] },
               session: { type: ['string', 'null'] },
               lifecycle: { type: ['string', 'null'] },
               seats: { type: ['integer', 'null'] },
+              // Whether the team's session runs now, from the same machine-wide read
+              // `team list --seats` takes; a session herdr does not list reads stopped.
+              running: { type: 'boolean' },
+              // The live seats by the four words the reader and `team list --seats` share.
+              // Null when a running session's roster could not be read, and for a team no
+              // record holds.
+              active: {
+                type: ['object', 'null'],
+                additionalProperties: false,
+                required: ['ready', 'working', 'waiting', 'stopped'],
+                properties: {
+                  ready: { type: 'integer' },
+                  working: { type: 'integer' },
+                  waiting: { type: 'integer' },
+                  stopped: { type: 'integer' },
+                },
+              },
+              // One entry per seat the reading names: the live roster for a running session,
+              // the registry's roster read as stopped for a down one.
+              roster: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['team', 'name', 'state', 'model'],
+                  properties: {
+                    team: { type: 'string' },
+                    name: { type: ['string', 'null'] },
+                    state: { type: ['string', 'null'] },
+                    model: { type: ['string', 'null'] },
+                  },
+                },
+              },
             },
           },
         },
+        // The project's active agents: ready, working and waiting across its teams. Null when
+        // a registered team's live roster could not be read, never a partial count.
+        active_agents: { type: ['integer', 'null'] },
       },
     },
   ],
@@ -520,7 +565,7 @@ export const PROJECTS_OUTPUT_SCHEMA: CommandSchemaSpec = {
           },
           deliveryOrder: {
             type: 'array',
-            items: { type: 'string', enum: [...DELIVERY_LEGS] },
+            items: { type: 'string', enum: [...ORDER_WORDS_READBACK] },
           },
           senderName: { type: 'string', enum: [...SENDER_NAME_MODES] },
           provenance: {
@@ -1163,6 +1208,7 @@ export const LOCK_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
         run: { type: 'string' },
         by: { type: 'string', minLength: 1 },
         at: { type: 'string', minLength: 1 },
+        pid: { type: 'integer', minimum: 1 },
       },
     },
   },
@@ -1566,12 +1612,19 @@ export const TRACE_OUTPUT_SCHEMA: CommandSchemaSpec = {
           to: { type: 'string' },
           seat: { type: 'string' },
           thread: { type: 'string' },
+          rule: { type: 'string' },
           // The route a leg tried (`leg.tried`) or the leg a retry used (`wake.retried`).
           via: { type: 'string' },
           // The writer's machine word: the walk's outcome, the webhook post's, or the retry's.
           outcome: { type: 'string' },
           // Milliseconds the step itself took, as its writer measured them.
           ms: { type: 'number', minimum: 0 },
+          // The two times a typed wake's leg records, counted from the moment the message was
+          // staged: `submit_ms` to the first read that showed its line gone after Enter (the
+          // gated point), `working_ms` to the profile's working screen (reported only). Absent
+          // when the walk saw neither.
+          submit_ms: { type: 'number', minimum: 0 },
+          working_ms: { type: 'number', minimum: 0 },
           reason: { type: 'string' },
           delta_ms: { type: ['integer', 'null'] },
         },
@@ -1729,6 +1782,22 @@ export const POLICY_OUTPUT_SCHEMA: CommandSchemaSpec = {
   ],
 };
 
+/** Published `--json` output schema for `team checkpoint` (`schema/checkpoint.schema.json`). */
+export const CHECKPOINT_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.checkpoint',
+  fileName: 'checkpoint.schema.json',
+  title: 'team checkpoint --json output',
+  statuses: ['recorded'],
+  required: ['seat', 'path', 'at', 'deadline', 'by'],
+  properties: {
+    seat: { type: 'string', minLength: 1 },
+    path: { type: 'string', minLength: 1 },
+    at: { type: 'string', minLength: 1 },
+    deadline: { type: 'string', minLength: 1 },
+    by: { type: 'string', minLength: 1 },
+  },
+});
+
 /** Published `--json` output schema for `team restart` (`schema/restart.schema.json`). */
 export const RESTART_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   name: 'team.restart',
@@ -1743,6 +1812,11 @@ export const RESTART_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
     // Why the registry holds no record binding the seat, when it does not: the seat runs, but
     // native delivery cannot resolve it and only pull reaches it.
     pull_only: { type: 'string', minLength: 1 },
+    // The handover file the launch was given when a standing checkpoint's file was there.
+    handover: { type: 'string', minLength: 1 },
+    // A checkpoint was on record and no handover file was there: the restart ran from the
+    // previous checkpoint, and the lead is told it may be stale. The value is the ask's path.
+    handover_asked: { type: 'string', minLength: 1 },
   },
 });
 
@@ -1916,7 +1990,7 @@ export const MESSAGES_OUTPUT_SCHEMA: CommandSchemaSpec = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['id', 'from', 'to', 'sent', 'sent_display', 'status'],
+        required: ['id', 'from', 'to', 'sent', 'sent_display', 'status', 'sender_attribution'],
         properties: {
           id: { type: 'string', minLength: 1 },
           from: { type: ['string', 'null'] },
@@ -1926,7 +2000,11 @@ export const MESSAGES_OUTPUT_SCHEMA: CommandSchemaSpec = {
           // `waiting`: a record addressed to another mailbox, listed read-only — no receipt
           // published for it; `body` rides along only in the owner's reading, and a record that
           // does not verify carries none.
-          status: { type: 'string', enum: ['shown', 'refused', 'waiting'] },
+          status: { type: 'string', enum: ['shown', 'refused', 'waiting', 'read'] },
+          // What the sender rests on: the shared checkout key every seat can read
+          // (`unverified_claim`), the launch's own seat brief bound to the seat's current claim,
+          // or nothing at all.
+          sender_attribution: { type: 'string', enum: ['unverified_claim', 'launch-brief', 'none'] },
           body: { type: 'string' },
         },
       },
@@ -2024,11 +2102,14 @@ export const DROPS_OUTPUT_SCHEMA: CommandSchemaSpec = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['from', 'received', 'path'],
+        required: ['from', 'received', 'path', 'sender_attribution'],
         properties: {
           // The sender the record's payload names — or, in a raw file an earlier build wrote, its
           // first line; null when neither names one.
           from: { type: ['string', 'null'] },
+          // What the sender rests on: the shared checkout key (`unverified_claim`), the seat's
+          // current general seat brief, or nothing at all.
+          sender_attribution: { type: 'string', enum: ['unverified_claim', 'launch-brief', 'none'] },
           received: { type: 'string', minLength: 1 },
           path: { type: 'string', minLength: 1 },
         },
@@ -2184,6 +2265,30 @@ export const ACK_OUTPUT_SCHEMA: CommandSchemaSpec = {
     thread: { type: 'string', minLength: 1 },
     written: { type: 'boolean' },
     at: { type: 'string', minLength: 1 },
+  },
+};
+
+/** Published `--json` output schema for `team show` (`schema/show.schema.json`): the verified
+ *  message record from the caller's own mailbox, its shortest unique prefix, whether this run
+ *  newly wrote the read receipt (`written`), and the rendered full message text (`content`). */
+export const SHOW_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.show',
+  fileName: 'show.schema.json',
+  title: 'team show --json output',
+  required: ['format', 'id', 'prefix', 'project', 'session', 'seat', 'from', 'from_id', 'rule', 'at', 'written', 'content'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    id: { type: 'string', minLength: 1 },
+    prefix: { type: 'string', minLength: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    seat: { type: 'string', minLength: 1 },
+    from: { type: 'string', minLength: 1 },
+    from_id: { type: ['string', 'null'] },
+    rule: { type: 'string', minLength: 1 },
+    at: { type: 'string', minLength: 1 },
+    written: { type: 'boolean' },
+    content: { type: 'string', minLength: 1 },
   },
 };
 
@@ -2777,7 +2882,7 @@ export const SETTINGS_OUTPUT_SCHEMA: CommandSchemaSpec = {
           key: { type: 'string', enum: [...CONFIG_KEYS] },
           value: {
             type: ['string', 'boolean', 'array', 'null'],
-            items: { type: 'string', enum: [...DELIVERY_LEGS] },
+            items: { type: 'string', enum: [...ORDER_WORDS_READBACK] },
           },
           source: { type: 'string', enum: CONFIG_SOURCE_WORDS },
           applies: { type: 'string', enum: ['restart-resume', 'at-once'] },
@@ -2810,11 +2915,11 @@ export const SETTINGS_CHANGE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchem
           key: { type: 'string', enum: [...CONFIG_KEYS] },
           value: {
             type: ['string', 'boolean', 'array', 'null'],
-            items: { type: 'string', enum: [...DELIVERY_LEGS] },
+            items: { type: 'string', enum: [...ORDER_WORDS_READBACK] },
           },
           old: {
             type: ['string', 'boolean', 'array', 'null'],
-            items: { type: 'string', enum: [...DELIVERY_LEGS] },
+            items: { type: 'string', enum: [...ORDER_WORDS_READBACK] },
           },
           applies: { type: 'string', enum: ['restart-resume', 'at-once'] },
         },
@@ -2878,7 +2983,7 @@ export const SEAT_OUTPUT_SCHEMA: CommandSchemaSpec = {
           key: { type: 'string', enum: [...CONFIG_KEYS] },
           value: {
             type: ['string', 'boolean', 'array', 'null'],
-            items: { type: 'string', enum: [...DELIVERY_LEGS] },
+            items: { type: 'string', enum: [...ORDER_WORDS_READBACK] },
           },
           source: { type: 'string', enum: CONFIG_SOURCE_WORDS },
           applies: { type: 'string', enum: ['restart-resume', 'at-once'] },
@@ -3203,10 +3308,199 @@ export const WORKFLOW_OUTPUT_SCHEMA: CommandSchemaSpec = {
   ],
 };
 
+export const ANALYSE_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.analyse',
+  fileName: 'analyse.schema.json',
+  title: 'team analyse --json output',
+  required: ['format', 'at', 'analyser', 'source', 'analysis_cost', 'report', 'proposal'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    at: { type: 'string', minLength: 1 },
+    analyser: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['principal', 'authorized_by', 'scope'],
+      properties: {
+        principal: { type: 'string', minLength: 1 },
+        authorized_by: { type: 'string', const: 'owner' },
+        scope: { type: 'string', enum: ['full', 'public'] },
+      },
+    },
+    source: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['name', 'kind', 'level'],
+      properties: {
+        name: { type: 'string', minLength: 1 },
+        kind: { type: 'string', enum: ['teamcli', 'tool', 'tracker', 'lab'] },
+        level: { type: 'string', enum: ['default', 'machine', 'entity', 'project'] },
+      },
+    },
+    analysis_cost: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['duration_ms', 'git_walks', 'files_read', 'bytes_read', 'tokens', 'usd'],
+      properties: {
+        duration_ms: { type: 'integer', minimum: 0 },
+        git_walks: { type: 'integer', minimum: 0 },
+        files_read: { type: 'integer', minimum: 0 },
+        bytes_read: { type: 'integer', minimum: 0 },
+        tokens: { type: 'integer', const: 0 },
+        usd: { type: 'number', const: 0 },
+      },
+    },
+    report: {
+      type: 'object',
+      additionalProperties: false,
+      required: [
+        'root',
+        'visibility',
+        'manifests',
+        'size',
+        'languages',
+        'stack_skills',
+        'checks',
+        'ci',
+        'release',
+        'pace',
+        'open_work',
+        'topology',
+        'findings',
+      ],
+      properties: {
+        root: { type: 'string', minLength: 1 },
+        visibility: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['value', 'source'],
+          properties: {
+            value: { type: 'string', enum: ['public', 'private', 'not known'] },
+            source: { type: 'string', minLength: 1 },
+          },
+        },
+        manifests: {
+          type: 'array',
+          items: { type: 'string', minLength: 1 },
+        },
+        size: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['files', 'lines', 'mark', 'source'],
+          properties: {
+            files: { type: 'integer', minimum: 0 },
+            lines: { type: 'integer', minimum: 0 },
+            mark: { type: 'string', enum: ['measured', 'estimated'] },
+            source: { type: 'string', minLength: 1 },
+          },
+        },
+        languages: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['language', 'files', 'lines', 'share_pct'],
+            properties: {
+              language: { type: 'string', minLength: 1 },
+              files: { type: 'integer', minimum: 0 },
+              lines: { type: 'integer', minimum: 0 },
+              share_pct: { type: 'number', minimum: 0, maximum: 100 },
+            },
+          },
+        },
+        stack_skills: {
+          type: 'array',
+          items: { type: 'string', minLength: 1 },
+        },
+        checks: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['command', 'source'],
+            properties: {
+              command: { type: 'string', minLength: 1 },
+              source: { type: 'string', minLength: 1 },
+            },
+          },
+        },
+        ci: {
+          type: 'array',
+          items: { type: 'string', minLength: 1 },
+        },
+        release: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['tags', 'workflows', 'source'],
+          properties: {
+            tags: { type: 'boolean' },
+            workflows: {
+              type: 'array',
+              items: { type: 'string', minLength: 1 },
+            },
+            source: { type: 'string', minLength: 1 },
+          },
+        },
+        pace: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['window_days', 'commits_per_day', 'active_hours_per_day', 'rhythm', 'source'],
+          properties: {
+            window_days: { type: 'integer', minimum: 1 },
+            commits_per_day: { type: 'number', minimum: 0 },
+            active_hours_per_day: { type: 'number', minimum: 0 },
+            rhythm: { type: 'string', enum: ['idle', 'steady-idle', 'active', 'bursty', 'sparse'] },
+            source: { type: 'string', minLength: 1 },
+          },
+        },
+        open_work: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['open', 'blocked', 'source'],
+          properties: {
+            open: { type: 'integer', minimum: 0 },
+            blocked: { type: 'integer', minimum: 0 },
+            source: { type: 'string', minLength: 1 },
+          },
+        },
+        topology: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['parallelizable', 'serial'],
+          properties: {
+            parallelizable: {
+              type: 'array',
+              items: { type: 'string', minLength: 1 },
+            },
+            serial: {
+              type: 'array',
+              items: { type: 'string', minLength: 1 },
+            },
+          },
+        },
+        findings: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['kind', 'source', 'summary'],
+            properties: {
+              kind: { type: 'string', const: 'untrusted-instruction-ignored' },
+              source: { type: 'string', minLength: 1 },
+              summary: { type: 'string', minLength: 1 },
+            },
+          },
+        },
+      },
+    },
+    proposal: { type: ['object', 'null'] },
+  },
+};
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
   ABOUT_OUTPUT_SCHEMA,
+  ANALYSE_OUTPUT_SCHEMA,
   STATUS_OUTPUT_SCHEMA,
   SEATS_OUTPUT_SCHEMA,
   PROJECTS_OUTPUT_SCHEMA,
@@ -3236,6 +3530,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   NEXT_OUTPUT_SCHEMA,
   RELOAD_OUTPUT_SCHEMA,
   INIT_OUTPUT_SCHEMA,
+  CHECKPOINT_OUTPUT_SCHEMA,
   RESTART_OUTPUT_SCHEMA,
   DOWN_OUTPUT_SCHEMA,
   UP_OUTPUT_SCHEMA,
@@ -3252,6 +3547,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   SEND_OUTPUT_SCHEMA,
   REPLY_OUTPUT_SCHEMA,
   ACK_OUTPUT_SCHEMA,
+  SHOW_OUTPUT_SCHEMA,
   ANSWER_OUTPUT_SCHEMA,
   MCP_OUTPUT_SCHEMA,
   TEMPO_OUTPUT_SCHEMA,

@@ -270,6 +270,22 @@ function readByHook(
   if (!written.ok) throw new Error(written.reason);
 }
 
+/** The receipt a lead's sweep writes for a stopped seat: a signed `read` receipt whose `read_by`
+ *  names the clearer. It settles the message without ever being the seat's own read. */
+function clearedByHook(at: SeedWorld, dropDir: string, id: string, seat: string, session: string, by = 'owner'): void {
+  const written = writeReceipt(dropDir, signReceiptPayload({
+    kind: 'receipt',
+    status: 'read',
+    id,
+    to: seat,
+    root: realpathSync(at.root),
+    session,
+    at: NOW.toISOString(),
+    read_by: `lead-ack:${by}`,
+  }, at.home), at.home);
+  if (!written.ok) throw new Error(written.reason);
+}
+
 /** The seat's current general-brief claim, as a launch's own delivery writes it: one lifetime's
  *  id, the delivered body's digest, and the epoch the runtime started under. */
 function seedClaim(at: SeedWorld, session: string, seat: string) {
@@ -362,6 +378,83 @@ describe('retryHeldDrops', () => {
     });
     expect(typeof steps[0]!.ms).toBe('number');
     expect(steps[0]!.ms!).toBeGreaterThanOrEqual(0);
+  });
+
+  test('a lead\'s clearance settles the marker without typing or calling it the seat\'s read', async () => {
+    // A stopped seat's stale mail was swept by its lead: the signed `lead-ack` receipt settles
+    // the marker. No trigger is typed — the seat is gone — and the history line names the
+    // clearer, never `delivered (read)`.
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const body = 'from the owner — admitted by: the owner\n\nstale mail';
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-cleared', body);
+    clearedByHook(made, dropDir, 'drop-cleared', 'lead', 'acme');
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+
+    await retryHeldDrops({
+      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
+      live: liveWith('lead', 'pane-lead'), ownPane: null, sources: scripts(one), now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(readPending(dropDir)).toEqual([]);
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok).toBe(true);
+    if (!history.ok) return;
+    expect(history.entries).toEqual([{
+      ts: NOW.toISOString(),
+      from: 'owner',
+      to: 'lead',
+      body,
+      id: 'drop-cleared',
+      outcome: 'cleared by owner',
+    }]);
+    expect(said).toEqual(['lead: a held send from owner was cleared by owner']);
+  });
+
+  test('a clearance that lands while the retry reads the pane types nothing', async () => {
+    // The marker was read before the sweep wrote its receipt. The retry must take the receipt it
+    // sees on the way in as the clearance: nothing is typed, and the marker is settled.
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const body = 'from the owner — admitted by: the owner\n\ncleared mid-retry';
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-cleared-late', body);
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    const base = scripts(one);
+
+    await retryHeldDrops({
+      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
+      live: liveWith('lead', 'pane-lead'), ownPane: null,
+      sources: {
+        ...base,
+        screen: (pane: string, session: string) => {
+          clearedByHook(made, dropDir, 'drop-cleared-late', 'lead', 'acme');
+          return base.screen(pane, session);
+        },
+      },
+      now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(readPending(dropDir)).toEqual([]);
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok).toBe(true);
+    if (!history.ok) return;
+    expect(history.entries).toEqual([{
+      ts: NOW.toISOString(),
+      from: 'owner',
+      to: 'lead',
+      body,
+      id: 'drop-cleared-late',
+      outcome: 'cleared by owner',
+    }]);
+    expect(said).toEqual(['lead: a held send from owner was cleared by owner']);
   });
 
   test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: never types into a box that holds someone else\'s text, and delivers once it is free', async () => {
@@ -790,6 +883,42 @@ describe('promoteInboxDrops', () => {
     promoteInboxDrops(at);
     expect(said).toHaveLength(1);
     expect(readHistory('acme', made.root, made.home)).toMatchObject({ ok: true, entries: [{ id: INBOX_A }] });
+  });
+
+  test('a lead\'s clearance settles an inbox marker as cleared, never as the seat\'s read', () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const body = 'from the owner — admitted by: the owner\n\nswept by the lead';
+    const dropDir = seedInbox(made, 'acme', 'lead', INBOX_W, body);
+    clearedByHook(made, dropDir, INBOX_W, 'lead', 'acme');
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    const at = {
+      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
+      live: { running: true, agents: [], workspaces: [], screens: {} } as Live,
+      ownPane: null, sources: scripts(one), now: NOW,
+      say: (text: string) => said.push(text),
+    };
+
+    // A clearance is not a read: the ring path learns nothing, the marker goes, and the one
+    // history line names the clearer.
+    expect(promoteInboxDrops(at)).toEqual(new Set());
+    expect(readPending(dropDir)).toEqual([]);
+    expect(one.typed).toEqual([]);
+    expect(said).toEqual(['lead: an inbox send from owner was cleared by owner']);
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok).toBe(true);
+    if (!history.ok) return;
+    expect(history.entries).toEqual([{
+      ts: NOW.toISOString(),
+      from: 'owner',
+      to: 'lead',
+      body,
+      id: INBOX_W,
+      outcome: 'cleared by owner',
+    }]);
+    // The record is still the message: the clearance only settles the marker.
+    expect(recordBody(join(dropDir, INBOX_W))).toBe(body);
   });
 
   test('a read through the inbox hides the drop from team drops, and the watch then promotes it', () => {
@@ -1392,7 +1521,10 @@ describe('the turn-start read, end to end', () => {
     const out = shell.run(read as string, made.root);
     const envelope = JSON.parse(out) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };
     expect(envelope.hookSpecificOutput.hookEventName).toBe('UserPromptSubmit');
-    expect(envelope.hookSpecificOutput.additionalContext).toBe(body);
+    // The hook takes the sender from the verified record, not from the body's opening. This
+    // send's claimed from is owner, so the header is `from owner (owner):`. The opening names
+    // "the owner", which is not that name, and the preamble stays content.
+    expect(envelope.hookSpecificOutput.additionalContext).toBe(`from owner (owner):\n\n${body}`);
 
     // The receipt is the seat's proof, at the name, mode and shape the promotion reads: the same
     // signed status receipt the inbox server writes, not a marker of the hook's own.

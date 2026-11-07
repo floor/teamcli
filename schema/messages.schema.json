@@ -58,7 +58,8 @@
           "to",
           "sent",
           "sent_display",
-          "status"
+          "status",
+          "sender_attribution"
         ],
         "properties": {
           "id": {
@@ -92,7 +93,16 @@
             "enum": [
               "shown",
               "refused",
-              "waiting"
+              "waiting",
+              "read"
+            ]
+          },
+          "sender_attribution": {
+            "type": "string",
+            "enum": [
+              "unverified_claim",
+              "launch-brief",
+              "none"
             ]
           },
           "body": {

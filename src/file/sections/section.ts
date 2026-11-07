@@ -18,6 +18,13 @@ export interface Ctx {
   values: Map<string, unknown>;
   /** Injected home for path validation. */
   home?: string;
+  /** The home whose registry, entities file and machine settings the default lead is read from.
+   *  Absent for a validator that holds only the text: such a reader reads no chain, so a file
+   *  that names no lead is refused as it was before the setting existed. */
+  leadHome?: string;
+  /** The lead a stored copy is taken to name: the seat its approval pinned (`approval.lead`).
+   *  Read where the default chain would be, so the copy verifies without the chain. */
+  leadPin?: string;
   /** Injected filesystem for path validation. The gate uses the same reader. */
   fs?: FsReader;
   /** The project root, when the caller knows it: trust containment is checked against it. */

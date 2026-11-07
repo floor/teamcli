@@ -5,9 +5,17 @@ It reads the team file, the record this machine holds of it, the state, herdr an
 and changes nothing except the repairs the owner's `--repair` makes — the state's two leftovers
 dropped, the dev-mode mark an agent's registration left cleared, and herdr's drifted sidebar
 lines set back from the
-file — no git is needed, so it answers as well in a plain folder as in a repository. Where
+file — and the one close the team's lead's or the owner's `--close-orphans` makes: the live agent
+processes no pane holds, ended after one question at a terminal. No git is needed, so it answers
+as well in a plain folder as in a repository. Where
 [`team status`](status.md) says what the team is, the check says what to act on: the differences
 alone, each with its repair.
+An entity the file names, when the file has a lead and that entity has no live signed
+`owner-reply-to` — none at all, or only an expired declaration — is a difference. The line
+says what is missing, and the repair is
+`team policy set entity owner-reply-to <lead>@<team> --entity <id> --dry-run`, the owner's
+dry-run of the declaration. A live declaration, a file that names no entity, and a
+declaration that cannot be read draw no such line.
 It is also the old name of [`team commits check`](commits.md) and [`team pr check`](pr.md), still
 read through 0.3.3. A `<ref>` (a range when it holds `..`, passed to git as given, otherwise that
 one commit) runs that older reading, as do `--pr <file>` (check a pull request's body as well;
@@ -17,14 +25,35 @@ it with `team check: unknown option --session` and exit 2. `--repair` is this on
 the older one meets it with `team check: unknown option --repair` and exit 2. A run of the older reading says once
 on stderr which command now holds it, and `--pr` adds its own line.
 
-The registries answer for the team's place: a team the project registry names in two projects is a
-difference naming both, repaired by fixing the registry file, and so is a registry that cannot be
-read. A team whose file sets `project_lead: true` while another team of the same project sets it
-too is one as well — `the project <name> has <n> lead teams: <names>`, repaired with
+The registries answer for the team's place: a team may serve several projects, with one home
+project supplying its settings, policies and rules. A file with `also_in` but no `in_project`, or
+with the home repeated in `also_in`, is refused as it loads. `project_lead: true` requires a home
+and leads only that home. An unreadable registry remains a difference. A team whose file sets
+`project_lead: true` while another team of the same home project sets it too is one as well —
+`the project <name> has <n> lead teams: <names>`, repaired with
 `take "project_lead: true" off all but one of them`. The two herdr sidebar lines each file seat
 carries are compared on the same pass: a workspace label or display line that reads as neither the
 file's own text nor a line the watch may paint is a difference repaired with
-`team register <seat>`, which re-applies both lines from the file without a relaunch. A live seat
+`team register <seat>`, which re-applies both lines from the file without a relaunch. For a running
+seat with a recorded pane, `display_agent` is read off `pane list --workspace <id>` (one call per
+workspace): a row with no `display_agent` field is `<seat>: its sidebar display line is missing or
+expired; the file's line is "<line>"`, repaired by `team register <seat>` (or the owner's
+`--repair`, which re-reports `displayAgent(seat)` with `--ttl-ms` `daemon.sidebar-ttl-ms`). A
+stopped seat is never named for a missing display line. The terminal host's sidebar layout config
+(`ui.sidebar.agents.rows` and `[ui] status_indicators`) and the per-session reload store
+(`~/.config/team/sidebar-reloads.yaml`) are checked on the same pass: a layout without the `agent`
+token in any row is a difference (`line 2 has nowhere to live`) naming the resolved
+`workspace.sidebar.rows` template, a `status_indicators` value other than the resolved
+`workspace.sidebar.status_indicators` word (`symbols` or `dots`) is a difference naming the
+resolved value, and each running session of the entity's teams with no reload record or an older
+`rows` or `status_indicators` record is named (`no TeamCLI reload recorded at the current layout`,
+noting that the terminal host's live sidebar layout cannot be read back so a running session is
+presumed to hold an older layout until TeamCLI records a reload, even if reloaded by hand; a
+session that is not running is never named). Under `workspace.sidebar.manage: on` (the default),
+`--repair` re-applies the marked sidebar block and `status_indicators` key (backing up, splicing,
+validating, and rolling back on failure), reloads every running session, and records each applied
+reload; under `workspace.sidebar.manage: off`, `team check` prints the exact TOML block without
+writing the config, and `--repair` applies it on the owner's explicit request. A live seat
 the state holds ready that the team registry's record does not list in its roster is a difference
 too, repaired with the same `team register <seat>`: where the registry holds a record of the team,
 its roster is the record of who its seats are for the permission bridge, and a seat the roster does
@@ -141,6 +170,30 @@ bus is serving the root to finish it, one line says how many wait:
 A bus that serves the root draws no line: its own pass records the outcome. The line never
 reports a post as delivered, and it never enters the total or the exit.
 
+A seat whose chain declares `messaging.store: none` is named on the same pass, one line per seat:
+the line says its sends keep no copy, that a socket frame still carries the signed record's bytes
+a receiver verifies, and what the copy would have carried — the retry, the unread re-wake, the
+read receipt and the `queued, not woken` flag. For a seat the file marks `human` the line says a
+send to it is refused instead, because a person's pane is reached by the stored copy alone. The
+word is a choice, never a fault, so like every note here it does not enter the total or the exit
+([the team file](../team-file.md#messagingstore)).
+
+The nightly harness's latest per-leg result is read on the same pass: `pingpong-legs.json` in the
+team's state folder, `.agents` in the project, and nothing else — the check never starts a run,
+and a team that has not run the nightly draws no finding for a missing file. A class is over when
+its staged-to-read p50 or p95 is past its send-to-read target — channel 3 s and 6 s, webhook 2 s
+and 5 s, typed 12 s and 20 s; mailbox has no target — and each measure past one is a difference
+naming the run's date: `nightly run <date>: channel p50 4s is over 3s and p95 7s is over 6s`. A
+class the result recorded no samples for draws nothing. A message the run recorded as lost is its
+own finding — `nightly run <date>: 1 message was lost`, `<n> messages were lost` for more — and a
+result older than 36 hours is still read: its misses keep the run's own date, and one more finding
+says `nightly run <date> is older than a day`, repaired with `run the nightly again`. A missed
+class's repair names that nightly run's per-leg table, a lost message's its lost table, and every
+finding here is the team's lead's. A file that is not the nightly result, or cannot be read, is
+one finding in the check's own words — `the nightly run result cannot be read`, repaired when the
+next nightly rewrites it — never a reading of its contents; a lost count that is not a whole
+number is that same finding.
+
 A seat held at a prompt is named on the same pass: one line per held seat, read from the pane the
 state records for it through the watch's own screen reader. A pane that no longer holds the
 process team launched — back at its shell, or replaced by one the state's stored session does not
@@ -163,6 +216,43 @@ printed its plain permission or trust row for the seat (`status`'s wording), the
 with this one line, so a held seat is named once. A temporary seat — one `team add --temporary`
 recorded and the file never names — is read the same way, from its record, with its like-seat's
 CLI.
+
+Live agent processes no pane holds are named on the same pass, and one flag closes them. The
+reading proves a process two ways: the state's own launch records name the shell and the pids a
+seat's CLI ran as, and a process no record accounts for is found by the working folder it runs
+in, named only when that folder is inside this team's root. Every row says the pid, the CLI, the
+age and the team record it answers to — `pid <pid>: a live <cli> process with no pane in session
+"<session>" (started <age>; last team <project>, seat <seat>)`, or `no seat record` in place of
+the seat — and it is a difference: exit 1. The repair is `close it through the team (team check
+--close-orphans)` for a process the close may end, and `inspect it, then stop it by hand if it is
+not a seat's` for one it may not (the first repair is the team's lead's, the second the owner's):
+a process the state does not name is closeable only when it started at or after the daemon's own
+start — a run that cannot read that start names such a process and does not close it — and one
+the state names is closeable whatever its start. The reading never guesses. A pane list that cannot be read, or that
+reads no agents while the state records seats, names nothing and closes nothing — a failed read
+must never make a live seat's CLI look orphaned — and a pane the session could not say what runs
+in is named as a note, with processes found by their folder left unnamed under it. A recorded CLI
+whose pane went unanswered is proved by the launch's own shell instead: a chain without that
+shell proves the CLI left the pane, and a chain that cannot be read names nothing.
+
+`--close-orphans` is the team's lead's or the owner's: a plain seat sees every row and is refused
+the close. It asks one question at a terminal — `team check: close <n> orphan processes? [y/N] `
+— and a no signals nothing (`left: <n> orphan processes: you answered no`). Before each stop it
+re-proves the candidate: the pid still runs the same CLI, its start instant has not moved, no
+other session's pane holds it, no pane of this session holds it — read again right before the
+signal, because the reading that named the candidate was taken before the question — and a
+recorded CLI's launch shell is no longer above it. A stop is the terminate signal, then the
+process's identity and this session's panes are read again, then the kill signal for a process
+that has not gone in two seconds, and one more second's wait; every outcome is its own line —
+`closed: pid <pid>: <cli> (seat <seat>)`,
+`forced: pid <pid>: <cli> (seat <seat>)` for one that needed the kill, and `left: pid <pid>:
+<why>` for one whose proof no longer held, one it could not end, or one the system refused to
+stop. The reading runs again after any close, so the report describes the world the close left,
+and the exit is 1 while any difference remains. The close never shares a run with `--repair` (two
+acts, and one run could not say which left what) and never runs with `--json` (there is no
+terminal to ask at); both are refused at the invocation. The reading costs one process-table read
+and one working-folder read for all the pids it needs — never a folder read per process on every
+run — and reads nothing at all until a seat record or a listed agent exists.
 
 A watch the machine daemon hosts is read on the same pass. Three states are differences with one
 repair: a required watch that stopped or failed reads `watch: stopped in the daemon (<reason>)` or
@@ -204,6 +294,12 @@ first release is later than that date, each dated from the release tags. Re-sign
 after that release stops the note. A grant whose signing time cannot be read says `unknown` instead
 of claiming an op is new. Like every note here, it is information, never a difference.
 
+One more note watches the bus log's size. When the retained segments on disk reach four fifths
+of their 100 MB cap, the check prints `bus: the bus log holds <n> MB of its 100 MB
+retained-size cap; the team's lead: shorten bus.retain_days, or accept the oldest sealed
+segments dropping (each drop is declared in the log)`. It is an alert line, never a second cap:
+it drops nothing, changes no exit, and a log below that share says nothing.
+
 The state's leftovers are differences too. A record for a seat the file no longer declares — one
 an older file named and this one dropped — and a session the file does not name with no seat of
 the team in it are both named: `<seat>: left the team file but its record still claims pane <pane>` (its pane
@@ -227,7 +323,12 @@ is on, is recorded again with the caller gate in force: the same write the owner
 line that drifted is set back from the file through the same rename and display report
 `team register <seat>` makes. Each repair is named in one `repaired:` line and written to the log;
 a herdr that will not take a sidebar line says so as `team register` does, and its difference
-stands. Everything else keeps its advice — a model drift's relaunch, a blind seat's look at the
+stands. On the same `--repair`, the terminal host's sidebar layout (`ui.sidebar.agents.rows` and
+`[ui] status_indicators`) is re-applied when out of date (under `workspace.sidebar.manage: on`, or
+on the owner's explicit `--repair` under `off`), every running session needing a reload is reloaded
+and recorded in `~/.config/team/sidebar-reloads.yaml`, and any running seat whose `display_agent`
+was missing, expired, or drifted is re-reported with `--ttl-ms` `daemon.sidebar-ttl-ms` (a host
+refusal is named and leaves its difference standing). Everything else keeps its advice — a model drift's relaunch, a blind seat's look at the
 pane — because those are decisions, not writes the file settles, and `--repair` never starts,
 stops or relaunches a seat.
 
@@ -269,7 +370,7 @@ repair.
 
 ## Synopsis
 
-    team check [--session <name>] [--file <path>] [--repair] [--json]
+    team check [--session <name>] [--file <path>] [--repair] [--close-orphans] [--json]
 
 ## Flags
 
@@ -278,6 +379,7 @@ repair.
 | `--session` | `<name>` | the herdr session to read, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's alone |
 | `--repair` | — | the owner's repair, one write: drop the state's leftovers (a record for a seat the file no longer declares, a session with no seat of the team in it), re-record a seat an agent registered under dev mode with the caller gate in force, and set herdr's drifted sidebar lines back from the file; the owner's alone |
+| `--close-orphans` | — | close the live agent processes the run proves no pane holds, after one question at a terminal: every candidate is re-proven just before it is signalled, a process that will not stop is left and named, and the reading is taken again after the close; the team's lead's or the owner's; never with `--repair` or `--json` |
 | `--json` | — | emit the structured `team.check` JSON document on stdout (`schema/check.schema.json`) |
 
 ## Who may run it
@@ -292,6 +394,11 @@ repair.
 Aimed by a caller that passes the gate but is not the owner, `--file`, `--session` and `--repair`
 meet the refusal every command gives them and exit 1.
 
+`--close-orphans` is narrower than the check's own gate: the team's lead's or the owner's, never a
+plain seat's. Every caller that passes the check still sees every row the reading names, but a
+seat that is neither the orchestrator nor the operator, and a delegate pane the file names, is
+refused the close with `team check: --close-orphans is the team's lead's or the owner's`, exit 1.
+
 ## Output and exit codes
 
 Every run prints the declared limitation of a client app key, on stdout in text mode and as
@@ -301,9 +408,14 @@ the `key_isolation` field in JSON: `key isolation: enforced against team panes (
 | --- | --- | --- |
 | nothing needs acting on | `team <project>, session "<session>"`, any deprecation `warning:` or `note:` lines, and `no differences` | 0 |
 | the owner's `--repair` repaired what it can (the state's leftovers dropped, dev-mode marks cleared, drifted sidebar lines set back), and nothing else needs acting on | `team <project>, session "<session>"`, one `repaired: <what was repaired>` line per repair, and `no differences` | 0 |
+| the team's lead's or the owner's `--close-orphans` settled every orphan the reading named, and nothing else needs acting on | `team <project>, session "<session>"`, one `closed: pid <pid>: <cli> (<seat>)` line per process stopped, one `forced: …` line for a process that needed the kill, a `left: pid <pid>: <why>` line for a candidate that left on its own first, and `no differences` | 0 |
+| the close ran, and something still needs acting on: a process it left, or any other finding | the same `closed:`/`forced:`/`left:` lines, then each remaining `difference:` block and the summary | 1 |
+| the close question is answered no | `left: <n> orphan processes: you answered no`, nothing signalled, then the rows as they stood | 1 |
+| a plain seat or a delegate pane aims `--close-orphans` | `team check: --close-orphans is the team's lead's or the owner's`, before any question | 1 |
 | something needs acting on | `team <project>, session "<session>"`, one `difference:` block per finding with its `  repair:` and `  who:` lines under it, then `<n> difference` / `<n> differences` (and `, <m> for the owner` when any finding is the owner's) | 1 |
 | a flag the caller may not aim | the refusal every command gives it | 1 |
 | the check can't run (the loader's, the state's or herdr's own text), the invocation can't be read, or the caller may not check this team | `team check: <problem>`, or the one fixed sentence | 2 |
+| `--close-orphans` with no terminal, or where no process reading is wired | `team check: --close-orphans asks before it closes anything; it needs a terminal`, or `team check: --close-orphans has no process reading here`; nothing is signalled | 2 |
 
 ## Example
 
@@ -364,9 +476,9 @@ seats:
     launch: claude --model deepseek-flash
 ```
 
-The team runs as the file and the state say, so there is nothing to act on (the notes are the
-housekeeping of a role word written the 0.3.5/0.4 way, and each seat's delivery class where no
-socket is live):
+The team runs as the file and the state say. The notes are the housekeeping of a role word
+written the 0.3.5/0.4 way, and each seat's delivery class where no socket is live. The one
+difference is the entity's missing owner-reply endpoint:
 
 ```console
 $ team check ; echo "exit $?"
@@ -377,8 +489,11 @@ note: claude-keeper: no cross-session socket is live, so sends go to its drop fo
 note: claude-beacon: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn — claude-beacon reads it at its next turn, and nothing here gives it one (pull-only)
 note: worker: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn — worker reads it at its next turn, and nothing here gives it one (pull-only)
 note: watch: the recorded process 4242 is gone; the daemon health cannot say whether a hosted watch owns the route
-no differences
-exit 0
+difference: entity "lab" declares no owner-reply-to policy
+  repair: team policy set entity owner-reply-to claude-keeper@beacon --entity lab --dry-run
+  who: the owner
+1 difference, 1 for the owner
+exit 1
 ```
 
 The entity's rule refuses this lab, and the check names each seat of the team it runs in with the
@@ -396,13 +511,16 @@ note: claude-keeper: no cross-session socket is live, so sends go to its drop fo
 note: claude-beacon: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn — claude-beacon reads it at its next turn, and nothing here gives it one (pull-only)
 note: worker: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn — worker reads it at its next turn, and nothing here gives it one (pull-only)
 note: watch: the recorded process 4242 is gone; the daemon health cannot say whether a hosted watch owns the route
+difference: entity "lab" declares no owner-reply-to policy
+  repair: team policy set entity owner-reply-to claude-keeper@beacon --entity lab --dry-run
+  who: the owner
 difference: claude-keeper: declares vendor anthropic, which the entity model rule *=!anthropic refuses; a swap to claude-code DeepSeek Flash 4.0 from beacon/worker is proposed
   repair: team swap queue claude-keeper
   who: the team's lead
 difference: claude-beacon: declares vendor anthropic, which the entity model rule *=!anthropic refuses; a swap to claude-code DeepSeek Flash 4.0 from beacon/worker is proposed
   repair: team swap queue claude-beacon
   who: the team's lead
-2 differences
+3 differences, 1 for the owner
 exit 1
 ```
 

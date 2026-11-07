@@ -123,7 +123,9 @@ describe('checkLogin with fake command results', () => {
       mcpInbox: null,
       settings: null,
       typedWake: null,
+      typedWakeSettleMs: null,
       readHint: null,
+      wake: null,
       watchWake: false,
       watchWakeTries: 3,
       delivery: 'none',
@@ -266,6 +268,35 @@ describe('team doctor --login', () => {
       'grok: logged in',
     ]);
   });
+
+  for (const json of [false, true]) {
+    for (const absent of [false, true]) {
+      test(`first-run waiting findings do not change the login exit (${json ? 'json' : 'text'}, ${absent ? 'one absent' : 'three logged in'})`, async () => {
+        const io = testIo(dir);
+        const args = ['--file', file, '--login', ...(json ? ['--json'] : [])];
+        const sources = fakeSources({
+          version: () => '1.2.3',
+          loggedIn: (profile) => !absent || profile.cli !== 'codex',
+        });
+        const code = await runDoctor(args, io, sources);
+        expect(code).toBe(absent ? 1 : 0);
+        expect(io.err).toBe('');
+        const loaded = loadTeamFile(dir, { file });
+        if (!loaded.ok) throw new Error('file must load');
+        const findings = doctorLoginFindings(loaded.team, sources);
+        expect(findings.filter((one) => one.level === 'miss').map((one) => one.text)).toEqual(absent ? ['log in to codex: `codex login`'] : []);
+        expect(findings.filter((one) => one.text.includes('waiting, first-run')).map((one) => one.level)).toEqual(Array(12).fill('note'));
+        expect(findings.filter((one) => one.text.endsWith(': logged in')).length).toBe(absent ? 2 : 3);
+        if (json) {
+          const doc = JSON.parse(io.out) as { summary: { missing: number; warnings: number } };
+          expect(doc.summary).toMatchObject({ missing: absent ? 1 : 0, warnings: 0 });
+        } else {
+          expect(io.out).toContain('note  claude-code: waiting, first-run survey');
+          expect(io.out).toContain(absent ? 'team doctor: 1 missing, 0 warnings' : 'team doctor: nothing missing, 0 warnings');
+        }
+      });
+    }
+  }
 
   test('bad option reports usage with [--login]', async () => {
     const io = testIo(dir);

@@ -1,16 +1,19 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  anotherPaneRefusal,
   callerLabel,
   callerStanding,
   callerVerdict,
   describeCaller,
   isOwner,
+  judgeCallerIn,
   mayChangeTeam,
   mayLaunchSeats,
   noPaneRefusal,
+  parsePsSnapshot,
   parseStat,
   placeCaller,
   processReader,
@@ -21,7 +24,11 @@ import {
   standingOf,
 } from '../src/caller.ts';
 import type { Caller, CallerSources, Process } from '../src/caller.ts';
+import { runSend, type SendHost } from '../src/commands/send.ts';
+import { readTeamConfig } from '../src/file/team-config.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
+import { updateState } from '../src/state.ts';
+import { testIo } from './helpers.ts';
 
 const agent = (name: string | null, pane: string): HerdrAgent => ({ name, agent: 'claude', pane, workspace: pane.split(':')[0] ?? '', status: 'idle', cwd: null });
 
@@ -418,5 +425,440 @@ describe('reading the process table', () => {
   test('the platform picks the table: /proc on Linux, ps everywhere else', () => {
     expect(processReader('linux')).toBe(readWithProc);
     expect(processReader('darwin')).toBe(readWithPs);
+  });
+});
+
+describe('caller verdict parity across placement and send (S1)', () => {
+  const TEAM = `format: 1
+project: acme
+coordinator: lead
+operator: lead
+session: acme
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: lead
+    label: lead
+    human: true
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+  - role: implementer
+    name: worker
+    label: worker
+    cli: codex
+    vendor: openai
+    model: GPT
+    version: "5"
+    launch: codex
+`;
+
+  const made: string[] = [];
+  afterEach(() => {
+    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function setupTeam(seats: Record<string, { stage: 'ready'; pane?: string }>): {
+    root: string;
+    agentsDir: string;
+    home: string;
+    team: NonNullable<Extract<ReturnType<typeof readTeamConfig>, { ok: true }>['team']>;
+  } {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-s1-parity-')));
+    made.push(base);
+    const root = join(base, 'acme');
+    const agentsDir = join(root, '.agents');
+    const home = join(base, 'home');
+    mkdirSync(agentsDir, { recursive: true });
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(agentsDir, 'team.yaml'), TEAM);
+    const hooksDir = join(agentsDir, 'hooks', 'acme');
+    mkdirSync(hooksDir, { recursive: true });
+    const hookSettings = join(hooksDir, 'lead.json');
+    writeFileSync(hookSettings, `${JSON.stringify({ crossSessionInbound: 'accept' })}\n`, { mode: 0o600 });
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(hookSettings, past, past);
+    updateState(agentsDir, (state) => {
+      state.sessions.acme = { seats } as never;
+    });
+    const loaded = readTeamConfig(root, { home });
+    if (!loaded.ok) throw new Error(loaded.errors.join('\n'));
+    return { root, agentsDir, home, team: loaded.team };
+  }
+
+  function sendHost(home: string): SendHost {
+    const socks = join(home, 'socks');
+    mkdirSync(socks, { recursive: true });
+    writeFileSync(join(socks, '101.sock'), '');
+    return {
+      home,
+      now: () => new Date('2026-11-05T12:00:00.000Z'),
+      newId: () => '0f0e0d0c-0b0a-4a4b-8c8d-9e9f0a1b2c3d',
+      agents: () => [
+        { name: 'lead', pane: 'pane1', cli: 'claude' },
+        { name: 'worker', pane: 'pane2', cli: 'claude' },
+      ],
+      processInfo: (_session, pane) => {
+        if (pane === 'pane1') return { shell: 100, foreground: [101] };
+        if (pane === 'pane2') return { shell: 200, foreground: [201] };
+        return null;
+      },
+      socketsDir: socks,
+      deliver: async () => ({ ok: true }),
+      native: {
+        typeText: () => false,
+        pressEnter: () => false,
+        status: () => 'idle',
+        wait: async () => {},
+        paneText: () => '',
+        foregroundCwd: () => null,
+      },
+    };
+  }
+
+  test('a seat pane: ancestor chain in the recorded pane places the seat and admits send', async () => {
+    const { root, agentsDir, home, team } = setupTeam({
+      lead: { stage: 'ready', pane: 'pane1' },
+      worker: { stage: 'ready', pane: 'pane2' },
+    });
+    const workerChain: Process[] = [{ pid: 210, name: 'zsh' }, { pid: 200, name: 'claude' }, { pid: 10, name: 'herdr' }];
+    const io = testIo(root);
+    delete io.caller;
+    io.callerSources = () => sources(workerChain, {
+      agents: () => [agent('lead', 'pane1'), agent('worker', 'pane2')],
+      paneRootPid: (pane) => ({ pane1: 100, pane2: 200 })[pane] ?? null,
+    });
+
+    const judged = judgeCallerIn(io, agentsDir, team);
+    expect(judged.caller).toEqual({ kind: 'seat', name: 'worker', pane: 'pane2', session: 'acme' });
+    expect(callerVerdict(judged.caller, 'worker', standingOf(agentsDir, judged.session, judged.caller))).toEqual({ kind: 'ok' });
+
+    const code = await runSend(['lead', 'hello from worker'], io, sendHost(home));
+    expect(code).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out).toContain('lead: queued, not woken (drop');
+  });
+
+  test('a non-seat pane: agentless pane whose root pid vouches is placed as a pane and refused by send', async () => {
+    const { root, agentsDir, home, team } = setupTeam({
+      lead: { stage: 'ready', pane: 'pane1' },
+      worker: { stage: 'ready', pane: 'pane2' },
+    });
+    const shellChain: Process[] = [{ pid: 900, name: 'zsh' }, { pid: 10, name: 'herdr' }];
+    const io = testIo(root);
+    io.env = { HERDR_PANE_ID: 'pane9' };
+    delete io.caller;
+    io.callerSources = () => sources(shellChain, {
+      agents: () => [agent('lead', 'pane1'), agent('worker', 'pane2')],
+      env: { HERDR_PANE_ID: 'pane9' },
+      paneRootPid: (pane) => ({ pane1: 100, pane2: 200, pane9: 900 })[pane] ?? null,
+    });
+
+    const judged = judgeCallerIn(io, agentsDir, team);
+    expect(judged.caller).toEqual({ kind: 'pane', pane: 'pane9', session: 'acme' });
+    expect(callerVerdict(judged.caller, 'worker', standingOf(agentsDir, judged.session, judged.caller))).toEqual({ kind: 'refused' });
+    expect(describeCaller(judged.shown)).toBe('it runs in pane acme/pane9, which no grant lists');
+
+    const code = await runSend(['lead', 'from non-seat pane'], io, sendHost(home));
+    expect(code).toBe(1);
+    expect(io.err).toContain('it runs in pane acme/pane9, which no grant lists');
+  });
+
+  test('an unplaced caller: incomplete walk, unnamed pane, detached CLI, and unattended flag each refuse with their exact reason', async () => {
+    const { root, agentsDir, home, team } = setupTeam({
+      lead: { stage: 'ready', pane: 'pane1' },
+      worker: { stage: 'ready', pane: 'pane2' },
+    });
+
+    const cases: Array<{ label: string; makeSources: () => CallerSources; expectedReason: RegExp }> = [
+      {
+        label: 'incomplete ancestor walk',
+        makeSources: () => sources(terminal, { ancestors: () => null }),
+        expectedReason: /parent processes can't be read to the top/,
+      },
+      {
+        label: 'pane without an agent and no vouched root pid',
+        makeSources: () => sources([{ pid: 900, name: 'zsh' }, { pid: 10, name: 'herdr' }], {
+          agents: () => [agent('lead', 'pane1')],
+          paneRootPid: (pane) => (pane === 'pane1' ? 100 : null),
+        }),
+        expectedReason: /pane without an agent/,
+      },
+      {
+        label: 'unnamed agent in pane',
+        makeSources: () => sources([{ pid: 300, name: 'claude' }, { pid: 10, name: 'herdr' }]),
+        expectedReason: /runs in pane pane3, whose agent has no .* name/,
+      },
+      {
+        label: 'detached CLI outside the terminal host',
+        makeSources: () => sources([{ pid: 51, name: 'bash' }, { pid: 50, name: 'claude' }, { pid: 40, name: 'zsh' }], {
+          env: { HERDR_PANE_ID: 'pane1' },
+        }),
+        expectedReason: /detached from that pane/,
+      },
+      {
+        label: 'AGENT_UNATTENDED set in environment',
+        makeSources: () => sources(terminal, { env: { AGENT_UNATTENDED: '1' } }),
+        expectedReason: /AGENT_UNATTENDED is set/,
+      },
+    ];
+
+    for (const one of cases) {
+      const io = testIo(root);
+      delete io.caller;
+      io.callerSources = () => one.makeSources();
+
+      const judged = judgeCallerIn(io, agentsDir, team);
+      expect(judged.caller.kind).toBe('unplaced');
+      expect(callerVerdict(judged.caller, 'worker', standingOf(agentsDir, judged.session, judged.caller))).toEqual({ kind: 'refused' });
+      expect(describeCaller(judged.shown)).toMatch(one.expectedReason);
+
+      const code = await runSend(['lead', `attempt: ${one.label}`], io, sendHost(home));
+      expect(code).toBe(1);
+      expect(io.err).toMatch(one.expectedReason);
+    }
+  });
+
+  test('a caller whose pane changed: another-pane and no-pane verdicts match state and refuse send', async () => {
+    // 1. State records pane2 for worker, but worker's ancestor chain is now in pane9.
+    const moved = setupTeam({
+      lead: { stage: 'ready', pane: 'pane1' },
+      worker: { stage: 'ready', pane: 'pane2' },
+    });
+    const movedChain: Process[] = [{ pid: 910, name: 'zsh' }, { pid: 900, name: 'claude' }, { pid: 10, name: 'herdr' }];
+    const movedIo = testIo(moved.root);
+    delete movedIo.caller;
+    movedIo.callerSources = () => sources(movedChain, {
+      agents: () => [agent('lead', 'pane1'), agent('worker', 'pane9')],
+      paneRootPid: (pane) => ({ pane1: 100, pane9: 900 })[pane] ?? null,
+    });
+
+    const movedJudged = judgeCallerIn(movedIo, moved.agentsDir, moved.team);
+    expect(movedJudged.caller).toEqual({ kind: 'seat', name: 'worker', pane: 'pane9', session: 'acme' });
+    expect(callerVerdict(movedJudged.caller, 'worker', standingOf(moved.agentsDir, movedJudged.session, movedJudged.caller))).toEqual({
+      kind: 'another-pane',
+      name: 'worker',
+      recordedPane: 'pane2',
+    });
+
+    const movedCode = await runSend(['lead', 'from moved pane'], movedIo, sendHost(moved.home));
+    expect(movedCode).toBe(1);
+    expect(movedIo.err).toContain(anotherPaneRefusal('worker', 'pane2'));
+
+    // 2. State records no pane for worker.
+    const unrecorded = setupTeam({
+      lead: { stage: 'ready', pane: 'pane1' },
+      worker: { stage: 'ready' },
+    });
+    const workerChain: Process[] = [{ pid: 210, name: 'zsh' }, { pid: 200, name: 'claude' }, { pid: 10, name: 'herdr' }];
+    const unrecordedIo = testIo(unrecorded.root);
+    delete unrecordedIo.caller;
+    unrecordedIo.callerSources = () => sources(workerChain, {
+      agents: () => [agent('lead', 'pane1'), agent('worker', 'pane2')],
+      paneRootPid: (pane) => ({ pane1: 100, pane2: 200 })[pane] ?? null,
+    });
+
+    const unrecordedJudged = judgeCallerIn(unrecordedIo, unrecorded.agentsDir, unrecorded.team);
+    expect(unrecordedJudged.caller).toEqual({ kind: 'seat', name: 'worker', pane: 'pane2', session: 'acme' });
+    expect(callerVerdict(unrecordedJudged.caller, 'worker', standingOf(unrecorded.agentsDir, unrecordedJudged.session, unrecordedJudged.caller))).toEqual({
+      kind: 'no-pane',
+      name: 'worker',
+    });
+
+    const unrecordedCode = await runSend(['lead', 'from unrecorded pane'], unrecordedIo, sendHost(unrecorded.home));
+    expect(unrecordedCode).toBe(1);
+    expect(unrecordedIo.err).toContain(noPaneRefusal('worker'));
+  });
+
+  test('an impostor ancestor chain: forged HERDR_PANE_ID or non-ancestor pane root never grants another seat\'s identity', async () => {
+    const { root, agentsDir, home, team } = setupTeam({
+      lead: { stage: 'ready', pane: 'pane1' },
+      worker: { stage: 'ready', pane: 'pane99' },
+    });
+
+    // Impostor 1: caller's ancestor chain is in pane2 (root pid 200, named worker), while env claims
+    // HERDR_PANE_ID=pane1 (lead's recorded pane, root pid 100). Placement follows the ancestor pids
+    // (200 -> worker on pane2), never the forged environment variable, and refuses because worker's
+    // recorded pane is pane99.
+    const impostorSeatChain: Process[] = [{ pid: 210, name: 'zsh' }, { pid: 200, name: 'claude' }, { pid: 10, name: 'herdr' }];
+    const ioSeat = testIo(root);
+    ioSeat.env = { HERDR_PANE_ID: 'pane1', HERDR_SESSION: 'acme' };
+    delete ioSeat.caller;
+    ioSeat.callerSources = () => sources(impostorSeatChain, {
+      agents: () => [agent('lead', 'pane1'), agent('worker', 'pane2')],
+      env: { HERDR_PANE_ID: 'pane1', HERDR_SESSION: 'acme' },
+      paneRootPid: (pane) => ({ pane1: 100, pane2: 200 })[pane] ?? null,
+    });
+
+    const judgedSeat = judgeCallerIn(ioSeat, agentsDir, team);
+    expect(judgedSeat.caller).toEqual({ kind: 'seat', name: 'worker', pane: 'pane2', session: 'acme' });
+    expect(callerVerdict(judgedSeat.caller, 'worker', standingOf(agentsDir, judgedSeat.session, judgedSeat.caller))).toEqual({
+      kind: 'another-pane',
+      name: 'worker',
+      recordedPane: 'pane99',
+    });
+
+    const seatCode = await runSend(['worker', 'impostor claiming lead pane'], ioSeat, sendHost(home));
+    expect(seatCode).toBe(1);
+    expect(ioSeat.err).toContain(anotherPaneRefusal('worker', 'pane99'));
+
+    // Impostor 2: agentless shell in pane9 (root pid 900) forges HERDR_PANE_ID=pane1 (lead's pane,
+    // root pid 100). Because pid 100 is not in the caller's ancestor chain [900, 10], placement
+    // refuses to vouch pane1 and returns unplaced.
+    const impostorShellChain: Process[] = [{ pid: 900, name: 'zsh' }, { pid: 10, name: 'herdr' }];
+    const ioShell = testIo(root);
+    ioShell.env = { HERDR_PANE_ID: 'pane1' };
+    delete ioShell.caller;
+    ioShell.callerSources = () => sources(impostorShellChain, {
+      agents: () => [agent('lead', 'pane1'), agent('worker', 'pane2')],
+      env: { HERDR_PANE_ID: 'pane1' },
+      paneRootPid: (pane) => ({ pane1: 100, pane2: 200, pane9: 900 })[pane] ?? null,
+    });
+
+    const judgedShell = judgeCallerIn(ioShell, agentsDir, team);
+    expect(judgedShell.caller).toMatchObject({ kind: 'unplaced', reason: expect.stringMatching(/pane without an agent/) });
+    expect(callerVerdict(judgedShell.caller, 'worker', standingOf(agentsDir, judgedShell.session, judgedShell.caller))).toEqual({ kind: 'refused' });
+
+    const shellCode = await runSend(['lead', 'impostor shell claiming lead pane'], ioShell, sendHost(home));
+    expect(shellCode).toBe(1);
+    expect(ioShell.err).toMatch(/pane without an agent/);
+  });
+
+  test('parsePsSnapshot reads pid, ppid, and command name from one process snapshot', () => {
+    const raw = [
+      '    1     0 /sbin/launchd',
+      '   10     1 /opt/homebrew/bin/herdr',
+      '  200    10 -zsh',
+      '  210   200 /Applications/Claude.app/Contents/MacOS/claude',
+      'nonsense line',
+      '',
+    ].join('\n');
+    const snapshot = parsePsSnapshot(raw);
+    expect(snapshot.get(1)).toEqual({ ppid: 0, name: 'launchd' });
+    expect(snapshot.get(10)).toEqual({ ppid: 1, name: 'herdr' });
+    expect(snapshot.get(200)).toEqual({ ppid: 10, name: 'zsh' });
+    expect(snapshot.get(210)).toEqual({ ppid: 200, name: 'claude' });
+  });
+
+  test('runSend computes caller ancestry and terminal-host snapshots once across gate, prologue, and preflights', async () => {
+    const { root, home } = setupTeam({
+      lead: { stage: 'ready', pane: 'pane1' },
+      worker: { stage: 'ready', pane: 'pane2' },
+    });
+    const workerChain: Process[] = [{ pid: 210, name: 'zsh' }, { pid: 200, name: 'codex' }, { pid: 10, name: 'herdr' }];
+
+    let ancestorsCalls = 0;
+    let callerAgentsCalls = 0;
+    const callerPaneRootCalls = new Map<string, number>();
+
+    const io = testIo(root);
+    delete io.caller;
+    io.callerSources = () => ({
+      ancestors: () => {
+        ancestorsCalls += 1;
+        return workerChain;
+      },
+      agents: () => {
+        callerAgentsCalls += 1;
+        return [agent('lead', 'pane1'), agent('worker', 'pane2')];
+      },
+      paneRootPid: (pane) => {
+        callerPaneRootCalls.set(pane, (callerPaneRootCalls.get(pane) ?? 0) + 1);
+        return ({ pane1: 100, pane2: 200 })[pane] ?? null;
+      },
+      env: {},
+      stdinIsTTY: true,
+    });
+
+    let hostAgentsCalls = 0;
+    let paneTextCalls = 0;
+    const baseHost = sendHost(home);
+    const countingHost: SendHost = {
+      ...baseHost,
+      agents: (session) => {
+        hostAgentsCalls += 1;
+        return baseHost.agents(session);
+      },
+      native: {
+        ...baseHost.native,
+        paneText: (session, pane) => {
+          paneTextCalls += 1;
+          return baseHost.native.paneText?.(session, pane) ?? '';
+        },
+      },
+    };
+
+    const code = await runSend(['lead', 'single-snapshot check'], io, countingHost);
+    expect(code).toBe(0);
+    expect(ancestorsCalls).toBe(1);
+    expect(callerAgentsCalls).toBe(1);
+    expect(callerPaneRootCalls.get('pane1') ?? 0).toBeLessThanOrEqual(1);
+    expect(callerPaneRootCalls.get('pane2') ?? 0).toBeLessThanOrEqual(1);
+    expect(hostAgentsCalls).toBeLessThanOrEqual(1);
+    expect(paneTextCalls).toBeLessThanOrEqual(1);
+  });
+
+  test('two sends in one process with different callers each get their own verdict, and calls outside a send snapshot memoise nothing', async () => {
+    const { root, home, agentsDir, team } = setupTeam({
+      lead: { stage: 'ready', pane: 'pane1' },
+      worker: { stage: 'ready', pane: 'pane2' },
+    });
+
+    let activeChain: Process[] = [{ pid: 210, name: 'zsh' }, { pid: 200, name: 'codex' }, { pid: 10, name: 'herdr' }];
+    let activeWorkerPane = 'pane2';
+    let ancestorsReads = 0;
+
+    const io = testIo(root);
+    delete io.caller;
+    io.callerSources = () => ({
+      ancestors: () => {
+        ancestorsReads += 1;
+        return activeChain;
+      },
+      agents: () => [agent('lead', 'pane1'), agent('worker', activeWorkerPane)],
+      paneRootPid: (pane) => ({ pane1: 100, [activeWorkerPane]: 200 })[pane] ?? null,
+      env: {},
+      stdinIsTTY: true,
+    });
+
+    // Outside any send snapshot: nothing is memoised across calls.
+    const firstOutside = judgeCallerIn(io, agentsDir, team);
+    expect(firstOutside.caller).toEqual({ kind: 'seat', name: 'worker', pane: 'pane2', session: 'acme' });
+    expect(callerVerdict(firstOutside.caller, 'worker', standingOf(agentsDir, firstOutside.session, firstOutside.caller))).toEqual({ kind: 'ok' });
+    expect(ancestorsReads).toBe(1);
+
+    activeWorkerPane = 'pane99';
+    const secondOutside = judgeCallerIn(io, agentsDir, team);
+    expect(secondOutside.caller).toEqual({ kind: 'seat', name: 'worker', pane: 'pane99', session: 'acme' });
+    expect(callerVerdict(secondOutside.caller, 'worker', standingOf(agentsDir, secondOutside.session, secondOutside.caller))).toEqual({
+      kind: 'another-pane',
+      name: 'worker',
+      recordedPane: 'pane2',
+    });
+    expect(ancestorsReads).toBe(2);
+
+    // Send 1 in this process: worker on recorded pane2 is admitted.
+    activeWorkerPane = 'pane2';
+    const firstSendCode = await runSend(['lead', 'first send from worker pane2'], io, sendHost(home));
+    expect(firstSendCode).toBe(0);
+
+    // Send 2 in the same process: caller's pane changes to pane99 (unrecorded for worker); gets its own verdict and is refused.
+    activeWorkerPane = 'pane99';
+    io.out = '';
+    io.err = '';
+    const secondSendCode = await runSend(['lead', 'second send from worker on another pane'], io, sendHost(home));
+    expect(secondSendCode).toBe(1);
+    expect(io.err).toContain(anotherPaneRefusal('worker', 'pane2'));
+
+    // Send 3 in the same process: caller's ancestor chain changes to an agentless shell; gets its own verdict and is refused.
+    activeChain = [{ pid: 900, name: 'zsh' }, { pid: 10, name: 'herdr' }];
+    io.out = '';
+    io.err = '';
+    const thirdSendCode = await runSend(['lead', 'third send from agentless shell'], io, sendHost(home));
+    expect(thirdSendCode).toBe(1);
+    expect(io.err).toMatch(/pane without an agent/);
   });
 });

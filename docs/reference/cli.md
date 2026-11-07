@@ -160,6 +160,34 @@ Usage:
 
 None.
 
+## `analyse`
+
+Hidden: no
+
+Usage:
+
+    team analyse [<path>] [--json]
+
+### Who may run it
+
+`any-caller` — the command runs its own analyser gate before any project file or git history is read: only the owner or a seat named in the owner's analyser setting for the target scope is admitted, and a public-only analyser is refused on a non-public project
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `path` | yes | no |
+
 ## `answer`
 
 Hidden: no
@@ -554,7 +582,7 @@ Hidden: no
 
 Usage:
 
-    team check [--session <name>] [--file <path>] [--repair] [--json]
+    team check [--session <name>] [--file <path>] [--repair] [--close-orphans] [--json]
     team check <ref> [--pr <file>] [--since <ref>] [--file <path>]
 
 ### Who may run it
@@ -565,6 +593,7 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--close-orphans` | no | no | no |
 | `--file` | yes | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
@@ -581,6 +610,36 @@ Usage:
 | Name | Optional | Repeatable |
 | --- | --- | --- |
 | `ref` | yes | no |
+
+## `checkpoint`
+
+Hidden: no
+
+Usage:
+
+    team checkpoint <seat> [--session <name>] [--file <path>] [--json]
+
+### Who may run it
+
+`owner-or-leads` — recording a standing checkpoint ask for a seat: the owner or `leads`, as `restart`
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--file` | yes | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `--session` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
 
 ## `client`
 
@@ -933,9 +992,9 @@ Usage:
 
     team daemon status [--json]
     team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
-    team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
+    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
     team daemon restart [--dry-run] [--json]
-    team daemon uninstall [--json]
+    team daemon uninstall [--home <folder>] [--json]
     team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
 
 ### Who may run it
@@ -1014,7 +1073,7 @@ Hidden: no
 
 Usage:
 
-    team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
+    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
 
 #### Who may run it
 
@@ -1027,6 +1086,7 @@ Usage:
 | `--dry-run` | no | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--home` | yes | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
 | `--presence` | no | no | no |
@@ -1126,7 +1186,7 @@ Hidden: no
 
 Usage:
 
-    team daemon uninstall [--json]
+    team daemon uninstall [--home <folder>] [--json]
 
 #### Who may run it
 
@@ -1138,6 +1198,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--home` | yes | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
 | `-h` | no | no | yes |
@@ -1316,7 +1377,7 @@ Hidden: no
 Usage:
 
     team drops [--follow] [--json]
-    team drops --read --seat <seat> [--session <session>] [--epoch <run_id>]
+    team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>]
 
 ### Who may run it
 
@@ -1330,6 +1391,7 @@ Usage:
 | `--follow` | no | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--id` | yes | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
 | `--read` | no | no | no |
@@ -2247,6 +2309,7 @@ Hidden: no
 Usage:
 
     team policy [--seat <name>] [--file <path>] [--json]
+    team policy keys [--json]
     team policy set <level> <name> <value> [--until <iso>] [--kind <enforced|advised>] [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]
     team policy unset <level> <name> [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]
 
@@ -2268,6 +2331,32 @@ Usage:
 | `-h` | no | no | yes |
 
 ### Positionals
+
+None.
+
+### `keys`
+
+Hidden: no
+
+Usage:
+
+    team policy keys [--json]
+
+#### Who may run it
+
+`any-caller` — the listing reads the built-in policy names and changes nothing, so any caller reads it without an account or team record
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
 
 None.
 
@@ -2892,6 +2981,7 @@ Usage:
 
     team rename <seat> <new-seat> [--session <name>] [--file <path>] [--json]
     team rename --renumber [--dry-run] [--session <name>] [--file <path>] [--json]
+    team rename --team <new-name> [--from <old-name>] [--in-project <project>] [--session <name>] [--rekey] [--dry-run] [--file <path>] [--json]
 
 ### Who may run it
 
@@ -2903,12 +2993,16 @@ Usage:
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
+| `--from` | yes | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--in-project` | yes | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--rekey` | no | no | no |
 | `--renumber` | no | no | no |
 | `--session` | yes | no | no |
+| `--team` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -2955,7 +3049,7 @@ Hidden: no
 
 Usage:
 
-    team restart <seat> [--abandon] [--fresh] [--dry-run] [--session <name>] [--file <path>] [--json]
+    team restart <seat> [--abandon] [--fresh] [--resume <cli-session-id>] [--resolve-launch] [--dry-run] [--session <name>] [--file <path>] [--json]
     team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
 
 ### Who may run it
@@ -2975,6 +3069,8 @@ Usage:
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--resolve-launch` | no | no | no |
+| `--resume` | yes | no | no |
 | `--session` | yes | no | no |
 | `--team` | yes | no | no |
 | `-h` | no | no | yes |
@@ -3552,6 +3648,36 @@ Usage:
 
 None.
 
+## `show`
+
+Hidden: no
+
+Usage:
+
+    team show <id> [--json]
+
+### Who may run it
+
+`owner-or-own-team` — showing a message record is the record's addressee on its own pane, or the owner: it reads only the caller's own mailbox and writes the same signed read receipt team messages and team ack write
+
+A run with no terminal is refused: only the owner or a seat of this team runs this, from a terminal outside herdr or its own pane
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `id` | no | no |
+
 ## `status`
 
 Hidden: no
@@ -3559,6 +3685,7 @@ Hidden: no
 Usage:
 
     team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]
+    team status --project <name> --watch
     team status --client <grant-file> --key <client-key> [--team <team>] [--json]
 
 ### Who may run it
@@ -3579,6 +3706,7 @@ Usage:
 | `--project` | yes | no | no |
 | `--session` | yes | no | no |
 | `--team` | yes | no | no |
+| `--watch` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -3799,12 +3927,12 @@ Hidden: no
 
 Usage:
 
-    team up [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]
-    team up --all [--dry-run] [--serial] [--no-launch] [--json]
-    team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--json]
-    team up --general <grant.json> --key <client-key> [--all] [--dry-run] [--serial] [--no-launch] [--json]
+    team up [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--session <name>] [--file <path>] [--json]
+    team up --all [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]
+    team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]
+    team up --general <grant.json> --key <client-key> [--all] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]
     team up --request [--reason <text>] [--serial] [--json]
-    team up --approval <request-id> [--dry-run] [--serial] [--json]
+    team up --approval <request-id> [--dry-run] [--serial] [--resolve-launch] [--json]
 
 ### Who may run it
 
@@ -3826,6 +3954,7 @@ Usage:
 | `--no-launch` | no | no | no |
 | `--reason` | yes | no | no |
 | `--request` | no | no | no |
+| `--resolve-launch` | no | no | no |
 | `--serial` | no | no | no |
 | `--session` | yes | no | no |
 | `--team` | yes | no | no |

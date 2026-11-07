@@ -41,6 +41,7 @@ import type { ServiceManager, ServiceRestartSuccess } from '../src/daemon/servic
 import type { HostedWatchState } from '../src/watch/hosted.ts';
 import type { StatusSource } from '../src/watch/status-events.ts';
 import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
+import { runCheckpoint } from '../src/commands/checkpoint.ts';
 import { runClient } from '../src/commands/client.ts';
 import { issueOwnerGeneralGrant } from '../src/client/general-grant.ts';
 import { commits } from '../src/commands/commits.ts';
@@ -68,6 +69,7 @@ import { runRaise } from '../src/commands/raise.ts';
 import { runGrant } from '../src/commands/grant.ts';
 import { runDelegate } from '../src/commands/delegate.ts';
 import { runAck } from '../src/commands/ack.ts';
+import { runShow } from '../src/commands/show.ts';
 import { runDevelopmentMode } from '../src/commands/development-mode.ts';
 import { runOwnerSeat } from '../src/commands/owner-seat.ts';
 import { runRevoke } from '../src/commands/revoke.ts';
@@ -109,6 +111,7 @@ import { delegateGate, type DelegateSources } from '../src/delegate.ts';
 import { listFolder } from '../src/file/landing.ts';
 import { findRoot, loadTeamFile } from '../src/file/load.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
+import { markChannelNotified } from '../src/mcp/channel.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
 import { grantGate, type GrantSources } from '../src/grant.ts';
 import { defaultFs, lobbyDir } from '../src/lobby/gate.ts';
@@ -139,6 +142,11 @@ import type { KeyReader } from '../src/release/keychain.ts';
 import { leadPart, outsidePart, scenePart, skipsScene, unknownScenes, wantedScenes } from './exit-filter.ts';
 import { fakeFetch, fixture, happy, json, URLS, type Answers } from './release/world.ts';
 import { runImport } from '../src/commands/import.ts';
+import { runAnalyse } from '../src/commands/analyse.ts';
+import { signAnalyserSetting } from '../src/analyse/gate.ts';
+import { recordText } from '../src/config/team-record.ts';
+import { entitiesPath } from '../src/entities.ts';
+import type { YamlValue } from '../src/yaml.ts';
 import { intoRegistry, realRegistryTouched, storedTeam, underRegistry } from './helpers/registry-team.ts';
 import { runMigrate } from '../src/commands/migrate.ts';
 import { CLAUDE_IDLE, claudeBox, deliverBriefs, fixtureBase, gitEnv, testIo, thisProcessJobRecord, thisProcessUnitRecord } from './helpers.ts';
@@ -433,7 +441,7 @@ function doctor(home: string, over: Partial<DoctorSources> = {}): DoctorSources 
 function launching(text: string, paneOk: (command: string) => boolean = () => true, server = true): Launch {
   let n = 0;
   let session: 'absent' | 'running' = 'absent';
-  const panes = new Map<string, { text: string; agent: boolean }>();
+  const panes = new Map<string, { text: string; agent: boolean; name: string | null }>();
   return {
     sessionState: () => session,
     startServer() {
@@ -445,7 +453,7 @@ function launching(text: string, paneOk: (command: string) => boolean = () => tr
     createWorkspace() {
       n += 1;
       const pane = `w${n}:p1`;
-      panes.set(pane, { text, agent: false });
+      panes.set(pane, { text, agent: false, name: null });
       return { pane, workspace: `w${n}` };
     },
     paneRun(_session, pane, command) {
@@ -454,10 +462,23 @@ function launching(text: string, paneOk: (command: string) => boolean = () => tr
       if (known) known.agent = true;
       return true;
     },
-    renameAgent: () => true,
+    // A rename the list already shows under the seat's name is left as it is. One that changes
+    // the name is listed under it, which is what the naming step reads back.
+    renameAgent(_session, pane, name) {
+      const known = panes.get(pane);
+      if (known !== undefined && known.name !== name) known.name = name;
+      return true;
+    },
     closeWorkspace: () => true,
     agentPanes: () => [...panes].filter(([, pane]) => pane.agent).map(([id]) => id),
-    agents: () => [],
+    agents: () => [...panes].flatMap(([id, pane]) => (pane.name === null ? [] : [{
+      name: pane.name,
+      agent: 'claude-code',
+      pane: id,
+      workspace: id.replace(/:p1$/, ''),
+      status: 'idle',
+      cwd: null,
+    }])),
     paneText: (_session, pane) => panes.get(pane)?.text ?? '',
     foreground: () => ['claude'],
     sleep: async () => {},
@@ -753,6 +774,12 @@ scene('add.reserved-name', async (place) => {
       .replace('    name: lead\n    label: lead\n', '    name: orchestrator\n    label: orchestrator\n'),
   );
   return show(await added(place, ['lead'], owner, addSources(place)), '"lead" is reserved');
+});
+scene('add.reserved-daemon', async (place) => {
+  // The file's own seats are untouched: `daemon` is new in every file, and the word belongs to
+  // the machine daemon's reminder sends, which carry it as their sender with no registry id.
+  write(place, TWO);
+  return show(await added(place, ['daemon'], owner, addSources(place)), '"daemon" is reserved');
 });
 scene('add.temporary-unexpected', async (place) => show(await added(place, ['extra', '--temporary'], owner, addSources(place)), 'unexpected'));
 scene('add.temporary-flags', async (place) => show(await added(place, ['worker', '--until', 'result:out.md'], owner, addSources(place)), '--until and --worktree'));
@@ -1211,6 +1238,46 @@ scene('check.repair-owner', async (place) => {
   write(place, TEAM);
   recordsLead(place);
   return show(await checked(place, ['--repair'], leadSeat, checkSources(quiet)), "--repair is the owner's");
+});
+scene('check.close-orphans-lead', async (place) => {
+  // A plain seat of the team sees every row the reading names, but the close is the lead's or the
+  // owner's: this caller is recorded and placed, and the flag is still refused.
+  write(place, TWO);
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats.worker = { stage: 'ready', pane: 'pane-worker' };
+  });
+  const worker: Caller = { kind: 'seat', name: 'worker', pane: 'pane-worker', session: 'acme' };
+  return show(
+    await checked(place, ['--close-orphans'], worker, checkSources(quiet)),
+    "--close-orphans is the team's lead's or the owner's",
+  );
+});
+scene('check.close-orphans-unavailable', async (place) => {
+  // A report wired with no process reading cannot re-prove a process, so the close refuses before
+  // it reads anything.
+  write(place, TEAM);
+  return show(await checked(place, ['--close-orphans'], owner, checkSources(quiet)), 'has no process reading here');
+});
+scene('check.close-orphans-terminal', async (place) => {
+  // The close asks its one question at a terminal; with none, the run refuses before it reads or
+  // signals anything.
+  write(place, TEAM);
+  const sources: CheckSources = {
+    ...checkSources(quiet),
+    orphans: { table: () => [], foldersOf: () => new Map(), ancestorsOf: () => null, own: () => [] },
+    closeOrphans: {
+      alive: () => false,
+      commOf: () => null,
+      startOf: () => null,
+      ancestorsOf: () => null,
+      heldElsewhere: () => new Set<number>(),
+      heldHere: () => new Set<number>(),
+      signal: () => false,
+      pause: () => {},
+    },
+  };
+  return show(await checked(place, ['--close-orphans'], owner, sources), 'it needs a terminal');
 });
 scene('check.repaired', async (place) => {
   write(place, TEAM);
@@ -1759,6 +1826,27 @@ scene('doctor.missing', async (place) => {
   return show({ code: await runDoctor(['--file', place.file], io, doctor(place.home, { version: () => null })), out: io.out, err: io.err }, 'install');
 });
 
+scene('checkpoint.recorded', async (place) => {
+  approve(place, TEAM);
+  const io = testIo(place.root, owner);
+  return show({ code: await runCheckpoint(['lead'], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err }, 'recorded lead ->');
+});
+scene('checkpoint.caller', async (place) => {
+  approve(place, TEAM);
+  const io = testIo(place.root, other);
+  return show({ code: await runCheckpoint(['lead'], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err }, 'only the owner or `leads`');
+});
+scene('checkpoint.io', async (place) => {
+  approve(place, TEAM);
+  mkdirSync(join(place.root, '.agents', 'team.state.json'), { recursive: true });
+  const io = testIo(place.root, owner);
+  return show({ code: await runCheckpoint(['lead'], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err }, 'the state cannot be written');
+});
+scene('checkpoint.invocation', async (place) => {
+  const io = testIo(place.root, owner);
+  return show({ code: await runCheckpoint([], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err }, 'a seat name is required');
+});
+
 async function down(place: Place, argv: string[], caller: Caller, sources: RemoveSources): Promise<Ran> {
   const io = testIo(place.root, caller);
   return runCompared(place, argv, (args) => runDown(args, io, { ...sources, home: sources.home ?? place.home }), io);
@@ -1918,9 +2006,13 @@ scene('down.never-approved', async (place) => {
 scene('down.legacy', async (place) => {
   approve(place, TEAM);
   editApproval(place, (record) => {
+    // Format 1 is the unsigned shape. lead and actor are signed with format 2, and a format-1
+    // record that still carries either is refused before the legacy reading.
     record.format = 1;
     delete record.signature;
     delete record.generation;
+    delete record.lead;
+    delete record.actor;
   });
   return show(await down(place, [], owner, downSources({
     sessionRunning: () => true, agents: () => [agent('lead')], home: place.home,
@@ -2740,6 +2832,26 @@ scene('seats.not-yours', async (place) => {
     entities(place);
     return show(await entityRun(place, ['set', 'floor.names.unique', 'team']), 'set floor.names.unique');
   });
+  /** The owner's projects file in the place's home: `beacon` is the one project on record. */
+  function projects(place: Place): string {
+    const file = join(place.home, '.config', 'team', 'projects.yaml');
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `projects:\n  beacon:\n    name: Beacon\n`);
+    return file;
+  }
+  scene('config.entity.composed-value', async (place) => {
+    write(place, TEAM);
+    return show(await entityRun(place, ['get', 'composed.rules']), 'No entity, project, or team rules declared');
+  });
+  scene('config.project.rules-written', async (place) => {
+    projects(place);
+    return show(await entityRun(place, ['set', 'project.beacon.rules', '[ "one" ]']), 'set project.beacon.rules');
+  });
+  scene('config.project.rules-unchanged', async (place) => {
+    projects(place);
+    await entityRun(place, ['set', 'project.beacon.rules', '[ "one" ]']);
+    return show(await entityRun(place, ['set', 'project.beacon.rules', '[ "one" ]']), 'nothing changed');
+  });
   scene('config.entity.detached', async (place) => {
     entities(place);
     return show(await entityRun(place, ['set', 'floor.names.unique', 'off'], detachedCaller), 'terminal');
@@ -2766,6 +2878,17 @@ scene('seats.not-yours', async (place) => {
   scene('config.entity.path', async (place) => {
     entities(place);
     return show(await entityRun(place, ['set', 'omega.names.unique', 'off']), 'no entry for entity "omega"');
+  });
+  scene('config.entity.reminders-problem', async (place) => {
+    entities(place);
+    return show(
+      await entityRun(place, ['set', 'floor.reminders', '[{name: Daily, at: ["09:00"], text: hi, to: [lead@acme]}]']),
+      'a name is lower-case words and dashes',
+    );
+  });
+  scene('config.entity.reminders-value', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'floor.reminders', 'not-a-list']), 'is not a YAML list of reminders');
   });
   scene('config.entity.unreadable', async (place) => {
     entities(place);
@@ -2820,9 +2943,9 @@ function tamperedSeatSetting(place: Place): void {
   const path = join(agentsDir(place.home), `${agentId}.yaml`);
   const text = readFileSync(path, 'utf8');
   // The fixture's launch line carries the same model name, so the tamper targets the settings
-  // entry's own `value:` line; the first match would land on `launch` and leave the record
+  // entry's own `"value":` line; the first match would land on `launch` and leave the record
   // verifying.
-  const tampered = text.replace('value: "claude-opus-5-5"', 'value: "claude-haiku-5-5"');
+  const tampered = text.replace('"value": "claude-opus-5-5"', '"value": "claude-haiku-5-5"');
   if (tampered === text) throw new Error('the record has no value to tamper');
   writeFileSync(path, tampered);
 }
@@ -5366,6 +5489,55 @@ scene('team.restore-entry-refused', async (place) => {
   }
   return show(ran, 'the token name is not one this daemon writes');
 });
+// The typed-wake child entry is its own program too: without a readable one-use token it types
+// nothing and says why from a process of its own.
+scene('team.wake-entry-refused', async (place) => {
+  const entry = fileURLToPath(new URL('../src/daemon/wake/entry.ts', import.meta.url));
+  let ran: Ran;
+  try {
+    execFileSync(process.execPath, [entry, '--inherited', 'not-a-token'], {
+      cwd: place.root,
+      env: { ...process.env, HOME: place.home },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    ran = { code: 0, out: '', err: '' };
+  } catch (error) {
+    const failed = error as { status?: number; stderr?: unknown };
+    ran = {
+      code: failed.status ?? -1,
+      out: '',
+      err: typeof failed.stderr === 'string' ? failed.stderr : String(failed.stderr ?? ''),
+    };
+  }
+  return show(ran, 'the token name is not one this daemon writes');
+});
+// The mailbox router child is its own program too: started with no token, or with a token it
+// cannot read and spend, it routes nothing and says so from a process of its own.
+scene('team.mailbox-entry-refused', async (place) => {
+  const entry = fileURLToPath(new URL('../src/daemon/mailbox/entry.ts', import.meta.url));
+  const runEntry = (argv: string[]): Ran => {
+    try {
+      execFileSync(process.execPath, [entry, ...argv], {
+        cwd: place.root,
+        env: { ...process.env, HOME: place.home },
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      return { code: 0, out: '', err: '' };
+    } catch (error) {
+      const failed = error as { status?: number; stderr?: unknown };
+      return {
+        code: failed.status ?? -1,
+        out: '',
+        err: typeof failed.stderr === 'string' ? failed.stderr : String(failed.stderr ?? ''),
+      };
+    }
+  };
+  const noToken = show(runEntry([]), 'the mailbox router child has no readable one-use token');
+  show(runEntry([join(place.base, 'missing-token')]), 'the mailbox router child has no readable one-use token');
+  return noToken;
+});
 scene('daemon.fault-usage', async (place) =>
   show(await daemonRan(place, ['fault-watch', '--root', place.root, '--route', 'nope']), '32-character route id'));
 scene('daemon.fault-root', async (place) =>
@@ -6242,8 +6414,10 @@ scene('send.sent-unconfirmed', async (place) => {
   return show(await sent(place, ['lead', 'hello'], owner, sendHost(place, { inboxGraceMs: 0 })), 'lead: queued, not woken (drop, 0 ms)');
 });
 /** The development channel: a Claude lead launched with the channel naming the team server, a
- *  live listener that declared it, and no declared order. The server's push marker lands while
- *  the sender waits, so the walk ends `sent (channel)` and nothing is typed. */
+ *  live listener that declared it, and no declared order. The server's push marker lands and
+ *  records the notification while the sender waits. A reservation alone is not that write, so
+ *  the walk would leave the channel and end on the drop. With the notification recorded, the
+ *  walk ends `sent (channel)` and nothing is typed. */
 scene('send.sent-channel', async (place) => {
   const text = TEAM.replace('launch: claude --model claude-opus-5-5', 'launch: claude --model claude-opus-5-5 --dangerously-load-development-channels server:team-inbox')
     .replace(/# The send scenes on this file[\s\S]*$/, '');
@@ -6257,6 +6431,7 @@ scene('send.sent-channel', async (place) => {
     if (id === undefined) return;
     try {
       writeFileSync(join(dropDir, `${id}.channel-push.json`), `${JSON.stringify({ v: 1, kind: 'channel-push', id, seat: 'lead', session: 'acme', root: place.root, at: NOW.toISOString(), meta: { id, from: 'owner', seat: 'lead', team: 'acme' }, content_sha256: 'a'.repeat(64), status: 'sent (channel)' })}\n`, { flag: 'wx', mode: 0o600 });
+      markChannelNotified(dropDir, id);
     } catch {
       // Already pushed on an earlier wait.
     }
@@ -6672,6 +6847,7 @@ function recordReload(place: Place, name: string, recorded = true): void {
 
 function reloadLaunch(options: { create?: boolean; agents?: HerdrAgent[]; text?: string } = {}): Launch {
   const panes = new Map<string, string>([['w1:p1', options.text ?? IDLE]]);
+  const named = new Map<string, string>();
   let clock = Date.parse('2026-10-14T09:00:00Z');
   let n = 0;
   return {
@@ -6689,10 +6865,27 @@ function reloadLaunch(options: { create?: boolean; agents?: HerdrAgent[]; text?:
       panes.set(pane, IDLE);
       return true;
     },
-    renameAgent: () => true,
+    // A rename the list already shows under the seat's name is not called again. One that is
+    // called is listed under that name, which is what the naming step reads back.
+    renameAgent(_session, pane, name) {
+      if (named.get(pane) === name) return true;
+      named.set(pane, name);
+      return true;
+    },
     closeWorkspace: () => true,
     agentPanes: () => [...panes.keys()],
-    agents: () => options.agents ?? [agent('lead')],
+    agents: () => {
+      const base = (options.agents ?? [agent('lead')]).map((one) => {
+        const name = named.get(one.pane);
+        return name === undefined ? one : { ...one, name };
+      });
+      const seen = new Set(base.map((one) => one.pane));
+      for (const [pane, name] of named) {
+        if (seen.has(pane)) continue;
+        base.push({ name, agent: 'claude', pane, workspace: pane, status: 'idle', cwd: null });
+      }
+      return base;
+    },
     workspacePanes: () => ['w1:p1'],
     paneText: (_session, pane) => panes.get(pane) ?? options.text ?? IDLE,
     foreground: () => ['claude'],
@@ -6723,6 +6916,37 @@ scene('reload.same', async (place) => {
   write(place, TEAM);
   recordReload(place, 'lead');
   return show(await reloaded(place, ['lead']), 'already running what the file declares');
+});
+function grokReloadRefusal(place: Place, recorded: boolean, drift = false): void {
+  const text = TEAM.replace('    cli: claude-code', '    cli: grok')
+    .replace('    model: Claude Opus', '    model: Grok')
+    .replace('    version: "5.5"', '    version: "4.7"')
+    .replace('    launch: claude --model claude-opus-5-5', '    launch: grok');
+  write(place, `${text}trust: [.]\n`);
+  recordReload(place, 'lead', recorded);
+  updateState(join(place.root, '.agents'), (state) => {
+    const held = state.sessions.acme?.seats.lead;
+    if (!held) throw new Error('the reload scene has no recorded seat');
+    held.cli = 'grok';
+    held.start_cwd = place.root;
+    if (recorded) {
+      held.model = drift ? 'Other' : 'Grok';
+      held.version = '4.7';
+      held.launch_line = 'grok';
+    }
+  });
+}
+scene('reload.start-same', async (place) => {
+  grokReloadRefusal(place, true);
+  return show(await reloaded(place, ['lead']), 'cannot start in or grant an ancestor');
+});
+scene('reload.start-unrecorded', async (place) => {
+  grokReloadRefusal(place, false);
+  return show(await reloaded(place, ['lead']), 'cannot start in or grant an ancestor');
+});
+scene('reload.start', async (place) => {
+  grokReloadRefusal(place, true, true);
+  return show(await reloaded(place, ['lead']), 'cannot start in or grant an ancestor');
 });
 scene('reload.absent', async (place) => {
   write(place, TEAM);
@@ -7478,6 +7702,13 @@ scene('register.handle-held', async (place) => {
   });
   return show(await registered(place, ['lead'], owner, { agents: () => [agent('lead')] }), "the id its record holds (seat_0123456789ab) is worker's handle");
 });
+scene('register.launch-only', async (place) => {
+  write(place, TEAM);
+  // The seat stands on its recorded pane, and the record holds no process identity: its own
+  // run would record the pane root, and that write is the launch's or the owner's walk's.
+  recordLead(place);
+  return show(await registered(place, ['lead'], leadSeat, { agents: () => [agent('lead')] }), 'only the owner records a pane root');
+});
 scene('register.no-seat', async (place) => {
   write(place, TEAM);
   return show(await registered(place, ['missing']), 'no seat "missing"');
@@ -7730,6 +7961,30 @@ for (const [name, command, args, invalidArgs] of [
       'only the owner or a seat this team marks `leads` acknowledges another seat\'s messages',
     );
   });
+}
+
+{
+  const SENT = '3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
+  const FILE = TWO.replace('workspace:', 'session: acme\nworkspace:');
+  async function shown(place: Place, argv: readonly string[], caller: Caller = owner): Promise<Ran> {
+    const io = testIo(place.root, caller);
+    return { code: await runShow([...argv], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+  }
+  scene('show.shown', async (place) => {
+    write(place, FILE);
+    plantRecord(place.home, place.root, 'acme', 'owner', SENT, "from the file's seat worker (no registry record yet) — admitted by: a seat to its own team's orchestrator\n\nquestion", { from: 'worker', at: NOW.toISOString() });
+    return show(await shown(place, ['3a3b3c4d']), 'question');
+  });
+  scene('show.refused', async (place) => {
+    write(place, FILE);
+    messageKeyOf(place.home);
+    return show(await shown(place, ['3a3b3c4d']), 'no record named');
+  });
+  scene('show.configuration', async (place) => {
+    write(place, 'format: [\n');
+    return show(await shown(place, ['3a3b3c4d']), 'team show:');
+  });
+  scene('show.usage', async (place) => show(await shown(place, []), '<id> is required'));
 }
 
 {
@@ -8046,6 +8301,41 @@ scene('waits.usage', async (place) => {
   return show(await waited(place, ['--all'], leadSeat), 'unknown option');
 });
 
+/** An owner-signed analyser whose read roots are the paths this scene names. The value is the
+ *  same shape the gate verifies: principal, scope and roots, signed under the place's home. */
+function namedAnalyser(place: Place, scope: 'full' | 'public', roots: string[]): void {
+  const signed = signAnalyserSetting(place.home, 'entity', 'acme', {
+    principal: 'owner',
+    scope,
+    roots,
+  });
+  const path = entitiesPath(place.home);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, recordText({ acme: { analyser: signed as unknown as YamlValue } }));
+}
+
+async function analysed(place: Place, argv: string[]): Promise<Ran> {
+  const io = testIo(place.root, owner);
+  return { code: await runAnalyse(argv, io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+}
+
+scene('analyse.invocation', async (place) => show(await analysed(place, ['--nope']), 'unknown option'));
+scene('analyse.unauthorised', async (place) => show(await analysed(place, ['.']), 'no analyser is named'));
+scene('analyse.scope', async (place) => {
+  namedAnalyser(place, 'public', [place.root]);
+  return show(await analysed(place, ['.']), 'scope: public');
+});
+scene('analyse.unreadable', async (place) => {
+  const link = join(place.root, 'linked');
+  symlinkSync(place.root, link);
+  namedAnalyser(place, 'full', [place.root]);
+  return show(await analysed(place, [link]), 'symbolic links are refused');
+});
+scene('analyse.report', async (place) => {
+  namedAnalyser(place, 'full', [place.root]);
+  return show(await analysed(place, ['.']), 'analysis cost:');
+});
+
 // The source probe reads every command file (~2 s); the tree does not change during a run.
 let analyzed: ReturnType<typeof analyzeSource> | undefined;
 function analyze(...args: Parameters<typeof analyzeSource>): ReturnType<typeof analyzeSource> {
@@ -8058,9 +8348,15 @@ const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepa
   // No pane messaging: these were the typed leg's own outcomes; with nothing typed, an unreached
   // seat's message waits in its bus inbox (exit 0), so no scene can take them any more.
   'send.queued', 'send.held', 'send.not-submitted', 'send.unreachable',
+  // The typed-wake handoff needs a live send daemon with a wake child and a scripted pane; the
+  // handoff's single scene is test/typed-wake-handoff.test.ts's.
+  'send.handed',
   // The chores child's normal exit is reached only by the child itself, after its host ended its
   // input; a scene in this process cannot end its own standard input.
-  'daemon.chores-ended']);
+  'daemon.chores-ended',
+  // Re-checks after asynchronous brief delivery defend against a concurrently changed start
+  // folder. The synchronous start refusals have direct scenes above.
+  'reload.inbox-start-same', 'reload.inbox-start-unrecorded']);
 
 const contract = loadContract();
 contract.rows.forEach((row, index) => scenePosition.set(row.id, index));
@@ -8790,7 +9086,7 @@ leadTest('under the registry source, remove takes the seat out of the registry r
 describe('owner-seat approval admits import, add and up for a seat', () => {
   const requestId = (ran: Ran) => /owner-seat request (oa_[0-9a-f]{24})/.exec(ran.out)?.[1] ?? '';
 
-  test('up: request, answer, a dry run that spends nothing, the launch, and a refused replay', async () => {
+  leadTest('up: request, answer, a dry run that spends nothing, the launch, and a refused replay', async () => {
     const place = layout(true);
     try {
       approve(place, TEAM);
@@ -8818,7 +9114,7 @@ describe('owner-seat approval admits import, add and up for a seat', () => {
     }
   }, 120_000);
 
-  test('up: an approval for other arguments is refused, and the seat without one is denied as before', async () => {
+  leadTest('up: an approval for other arguments is refused, and the seat without one is denied as before', async () => {
     const place = layout(true);
     try {
       approve(place, TEAM);
@@ -8836,7 +9132,7 @@ describe('owner-seat approval admits import, add and up for a seat', () => {
     }
   }, 120_000);
 
-  test('add: request, answer, the add as asked', async () => {
+  leadTest('add: request, answer, the add as asked', async () => {
     const place = layout(true);
     try {
       approve(place, TWO);
@@ -8854,7 +9150,7 @@ describe('owner-seat approval admits import, add and up for a seat', () => {
     }
   }, 120_000);
 
-  test('import: request, answer, the import, and a refused replay', async () => {
+  leadTest('import: request, answer, the import, and a refused replay', async () => {
     const place = layout(true);
     try {
       write(place, TEAM);
@@ -8875,7 +9171,7 @@ describe('owner-seat approval admits import, add and up for a seat', () => {
     }
   }, 120_000);
 
-  test('init and up in one request: one answer creates the team and starts it', async () => {
+  leadTest('init and up in one request: one answer creates the team and starts it', async () => {
     const place = layout(true);
     try {
       const store = seatOwner(place.home);

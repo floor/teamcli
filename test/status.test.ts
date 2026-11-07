@@ -695,12 +695,12 @@ describe('team status', () => {
     }], NOW.getTime());
     const { code, out } = await status();
     expect(code).toBe(0);
-    expect(out).toContain('openai  weekly  left 39%  used 61%  resets in 44m  codex-acme  changed 2m ago  status line  fresh');
+    expect(out).toContain('openai  weekly  left 39%  used 61%  resets in 44m  codex-acme  changed 2m ago  read from a seat’s status bar  fresh');
     expect(out).toContain('deepseek  unknown');
     const doc = JSON.parse((await status('--json')).out);
     expect(doc.budgets).toEqual([
-      { account: 'deepseek', window: null, left: null, used: null, resetsIn: null, seat: null, age: null, source: null, fallback: false, state: 'unknown', inside: false, reserve: null },
-      { account: 'openai', window: 'weekly', left: 39, used: 61, resetsIn: '44m', seat: 'codex-acme', age: '2m', source: 'status_line', fallback: false, state: 'fresh', inside: false, reserve: 10 },
+      { account: 'deepseek', window: null, left: null, used: null, resetsIn: null, seat: null, age: null, source: null, fallback: false, state: 'unknown', inside: false, reserve: null, expired: false },
+      { account: 'openai', window: 'weekly', left: 39, used: 61, resetsIn: '44m', seat: 'codex-acme', age: '2m', source: 'status_line', fallback: false, state: 'fresh', inside: false, reserve: 10, expired: false },
     ]);
   });
 
@@ -722,7 +722,7 @@ describe('team status', () => {
     expect(out).not.toContain('4.996');
     const doc = JSON.parse((await status('--json')).out);
     expect(doc.budgets).toEqual([
-      { account: 'deepseek', window: null, left: null, used: null, resetsIn: null, seat: null, age: null, source: null, fallback: false, state: 'unknown', inside: false, reserve: null },
+      { account: 'deepseek', window: null, left: null, used: null, resetsIn: null, seat: null, age: null, source: null, fallback: false, state: 'unknown', inside: false, reserve: null, expired: false },
     ]);
   });
 
@@ -748,10 +748,10 @@ describe('team status', () => {
     }], NOW.getTime());
     const { code, out } = await status();
     expect(code).toBe(0);
-    expect(out).toContain('openai  weekly  left 5%  used 95%  resets unknown  -  read 2m ago  check  fresh, inside reserve 10%');
+    expect(out).toContain('openai  weekly  left 5%  used 95%  resets not printed  -  read 2m ago  estimated  fresh, inside reserve 10%');
     const doc = JSON.parse((await status('--json')).out);
     expect(doc.budgets).toEqual([
-      { account: 'openai', window: 'weekly', left: 5, used: 95, resetsIn: null, seat: null, age: '2m', source: 'check', fallback: false, state: 'fresh', inside: true, reserve: 10 },
+      { account: 'openai', window: 'weekly', left: 5, used: 95, resetsIn: null, seat: null, age: '2m', source: 'check', fallback: false, state: 'fresh', inside: true, reserve: 10, expired: false },
     ]);
   });
 
@@ -777,10 +777,10 @@ describe('team status', () => {
     }], NOW.getTime());
     const { code, out } = await status();
     expect(code).toBe(0);
-    expect(out).toContain('openai  weekly  left 39%  used 61%  resets in 44m  codex-acme  changed 2m ago  status line (fallback)  fresh');
+    expect(out).toContain('openai  weekly  left 39%  used 61%  resets in 44m  codex-acme  changed 2m ago  read from a seat’s status bar (fallback)  fresh');
     const doc = JSON.parse((await status('--json')).out);
     expect(doc.budgets).toEqual([
-      { account: 'openai', window: 'weekly', left: 39, used: 61, resetsIn: '44m', seat: 'codex-acme', age: '2m', source: 'status_line', fallback: true, state: 'fresh', inside: false, reserve: 10 },
+      { account: 'openai', window: 'weekly', left: 39, used: 61, resetsIn: '44m', seat: 'codex-acme', age: '2m', source: 'status_line', fallback: true, state: 'fresh', inside: false, reserve: 10, expired: false },
     ]);
   });
 
@@ -817,8 +817,8 @@ describe('team status', () => {
     const plain = await run(false);
     const pointed = await run(true);
     // Non-vacuity: the rows this pins are the stored readings' own, fallback mark and all.
-    expect(plain.out).toContain('openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh');
-    expect(plain.out).toContain('openai  weekly  left 39%  used 61%  resets in 44m  codex-acme  changed 2m ago  status line (fallback)  fresh');
+    expect(plain.out).toContain('openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  estimated  fresh');
+    expect(plain.out).toContain('openai  weekly  left 39%  used 61%  resets in 44m  codex-acme  changed 2m ago  read from a seat’s status bar (fallback)  fresh');
     expect(plain.budgets).toHaveLength(2);
     expect(pointed).toEqual(plain);
   });

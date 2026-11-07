@@ -27,7 +27,8 @@ import { readTeamConfig } from '../file/team-config.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Seat } from '../file/types.ts';
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
-import { agentList, agentRename, agentStatus, paneForeground, paneProcesses, paneRead, reportDisplayAgent, sessionState, workspaceRename, type HerdrAgent, type PaneProcesses, type SessionState } from '../herdr.ts';
+import { agentList, agentRename, agentStatus, paneForeground, paneProcesses, paneRead, reportDisplayAgent, sessionState, SIDEBAR_TTL_CAP_MS, workspaceRename, type HerdrAgent, type PaneProcesses, type SessionState } from '../herdr.ts';
+import { sidebarPolicy } from '../settings/sidebar-policy.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { currentBriefClaim, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
@@ -88,7 +89,7 @@ export type RegisterSources = {
   renameWorkspace?: (session: string, workspace: string, label: string) => boolean;
   /** Line 2, re-applied the same way: `displayAgent(seat)`, through the `pane report-metadata`
    *  call `add` reports it with. Left out, the real write runs over herdr. */
-  reportDisplayAgent?: (session: string, pane: string, text: string) => boolean;
+  reportDisplayAgent?: (session: string, pane: string, text: string, ttlMs?: number) => boolean;
   /** Names the pane as the seat — the herdr rename a launch runs at its `rename` step. Left out,
    *  the real `herdr agent rename` runs. */
   renameAgent?: (session: string, pane: string, name: string) => boolean;
@@ -344,6 +345,27 @@ function replacedProcessRefused(out: Io, json: boolean, name: string, pane: stri
   return 1;
 }
 
+/**
+ * The pane root is the launch's own write: the daemon's launch, or the owner's walk. A caller
+ * other than the owner may repeat an identity the record already holds and this pane still
+ * matches; a new one — a first record, a record that predates the identity, or a replaced
+ * process — is not that caller's to make. `register.replaced` stays the owner's refusal on the
+ * already path: the same live fact, said to the only caller that could have recorded it.
+ */
+function launchOnlyRefused(out: Io, json: boolean, name: string, pane: string, dry: boolean, unblock: string): number {
+  const line = `${plainLine(name)}: pane ${plainLine(pane)} is not a process identity this record's launch wrote; only the owner records a pane root, from a terminal outside herdr`;
+  if (json) {
+    refuse(out, true, 'register', { id: 'register.launch-only', message: line, repair: null });
+  } else if (dry) {
+    out.stdout(`! register would refuse: ${plainText(line)}\n`);
+    out.stdout(`! to unblock: ${plainText(unblock)}\n`);
+  } else {
+    out.stderr(`team register: ${line}\n`);
+  }
+  // exit: register.launch-only
+  return 1;
+}
+
 function handleHeldRefused(out: Io, json: boolean, name: string, id: string, holder: string): number {
   refuse(out, json, 'register', {
     id: 'register.handle-held',
@@ -428,6 +450,13 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     const words = ['team register', shellQuote(name)];
     if (values.session !== undefined) words.push('--session', shellQuote(values.session));
     return `a seat of this team runs \`${words.join(' ')}\` from its own pane (the owner runs it from this folder, at a terminal outside herdr)`;
+  };
+  // The pane root's own way out: the owner's run, which is a launch's own authority for this
+  // record even where the seat stands elsewhere.
+  const unblockRoot = (values: { session?: string }): string => {
+    const words = ['team register', shellQuote(name)];
+    if (values.session !== undefined) words.push('--session', shellQuote(values.session));
+    return `the owner runs \`${words.join(' ')}\` from a terminal outside herdr`;
   };
 
   const walked = walkCaller(io);
@@ -645,6 +674,20 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     return cliRefused(io, json, name, pane, seat.cli);
   }
 
+  // The pane root this run would write is the launch's own: the process identity of the pane the
+  // daemon launched, or the owner's walk recorded. A caller other than the owner — a seat of this
+  // team, a delegate, a grant — may repeat the identity its record already holds and this live
+  // pane still matches (a run in the seat's own unchanged pane, the pane `team restart` wrote), and it
+  // may do everything else this command does; it may not make a root. A record that predates the
+  // identity, a first record, and a replaced process are all that refusal. The gate sits on both
+  // writes below: the already path's completion of a missing identity, and the adopt write. It is
+  // the record's own evidence, not the caller gate's, so dev mode does not fold it: a folded
+  // caller still records no root.
+  const rootContinuity = seatProcessVerdict(held?.launched, procs);
+  if (rootContinuity !== 'same' && !mayLaunchSeats(walked)) {
+    return launchOnlyRefused(io, json, name, pane, dry, unblockRoot(args.values));
+  }
+
   // Already recorded on this pane, and ready: the seat is not relaunched and its screen is not
   // read. The record a launch writes is written again from the file as it now stands — the
   // signing, the roster, the team's project pointers and the address — so the repair `team
@@ -715,7 +758,16 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
           };
         });
       }
-      relabel(out, sources, session, seat, pane, listed?.workspace, name);
+      relabel(
+        out,
+        sources,
+        session,
+        seat,
+        pane,
+        listed?.workspace,
+        name,
+        sidebarPolicy({ home: sources.home, root, team, now: refreshedAt }).ttlMs,
+      );
       // The audit lines a delegated and a granted act write, the same ones the launch path
       // writes below: this path is that act too, and its early return must not skip them.
       if (delegated !== null) logDelegated(dir, delegated, 'up', refreshedAt, 'register');
@@ -1006,7 +1058,8 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   }
   // The seat's sidebar, painted from the file the way `up` and `add` paint it: the record above
   // makes the seat reachable; these two writes make its own lines say what the file says.
-  relabel(out, sources, session, seat, pane, workspace, name);
+  const sidebarTtlMs = sidebarPolicy({ home: sources.home, root, team, now }).ttlMs;
+  relabel(out, sources, session, seat, pane, workspace, name, sidebarTtlMs);
   noteLaunchedPane(sources.home, path, pane, session);
   // The audit line a delegated act writes, naming the authority (`up`) it was run under; a
   // granted seat writes the grant's own line.
@@ -1052,6 +1105,7 @@ function relabel(
   pane: string,
   workspace: string | undefined,
   name: string,
+  ttlMs = SIDEBAR_TTL_CAP_MS,
 ): void {
   if (workspace !== undefined) {
     const title = workspaceLabel(seat);
@@ -1063,10 +1117,8 @@ function relabel(
     if (!renamed) out.stdout(`${plainLine(name)}: its title was not reported\n`);
   }
   const display = displayAgent(seat);
-  const reported = (sources.reportDisplayAgent ?? ((s, pane, text) => reportDisplayAgent(pane, text, s)))(
-    session,
-    pane,
-    display,
-  );
+  const reported = (
+    sources.reportDisplayAgent ?? ((s, p, text, ttl = SIDEBAR_TTL_CAP_MS) => reportDisplayAgent(p, text, s, ttl))
+  )(session, pane, display, ttlMs);
   if (!reported) out.stdout(`${plainLine(name)}: its display was not reported\n`);
 }

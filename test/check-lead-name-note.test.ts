@@ -8,13 +8,15 @@
 // nicknames are new, and the reservation binds them.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runTeamCheck } from '../src/check/team.ts';
 import { displayAgent, workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { approvalStanding } from '../src/store/store.ts';
+import { writePolicySet } from '../src/policy/index.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { CLAUDE_IDLE, deliverBriefs, notesOtherThanSocket, testIo } from './helpers.ts';
@@ -139,6 +141,18 @@ function check(root: string, text: string): { code: number; out: string } {
 }
 
 describe('a legacy seat named lead', () => {
+  test('explicit pretrust is a note before the closing summary and dormant admission stays quiet', () => {
+    const root = place(LEGACY);
+    const home = join(dirname(root), 'home');
+    for (const name of ['pretrust', 'first-run-admission']) {
+      const wrote = writePolicySet(home, { level: 'team', target: teamIdOf(root), teamRoot: root, name, value: 'off' }, { now: NOW });
+      expect(wrote.ok).toBe(true);
+    }
+    const { out } = check(root, readFileSync(join(root, '.agents', 'team.yaml'), 'utf8'));
+    expect(notesOtherThanSocket(out)).toEqual(['note: pretrust: off']);
+    expect(out.trim().split('\n').at(-1)).toBe('no differences');
+  });
+
   test('a file whose named seat holds leads loads and draws no note: the address and the name reach it', () => {
     expect(validateTeamFile(LEGACY).ok).toBe(true);
     const { code, out } = check(place(LEGACY), LEGACY);
@@ -178,6 +192,15 @@ describe('a legacy seat named lead', () => {
     if (loaded.ok) return;
     expect(loaded.errors.map((problem) => problem.message)).toContain(
       'seat "builder-1": "lead" is reserved: lead@<team> addresses the team\'s lead, so no nickname takes it',
+    );
+  });
+
+  test('a nickname may not take the daemon\'s word either: it is a sender identity, not a seat', () => {
+    const loaded = validateTeamFile(NICKNAMED.replace('nickname: lead', 'nickname: daemon'));
+    expect(loaded.ok).toBe(false);
+    if (loaded.ok) return;
+    expect(loaded.errors.map((problem) => problem.message)).toContain(
+      'seat "builder-1": "daemon" is reserved: the machine daemon\'s reminders send under that name, so no nickname takes it',
     );
   });
 

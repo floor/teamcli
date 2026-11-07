@@ -1,6 +1,7 @@
 import { lstatSync, readFileSync, readdirSync, realpathSync, type Stats } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { recordedSession, textDeclaresSession, withRecordedSession } from '../file/recorded-session.ts';
+import { defaultSession } from '../file/sections/session.ts';
 import type { TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { storesFolder } from '../store/store.ts';
@@ -39,17 +40,17 @@ function scalar(map: YamlNode, key: string): string | null {
   return entry.value.value;
 }
 
-/** `project`, `entity` and `session` as the file writes them. An omitted session is the entity and
- *  the project name joined with `-`, the project name alone when the file names no entity: the
- *  section's own default, kept in step with it. Null when those cannot be read, so the file is not
- *  claimed for a session. */
+/** `project`, `entity` and `session` as the file writes them. An omitted session is the section's
+ *  own default (`defaultSession`: `<entity>-<project>` for a team in a project it namesakes,
+ *  `<entity>-<project>-<team>` for one it does not, `<entity>-<team>` for a team that is its own
+ *  project), so a file claimed here is the one the validator would seat in the session. Null when
+ *  those cannot be read, so the file is not claimed for a session. */
 function declared(text: string): { project: string; session: string } | null {
   try {
     const node = parseYaml(text);
     const project = scalar(node, 'project');
     if (!project) return null;
-    const entity = scalar(node, 'entity');
-    return { project, session: scalar(node, 'session') ?? (entity ? `${entity}-${project}` : project) };
+    return { project, session: scalar(node, 'session') ?? defaultSession(project, scalar(node, 'entity'), scalar(node, 'in_project')) };
   } catch {
     return null;
   }
@@ -89,8 +90,8 @@ function interpret(path: string, root: string, session: string, home: string): F
   const names = declared(text);
   if (!names) return null;
   const folder = resolved(root);
-  // A file that declares no session takes the registry's recorded session. The derived
-  // `<entity>-<project>` name is not used when the registry already recorded another.
+  // A file that declares no session takes the registry's recorded session. The derived default
+  // is not used when the registry already recorded another.
   const sessionName = textDeclaresSession(text) ? names.session : (recordedSession(home, folder) ?? names.session);
   if (sessionName !== session) return null;
   const validated = validateTeamFile(text, { home, root: folder });

@@ -23,7 +23,7 @@ import { emptySession, updateState } from '../../src/state.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
 import type { DownLaunch } from '../../src/commands/down.ts';
 import type { Launch } from '../../src/commands/up.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, testIo, recordRenames } from '../helpers.ts';
 
 const NOW = new Date('2026-10-15T09:00:00Z');
 const IDLE = CLAUDE_IDLE;
@@ -163,6 +163,8 @@ function world(): { launch: Launch; session: 'absent' | 'running' } {
     sleep: async () => {},
     now: () => NOW,
   };
+
+  recordRenames(made.launch);
   return made;
 }
 

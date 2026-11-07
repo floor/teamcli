@@ -125,6 +125,12 @@ function padded(text: string, comment: string): string {
   return `${text}${' '.repeat(Math.max(1, 30 - text.length))}${comment}`;
 }
 
+/** A project id is bare only when a YAML 1.1 read would keep the same text. `12e45` is a float and an all-digit id is a number, so those are quoted. */
+function yamlWord(text: string): string {
+  const bare = /^[A-Za-z_/~][A-Za-z0-9_./@~-]*$/.test(text) && !/^(~|null|true|false)$/i.test(text);
+  return bare ? text : JSON.stringify(text);
+}
+
 export function skeleton(project: string, head: string | null, teamVersion = version(), root?: string, cli = 'claude-code'): string {
   const rootPath = root ?? `/path/to/${project}`;
   const picked = PICKED_SEATS[cli as (typeof PICKED_CLIS)[number]] ?? PICKED_SEATS['claude-code'];
@@ -133,7 +139,7 @@ export function skeleton(project: string, head: string | null, teamVersion = ver
 # The team of ${project}. Private to this clone: see .git/info/exclude.
 # The live file is what the commands read. Edit it, then run team up.
 format: 1
-project: ${project}
+project: ${yamlWord(project)}
 # visibility: public          # public | private: whether forbidden_public applies
 # session: ${project}          # the herdr session; default <entity>-<project>, never "default"
 ${padded('operator: orchestrator', '# the seat the watch reports to')}
@@ -554,7 +560,7 @@ export async function runInit(
     }
     // The stored copy is validated before anything is written: a copy that no longer validates
     // (a newer validator, a copy approved under rules since changed) is refused, never restored.
-    const restoredCheck = validateTeamFile(copy);
+    const restoredCheck = validateTeamFile(copy, { home, root });
     if (!restoredCheck.ok) {
       const first = restoredCheck.errors[0];
       refuse(io, json, 'init', {
@@ -590,7 +596,7 @@ export async function runInit(
     first = `Restored ${TEAM_FILE} from an archive. ${archiveProvenance(archived.manifest)}\n`;
   } else {
     text = skeleton(basename(root), git(root, 'rev-parse', 'HEAD'), version(), root, firstLoggedInCli(sources));
-    const check = validateTeamFile(text);
+    const check = validateTeamFile(text, { home, root });
     if (!check.ok) {
       refuse(io, json, 'init', {
         id: 'init.skeleton',

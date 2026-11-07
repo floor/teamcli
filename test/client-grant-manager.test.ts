@@ -64,7 +64,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { LOG_FILE, readState } from '../src/state.ts';
 import { keyOf, signDomain } from '../src/store/keys.ts';
 import { storePath } from '../src/store/store.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const made: string[] = [];
 const realTmp = process.env.TMPDIR;
@@ -317,6 +317,8 @@ function launchOf(now: () => Date): Made {
     sleep: async () => {},
     now,
   };
+
+  recordRenames(made.launch);
   return made;
 }
 
@@ -757,7 +759,7 @@ describe('the other manager routes verify the same grant on the same team', () =
     expect(flagged.err).toContain("are the owner's and take no --client");
     const freshFlag = testIo(w.docs, noTerminal);
     expect(await runRestart(['worker', '--client', manager.path, '--key', w.grok.keyPath, '--fresh'], freshFlag, restartSources)).toBe(2);
-    expect(freshFlag.err).toContain("--fresh are the owner's and take no --client");
+    expect(freshFlag.err).toContain("--file, --session, --abandon, --fresh and --resume are not for --client");
   });
 });
 

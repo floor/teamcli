@@ -6,6 +6,8 @@ import {
   assignmentProblems,
   assignmentWeights,
   plan,
+  readTimings,
+  shardPlan,
   shardUnits,
   timingsFromLog,
   unitTimesFromJunit,
@@ -15,9 +17,17 @@ import {
 
 test('a split file becomes its parts, each a fraction of its time', () => {
   const all = units(['test/a.test.ts', 'test/exit-codes.test.ts', 'test/a.test.ts']);
-  expect(all).toEqual(['test/a.test.ts', 'test/exit-codes.test.ts#0/4', 'test/exit-codes.test.ts#1/4', 'test/exit-codes.test.ts#2/4', 'test/exit-codes.test.ts#3/4']);
-  const w = weights(all, { 'test/a.test.ts': 10, 'test/exit-codes.test.ts': 400 }, () => 100);
-  expect(w.get('test/exit-codes.test.ts#2/4')).toBe(100);
+  expect(all).toEqual([
+    'test/a.test.ts',
+    'test/exit-codes.test.ts#0/6',
+    'test/exit-codes.test.ts#1/6',
+    'test/exit-codes.test.ts#2/6',
+    'test/exit-codes.test.ts#3/6',
+    'test/exit-codes.test.ts#4/6',
+    'test/exit-codes.test.ts#5/6',
+  ]);
+  const w = weights(all, { 'test/a.test.ts': 10, 'test/exit-codes.test.ts': 600 }, () => 100);
+  expect(w.get('test/exit-codes.test.ts#2/6')).toBe(100);
 });
 
 test('every unit lands in exactly one shard, longest first to the lightest', () => {
@@ -40,8 +50,8 @@ test('an untimed unit weighs the measured average when the assignment is made, n
   const w = assignmentWeights(['test/new.test.ts', 'test/old.test.ts'], { 'test/old.test.ts': 1200 }, (f) => sizes[f] ?? 0);
   expect(w.get('test/new.test.ts')).toBe(UNTIMED_MS);
   expect(w.get('test/old.test.ts')).toBe(1200);
-  const part = assignmentWeights(['test/exit-codes.test.ts#1/4'], {}, () => 0);
-  expect(part.get('test/exit-codes.test.ts#1/4')).toBe(Math.round(UNTIMED_MS / 4));
+  const part = assignmentWeights(['test/exit-codes.test.ts#1/6'], {}, () => 0);
+  expect(part.get('test/exit-codes.test.ts#1/6')).toBe(Math.round(UNTIMED_MS / 6));
 });
 
 test('the packed plan is checked in as a sorted unit-to-shard map', () => {
@@ -69,10 +79,12 @@ const CLEAN = {
   shards: 2,
   units: {
     'test/a.test.ts': 0,
-    'test/exit-codes.test.ts#0/4': 1,
-    'test/exit-codes.test.ts#1/4': 1,
-    'test/exit-codes.test.ts#2/4': 0,
-    'test/exit-codes.test.ts#3/4': 0,
+    'test/exit-codes.test.ts#0/6': 1,
+    'test/exit-codes.test.ts#1/6': 1,
+    'test/exit-codes.test.ts#2/6': 0,
+    'test/exit-codes.test.ts#3/6': 0,
+    'test/exit-codes.test.ts#4/6': 1,
+    'test/exit-codes.test.ts#5/6': 0,
   },
 };
 
@@ -88,7 +100,18 @@ test('--check names a test file with no shard, a stray unit and an empty shard',
   const stray = { ...CLEAN, units: { ...CLEAN.units, 'test/gone.test.ts': 1 } };
   expect(assignmentProblems(stray, TRACKED).join('\n')).toContain('not a tracked test');
 
-  const oneShard = { shards: 2, units: { 'test/a.test.ts': 0, 'test/exit-codes.test.ts#0/4': 0, 'test/exit-codes.test.ts#1/4': 0, 'test/exit-codes.test.ts#2/4': 0, 'test/exit-codes.test.ts#3/4': 0 } };
+  const oneShard = {
+    shards: 2,
+    units: {
+      'test/a.test.ts': 0,
+      'test/exit-codes.test.ts#0/6': 0,
+      'test/exit-codes.test.ts#1/6': 0,
+      'test/exit-codes.test.ts#2/6': 0,
+      'test/exit-codes.test.ts#3/6': 0,
+      'test/exit-codes.test.ts#4/6': 0,
+      'test/exit-codes.test.ts#5/6': 0,
+    },
+  };
   expect(assignmentProblems(oneShard, TRACKED).join('\n')).toContain('shard 1: no units');
 });
 
@@ -151,6 +174,115 @@ const JUNIT = `<?xml version="1.0" encoding="UTF-8"?>
 test('a JUnit report gives each file its suite time, and a label the sum for a split part', () => {
   expect(unitTimesFromJunit(JUNIT)).toEqual({ 'test/a.test.ts': 1234, 'test/b.test.ts': 500 });
   expect(unitTimesFromJunit(JUNIT, 'test/exit-codes.test.ts#0/4')).toEqual({ 'test/exit-codes.test.ts#0/4': 1734 });
+  const subMs = `<testsuite name="test/fast.test.ts" time="0.000100"></testsuite>`;
+  expect(unitTimesFromJunit(subMs)).toEqual({ 'test/fast.test.ts': 1 });
+  expect(weights(['test/fast.test.ts'], { 'test/fast.test.ts': 0 }, () => 100).get('test/fast.test.ts')).toBe(1);
+  expect(Object.entries(readTimings()).filter(([, ms]) => ms < 1)).toEqual([]);
+});
+
+const FULL_FILES = [
+  'test/broker.test.ts',
+  'test/a.test.ts',
+  'test/b.test.ts',
+  'test/c.test.ts',
+  'test/d.test.ts',
+  'test/e.test.ts',
+  'test/f.test.ts',
+  'test/g.test.ts',
+];
+
+const FULL_ASSIGNMENT = {
+  shards: 4,
+  units: {
+    'test/broker.test.ts': 0,
+    'test/a.test.ts': 0,
+    'test/b.test.ts': 1,
+    'test/c.test.ts': 1,
+    'test/d.test.ts': 2,
+    'test/e.test.ts': 2,
+    'test/f.test.ts': 3,
+    'test/g.test.ts': 3,
+  },
+};
+
+/** Three paced files keep the median rate at 0.1 ms/byte, so an untimed file weighs its size. */
+const FULL_TIMINGS: Record<string, number> = {
+  'test/broker.test.ts': 339100,
+  'test/paced-a.test.ts': 100,
+  'test/paced-b.test.ts': 100,
+  'test/paced-c.test.ts': 100,
+};
+
+const FULL_SIZES: Record<string, number> = {
+  'test/broker.test.ts': 1000,
+  'test/paced-a.test.ts': 1000,
+  'test/paced-b.test.ts': 1000,
+  'test/paced-c.test.ts': 1000,
+};
+
+const fullSize = (file: string) => FULL_SIZES[file] ?? 600;
+
+const ASSIGNED_BINS = [
+  ['test/a.test.ts', 'test/broker.test.ts'],
+  ['test/b.test.ts', 'test/c.test.ts'],
+  ['test/d.test.ts', 'test/e.test.ts'],
+  ['test/f.test.ts', 'test/g.test.ts'],
+];
+
+function fullQuery(over: Partial<Parameters<typeof shardPlan>[0]> = {}) {
+  return {
+    named: [] as string[],
+    fromEnv: [] as string[],
+    modeFull: true,
+    shards: 4,
+    assignment: FULL_ASSIGNMENT,
+    allTracked: FULL_FILES,
+    timings: FULL_TIMINGS,
+    size: fullSize,
+    ...over,
+  };
+}
+
+test('a full suite with no named files reads the checked-in assignment', () => {
+  expect(shardPlan(fullQuery()).map((bin) => bin.files)).toEqual(ASSIGNED_BINS);
+});
+
+test('TESTS=full with no named files reads the checked-in assignment', () => {
+  expect(shardPlan(fullQuery({ modeFull: false, fromEnv: ['full'] })).map((bin) => bin.files)).toEqual(ASSIGNED_BINS);
+});
+
+test('a selected list still packs at run time from recorded weights', () => {
+  const listed = ['test/a.test.ts', 'test/b.test.ts', 'test/c.test.ts'];
+  const timings = { 'test/a.test.ts': 50, 'test/b.test.ts': 30, 'test/c.test.ts': 10 };
+  const bins = shardPlan(fullQuery({ named: listed, fromEnv: [], modeFull: false, shards: 2, allTracked: listed, timings }));
+  expect(bins).toEqual(plan(units(listed), 2, weights(units(listed), timings, fullSize)));
+});
+
+test('files named on the command line still pack at run time when the mode is full', () => {
+  const bins = shardPlan(fullQuery({ named: ['test/a.test.ts'] }));
+  expect(bins).toEqual(plan(units(FULL_FILES), 4, weights(units(FULL_FILES), FULL_TIMINGS, fullSize)));
+});
+
+test('a full suite asked for a different shard count still packs at run time', () => {
+  const bins = shardPlan(fullQuery({ shards: 2 }));
+  expect(bins).toEqual(plan(units(FULL_FILES), 2, weights(units(FULL_FILES), FULL_TIMINGS, fullSize)));
+});
+
+test('a full suite with no assignment file still packs at run time', () => {
+  const bins = shardPlan(fullQuery({ assignment: null }));
+  expect(bins).toEqual(plan(units(FULL_FILES), 4, weights(units(FULL_FILES), FULL_TIMINGS, fullSize)));
+});
+
+test('a full suite keeps the assignment and appends a tracked file it does not name', () => {
+  const bins = shardPlan(fullQuery({ allTracked: [...FULL_FILES, 'test/new.test.ts'] }));
+  expect(bins.map((bin) => bin.files)).toEqual([
+    ['test/a.test.ts', 'test/broker.test.ts'],
+    ['test/b.test.ts', 'test/c.test.ts', 'test/new.test.ts'],
+    ['test/d.test.ts', 'test/e.test.ts'],
+    ['test/f.test.ts', 'test/g.test.ts'],
+  ]);
+  const dropped = shardPlan(fullQuery({ allTracked: FULL_FILES.filter((file) => file !== 'test/g.test.ts') }));
+  expect(dropped.flatMap((bin) => bin.files)).not.toContain('test/g.test.ts');
 });
 
 const NESTED_JUNIT = `<?xml version="1.0" encoding="UTF-8"?>

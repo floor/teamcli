@@ -34,7 +34,7 @@ import { receiptFile, readRecord, recordHolds, signedReceiptOf } from '../src/se
 import { emptySession, readState, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { approvalStanding } from '../src/store/store.ts';
-import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-18T09:00:00Z');
 const NOW_ISO = NOW.toISOString();
@@ -259,7 +259,9 @@ describe('the delivery', () => {
     const io = testIo(root, { kind: 'seat', name: 'lead', pane: 'pane-reader', session: 'acme' });
     const code = await runDrops(['--read', '--seat', 'lead'], io, { home });
     expect(code).toBe(0);
-    expect(io.out).toBe(`${generalBriefBody()}\n`);
+    // The stored record keeps the admitted-by line. The seat's read shows the compact header,
+    // the same substitution the attributed-reader scene already expects, plus the command's newline.
+    expect(io.out).toBe(`${generalBriefBody().replace(/^from the launch — admitted by: [^\n]+/, 'from the launch (launch brief):')}\n`);
     const context = { to: 'lead', root, session: 'acme' };
     expect(receiptHeld(dropDir('lead'), claim.id, context, home)).toBe(true);
     const receipt = signedReceiptOf(JSON.parse(readFileSync(receiptFile(dropDir('lead'), claim.id, 'read'), 'utf8')));
@@ -436,6 +438,9 @@ seats:
       sleep: async () => {},
       now: () => NOW,
     };
+
+
+    recordRenames(launch);
     const sources: UpSources = {
       home,
       now: () => NOW,

@@ -1,5 +1,4 @@
 import { NO_EVENT_ADAPTER_TOOK_IT, NO_PANE_MESSAGING, queuedLine } from '../src/send/no-pane-messaging.ts';
-import { MCP_INBOX_UNAVAILABLE } from '../src/send/walk-cascade.ts';
 // `team send`: the socket channel against fixtures — a fake seat, a fake sockets folder, and a
 // real unix socket (a listener this test owns). No pane is read and no live session is touched.
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -73,8 +72,8 @@ seats:
     launch: codex -m test
 # The scenes below exercise the typed leg: the file declares no wake for this seat, so the typed
 # leg is set aside with its reason, and the mailbox closes the walk. The mcp-inbox word stays in
-# the order as a name this build only reads: the report says it was not a delivery leg, and the
-# drop file takes the send.
+# the order as a retired name this build only reads: it is dropped before the walk, the report
+# carries nothing for it, and the drop file takes the send.
 delivery_order: [mcp-inbox, typed]
 `;
 }
@@ -661,7 +660,6 @@ describe('team send: --wait', () => {
       seat: 'lead',
       channel: 'drop',
       delivery: [
-        { leg: 'mcp-inbox', state: 'skipped', reason: MCP_INBOX_UNAVAILABLE },
         { leg: 'drop', state: 'attempted' },
       ],
       thread: sentId,
@@ -775,9 +773,18 @@ describe('team send: --list', () => {
   test("with no projects source injected, the registry the host's home holds places the team", async () => {
     const { root, sockets } = world();
     const io = owner(root);
-    // Written through the registry's own writer, under the home the host carries: the reading that
-    // finds it is the one bound to that home, not to wherever the process runs.
-    upsertProject(join(base, 'home'), '4f2a1b7c9d0e', { name: 'TeamCLI', entity: 'floor', lead: 'agt_2b9f', teams: [teamIdOf(root)] });
+    // Written through the registry's own writers, under the home the host carries: the reading that
+    // finds it is the one bound to that home, not to wherever the process runs. Membership is the
+    // team record's own, so the join is written there; the project side keeps no team list.
+    const home = join(base, 'home');
+    upsertProject(home, '4f2a1b7c9d0e', { name: 'TeamCLI', entity: 'floor', lead: 'agt_2b9f' });
+    upsertTeam(home, teamIdOf(root), {
+      project: 'acme',
+      session: 'acme',
+      root,
+      projectId: '4f2a1b7c9d0e',
+      projects: ['4f2a1b7c9d0e'],
+    });
 
     const code = await runSend(['--list'], io, fake(sockets));
 
@@ -871,10 +878,7 @@ describe('team send: --json documents', () => {
     expect(doc.status).toBe('queued, not woken');
     expect(doc.seat).toBe('lead');
     expect(doc.channel).toBe('drop');
-    expect(doc.delivery).toEqual([
-      { leg: 'mcp-inbox', state: 'skipped', reason: MCP_INBOX_UNAVAILABLE },
-      { leg: 'drop', state: 'attempted' },
-    ]);
+    expect(doc.delivery).toEqual([{ leg: 'drop', state: 'attempted' }]);
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     expect(readdirSync(drops).filter((name) => !name.includes('.'))).toEqual([doc.ids.sent]);
   });
@@ -914,7 +918,6 @@ describe('team send: --json documents', () => {
       seat: 'lead',
       channel: 'drop',
       delivery: [
-        { leg: 'mcp-inbox', state: 'skipped', reason: MCP_INBOX_UNAVAILABLE },
         { leg: 'drop', state: 'attempted' },
       ],
       ids: { sent: doc.ids.sent, reply: null },
@@ -1133,7 +1136,6 @@ describe('team send: native drop', () => {
       seat: 'lead',
       channel: null,
       delivery: [
-        { leg: 'mcp-inbox', state: 'skipped', eligible: false, reason: MCP_INBOX_UNAVAILABLE },
         { leg: 'drop', state: 'candidate', eligible: true },
       ],
       ids: { sent: null, reply: null },

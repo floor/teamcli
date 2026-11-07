@@ -107,7 +107,7 @@
     },
     "claude-code": {
       "idle": {
-        "real": 9,
+        "real": 10,
         "constructed": 2,
         "undocumented": 0
       },
@@ -1344,6 +1344,83 @@
           },
           "unknown": {
             "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "feedback survey": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          }
+        },
+        "2.1.319": {
+          "idle": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "scroll back": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 0,
             "constructed": 0,
             "undocumented": 0
           },
@@ -3318,6 +3395,12 @@
       "file": "claude-code/2.1.303/unsent-multiline-ansi.txt",
       "cli": "claude-code",
       "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.319/idle.txt",
+      "cli": "claude-code",
+      "kind": "idle",
       "provenance": "capture"
     },
     {

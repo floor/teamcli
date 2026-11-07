@@ -64,7 +64,34 @@ and launcher:
 | Cursor | `cursor` |
 
 Antigravity seats also carry a model pool: `gemini` or `claude-gpt`. The store keeps pool readings
-separate; unknown models have no inferred pool.
+separate; unknown models have no inferred pool. The pool is the tool's own word and never prints:
+a label names the bucket as the CLI's usage print does (`Gemini models`, `Claude and GPT models`,
+from `quota-observe.ts`), and leads with the account's plan when the owner wrote one down
+(`machinePlansOf`, below).
+
+The machine file `~/.config/team/accounts.yaml` may also carry a top-level `plans:` map from
+account name to the plan's words (`plans: { google-antigravity: Google AI Ultra }`). No CLI prints
+the plan a subscription runs on, so this owner-written entry is the only source, read once per run
+by `machinePlansOf` and carried as `MachineUsage.plans` into every label (`accountLabel`): the plan
+and the bucket (`Google AI Ultra, Claude and GPT models`), the account and the bucket when no plan
+is set (`google-antigravity (Claude and GPT models)`), the account alone for a subscription that
+splits into no bucket. JSON keeps `account` and `pool` and adds `plan` where one is set.
+
+The same file may carry a top-level `credits:` map, one entry per account: `available` (a
+non-negative number) and `currency` (three letters) are required, `cap` (a positive number) and
+`autoReload` (a boolean) are optional. `machineCreditsOf` reads it once per run into
+`MachineUsage.credits`; `reportOf` copies the entries for the accounts this view prints a row
+for into `UsageReport.credits`, keyed by account and copied field by field, so the owner's map
+never rides the JSON by reference. `reportText` prints one `credits` line under the account's
+rows: the money available, the monthly cap and the reload state, then the overage answer for the
+account's quota state — `walled` or `near cap` prints `overage is expected before the reset`
+with the limit the credit is spent to (the whole cap when the credit reaches it, else how far
+short of the cap it stops), `ok` prints `no overage is expected before the reset`, and `unknown`
+prints that no fresh reading can say either way. The expected overage in money is nowhere in
+these figures — no CLI prints it and no plan price turns the window's overshoot into money — so
+the line never invents one. An entry that names no available amount or no currency is skipped,
+never guessed, and an optional field that is no figure is left out while the rest of the entry
+still reads.
 
 The paying account is not the lab. A seat's lab is the model its pane says it runs: herdr's
 `display_agent` line for the agent of that name, which the watch keeps from the pane itself. A
@@ -85,8 +112,15 @@ transcript or input box is not a reading. The supported screen grammars are:
   are subscription percentages used for the session and weekly windows. This is a constructed,
   tested formatter contract, not a claim about the CLI's default status-line configuration.
 
-Antigravity's screen fixtures do not provide a quota percentage. Accounts without a supported
-screen grammar or a recorded figure print `unknown  not readable from a CLI screen`. Readable
+Antigravity's screen fixtures do not provide a quota percentage, but its own usage print
+(`agy --print /usage`) does, so a team seat on the Antigravity CLI keeps that account readable.
+Readable is decided by the CLI kinds the machine's teams declare: a seat's CLI either has a
+pattern that names the account, or is a CLI whose own usage print measures it. A shipped quota
+profile is the tool's knowledge of a CLI, not a screen — with no seat on that CLI here, nothing
+answers for it. An account outside that set and with no recorded figure prints
+`unknown  not readable from a CLI screen`, the truth about where its figure could come from,
+never a bare `unknown` that reads as a figure not yet seen; the same account with a recorded
+machine reading still shows it, because the store is machine-wide and outlives a seat. Readable
 accounts without an observation print `unknown`. A lab no screen reads and no reading reached is
 not an account row at all in the text face: it is one line `deepseek  not readable from a screen
 (11 seats)`, its seat count in place of an `unknown` row that would read as a figure not yet seen.
@@ -132,31 +166,58 @@ table and that line, never the table alone; the flag changes no JSON key. The mo
 `information/quota.ts`; the live readers in `information/quota-observe.ts`; `reportOf` builds the
 block from the labs it already shows, so a lab or account this view hides can never reach it.
 
-A window line prints the used and left percentages, the reset (a countdown, or the words a wall
-screen showed), the margin, and the source with the reading's age. Observations are stamped when
+A window line prints the used and left percentages, the reset (a countdown, `resets not printed`
+when the source gave no reset moment, or the words a wall screen showed), the pace in plain words,
+and where the figure was read — the one plain-words vocabulary `sourceText` gives every face:
+`read from a seat’s status bar` for a screen's own row, `read from the CLI` for a usage print,
+`estimated` for a stored reading — with its age. Observations are stamped when
 read, and the newest observation per account, pool and window wins. Two sources print no
-percentage: the watch's machine cache (`source: machine reading`) and the live readers.
+percentage: the watch's machine cache (`source: machine reading` in the model) and the live readers.
 
 The margin is `expected minus used`, in percentage points: the share of the window that has
 already elapsed minus the share spent. The session window is five hours (the length the
-Antigravity usage print names as `Five Hour Limit`); the weekly window is seven days. A status row
-that prints its own margin — Claude Code's `W: 12% (+13.3%)` — is believed as printed; otherwise
-the figure is computed from the reset when it is known and still ahead. A reading older than five
-minutes, or one whose reset has passed, prints marked `stale`, carries no margin, and its state
-is `unknown`. States are `walled` (a live wall screen, or 100% used), `near cap` (90% used or
-above, or a fresh margin at or below −50%), `ok` below both, and `unknown` when nothing fresh is
-observed. The account table's `STATE` column prints the same words — the quota view is where the
-figures come from, not where the state first appears — and marks a stale reading `stale`. The
-margin test matters as much as the used figure: an account 89% used with a −71.6% margin is
-spending far ahead of its window and prints `near cap`, not `ok`.
+Antigravity usage print names as `Five Hour Limit`); the weekly window is seven days. The line
+never prints the word: within a band of ten points either way — the same band the advice uses for
+headroom and `near cap` — it says `on pace`; a band or more ahead of its clock prints `ahead of
+pace by 13.3%`; a band or more behind prints the run-out in hours (below), or `runs out before the
+reset` when the source printed the pace but no clock; no clock at all prints `pace not known`. A
+status row that prints its own margin — Claude Code's `W: 12% (+13.3%)` — is believed as printed;
+otherwise the figure is computed from the reset when it is known and still ahead. A reading older
+than five minutes, or one whose reset has passed, prints marked `stale`, carries no pace word, and
+its state is `unknown`. States are `walled` (a live wall screen, or 100% used), `near cap` (a
+fresh window at 90% used or above — the figure is nearly spent whatever the clock says — or,
+below that floor, a fresh margin at or below −10%: the window is on course to empty before it
+resets), `ok` below both, and `unknown` when nothing fresh is observed. The 90% floor is the same
+figure a window with no margin falls back to; it decides in every case, so a window at 96% used
+and on pace is `near cap`, and the account table's `STATE` cell says both facts — `near cap  on
+pace, 4% left, resets in 9h` — while the credits line and the advice answer for the account. A
+figure whose source printed no reset says `resets not printed` in place of a countdown: the
+source answered the percentage and gave no clock — the Codex status cell is one, and the reset
+there lives in the CLI's own status view, which this tool does not press keys to read. A wall
+keeps `resets unknown` when its rejection named no lift time, because that word is about a limit
+whose end nothing on the screen states. The account table's `STATE` column prints the same words —
+the quota view is where the figures come from, not where the state first appears — and marks a
+stale reading `stale`. The margin test matters as much as the used figure: an account 89% used
+with a −71.6% margin is spending far ahead of its window and prints `near cap`, not `ok`.
 
 The advice line is built only from what the block already shows. With walls, it names the seats
 on each walled account (up to two) and the account with the best fresh margin at or above +10% as
-the destination, or says that no other account has headroom. With no walls, it names the
-near-cap accounts, worst margin first (up to two), with a headroom account as the destination when
-one exists; failing a near cap, it names the accounts with that headroom. When figures exist but
-none has headroom and none is near cap, it says so; when nothing has answered, it says that. A restricted caller's advice can only name accounts and seats the restricted view
-already shows: another team's seats are counted (`+N on another team`), never named.
+the destination, or says that no other account has headroom. With no walls, each near-cap account
+is one action, worst margin first (up to two): the window that made it near cap with its used
+figure and its clock in the window line's words (`nearFigureOf`, `nearClock`); the credits answer
+when `QuotaOptions.credits` carries the account's figures — `credits <amount> cover the overage`,
+or `until they are spent, <amount> short of the monthly cap`; and `or move <seats> off <account>`
+with a headroom account as the destination, or `no other account has headroom`. The seats are
+`ReportQuotaAccount.seats`, the same list the block prints, so a restricted view never names a
+seat it hides; an account with no seat gets the headroom sentence instead. Failing a near cap, it
+names the accounts with that headroom. When figures exist but none has headroom and none is near
+cap, it says so; when nothing has answered, it says that. A
+fresh figure whose source printed no reset, so that no margin can be read, is named with where
+its clock is printed — the CLI's own status view — appended to whichever sentence the line
+carries; a window whose row printed its own margin needs no such route, and a walled account's
+advice is the move, not an errand for a clock. A restricted caller's advice can only name accounts
+and seats the restricted view already shows: another team's seats are counted
+(`+N on another team`), never named.
 
 The live readers are observable only, and none opens a credential, key or CLI session file:
 
@@ -168,21 +229,40 @@ The live readers are observable only, and none opens a credential, key or CLI se
   and stderr discarded — parsed only in the tab-separated shape a real run produced
   ("Remaining" is the left percentage);
 - quota screens: the profile's own rate-limit classifier first, then the phrases `quota reached`,
-  `out of usage`, `usage limit reached`, and the CLI's 429/403 rejection. A wall is never given an
-  invented percentage; the reset words it printed ride the account's table row.
+  `out of usage`, `usage limit reached`, a limit sentence naming its own window or spelling out
+  reaching the limit (`Weekly limit reached until …`, `you have reached your weekly limit`), and
+  the CLI's 429/403 rejection. The reset may follow `until` as well as `resets`/`try again`. A
+  wall is never given an invented percentage; the reset words it printed ride the account's table
+  row. A live wall keeps the account's rows (`reportOf`), and the row prints
+  `walled  limit reached, resets <time>  read <age> ago`; `quotaOf` carries the same reset and
+  age as `wall`, so the tree's account line and the table agree.
 
 An unreadable pane or an unanswered usage command is one counted note (`1 seat pane could not be
-read`, `a CLI usage command did not answer`) however many seats hit it. The restricted view reads
-only the caller's own team's panes; the full view reads every team's. The machine reading cache is
+read`, `a CLI usage command did not answer`) however many seats hit it, and a pane note carries
+the seats it is about (`seats` on `QuotaLive.notes` and on `ReportNote`, printed after the
+sentence: `2 seat panes could not be read: coda, lead`). The restricted view reads only the
+caller's own team's panes; the full view reads every team's. The machine reading cache is
 machine-wide, as the report's own machine lines already are.
+
+A team whose definition cannot be read is one note too, and it names the file the read tried, not
+just the team: `projectUsage` puts that path on its block as `unreadableFile`, written to the
+note's text as a tilde path for the owner, and to the named-team sentence as a parenthetical
+(`the team "team" (~/Code/floor/team): its file could not be read (~/…/team-config/<id>.json).`).
+A restricted caller reads this project's own file relative to its root (`.agents/team.yaml`) or
+a `~/…` path, never another derived location. Which file that is comes from the failed
+`LoadResult`'s `source` mark: `registry` when the record was the definition being read (the
+record's own path), `team-file` when the team file was.
 
 ## Per-seat figures and spend
 
 With `--tree`, each team's seat table is followed by the seats' own figures, built by `reportOf`
 into `teams[].seats` (`information/usage.ts`): one line per window per seat, and one spend line
-per seat. A window this run read from the seat's own pane is `measured`, with the status row's
-source; a window only the watch's per-seat record answers is `estimated`, source `state record`,
-with its age and staleness. The record fills only the windows the live read did not answer, and
+per seat. A window this run read from the seat's own pane is `measured` in the model, with the
+status row's source; a window only the watch's per-seat record answers is `estimated`, source
+`state record`, with its age and staleness. The human text prints neither model word: every face
+spells a source through `sourceText` (`budgets/table.ts`), so the line says `read from a seat’s
+status bar`, `read from the CLI` or `estimated`, with the reading's age beside it. The record fills
+only the windows the live read did not answer, and
 stored readings pass the same bound-account filter the report's rows use, so a reading for an
 account this team's file does not bind never becomes a seat figure. A seat with no figure in
 either source prints `unknown  no reading for this seat`; no percentage is invented.
@@ -200,7 +280,8 @@ The report's cost `source` is the session registry's own word for how an amount 
 (`measured` or `estimated` on a recorded session's `cost`; the registry omits a cost it did not
 measure and prints that as `unknown`, never zero). A figure both commands carry therefore prints
 the same mark in `team sessions` and `team usage`; the report keeps the surface it read in
-`readFrom` (`status line`), beside `readAt` and `age`. The registry does not write this figure
+`readFrom` (`status line`), beside `readAt` and `age`, and the human text spells it with
+`sourceText` (`read from a seat’s status bar`). The registry does not write this figure
 yet — the spend is read from the screen, not from a record — so the two agree on the vocabulary,
 not on storage.
 
@@ -214,15 +295,20 @@ stamp, because within one project a seat name is one seat.
 Text and JSON use the same report. `--json` has format 1, a read timestamp, view, caller project,
 counts, account rows grouped by lab, the `quota` block, unknown reasons, notes, and `teams` with
 each seat's run, its windows (mark, source, reading time, age and staleness) and its cost (the
-registry's `source` word, `readFrom`, reading time and age; `why` when unknown). A lab no screen reads and no reading reached also carries its seat count (`seats`),
+registry's `source` word, `readFrom`, reading time and age; `why` when unknown). Notes carry
+their `count` and, for a pane note, the `seats` it is about. A lab no screen reads and no reading reached also carries its seat count (`seats`),
 which the text face prints as one line in place of its rows. Subscription rows carry the window,
-left/used percentages, reset countdown and reading age; Antigravity pool rows add `pool`. A
+left/used percentages, reset countdown and reading age; Antigravity pool rows add `pool`, and a
+row whose account the machine file gives a plan also carries `plan` (the text leads with it). A
 machine account counts once even with multiple windows or pools. The `quota` block carries
 `format: 1`, the accounts file the declaration line points at, one lab per entry with its
 accounts, seats, states and windows (each with its source, age, staleness, wall flag and margin),
-and the one advice sentence. A team whose file cannot be read is one note naming the team and its
-`~` root in every view; a root outside the home is a derived location, so it stays the owner's
-sentence and other callers read the team's name only.
+and the one advice sentence. A team whose file cannot be read is one note naming the team, its
+`~` root and the file the read tried in every view; a root outside the home is a derived
+location, so it stays the owner's sentence and other callers read the team's name only, and the
+file is shown to its owner (or, for another caller, only as `.agents/team.yaml` or a `~/…` path). A team the machine reports as not running
+is the counted line instead: `n teams on this machine are not running`, one note whatever the
+count, naming no team in either view.
 
 The full view belongs to the owner at a terminal. Every other caller receives the restricted
 view: its approved team names and rows, shared machine subscriptions, and anonymized counts or
@@ -232,7 +318,14 @@ boundary. `--all` does not elevate an agent's permissions.
 Seat records are filtered by what is running. A team whose recorded session herdr reports as not
 running contributes no seats and no accounts — not even a synthesized one — while a session whose
 state cannot be asked leaves the record as it stands; a stopped seat never prints, in either
-case. The closing summary counts a synthesized account exactly as a declared one, so a machine
+case. Another team with no live session is a record the report does not list: its problems and
+why-lines are history and are not printed, the watch clause never names it, and one counted note
+says how many such teams the machine holds; `--all` prints their blocks, each by the name its
+store recorded. The caller's own team keeps its own problems and why-lines and is not in that
+count, because its block always prints. A live file that cannot be read names no session, so
+liveness is asked under the session the store's approved text names — the machine's own copy of
+the team as approved — and a recorded text that names none leaves the team alone. The closing
+summary counts a synthesized account exactly as a declared one, so a machine
 with no `accounts.yaml` counts one account per lab its seats draw on.
 
 `usage` itself is read-only: it runs no check, writes no state, and opens no credential, key or

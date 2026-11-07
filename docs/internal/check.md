@@ -10,8 +10,10 @@ the exit codes stay on the page.
 One answer to one question: **is anything wrong with this team that someone should act on?**
 It reads the team file, the approval, the state, herdr and the registries, and changes nothing
 except what the owner's `--repair` settles — the state's two leftovers, the dev-mode mark an
-agent's registration left, and the two herdr sidebar lines — no git is needed, so it answers as
-well in a plain folder as in a repository. It is not
+agent's registration left, and the two herdr sidebar lines — and what the team's lead's or the
+owner's `--close-orphans` ends, after one question at a terminal: the live agent processes the
+reading proves no pane holds. No git is needed, so it answers as well in a plain folder as in a
+repository. It is not
 [`team status`](status.md) with fewer lines: status answers *what the team is* — the rows, the
 budgets, every difference and note — and the check answers *what to act on*: the differences
 alone, each with its repair, and the one note a file can earn.
@@ -84,7 +86,20 @@ back to "<line>"` — and the live session is read again after the writes, so th
 the sidebar the repair left. A herdr that will not take a line says `<seat>: its title was not
 reported` (or `its display was not reported`), as `team register` does, and that difference
 stands. Only the line that drifted is written: a correct display line is not re-reported because
-its workspace label moved.
+its workspace label moved. For a running seat with a recorded pane, `display_agent` is read off
+`pane list --workspace <id>` (one call per workspace): a row with no `display_agent` is named as
+`<seat>: its sidebar display line is missing or expired; the file's line is "<line>"` (replacing
+the earlier no-display carve-out; stopped seats are never named), and `--repair` re-reports
+`displayAgent(seat)` with `--ttl-ms` `daemon.sidebar-ttl-ms`. The terminal host's sidebar config
+(`ui.sidebar.agents.rows` and `[ui] status_indicators`) and per-session reload records
+(`~/.config/team/sidebar-reloads.yaml`) are checked beside it (`src/check/sidebar.ts`): a config
+without `agent` in any row (`line 2 has nowhere to live`), a mismatched `status_indicators`, and
+any running session of the entity's teams lacking a reload record at the current pair are named as
+owner differences (`no TeamCLI reload recorded at the current layout`, noting the presumption
+because the live sidebar layout cannot be read back). Under `workspace.sidebar.manage: off`, `team
+check` prints the exact TOML block without writing the config; `--repair` applies the config,
+reloads running sessions, and records applied reloads under both `on` and `off` on the owner's
+explicit request, leaving any host-refused difference standing.
 
 Nothing else is repaired. A model drift keeps its relaunch, a blind seat its look at the pane, a
 roster gap its `team register` — those are decisions the run names, and `--repair` never starts,
@@ -252,6 +267,82 @@ record alone (`team add --temporary` never writes one into the file), so the rea
 collects its recorded pane on the same terms as a declared seat's: a held temporary seat is named
 in a real run, not only where a scene hands the check its screen.
 
+## Live agent processes no pane holds, and the close
+
+The orphan reading (`orphanReading`, `src/check/orphans.ts`) names the agent CLIs this team
+launched that no pane holds any more, and `--close-orphans` ends them.
+
+The proof comes from two places. A seat's launch records its pane's shell and the foreground pids
+that are not it (`SeatState.launched`); every recorded pid that is alive, is a known CLI by its
+process name (`cliOf`, against the profiles' own process names in `src/clis.ts`), and that no
+pane and no record holds is a candidate. A process no record accounts for is found by its
+working folder: one bulk read (`processFoldersOf`) answers every pid in the table that is a known
+CLI, that no pane and no record holds, and that is not this run's own ancestry; only a folder
+inside this team's root names the process.
+
+The pane list is the proof every row rests on. A session that is not running, a pane list that
+reads no agents while the state records seats, and a process table that cannot be read each name
+nothing and close nothing — a failed read must never make a live seat's CLI look orphaned — and
+each is a note, so the reason the reading named nothing is on the page. A pane the session lists
+but cannot read is counted as unread: processes found by their folder are then not named at all
+(the process could be sitting in that pane), and a recorded CLI whose pane is unread is proved by
+its launch shell instead (`ancestorsOf`): a chain that does not hold the shell proves the CLI
+left the pane, and a chain that cannot be read names nothing.
+
+A process the state does not name is closeable only when it started at or after the daemon's own
+start (`daemonSince`): before that it may belong to something the record does not know. With no
+known daemon start, such processes are named and not closed, and a note says so. When in doubt
+the reading names a process and does not close it — that is the rule the `closeable` flag and the
+repair line both carry. The reading also excludes this run's own pid and ancestry, so the check
+never names or closes itself.
+
+Each candidate is one difference: `pid <pid>: a live <cli> process with no pane in session
+"<session>" (started <age>; last team <project>, seat <seat>)` — or `no seat record` — repaired
+with `close it through the team (team check --close-orphans)` where the close may end it and
+`inspect it, then stop it by hand if it is not a seat's` where it may not; the first repair's
+actor is the team's lead, the second's the owner.
+
+The reading is bounded on purpose, because a check runs often. It reads the process table once,
+and the table is the user's own processes (`processTable` runs the listing scoped to this user in
+`src/watch/process-adapter.ts`), so the folder read never asks about a process outside this user.
+The folder read is one bulk query for every pid it needs and does not run at all when no such pid
+exists; a recorded CLI whose pane answered costs no chain read; and nothing is read at all until
+a seat record or a listed agent exists.
+
+The close (`closeOrphans`, same file) is the team's lead's or the owner's — `isLeadSeat`, the
+orchestrator or the operator — checked after the caller gate; a plain seat or a delegate pane
+still sees every row and is refused the close (`check.close-orphans-lead`, exit 1). It needs a
+terminal (`check.close-orphans-terminal`, exit 2) and a process reading
+(`check.close-orphans-unavailable`, exit 2), and it never shares a run with `--repair` or
+`--json`. It asks one question for the closeable candidates — the count, never the rows it may
+not touch — and a no signals nothing and says `left: <n> orphan processes: you answered no`.
+
+Before each signal it re-proves the candidate: the pid is alive and still runs the same CLI, its
+start instant has not moved (within two seconds, the table's own clock second), no other running
+session's pane holds it, a recorded candidate's launch shell is no longer in its chain, and no
+pane of this session holds it. The proof over the other sessions is one pass for every candidate,
+read once after the yes (`heldElsewhere` over `sessionList`, each other session's agents, and each
+pane's `paneProcesses`), so a close run never asks the machine once per process; this session's
+own panes are read again immediately before each signal (`heldHere`), because the reading that
+named the candidate was taken before the question, and a pane can take a process in while the
+question or the wait is open. A read that does not answer leaves every candidate alone (`left: pid
+<pid>: other panes could not be read`, `this session's panes could not be read`, `its process
+chain could not be read`), and so does a pid gone (`it was gone before it could be closed`),
+renamed (`the pid now runs <name>`), reused (`it is not the process the check saw`), or one a pane
+holds (`a pane of this session holds it`).
+
+A stop is the terminate signal, the process's identity and this session's panes read again, then
+the kill signal for a process that has not gone in two seconds, and one more second's wait — so a
+pid reused, or a pane that picked the process up, in the grace is left rather than forced. Every
+outcome is a line:
+`closed: pid <pid>: <cli> (seat <seat>)`,
+`forced: pid <pid>: <cli> (seat <seat>)` for one that needed the kill, and `left: pid <pid>:
+<why>` for one that answered neither, one the system refused (`the system refused the stop`), one
+still inside its pane, and each proof above that no longer held. Each line is written to the
+project's log under `check` and the caller's label, and the reading is taken again after a close,
+so the report describes the world the close left: a closed process is gone from the rows, and one
+the close could not end keeps its row with the reading's own repair.
+
 ## Who the check answers
 
 The caller decides, not the flags. Three callers get the answer:
@@ -277,6 +368,10 @@ flag, any caller detail:
 owner, each meets the refusal every command gives it (`--file is the owner's, from a terminal
 outside herdr; this call is …`) and exits 1. For every other caller the two flags aim nothing
 and open nothing: the target is the file the caller's own place finds.
+
+`--close-orphans` is narrower than the gate itself: the check's caller gate and the team's lead's
+or the owner's. A seat of the team that is neither the orchestrator nor the operator sees every
+row and is refused the close, and a delegate pane is refused it the same way.
 
 ## What it reads
 
@@ -371,17 +466,26 @@ and open nothing: the target is the file the caller's own place finds.
   The roster is read the way the bridge reads it, so a registry that cannot be read reads as no
   record of the team here and the difference is not raised on it.
 
+- the process table, this user's own processes (`processTable`), one bulk working-folder read
+  (`processFoldersOf`) and the run's own ancestry, for the orphan reading above; a close run adds
+  the liveness, identity and ancestry reads, one pane pass over the other running sessions for the
+  whole run, and the stop signals. All of them are wired in `realCheckSources` from
+  `src/watch/process-adapter.ts` and `src/caller.ts`; a scene that hands in no process source
+  reads no table.
+
 It writes nothing at all — not the state, not the store, not the `last_valid` copy `status`
-keeps beside the file it read — for every caller, the owner included, save the one act: the
+keeps beside the file it read — for every caller, the owner included, save two acts: the
 owner's `--repair`, which drops the leftovers named above, clears a dev-mode mark and sets a
-drifted sidebar line back from the file.
+drifted sidebar line back from the file, and the team's lead's or the owner's
+`--close-orphans`, which signals the processes it re-proves and writes one log line per outcome.
 
 ## Output
 
 The report opens with the context line (`team <project>, session "<session>"`), followed by any
 deprecation warnings from the file (`warning: the file, line <n>: <message>; repair: <repair>`),
-any `repaired:` lines, any `note:` lines (collapsed with `(x<n>)` when repeated), each finding's
-three-line `difference:` / `  repair:` / `  who:` block, and the closing summary line. The check
+any `repaired:` lines, any `closed:`, `forced:` or `left:` lines a close run printed, any `note:`
+lines (collapsed with `(x<n>)` when repeated), each finding's three-line `difference:` /
+`  repair:` / `  who:` block, and the closing summary line. The check
 prints no seat table and no budget block:
 
     team beacon, session "beacon"

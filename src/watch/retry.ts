@@ -14,18 +14,22 @@
 // client reads it. A receipt promotes it once (`delivered (read)`, the marker cleared) with nothing
 // typed; a message still unread when `INBOX_FALLBACK_MS` ends is handed to this same retry, which
 // types its trigger and records why the fallback happened. A message the drop leg left is not a
-// held send either: nothing is ever typed for it, and a receipt from the seat's own watcher — the
-// turn-start hook's read (`team drops --read`), or its inbox client's `inbox_read` — promotes it
-// the same way. A
-// drop no watcher read is given up on with the file's path, never typed and never called lost.
+// held send: the retry find does not type it. When the seat returns to idle, one queued drop is
+// offered through the guarded typed wake, once for that idle stretch, and a later pass that still
+// sees idle offers nothing. A receipt from the seat's own watcher — the turn-start hook's read
+// (`team drops --read`), or its inbox client's `inbox_read` — promotes it the same way. A drop no
+// watcher read is given up on with the file's path once the age bound ends, and is never called lost.
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import type { ChildOptions } from '../child.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import type { PaneProcesses } from '../herdr.ts';
+import { READ_LIMITS_DEFAULT_MS } from './read-limits.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { isBareShellPane } from '../send/daemon.ts';
 import { claimBindingIn, currentClaimIn, INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, inboxLive, receiptHeld } from '../mcp/inbox.ts';
 import { briefBindingOf, GENERAL_BRIEF_FROM } from '../launch/general-brief.ts';
+import { profileFor } from '../profiles/profile.ts';
 import {
   channelLaunchEnabled,
   CHANNEL_CONFIRM_MS,
@@ -35,7 +39,9 @@ import {
   recordChannelHeld,
 } from '../mcp/channel.ts';
 import {
+  clearDropOffered,
   clearPending,
+  markDropOffered,
   markRedelivered,
   PENDING_MAX_AGE_MS,
   PENDING_MAX_TRIES,
@@ -47,16 +53,19 @@ import { wakeStep } from '../send/steps.ts';
 import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from '../send/deliver.ts';
 import { appendHistory } from '../send/history.ts';
 import { readTriggerLine } from '../send/native.ts';
+import { leadAckReceiptAt } from '../send/record.ts';
 import type { TypedWakeResult } from '../send/typed-wake.ts';
 import { markTaken } from '../send/taken.ts';
 import { verifiedPayloadOf, wakeTrigger } from '../send/wake.ts';
 import type { Live } from '../status/compare.ts';
 import type { MailPass } from './mail-pass.ts';
+import { messageKeyState } from '../store/keys.ts';
 import { readScreen } from './screen.ts';
 
 /** What a retry reads and types through: the watch's own sources, narrowed to the pane calls. */
 export type RetrySources = {
   screen(pane: string, session: string): string | null;
+  screenAsync?(pane: string, session: string, options: ChildOptions): Promise<string | null>;
   status(pane: string, session: string): string | null;
   typeText(pane: string, text: string, session: string): boolean;
   pressEnter(pane: string, session: string): boolean;
@@ -82,6 +91,11 @@ export type RetryScene = {
   home?: string;
   team: TeamFile;
   live: Live;
+  /** The pass's per-pane process snapshot when the caller already read it. */
+  processes?: Readonly<Record<string, PaneProcesses | null>>;
+  /** How one fallback async screen read is bounded in this pass (or the options directly).
+   *  Absent in direct test scenes, the read uses the documented per-read timeout. */
+  readOptions?: ChildOptions | (() => ChildOptions | null);
   /** The watch's own pane: never typed into. */
   ownPane: string | null;
   sources: RetrySources;
@@ -98,6 +112,61 @@ export type RetryScene = {
   mail?: MailPass;
 };
 
+/** The pane's status from the pass's live snapshot when the snapshot carries whole-session
+ *  pane readings, falling back to `sources.status` only for minimal test scenes that omit them. */
+export function passPaneStatus(scene: RetryScene, pane: string, agentStatus?: string): string | null {
+  if (pane in scene.live.screens || scene.live.processes !== undefined) {
+    if (agentStatus !== undefined && agentStatus !== '') return agentStatus;
+    const found = scene.live.agents.find((agent) => agent.pane === pane);
+    return found?.status ?? null;
+  }
+  return scene.sources.status(pane, scene.session);
+}
+
+const fallbackScreens = new WeakMap<Live, Map<string, string | null>>();
+
+/** The pane's visible screen from the pass's live snapshot when present, falling back to
+ *  `sources.screen` only for minimal test scenes whose `live` snapshot omits pane readings. */
+export function passPaneScreen(scene: RetryScene, pane: string): string | null {
+  if (pane in scene.live.screens) return scene.live.screens[pane] ?? null;
+  const cached = fallbackScreens.get(scene.live);
+  if (cached !== undefined && cached.has(pane)) return cached.get(pane) ?? null;
+  if (scene.live.processes !== undefined || scene.sources.screenAsync !== undefined) return null;
+  return scene.sources.screen(pane, scene.session);
+}
+
+/** The pane's visible screen from the pass's live snapshot when present, falling back to one
+ *  awaited `sources.screenAsync` read per pass when the snapshot screen map omits the pane. */
+export async function passPaneScreenAsync(scene: RetryScene, pane: string): Promise<string | null> {
+  if (pane in scene.live.screens) return scene.live.screens[pane] ?? null;
+  let cached = fallbackScreens.get(scene.live);
+  if (cached !== undefined && cached.has(pane)) return cached.get(pane) ?? null;
+  if (scene.sources.screenAsync !== undefined) {
+    const options = typeof scene.readOptions === 'function'
+      ? scene.readOptions()
+      : (scene.readOptions ?? { timeoutMs: READ_LIMITS_DEFAULT_MS.timeout });
+    if (options === null) return null;
+    const read = await scene.sources.screenAsync(pane, scene.session, options);
+    if (cached === undefined) {
+      cached = new Map();
+      fallbackScreens.set(scene.live, cached);
+    }
+    cached.set(pane, read);
+    if (read !== null) scene.live.screens[pane] = read;
+    return read;
+  }
+  return passPaneScreen(scene, pane);
+}
+
+/** The pane's process identity from the pass's snapshot when present, falling back to
+ *  `sources.processes` only for direct scenes that supply no process map. */
+export function passPaneProcesses(scene: RetryScene, pane: string): PaneProcesses | null {
+  if (scene.processes !== undefined && pane in scene.processes) return scene.processes[pane] ?? null;
+  if (scene.live.processes !== undefined && pane in scene.live.processes) return scene.live.processes[pane] ?? null;
+  if (scene.processes !== undefined || scene.live.processes !== undefined) return null;
+  return scene.sources.processes?.(pane, scene.session) ?? null;
+}
+
 /** The drop's words, minus the trigger line: one sentence for the watch's log. An inbox send
  *  was `sent (unconfirmed)` rather than held — the seat's own client never read it — and the
  *  watch typing it is the fallback its bound promises, not a retry. */
@@ -105,6 +174,25 @@ function heldWords(drop: PendingDrop): string {
   if (drop.leg === 'mcp-inbox') return `an inbox send from ${drop.from}`;
   if (drop.leg === 'channel') return `a channel send from ${drop.from}`;
   return `a held send from ${drop.from}`;
+}
+
+/** The lead's clearance of a message, when this home's message key proves one: a stopped seat's
+ *  swept mail is settled, and no retry may type it or report the seat as its reader. */
+export function clearedAt(
+  scene: Pick<RetryScene, 'home' | 'root' | 'session' | 'team'>,
+  dropDir: string,
+  id: string,
+  to: string,
+): { by: string; at: string } | null {
+  if (scene.home === undefined) return null;
+  const key = messageKeyState(scene.home);
+  if (key.kind !== 'key') return null;
+  return leadAckReceiptAt(
+    dropDir,
+    id,
+    { to, root: scene.root, session: scene.session, lead: scene.team.orchestrator },
+    key.key,
+  );
 }
 
 /** Why this marker's delivery ended on another leg, as the history line's failed note. The
@@ -289,6 +377,23 @@ async function retryOne(scene: RetryScene, seat: Seat, pane: string, dropDir: st
       giveUp(scene, dropDir, drop, 'the seat is back at its shell; nothing was typed');
       return;
     }
+    // A lead's clearance that landed after the retry records were read settles the drop the
+    // same way: nothing is typed, and the history names who cleared it rather than claiming the
+    // seat read it.
+    const cleared = clearedAt(scene, dropDir, drop.id, drop.to);
+    if (cleared !== null) {
+      clearPending(dropDir, drop.id);
+      appendHistory(scene.team.project, scene.root, home, {
+        ts: scene.now.toISOString(),
+        from: drop.from,
+        to: drop.to,
+        body: drop.body,
+        id: drop.id,
+        outcome: `cleared by ${cleared.by}`,
+      });
+      scene.say(`${drop.to}: ${heldWords(drop)} was cleared by ${cleared.by}`, false);
+      return;
+    }
     const receipt = (): boolean => receiptHeld(dropDir, drop.id, { to: drop.to, root: scene.root, session: scene.session }, home, claimBindingIn(scene.root, scene.session, drop.to, drop.id));
     // A receipt that landed since the retry records were read is the read itself: nothing is
     // typed, and the marker is settled with the words a receipt inside the retry's window earns.
@@ -427,6 +532,22 @@ async function redeliverChannel(scene: RetryScene, seat: Seat, pane: string, dro
     giveUp(scene, dropDir, drop, 'this watch has no home to verify its sender with');
     return;
   }
+  // A lead's clearance that landed after the promotion pass read the markers settles the drop:
+  // nothing is redelivered, and the history names the clearer rather than the seat as its reader.
+  const cleared = clearedAt(scene, dropDir, drop.id, drop.to);
+  if (cleared !== null) {
+    clearPending(dropDir, drop.id);
+    appendHistory(scene.team.project, scene.root, home, {
+      ts: scene.now.toISOString(),
+      from: drop.from,
+      to: drop.to,
+      body: drop.body,
+      id: drop.id,
+      outcome: `cleared by ${cleared.by}`,
+    });
+    scene.say(`${drop.to}: ${heldWords(drop)} was cleared by ${cleared.by}`, false);
+    return;
+  }
   const receipt = (): boolean => receiptHeld(dropDir, drop.id, { to: drop.to, root: scene.root, session: scene.session }, home, claimBindingIn(scene.root, scene.session, drop.to, drop.id));
   // A receipt that arrived after the promotion pass read the markers is the read itself: an
   // acknowledged message is never touched again.
@@ -490,6 +611,29 @@ export function promoteInboxDrops(scene: RetryScene): ReadonlySet<string> {
       // send's proof and never this one's.
       if (drop.leg === undefined) continue;
       if (scene.home === undefined) continue;
+      // A lead's clearance is not a read: the marker goes, the ring learns nothing, and the one
+      // history line names the clearer.
+      const cleared = clearedAt(scene, dropDir, drop.id, seat.name);
+      if (cleared !== null) {
+        clearPending(dropDir, drop.id);
+        appendHistory(scene.team.project, scene.root, scene.home, {
+          ts: scene.now.toISOString(),
+          from: drop.from,
+          to: drop.to,
+          body: drop.body,
+          id: drop.id,
+          outcome: `cleared by ${cleared.by}`,
+        });
+        scene.say(
+          drop.leg === 'drop'
+            ? `${seat.name}: a dropped send from ${drop.from} was cleared by ${cleared.by}`
+            : drop.leg === 'channel'
+              ? `${seat.name}: a channel send from ${drop.from} was cleared by ${cleared.by}`
+              : `${seat.name}: an inbox send from ${drop.from} was cleared by ${cleared.by}`,
+          false,
+        );
+        continue;
+      }
       if (!receiptHeld(dropDir, drop.id, { to: seat.name, root: scene.root, session: scene.session }, scene.home, claimBindingIn(scene.root, scene.session, seat.name, drop.id))) continue;
       read.add(`${seat.name}\n${drop.id}`);
       clearPending(dropDir, drop.id);
@@ -516,6 +660,62 @@ export function promoteInboxDrops(scene: RetryScene): ReadonlySet<string> {
     }
   }
   return read;
+}
+
+/** The line the guarded wake offers, or null when this home cannot name one. A missing line does
+ *  not retire the marker: the age bound still does, and this stretch's offer mark already stops
+ *  a loop. */
+function queuedTriggerLine(scene: RetryScene, seat: Seat, dropDir: string, drop: PendingDrop): string | null {
+  const home = scene.home;
+  if (home === undefined || !existsSync(join(dropDir, drop.id))) return null;
+  const payload = verifiedPayloadOf(dropDir, drop.id, home);
+  if (payload === null) return null;
+  const sender = wakeTrigger(payload, home, { root: scene.root, session: scene.session, team: scene.team }, scene.now);
+  if (sender === null) return null;
+  return readTriggerLine(drop.to, scene.session, sender, seat.cli);
+}
+
+/** A profile the watch may wake the same way a send does: the seat's own `watch_wake` word, or
+ *  the profile's, and only where that profile declares the typed wake. */
+function queuedWakeOn(seat: Seat): boolean {
+  const profile = profileFor(seat.cli);
+  if (profile?.typedWake == null) return false;
+  return (seat.watchWake ?? profile.watchWake) === true;
+}
+
+/**
+ * Offers the oldest queued drop through the guarded typed wake, once for this idle stretch.
+ * The offer mark is written before the wake, and the offer spends one try. A later pass that
+ * still sees idle finds the mark and offers nothing. Leaving idle clears the mark, so the next
+ * return can offer once, until the try limit is spent. The wake itself reads the box twice and
+ * types nothing into a pane that is not the empty idle prompt.
+ */
+async function reofferQueuedDrop(
+  scene: RetryScene,
+  seat: Seat,
+  pane: string,
+  dropDir: string,
+  queued: readonly PendingDrop[],
+): Promise<void> {
+  if (queued.length === 0 || queued.some((one) => one.offered === true)) return;
+  const wake = scene.sources.typedWake;
+  if (wake === undefined || !queuedWakeOn(seat)) return;
+  const drop = queued[0];
+  if (drop === undefined || !existsSync(join(dropDir, drop.id))) return;
+  if (drop.tries >= PENDING_MAX_TRIES) {
+    giveUpUnread(scene, dropDir, drop, `the seat did not read it in ${String(PENDING_MAX_TRIES)} offers`);
+    return;
+  }
+  const lock = acquireSeatLock(scene.dir, scene.session, seat.name);
+  if (!('release' in lock)) return;
+  try {
+    markDropOffered(dropDir, drop);
+    const line = queuedTriggerLine(scene, seat, dropDir, drop);
+    if (line === null) return;
+    await wake(pane, line, seat.cli, scene.session);
+  } finally {
+    lock.release();
+  }
 }
 
 /**
@@ -550,6 +750,24 @@ export async function retryHeldDrops(scene: RetryScene): Promise<void> {
     // reads it (a receipt bound to the claim) or when a newer claim supersedes it.
     const owed = new Set<string>();
     const pending = drops.filter((drop) => {
+      // A lead's sweep of a stopped seat's mail settles the marker here, before any pane is
+      // looked for: the seat is gone, nothing is typed, and the history names the clearer.
+      const cleared = clearedAt(scene, dropDir, drop.id, seat.name);
+      if (cleared !== null) {
+        clearPending(dropDir, drop.id);
+        if (scene.home !== undefined) {
+          appendHistory(scene.team.project, scene.root, scene.home, {
+            ts: scene.now.toISOString(),
+            from: drop.from,
+            to: drop.to,
+            body: drop.body,
+            id: drop.id,
+            outcome: `cleared by ${cleared.by}`,
+          });
+        }
+        scene.say(`${seat.name}: ${heldWords(drop)} was cleared by ${cleared.by}`, false);
+        return false;
+      }
       if (claim === null || drop.from !== GENERAL_BRIEF_FROM) return true;
       if (drop.id === claim.id) {
         if (!read) {
@@ -601,19 +819,31 @@ export async function retryHeldDrops(scene: RetryScene): Promise<void> {
     const agents = scene.live.agents.filter((agent) => agent.name === seat.name);
     const pane = agents.length === 1 ? agents[0]?.pane : undefined;
     if (pane === undefined || pane === scene.ownPane) continue;
+    // Leaving idle clears the stretch mark. The next return to idle can offer once; a pass that
+    // still sees the seat working offers nothing.
+    const status = scene.sources.status(pane, scene.session);
+    const queued = live.filter((one) => one.leg === 'drop');
+    if (status === 'working' || status === 'blocked' || status === 'unknown') {
+      for (const one of queued) clearDropOffered(dropDir, one);
+    }
     // A typed marker is the retry's own business and always goes first. A channel marker is
     // redelivered once, after its confirmation window and only while no redelivery is recorded.
     // An inbox marker is typed only once its fallback window has ended — before that the seat's
     // own client still has the message, and typing the trigger would race a read that is about to
-    // happen. A drop marker is in none of the finds: nothing is ever typed for it.
+    // happen. A drop marker is not in that find. It is offered below, once, when the seat is idle
+    // and no other retry took this pass.
     const channelDue = live.find(
       (one) => one.leg === 'channel' && one.redelivered === undefined && now - Date.parse(one.ts) > CHANNEL_CONFIRM_MS,
     );
     const drop = live.find((one) => one.leg === undefined)
       ?? channelDue
       ?? live.find((one) => one.leg === 'mcp-inbox' && now - Date.parse(one.ts) > INBOX_FALLBACK_MS);
-    if (drop === undefined) continue;
-    if (drop.leg === 'channel') await redeliverChannel(scene, seat, pane, dropDir, drop);
-    else await retryOne(scene, seat, pane, dropDir, drop);
+    if (drop !== undefined) {
+      if (drop.leg === 'channel') await redeliverChannel(scene, seat, pane, dropDir, drop);
+      else await retryOne(scene, seat, pane, dropDir, drop);
+      continue;
+    }
+    if (status !== 'idle' && status !== 'done') continue;
+    await reofferQueuedDrop(scene, seat, pane, dropDir, queued);
   }
 }

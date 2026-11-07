@@ -12,6 +12,8 @@ import { currentBriefClaim, deliverBriefForAttribution } from '../src/launch/gen
 import { rulesText } from '../src/launch/rules.ts';
 import { readMessage } from '../src/mcp/inbox.ts';
 import { readAgents } from '../src/registry/agents.ts';
+import type { HerdrAgent } from '../src/herdr.ts';
+import { forgetTeam, getTeam, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { signedRecordOf, type SignedRecord } from '../src/send/record.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 
@@ -441,4 +443,71 @@ export function fixtureBase(prefix: string): string {
     throw new Error(`the fixture scratch root "${real}" is inside the checkout; name a root outside it with TEAMCLI_TEST_SCRATCH`);
   }
   return realpathSync(mkdtempSync(join(real, prefix)));
+}
+
+/** Run `write` while the fixture's team is registered, so an address policy can name it.
+ *  A record this call creates is removed again: a scene that proves an empty registry still
+ *  sees one, and a record already there is left as it was. */
+export function duringAddressWrite(
+  home: string,
+  root: string,
+  project: string,
+  entity: string | null,
+  at: Date,
+  write: () => void,
+): void {
+  const id = teamIdOf(root);
+  const prior = getTeam(home, id);
+  if (prior === null) {
+    upsertTeam(home, id, { project, entity, session: project, root, roster: [], at: at.toISOString() });
+  }
+  try {
+    write();
+  } finally {
+    if (prior === null) forgetTeam(home, id);
+  }
+}
+
+type RenameHost = {
+  renameAgent(session: string, pane: string, name: string): boolean;
+  agents?(session: string): HerdrAgent[] | null;
+  agentList?(session: string): HerdrAgent[] | null;
+};
+
+/** Makes a fake launch's agent list reflect the renames it accepts. The naming step reads the
+ *  list back after `renameAgent`; a fake that records the call without listing the name leaves
+ *  the seat at launched with "its name was not listed after the rename". A pane already listed
+ *  takes the renamed name; a pane the list never held is added. The object is patched in place
+ *  so a literal keeps the contextual type of its assignment. */
+export function recordRenames<T extends RenameHost>(host: T): T {
+  const renamed = new Map<string, string>();
+  const original = host.renameAgent;
+  host.renameAgent = function (session: string, pane: string, name: string): boolean {
+    const accepted = original.call(host, session, pane, name);
+    if (accepted) renamed.set(pane, name);
+    return accepted;
+  };
+  const merged = (read: (session: string) => HerdrAgent[] | null) => (session: string): HerdrAgent[] | null => {
+    const list = read(session);
+    if (list === null) return null;
+    const listed = new Set(list.map((agent) => agent.pane));
+    const named = list.map((agent) => {
+      const name = renamed.get(agent.pane);
+      return name === undefined ? agent : { ...agent, name };
+    });
+    const added = [...renamed]
+      .filter(([pane]) => !listed.has(pane))
+      .map(([pane, name]) => ({
+        name,
+        agent: null,
+        pane,
+        workspace: pane.includes(':') ? pane.slice(0, pane.indexOf(':')) : pane,
+        status: 'idle',
+        cwd: null,
+      }));
+    return [...named, ...added];
+  };
+  if (host.agents !== undefined) host.agents = merged(host.agents);
+  if (host.agentList !== undefined) host.agentList = merged(host.agentList);
+  return host;
 }

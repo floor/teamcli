@@ -15,7 +15,7 @@ import { approvalOf } from '../../src/approve/approval.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
 import { lobbyDir } from '../../src/lobby/gate.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
-import { CLAUDE_IDLE, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, recordRenames, testIo } from '../helpers.ts';
 
 function sink(isTTY: boolean): { out: string[]; err: string[]; sink: ProgressSink } {
   const out: string[] = [];
@@ -104,9 +104,10 @@ describe('launchConcurrency edges', () => {
     expect(launchConcurrency({ ...ample, memoryFree: 24 }, limits)).toBe(1);
   });
 
-  test('swap at exactly 1.5 × swap_free_min still launches in parallel; just under it holds serial', () => {
+  test('free swap at any level still launches in parallel: the figure gates nothing', () => {
     expect(launchConcurrency({ ...ample, swapFree: 3e9 }, limits)).toBe(8);
-    expect(launchConcurrency({ ...ample, swapFree: 2.9e9 }, limits)).toBe(1);
+    expect(launchConcurrency({ ...ample, swapFree: 2.9e9 }, limits)).toBe(8);
+    expect(launchConcurrency({ ...ample, swapFree: 0 }, limits)).toBe(8);
   });
 
   test('a machine whose swap figures cannot be read is gated by load and memory alone', () => {
@@ -519,18 +520,18 @@ describe('parallel launch window boundaries', () => {
     const report = await executePlan(plan, 'acme', host);
     expect(report).toEqual({ serverFailed: false, watchFailed: false, held: false, dropped: [], restoreBuckets: [] });
     // No seat's create ran until the seat before it had settled: a's whole launch, then b's,
-    // then c's, in file order with no interleaving. Each pane is named at create now, so its
-    // rename event comes before its own launch.
+    // then c's, in file order with no interleaving. The rename follows the launch, one idle
+    // poll later, and the next seat starts at that rename.
     expect(events).toEqual([
       'create:a@0',
-      'rename:a@0',
       'launch:a-pane@0',
+      'rename:a@2000',
       'create:b@2000',
-      'rename:b@2000',
       'launch:b-pane@2000',
+      'rename:b@4000',
       'create:c@4000',
-      'rename:c@4000',
       'launch:c-pane@4000',
+      'rename:c@6000',
     ]);
     expect(t).toBe(6000);
     expect(out.join('')).toBe('a: ready\nb: ready\nc: ready\n');
@@ -678,6 +679,7 @@ function launchWorld(): { launch: Launch; order: string[] } {
     },
     now: () => new Date(clock),
   };
+  recordRenames(launch);
   return { launch, order };
 }
 

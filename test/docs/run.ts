@@ -8,6 +8,8 @@ import { createConnection } from 'node:net';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runAck } from '../../src/commands/ack.ts';
+import { runAnalyse } from '../../src/commands/analyse.ts';
+import { runShow } from '../../src/commands/show.ts';
 import { runAdd } from '../../src/commands/add.ts';
 import { runAgents } from '../../src/commands/agents.ts';
 import { runFallback } from '../../src/commands/fallback.ts';
@@ -22,6 +24,7 @@ import { runBatch } from '../../src/commands/batch.ts';
 import { runBus } from '../../src/commands/bus.ts';
 import { runForget } from '../../src/commands/forget.ts';
 import { check, loadConfig } from '../../src/commands/check.ts';
+import { runCheckpoint } from '../../src/commands/checkpoint.ts';
 import { commits } from '../../src/commands/commits.ts';
 import { pr } from '../../src/commands/pr.ts';
 import { runDoctor } from '../../src/commands/doctor.ts';
@@ -332,6 +335,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runAck(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'agents':
       return runAgents(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
+    case 'analyse':
+      return runAnalyse(rest, io, { home: fixture.home, now: () => new Date(spec.now), durationMs: 1 });
     case 'fallback':
       return runFallback(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'add':
@@ -411,6 +416,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
     case 'reply':
       // The page's clock is pinned, so thread-ttl is read against it, not against today.
       return runReply(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
+    case 'show':
+      return runShow(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'issues':
       return runIssues(rest, io, { home: fixture.home });
     case 'next':
@@ -440,6 +447,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       });
     case 'restart':
       return runRestart(rest, io, world.restartSources());
+    case 'checkpoint':
+      return runCheckpoint(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'order':
       return runOrder(rest, io, world.orderSources());
     case 'send': {
@@ -662,7 +671,7 @@ function blockWorld(page: Page, block: Block): void {
   }
   if (block.attrs.machine) {
     const kind = block.attrs.machine;
-    if (kind !== 'calm' && kind !== 'tight' && kind !== 'small-swap') throw new Error(`machine="${kind}": it is calm, tight or small-swap`);
+    if (kind !== 'calm' && kind !== 'tight') throw new Error(`machine="${kind}": it is calm or tight`);
     world.setMachine(kind);
   }
   const tools = block.attrs.tools;

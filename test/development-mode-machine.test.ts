@@ -348,7 +348,7 @@ test('the machine record governs the verified cross-team owner-gate lift: on adm
   const on = lift();
   expect(on.lifted).toBe(true);
   expect(on.warning).toBe("warning: --repair is the owner's; dev mode continues (dev-mode on at machine level)");
-  expect(readFileSync(join(at.targetRoot, '.agents', 'team.log'), 'utf8')).toContain('admitted as orchestrator');
+  expect(readFileSync(join(at.targetRoot, '.agents', 'team.log'), 'utf8')).toContain('admitted as lead');
 
   seed(at.home, 'off');
   expect(lift().lifted).toBe(false);

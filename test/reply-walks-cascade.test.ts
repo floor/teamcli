@@ -36,10 +36,6 @@ import { NOW, fake, world, type World } from './send-native-fixtures.ts';
 const SENT = '0f0e0d0c-0b0a-4a4b-8c8d-9e9f0a1b2c3d';
 const REPLY = '3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
 
-// The sender-posted webhook runs through a detached child. On Linux that child posts nothing, so
-// these scenes read the drop leg instead of the webhook leg; they run on macOS, where it posts.
-const offDarwin = process.platform !== 'darwin';
-
 let made: World | null = null;
 const stops: (() => unknown)[] = [];
 afterEach(() => {
@@ -75,10 +71,11 @@ async function run(
   at: World,
   patch: Partial<SendHost>,
   caller: Caller = { kind: 'owner' },
+  reply: Partial<ReplyHost> = {},
 ): Promise<Result> {
   const io = testIo(at.root, caller);
   const send = fake(at, patch);
-  const host: ReplyHost = { home: at.home, now: () => NOW, newId: () => REPLY, send };
+  const host: ReplyHost = { home: at.home, now: () => NOW, newId: () => REPLY, send, ...reply };
   const code = await runReply([SENT, 'the answer'], io, host);
   return { code, out: io.out, err: io.err, host: send };
 }
@@ -109,7 +106,7 @@ function hookFiles(url: string): { urlFile: string; secretFile: string } {
   return { urlFile, secretFile };
 }
 
-test.skipIf(offDarwin)('a reply to a socket-reachable seat reports the socket leg and leaves the signed copy', async () => {
+test('a reply to a socket-reachable seat reports the socket leg and leaves the signed copy', async () => {
   made = world(null);
   declareSeat(made, 'helper', 'accept');
   sentToOwner(made, 'helper');
@@ -136,7 +133,7 @@ test.skipIf(offDarwin)('a reply to a socket-reachable seat reports the socket le
   });
 });
 
-test.skipIf(offDarwin)('a reply still marks the record read when a wake leg takes it', async () => {
+test('a reply still marks the record read when a wake leg takes it', async () => {
   made = world(null);
   declareSeat(made, 'helper', 'accept');
   sentToOwner(made, 'helper');
@@ -153,7 +150,7 @@ test.skipIf(offDarwin)('a reply still marks the record read when a wake leg take
   expect(existsSync(join(recordDir(made.root, 'acme', 'owner'), `${SENT}.replied.json`))).toBe(true);
 });
 
-test.skipIf(offDarwin)('a reply to a seat whose socket refuses falls to the webhook behind it', async () => {
+test('a reply to a seat whose socket refuses falls to the webhook behind it', async () => {
   const hook = receiver();
   made = world(['socket', 'drop'], [{ name: 'iris', role: 'remote', webhook: hookFiles(hook.url) }]);
   declareSeat(made, 'iris', 'refuse');
@@ -176,7 +173,7 @@ test.skipIf(offDarwin)('a reply to a seat whose socket refuses falls to the webh
   expect(line.failed?.some((why) => why.startsWith('socket: the receiving Claude session declares crossSessionInbound refuse'))).toBe(true);
 });
 
-test.skipIf(offDarwin)('a reply outside the allowed direction is still refused, and no frame is dialed', async () => {
+test('a reply outside the allowed direction is still refused, and no frame is dialed', async () => {
   made = world(null);
   declareSeat(made, 'lead', 'accept');
   // The record sits in lead's folder, addressed to lead: the owner is not its addressee.
@@ -284,7 +281,7 @@ function assertSingleReceiptsOnAnsweredRecord(
   expect(targetSidecars).toEqual([]);
 }
 
-test.skipIf(offDarwin)('probe 1 & 3: reply across wake classes (socket, webhook, typed wake, pull-only) takes the expected leg and writes read + replied receipts exactly once', async () => {
+test('probe 1 & 3: reply across wake classes (socket, webhook, typed wake, pull-only) takes the expected leg and writes read + replied receipts exactly once', async () => {
   // 1. Socket wake class (claude-code with inbound: accept + live socket) -> via: 'socket'
   {
     const w = world(null);
@@ -502,7 +499,7 @@ async function startCodexAppServer(socketPath: string, threadId: string): Promis
   };
 }
 
-test.skipIf(offDarwin)('probe 1 (Codex runtime queue, Gemini headless-resume, and codex_daemon off): reply takes native runtime queue for Codex, headless-resume for Gemini, and typed-first when codex_daemon is off', async () => {
+test('probe 1 (Codex runtime queue, Gemini headless-resume, and codex_daemon off): reply takes native runtime queue for Codex, headless-resume for Gemini, and typed-first when codex_daemon is off', async () => {
   const threadId = '019a0000-aaaa-7bbb-8ccc-ddddeeeeffff';
   const geminiSessionId = 'ses_gemini_019a0000';
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'reply-codex-cascade-')));
@@ -869,7 +866,7 @@ exit 0
   }
 });
 
-test.skipIf(offDarwin)('probe 2: refused replies (wrong direction, not admitted, thread mismatch) never dial a socket, post a webhook, or type into a pane', async () => {
+test('probe 2: refused replies (wrong direction, not admitted, thread mismatch) never dial a socket, post a webhook, or type into a pane', async () => {
   const hook = receiver();
   const hookPaths = hookFiles(hook.url);
   stops.push(() => rmSync(dirname(hookPaths.urlFile), { recursive: true, force: true }));
@@ -1185,7 +1182,7 @@ seats:
   expect(pane.typed).toEqual([]);
 });
 
-test.skipIf(offDarwin)('probe 4: a locked target seat is queued, not refused, and its webhook posts its one arrival', async () => {
+test('probe 4: a locked target seat is queued, not refused, and its webhook posts its one arrival', async () => {
   // The receiving seat's lock is another command's — a watch child mid-wake — so the reply is
   // written without it and walked: the record is the message, the webhook row still posts its
   // one arrival, and no pane is typed while the holder has the seat.
@@ -1211,7 +1208,7 @@ test.skipIf(offDarwin)('probe 4: a locked target seat is queued, not refused, an
   }
 });
 
-test.skipIf(offDarwin)('probe 5: webhook is posted at most once when reply webhook walks race on the same claim', async () => {
+test('probe 5: webhook is posted at most once when reply webhook walks race on the same claim', async () => {
   // Barrier webhook server: holds the first HTTP POST until released so a racing walk hits the active `.posting` claim.
   const hits: { method: string; body: string }[] = [];
   let releaseFirstPost!: () => void;

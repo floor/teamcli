@@ -23,11 +23,27 @@ import { readEntityPolicySource, readProjectPolicySource, readTeamPolicySource }
 import { getPolicySpec, normalizePolicyName, type Policy } from '../policy/types.ts';
 import type { ProjectRecord } from '../registry/projects.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import type { DeliveryLeg, SettingLevel } from '../settings/inherit.ts';
+import { liveOrderWords, type DeliveryLeg, type OrderWord, type SettingLevel } from '../settings/inherit.ts';
 import { deliveryOrder } from '../settings/resolve.ts';
 
-/** A chain as the levels that declare an order; a level left out declares nothing. */
-export type DeliveryChain = Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>;
+/**
+ * A chain as the levels that declare an order; a level left out declares nothing. What a level
+ * holds is live legs only: the retired `mcp-inbox` alias is dropped before the chain is built
+ * (`liveWordOf`). A level whose word held only that name is `drop`, the mailbox, so the seat's
+ * shape cannot fill the gap with a typed wake. An empty word is still left out. The word an
+ * older build wrote still reads in the files; the chain never carries the retired name.
+ */
+export type DeliveryChain = Partial<Record<SettingLevel, readonly OrderWord[] | undefined>>;
+
+/** One level's word with the retired alias names dropped. A word that is only the retired name
+ *  is `drop`, so the level is a mailbox and not an absent word the shape would replace with a
+ *  typed wake. `undefined` when the word is absent. */
+function liveWordOf(words: readonly OrderWord[] | null | undefined): readonly DeliveryLeg[] | undefined {
+  if (words === undefined || words === null) return undefined;
+  const legs = liveOrderWords(words);
+  if (legs.length > 0) return legs;
+  return words.length > 0 ? ['drop'] : undefined;
+}
 
 /**
  * A project registry or project policy record this reader cannot read. A project's word can
@@ -90,12 +106,13 @@ export function deliveryChainOf(input: {
     }
   }
   const entity = signedOrderOf(readEntityPolicySource(input.home, file?.entity ?? null), now) ?? undefined;
-  let project: readonly DeliveryLeg[] | undefined;
+  // The project's word keeps any retired name it still carries; the resolver drops it.
+  let project: readonly OrderWord[] | undefined;
   let projectId: string | null = null;
   try {
     const record = input.projectOfTeam(teamIdOf(input.root));
     projectId = record?.id ?? null;
-    project = record?.deliveryOrder;
+    project = liveWordOf(record?.deliveryOrder);
   } catch (error) {
     // The project's word can only narrow. A registry that cannot name the team's project — an
     // unreadable or corrupt file, or a team two projects name — leaves a bound this reader
@@ -116,14 +133,15 @@ export function deliveryChainOf(input: {
   // The team source carries the file's legacy word itself when no signed record is held; the
   // fallback covers a source that cannot be read, where the validated file's word still stands.
   const teamPolicy = file ? signedOrderOf(readTeamPolicySource(input.home, input.root, file), now) : undefined;
-  const team = teamPolicy !== undefined ? (teamPolicy ?? undefined) : (file?.deliveryOrder ?? undefined);
+  const team = teamPolicy !== undefined ? (teamPolicy ?? undefined) : liveWordOf(file?.deliveryOrder);
   const found: Seat | undefined = file?.seats.find((one) => one.name === input.seat);
   const wider: DeliveryChain = {
     ...(entity !== undefined ? { entity } : {}),
     ...(project !== undefined ? { project } : {}),
     ...(team !== undefined ? { team } : {}),
   };
-  const seat = input.overrides?.deliveryOrder ?? found?.deliveryOrder ?? seatDefault(found, wider);
+  const seatWord = liveWordOf(input.overrides?.deliveryOrder) ?? liveWordOf(found?.deliveryOrder);
+  const seat = seatWord ?? seatDefault(found, wider);
   return { ...wider, ...(seat !== undefined ? { seat } : {}) };
 }
 
@@ -131,7 +149,8 @@ export function deliveryChainOf(input: {
  * One level's signed `delivery-order` word. `undefined` means the level holds no signed record —
  * the legacy word, when it has one, still applies. `null` means it holds one but no word stands:
  * every declaration it holds is expired or a value the catalogue cannot read, so the level is
- * silent and the legacy word it shadows does not come back.
+ * silent and the legacy word it shadows does not come back. A word whose every name is the
+ * retired alias is `drop`: the record still shadows the legacy word, and the walk does not type.
  */
 function signedOrderOf(source: PolicySourceRead | null, now: Date): readonly DeliveryLeg[] | null | undefined {
   if (source === null || !source.ok) return undefined;
@@ -146,7 +165,10 @@ function signedOrderOf(source: PolicySourceRead | null, now: Date): readonly Del
     held = true;
     if (expiredPolicy(policy, now)) continue;
     const parsed = spec?.parseValue(policy.value) as readonly DeliveryLeg[] | null | undefined;
-    if (parsed) word = parsed;
+    // An alias-only signed word is the mailbox. The record still shadows the level's legacy
+    // word, and the walk is drop rather than the typed fallback.
+    if (parsed && parsed.length > 0) word = parsed;
+    else if (Array.isArray(parsed) && parsed.length === 0) word = ['drop'];
   }
   if (!held) return undefined;
   return word ?? null;
@@ -173,8 +195,8 @@ function expiredPolicy(policy: Policy, now: Date): boolean {
  * The watcherless shape is read off the chain the wider levels resolve, less the drop leg: the
  * shape says only that this seat reads no drop file, never that a channel leg a word declares is
  * unreachable. Under the default (`typed`, `drop`) the shape is `typed` alone; a team word such
- * as `[socket, typed]` keeps its socket, and an `mcp-inbox` word stays in the order so the walk
- * can report it unavailable (`src/send/walk-cascade.ts`).
+ * as `[socket, typed]` keeps its socket. A word that is only the retired `mcp-inbox` name is
+ * already `drop` before this shape is asked (`liveWordOf`), so the shape never types for it.
  */
 function seatDefault(seat: Seat | undefined, wider: DeliveryChain): readonly DeliveryLeg[] | undefined {
   if (seat === undefined) return undefined;

@@ -18,6 +18,7 @@ import { daemonSocketPath as sendSocketPath, startSendDaemon } from '../src/send
 import { darwinServiceManager } from '../src/daemon/service-darwin.ts';
 import type { ServiceManager, ServiceProgram, ServiceRunResult } from '../src/daemon/service.ts';
 import { DAEMON_PROTOCOL_VERSION, type DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
+import { noteTeam } from '../src/registry/teams.ts';
 import { testIo, thisProcessJobRecord, thisProcessUnitRecord } from './helpers.ts';
 
 const TEAM = `format: 1
@@ -879,7 +880,7 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
       calls.push([command, ...args]);
       return { status: 0, stdout: '', stderr: '' };
     };
-    const manager = darwinServiceManager({ runner, uid: 501 });
+    const manager = darwinServiceManager({ runner, uid: 501, accountHome: home });
     const entry = programAt(home);
     const installed = manager.install(home, { execPath: '/runtime/bin/node', entry, roots: ['/repo'] });
     expect(installed.ok).toBe(true);
@@ -897,7 +898,9 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
     expect(unit).toContain('run');
     expect(unit).toContain('--started-by');
     expect(unit).toContain('service-manager');
-    expect(unit).toContain('/repo');
+    // The unit names no checkout. A service start reads the registry, so yesterday's root is not frozen in.
+    expect(unit).not.toContain('--root');
+    expect(unit).not.toContain('/repo');
     expect(unit).toContain('RunAtLoad');
     expect(unit).toContain('KeepAlive');
     expect(calls[0]?.[0]).toBe('launchctl');
@@ -911,7 +914,7 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
 
   test('the unit carries the presence opt-in exactly when the install program asks for it', () => {
     const { home } = scratch();
-    const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
+    const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501, accountHome: home });
     const entry = programAt(home);
     const plain = manager.install(home, { execPath: '/runtime/bin/node', entry, roots: ['/repo'] });
     expect(plain.ok).toBe(true);
@@ -933,7 +936,7 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
 
   test('the unit carries the watch opt-in exactly when the install program asks for it', () => {
     const { home } = scratch();
-    const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
+    const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501, accountHome: home });
     const entry = programAt(home);
     const plain = manager.install(home, { execPath: '/runtime/bin/node', entry, roots: ['/repo'] });
     expect(plain.ok).toBe(true);
@@ -967,6 +970,7 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
     const manager = darwinServiceManager({
       runner: () => ({ status: 1, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' }),
       uid: 501,
+      accountHome: home,
       sleep: () => {},
     });
     const entry = programAt(home);
@@ -983,6 +987,7 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
     const manager = darwinServiceManager({
       runner: () => ({ status: 1, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' }),
       uid: 501,
+      accountHome: home,
       sleep: () => {},
     });
     const entry = programAt(home);
@@ -997,7 +1002,7 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
 
   test('a failed reinstall puts the earlier unit back for the next login', () => {
     const { home } = scratch();
-    const good = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
+    const good = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501, accountHome: home });
     const first = good.install(home, { execPath: '/runtime/bin/node', entry: programAt(home, 'v1'), roots: ['/repo'] });
     expect(first.ok).toBe(true);
     if (!first.ok) return;
@@ -1005,6 +1010,7 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
     const failing = darwinServiceManager({
       runner: () => ({ status: 1, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' }),
       uid: 501,
+      accountHome: home,
       sleep: () => {},
     });
     const again = failing.install(home, { execPath: '/runtime/bin/node', entry: programAt(home, 'v2'), roots: ['/repo'] });
@@ -1017,7 +1023,7 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
 
   test('a stop the service manager refuses is reported as a refusal, and the unit stays', () => {
     const { home } = scratch();
-    const good = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
+    const good = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501, accountHome: home });
     const installed = good.install(home, { execPath: '/runtime/bin/node', entry: programAt(home), roots: ['/repo'] });
     expect(installed.ok).toBe(true);
     if (!installed.ok) return;
@@ -1025,6 +1031,7 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
     const refuses = darwinServiceManager({
       runner: () => ({ status: 3, stdout: '', stderr: 'Boot-out failed: 3: No such process' }),
       uid: 501,
+      accountHome: home,
     });
     const removed = refuses.uninstall(home);
     expect(removed.ok).toBe(false);
@@ -1041,6 +1048,7 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
     const manager = darwinServiceManager({
       runner: () => ({ status: 3, stdout: '', stderr: '' }),
       uid: 501,
+      accountHome: home,
     });
     expect(manager.uninstall(home)).toMatchObject({ ok: true, removed: false });
   });
@@ -1119,6 +1127,7 @@ const owner = { kind: 'owner' } as const;
 function sourcesOf(home: string, overrides: Partial<DaemonCommandSources> = {}): DaemonCommandSources {
   return {
     home,
+    accountHome: home,
     program: { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js' },
     version: 'test',
     // An install reports success only after the daemon it started answers; this reading stands
@@ -1634,13 +1643,15 @@ describe('team daemon status, install, uninstall and run', () => {
 
   test('the installed unit’s own argv starts the one daemon hosting send and bus', async () => {
     const { root, home } = scratch();
-    const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
+    const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501, accountHome: home });
     const unit = manager.install(home, { execPath: '/runtime/bin/node', entry: programAt(home), roots: [root] });
     expect(unit.ok).toBe(true);
     if (!unit.ok) return;
     const argv = unitArguments(unit.unitPath);
-    expect(argv.slice(-2)).toEqual(['--root', root]);
+    expect(argv).not.toContain('--root');
+    expect(argv).not.toContain(root);
     expect(argv).toContain('--started-by');
+    expect(noteTeam(home, root, { project: 'acme', entity: null, session: 'acme', lobby: null }, 'running', 'owner')).toBeNull();
 
     // The login start, end to end: the unit's own argv through the command surface and the real
     // machine daemon. A synthetic manager keeps this process's own record, so the replay of the
@@ -1657,6 +1668,7 @@ describe('team daemon status, install, uninstall and run', () => {
     }));
     await waitFor(() => io.out.includes('team daemon: running'));
     expect(io.out).toContain('roots 1 (send 1, bus 1)');
+    expect(io.out).toContain(`${root} from the registry`);
     expect(io.out).toContain('broker not hosted');
     expect(existsSync(daemonSocketPath(home))).toBe(true);
     expect(existsSync(sendSocketPath('acme', root, home))).toBe(true);
@@ -1665,7 +1677,7 @@ describe('team daemon status, install, uninstall and run', () => {
     expect(health.state).toBe('running');
     expect(health.startedBy).toBe('service-manager');
     expect(health.roots).toHaveLength(1);
-    expect(health.roots[0]).toMatchObject({ root, team: 'acme', send: 'serving', bus: 'serving', why: null });
+    expect(health.roots[0]).toMatchObject({ root, team: 'acme', send: 'serving', bus: 'serving', why: null, source: 'registry' });
     expect(health.roots[0]?.firstPass).toBeDefined();
     // The row carries the chores report beside the hosting facts; its mode is the release default.
     expect(health.roots[0]?.chores?.mode).toBe('per-root');

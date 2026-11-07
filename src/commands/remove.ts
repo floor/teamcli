@@ -146,11 +146,11 @@ export function leftoverName(name: string): boolean {
 }
 
 /** The file edit `remove` would write, or null when that edit is valid or changes nothing. */
-function editProblems(path: string, name: string, keep: boolean, home: string): Problem[] | null {
+function editProblems(path: string, name: string, keep: boolean, home: string, root: string): Problem[] | null {
   const text = readTeamText(path, { home });
   const next = keep ? markStopped(text, name) : takeOut(text, name);
   if (next === text) return null;
-  const parsed = validateTeamFile(next);
+  const parsed = validateTeamFile(next, { home, root });
   return parsed.ok ? null : parsed.errors;
 }
 
@@ -441,7 +441,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       root,
       dir,
       now: sources.now(),
-      // Ruling D5: the placed operator may abandon, under the lead-gates policy.
+      // The placed operator may abandon, under the lead-gates policy.
       admitsOperator: true,
     });
     if (!lift.lifted) {
@@ -684,7 +684,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // An edit that will not validate is refused before the seat is stopped. Stopping first would
   // end the live session and then report that nothing was written.
   if (!temporary && !swap) {
-    const ahead = editProblems(path, name, args.flags.has('keep'), sources.home ?? homedir());
+    const ahead = editProblems(path, name, args.flags.has('keep'), sources.home ?? homedir(), root);
     if (ahead) {
       refuse(io, json, 'remove', {
         id: 'remove.edit',
@@ -829,14 +829,14 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       // (omission is the revocation signal), and a seat `--keep` stopped stays — the grant is
       // the file's, not the seat's runtime state. A projection problem is a log line, never a
       // refusal: the removal itself is done.
-      const refreshed = validateTeamFile(rewrote);
+      const refreshed = validateTeamFile(rewrote, { home, root });
       if (refreshed.ok && sources.home) {
         const projectionNote = reachProjectionNote(writeReachProjection(refreshed.team, sources.home));
         if (projectionNote) logLine(dir, 'remove', whoText, projectionNote, sources.now());
       }
     }
     if (kept !== null) {
-      const parsed = validateTeamFile(kept);
+      const parsed = validateTeamFile(kept, { home, root });
       // A delegated remove never re-signs the approval: `--keep` is the gate's to refuse, and the
       // signing itself stays the owner's for a delegate whatever reached here.
       if (parsed.ok && standing.kind === 'verified' && delegatePane === null) recordSeatDigestOf(standing, parsed.team, root, name, home);

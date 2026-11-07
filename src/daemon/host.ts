@@ -21,7 +21,7 @@ import {
 } from 'node:fs';
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { busSocket, startBus, type BusHandle, type StartBusInput, type StartBusResult } from '../bus/server.ts';
 import { freshBusWatch, nextBackoffMs, reviveBus, type BusWatch } from '../bus/supervise.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
@@ -33,12 +33,14 @@ import { eventThresholdsInForce, DAEMON_HEARTBEAT_SECONDS } from '../policy/inde
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { RestoreSweepResult } from '../launch/restore-sweep.ts';
 import { runRestoreSweepInChild } from './restore/spawn.ts';
+import { spawnWakeChild } from './wake/spawn.ts';
 import { pidAlive, readState, type State } from '../state.ts';
 import { probeDaemonSocket, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
 import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot, type DaemonRequest, type DaemonResponse, type DaemonRootHealthSnapshot } from './protocol.ts';
 import { probeDaemonHealth } from './health.ts';
 import { choresPolicyFor } from './chores/policy.ts';
 import { createChoresFleet, type ChoresFleet } from './chores/supervisor.ts';
+import { createMailboxRouter, type MailboxChild, type MailboxRouter } from './mailbox/supervisor.ts';
 import type { ChoresChild, SpawnChoresInput } from './chores/spawn.ts';
 import type { ChoresPresenceProof, ChoresPresenceReading, ChoresPresenceStatus } from './chores/protocol.ts';
 import { FALLBACK_STORE_PASS_LIMIT, FALLBACK_STORE_PASS_MS, storeBacklogLimits, sweepFallbackEscalationsSliced, type FallbackSweepResult, type SweepRoot } from './fallback-sweep.ts';
@@ -53,6 +55,7 @@ import { hostedWatchAuthority } from './watch-authority.ts';
 import { createPresenceIngester, type PresenceIngester } from './presence/ingest.ts';
 import { createPresenceActivity, type PresenceActivityStep } from './presence/activity.ts';
 import { createPresencePublisher, type PresencePublisherStep } from './presence/publish.ts';
+import { createNativeFeed, type NativeFeed } from './presence/native-feed.ts';
 import { createPresenceHeld, type PresenceHeldStep } from './presence/held.ts';
 import { canonicalSeatOf, currentPresenceBinding, presenceBindingFrom } from './presence/reconcile.ts';
 import { codexPresenceFor, codexPresenceTarget } from './presence/codex-source.ts';
@@ -66,9 +69,11 @@ import { WATCH_DIRECT_WORK, verifyWatchAuthority } from '../watch/authority.ts';
 import type { BrokerWorkSource } from '../idle_work.ts';
 import { sendWatchDirect } from '../watch/direct-send.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
+import { reminderTick, type ReminderSend, type ReminderSpec } from '../reminder/run.ts';
 import {
   ensureMachineDir,
-  writeDaemonState,
+  serializeDaemonState,
+  writeDaemonStateText,
   type DaemonFeatures,
   type DaemonRootState,
   type DaemonStuckRequest,
@@ -135,6 +140,10 @@ export type StartMachineDaemonInput = {
   home?: string;
   /** The checkouts whose send and bus endpoints this one process hosts. */
   roots: string[];
+  /** The checkouts were read from registry teams whose lifecycle is running, not from --root. */
+  rootsFromRegistry?: boolean;
+  /** Re-read on each heartbeat and on root.added. A root it names is hosted when it is not already. */
+  runningRoots?: () => readonly string[];
   startedBy?: string;
   version: string;
   /** The packaged commit this build was installed from; null or absent in a source checkout. */
@@ -280,6 +289,34 @@ export type StartMachineDaemonInput = {
   restoreRetryMaxDelayMs?: number;
   restoreRetryBudgetMs?: number;
   /**
+   * The reminders this daemon runs on its beat, read fresh on every beat so an edited config is
+   * picked up without a restart. Absent, no reminder runs; reading the configured list into
+   * these specs is the caller's business, and the reader gets the beat's log so a refused entry
+   * is named. A reader that throws is logged and fires nothing on that beat, and a reminder is
+   * machine-scoped: the one list serves every hosted root. This is the inline path a daemon
+   * without a chores fleet runs; a daemon with one hands the read to a child.
+   */
+  reminders?: (log: (line: string) => void) => readonly ReminderSpec[];
+  /**
+   * The canonical checkouts this daemon hosts, handed to the machine chores child so its list
+   * read refuses a target outside them exactly as this daemon's own read does. Absent, the
+   * fleet's hosted list falls back to the accepted routes' roots.
+   */
+  reminderHosted?: readonly string[];
+  /**
+   * The transport a reminder uses. The default is the verified daemon sender, which proves the
+   * daemon's state record, lock and heartbeat before every leg; a test injects its own so a
+   * synthetic scene reaches no socket. An injected transport is a function that cannot cross a
+   * pipe, so a daemon given one delivers inline even when its chores fleet is hosted.
+   */
+  reminderSend?: ReminderSend;
+  /**
+   * The state record's physical writer. The default writes the record atomically off the
+   * event loop; a test injects a counting or slow writer to prove one write per beat, a
+   * write only on change, and a probe that answers while a write is in flight.
+   */
+  stateWriter?: (home: string, text: string) => Promise<void>;
+  /**
    * Whether the daemon isolates the heavy per-root chores in supervised children. Off by
    * default, like the other hosting seams: a daemon started without it runs exactly the inline
    * path, and a test harness that never opted in behaves as it always did. The mode per route is
@@ -290,6 +327,13 @@ export type StartMachineDaemonInput = {
   /** Starts one chores child. The default writes a one-use token and spawns this program's hidden
    *  child verb; a test injects a fixture child to observe the protocol and the supervision. */
   choresFactory?: (input: SpawnChoresInput) => ChoresChild;
+  /**
+   * Whether this daemon starts the one mailbox router. Off unless a start asks for it, so a
+   * harness that never opted in does not spawn the child. The beat only nudges it.
+   */
+  mailboxHosting?: boolean;
+  /** Starts the mailbox router child. A test injects a fixture child. */
+  mailboxFactory?: () => MailboxChild;
 };
 
 export type StartMachineDaemonResult =
@@ -496,6 +540,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const stuckMs = input.stuckMs ?? STUCK_MS;
   const refreshCloseBoundMs = input.refreshCloseBoundMs ?? REFRESH_CLOSE_BOUND_MS;
   const pid = process.pid;
+  const nativeFeedOwner = input.presenceHosting === true ? randomUUID().replaceAll('-', '') : undefined;
   const uid = typeof process.getuid === 'function' ? process.getuid() : -1;
   const socketPath = daemonSocketPath(home);
   const lockPath = daemonLockPath(home);
@@ -555,6 +600,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
    *  the daemon was not started with the isolation seam. The state writer reads it every time,
    *  so a beat's record carries what each child said on this beat. */
   let choresFleet: ChoresFleet | null = null;
+  /** The one mailbox router, built once the beat exists. Null when this start did not ask for it. */
+  let mailboxRouter: MailboxRouter | null = null;
   /** What each route must re-read, by canonical root. The route remembers the loader's root and
    *  the file a `team-file` route launched from; a registry route names no file, so it is resolved
    *  from its root again the way every writer resolves it. `handle` is the path the loader
@@ -572,6 +619,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     ingester: PresenceIngester;
     activity: PresenceActivityStep;
     publisher: PresencePublisherStep;
+    native: NativeFeed;
     /** The held-frame step: the one place a socket frame is seen at a held-message dialog. */
     held: PresenceHeldStep;
     /** One read-only runtime source per managed seat; empty for a hook-only route. */
@@ -757,8 +805,46 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     });
   };
 
-  const writeState = (afterClose = false): void => {
-    if (closed && !afterClose) return;
+  // The state record's writes, serialized off this loop: at most one physical write in
+  // flight, a newer text replacing a queued one, and no write at all when the text is the
+  // one already written, writing or queued. The probe answers from memory, so a slow disk
+  // delays only the file, never the answer.
+  const stateWriter = input.stateWriter ?? writeDaemonStateText;
+  let lastWrittenStateText: string | null = null;
+  let writingStateText: string | null = null;
+  let queuedStateText: string | null = null;
+  let stateWriteDrain: Promise<void> | null = null;
+  const queueStateWrite = (text: string): Promise<void> => {
+    if (text === lastWrittenStateText || text === writingStateText || text === queuedStateText) {
+      return stateWriteDrain ?? Promise.resolve();
+    }
+    queuedStateText = text;
+    if (stateWriteDrain === null) {
+      stateWriteDrain = (async (): Promise<void> => {
+        while (queuedStateText !== null) {
+          const current = queuedStateText;
+          queuedStateText = null;
+          writingStateText = current;
+          try {
+            await stateWriter(home, current);
+            lastWrittenStateText = current;
+          } catch {
+            // The next beat tries again; an unwritable record is reported as unknown, never healthy.
+          } finally {
+            writingStateText = null;
+          }
+        }
+        stateWriteDrain = null;
+      })();
+    }
+    return stateWriteDrain;
+  };
+  const flushStateWrites = async (): Promise<void> => {
+    while (stateWriteDrain !== null) await stateWriteDrain;
+  };
+
+  const writeState = (afterClose = false): Promise<void> => {
+    if (closed && !afterClose) return Promise.resolve();
     for (const one of hostedWatches) one.status.watch = one.watch.state();
     for (const refresh of passRefreshers) refresh();
     // Each route's chores record is this beat's reading, never a stored word: the supervisor
@@ -769,25 +855,23 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         if (chores !== undefined) status.chores = chores;
       }
     }
-    try {
-      writeDaemonState(home, {
-        format: 1,
-        pid,
-        uid,
-        since,
-        startedBy,
-        version: input.version,
-        gitHead: input.gitHead ?? null,
-        heartbeatAt,
-        socket: socketPath,
-        features,
-        stuck: stuckNow(),
-        roots: [...roots],
-        ...(heartbeatSeconds === null ? {} : { heartbeatSeconds }),
-      });
-    } catch {
-      // The next heartbeat tries again; an unwritable record is reported as unknown, never healthy.
-    }
+    return queueStateWrite(serializeDaemonState({
+      format: 1,
+      pid,
+      uid,
+      since,
+      ...(closed || nativeFeedOwner === undefined ? {} : { nativeFeedOwner }),
+      startedBy,
+      version: input.version,
+      gitHead: input.gitHead ?? null,
+      heartbeatAt,
+      socket: socketPath,
+      features,
+      stuck: stuckNow(),
+      roots: [...roots],
+      ...(heartbeatSeconds === null ? {} : { heartbeatSeconds }),
+      ...(mailboxRouter === null ? {} : { mailbox: { heartbeatAt: mailboxRouter.state().heartbeatAt } }),
+    }));
   };
 
   /**
@@ -890,6 +974,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // The accept, frame and close mechanics live in the relay package's framing host; this process
   // keeps the protocol: the same line parser and refusal bytes, the same health answer and
   // in-flight tracking, and the same socket file, permission and stale-path ownership below.
+  let adoptNotifiedRoot: ((root: string) => Promise<void>) | null = null;
+  const pendingRootAdds: string[] = [];
   const host = createHostServer({
     socketPath,
     frameLimit: DAEMON_FRAME_LIMIT,
@@ -922,6 +1008,22 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         if (request.op === 'next' && request.v === 2) {
           return formatDaemonResponse(await answerNext(request));
         }
+        // A hosting notice, not a send. It hosts a checkout the registry already marks running.
+        // It does not admit a caller and it does not change who may send.
+        if (request.op === 'root.added') {
+          const named = request.scope?.root;
+          if (named === undefined || named === '') {
+            return formatDaemonResponse({
+              v: request.v,
+              id: request.id,
+              ok: false,
+              error: { code: 'daemon.bad-frame', message: 'root.added names the checkout in scope.root' },
+            });
+          }
+          if (adoptNotifiedRoot === null) pendingRootAdds.push(named);
+          else await adoptNotifiedRoot(named);
+          return formatDaemonResponse(answerDaemonRequest({ ...request, op: 'health' }, health({ roots: true })));
+        }
         // Only the health answer returns roots. Every other op, including send, skips the
         // per-seat state read.
         return formatDaemonResponse(answerDaemonRequest(request, health({ roots: request.op === 'health' })));
@@ -949,7 +1051,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     };
   }
   chmodSync(socketPath, 0o600);
-  writeState();
+  await writeState();
 
   const sendHandles: SendDaemonHandle[] = [];
   const busHandles: BusHandle[] = [];
@@ -966,8 +1068,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   let beat: (() => void) | null = null;
   const beatTick = (): void => {
     heartbeatAt = now().toISOString();
-    writeState();
     beat?.();
+    // One write per beat, at its end, so the record carries everything the beat itself
+    // changed and the disk is never visited twice for one heartbeat.
+    void writeState();
   };
   let timer = setInterval(beatTick, heartbeatMs);
   timer.unref();
@@ -989,9 +1093,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // one process hosts each checkout's existing send and bus listeners beside it. N checkouts
   // therefore mean 2N+1 endpoints in one process until the machine endpoint serves route
   // delivery and a shared per-seat queue behind the relay package boundary.
-  for (const rootArg of input.roots) {
+  const hosting = new Set<string>();
+  const hostCheckout = async (rootArg: string): Promise<void> => {
+    const key = resolve(rootArg);
+    if (hosting.has(key)) return;
+    hosting.add(key);
     const status: MachineRootStatus = {
       root: rootArg, team: null, send: 'starting', bus: 'starting', why: null, sendWhy: null, busWhy: null,
+      ...(input.rootsFromRegistry === true ? { source: 'registry' as const } : {}),
     };
     // A root with no hosted endpoint keeps both sockets null and the refresh skips it.
     const watch: EndpointWatch = {
@@ -1011,20 +1120,23 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     };
     watched.push(watch);
     let registered = false;
-    const register = (): void => {
-      if (registered) return;
+    const register = (): Promise<void> => {
+      if (registered) return Promise.resolve();
       registered = true;
       roots.push(status);
-      writeState();
+      // Awaited by the loop below: the record names this root before any of its endpoints
+      // starts, so a reader that finds the bound socket during the roots loop finds the
+      // checkout being brought up, never an empty startup record beside a live socket.
+      return writeState();
     };
     const loaded = readTeamConfig(rootArg, { home });
     if (!loaded.ok) {
       status.why = loaded.errors[0]?.message ?? 'the team file cannot be read';
       status.send = 'failed';
       status.bus = 'failed';
-      register();
+      await register();
       logLine(`root ${rootArg}: ${status.why}`);
-      continue;
+      return;
     }
     // Routed by what the loader actually opened, never by the spelling of the argument: two
     // spellings of one checkout are one route, or every scope naming it would be ambiguous.
@@ -1033,18 +1145,18 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       status.why = 'the checkout root cannot be resolved to a folder';
       status.send = 'failed';
       status.bus = 'failed';
-      register();
+      await register();
       logLine(`root ${rootArg}: ${status.why}`);
-      continue;
+      return;
     }
     if (duplicateRoute(routes, canonical) !== null) {
       status.root = canonical;
       status.why = 'this checkout is already hosted by this daemon';
       status.send = 'failed';
       status.bus = 'failed';
-      register();
+      await register();
       logLine(`root ${rootArg}: ${status.why}`);
-      continue;
+      return;
     }
     status.root = canonical;
     status.team = loaded.team.project;
@@ -1053,7 +1165,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     teams.set(canonical, loaded.team);
     // Registered before any endpoint is started: status can name the root, and a heartbeat
     // keeps its record fresh, while a large store or a slow start below is still in progress.
-    register();
+    // The write is awaited so the record names the root before its endpoints do.
+    await register();
     const route = routeOf(
       canonical,
       loaded.team.project,
@@ -1068,6 +1181,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // A root with no readable team file or a second spelling of a hosted checkout got no route,
       // so it gets no ingester.
       const stateDir = dirname(loaded.path);
+      const native = createNativeFeed({ stateDir, session: loaded.team.session,
+        seats: loaded.team.seats.map((seat) => seat.name), project: loaded.team.project, root: canonical, home,
+        daemonOwner: nativeFeedOwner! });
       const health = createPresenceChannelHealth(PRESENCE_HEALTH_GRACE_MS, since);
       // Every expected seat is registered before the first pass, so an unsampled seat can never
       // inherit the route's answer. A resolution or start failure is registered as an explicit
@@ -1114,6 +1230,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             policy: 'on',
             feature: true,
             now,
+            frame: (text) => native.codexFrame(read.target, text),
           });
           if (started.kind === 'subscribed') runtimes.push(started.source);
           else unproven.push({ seat: seat.name, why: started.why });
@@ -1160,6 +1277,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       presenceWork.push({
         route,
         stateDir,
+        native,
         ingester: input.presenceIngest?.(route, stateDir)
           ?? createPresenceIngester({ stateDir, session: loaded.team.session }),
         activity: input.presenceActivity?.(route, stateDir)
@@ -1180,6 +1298,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             session: loaded.team.session,
             home,
             seats: loaded.team.seats.map((seat) => ({ name: seat.name, launch: seat.launch })),
+            lead: loaded.team.orchestrator,
           }),
         sources,
         sourceRuns: sources.map(() => null),
@@ -1199,6 +1318,12 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     const startSend = (): Promise<Awaited<ReturnType<typeof startSendDaemon>>> =>
       (input.sendStart ?? startSendDaemon)({
         root: canonical, dir: canonical, team: loaded.team, host: sendHost,
+        // The machine daemon's typed wake runs in a wake child of its own: the send server
+        // answers `handed` at acceptance and the walk never touches the daemon's loop. A test
+        // that injects its own send host still names its own seam (or none) through `sendStart`.
+        wake: (wake) => {
+          spawnWakeChild({ request: { version: 1, ...wake } });
+        },
         ...(presence === undefined ? {} : {
           presenceStateDir: presence.stateDir,
           presenceChannelHealthy: (seat: string) => seatReady && seatQualified(presence, seat, now()),
@@ -1216,9 +1341,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       status.bus = 'failed';
       status.busFailedAt = status.sendFailedAt;
       status.why = `the send server could not start: ${error instanceof Error ? error.message : 'unknown error'}`;
-      register();
+      await register();
       logLine(`root ${rootArg}: ${status.why}`);
-      continue;
+      return;
     }
     watch.sendStarted = true;
     if (send.kind === 'serving') {
@@ -1249,9 +1374,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       status.bus = 'failed';
       status.busFailedAt = now().toISOString();
       status.busWhy ??= thresholds.refusals.map((refusal) => refusal.message).join('; ');
-      register();
+      await register();
       logLine(`root ${rootArg}: bus not hosted: ${status.busWhy}`);
-      continue;
+      return;
     }
     let bus: Awaited<ReturnType<typeof startBus>>;
     try {
@@ -1273,9 +1398,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       status.bus = 'failed';
       status.busFailedAt = now().toISOString();
       status.busWhy ??= `the bus server could not start: ${error instanceof Error ? error.message : 'unknown error'}`;
-      register();
+      await register();
       logLine(`root ${rootArg}: ${status.busWhy}`);
-      continue;
+      return;
     }
     watch.busStarted = true;
     if (bus.kind === 'serving') {
@@ -1303,16 +1428,39 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             ? 'another bus server is starting'
             : 'the bus socket could not be bound';
     }
-    register();
+    await register();
     logLine(`root ${rootArg}: send ${status.send}, bus ${status.bus}`);
-  }
+  };
+  adoptNotifiedRoot = async (named: string): Promise<void> => {
+    let running: readonly string[] = [];
+    try {
+      running = input.runningRoots?.() ?? [];
+    } catch (error) {
+      logLine(`registry roots: ${messageOf(error)}`);
+      return;
+    }
+    const wanted = resolve(named);
+    if (!running.some((root) => root === named || resolve(root) === wanted)) {
+      logLine(`root.added ${named}: not a running registry team; the heartbeat will rescan`);
+      return;
+    }
+    await hostCheckout(named);
+  };
+  for (const named of pendingRootAdds.splice(0)) void adoptNotifiedRoot(named);
+  for (const rootArg of input.roots) await hostCheckout(rootArg);
 
   // The chores fleet: one supervised child per group of roots, for a daemon started with the
   // isolation seam. Each accepted route reads its own policy chain to the team level; a chain
   // that cannot be read keeps the release defaults and says so in the daemon log. A root that
   // failed to load has no route and no team, so it gets no chores entry: there is no work to
   // isolate and no policy to read.
-  if (input.choresHosting === true && routes.length > 0) {
+  //
+  // The reminder rides this fleet in a group of its own: its list read touches the registry and
+  // every addressed team file, and its send is a whole delivery walk, so both are the main-loop
+  // work this isolation exists to remove. An injected transport is a function seam that cannot
+  // cross a pipe, so a daemon given one keeps the inline path and this process still delivers.
+  const remindersInFleet = input.choresHosting === true && input.reminders !== undefined && input.reminderSend === undefined;
+  if (input.choresHosting === true && (routes.length > 0 || remindersInFleet)) {
     choresFleet = createChoresFleet({
       home,
       beatMs: heartbeatMs,
@@ -1345,6 +1493,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
                 : {}),
             }];
       }),
+      ...(remindersInFleet
+        ? { machine: { reminders: { hosted: [...(input.reminderHosted ?? routes.map((route) => route.root))] } } }
+        : {}),
       log: (text) => logLine(text),
       ...(input.choresFactory === undefined ? {} : { factory: input.choresFactory }),
       // A hosted pass that yields between seats asks for the daemon's cross-route beat. The
@@ -1756,6 +1907,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const runPresence = (one: (typeof presenceWork)[number]): Promise<void> => {
     let run: Promise<void>;
     run = (async () => {
+      // Same pass and opt-in as presence; native publication has no dispatch consumer.
+      one.native.step();
       let healthy = false;
       let why: string | null = null;
       try {
@@ -2097,7 +2250,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         logLine(`root ${root}: the endpoint refresh failed: ${messageOf(one.reason)}`);
       }
     } finally {
-      writeState();
+      void writeState();
     }
   };
   const refreshHostedEndpoints = (): Promise<void> => {
@@ -2127,7 +2280,19 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // record; this one records what each checkout actually got, failures and reasons included, and
   // every heartbeat refreshes it after asking the hosted sockets whether they still answer. The
   // timer itself started before the roots loop; this attaches the rest of the beat to it.
-  writeState();
+  // One router for every root. The beat nudges it and reads the heartbeat; it does not wait
+  // on the child, an ask, or a reply.
+  if (input.mailboxHosting === true && input.mailboxFactory !== undefined) {
+    mailboxRouter = createMailboxRouter({
+      beatMs: heartbeatMs,
+      now,
+      log: (text) => logLine(text),
+      factory: input.mailboxFactory,
+    });
+  }
+  // The start does not answer until this write lands: a reader who finds the socket bound
+  // must find the record naming the roots it hosts, never the empty startup record.
+  await writeState();
 
   // The first retirement pass waits one full interval after the daemon started: a restart's first
   // ticks never rewrite history a caller may still be reading, and the clock a test pins at a
@@ -2169,7 +2334,47 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       );
     }
   };
+  // Reminders ride this same beat and are machine-scoped: one list for every hosted root,
+  // re-read each beat so an edited config runs without a restart. The tick is never awaited — a
+  // send that walks does not hold the beat — and a closed daemon starts none; a walk already
+  // under way has each later leg refused by the sender's own authority recheck. The module keeps
+  // its own per-reminder guard, so a beat that lands mid-walk skips that reminder and runs the
+  // others. This is the path a daemon without a fleet runs; with one, the machine child owns it.
+  const reminderBeat = (): void => {
+    // A daemon whose fleet carries the machine child starts no beat of its own: the child reads
+    // the list and walks the sends on its own loop, and this beat only nudges it. Two readers
+    // would be two clocks for one machine-scoped list.
+    if (closed || input.reminders === undefined || remindersInFleet) return;
+    let specs: readonly ReminderSpec[];
+    try {
+      specs = input.reminders((line) => logLine(line));
+    } catch (error) {
+      logLine(`reminders: the configured list could not be read — ${messageOf(error)}; nothing fires this beat`);
+      return;
+    }
+    if (specs.length === 0) return;
+    void reminderTick({
+      home,
+      now: now(),
+      specs,
+      ...(input.reminderSend === undefined ? {} : { send: input.reminderSend }),
+      log: (line) => logLine(line),
+    }).catch((error: unknown) => {
+      logLine(`reminders: the beat failed — ${messageOf(error)}`);
+    });
+  };
   beat = () => {
+    if (input.runningRoots !== undefined && !closed) {
+      try {
+        for (const root of input.runningRoots()) {
+          void hostCheckout(root).catch((error: unknown) => {
+            logLine(`registry roots: ${messageOf(error)}`);
+          });
+        }
+      } catch (error) {
+        logLine(`registry roots: ${messageOf(error)}`);
+      }
+    }
     try {
       faultInbox.consume(faultTargets);
     } catch (error) {
@@ -2183,7 +2388,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     // The chores fleet is a nudge and a check, never a wait: a stuck child is signalled here and
     // its replacement starts on a later beat, so this tick returns at once whatever it is doing.
     choresFleet?.tick(now());
-    writeState();
+    mailboxRouter?.tick(now());
     void refreshHostedEndpoints();
     // One fallback sweep rides the existing heartbeat: no second timer, process or socket. Each
     // hosted root reads its own validated team file and its markers' durable due instants; the
@@ -2192,6 +2397,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     // inline, plus any root it does not host at all: a root never handed to a child must never
     // go unswept here. With none left, the beat does nothing at this point.
     if (closed) return;
+    reminderBeat();
     const fleet = choresFleet;
     const inlineRoots = fleet === null
       ? sweepRoots
@@ -2378,6 +2584,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // quiescence. A close that has not resolved retains ownership below, exactly as a
       // non-quiesced ingester does.
       for (let index = 0; index < presenceWork.length; index += 1) {
+        presenceWork[index]?.native.close();
         admissions.push(closeSources(index).catch(() => undefined));
       }
       for (const one of hostedWatches) {
@@ -2411,6 +2618,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       if (choresFleet !== null) {
         admissions.push(choresFleet.stop('the daemon is closing').catch(() => undefined));
       }
+      if (mailboxRouter !== null) {
+        admissions.push(mailboxRouter.stop('the daemon is closing').catch(() => undefined));
+      }
       // The endpoint refresh is joined below, after this admission block, so its wait is bounded
       // and a retry joins a run that outlived the first answer. It is not part of `admissions`:
       // that join is unbounded, and a start that never settles must not keep the lock, the
@@ -2425,7 +2635,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           status.presence = { state: 'pending', why: 'the daemon is closing' };
         }
       }
-      writeState(true);
+      await writeState(true);
       await Promise.all(admissions);
       // Every watch stop above has settled, so a fault that had not reached its seam when the
       // close began can never reach one now: its writer is answered `not reached` instead of
@@ -2441,7 +2651,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     const refresh = refreshRun;
     if (refresh !== null && !(await settlesWithin(refresh, refreshCloseBoundMs))) {
       logLine('close pending: the endpoint refresh did not settle', true);
-      writeState(true);
+      await writeState(true);
       return;
     }
     // Presence drain: the in-flight pass of each route (an ingester step and the activity write
@@ -2504,10 +2714,12 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         if (status !== undefined) status.presence = { state: 'pending', why: one.why };
         logLine(`presence ${one.route.root}: close pending: ${one.why}`, true);
       }
-      writeState(true);
+      await writeState(true);
       return;
     }
     await host.close();
+    // No queued state write may land after the record is unlinked below and recreate it.
+    await flushStateWrites();
     try {
       if (existsSync(socketPath)) unlinkSync(socketPath);
     } catch {

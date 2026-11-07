@@ -8,7 +8,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
@@ -22,7 +22,7 @@ import { getTeam, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { signRecord } from '../src/send/record.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { gitEnv, testIo } from './helpers.ts';
+import { gitEnv, testIo, recordRenames } from './helpers.ts';
 import { intoRegistry, storedTeam, underRegistry } from './helpers/registry-team.ts';
 
 const SESSION = 'acme';
@@ -67,6 +67,7 @@ function seatBlock(name: string): string {
     model: Gemini Argon
     version: "4"
     launch: cursor-agent --model gemini-4-argon-high
+    cwd: ../own-helper
 `;
 }
 
@@ -74,14 +75,15 @@ function teamText(input: { root: string; seats: readonly string[]; project?: str
   const project = input.project ?? 'acme';
   const session = input.session ?? SESSION;
   const first = input.seats[0]!;
+  mkdirSync(join(dirname(input.root), 'own-helper'), { recursive: true });
   return `format: 1
 project: ${project}
 coordinator: ${first}
 operator: ${first}
 session: ${session}
 trust:
-  - ${lobby}
-  - ${input.root}
+  - .
+  - ../own-helper
 workspace:
   mode: shared
 seats:
@@ -229,6 +231,8 @@ function fake(): World {
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(world.launch);
   return world;
 }
 

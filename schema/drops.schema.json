@@ -57,13 +57,22 @@
         "required": [
           "from",
           "received",
-          "path"
+          "path",
+          "sender_attribution"
         ],
         "properties": {
           "from": {
             "type": [
               "string",
               "null"
+            ]
+          },
+          "sender_attribution": {
+            "type": "string",
+            "enum": [
+              "unverified_claim",
+              "launch-brief",
+              "none"
             ]
           },
           "received": {

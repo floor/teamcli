@@ -391,7 +391,7 @@ describe('the signed record a queued write leaves', () => {
     expect(set.code).toBe(0);
     expect(set.out).toBe('settings: set model=claude-haiku-5-5 at seat (lead)\n');
     const text = readFileSync(join(agentsDir(home), `${agentId}.yaml`), 'utf8');
-    expect(text).toContain('value: "claude-haiku-5-5"');
+    expect(text).toContain('"value": "claude-haiku-5-5"');
     expect(queue()['lead']).toBeDefined();
   });
 });
@@ -600,7 +600,7 @@ describe('a queue write that fails after the signing is a partial', () => {
       expect(doc.error.message).toContain('could not be queued');
       expect(doc.error.message).toContain('retrying the same setting repairs the queue');
       const text = readFileSync(join(agentsDir(home), `${agentId}.yaml`), 'utf8');
-      expect(text).toContain('value: "claude-haiku-5-5"');
+      expect(text).toContain('"value": "claude-haiku-5-5"');
       expect(queue()['lead']).toBeUndefined();
     } finally {
       unblock();

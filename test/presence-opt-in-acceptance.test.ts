@@ -34,6 +34,7 @@ import { darwinServiceManager } from '../src/daemon/service-darwin.ts';
 import type { ServiceManager, ServiceProgram } from '../src/daemon/service.ts';
 import { startSendDaemon, type DaemonHost } from '../src/send/daemon.ts';
 import { STATE_FILE } from '../src/state.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { testIo, thisProcessJobRecord, thisProcessUnitRecord } from './helpers.ts';
 
 const TEAM = `format: 1
@@ -240,6 +241,7 @@ describe('the presence opt-in default and the service unit', () => {
         return { status: 0, stdout: '', stderr: '' };
       },
       uid: 501,
+      accountHome: home,
     });
 
     const entry = programAt(home);
@@ -255,7 +257,7 @@ describe('the presence opt-in default and the service unit', () => {
     const plainArgs = unitArguments(plainUnit.unitPath);
     expect(plainArgs).toEqual([
       '/runtime/bin/node', retained, 'daemon', 'run',
-      '--started-by', 'service-manager', '--root', root,
+      '--started-by', 'service-manager',
     ]);
     expect(plainArgs).not.toContain('--presence');
 
@@ -267,13 +269,16 @@ describe('the presence opt-in default and the service unit', () => {
     const optedArgs = unitArguments(optedUnit.unitPath);
     expect(optedArgs).toEqual([
       '/runtime/bin/node', retained, 'daemon', 'run',
-      '--started-by', 'service-manager', '--root', root, '--presence',
+      '--started-by', 'service-manager', '--presence',
     ]);
     expect(calls.every((call) => call[0] === 'launchctl')).toBe(true);
 
     // The unit's own argv, replayed through the command: the no-terminal owner is admitted
     // because the manager's record names this process and the unit's words, and the presence
     // fields follow the unit's flag.
+    upsertTeam(home, teamIdOf(root), {
+      project: 'acme', entity: null, session: 'acme', root, lifecycle: 'running', by: 'owner',
+    });
     const seen: Array<Parameters<typeof startMachineDaemon>[0]> = [];
     const start = async (input: Parameters<typeof startMachineDaemon>[0]) => {
       seen.push(input);
@@ -281,7 +286,7 @@ describe('the presence opt-in default and the service unit', () => {
     };
     const unitIo = testIo(root, { kind: 'owner-no-tty' });
     expect(await runDaemon(optedArgs.slice(3), unitIo, sourcesOf(home, { start, service: managerOfThisProcess() }))).toBe(0);
-    expect(seen[0]).toMatchObject({ startedBy: 'service-manager', roots: [root], presenceHosting: true });
+    expect(seen[0]).toMatchObject({ startedBy: 'service-manager', roots: [root], rootsFromRegistry: true, presenceHosting: true });
     expect(seen[0]?.presenceCodexEndpoint).toBeDefined();
 
     const plainIo = testIo(root, { kind: 'owner-no-tty' });

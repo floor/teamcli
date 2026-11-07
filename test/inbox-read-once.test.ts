@@ -29,6 +29,8 @@ import { messageKeyState } from '../src/store/keys.ts';
 const SESSION = 'acme';
 const LEAD_ID = '4f0b8d82-7a8e-4da2-9e6f-9b5aac2d3e45';
 const BODY = 'the one body this id may expose';
+/** The body as the reader serves it: nothing attests the fixture's claim, so it opens marked. */
+const MARKED_BODY = `Codex seat worker (owner):\n\n${BODY}`;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const moduleUrl = (relative: string): string => pathToFileURL(join(HERE, '..', relative)).href;
@@ -164,7 +166,7 @@ function runInBackground(script: string, args: readonly string[]): Promise<Child
 }
 
 function bodies(results: readonly Record<string, unknown>[]): number {
-  return results.filter((result) => result.ok === true && typeof result.body === 'string' && result.body === BODY).length;
+  return results.filter((result) => result.ok === true && typeof result.body === 'string' && result.body === MARKED_BODY).length;
 }
 
 describe('the inbox read-once gate', () => {
@@ -172,7 +174,7 @@ describe('the inbox read-once gate', () => {
     const at = place();
     try {
       message(at, 'lead', LEAD_ID, BODY);
-      expect(read(at)).toEqual({ ok: true, body: BODY });
+      expect(read(at)).toEqual({ ok: true, body: MARKED_BODY });
       const receipt = readFileSync(receiptPath(at.dropDir, LEAD_ID), 'utf8');
       expect(readReceipt(at).payload).toMatchObject({ id: LEAD_ID, to: 'lead', status: 'read' });
 
@@ -260,7 +262,7 @@ describe('the inbox read-once gate', () => {
 
       // No shared name was published, so there is nothing to reclaim; the next reader serves the
       // one body and the leftover is left as debris, not treated as a receipt.
-      expect(read(at)).toEqual({ ok: true, body: BODY });
+      expect(read(at)).toEqual({ ok: true, body: MARKED_BODY });
       expect(read(at)).toMatchObject({ ok: false, served: 'already-served' });
       expect(readFileSync(leftover, 'utf8')).toBe('half-written receipt\n');
     } finally {

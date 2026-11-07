@@ -188,6 +188,7 @@ function scene(shadow: Shadow, localNickname?: string, declared = false): Scene 
   };
 }
 
+/** The frame's compact header line stands first. */
 function frameLine(frames: readonly string[]): string {
   const frame = frames[0];
   if (frame === undefined) throw new Error('no socket frame was dialed');
@@ -195,11 +196,11 @@ function frameLine(frames: readonly string[]): string {
 }
 
 test('a sender reads its own team nickname ahead of its written label', async () => {
-  const one = scene(null, 'Achilles');
+  const one = scene(null, 'alpha');
   made = one;
 
   expect(await one.run()).toBe(0);
-  expect(frameLine(one.frames)).toBe('Message from Achilles (sender5@acme)');
+  expect(frameLine(one.frames)).toBe('from alpha (project lead):');
 });
 
 test('a receiving team nickname cannot rename a sender whose own roster lacks its id', async () => {
@@ -207,7 +208,7 @@ test('a receiving team nickname cannot rename a sender whose own roster lacks it
   made = one;
 
   expect(await one.run()).toBe(0);
-  expect(frameLine(one.frames)).toBe('Message from Fixture Sender (sender5@acme)');
+  expect(frameLine(one.frames)).toBe('from Fixture Sender (project lead):');
 });
 
 test('a foreign team nickname cannot rename a sender whose own roster lacks its id', async () => {
@@ -215,7 +216,7 @@ test('a foreign team nickname cannot rename a sender whose own roster lacks its 
   made = one;
 
   expect(await one.run()).toBe(0);
-  expect(frameLine(one.frames)).toBe('Message from Fixture Sender (sender5@acme)');
+  expect(frameLine(one.frames)).toBe('from Fixture Sender (project lead):');
 });
 
 test('a receiving team roster cannot answer a sender id with a conflicting nickname', async () => {
@@ -223,7 +224,7 @@ test('a receiving team roster cannot answer a sender id with a conflicting nickn
   made = one;
 
   expect(await one.run()).toBe(0);
-  expect(frameLine(one.frames)).toBe('Message from Fixture Sender (sender5@acme)');
+  expect(frameLine(one.frames)).toBe('from Fixture Sender (project lead):');
 });
 
 test('a foreign team roster cannot answer a sender id with a conflicting nickname', async () => {
@@ -231,7 +232,7 @@ test('a foreign team roster cannot answer a sender id with a conflicting nicknam
   made = one;
 
   expect(await one.run()).toBe(0);
-  expect(frameLine(one.frames)).toBe('Message from Fixture Sender (sender5@acme)');
+  expect(frameLine(one.frames)).toBe('from Fixture Sender (project lead):');
 });
 
 test('a declared sender also uses its own team label when a foreign team has the same seat nickname', async () => {
@@ -239,5 +240,5 @@ test('a declared sender also uses its own team label when a foreign team has the
   made = one;
 
   expect(await one.run()).toBe(0);
-  expect(frameLine(one.frames)).toBe('Message from Fixture Sender (sender5@acme)');
+  expect(frameLine(one.frames)).toBe('from Fixture Sender (to orchestrator):');
 });

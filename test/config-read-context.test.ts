@@ -1,7 +1,7 @@
 // The two context corners of the config read: a roster line names the agent but must not skip the
-// project registry that resolves the entity and project around it, and the loaded declaration's
-// own `entity:` must still reach the entity source when the registry names none, so a bad entity
-// source refuses the read instead of disappearing from it.
+// team record's home project or the project registry that resolves the entity around it, and the
+// loaded declaration's own `entity:` must still reach the entity source when the registry names
+// none, so a bad entity source refuses the read instead of disappearing from it.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -54,10 +54,11 @@ function read() {
   return readSeatSettings({ home, root, project: 'acme', seat: SEAT, teamDeliveryOrder: null });
 }
 
-/** The team record exists and carries a roster line, while its project and entity are null: the
- *  project registry is the only declaration of both. The registry also holds a newer agent for
- *  the same team and seat, so a read that falls through to it instead of the roster is visible. */
-function rosterWithNullProject(): { rosterAgent: string; newerAgent: string } {
+/** The team record exists and carries a roster line, and names its home project; its entity is
+ *  null, so the project registry is the only declaration of the entity. The registry also holds a
+ *  newer agent for the same team and seat, so a read that falls through to it instead of the
+ *  roster is visible. */
+function rosterWithNamedProject(): { rosterAgent: string; newerAgent: string } {
   const teamId = teamIdOf(root);
   const reach = { ...init().reach, team: teamId };
   const rosterAgent = registerAgent(home, { ...init(), reach }).id;
@@ -67,6 +68,7 @@ function rosterWithNullProject(): { rosterAgent: string; newerAgent: string } {
     session: 'acme',
     root,
     lobby: '',
+    projectId: 'acme',
     roster: [{ agent: rosterAgent, seat: SEAT.name, role: 'builder' }],
   });
   return { rosterAgent, newerAgent };
@@ -93,9 +95,9 @@ const ENTITY_SETTINGS = [
 ].join('\n');
 
 describe('a roster line and the project it sits in', () => {
-  test('the roster names the agent, and the project registry still resolves entity and project', () => {
-    const { rosterAgent, newerAgent } = rosterWithNullProject();
-    upsertProject(home, 'acme', { name: 'Acme', teams: [teamIdOf(root)], entity: 'acme-entity' });
+  test('the roster names the agent, and the project registry still resolves the entity around it', () => {
+    const { rosterAgent, newerAgent } = rosterWithNamedProject();
+    upsertProject(home, 'acme', { name: 'Acme', entity: 'acme-entity' });
 
     const found = agentIdOf(home, root, SEAT.name);
     expect(found.agentId).toBe(rosterAgent);
@@ -105,10 +107,9 @@ describe('a roster line and the project it sits in', () => {
   });
 
   test('the resolved project is read, so a bad project record refuses instead of being skipped', () => {
-    rosterWithNullProject();
+    rosterWithNamedProject();
     upsertProject(home, 'acme', {
       name: 'Acme',
-      teams: [teamIdOf(root)],
       settings: {
         workspace: { value: 'herdr', setter: 'owner', date: '2026-10-19T08:00:00.000Z', target: 'acme', generation: 2, signature: 'cd' },
       },

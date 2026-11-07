@@ -355,7 +355,7 @@ describe('the administration admission', () => {
     expect(io.err).toContain('dev mode continues');
     const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
     expect(log).toContain('daemon [atlas] warning: only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon');
-    expect(log).toContain('admitted as orchestrator');
+    expect(log).toContain('admitted as lead');
   });
 
   test('the target team’s operator is no orchestrator: dev mode does not blanket-admit every seat', async () => {
@@ -624,6 +624,11 @@ describe('the running daemon, end to end', () => {
       expect(after?.cycles).toBeGreaterThan(before.cycles);
       expect(after?.startedAt).toBe(pidBefore);
 
+      await waitUntil(() => {
+        const current = readDaemonState(home);
+        const watch = current.kind === 'ok' ? current.state.roots[0]?.watch : undefined;
+        return watch !== undefined && watch.failures === 1 && watch.phase === 'running';
+      });
       const recorded = readDaemonState(home);
       expect(recorded.kind).toBe('ok');
       if (recorded.kind === 'ok') {

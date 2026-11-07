@@ -16,6 +16,7 @@ import { readStoredTeamConfig, TeamConfigStoreError, teamConfigRecordPath } from
 import { teamIdOf } from '../registry/teams.ts';
 import { listedTeam, withRecordedSession } from './recorded-session.ts';
 import { noteRegistryRead, resolveTeamConfigSource } from './team-config.ts';
+import { currentRunMemo } from '../run-memo.ts';
 
 export const TEAM_FILE = '.agents/team.yaml';
 
@@ -99,6 +100,12 @@ function realOrResolved(path: string): string {
 }
 
 export function findRoot(cwd: string): string | null {
+  const memo = currentRunMemo();
+  const key = resolve(cwd);
+  if (memo !== null) {
+    const cached = memo.gitRoots.get(key);
+    if (cached !== undefined) return cached === '' ? null : cached;
+  }
   try {
     const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
       cwd,
@@ -106,8 +113,17 @@ export function findRoot(cwd: string): string | null {
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: syncChildTimeout(5_000),
     }).trim();
-    return common ? dirname(common) : null;
+    const root = common ? dirname(common) : null;
+    if (memo !== null) {
+      memo.gitRoots.set(key, root ?? '');
+      if (root !== null) {
+        memo.gitRoots.set(root, root);
+        memo.gitRoots.set(resolve(root), root);
+      }
+    }
+    return root;
   } catch {
+    memo?.gitRoots.set(key, '');
     return null;
   }
 }
@@ -180,20 +196,22 @@ function readRegistryThenFile(cwd: string, options: LoadTeamFileOptions): LoadRe
     stored = readStoredTeamConfig(home, id);
   } catch (error) {
     if (error instanceof TeamConfigStoreError) {
-      return { ok: false, path, errors: [{ line: 0, message: `the registry's record of this team cannot be read: ${error.message}` }] };
+      return { ok: false, path, source: 'registry', errors: [{ line: 0, message: `the registry's record of this team cannot be read: ${error.message}` }] };
     }
     throw error;
   }
   if (stored !== null) {
     const loaded = loadTeamText(stored.text, root, path, options);
-    if (!loaded.ok) return loaded;
+    // The definition was the record's stored text: a failure here is the record's, whatever
+    // `path` names (the team file's conventional place, which a migrated team no longer has).
+    if (!loaded.ok) return { ...loaded, source: 'registry' };
     // A stored definition that omits `session:` keeps the session the team registry recorded.
     // Deriving `<entity>-<project>` here addresses a herdr session the running crew is not in.
     const team = withRecordedSession(loaded.team, loaded.text, home, root);
     const read = team === loaded.team ? loaded : { ...loaded, team };
     return noteRegistryRead(read, path, root, { home });
   }
-  if (!found) return readTeamYaml(cwd, options);
+  if (!found) return withLoadSource(readTeamYaml(cwd, options), 'team-file');
   const listed = listedTeam(home, root) != null;
   const file = readTeamYaml(cwd, options);
   if (!file.ok) {
@@ -201,6 +219,7 @@ function readRegistryThenFile(cwd: string, options: LoadTeamFileOptions): LoadRe
       return {
         ok: false,
         path: file.path ?? path,
+        source: 'team-file',
         errors: [{
           line: 0,
           message: `the registry lists this team but holds no config record, and ${TEAM_FILE} is not here to import: restore the file and run \`team migrate\`, or recreate the team with \`team init\``,
@@ -212,13 +231,14 @@ function readRegistryThenFile(cwd: string, options: LoadTeamFileOptions): LoadRe
       return {
         ok: false,
         path: file.path ?? path,
+        source: 'team-file',
         errors: [{
           line: 0,
           message: `no team is registered for ${root} (${teamConfigRecordPath(home, id)}): run \`team init\`, then \`team migrate\``,
         }],
       };
     }
-    return file;
+    return { ...file, source: 'team-file' };
   }
   const team = withRecordedSession(file.team, file.text, home, root);
   return {
@@ -227,6 +247,13 @@ function readRegistryThenFile(cwd: string, options: LoadTeamFileOptions): LoadRe
     source: 'team-file',
     notice: listed ? FILE_FALLBACK_LISTED : FILE_FALLBACK_UNLISTED,
   };
+}
+
+/** The read's source, on a success and a failure alike: a reader that has only the result (the
+ *  usage report's own block read) learns from it which file a failed read was about — the
+ *  registry's record, or the team file. */
+function withLoadSource(result: LoadResult, source: 'registry' | 'team-file'): LoadResult {
+  return { ...result, source };
 }
 
 // Finds, reads and validates the team file. With `file`, the root is the folder that holds the
@@ -458,13 +485,16 @@ export function placedProblems(
 // A file that writes its mode is validated once, as before; so is every file when the chain holds
 // no `workspace-mode` (the release default is `worktree`).
 function validateWithWorkspaceMode(text: string, root: string, options: { home?: string; fs?: FsReader }): ReturnType<typeof validateTeamFile> {
-  const plain = () => validateTeamFile(text, { home: options.home, fs: options.fs, root });
+  // The default lead's chain is read from the same home the policy chain uses, so a team that
+  // names no lead in its file resolves one the same way under either source.
+  const leadHome = options.home ?? homedir();
+  const plain = () => validateTeamFile(text, { home: options.home, leadHome, fs: options.fs, root });
   if (fileDeclaresWorkspaceMode(text)) return plain();
-  const probe = validateTeamFile(text, { home: options.home, fs: options.fs, root, workspaceMode: 'shared' });
+  const probe = validateTeamFile(text, { home: options.home, leadHome, fs: options.fs, root, workspaceMode: 'shared' });
   if (!probe.ok) return plain();
   let mode: 'worktree' | 'shared' = 'worktree';
   try {
-    const home = options.home ?? homedir();
+    const home = leadHome;
     let projectId: string | null = null;
     try {
       projectId = projectOfTeam(home, teamIdOf(root))?.id ?? null;

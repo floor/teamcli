@@ -20,7 +20,7 @@ import { loadTeamFile } from '../../src/file/load.ts';
 import { seatIsStopped, takeOut } from '../../src/file/lines.ts';
 import { currentBriefClaim } from '../../src/launch/general-brief.ts';
 import { writePolicySet } from '../../src/policy/index.ts';
-import { CLAUDE_IDLE, deliverBriefs, gitEnv, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, gitEnv, testIo, recordRenames } from '../helpers.ts';
 import type { Machine } from '../../src/watch/machine.ts';
 import { profileFor, resolveEffortOverride, resolveModelOverride, withLaunchOverrides } from '../../src/profiles/profile.ts';
 
@@ -188,6 +188,7 @@ function world(): { launch: Launch; creates: string[]; renames: string[]; sessio
     },
     now: () => new Date(clock),
   };
+  recordRenames(made.launch);
   return made;
 }
 
@@ -370,6 +371,28 @@ describe('team add', () => {
     const made = world();
     const io = testIo(project, owner);
     expect(await runAdd(['lead'], io, sources(made))).toBe(0);
+    expect(io.err).not.toContain('is reserved');
+  });
+
+  test('refuses a new seat named daemon: the reminder sender owns the word', async () => {
+    // The machine daemon's reminder sends are recorded as `daemon`, with no registry id, so no
+    // new seat may carry the name and be indistinguishable from them.
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['daemon'], io, sources(made))).toBe(2);
+    expect(io.err).toContain(
+      'team add: "daemon" is reserved: the machine daemon\'s reminders send under that name, so no new seat takes it as a name\nUsage: team add <name>',
+    );
+    expect(made.creates).toEqual([]);
+  });
+
+  test('a legacy file that declares a seat named daemon still starts it: the reservation binds new names', async () => {
+    // A file written before the reservation may already carry the word as a seat's name: it
+    // loads, and re-adding it is a restart, never a new name.
+    approve(FILE.replace('    name: worker\n    label: worker\n', '    name: daemon\n    label: daemon\n'));
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['daemon'], io, sources(made))).toBe(0);
     expect(io.err).not.toContain('is reserved');
   });
 
@@ -2036,4 +2059,28 @@ describe('team add after a lead swap', () => {
     expect(session?.swapping).toBeUndefined();
     expect(readFileSync(join(agents, 'team.log'), 'utf8')).toContain('lead runs its new agent (swap started by owner at 2026-10-15T07:00:00.000Z)');
   });
+});
+
+
+describe('review: add honors recorded own and peer folders', () => {
+  for (const cli of ['grok', 'cursor']) for (const occupied of [false, true]) {
+    test(`${cli} recorded worktree, occupied=${occupied}`, async () => {
+      const own = join(home, 'worktrees', 'own'); mkdirSync(own, { recursive: true });
+      const yaml = FILE.replace('    name: worker\n    label: worker\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5',
+        `    name: worker\n    label: worker\n    cli: ${cli}\n    vendor: xai\n    model: Grok\n    version: "4.7"\n    launch: ${cli === 'grok' ? 'grok' : 'cursor-agent'}`);
+      approve(yaml);
+      updateState(join(project, '.agents'), state => {
+        const session = state.sessions.acme ??= emptySession();
+        session.worktrees.task = { seat: 'worker', path: own, branch: 'fix/own', setup: 'ok' };
+        if (occupied) session.worktrees.peer = { seat: 'lead', path: own, branch: 'fix/peer', setup: 'ok' };
+      });
+      const before = readFileSync(join(project, '.agents/team.yaml'), 'utf8');
+      const made = world(), io = testIo(project, owner);
+      expect(await runAdd(['worker', '--dry-run'], io, sources(made)), io.err).toBe(occupied ? 1 : 0);
+      if (occupied) expect(io.err).toContain('overlaps seat lead');
+      else expect(io.out).toContain(own);
+      expect(made.creates).toEqual([]);
+      expect(readFileSync(join(project, '.agents/team.yaml'), 'utf8')).toBe(before);
+    });
+  }
 });

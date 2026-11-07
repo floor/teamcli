@@ -23,6 +23,7 @@ import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { setHerdrRun } from '../src/herdr.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
+import { writePolicySet } from '../src/policy/index.ts';
 import { getTeam, noteTeam, setRoster, teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
@@ -226,6 +227,12 @@ describe('team check names the drift as a notice', () => {
     // The file is edited where it stands: the record still holds the lobby from before, and the
     // file now derives another one. The check is what must say so.
     const after = fileAt(w, teamText('renew', null));
+    const wrote = writePolicySet(
+      w.home,
+      { level: 'entity', target: 'renew', name: 'owner-reply-to', value: 'lead@acme' },
+      { now: NOW },
+    );
+    if (!wrote.ok) throw new Error(wrote.why);
     const { code, out } = check(w, after);
 
     // Nothing else is wrong in this scene, so the drift is the only thing the check has to say —

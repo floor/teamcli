@@ -35,7 +35,7 @@ import { EVENT_RECORD_ID } from '../../bus/log.ts';
 import { showsHeldFrameDialog } from '../../send/deliver.ts';
 import { appendHistory, historyPath, readHistory, type HistoryEntry } from '../../send/history.ts';
 import { declaredInboundOf, heldSocketPath, recordHeldSocket } from '../../send/inbound.ts';
-import { isRead, readRecord, sameFolder, verifyRecord } from '../../send/record.ts';
+import { isReadOrCleared, readRecord, sameFolder, verifyRecord } from '../../send/record.ts';
 import { messageKeyState } from '../../store/keys.ts';
 import type { Seat } from '../../file/types.ts';
 
@@ -77,6 +77,9 @@ export type PresenceHeldInput = {
   /** This route's seats. A line addressed to another seat is not this route's to watch, and a
    *  seat's launch line binds the mark to the declaration the retry guard compares. */
   seats: ReadonlyArray<Pick<Seat, 'name' | 'launch'>>;
+  /** The team's lead seat: a clearance signed by it settles a watched record without the seat
+   *  ever reading it. Absent, only the owner's clearances do. */
+  lead?: string;
   /** Test seam: the pane read. The real one goes through the pane host with the step's bound. */
   screen?: (pane: string, session: string) => Promise<string | null>;
   /** Test seam: the session's live agents, as the pane host lists them. */
@@ -127,7 +130,8 @@ export function createPresenceHeld(input: PresenceHeldInput): PresenceHeldStep {
   };
 
   /** The candidate's signed record, or null when it does not verify, is addressed elsewhere, is
-   *  another checkout's, or carries the seat's read receipt. */
+   *  another checkout's, or carries the seat's read receipt — or a lead's clearance, which
+   *  settles it without the seat ever reading it. */
   const bound = (id: string, seat: string, key: KeyObject): Bound | null => {
     const dropDir = join(input.stateDir, 'send-drops', input.session, seat);
     const read = readRecord(join(dropDir, id), id);
@@ -136,8 +140,13 @@ export function createPresenceHeld(input: PresenceHeldInput): PresenceHeldStep {
     const payload = read.record.payload;
     if (payload.to !== seat || payload.session !== input.session) return null;
     if (!sameFolder(payload.root, input.root)) return null;
-    if (isRead(dropDir, id, { to: seat, root: input.root, session: input.session }, key)) return null;
-    return { id, seat, from: payload.from, body: payload.body, thread: payload.thread };
+    if (!isReadOrCleared(
+      dropDir,
+      id,
+      { to: seat, root: input.root, session: input.session, ...(input.lead === undefined ? {} : { lead: input.lead }) },
+      key,
+    )) return { id, seat, from: payload.from, body: payload.body, thread: payload.thread };
+    return null;
   };
 
   /** Finds the delivered lines written since the watch window opened and schedules their looks. */

@@ -34,6 +34,7 @@ function wake(screen: (read: number, keys: readonly string[]) => string | null):
   enters: number;
 } {
   const typed: string[] = [];
+  const prompts: string[] = [];
   const keys: string[] = [];
   let enters = 0;
   let reads = 0;
@@ -44,6 +45,11 @@ function wake(screen: (read: number, keys: readonly string[]) => string | null):
       return true;
     },
     enter: () => {
+      enters += 1;
+      return true;
+    },
+    prompt: (_pane, text) => {
+      prompts.push(text);
       enters += 1;
       return true;
     },
@@ -65,12 +71,12 @@ function wake(screen: (read: number, keys: readonly string[]) => string | null):
 
 test('a survey at the bottom is skipped once, then two idle reads let the wake type', async () => {
   expect(readScreen('antigravity', SURVEY).kind).toBe('feedback survey');
-  const screens = [SURVEY, IDLE, IDLE, holding(LINE), holding(LINE), WORKING];
+  const screens = [SURVEY, IDLE, IDLE, WORKING];
   const pane = wake((read) => screens[Math.min(read, screens.length - 1)] ?? null);
   const out = await deliverTypedWake(pane.host, PANE, LINE, 'antigravity', FAST);
-  expect(out).toMatchObject({ delivered: true, tries: 1 });
+  expect(out).toMatchObject({ delivered: true, tries: 1, reason: 'the working screen showed after the agent prompt' });
   expect(pane.keys).toEqual(['0']);
-  expect(pane.typed).toEqual([LINE]);
+  expect(pane.typed).toEqual([]);
   expect(pane.enters).toBe(1);
 });
 

@@ -18,11 +18,11 @@ export const GENERAL_GRANT_DOMAIN = 'team-general-grant-v1';
 // test/general-grant-widened.test.ts declares them unshipped until a release measures them.
 export const GENERAL_OPS = [
   'config', 'restart', 'up', 'down', 'abandon', 'send', 'messages', 'reply', 'init',
-  'ack', 'add', 'agents', 'answer', 'approvals', 'archive', 'ask-show', 'batch', 'brief', 'broker', 'bus', 'check', 'client',
+  'ack', 'add', 'agents', 'analyse', 'answer', 'approvals', 'archive', 'ask-show', 'batch', 'brief', 'broker', 'bus', 'check', 'checkpoint', 'client',
   'commits', 'daemon', 'delegate', 'development-mode', 'doctor', 'drops', 'fallback', 'feed', 'forget', 'grant', 'hold', 'import',
   'issues', 'list', 'lock', 'mcp', 'migrate', 'next', 'order', 'owner-seat', 'pause', 'peek', 'plan', 'policy', 'pr', 'proc', 'projects',
   'queue', 'raise', 'register', 'release', 'reload', 'remove', 'rename', 'resume', 'revoke', 'route', 'seat', 'seats',
-  'sessions', 'settings', 'setup', 'status', 'swap', 'tempo', 'trace', 'unlock', 'usage', 'waits', 'watch', 'workflow', 'worktree',
+  'sessions', 'settings', 'setup', 'show', 'status', 'swap', 'tempo', 'trace', 'unlock', 'usage', 'waits', 'watch', 'workflow', 'worktree',
 ] as const;
 export type GeneralOp = (typeof GENERAL_OPS)[number];
 /** Every op, now and later: signed as the literal `*`, so one owner signature covers ops added after it. */

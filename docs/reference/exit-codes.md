@@ -72,6 +72,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.model` | `add` | 2 | the --model override is not known for the seat's CLI | `team add worker --model unknown` |
 | `add.not-a-repo` | `add` | 2 | not inside a git repository | `team add worker` |
 | `add.prepared` | `add` | 2 | the prepared edit does not validate | `team add worker` |
+| `add.reserved-daemon` | `add` | 2 | a new seat may not be named daemon | `team add daemon` |
 | `add.reserved-name` | `add` | 2 | a new seat may not be named lead | `team add lead` |
 | `add.seat-name` | `add` | 2 | a seat name is required | `team add` |
 | `add.temporary-flags` | `add` | 2 | --until and --worktree need --temporary | `team add worker --until result:out.md` |
@@ -83,6 +84,11 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `agents.registry` | `agents` | 1 | the team registry cannot be read | `team agents prune` |
 | `agents.stale` | `agents` | 1 | the dry run found records to retire | `team agents prune` |
 | `agents.invocation` | `agents` | 2 | the invocation cannot be read | `team agents prune --nope` |
+| `analyse.report` | `analyse` | 0 | the project analysis report was printed | `team analyse .` |
+| `analyse.scope` | `analyse` | 1 | the named analyser has scope: public and the target project is not public | `team analyse .` |
+| `analyse.unauthorised` | `analyse` | 1 | no analyser is named for the target project, or the caller is not the named analyser | `team analyse .` |
+| `analyse.unreadable` | `analyse` | 1 | the target project path cannot be read or is a symbolic link | `team analyse missing-dir` |
+| `analyse.invocation` | `analyse` | 2 | the invocation cannot be read | `team analyse --nope` |
 | `answer.question` | `answer` | 0 | the question dialog was answered: dismissed with the recorded key, and the seat sent the decision line | `team answer lead question` |
 | `answer.ready` | `answer` | 0 | the trust dialog was answered and the seat is ready | `team answer lead trust` |
 | `answer.action` | `answer` | 1 | the recorded key was not sent | `team answer lead trust` |
@@ -177,10 +183,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `bus.usage` | `bus` | 2 | the invocation cannot be read | `team bus extra` |
 | `check.ok` | `check` | 0 | nothing needs acting on | `team check` |
 | `check.repaired` | `check` | 0 | the owner's --repair dropped the state's leftovers, and nothing else needs acting on | `team check --repair` |
+| `check.close-orphans-lead` | `check` | 1 | --close-orphans is the team's lead's or the owner's | `team check --close-orphans` |
 | `check.file-owner` | `check` | 1 | --file is the owner's | `team check --file .agents/team.yaml` |
 | `check.findings` | `check` | 1 | something needs acting on | `team check` |
 | `check.repair-owner` | `check` | 1 | --repair is the owner's | `team check --repair` |
 | `check.session-owner` | `check` | 1 | --session is the owner's | `team check --session team` |
+| `check.close-orphans-terminal` | `check` | 2 | --close-orphans asks before it closes anything; it needs a terminal | `team check --close-orphans` |
+| `check.close-orphans-unavailable` | `check` | 2 | --close-orphans has no process reading here | `team check --close-orphans` |
 | `check.file` | `check` | 2 | the team file can't be read | `team check --file missing.yaml` |
 | `check.file-invalid` | `check` | 2 | the team file can't be parsed | `team check --file team.yaml` |
 | `check.herdr` | `check` | 2 | herdr doesn't answer | `team check` |
@@ -188,6 +197,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `check.not-a-repo` | `check` | 2 | not inside a git repository and no team file here | `team check` |
 | `check.not-yours` | `check` | 2 | the caller may not check this team | `team check` |
 | `check.state` | `check` | 2 | the state can't be read | `team check` |
+| `checkpoint.recorded` | `checkpoint` | 0 | the standing checkpoint ask was recorded in state | `team checkpoint worker` |
+| `checkpoint.caller` | `checkpoint` | 1 | only the owner or a placed leads seat may record a checkpoint ask | `team checkpoint worker` |
+| `checkpoint.io` | `checkpoint` | 1 | the team state cannot be written | `team checkpoint worker` |
+| `checkpoint.invocation` | `checkpoint` | 2 | the invocation, seat name, or team file is invalid | `team checkpoint` |
 | `client.general-grant.issued` | `client` | 0 | the general grant was issued and written | `team client general-grant --to <client-id> --public-key <client.pub> --request` |
 | `client.general-grant.requested` | `client` | 0 | the owner-seat request to issue a general grant was recorded; nothing was issued yet | `team client general-grant --to <client-id> --public-key <client.pub> --request` |
 | `client.keygen.done` | `client` | 0 | the client key pair was written in the named directory | `team client keygen --out ~/.config/team-client/grok-bot` |
@@ -216,9 +229,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `commits.since-missing` | `commits` | 2 | since doesn't name a commit | `team commits check HEAD --since missing` |
 | `commits.since-unreachable` | `commits` | 2 | since is not reachable from the ref | `team commits check HEAD --since topic` |
 | `config.approval-requested` | `config` | 0 | an owner-seat request for this set or unset was recorded and sent to the owner seat; nothing was written | `team config set <path> <value> --request` |
-| `config.entity.unchanged` | `config` | 0 | the entity already writes that names.unique word; nothing was written | `team config set <entity>.names.unique off` |
-| `config.entity.value` | `config` | 0 | the entity's names.unique word is printed | `team config get <entity>.names.unique` |
-| `config.entity.written` | `config` | 0 | the entity's names.unique word was written | `team config set <entity>.names.unique off` |
+| `config.entity.composed-value` | `config` | 0 | the team file's composed rules are printed | `team config get composed.rules` |
+| `config.entity.unchanged` | `config` | 0 | the entity already writes that value; nothing was written | `team config set <entity>.names.unique off` |
+| `config.entity.value` | `config` | 0 | the entity's value is printed | `team config get <entity>.names.unique` |
+| `config.entity.written` | `config` | 0 | the entity's value was written | `team config set <entity>.names.unique off` |
+| `config.project.rules-unchanged` | `config` | 0 | the project already writes those rules; nothing was written | `team config set project.<name>.rules [ ]` |
+| `config.project.rules-written` | `config` | 0 | the project's rules were written | `team config set project.<name>.rules [ ]` |
 | `config.shown` | `config` | 0 | the settings registry is printed | `team config keys` |
 | `config.unchanged` | `config` | 0 | the edit changes nothing; nothing was written | `team config set project acme` |
 | `config.value` | `config` | 0 | the value at the path is printed | `team config get project` |
@@ -229,9 +245,11 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `config.entity.detached` | `config` | 1 | an entity's word was set with no terminal | `team config set <entity>.names.unique off` |
 | `config.entity.general-refused` | `config` | 1 | the general grant does not cover this entity or admit this set; nothing was written | `team config set <entity>.names.unique off --general <grant.json> --key <client.key>` |
 | `config.entity.names-value` | `config` | 1 | the word is not one of entity, project, team or off; nothing was written | `team config set <entity>.names.unique everywhere` |
-| `config.entity.no-value` | `config` | 1 | the entity's entry writes no names.unique word | `team config get <entity>.names.unique` |
-| `config.entity.not-owner` | `config` | 1 | an entity's word was set by a caller that is neither the owner nor admitted by the owner's general grant | `team config set <entity>.names.unique off` |
+| `config.entity.no-value` | `config` | 1 | the entity's entry writes no such value | `team config get <entity>.names.unique` |
+| `config.entity.not-owner` | `config` | 1 | an entity's value was set by a caller that is neither the owner nor admitted by the owner's general grant | `team config set <entity>.names.unique off` |
 | `config.entity.path` | `config` | 1 | the entity's entry cannot be set (no such entry, or a value on the way); nothing was written | `team config set <entity>.names.unique off` |
+| `config.entity.reminders-problem` | `config` | 1 | the reminder list holds a value the daemon's own parser refuses; nothing was written | `team config set <entity>.reminders '[{name: NO, at: ["09:00"], text: hi, to: [lead@acme]}]'` |
+| `config.entity.reminders-value` | `config` | 1 | the value is not a YAML list of reminders; nothing was written | `team config set <entity>.reminders not-a-list` |
 | `config.general-refused` | `config` | 1 | the general grant does not admit this edit; nothing was written | `team config set <path> <value> --general <grant.json> --key <client.key>` |
 | `config.invalid` | `config` | 1 | the changed record does not validate; nothing was written | `team config set seats.lead.cli nope` |
 | `config.name-taken` | `config` | 1 | a nickname the change sets is already held by another team's seat; nothing was written | `team config set seats.worker.label "Cicero · implementer"` |
@@ -580,6 +598,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `register.grant-flag` | `register` | 1 | --session is the owner's for a granted seat | `team register worker --session other` |
 | `register.handle-held` | `register` | 1 | the id its record holds is another seat's handle | `team register worker` |
 | `register.herdr` | `register` | 1 | herdr doesn't answer | `team register worker` |
+| `register.launch-only` | `register` | 1 | a caller other than the owner would record the pane root | `team register worker` |
 | `register.many-agents` | `register` | 1 | the session has more than one agent with that name | `team register worker` |
 | `register.no-agent` | `register` | 1 | no agent of that name is running in the session | `team register worker` |
 | `register.no-cli` | `register` | 1 | the pane holds no CLI in front of its shell | `team register worker` |
@@ -617,11 +636,16 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `reload.grant-omitted` | `reload` | 1 | the file grants nothing | `team reload worker` |
 | `reload.grant-scope` | `reload` | 1 | the grant does not list reload | `team reload worker` |
 | `reload.human` | `reload` | 1 | the seat is a human's pane; nothing is closed, typed into or launched over it | `team reload worker` |
+| `reload.inbox-start-same` | `reload` | 1 | the same seat's start folder no longer verifies after its brief delivery; the inbox is not refreshed | `team reload worker` |
+| `reload.inbox-start-unrecorded` | `reload` | 1 | the unrecorded-model seat's start folder no longer verifies after its brief delivery; the inbox is not refreshed | `team reload worker` |
 | `reload.launch` | `reload` | 1 | the close happened and the new launch did not reach ready | `team reload worker` |
 | `reload.not-idle` | `reload` | 1 | the seat is not at an idle prompt; nothing closed | `team reload worker` |
 | `reload.not-running` | `reload` | 1 | the seat has no ready pane to close | `team reload worker` |
 | `reload.run-lock` | `reload` | 1 | another session-mutating run is holding the session | `team reload worker` |
 | `reload.self` | `reload` | 1 | a reload does not close the caller's seat | `team reload lead` |
+| `reload.start` | `reload` | 1 | the planned relaunch folder is not the seat's own; its workspace is left open | `team reload worker` |
+| `reload.start-same` | `reload` | 1 | the seat matches the file, but its recorded start folder is missing or is not its own; nothing refreshed | `team reload worker` |
+| `reload.start-unrecorded` | `reload` | 1 | the launch record has no model and its start folder cannot be verified as its own; nothing refreshed | `team reload worker` |
 | `reload.unsent` | `reload` | 1 | the seat holds unsent text; nothing closed | `team reload worker` |
 | `reload.untested` | `reload` | 1 | the installed CLI is outside its profile's tested range, so the relaunch's ready screen may not be recognised; nothing closed | `team reload worker` |
 | `reload.working` | `reload` | 1 | the seat is working; nothing closed | `team reload worker` |
@@ -747,13 +771,14 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.delivered` | `send` | 0 | the record is written and the seat's channel took the message | `team send worker hello` |
 | `send.delivered-webhook` | `send` | 0 | the record is written and the seat's webhook adapter took the message | `team send worker hello` |
 | `send.dry-run` | `send` | 0 | the seat and channel were resolved and nothing was written | `team send worker hello --dry-run` |
+| `send.handed` | `send` | 0 | the typed wake was handed to the send daemon, which staged its own durable copy and asked its wake child to run the screen walk; the delivery's history line is the child's, and the id printed is the one it keeps | `team send lead hello` |
 | `send.listed` | `send` | 0 | the addressable seats were printed, nothing was sent | `team send --list` |
 | `send.native` | `send` | 0 | a native handoff was printed for the sender's own SendMessage, and nothing was delivered | `team send worker hello` |
 | `send.queued` | `send` | 0 | the receiver was busy, so the signed copy is stored and nothing was typed; the message is delivered when the seat's lock clears, and the id on the line is the one the delivery keeps | `team send lead hello` |
 | `send.record-dry-run` | `send` | 0 | a recorded native delivery was resolved and nothing was written | `team send --record builder-2 --channel native --ms 812 --dry-run` |
 | `send.recorded` | `send` | 0 | a native delivery the sender made itself was written to the history | `team send --record builder-2 --channel native --ms 812` |
 | `send.sent-channel` | `send` | 0 | the seat's own inbox server wrote the push notification and its marker; the signed read receipt that follows is the read | `team send lead hello` |
-| `send.sent-unconfirmed` | `send` | 0 | the record is written and left in the seat's own folder — its inbox on the mcp-inbox leg, its drop folder on the drop leg — and no signed read receipt has come back | `team send worker hello` |
+| `send.sent-unconfirmed` | `send` | 0 | the record is written and left in the seat's own folder — its drop folder on the drop leg, its inbox on a word an older build wrote — and no signed read receipt has come back | `team send worker hello` |
 | `send.session-created` | `send` | 0 | the receiving CLI created a remote session from the message and printed its session line with an id; that id is the delivery, and no read receipt follows | `team send worker hello` |
 | `send.approval-refused` | `send` | 1 | the owner-seat request or approval for this send was refused: missing, expired, mismatched, unsigned, self-approved or already used | `team send <seat> <message> --approval <request-id>` |
 | `send.brief-memory` | `send` | 1 | a --brief send is refused because the team's brief transport is memory; nothing was written and there is no fallback | `team send worker --brief brief.md` |
@@ -797,6 +822,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `setup.done` | `setup` | 0 | the owner signed the charter | `team setup --signer touch-id` |
 | `setup.refused` | `setup` | 1 | the owner did not sign the charter; nothing was written | `team setup --signer touch-id` |
 | `setup.invocation` | `setup` | 2 | the invocation is invalid, or --signer was omitted so this run does not sign | `team setup` |
+| `show.shown` | `show` | 0 | the message was printed and marked read, or was already read or answered and was printed again | `team show 3a3b3c4d` |
+| `show.refused` | `show` | 1 | the message can't be shown, or the call is not the record's addressee | `team show 3a3b3c4d` |
+| `show.configuration` | `show` | 2 | the team file can't be read | `team show 3a3b3c4d` |
+| `show.usage` | `show` | 2 | the invocation can't be read | `team show` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |
 | `status.project-listed` | `status` | 0 | the project's teams are listed | `team status --project TeamCLI` |
 | `status.client-refused` | `status` | 1 | the owner-signed bundle grant, or the client read it admits, did not verify | `team status --client grant.json --key client.key` |
@@ -836,6 +865,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `team.command-threw` | `team` | 1 | a command threw | `team init` |
 | `team.general-refused` | `team` | 1 | the general grant does not admit this command here (expired, another key, or an op it does not cover); nothing ran | `team status --general <grant.json> --key <client.key>` |
 | `team.general-target` | `team` | 1 | the general grant lists entities, and this release admits a wildcard grant only (scoped grants arrive in 0.5.11); nothing ran | `team status --general <grant.json> --key <client.key> (a grant that lists entities)` |
+| `team.mailbox-entry-refused` | `team` | 1 | the machine daemon's mailbox router child was started without a readable one-use token, so it routed nothing | `the daemon starts its mailbox router child entry` |
 | `team.mcp-serve-replacement-ended` | `team` | 1* | the stale inbox server's fresh replacement ended, and the server left with that process's exit code (1 when a signal ended it) | `team mcp serve` |
 | `team.mcp-serve-restart-failed` | `team` | 1 | a stale inbox server could not start its fresh replacement, said why and left | `team mcp serve` |
 | `team.presence-hook-invalid` | `team` | 1 | the presence hook's words can't be read | `team presence-hook --event turn-end` |
@@ -846,6 +876,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `team.no-command` | `team` | 2 | no command was given | `team` |
 | `team.restore-entry-refused` | `team` | 2 | the machine daemon's restore child was started without a readable one-use token, so it restored nothing | `the daemon starts its restore child entry` |
 | `team.unknown` | `team` | 2 | the command is unknown | `team nosuch` |
+| `team.wake-entry-refused` | `team` | 2 | the send daemon's typed-wake child was started without a readable one-use token, so it typed nothing | `the daemon starts its typed-wake child entry` |
 | `tempo.set` | `tempo` | 0 | the tempo was written | `team tempo urgent` |
 | `tempo.unchanged` | `tempo` | 0 | the tempo was already that word | `team tempo urgent` |
 | `tempo.detached` | `tempo` | 1 | a run with no terminal | `team tempo urgent` |

@@ -14,7 +14,7 @@ import type { Seat, TeamFile } from '../src/file/types.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { emptySession, updateState } from '../src/state.ts';
-import { CLAUDE_IDLE, testIo, withWas } from './helpers.ts';
+import { CLAUDE_IDLE, testIo, withWas, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-04T09:00:00Z');
 const now = NOW.getTime();
@@ -192,6 +192,8 @@ function world() {
     sleep: async () => {},
     now: () => NOW,
   };
+
+  recordRenames(made.launch);
   return made;
 }
 

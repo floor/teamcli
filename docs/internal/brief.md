@@ -14,7 +14,8 @@ works out which seats to write, the other writes one seat's claim and its record
 
 A delivery is deliberately not a pane operation. It writes a signed message record into the
 seat's drop folder and nothing else; the seat's own turn-start reader (`team drops --read`)
-verifies it, writes its receipt and prints it. Nothing is typed, no screen is read, and the
+verifies it, prints it, and writes its receipt after that hand-over. That read is at-least-once:
+two racing readers can both print the body. The inbox server stays receipt-first. Nothing is typed, no screen is read, and the
 command needs no herdr call — which is why it works for a human seat too.
 
 ## The claim
@@ -88,8 +89,9 @@ a failed seat is retried by the next apply with no duplicate.
 ## Retry sidecars, and prune
 
 A held delivery leaves a retry marker — `<id>.pending` beside the record — and the marker is the
-send walk's, not the delivery's: the mcp-inbox and drop legs write one so `team watch` can retry
-the wake, the retry types nothing in this build, and a delivery that types leaves none. Two rules
+send walk's, not the delivery's: the drop leg writes one so `team watch` can retry
+the wake (a record an older build left on the retired mcp-inbox name carries one too), the
+retry types nothing in this build, and a delivery that types leaves none. Two rules
 retire a launch-brief marker, in the watch's retry pass and in `team brief prune` alike. A marker
 whose id is not the seat's current claim is superseded: the seat's reader refuses that older
 delivery by name, and a retry would hand the seat a record it cannot read. A marker whose id is

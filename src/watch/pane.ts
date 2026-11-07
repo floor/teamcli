@@ -278,22 +278,9 @@ export function processCommandOf(pid: number): string | null {
 }
 
 /** The instant the process at `pid` started, in epoch milliseconds, or null when it is gone or
- *  its start line does not read. Measured on this machine: `ps -o lstart= -p <pid>` prints
- *  `Tue Oct 20 05:19:15 2026` (one-second resolution, local time), which `Date.parse` reads as
- *  that instant. */
-export function processStartOf(pid: number): number | null {
-  try {
-    const line = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: syncChildTimeout(2_000),
-    }).trim();
-    const at = Date.parse(line);
-    return Number.isFinite(at) ? at : null;
-  } catch {
-    return null;
-  }
-}
+ *  its start line does not read. Read through the process adapter, where the query lives: the
+ *  watch stop's proof and the orphan reading must read one instant the same way. */
+export { processStartOf } from './process-adapter.ts';
 
 /** The file a watch line names, resolved the way that process's own read resolves it: an absolute
  *  path as itself, a relative one from the folder the process started in. Null when it resolves

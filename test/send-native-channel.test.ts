@@ -1,7 +1,7 @@
 import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
-import { MCP_INBOX_UNAVAILABLE } from '../src/send/walk-cascade.ts';
 // Every world here declares the native leg first — `delivery_order: [native, mcp-inbox, typed]`,
-// since a word naming native is what puts it in the walk. A sender whose own file declares Claude
+// since a word naming native is what puts it in the walk; the retired `mcp-inbox` word is
+// dropped before the walk and the report carries nothing for it. A sender whose own file declares Claude
 // Code gets the handoff: one pending record, the exact SendMessage target, the body, and the
 // confirm line — and `team send --confirm <id>` writes the one history line. A sender that cannot
 // make the leg walks on to the inbox and the typed trigger. `--wait` to a Claude Code seat is
@@ -454,7 +454,6 @@ test('a claude-code seat gets the native handoff: a pending record, the exact ta
     confirm: `team send --confirm ${ID}`,
     message: HANDOFF_BODY,
     delivery: [
-      { leg: 'mcp-inbox', state: 'skipped', reason: MCP_INBOX_UNAVAILABLE },
       { leg: 'native', state: 'attempted' },
       { leg: 'drop', state: 'not-reached' },
     ],

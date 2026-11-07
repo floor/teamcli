@@ -2,22 +2,23 @@
 // Splits the test files over shards by recorded duration, so one shard no longer gets most of the
 // time (round-robin by position put exit-codes and broker on the same shard as hundreds of others).
 //
-//   bun scripts/ci-shard-tests.ts --shard 1 --shards 4 [tests...]   one shard's units, space-separated
+//   bun scripts/ci-shard-tests.ts --shard 1 --shards 6 [tests...]   one shard's units, space-separated
 //     (a unit is a test file, or `<file>#<i>/<n>`: part i of n of a SPLIT file)
-//   bun scripts/ci-shard-tests.ts --plan --shards 4 [tests...]      every shard with its estimate (stderr)
-//   bun scripts/ci-shard-tests.ts --assigned --shard 1 --shards 4   one shard of the checked-in assignment
+//   bun scripts/ci-shard-tests.ts --plan --shards 6 [tests...]      every shard with its estimate (stderr)
+//   bun scripts/ci-shard-tests.ts --assigned --shard 1 --shards 6   one shard of the checked-in assignment
 //   bun scripts/ci-shard-tests.ts --assigned --plan                 the checked-in assignment with estimates
 //   bun scripts/ci-shard-tests.ts --check                           fail unless every tracked test is assigned once
 //   bun scripts/ci-shard-tests.ts --write                           drop deleted units, append new ones, move none
-//   bun scripts/ci-shard-tests.ts --rebalance [--shards 4]          rewrite the assignment by recorded duration
-//   bun scripts/ci-shard-tests.ts --run 1/4                         run one shard locally, files then parts
+//   bun scripts/ci-shard-tests.ts --rebalance [--shards 6]          rewrite the assignment by recorded duration
+//   bun scripts/ci-shard-tests.ts --run 1/6                         run one shard locally, files then parts
 //   bun scripts/ci-shard-tests.ts --record <log> [log...]           merge timings from shard job logs of one system
 //   bun scripts/ci-shard-tests.ts --junit <report.xml> [--label <unit>]  print a run's unit times for --record
 //
-// With no test arguments, the list is read from $TESTS; `full` (or MODE=full) means every
-// tracked test file. The PR job packs the selected tests at run time; the whole suite uses the
-// checked-in assignment (scripts/ci-shard-assignment.json), so adding a test file appends it to the
-// lightest shard and moves no existing unit. Weights come from scripts/ci-test-timings.json
+// With no test arguments, the list is read from $TESTS. A full suite (MODE=full, or TESTS=full)
+// with no files named on the command line reads the checked-in assignment
+// (scripts/ci-shard-assignment.json) and appends any tracked unit that file does not name,
+// so the shards stay the balance `--rebalance` wrote and a file added since still runs.
+// A selected list still packs at run time. `--write` is the same append, saved back to the file. Weights come from scripts/ci-test-timings.json
 // (milliseconds of wall time per file, from a `full` job log); a file with no recorded time weighs
 // its size in bytes times the suite's median milliseconds-per-byte, so a new file still lands
 // somewhere sensible. The assignment paths instead weigh an untimed unit at UNTIMED_MS, the
@@ -45,7 +46,7 @@ export type Assignment = { shards: number; units: Record<string, number> };
  * the timings have one, else 1/n of the file.
  * exit-codes alone is ~44% of the suite; whole, it would set every PR's wall time.
  */
-export const SPLIT: Record<string, number> = { 'test/exit-codes.test.ts': 4 };
+export const SPLIT: Record<string, number> = { 'test/exit-codes.test.ts': 6 };
 
 /** The units to pack: every file, with a split file replaced by its parts. */
 export function units(files: string[]): string[] {
@@ -73,12 +74,12 @@ export function weights(files: string[], timings: Record<string, number>, size: 
     .filter((r) => Number.isFinite(r))
     .sort((a, b) => a - b);
   const rate = rates.length ? rates[Math.floor(rates.length / 2)]! : 0.1;
-  const one = (f: string) => timings[f] ?? Math.max(1, Math.round(size(f) * rate));
+  const one = (f: string) => Math.max(1, timings[f] ?? Math.round(size(f) * rate));
   return new Map(
     files.map((u) => {
       const [f, part] = u.split('#') as [string, string | undefined];
       // A part's own recorded time first (part 0 carries the whole-repo checks), else 1/n of the file.
-      return [u, timings[u] ?? (part ? Math.round(one(f) / Number(part.split('/')[1])) : one(f))];
+      return [u, Math.max(1, timings[u] ?? (part ? Math.round(one(f) / Number(part.split('/')[1])) : one(f)))];
     }),
   );
 }
@@ -213,11 +214,58 @@ export function readAssignment(path = ASSIGNMENT): Assignment {
   for (const [unit, shard] of Object.entries((raw.units ?? {}) as Record<string, unknown>)) {
     units[unit] = Number(shard);
   }
-  return { shards: Number(raw.shards ?? 4), units: sortedUnits(units) };
+  return { shards: Number(raw.shards ?? 6), units: sortedUnits(units) };
 }
 
 function writeAssignment(assignment: Assignment): void {
   writeFileSync(ASSIGNMENT, `${JSON.stringify({ shards: assignment.shards, units: sortedUnits(assignment.units) }, null, 2)}\n`);
+}
+
+export type ShardQuery = {
+  /** Files named on the command line, after the flags. */
+  named: readonly string[];
+  /** `$TESTS`, already split. Used only when `named` is empty. */
+  fromEnv: readonly string[];
+  modeFull: boolean;
+  shards: number;
+  /** Checked-in assignment, or null when that file is absent. */
+  assignment: Assignment | null;
+  /** Every tracked test. Used when a full suite still packs at run time. */
+  allTracked: readonly string[];
+  timings: Record<string, number>;
+  size?: (file: string) => number;
+};
+
+/**
+ * The plan for every shard.
+ *
+ * A full suite (`MODE=full`, or `$TESTS` equal to `full`) with no files named on the command
+ * line reads the checked-in assignment, when that file exists and the requested shard count
+ * matches it. A tracked unit the assignment does not name joins the lightest shard, and a unit
+ * whose file is gone is dropped, so a stale assignment cannot skip a test or keep a deleted one.
+ * Packing that suite from recorded weights leaves a long file alone in one shard, because an
+ * untimed file weighs only its size. A selected list, a full suite with no assignment file, and
+ * a full suite asked to pack into a different count, still pack at run time.
+ */
+export function shardPlan(q: ShardQuery): Plan {
+  const envFull = q.fromEnv.length === 1 && q.fromEnv[0] === 'full';
+  if (q.named.length === 0 && (q.modeFull || envFull) && q.assignment !== null && q.shards === q.assignment.shards) {
+    const want = units([...q.allTracked]);
+    const weight = assignmentWeights(want, q.timings, q.size);
+    const next = appendUnits(q.assignment, want, weight, q.shards);
+    const bins: Plan = Array.from({ length: q.shards }, () => ({ files: [], ms: 0 }));
+    for (const [unit, shard] of Object.entries(next.units)) {
+      if (!Number.isInteger(shard) || shard < 0 || shard >= q.shards) continue;
+      bins[shard]!.files.push(unit);
+      bins[shard]!.ms += weight.get(unit) ?? 0;
+    }
+    for (const bin of bins) bin.files.sort();
+    return bins;
+  }
+  let tests: readonly string[] = q.named.length ? q.named : q.fromEnv;
+  if (q.modeFull || (tests.length === 1 && tests[0] === 'full')) tests = q.allTracked;
+  const all = units([...tests]);
+  return plan(all, q.shards, weights(all, q.timings, q.size));
 }
 
 /** Shard i's units, sorted, from the checked-in assignment. */
@@ -283,7 +331,7 @@ export function unitTimesFromJunit(xml: string, label?: string): Record<string, 
     const file = /\bfile="([^"]+)"/.exec(tag)?.[1];
     const seconds = /\btime="([0-9.]+)"/.exec(tag)?.[1];
     if (name === undefined || seconds === undefined) continue;
-    rows.push({ name, ...(file === undefined ? {} : { file }), ms: Math.round(Number(seconds) * 1000) });
+    rows.push({ name, ...(file === undefined ? {} : { file }), ms: Math.max(1, Math.round(Number(seconds) * 1000)) });
   }
   const add = (unit: string, ms: number): void => {
     if (label === undefined) times[unit] = (times[unit] ?? 0) + ms;
@@ -404,7 +452,7 @@ if (import.meta.main) {
     const tracked = allTests();
     const want = units(tracked);
     const base = existsSync(ASSIGNMENT) ? readAssignment() : null;
-    const shards = Number(get('--shards') ?? base?.shards ?? 4);
+    const shards = Number(get('--shards') ?? base?.shards ?? 6);
     if (!Number.isInteger(shards) || shards < 1) usage();
     if (base && base.shards !== shards && Object.keys(base.units).length) {
       console.error(`ci:shard: --write never moves a unit, so it cannot take the file from ${base.shards} shards to ${shards}; run --rebalance`);
@@ -423,7 +471,7 @@ if (import.meta.main) {
     const tracked = allTests();
     const want = units(tracked);
     const base = existsSync(ASSIGNMENT) ? readAssignment() : null;
-    const shards = Number(get('--shards') ?? base?.shards ?? 4);
+    const shards = Number(get('--shards') ?? base?.shards ?? 6);
     if (!Number.isInteger(shards) || shards < 1) usage();
     const next = assignmentOf(plan(want, shards, assignmentWeights(want, readTimings())));
     writeAssignment(next);
@@ -487,13 +535,19 @@ if (import.meta.main) {
     process.exit(0);
   }
 
-  const shards = Number(get('--shards') ?? 4);
+  const shards = Number(get('--shards') ?? 6);
   const shard = get('--shard');
   const rest = a.filter((x, i) => !x.startsWith('--') && !['--shards', '--shard', '--record'].includes(a[i - 1] ?? ''));
-  let tests = rest.length ? rest : (process.env.TESTS ?? '').split(/\s+/).filter(Boolean);
-  if (process.env.MODE === 'full' || (tests.length === 1 && tests[0] === 'full')) tests = allTests();
-  const all = units(tests);
-  const bins = plan(all, shards, weights(all, readTimings()));
+  const fromEnv = (process.env.TESTS ?? '').split(/\s+/).filter(Boolean);
+  const bins = shardPlan({
+    named: rest,
+    fromEnv,
+    modeFull: process.env.MODE === 'full',
+    shards,
+    assignment: existsSync(ASSIGNMENT) ? readAssignment() : null,
+    allTracked: allTests(),
+    timings: readTimings(),
+  });
   if (a.includes('--plan') || shard === undefined) {
     bins.forEach((b, i) => console.error(`shard ${i}: ${b.files.length} files, ~${(b.ms / 1000).toFixed(1)}s`));
   }

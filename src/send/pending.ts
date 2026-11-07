@@ -10,11 +10,14 @@
 // tries or a fixed age, and says the drop's path so the message can be sent again.
 //
 // The marker is a convenience, never the message: the drop file is the message, and a marker that
-// cannot be written or read costs a retry, not a byte of the body. The mcp-inbox leg writes the
-// same record with `leg: 'mcp-inbox'`: its message waits in the seat's own inbox, and the record
-// says which leg left it so a retry pass never mistakes it for a held typed send. The drop leg
+// cannot be written or read costs a retry, not a byte of the body. A record an older build
+// wrote on the retired mcp-inbox name carries `leg: 'mcp-inbox'`: its message waits in the
+// seat's own inbox, and the record says which leg left it so a retry pass never mistakes it
+// for a held typed send. The drop leg
 // writes `leg: 'drop'`: its reader is the seat's own watcher, whose receipt promotes the record
-// once the message is read, and the drop is never typed into a pane. The channel leg writes
+// once the message is read. A profile with a typed wake is offered that queued drop once when
+// the seat returns to idle, through the guarded wake, and `offered` says this idle stretch
+// already did. The channel leg writes
 // `leg: 'channel'`: the seat's own server pushed the message, and a marker with no receipt after
 // the confirmation window is the watch's to redeliver exactly once (`redelivered` records that
 // it did), never a typed retry's to repeat.
@@ -56,12 +59,16 @@ export type PendingDrop = {
   /** The leg that left the record. Absent on a held or not-submitted typed send, which is the
    *  retry's own business; `mcp-inbox` on a message left in the seat's inbox, whose marker is
    *  followed by the inbox leg rather than typed by the retry pass; `drop` on a message the drop
-   *  leg left, promoted by the seat's own receipt and never typed; `channel` on a message the
+   *  leg left, promoted by the seat's own receipt, and offered once through the guarded wake
+   *  when the seat returns to idle; `channel` on a message the
    *  seat's channel server pushed, which the watch redelivers once if no receipt follows. */
   leg?: 'mcp-inbox' | 'drop' | 'channel';
   /** Set on a channel marker the watch has already redelivered, with the reason it did. The value
    *  is what makes the redelivery one-shot: no pass redelivers a marker that carries it. */
   redelivered?: string;
+  /** Set when this idle stretch already offered the queued drop through the guarded wake.
+   *  Cleared when the seat leaves idle, so the next return to idle can offer once. */
+  offered?: true;
   /** The thread the message belongs to; absent on a marker written before the thread spine. */
   thread?: string;
 };
@@ -95,6 +102,21 @@ export function recordPendingTry(dropDir: string, drop: PendingDrop): void {
  *  attempted, so a second pass — or a process that dies mid-attempt — can never redeliver again. */
 export function markRedelivered(dropDir: string, drop: PendingDrop, reason: string): void {
   writePendingDrop(dropDir, { ...drop, redelivered: reason });
+}
+
+/** Records that this idle stretch already offered the queued drop, and counts the offer against
+ *  the try limit. Written before the wake, so a second pass of the same stretch — or one that
+ *  starts after a crash mid-wake — cannot offer again. */
+export function markDropOffered(dropDir: string, drop: PendingDrop): void {
+  writePendingDrop(dropDir, { ...drop, tries: drop.tries + 1, offered: true });
+}
+
+/** Clears the idle-stretch mark so the next return to idle can offer the queued drop once. */
+export function clearDropOffered(dropDir: string, drop: PendingDrop): void {
+  if (drop.offered !== true) return;
+  const next: PendingDrop = { ...drop };
+  delete next.offered;
+  writePendingDrop(dropDir, next);
 }
 
 /** Forgets a drop: delivered, or given up on. */
@@ -133,6 +155,7 @@ function readPendingDrops(dropDir: string): PendingDrop[] {
         tries: typeof parsed.tries === 'number' && Number.isInteger(parsed.tries) && parsed.tries >= 0 ? parsed.tries : 0,
         ...(parsed.leg === 'mcp-inbox' || parsed.leg === 'drop' || parsed.leg === 'channel' ? { leg: parsed.leg } : {}),
         ...(typeof parsed.redelivered === 'string' && parsed.redelivered !== '' ? { redelivered: parsed.redelivered } : {}),
+        ...(parsed.offered === true ? { offered: true as const } : {}),
         ...(typeof parsed.thread === 'string' && parsed.thread !== '' ? { thread: parsed.thread } : {}),
       });
     } catch {

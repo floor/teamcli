@@ -1,0 +1,16 @@
+# Synthetic fixture: an endpoint carrying keys the schema does not know, including one
+# inside the provider block and one inside a secret reference.
+format: 1
+name: unknown-key
+kind: endpoint
+harness: claude-code
+surprise: true
+writable_folders:
+  - { path: '{root}' }
+provider:
+  name: acme
+  base_url: https://api.acme.invalid/anthropic
+  token: { store: example-store, item: acme-api-key, value: not-allowed-here }
+  models:
+    default: acme-large-1
+  region: nowhere

@@ -21,7 +21,7 @@ import { runForget } from '../../src/commands/forget.ts';
 import { runConfig } from '../../src/commands/config.ts';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
 import type { Io } from '../../src/io.ts';
-import { upsertProject, readProjects } from '../../src/registry/projects.ts';
+import { list, upsertProject } from '../../src/registry/projects.ts';
 import { getTeam, teamIdOf, upsertTeam } from '../../src/registry/teams.ts';
 import { emptySession, updateState } from '../../src/state.ts';
 import { seatOwner, type FakeStore } from '../helpers/owner-seat.ts';
@@ -336,9 +336,10 @@ describe('approvals and forget', () => {
     mkdirSync(other, { recursive: true });
     const a = 'abc123abc123';
     const b = 'def456def456';
-    upsertTeam(p.home, a, { project: 'acme', session: 'acme', root: p.root, by: 'test', roster: [{ agent: 'agt_lead', seat: 'lead', role: 'coordinator' }] });
-    upsertTeam(p.home, b, { project: 'acme', session: 'beta', root: other, by: 'test' });
-    upsertProject(p.home, 'acme-proj', { name: 'Acme', teams: [a, b], lead: 'agt_lead', by: 'test' });
+    upsertProject(p.home, 'acme-proj', { name: 'Acme', lead: 'agt_lead', by: 'test' });
+    // Membership is the team record's project, not a list stored on the project.
+    upsertTeam(p.home, a, { project: 'acme', session: 'acme', root: p.root, projectId: 'acme-proj', projects: ['acme-proj'], by: 'test', roster: [{ agent: 'agt_lead', seat: 'lead', role: 'coordinator' }] });
+    upsertTeam(p.home, b, { project: 'acme', session: 'beta', root: other, projectId: 'acme-proj', projects: ['acme-proj'], by: 'test' });
     writeFileSync(join(p.root, '.agents', 'team.yaml'), TEAM);
     const ambiguous = ioOf(p.root, owner);
     expect(await runForget(['acme'], ambiguous, { home: p.home })).toBe(1);
@@ -351,8 +352,9 @@ describe('approvals and forget', () => {
     expect(ran.out).toContain('panes were not stopped');
     expect(getTeam(p.home, a)).toBeNull();
     expect(getTeam(p.home, b)?.project).toBe('acme');
-    expect(readProjects(p.home)['acme-proj']?.teams).toEqual([b]);
-    expect(readProjects(p.home)['acme-proj']?.lead).toBeNull();
+    const project = list(p.home).find((one) => one.id === 'acme-proj');
+    expect(project?.teams).toEqual([b]);
+    expect(project?.lead).toBeNull();
     expect(existsSync(join(p.root, '.agents', 'team.yaml'))).toBe(true);
     const seat = ioOf(p.root, detached);
     expect(await runForget([b, '--request'], seat, { home: p.home, now: () => NOW, ownerSeatStore: p.store })).toBe(0);

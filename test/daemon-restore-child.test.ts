@@ -8,18 +8,18 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { shortSocketBase } from './helpers.ts';
 import { fileURLToPath } from 'node:url';
 import { startMachineDaemon } from '../src/daemon/host.ts';
-import { DAEMON_LABEL, daemonLogPath, machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
+import { darwinServiceManager } from '../src/daemon/service-darwin.ts';
+import { DAEMON_LABEL, daemonLabel, daemonLogPath, machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
 import { restoreEntryOf, runRestoreSweepInChild } from '../src/daemon/restore/spawn.ts';
 import { acceptRestoreDoor, discardRestoreInherit, restoreDoorText, writeRestoreDoor } from '../src/daemon/restore/token.ts';
 import { readDaemonState } from '../src/daemon/state.ts';
 
-/** The timed scene runs under /private/tmp where a bun child starts quickly; elsewhere the
- *  system temporary folder. */
-const BASE = existsSync('/private/tmp') ? '/private/tmp' : tmpdir();
+/** The timed scene runs under the short temp folder, where a bun child starts quickly. */
+const BASE = shortSocketBase();
 
 // The restore door binds the child to the parent the system's service manager records. A
 // platform whose product build has no service-manager adapter (src/daemon/service.ts offers the
@@ -60,6 +60,10 @@ const ENTRY = fileURLToPath(new URL('../src/daemon/restore/entry.ts', import.met
 const bases: string[] = [];
 const ORIGINAL_PATH = process.env.PATH;
 
+/** Liveness answers come from the scene, never the machine: these scenes plant no claimed copy,
+ *  so the sweep has nothing to ask about. */
+const noneAlive = (): boolean => false;
+
 function scratch(): { base: string; root: string; home: string; bin: string } {
   const base = realpathSync(mkdtempSync(join(BASE, 'team-restore-child-')));
   bases.push(base);
@@ -73,10 +77,11 @@ function scratch(): { base: string; root: string; home: string; bin: string } {
   // reach the live system service manager and always report this test runner process as the
   // daemon job loaded from `home`'s own unit path.
   mkdirSync(join(home, 'Library', 'LaunchAgents'), { recursive: true });
-  const unitFile = join(home, 'Library', 'LaunchAgents', `${DAEMON_LABEL}.plist`);
+  const label = daemonLabel(home, darwinServiceManager().accountHome?.() ?? null) ?? DAEMON_LABEL;
+  const unitFile = join(home, 'Library', 'LaunchAgents', `${label}.plist`);
   writeFileSync(
     unitFile,
-    `<plist version="1.0"><dict><key>Label</key><string>${DAEMON_LABEL}</string></dict></plist>\n`,
+    `<plist version="1.0"><dict><key>Label</key><string>${label}</string></dict></plist>\n`,
     { mode: 0o600 },
   );
   const unitRealpath = realpathSync(unitFile);
@@ -193,7 +198,7 @@ describe("the restore child's authority is the one-use token", () => {
 
   test('the daemon writes it 0600 and reading it consumes it', () => {
     const { root, home } = scratch();
-    const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid });
+    const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid }, { isAlive: noneAlive });
     const path = restoreInheritPath(home, nonce);
     expect(existsSync(path)).toBe(true);
     expect(statSync(path).mode & 0o777).toBe(0o600);
@@ -259,7 +264,7 @@ describe("the restore child's authority is the one-use token", () => {
       why: 'no one-use token names this child',
     });
     // Nothing was consumed by the refusals: a real token still reads.
-    const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid });
+    const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid }, { isAlive: noneAlive });
     expect(
       acceptRestoreDoor({
         home,
@@ -315,7 +320,7 @@ describe("the restore child's authority is the one-use token", () => {
 
   test('a replayed token starts no second pass', async () => {
     const { root, home } = scratch();
-    const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid });
+    const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid }, { isAlive: noneAlive });
     if (offDarwin) {
       // No service-manager anchor exists here, so the door refuses with its documented error
       // before it spends the token: a second start cannot be a second pass, and the one-use
@@ -353,7 +358,7 @@ describe("the restore child's authority is the one-use token", () => {
       return;
     }
     for (let round = 0; round < 4; round += 1) {
-      const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid });
+      const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid }, { isAlive: noneAlive });
       const doorText = restoreDoorText(nonce, secret);
       // Both start before either can finish: the claim is the file system's rename, which admits
       // one mover, so the race cannot hand the same token to both.
@@ -374,7 +379,7 @@ describe("the restore child's authority is the one-use token", () => {
 
   test('a machine folder this child cannot claim in refuses the token', async () => {
     const { root, home } = scratch();
-    const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid });
+    const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid }, { isAlive: noneAlive });
     const dir = machineConfigDir(home);
     if (offDarwin) {
       // The refusal happens at the anchor this platform does not provide, before the claim is
@@ -639,6 +644,181 @@ describe('independent adversarial checks: restore spawn abort, deadline, spawn e
       runRestoreSweepInChild({ home, root, entry: oversizedEntry, timeoutMs: 5_000 }),
     ).rejects.toThrow('the restore child wrote a line over the frame limit and was not understood');
     expect(tokenFiles(home)).toEqual([]);
+  }, 30_000);
+
+  test('an oversized frame from a child that never claimed its token ends the child and discards the token', async () => {
+    const { base, root, home } = scratch();
+    // No readRestoreInherit: only the spawner's own discard can remove the token, and only its
+    // end signal can stop this child. The child marks that signal, so "ended" is observed, not
+    // inferred from the rejection alone.
+    const endedMark = join(base, 'child-ended');
+    const entry = join(base, 'oversized-no-claim-entry.ts');
+    writeFileSync(
+      entry,
+      [
+        `import { writeFileSync } from 'node:fs';`,
+        `process.on('SIGTERM', () => { writeFileSync(${JSON.stringify(endedMark)}, 'ended\\n'); process.exit(0); });`,
+        `process.stdout.write('x'.repeat(70 * 1024));`,
+        `await new Promise((resolve) => setTimeout(resolve, 10_000));`,
+      ].join('\n'),
+    );
+    await expect(
+      runRestoreSweepInChild({ home, root, entry, timeoutMs: 5_000 }),
+    ).rejects.toThrow('the restore child wrote a line over the frame limit and was not understood');
+    expect(tokenFiles(home)).toEqual([]);
+    let ended = existsSync(endedMark);
+    for (let waited = 0; !ended && waited < 2_000; waited += 25) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      ended = existsSync(endedMark);
+    }
+    expect(ended).toBe(true);
+  }, 20_000);
+
+  test('a success report from a child that never claimed its token leaves no token behind', async () => {
+    const { base, root, home } = scratch();
+    const entry = join(base, 'report-ok-no-claim-entry.ts');
+    writeFileSync(
+      entry,
+      [
+        `process.stdout.write(JSON.stringify({ ok: true, result: { kind: 'no-recorded-session' } }) + '\\n');`,
+        `await new Promise((resolve) => setTimeout(resolve, 10_000));`,
+      ].join('\n'),
+    );
+    await expect(
+      runRestoreSweepInChild({ home, root, entry, timeoutMs: 5_000 }),
+    ).resolves.toEqual({ kind: 'no-recorded-session' });
+    expect(tokenFiles(home)).toEqual([]);
+  }, 20_000);
+
+  test('a failure report from a child that never claimed its token leaves no token behind', async () => {
+    const { base, root, home } = scratch();
+    const entry = join(base, 'report-fail-no-claim-entry.ts');
+    writeFileSync(
+      entry,
+      [
+        `process.stdout.write(JSON.stringify({ ok: false, reason: 'a made-up refusal' }) + '\\n');`,
+        `await new Promise((resolve) => setTimeout(resolve, 10_000));`,
+      ].join('\n'),
+    );
+    await expect(
+      runRestoreSweepInChild({ home, root, entry, timeoutMs: 5_000 }),
+    ).rejects.toThrow('the restore child reported: a made-up refusal');
+    expect(tokenFiles(home)).toEqual([]);
+  }, 20_000);
+
+  test('frame-limit exact boundary (64 KiB + 1 byte) and the two reported paths (ok:true and ok:false) with and without child token claim', async () => {
+    const { base, root, home } = scratch();
+    const tokenModule = fileURLToPath(new URL('../src/daemon/restore/token.ts', import.meta.url));
+
+    // 1. Exact boundary: 64 * 1024 + 1 bytes without newline triggers the oversized-frame path,
+    // ends the child via SIGTERM, and discards the unclaimed token.
+    const exactOverMark = join(base, 'exact-over-ended');
+    const exactOverEntry = join(base, 'exact-over-entry.ts');
+    writeFileSync(
+      exactOverEntry,
+      [
+        `import { writeFileSync } from 'node:fs';`,
+        `process.on('SIGTERM', () => { writeFileSync(${JSON.stringify(exactOverMark)}, 'ended\\n'); process.exit(0); });`,
+        `process.stdout.write('a'.repeat(64 * 1024 + 1));`,
+        `await new Promise((resolve) => setTimeout(resolve, 10_000));`,
+      ].join('\n'),
+    );
+    await expect(
+      runRestoreSweepInChild({ home, root, entry: exactOverEntry, timeoutMs: 5_000 }),
+    ).rejects.toThrow('the restore child wrote a line over the frame limit and was not understood');
+    expect(tokenFiles(home)).toEqual([]);
+    for (let waited = 0; !existsSync(exactOverMark) && waited < 2_000; waited += 25) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(existsSync(exactOverMark)).toBe(true);
+
+    // 2. Reported path A (`{ ok: true, result }`) and Reported path B (`{ ok: false, reason }` and
+    // `{ ok: false }` with empty reason) when the child claims the token as `entry.ts` does:
+    // both end the child via `endReported()`, discard is a safe no-op, and leave no token file.
+    const okClaimedMark = join(base, 'ok-claimed-ended');
+    const okClaimedEntry = join(base, 'ok-claimed-entry.ts');
+    writeFileSync(
+      okClaimedEntry,
+      [
+        `import { writeFileSync } from 'node:fs';`,
+        `import { acceptRestoreDoor, readRestoreDoor } from ${JSON.stringify(tokenModule)};`,
+        `const at = process.argv.indexOf('--inherited');`,
+        `acceptRestoreDoor({ home: process.env.HOME ?? '', nonce: process.argv[at + 1] ?? '', text: readRestoreDoor() });`,
+        `process.on('SIGTERM', () => { writeFileSync(${JSON.stringify(okClaimedMark)}, 'ended\\n'); process.exit(0); });`,
+        `process.stdout.write(JSON.stringify({ ok: true, result: { kind: 'no-recorded-session' } }) + '\\n');`,
+        `await new Promise((resolve) => setTimeout(resolve, 10_000));`,
+      ].join('\n'),
+    );
+    const okResult = await runRestoreSweepInChild({ home, root, entry: okClaimedEntry, timeoutMs: 5_000 });
+    expect(okResult).toEqual({ kind: 'no-recorded-session' });
+    expect(tokenFiles(home)).toEqual([]);
+    for (let waited = 0; !existsSync(okClaimedMark) && waited < 2_000; waited += 25) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(existsSync(okClaimedMark)).toBe(true);
+
+    const failEmptyReasonMark = join(base, 'fail-empty-ended');
+    const failEmptyReasonEntry = join(base, 'fail-empty-entry.ts');
+    writeFileSync(
+      failEmptyReasonEntry,
+      [
+        `import { writeFileSync } from 'node:fs';`,
+        `import { acceptRestoreDoor, readRestoreDoor } from ${JSON.stringify(tokenModule)};`,
+        `const at = process.argv.indexOf('--inherited');`,
+        `acceptRestoreDoor({ home: process.env.HOME ?? '', nonce: process.argv[at + 1] ?? '', text: readRestoreDoor() });`,
+        `process.on('SIGTERM', () => { writeFileSync(${JSON.stringify(failEmptyReasonMark)}, 'ended\\n'); process.exit(0); });`,
+        `process.stdout.write(JSON.stringify({ ok: false, reason: '' }) + '\\n');`,
+        `await new Promise((resolve) => setTimeout(resolve, 10_000));`,
+      ].join('\n'),
+    );
+    await expect(
+      runRestoreSweepInChild({ home, root, entry: failEmptyReasonEntry, timeoutMs: 5_000 }),
+    ).rejects.toThrow('the restore child reported: the restore child reported a failure without a reason');
+    expect(tokenFiles(home)).toEqual([]);
+    for (let waited = 0; !existsSync(failEmptyReasonMark) && waited < 2_000; waited += 25) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(existsSync(failEmptyReasonMark)).toBe(true);
+
+    // 3. Probe the two reported paths (`ok: true` and `ok: false`) when a child reports and exits
+    // immediately WITHOUT claiming its token: both now discard the token on the spawner side so
+    // neither reported path depends on the child entry having consumed it first.
+    const { home: homeUnclaimedOk } = scratch();
+    const okUnclaimedEntry = join(base, 'ok-unclaimed-entry.ts');
+    writeFileSync(
+      okUnclaimedEntry,
+      [
+        `process.stdout.write(JSON.stringify({ ok: true, result: { kind: 'no-recorded-session' } }) + '\\n');`,
+        `process.exit(0);`,
+      ].join('\n'),
+    );
+    const unclaimedOkResult = await runRestoreSweepInChild({
+      home: homeUnclaimedOk,
+      root,
+      entry: okUnclaimedEntry,
+      timeoutMs: 5_000,
+    });
+    expect(unclaimedOkResult).toEqual({ kind: 'no-recorded-session' });
+    expect(tokenFiles(homeUnclaimedOk)).toEqual([]);
+
+    const { home: homeUnclaimedFail } = scratch();
+    const failUnclaimedEntry = join(base, 'fail-unclaimed-entry.ts');
+    writeFileSync(
+      failUnclaimedEntry,
+      [
+        `process.stdout.write(JSON.stringify({ ok: false, reason: 'unclaimed failure' }) + '\\n');`,
+        `process.exit(0);`,
+      ].join('\n'),
+    );
+    await expect(
+      runRestoreSweepInChild({
+        home: homeUnclaimedFail,
+        root,
+        entry: failUnclaimedEntry,
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow('the restore child reported: unclaimed failure');
+    expect(tokenFiles(homeUnclaimedFail)).toEqual([]);
   }, 30_000);
 
   test('a token for one root never touches a second root, and closing the daemon during a slow herdr call keeps the beat live and leaves no token behind', async () => {

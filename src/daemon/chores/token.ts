@@ -7,16 +7,17 @@
 // in its own module so the child's entry can read a token without loading the spawner.
 import { randomBytes } from 'node:crypto';
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
-import { claimOneUseToken } from '../one-use-token.ts';
+import { claimOneUseToken, pidAlive, sweepSpentClaims, type WriteTokenOptions } from '../one-use-token.ts';
 import { choresInheritPath, machineConfigDir } from '../paths.ts';
 import { choresConfigProblem } from './child.ts';
 import type { ChoresChildConfig } from './protocol.ts';
 
 /** Writes the one-use token a child reads. Returns its nonce. */
-export function writeChoresInherit(config: ChoresChildConfig): string {
+export function writeChoresInherit(config: ChoresChildConfig, options: WriteTokenOptions = {}): string {
   const nonce = randomBytes(16).toString('hex');
   const dir = machineConfigDir(config.home);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
+  sweepSpentClaims(dir, options.isAlive ?? pidAlive);
   const path = choresInheritPath(config.home, nonce);
   writeFileSync(path, `${JSON.stringify(config)}\n`, { mode: 0o600 });
   chmodSync(path, 0o600);

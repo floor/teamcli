@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CallerSources } from '../src/caller.ts';
 import { readTeamConfig } from '../src/file/team-config.ts';
-import { restartSelf, runMcpServe, type ServeOptions } from '../src/mcp/serve.ts';
+import { restartSelf, runMcpServe, SERVE_PLACEMENT_WAIT_MS, type ServeOptions } from '../src/mcp/serve.ts';
 import { receiptPath, listenerPath } from '../src/mcp/inbox.ts';
 import { registerInbox } from '../src/mcp/register.ts';
 import { launchCommand, profileFor, shellQuote } from '../src/profiles/profile.ts';
@@ -104,8 +104,17 @@ function parented(from: string, actual: Team, cli = 'codex', bridge = false) {
   return { io, reads };
 }
 type Request = string | (() => void);
+function placementClock() {
+  let at = 0;
+  return {
+    now: () => at,
+    sleep: async (ms: number) => { at += ms; },
+    at: () => at,
+  };
+}
 async function serve(home: string, io: ReturnType<typeof testIo>, options: ServeOptions, requests: Request[]) {
   const replies: any[] = [];
+  const pace = placementClock();
   const code = await runMcpServe(options, io, {
     lines: (async function* () {
       for (const line of requests) {
@@ -116,8 +125,8 @@ async function serve(home: string, io: ReturnType<typeof testIo>, options: Serve
     write: line => {
       const msg = JSON.parse(line); replies.push(msg);
     },
-  }, { home, build: { version: '0.0.0-fixture', build: 'fixture', builtAt: 0, head: null }, restart: () => { throw new Error('unexpected install restart'); } });
-  return { code, replies, err: io.err };
+  }, { home, build: { version: '0.0.0-fixture', build: 'fixture', builtAt: 0, head: null }, restart: () => { throw new Error('unexpected install restart'); } }, { now: pace.now, sleep: pace.sleep });
+  return { code, replies, err: io.err, waited: pace.at };
 }
 function readReceipt(t: Team, home: string) {
   const key = messageKeyState(home);
@@ -147,6 +156,9 @@ for (const withFile of [false, true]) {
     test(`another team's arguments refuse ${target}, file=${withFile}, without touching its inbox`, async () => {
       const w = world(), a = w.team('alpha'), b = w.team('beta');
       if (target === 'runtime removed') change(b, s => { delete s.seats[b.seat]; });
+      // The record still names B's pane, and the environment names that same pane, so the
+      // start wait runs. The clock walks it to the 5 s bound. A seat the state no longer
+      // holds, or one the file marks stopped, is refused before that wait.
       if (target === 'declared stopped') writeFileSync(b.file, readFileSync(b.file, 'utf8').replace('    role: worker', '    role: worker\n    stopped: true'));
       expect(readTeamConfig(b.root, { home: w.home }).ok).toBe(true);
       const options = { ...opts(b, withFile), ...(target === 'old epoch' ? { epoch: OLD } : {}) };
@@ -155,6 +167,8 @@ for (const withFile of [false, true]) {
       // Even persuasive environment hints naming B cannot replace the process ancestry of A.
       placement.io.env = { HERDR_PANE_ID: b.pane, TEAM_SEAT: b.seat, TEAM_SESSION: b.session };
       const out = await serve(w.home, placement.io, options, [tool('read', 'inbox_read', { id: b.id })]);
+      const waits = target === 'current' || target === 'old epoch';
+      expect(out.waited()).toBe(waits ? SERVE_PLACEMENT_WAIT_MS : 0);
       expect({ code: out.code, replies: out.replies.length, receipted: existsSync(receiptPath(b.drop, b.id)), leaked: JSON.stringify(out.replies).includes(b.body) }).toEqual({ code: 2, replies: 0, receipted: false, leaked: false });
       expect(readdirSync(b.drop).sort()).toEqual(before);
       expect(readFileSync(join(b.drop, b.id))).toEqual(bytes);

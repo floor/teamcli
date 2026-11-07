@@ -34,7 +34,7 @@ import { dirname, join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 import { logLine } from '../log.ts';
 import { ensureStoreLadder, readNoFollow } from '../send/history.ts';
-import { LockBusyError, withLock, writeAtomic } from '../state.ts';
+import { acquireLock, LOCK_FILE, LockBusyError, withLock, writeAtomic } from '../state.ts';
 import {
   messageKeyOf,
   messageKeyState,
@@ -43,18 +43,40 @@ import {
   type Json,
 } from '../store/keys.ts';
 import { storePath, storesFolder } from '../store/store.ts';
-import { DEFAULT_EVENT_RETENTION_SECONDS, isEventKind, type EventKind } from './kinds.ts';
+import {
+  DEFAULT_EVENT_RETENTION_SECONDS,
+  EVENT_LOG_KEPT,
+  EVENT_LOG_TOTAL_BYTES,
+  isEventKind,
+  type EventKind,
+} from './kinds.ts';
+import { eventLogSettingsFor } from './log-settings.ts';
+import {
+  INDEX_SUFFIX,
+  SEAL_DOMAIN,
+  SEAL_FORMAT,
+  SEAL_SUFFIX,
+  buildSegmentIndex,
+  indexPathOf,
+  keyPrintOfKey,
+  readSeal,
+  sealDigestOf,
+  sealPayloadOf,
+  sealPathOf,
+  sealSegment,
+  type SealFields,
+  type SegmentIndexEntry,
+  type StoredSeal,
+} from './seal.ts';
 
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
 export const EVENT_DOMAIN = 'team.event.v1\n';
 export const EVENT_LOG_FILE = 'events.jsonl';
-/** One segment reaches this size before it rotates. */
+/** One segment reaches this size before it rotates, in a root whose team file names no smaller
+ *  policy word; a team's `bus.segment_mb` replaces it through `eventLogSettingsFor`. */
 export const MAX_EVENT_LOG_BYTES = 100_000_000;
-/** The live file and one sealed segment. */
-export const EVENT_LOG_KEPT = 2;
-/** The most the team's retained event log may hold, across its files. */
-export const EVENT_LOG_TOTAL_BYTES = 100_000_000;
+export { EVENT_LOG_KEPT, EVENT_LOG_TOTAL_BYTES } from './kinds.ts';
 
 export type EventPayload = {
   v: 1;
@@ -91,6 +113,16 @@ export type EventPayload = {
   presence_event_id?: string;
   presence_observed_at?: string;
   presence_seq?: number;
+  /** On `seat.status`: native advisory only, never permission to answer or dispatch. */
+  status_binding?: string;
+  status_seq?: number;
+  status_source?: string;
+  status_availability?: string;
+  status_advisory?: string;
+  status_continuity?: string;
+  status_gate?: string;
+  status_process_confirmation?: string;
+  status_reason?: string;
   /** On a message step (`message.staged`, `webhook.posted`, `leg.tried`, `wake.retried`): the
    *  step's own machine word — the walk's (`delivered`, `refused`, `unreachable`, `held`,
    *  `timeout`) or the webhook post's (`posted`, `failed`, `unknown`) — never free text. A reader
@@ -100,6 +132,12 @@ export type EventPayload = {
    *  measurement (a refusal decided before anything was dialed), so it is kept apart from the
    *  sequence fields, which start at one. */
   ms?: number;
+  /** On a typed wake's `leg.tried`: the two measurements the bound is read from, both counted
+   *  from the moment the message was staged. `submit_ms` ends at the first read that showed the
+   *  wake's line gone after Enter (the gated point); `working_ms` ends at the profile's working
+   *  screen and is reported only. Either is absent when no read showed it. */
+  submit_ms?: number;
+  working_ms?: number;
   /** On a `config.changed` the reconcile pass appended for a signed record it found without one:
    *  `true`, so a reader can tell an event raised at write time from one raised after a crash. */
   reconciled?: string;
@@ -170,6 +208,27 @@ export function eventLogPath(project: string, root: string, home: string): strin
   return join(storePath(project, root, home), EVENT_LOG_FILE);
 }
 
+/** The bytes the retained set holds on disk: the live segment and every sealed slot inside the
+ *  reader's bound, the same files `readEvents` walks. A slot that is not a regular file of this
+ *  user's contributes nothing; the size is a stat, never a read, so a near-cap note costs one
+ *  stat per retained slot and never touches a segment's bytes. */
+export function retainedLogBytes(
+  project: string,
+  root: string,
+  home: string,
+  options: { kept?: number } = {},
+): number {
+  const kept = options.kept ?? eventLogSettingsFor(root, home).kept;
+  const path = join(storePath(project, root, home), EVENT_LOG_FILE);
+  let total = 0;
+  for (let n = kept - 1; n >= 0; n--) {
+    const at = n === 0 ? path : `${path}.${String(n)}`;
+    if (heldAt(at).kind !== 'file') continue;
+    total += sizeOfFile(at);
+  }
+  return total;
+}
+
 function ladderProblem(at: string): string | null {
   const held = heldAt(at);
   if (held.kind === 'missing') return null;
@@ -191,29 +250,257 @@ function fileProblem(at: string): string | null {
   return null;
 }
 
-function rotateEventLog(path: string, kept: number = EVENT_LOG_KEPT): string | null {
+/** Removes a dropped segment's sidecars with it: a seal whose segment is gone must not outlive it
+ *  and be mistaken for the next segment's. */
+function unlinkSidecars(segment: string): void {
+  for (const suffix of [SEAL_SUFFIX, INDEX_SUFFIX]) {
+    try {
+      unlinkSync(`${segment}${suffix}`);
+    } catch {
+      // Missing is the ordinary case for a segment sealed by an older build.
+    }
+  }
+}
+
+/** What a rotation needs to re-sign a seal for the slot its segment just moved to. */
+type SealSigner = { storeDir: string; key: KeyObject; keyPrint: string };
+
+/** Whether a sealed segment still agrees with its own seal as far as the start check may look
+ *  without reading sealed bytes: the file is there at the sealed size, and its index matches the
+ *  signed triple — byte count, line count and SHA-256 digest. A re-sign is a sealing act, so it
+ *  signs only a segment this check still holds for; a same-length in-place edit of the segment
+ *  itself stays undetected until its bytes are next read, as the design states. */
+function sealedSegmentAgrees(segmentPath: string, seal: StoredSeal): boolean {
+  if (heldAt(segmentPath).kind !== 'file') return false;
+  if (sizeOfFile(segmentPath) !== seal.bytes) return false;
+  const text = readNoFollow(indexPathOf(segmentPath));
+  if (text === null) return false;
+  const bytes = Buffer.from(text, 'utf8');
+  if (bytes.length !== seal.index.bytes) return false;
+  if (createHash('sha256').update(bytes).digest('hex') !== seal.index.digest) return false;
+  return text.split('\n').length - 1 === seal.index.lines;
+}
+
+/** Carries one moved seal to its new slot. A seal names its segment, so a shifted segment needs
+ *  its seal re-signed for the new name and for its predecessor's new `sealDigest`; `previous`
+ *  undefined keeps the seal's own predecessor, a digest names the predecessor re-signed in this
+ *  pass, and null moves the sidecar untouched — a predecessor that is present but unsealed
+ *  blocks this seal and every later one, and the moved file fails its name check beside the new
+ *  segment, which is what "unsealed" means. A seal whose segment no longer matches its own
+ *  signed claim is never re-signed; it moves untouched for the same reason. Returns the seal's
+ *  digest at the new slot, or null when it was not re-signed. */
+function moveSeal(
+  from: string,
+  to: string,
+  fromSlot: number,
+  toSlot: number,
+  signer: SealSigner | undefined,
+  previous: string | null | undefined,
+): string | null {
+  const movedVerbatim = (): string | null => {
+    if (existsSync(sealPathOf(from))) {
+      renameSync(sealPathOf(from), sealPathOf(to));
+      try {
+        chmodSync(sealPathOf(to), 0o600);
+      } catch {
+        // The reader refuses a file it cannot hold; the move stands.
+      }
+    }
+    return null;
+  };
+  if (signer === undefined || previous === null) return movedVerbatim();
+  const seal = readSeal(
+    from,
+    `${EVENT_LOG_FILE}.${String(fromSlot)}`,
+    signer.storeDir,
+    signer.keyPrint,
+    signer.key,
+  );
+  if (seal === null) return movedVerbatim();
+  // The segment and its index already sit at the new slot when this runs; both are checked
+  // against the seal's own signed claim before it is carried to a fresh signature.
+  if (!sealedSegmentAgrees(to, seal)) return movedVerbatim();
+  const fields: SealFields = {
+    format: seal.format,
+    keyPrint: seal.keyPrint,
+    store: seal.store,
+    segment: `${EVENT_LOG_FILE}.${String(toSlot)}`,
+    firstSeq: seal.firstSeq,
+    lastSeq: seal.lastSeq,
+    lines: seal.lines,
+    bytes: seal.bytes,
+    digest: seal.digest,
+    previous: previous === undefined ? seal.previous : previous,
+    sealedAt: seal.sealedAt,
+    index: seal.index,
+  };
+  const sealDigest = sealDigestOf(fields);
+  const signature = signDomain(SEAL_DOMAIN, sealPayloadOf(fields), signer.key);
+  writeAtomic(sealPathOf(to), `${JSON.stringify({ ...sealPayloadOf(fields), sealDigest, signature })}\n`);
+  try {
+    unlinkSync(sealPathOf(from));
+  } catch {
+    // The stale name beside the old slot fails its own name check; an orphan is not trusted.
+  }
+  return sealDigest;
+}
+
+/** The oldest slot is already unlinked, and a later step of that same rotation threw. */
+class RotationRemovedError extends Error {
+  constructor() {
+    super('the event log could not be rotated');
+    this.name = 'RotationRemovedError';
+  }
+}
+
+function rotateEventLog(
+  path: string,
+  kept: number = EVENT_LOG_KEPT,
+  signer?: SealSigner,
+): string | null {
   for (let n = 1; n < kept; n++) {
     const slot = `${path}.${String(n)}`;
     const problem = fileProblem(slot);
     if (problem !== null) return problem;
   }
   const oldest = `${path}.${String(kept - 1)}`;
+  let removed = false;
   if (existsSync(oldest)) {
+    unlinkSidecars(oldest);
     unlinkSync(oldest);
+    removed = true;
   }
+  try {
+    return rotateSlots(path, kept, signer);
+  } catch (error) {
+    if (removed) throw new RotationRemovedError();
+    throw error;
+  }
+}
+
+/** Shifts every younger slot up once the oldest has been removed. */
+function rotateSlots(path: string, kept: number, signer: SealSigner | undefined): string | null {
+  // A moved seal names its predecessor at the new slot: the seal re-signed in the previous
+  // iteration. The oldest retained slot's predecessor was just dropped, so its seal keeps the
+  // predecessor it already names — a break a retained drop record declares.
+  let predecessor: string | null | undefined = undefined;
   for (let n = kept - 2; n >= 1; n--) {
     const from = `${path}.${String(n)}`;
     const to = `${path}.${String(n + 1)}`;
-    if (existsSync(from)) {
-      renameSync(from, to);
-      chmodSync(to, 0o600);
+    if (!existsSync(from)) {
+      predecessor = undefined;
+      continue;
     }
+    renameSync(from, to);
+    chmodSync(to, 0o600);
+    // The index holds no name of its own; it travels with the segment untouched.
+    if (existsSync(`${from}${INDEX_SUFFIX}`)) {
+      renameSync(`${from}${INDEX_SUFFIX}`, `${to}${INDEX_SUFFIX}`);
+      try {
+        chmodSync(`${to}${INDEX_SUFFIX}`, 0o600);
+      } catch {
+        // The reader's triple check refuses a file it cannot read; the move stands.
+      }
+    }
+    predecessor = moveSeal(from, to, n, n + 1, signer, predecessor);
   }
   if (existsSync(path)) {
     renameSync(path, `${path}.1`);
     chmodSync(`${path}.1`, 0o600);
   }
   return null;
+}
+
+/** A predecessor segment's seal digest, read before a rotation can move or drop it. */
+function sealDigestOfSlot(
+  path: string,
+  slot: number,
+  storeDir: string,
+  home: string,
+): { existed: boolean; sealDigest: string | null } {
+  const segmentPath = `${path}.${String(slot)}`;
+  if (heldAt(segmentPath).kind !== 'file') return { existed: false, sealDigest: null };
+  const state = messageKeyState(home);
+  if (state.kind !== 'key') return { existed: true, sealDigest: null };
+  const seal = readSeal(
+    segmentPath,
+    `${EVENT_LOG_FILE}.${String(slot)}`,
+    storeDir,
+    keyPrintOfKey(state.key),
+    state.key,
+  );
+  return { existed: true, sealDigest: seal?.sealDigest ?? null };
+}
+
+/** Seals the segment a rotation just closed, leaving it unsealed when the chain cannot carry it:
+ *  a predecessor segment that carries no valid seal blocks this seal and every later one, and a
+ *  drop with no sealed predecessor breaks the chain the same way. Best effort by construction —
+ *  rotation never fails over a seal. */
+function sealRotatedSegment(
+  path: string,
+  kept: number,
+  storeDir: string,
+  home: string,
+  droppedPredecessor: { existed: boolean; sealDigest: string | null } | null,
+): void {
+  const state = messageKeyState(home);
+  if (state.kind !== 'key') return;
+  const keyPrint = keyPrintOfKey(state.key);
+  let previous: string | null;
+  if (kept > 2) {
+    const predecessor = `${path}.2`;
+    if (heldAt(predecessor).kind === 'file') {
+      const seal = readSeal(predecessor, `${EVENT_LOG_FILE}.2`, storeDir, keyPrint, state.key);
+      if (seal === null) return;
+      previous = seal.sealDigest;
+    } else {
+      // No `.2` is the chain root only when nothing older survived the rotation; a surviving
+      // segment below a hole means the chain is already broken.
+      for (let n = 3; n < kept; n++) {
+        if (heldAt(`${path}.${String(n)}`).kind === 'file') return;
+      }
+      previous = null;
+    }
+  } else {
+    // The oldest slot this rotation dropped: its seal carries the chain across a declared drop.
+    if (droppedPredecessor === null) return;
+    if (droppedPredecessor.existed && droppedPredecessor.sealDigest === null) return;
+    previous = droppedPredecessor.sealDigest;
+  }
+  sealSegment(`${path}.1`, `${EVENT_LOG_FILE}.1`, storeDir, keyPrint, state.key, previous);
+}
+
+/** Rotates the live file once, dropping the oldest slot and sealing the segment just closed. The
+ *  dropped slot's verified range is captured before it is unlinked; a rotation problem is
+ *  returned to the caller, a seal failure is not. */
+function rotateLive(
+  path: string,
+  kept: number,
+  storeDir: string,
+  home: string,
+  cause: 'age' | 'rotation',
+): { dropped: DroppedSegment | null; problem: string | null } {
+  const predecessor = kept === 2 ? sealDigestOfSlot(path, 1, storeDir, home) : null;
+  const dropped = captureOldestSlot(path, kept, home, cause);
+  const keyState = messageKeyState(home);
+  const signer =
+    keyState.kind === 'key'
+      ? { storeDir, key: keyState.key, keyPrint: keyPrintOfKey(keyState.key) }
+      : undefined;
+  let problem: string | null;
+  try {
+    problem = rotateEventLog(path, kept, signer);
+  } catch (error) {
+    if (error instanceof RotationRemovedError) return { dropped, problem: error.message };
+    throw error;
+  }
+  if (problem !== null) return { dropped: null, problem };
+  try {
+    sealRotatedSegment(path, kept, storeDir, home, predecessor);
+  } catch {
+    // The segment stays unsealed and is read and verified in full, as before seals existed.
+  }
+  return { dropped, problem: null };
 }
 
 /** The retention window a pass applies: the age a segment is kept after its last write, and the
@@ -311,13 +598,18 @@ function captureOldestSlot(
 /** Seals the live file when its last write is older than the window: every record it holds was
  *  written before the window too, so the prune that follows may drop it as one segment. Returns
  *  the oldest sealed slot the rotation dropped, if any. */
-function sealIdleLiveFile(path: string, home: string, kept: number, cutoffMs: number): DroppedSegment | null {
+function sealIdleLiveFile(
+  path: string,
+  home: string,
+  kept: number,
+  cutoffMs: number,
+  storeDir: string,
+): DroppedSegment | null {
   const writtenAt = writtenAtFile(path);
   if (writtenAt === null || writtenAt >= cutoffMs || sizeOfFile(path) === 0) return null;
-  const dropped = captureOldestSlot(path, kept, home, 'age');
-  const problem = rotateEventLog(path, kept);
-  if (problem !== null) throw new Error(problem);
-  return dropped;
+  const rotated = rotateLive(path, kept, storeDir, home, 'age');
+  if (rotated.problem !== null && rotated.dropped === null) throw new Error(rotated.problem);
+  return rotated.dropped;
 }
 
 /** Drops the oldest sealed segment while the retained bytes are over the cap or the segment was
@@ -341,10 +633,12 @@ function pruneSealed(path: string, home: string, kept: number, options: EventLog
   const dropped: DroppedSegment[] = [];
   for (const segment of sealed) {
     const overCap = total > maxTotal;
-    const tooOld = segment.writtenAt < cutoff;
+    // Zero is the explicit keep-all word: no age bound, so the size cap alone drops.
+    const tooOld = retentionSeconds > 0 && segment.writtenAt < cutoff;
     if (!overCap && !tooOld) break;
     const range = verifiedRangeOf(segment.path, home);
     try {
+      unlinkSidecars(segment.path);
       unlinkSync(segment.path);
     } catch {
       break;
@@ -363,6 +657,43 @@ function pruneSealed(path: string, home: string, kept: number, options: EventLog
     });
   }
   return dropped;
+}
+
+/** Removes a seal or an index whose segment is gone. An older build prunes a segment without
+ *  knowing the sidecars a newer build wrote beside it, so a downgrade can leave a seal pointing
+ *  at nothing; the orphan is never read as evidence, and a missing segment is judged by the drop
+ *  records that remain. Each removal is written once to the team log, and a sidecar that cannot
+ *  be removed is left for the next sweep. Callers hold the append lock: a rotation moves a
+ *  segment and its sidecars in separate steps, and a sweep between them would remove a live
+ *  index. Best effort: the sweep never fails its caller. */
+export function sweepOrphanedSidecars(
+  project: string,
+  root: string,
+  home: string,
+  options: { kept?: number } = {},
+): string[] {
+  const kept = options.kept ?? eventLogSettingsFor(root, home).kept;
+  const path = eventLogPath(project, root, home);
+  const segments: { segment: string; name: string }[] = [{ segment: path, name: EVENT_LOG_FILE }];
+  for (let n = 1; n <= kept - 1; n++) {
+    segments.push({ segment: `${path}.${String(n)}`, name: `${EVENT_LOG_FILE}.${String(n)}` });
+  }
+  const removed: string[] = [];
+  for (const { segment, name } of segments) {
+    if (heldAt(segment).kind !== 'missing') continue;
+    for (const suffix of [SEAL_SUFFIX, INDEX_SUFFIX]) {
+      const sidecar = `${segment}${suffix}`;
+      if (heldAt(sidecar).kind !== 'file') continue;
+      try {
+        unlinkSync(sidecar);
+      } catch {
+        continue;
+      }
+      removed.push(`${name}${suffix}`);
+      logLine(join(root, '.agents'), 'bus', 'event-log', `removed orphan ${name}${suffix}`);
+    }
+  }
+  return removed;
 }
 
 /** One operational record per dropping pass. The `.agents/team.log` line names every segment the
@@ -401,8 +732,6 @@ function declareDrop(
     (drop): drop is DroppedSegment & { oldestSeq: number; newestSeq: number } =>
       drop.oldestSeq !== null && drop.newestSeq !== null,
   );
-  if (named.length === 0) return;
-  const newest = Math.max(...named.map((drop) => drop.newestSeq));
   const byAge = drops.some((drop) => drop.bounds.includes('age'));
   const bySize = drops.some((drop) => drop.bounds.includes('rotation') || drop.bounds.includes('total'));
   const reason = byAge && bySize ? 'age or size' : byAge ? 'age' : 'size';
@@ -411,7 +740,8 @@ function declareDrop(
   // The declared floor is the oldest sequence retention has dropped, carried forward from the
   // declaration records still retained and from those inside the segments this pass removes.
   // Without it, a size-capped log would drop each declaration with the segment that held it and
-  // the older holes would look undeclared.
+  // the older holes would look undeclared. A slot whose range cannot be read still gets a signed
+  // drop: the range fields stay off it, so the hole is declared rather than only a team log line.
   let floor: number | null = null;
   const lower = (value: number | null): void => {
     if (value === null) return;
@@ -427,8 +757,10 @@ function declareDrop(
       lower(record.payload.dropped_oldest_seq ?? null);
     }
   }
-  if (floor === null) return;
-  const oldest: number = floor;
+  const ranged = named.length > 0 && floor !== null;
+  if (named.length > 0 && floor === null) return;
+  const newest = ranged ? Math.max(...named.map((drop) => drop.newestSeq)) : null;
+  const oldest = ranged ? floor : null;
   appendEvent(
     project,
     root,
@@ -437,16 +769,19 @@ function declareDrop(
       ts: new Date().toISOString(),
       kind: 'team.event-log-dropped',
       session,
-      record_id: `retention:${String(oldest)}-${String(newest)}`,
+      record_id: ranged
+        ? `retention:${String(oldest)}-${String(newest)}`
+        : `retention:unreadable:${drops.map((drop) => drop.name).join(',')}`,
       reason,
-      dropped_oldest_seq: oldest,
-      dropped_newest_seq: newest,
+      ...(ranged && oldest !== null && newest !== null
+        ? { dropped_oldest_seq: oldest, dropped_newest_seq: newest }
+        : {}),
     },
     {
       kept,
       deduplicate: true,
       retain: false,
-      ...(retainedNewest === null ? { seqOverride: newest + 1 } : {}),
+      ...(ranged && newest !== null && retainedNewest === null ? { seqOverride: newest + 1 } : {}),
     },
   );
 }
@@ -460,26 +795,47 @@ export function pruneEventLog(
   project: string,
   root: string,
   home: string,
-  options: EventLogRetention & { kept?: number; session?: string } = {},
+  options: EventLogRetention & { kept?: number; session?: string; lockWaitMs?: number } = {},
 ): void {
   try {
-    const kept = options.kept ?? EVENT_LOG_KEPT;
-    const retentionSeconds = options.retentionSeconds ?? DEFAULT_EVENT_RETENTION_SECONDS;
+    // The team's words answer whatever the caller left out; a caller that names all three is
+    // never sent through the policy store.
+    const settings =
+      options.kept === undefined || options.retentionSeconds === undefined
+        ? eventLogSettingsFor(root, home)
+        : null;
+    const kept = options.kept ?? settings?.kept ?? EVENT_LOG_KEPT;
+    const retentionSeconds =
+      options.retentionSeconds ?? settings?.retentionSeconds ?? DEFAULT_EVENT_RETENTION_SECONDS;
+    const retention: EventLogRetention = {
+      ...(options.maxTotalBytes !== undefined ? { maxTotalBytes: options.maxTotalBytes } : {}),
+      retentionSeconds,
+    };
     const storeDir = storePath(project, root, home);
     if (ensureStoreLadder(storeDir, home) !== null) return;
     // The whole pass holds the append lock: its rotation and drops move the retained files the
     // append scans, and its declaration precomputes a sequence override before appending. A
     // writer that slipped between those two steps could mint that same sequence.
+    // A key already held answers busy immediately when the caller asked not to wait. Pausing
+    // here holds the loop for the default, including the start path before the bus is serving.
     withEventLock(storeDir, () => {
       const path = eventLogPath(project, root, home);
       const drops: DroppedSegment[] = [];
-      const sealed = sealIdleLiveFile(path, home, kept, Date.now() - retentionSeconds * 1_000);
-      if (sealed !== null) drops.push(sealed);
-      drops.push(...pruneSealed(path, home, kept, options));
-      declareDrop(project, root, home, kept, options, drops, options.session ?? project);
-    });
-  } catch {
-    // Dropped on purpose: reads and writes are unaffected by retention failing.
+      // Under keep-all there is no age to seal against; the live segment is bounded by its size.
+      if (retentionSeconds > 0) {
+        const sealed = sealIdleLiveFile(path, home, kept, Date.now() - retentionSeconds * 1_000, storeDir);
+        if (sealed !== null) drops.push(sealed);
+      }
+      drops.push(...pruneSealed(path, home, kept, retention));
+      // Sidecars whose segment a downgrade (or an older build's prune) removed stay behind in
+      // slots retention never reaches; the sweep runs under this same lock so it cannot catch a
+      // rotation between the segment rename and its sidecar moves.
+      sweepOrphanedSidecars(project, root, home, { kept });
+      declareDrop(project, root, home, kept, retention, drops, options.session ?? project);
+    }, options.lockWaitMs);
+  } catch (error) {
+    // A busy key is the caller's to retry. Any other failure stays best-effort.
+    if (error instanceof LockBusyError) throw error;
   }
 }
 
@@ -505,13 +861,15 @@ const OPTIONAL_STRING_FIELDS = [
   'presence_binding',
   'presence_event_id',
   'presence_observed_at',
+  'status_binding', 'status_source', 'status_availability', 'status_advisory',
+  'status_continuity', 'status_gate', 'status_process_confirmation', 'status_reason',
 ] as const;
 
-const OPTIONAL_SEQUENCE_FIELDS = ['dropped_oldest_seq', 'dropped_newest_seq', 'presence_seq'] as const;
+const OPTIONAL_SEQUENCE_FIELDS = ['dropped_oldest_seq', 'dropped_newest_seq', 'presence_seq', 'status_seq'] as const;
 
 /** Measured quantities carry a zero legitimately: an attempt refused before it dialed took no
  *  time. They are not sequences, and the one-based check above would refuse the honest value. */
-const OPTIONAL_MEASURE_FIELDS = ['ms'] as const;
+const OPTIONAL_MEASURE_FIELDS = ['ms', 'submit_ms', 'working_ms'] as const;
 
 /** The shape every event's `record_id` must have: a generated token — a UUID, a digest, or a
  *  colon-joined name — never free text. The append index searches a retained line for the id as a
@@ -679,7 +1037,7 @@ function* prefixDigestAndMarkSteps(
   };
 }
 
-const PREFIX_HASH_CHUNK = 1 << 20;
+const PREFIX_HASH_CHUNK = 64 * 1024;
 
 /** Hashes the byte run a checkpoint's mark covers, reproducing the per-line digest exactly: each
  *  covered line's raw bytes and the newline the digest appends after it. Returns the un-finalized
@@ -757,7 +1115,10 @@ function* incrementalReadSteps(
       if (seen % READ_EVENTS_SLICE_LINES === 0) yield;
     }
   }
+  let verifiedSeen = 0;
   for (const line of tail) {
+    verifiedSeen += 1;
+    if (verifiedSeen % READ_EVENTS_SLICE_LINES === 0) yield;
     if (line.parsed === null) {
       tailBroken += 1;
       continue;
@@ -790,7 +1151,10 @@ function* incrementalReadSteps(
   let gap = false;
   let contiguous = true;
   let last: { file: number; end: number } | null = null;
+  let hashedSeen = 0;
   for (const line of tail) {
+    hashedSeen += 1;
+    if (hashedSeen % READ_EVENTS_SLICE_LINES === 0) yield;
     if (line.parsed === null || line.parsed.payload.seq > highest) {
       gap = true;
       continue;
@@ -905,8 +1269,8 @@ function writeStoredCheckpoint(storeDir: string, fields: CheckpointFields, key: 
 /** The retained lines one slice of a read parses, verifies or hashes before yielding, and the
  *  budget a sliced read may hold the loop before it gives a turn back. A slice stays in the tens
  *  of milliseconds on a retained log at the size cap. */
-const READ_EVENTS_SLICE_LINES = 1_000;
-const READ_EVENTS_SLICE_MS = 8;
+const READ_EVENTS_SLICE_LINES = 64;
+const READ_EVENTS_SLICE_MS = 2;
 
 /** What this process last read from one retained store: the files it read, their stamps, and the
  *  verified result. A read whose files are all unchanged answers from memory. Anything else — a
@@ -940,6 +1304,959 @@ async function driveSteps<T>(steps: Generator<void, T, void>): Promise<T> {
     await new Promise<void>((done) => setImmediate(done));
     since = performance.now();
   }
+}
+
+/** One retained sealed slot as start verification found it. `sealed` means the seal verified,
+ *  the segment's size matches the seal and the index matches the signed triple; anything else is
+ *  `unsealed` (with the reason) or `missing`, and an untrusted slot breaks the chain of every
+ *  newer seal. */
+export type SealCheck = {
+  name: string;
+  slot: number;
+  path: string;
+  state: 'sealed' | 'unsealed' | 'missing';
+  why?: 'no-seal' | 'bad-seal' | 'size' | 'index' | 'chain';
+  seal?: StoredSeal;
+  entries?: SegmentIndexEntry[];
+};
+
+export type SealCheckResult =
+  | {
+      ok: true;
+      /** The retained slots present, oldest first, up to the newest sealed one. */
+      segments: SealCheck[];
+      /** The open segment, stat'd but never read here: it is the one segment a start reads. */
+      open: { path: string; size: number } | null;
+      /** One line per untrusted segment, for the `.agents/team.log` report. */
+      problems: string[];
+    }
+  | { ok: false; reason: string };
+
+/** The companion index, read and checked against the seal's signed triple before any offset in
+ *  it is trusted. Null when the file is missing, changed, or holds a line this build cannot
+ *  spell — the segment is then unsealed for the read, exactly like a bad seal. */
+function verifiedIndexEntries(segmentPath: string, seal: StoredSeal): SegmentIndexEntry[] | null {
+  const text = readNoFollow(indexPathOf(segmentPath));
+  if (text === null) return null;
+  const bytes = Buffer.from(text, 'utf8');
+  if (bytes.length !== seal.index.bytes) return null;
+  if (createHash('sha256').update(bytes).digest('hex') !== seal.index.digest) return null;
+  const entries: SegmentIndexEntry[] = [];
+  let lastOffset = -1;
+  for (const line of text.split('\n')) {
+    if (line === '') continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      return null;
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+    const row = parsed as Record<string, unknown>;
+    if (typeof row['seq'] !== 'number' || !Number.isInteger(row['seq']) || row['seq'] < 1) return null;
+    if (typeof row['offset'] !== 'number' || !Number.isInteger(row['offset']) || row['offset'] < 0) return null;
+    if (typeof row['kind'] !== 'string' || typeof row['record_id'] !== 'string' || typeof row['session'] !== 'string') {
+      return null;
+    }
+    const offset = row['offset'];
+    if (offset <= lastOffset || offset >= seal.bytes) return null;
+    lastOffset = offset;
+    entries.push(row as unknown as SegmentIndexEntry);
+  }
+  return entries.length === seal.index.lines ? entries : null;
+}
+
+/**
+ * Verifies the retained sealed set at start without reading one byte of a sealed segment: every
+ * seal is read, checked for format, key print, store, segment name and signature, then chained
+ * oldest to newest. A segment is trusted only when its seal verifies, its file is present at the
+ * sealed byte count and its index matches the signed triple. A missing, unreadable or mismatched
+ * seal or index, a changed size, or a predecessor that is not itself a trusted sealed segment
+ * marks the slot unsealed; the caller reads it in full through the ordinary verified path. The
+ * open segment is stat'd and named here, never read.
+ */
+export function verifyEventLogSeals(
+  project: string,
+  root: string,
+  home: string,
+  options: { kept?: number } = {},
+): SealCheckResult {
+  const kept = options.kept ?? eventLogSettingsFor(root, home).kept;
+  const storeDir = storePath(project, root, home);
+  const stateRoot = storesFolder(home);
+  const configDir = dirname(stateRoot);
+  for (const level of [configDir, stateRoot, storeDir]) {
+    const problem = ladderProblem(level);
+    if (problem !== null) return { ok: false, reason: problem };
+  }
+
+  const path = join(storeDir, EVENT_LOG_FILE);
+  for (let n = kept - 1; n >= 1; n--) {
+    const problem = fileProblem(`${path}.${String(n)}`);
+    if (problem !== null) return { ok: false, reason: problem };
+  }
+  const openProblem = fileProblem(path);
+  if (openProblem !== null) return { ok: false, reason: openProblem };
+
+  const keyState = messageKeyState(home);
+  const key = keyState.kind === 'key' ? keyState.key : null;
+  const keyPrint = keyPrintOf(home);
+
+  // The oldest slot present is where the retained chain begins; slots above it were never
+  // reached, so their absence is not a hole. A gap below it is.
+  let oldestPresent = 0;
+  for (let n = kept - 1; n >= 1; n--) {
+    if (heldAt(`${path}.${String(n)}`).kind === 'file') {
+      oldestPresent = n;
+      break;
+    }
+  }
+
+  const segments: SealCheck[] = [];
+  const problems: string[] = [];
+  // The slot processed just before: its seal digest and whether that seal is trusted.
+  let predecessor: { digest: string; trusted: boolean } | null = null;
+  for (let n = oldestPresent; n >= 1; n--) {
+    const segmentPath = `${path}.${String(n)}`;
+    const name = `${EVENT_LOG_FILE}.${String(n)}`;
+    if (heldAt(segmentPath).kind !== 'file') {
+      segments.push({ name, slot: n, path: segmentPath, state: 'missing' });
+      problems.push(`${name}: segment file is missing`);
+      predecessor = { digest: '', trusted: false };
+      continue;
+    }
+    const seal = readSeal(segmentPath, name, storeDir, keyPrint, key);
+    if (seal === null) {
+      const why = existsSync(sealPathOf(segmentPath)) ? 'bad-seal' : 'no-seal';
+      segments.push({ name, slot: n, path: segmentPath, state: 'unsealed', why });
+      problems.push(`${name}: ${why === 'no-seal' ? 'seal file is missing' : 'seal does not verify'}`);
+      predecessor = { digest: '', trusted: false };
+      continue;
+    }
+    const size = sizeOfFile(segmentPath);
+    if (size !== seal.bytes) {
+      segments.push({ name, slot: n, path: segmentPath, state: 'unsealed', why: 'size' });
+      problems.push(`${name}: size ${String(size)} differs from the sealed ${String(seal.bytes)}`);
+      predecessor = { digest: seal.sealDigest, trusted: false };
+      continue;
+    }
+    const entries = verifiedIndexEntries(segmentPath, seal);
+    if (entries === null) {
+      segments.push({ name, slot: n, path: segmentPath, state: 'unsealed', why: 'index' });
+      problems.push(`${name}: index does not match its seal`);
+      predecessor = { digest: seal.sealDigest, trusted: false };
+      continue;
+    }
+    if (predecessor !== null && (!predecessor.trusted || seal.previous !== predecessor.digest)) {
+      segments.push({ name, slot: n, path: segmentPath, state: 'unsealed', why: 'chain' });
+      problems.push(`${name}: predecessor is not a trusted sealed segment`);
+      predecessor = { digest: seal.sealDigest, trusted: false };
+      continue;
+    }
+    segments.push({ name, slot: n, path: segmentPath, state: 'sealed', seal, entries });
+    predecessor = { digest: seal.sealDigest, trusted: true };
+  }
+
+  const open = heldAt(path).kind === 'file' ? { path, size: sizeOfFile(path) } : null;
+  return { ok: true, segments, open, problems };
+}
+
+type SealSetCache = { stamp: string; value: SealCheckResult };
+
+const sealSetChecks = new Map<string, SealSetCache>();
+
+function stampText(stamp: LogFileStamp | null): string {
+  return stamp === null ? '-' : `${String(stamp.ino)}:${String(stamp.size)}:${String(stamp.mtimeMs)}:${String(stamp.ctimeMs)}`;
+}
+
+/** A stamp of every file the seal check reads or stats: each retained segment, its seal and its
+ *  index, then the open segment. Any change to one of them makes the check run again, and nothing
+ *  else does. */
+function sealSetStamp(project: string, root: string, home: string, kept: number): string {
+  const path = eventLogPath(project, root, home);
+  const parts: string[] = [];
+  for (let n = kept - 1; n >= 1; n--) {
+    const segment = `${path}.${String(n)}`;
+    parts.push(stampText(fileStamp(segment)));
+    parts.push(stampText(fileStamp(sealPathOf(segment))));
+    parts.push(stampText(fileStamp(indexPathOf(segment))));
+  }
+  parts.push(stampText(fileStamp(path)));
+  return parts.join('|');
+}
+
+/**
+ * `verifyEventLogSeals` for a caller that asks repeatedly over an unchanged set: the answer is
+ * kept until a segment, a seal or an index changes. The check itself never reads a segment's
+ * bytes, so its stamp is those files' own identity — rotation, a re-seal, a prune or a tampered
+ * sidecar all move it.
+ */
+export function verifyEventLogSealsCached(
+  project: string,
+  root: string,
+  home: string,
+  options: { kept?: number } = {},
+): SealCheckResult {
+  const kept = options.kept ?? eventLogSettingsFor(root, home).kept;
+  const cacheKey = `${storePath(project, root, home)}\u0000${String(kept)}\u0000${keyPrintOf(home)}`;
+  const stamp = sealSetStamp(project, root, home, kept);
+  const cached = sealSetChecks.get(cacheKey);
+  if (cached !== undefined && cached.stamp === stamp) return cached.value;
+  const value = verifyEventLogSeals(project, root, home, { kept });
+  sealSetChecks.set(cacheKey, { stamp, value });
+  return value;
+}
+
+/** Whether every line of one closed segment parses as a signed event and verifies under the
+ *  message key, sliced so a large segment never holds the event loop: the parse and signature
+ *  check give a turn every `sliceLines` lines. A segment that is empty, has no trailing newline,
+ *  or carries one line the key does not hold for is never sealed. */
+function* segmentLinesVerifySteps(
+  path: string,
+  key: KeyObject,
+  sliceLines: number,
+  signal?: AbortSignal,
+): Generator<void, boolean, void> {
+  const text = readNoFollow(path);
+  if (text === null || text.length === 0 || !text.endsWith('\n')) return false;
+  const slice = Math.max(1, Math.floor(sliceLines));
+  let lines = 0;
+  let seen = 0;
+  let position = 0;
+  while (position < text.length) {
+    const newline = text.indexOf('\n', position);
+    const end = newline < 0 ? text.length : newline;
+    const raw = text.slice(position, end);
+    position = newline < 0 ? text.length : newline + 1;
+    if (raw.trim() === '') continue;
+    seen += 1;
+    if (seen % slice === 0) yield;
+    if (signal?.aborted === true) return false;
+    const parsed = parseSignedEventLine(raw);
+    if (parsed === null) return false;
+    if (!verifyDomain(EVENT_DOMAIN, parsed.payload as unknown as Json, parsed.signature, key)) {
+      return false;
+    }
+    lines += 1;
+  }
+  return lines > 0;
+}
+
+type PreparedOpenChunk = {
+  bytes: Buffer;
+  indexText: string;
+  lines: number;
+  firstSeq: number;
+  lastSeq: number;
+  declaredOldest: number | null;
+  digest: string;
+  index: { bytes: number; lines: number; digest: string };
+  session: string;
+};
+
+/**
+ * Seals the segments a store written before seals existed left behind, one segment at a time and
+ * sliced, and splits an oversized open `events.jsonl` (`size >= segmentBytes`, written under an
+ * older segment bound) into sealed `segmentBytes` segments: every candidate is read and verified in
+ * full first, with a turn to the event loop every `sliceLines` lines, and the append lock is taken
+ * only for the atomic commit itself. Each seal names the digest of the seal before it, so the chain
+ * is complete oldest first. A segment that cannot be sealed — an unverifiable line, a file that
+ * moved while it was read — stops the pass, so nothing newer is sealed onto a broken chain. A
+ * segment whose seal exists but does not hold is never re-sealed, because signing it again would
+ * launder exactly what the failed check refuses. Sealing is idempotent: a sealed segment is skipped
+ * and its sidecars are never rewritten.
+ */
+export function* sealUnsealedSegmentsSteps(
+  project: string,
+  root: string,
+  home: string,
+  options: {
+    kept?: number;
+    segmentBytes?: number;
+    retentionSeconds?: number;
+    maxTotalBytes?: number;
+    session?: string;
+    signal?: AbortSignal;
+    sliceLines?: number;
+  } = {},
+): Generator<void, string[], void> {
+  const settings =
+    options.kept === undefined ? eventLogSettingsFor(root, home) : null;
+  const kept = options.kept ?? settings!.kept;
+  const storeDir = storePath(project, root, home);
+  const sliceLines = options.sliceLines ?? READ_EVENTS_SLICE_LINES;
+  const keyState = messageKeyState(home);
+  if (keyState.kind !== 'key') return [];
+  const keyPrint = keyPrintOf(home);
+  const isAborted = (): boolean => options.signal?.aborted === true;
+  const sealed: string[] = [];
+  const checked = verifyEventLogSeals(project, root, home, { kept });
+  if (!checked.ok) return [];
+  let previous: string | null = null;
+  let chainOpen = true;
+  for (const segment of checked.segments) {
+    if (!chainOpen || isAborted()) break;
+    if (segment.state === 'sealed') {
+      if (segment.seal === undefined) {
+        chainOpen = false;
+        continue;
+      }
+      previous = segment.seal.sealDigest;
+      continue;
+    }
+    if (segment.state !== 'unsealed' || segment.why !== 'no-seal') {
+      chainOpen = false;
+      continue;
+    }
+    // The verification runs without the lock; the lock below covers only the seal write, and a
+    // segment whose bytes moved since it was verified is refused by the stamp check.
+    const stamp = fileStamp(segment.path);
+    if (stamp === null || !(yield* segmentLinesVerifySteps(segment.path, keyState.key, sliceLines, options.signal))) {
+      chainOpen = false;
+      continue;
+    }
+    const written: { seal: StoredSeal | null } = { seal: null };
+    try {
+      // A held key defers the whole migration. Swallowing the busy answer and continuing would
+      // look like a finished attempt, and this process would never seal the segment.
+      withEventLock(
+        storeDir,
+        () => {
+          if (!sameStamp(stamp, fileStamp(segment.path))) return;
+          written.seal = sealSegment(segment.path, segment.name, storeDir, keyPrint, keyState.key, previous);
+        },
+        0,
+      );
+    } catch (error) {
+      if (error instanceof LockBusyError) throw error;
+      chainOpen = false;
+      continue;
+    }
+    if (written.seal === null) {
+      // A file that moved since its verification keeps its slot unsealed and stops the chain; a
+      // later pass reads and seals what then sits there.
+      chainOpen = false;
+      continue;
+    }
+    previous = written.seal.sealDigest;
+    sealed.push(segment.name);
+    logLine(join(root, '.agents'), 'bus', 'event-log', `sealed ${segment.name}`);
+    yield;
+  }
+
+  // An open `events.jsonl` left over from a larger segment bound (`size >= segmentBytes`) is
+  // verified and indexed in slices outside the event lock. The chunk bytes are written to pending
+  // names while the lock is held, one segment per turn, and the live names change only in the
+  // commit that follows: until that commit the open file is still the whole readable log. A
+  // crash before the commit leaves that file and names a reader does not look at.
+  const openCandidate = checked.open;
+  if (
+    chainOpen &&
+    kept >= 2 &&
+    !isAborted() &&
+    openCandidate !== null &&
+    (options.segmentBytes !== undefined || openCandidate.size >= 1_000_000)
+  ) {
+    const fullSettings =
+      options.segmentBytes !== undefined && options.retentionSeconds !== undefined
+        ? null
+        : (settings ?? eventLogSettingsFor(root, home));
+    const segmentBytes = options.segmentBytes ?? fullSettings!.segmentBytes;
+    const retentionSeconds = options.retentionSeconds ?? fullSettings!.retentionSeconds;
+    const retention: EventLogRetention = {
+      ...(options.maxTotalBytes !== undefined ? { maxTotalBytes: options.maxTotalBytes } : {}),
+      retentionSeconds,
+    };
+    const openPath = openCandidate.path;
+    const openStamp = fileStamp(openPath);
+    const openBytes =
+      segmentBytes > 0 && openCandidate.size >= segmentBytes ? yield* readBytesYielding(openPath) : null;
+    const openStampAfter = fileStamp(openPath);
+    if (
+      openBytes !== null &&
+      sameStamp(openStamp, openStampAfter) &&
+      openBytes.length >= segmentBytes &&
+      openBytes[openBytes.length - 1] === BYTE_NEWLINE
+    ) {
+      const slice = Math.max(1, Math.floor(sliceLines));
+      const chunkRanges: {
+        start: number;
+        end: number;
+        firstSeq: number;
+        lastSeq: number;
+        declaredOldest: number | null;
+        session: string;
+      }[] = [];
+      let chunkStart = 0;
+      let chunkEnd = 0;
+      let firstSeq = 0;
+      let lastSeq = 0;
+      let declaredOldest: number | null = null;
+      let chunkSession = options.session ?? project;
+      let seen = 0;
+      let position = 0;
+      while (position < openBytes.length) {
+        const newline = openBytes.indexOf(BYTE_NEWLINE, position);
+        if (newline < 0) break;
+        const nextPos = newline + 1;
+        const raw = openBytes.toString('utf8', position, newline);
+        if (raw.trim() === '') break;
+        seen += 1;
+        if (seen % slice === 0) yield;
+        if (isAborted()) return sealed;
+        const parsed = parseSignedEventLine(raw);
+        if (
+          parsed === null ||
+          !verifyDomain(EVENT_DOMAIN, parsed.payload as unknown as Json, parsed.signature, keyState.key)
+        ) {
+          break;
+        }
+        if (chunkEnd > chunkStart && nextPos - chunkStart > segmentBytes) {
+          chunkRanges.push({
+            start: chunkStart,
+            end: chunkEnd,
+            firstSeq,
+            lastSeq,
+            declaredOldest,
+            session: chunkSession,
+          });
+          chunkStart = position;
+          chunkEnd = 0;
+          declaredOldest = null;
+        }
+        if (chunkEnd <= chunkStart) {
+          firstSeq = parsed.payload.seq;
+        }
+        chunkEnd = nextPos;
+        lastSeq = parsed.payload.seq;
+        chunkSession = parsed.payload.session;
+        const declared = parsed.payload.dropped_oldest_seq;
+        if (parsed.payload.kind === 'team.event-log-dropped' && declared !== undefined) {
+          declaredOldest = declaredOldest === null ? declared : Math.min(declaredOldest, declared);
+        }
+        if (chunkEnd - chunkStart >= segmentBytes) {
+          chunkRanges.push({
+            start: chunkStart,
+            end: chunkEnd,
+            firstSeq,
+            lastSeq,
+            declaredOldest,
+            session: chunkSession,
+          });
+          chunkStart = nextPos;
+          chunkEnd = nextPos;
+          declaredOldest = null;
+        }
+        position = nextPos;
+      }
+
+      if (chunkRanges.length > 0) {
+        const preparedChunks: PreparedOpenChunk[] = [];
+        let validChunks = true;
+        for (const range of chunkRanges) {
+          if (isAborted()) return sealed;
+          const chunkBytes = openBytes.subarray(range.start, range.end);
+          const built = buildSegmentIndex(chunkBytes);
+          if (built === null) {
+            validChunks = false;
+            break;
+          }
+          const indexBytes = Buffer.from(built.text, 'utf8');
+          preparedChunks.push({
+            bytes: chunkBytes,
+            indexText: built.text,
+            lines: built.entries.length,
+            firstSeq: range.firstSeq,
+            lastSeq: range.lastSeq,
+            declaredOldest: range.declaredOldest,
+            digest: createHash('sha256').update(chunkBytes).digest('hex'),
+            index: {
+              bytes: indexBytes.length,
+              lines: built.entries.length,
+              digest: createHash('sha256').update(indexBytes).digest('hex'),
+            },
+            session: range.session,
+          });
+          yield;
+        }
+
+        if (validChunks && !isAborted()) {
+          const splitOffset = chunkRanges[chunkRanges.length - 1]!.end;
+          const splitSealed: string[] = [];
+          const lockDir = join(storeDir, 'locks', 'events');
+          let release: (() => void) | null = null;
+          const pendingPaths: string[] = [];
+          const published: string[] = [];
+          let openReplaced = false;
+          try {
+            // The key stays held across the yields below. Another process sees the lock file.
+            // Another turn in this process takes the busy answer, because the hold is marked
+            // yielding for each turn the loop is free. The drop declaration runs later, on the
+            // commit turn, which is not yielding, so it still appends under this hold.
+            // A key already held is busy immediately. Waiting here would pause the loop for the
+            // whole default, so the split waits for the next pass instead.
+            release = acquireLock(lockDir, { waitMs: 0 });
+            heldEventLocks.add(lockDir);
+            const moved = !sameStamp(openStampAfter, fileStamp(openPath));
+            const rechecked = moved ? null : verifyEventLogSeals(project, root, home, { kept });
+            let currentPrev: string | null = null;
+            let chainOpenForSplit = !moved && rechecked !== null && rechecked.ok;
+            if (chainOpenForSplit && rechecked !== null && rechecked.ok) {
+              for (const seg of rechecked.segments) {
+                if (seg.state !== 'sealed' || seg.seal === undefined) {
+                  chainOpenForSplit = false;
+                  break;
+                }
+                currentPrev = seg.seal.sealDigest;
+              }
+            }
+            if (chainOpenForSplit && currentPrev === previous) {
+              const maxClosed = kept - 1;
+              const totalChunks = preparedChunks.length;
+              const drops: DroppedSegment[] = [];
+              const openMtimeMs = Math.floor(statSync(openPath).mtimeMs);
+              const signer: SealSigner = { storeDir, key: keyState.key, keyPrint };
+
+              for (let i = 0; i < totalChunks; i++) {
+                if (isAborted()) break;
+                const chunk = preparedChunks[i]!;
+                const slot = totalChunks - i;
+                if (slot > maxClosed) continue;
+                const pending = `${openPath}.pending-${String(slot)}`;
+                writeAtomic(pending, chunk.bytes.toString('utf8'));
+                writeAtomic(`${pending}${INDEX_SUFFIX}`, chunk.indexText);
+                pendingPaths.push(pending);
+                yield* yieldEventLock(lockDir);
+              }
+
+              if (!isAborted()) {
+                let chainPredecessor: string | null | undefined = undefined;
+                for (let n = maxClosed; n >= Math.max(1, maxClosed - totalChunks + 1); n--) {
+                  const slotPath = `${openPath}.${String(n)}`;
+                  if (heldAt(slotPath).kind !== 'file') continue;
+                  const existingSeal = readSeal(
+                    slotPath,
+                    `${EVENT_LOG_FILE}.${String(n)}`,
+                    storeDir,
+                    keyPrint,
+                    keyState.key,
+                  );
+                  const range = verifiedRangeOf(slotPath, home);
+                  drops.push({
+                    name: `${EVENT_LOG_FILE}.${String(n)}`,
+                    bytes: sizeOfFile(slotPath),
+                    oldestSeq: range?.oldest ?? null,
+                    newestSeq: range?.newest ?? null,
+                    declaredOldest: range?.declaredOldest ?? null,
+                    bounds: ['rotation'],
+                  });
+                  chainPredecessor = existingSeal?.sealDigest ?? null;
+                  unlinkSidecars(slotPath);
+                  unlinkSync(slotPath);
+                }
+
+                for (let n = maxClosed - totalChunks; n >= 1; n--) {
+                  const from = `${openPath}.${String(n)}`;
+                  const to = `${openPath}.${String(n + totalChunks)}`;
+                  if (!existsSync(from)) {
+                    chainPredecessor = undefined;
+                    continue;
+                  }
+                  renameSync(from, to);
+                  chmodSync(to, 0o600);
+                  if (existsSync(`${from}${INDEX_SUFFIX}`)) {
+                    renameSync(`${from}${INDEX_SUFFIX}`, `${to}${INDEX_SUFFIX}`);
+                    try {
+                      chmodSync(`${to}${INDEX_SUFFIX}`, 0o600);
+                    } catch {
+                      // The reader's triple check refuses a file it cannot read; the move stands.
+                    }
+                  }
+                  chainPredecessor = moveSeal(from, to, n, n + totalChunks, signer, chainPredecessor);
+                }
+
+                let pred: string | null = chainPredecessor === undefined ? previous : chainPredecessor;
+                for (let i = 0; i < totalChunks; i++) {
+                  const chunk = preparedChunks[i]!;
+                  const slot = totalChunks - i;
+                  const segmentName = `${EVENT_LOG_FILE}.${String(slot)}`;
+                  const fields: SealFields = {
+                    format: SEAL_FORMAT,
+                    keyPrint,
+                    store: storeDir,
+                    segment: segmentName,
+                    firstSeq: chunk.firstSeq,
+                    lastSeq: chunk.lastSeq,
+                    lines: chunk.lines,
+                    bytes: chunk.bytes.length,
+                    digest: chunk.digest,
+                    previous: pred,
+                    sealedAt: openMtimeMs,
+                    index: chunk.index,
+                  };
+                  const sealDigest = sealDigestOf(fields);
+                  pred = sealDigest;
+                  if (slot > maxClosed) {
+                    drops.push({
+                      name: `${EVENT_LOG_FILE}.${String(maxClosed)}`,
+                      bytes: chunk.bytes.length,
+                      oldestSeq: chunk.firstSeq,
+                      newestSeq: chunk.lastSeq,
+                      declaredOldest: chunk.declaredOldest,
+                      bounds: ['rotation'],
+                    });
+                    continue;
+                  }
+                  const slotPath = `${openPath}.${String(slot)}`;
+                  const pending = `${openPath}.pending-${String(slot)}`;
+                  const signature = signDomain(SEAL_DOMAIN, sealPayloadOf(fields), keyState.key);
+                  renameSync(pending, slotPath);
+                  chmodSync(slotPath, 0o600);
+                  published.push(slotPath);
+                  if (existsSync(`${pending}${INDEX_SUFFIX}`)) {
+                    renameSync(`${pending}${INDEX_SUFFIX}`, indexPathOf(slotPath));
+                    try {
+                      chmodSync(indexPathOf(slotPath), 0o600);
+                    } catch {
+                      // The reader's triple check refuses a file it cannot read; the move stands.
+                    }
+                  }
+                  writeAtomic(
+                    sealPathOf(slotPath),
+                    `${JSON.stringify({ ...sealPayloadOf(fields), sealDigest, signature })}\n`,
+                  );
+                  splitSealed.push(segmentName);
+                }
+
+                writeAtomic(openPath, openBytes.subarray(splitOffset).toString('utf8'));
+                openReplaced = true;
+                try {
+                  drops.push(...pruneSealed(openPath, home, kept, retention));
+                } catch {
+                  // Retention never fails the split pass.
+                }
+                try {
+                  declareDrop(
+                    project,
+                    root,
+                    home,
+                    kept,
+                    { ...retention, maxBytes: segmentBytes },
+                    drops,
+                    options.session ?? preparedChunks[preparedChunks.length - 1]!.session,
+                  );
+                } catch {
+                  // Retention never fails the split pass.
+                }
+              }
+            }
+          } catch (error) {
+            // A write failure leaves the open log readable for the next pass. A busy key is
+            // the caller's to retry; swallowing it would look like a finished attempt.
+            if (error instanceof LockBusyError) throw error;
+          } finally {
+            if (!openReplaced) {
+              for (const slotPath of published) {
+                try { unlinkSync(slotPath); } catch { /* the next pass seals what remains */ }
+                try { unlinkSync(indexPathOf(slotPath)); } catch { /* sidecar of a slot just removed */ }
+                try { unlinkSync(sealPathOf(slotPath)); } catch { /* sidecar of a slot just removed */ }
+              }
+              for (const pending of pendingPaths) {
+                try { unlinkSync(pending); } catch { /* already renamed, or never written */ }
+                try { unlinkSync(`${pending}${INDEX_SUFFIX}`); } catch { /* already renamed */ }
+              }
+            }
+            heldEventLocks.delete(lockDir);
+            eventLockYielding.delete(lockDir);
+            if (release !== null) release();
+          }
+          for (const name of splitSealed) {
+            sealed.push(name);
+            logLine(join(root, '.agents'), 'bus', 'event-log', `sealed ${name}`);
+          }
+        }
+      }
+    }
+  }
+  return sealed;
+}
+
+/** The blocking form of `sealUnsealedSegmentsSteps`: for a caller that can wait out the whole
+ *  pass. The bus's own first read drives the sliced form so its loop keeps serving. */
+export function sealUnsealedSegments(
+  project: string,
+  root: string,
+  home: string,
+  options: {
+    kept?: number;
+    segmentBytes?: number;
+    retentionSeconds?: number;
+    maxTotalBytes?: number;
+    session?: string;
+    signal?: AbortSignal;
+    sliceLines?: number;
+  } = {},
+): string[] {
+  return drainSteps(sealUnsealedSegmentsSteps(project, root, home, options));
+}
+
+/** What a hydrated record contributes to the reconcile and presence sets: the fields those passes
+ *  ask of a verified record, without its signature or its byte offset. */
+export type EventBrief = {
+  seq: number;
+  kind: string;
+  record_id: string;
+  session: string;
+  seat?: string;
+  ts?: string;
+  from?: string;
+  to?: string;
+};
+
+export type EventIndexReadResult =
+  | {
+      ok: true;
+      entries: EventBrief[];
+      /** Record signatures this read checked itself. A hydrated sealed segment contributes none;
+       *  the lines of the open segment are checked one by one as before. */
+      checked: number;
+      full: boolean;
+      path: string;
+      oldestSeq: number | null;
+      newestSeq: number | null;
+      unverified: number;
+      /** Present retained segments this read could not trust a seal for. The caller seals them
+       *  once its verified read is done; zero on a fully sealed store. */
+      unsealed: number;
+      /** The newest sequence the sealed set vouches for, or null when a present segment is not
+       *  sealed. A cursor at or above it can be answered from the open segment alone. */
+      sealedNewestSeq: number | null;
+    }
+  | { ok: false; reason: string };
+
+function briefOfEntry(entry: SegmentIndexEntry): EventBrief {
+  const brief: EventBrief = {
+    seq: entry.seq,
+    kind: entry.kind,
+    record_id: entry.record_id,
+    session: entry.session,
+  };
+  if (entry.seat !== undefined) brief.seat = entry.seat;
+  if (entry.ts !== undefined) brief.ts = entry.ts;
+  if (entry.from !== undefined) brief.from = entry.from;
+  if (entry.to !== undefined) brief.to = entry.to;
+  return brief;
+}
+
+function briefOfRecord(record: SignedEventRecord): EventBrief {
+  const { payload } = record;
+  const brief: EventBrief = {
+    seq: payload.seq,
+    kind: payload.kind,
+    record_id: payload.record_id,
+    session: payload.session,
+  };
+  if (payload.seat !== undefined) brief.seat = payload.seat;
+  if (payload.ts !== undefined) brief.ts = payload.ts;
+  if (payload.from !== undefined) brief.from = payload.from;
+  if (payload.to !== undefined) brief.to = payload.to;
+  return brief;
+}
+
+type HydratedStore = {
+  keyPrint: string;
+  kept: number;
+  seals: string;
+  openStamp: LogFileStamp | null;
+  result: Extract<EventIndexReadResult, { ok: true }>;
+  /** The sealed segments' briefs alone, kept so an append to the open segment re-reads only it. */
+  sealedEntries: EventBrief[];
+  sealedNewestSeq: number | null;
+  /** The verified open records behind this hydration, for a caller that needs whole records. */
+  openRecords: SignedEventRecord[];
+};
+
+const hydratedStores = new Map<string, HydratedStore>();
+
+type OpenRecords = { records: SignedEventRecord[]; checked: number; unverified: number };
+
+/** The open segment parsed and verified line by line, sliced: the one segment of a sealed store
+ *  whose bytes a reader still reads. A line whose signature does not verify is counted, never
+ *  returned. A missing or empty file contributes nothing; a file that exists and cannot be read
+ *  answers null. */
+function* openRecordsSteps(
+  path: string,
+  keyState: ReturnType<typeof messageKeyState>,
+  sliceLines: number,
+): Generator<void, OpenRecords | null, void> {
+  if (heldAt(path).kind !== 'file' || sizeOfFile(path) === 0) {
+    return { records: [], checked: 0, unverified: 0 };
+  }
+  const text = readNoFollow(path);
+  if (text === null) return null;
+  yield;
+  const slice = Math.max(1, Math.floor(sliceLines));
+  const records: SignedEventRecord[] = [];
+  let checked = 0;
+  let unverified = 0;
+  let position = 0;
+  let seen = 0;
+  while (position < text.length) {
+    const newline = text.indexOf('\n', position);
+    const end = newline < 0 ? text.length : newline;
+    const raw = text.slice(position, end);
+    position = newline < 0 ? text.length : newline + 1;
+    if (raw.trim() === '') continue;
+    seen += 1;
+    if (seen % slice === 0) yield;
+    const parsed = parseSignedEventLine(raw);
+    checked += 1;
+    if (
+      parsed === null ||
+      keyState.kind !== 'key' ||
+      !verifyDomain(EVENT_DOMAIN, parsed.payload as unknown as Json, parsed.signature, keyState.key)
+    ) {
+      unverified += 1;
+      continue;
+    }
+    records.push(parsed);
+  }
+  return { records, checked, unverified };
+}
+
+/**
+ * The dedupe view of the retained log for the reconcile pass: every sealed segment contributes
+ * its signed index, and only the open segment's bytes are read and checked line by line. The
+ * sealed set is verified by `verifyEventLogSealsCached` first; a segment that is present but
+ * unsealed sends the whole read through the ordinary verified path, so hydration is a saving over
+ * a sealed log, never a way around verification. The result is cached per store until a seal, a
+ * segment or the open file changes; an append to an unchanged sealed set re-reads only the open
+ * segment.
+ */
+export function hydrateEventLog(
+  project: string,
+  root: string,
+  home: string,
+  options: { kept?: number } = {},
+): EventIndexReadResult {
+  return drainSteps(hydrateEventLogSteps(project, root, home, options));
+}
+
+export function* hydrateEventLogSteps(
+  project: string,
+  root: string,
+  home: string,
+  options: { kept?: number } = {},
+): Generator<void, EventIndexReadResult, void> {
+  const kept = options.kept ?? eventLogSettingsFor(root, home).kept;
+  const checked = verifyEventLogSealsCached(project, root, home, { kept });
+  if (!checked.ok) return checked;
+
+  const keyState = messageKeyState(home);
+  const keyPrint = keyPrintOf(home);
+  const path = checked.open?.path ?? eventLogPath(project, root, home);
+  const openStamp = fileStamp(path);
+  const sealKey = checked.segments
+    .map((segment) => `${segment.name}:${segment.state}:${segment.seal?.sealDigest ?? ''}`)
+    .join('|');
+  const cacheKey = `${storePath(project, root, home)}\u0000${String(kept)}`;
+  const cached = hydratedStores.get(cacheKey);
+  const sameSeals =
+    cached !== undefined &&
+    cached.keyPrint === keyPrint &&
+    cached.kept === kept &&
+    cached.seals === sealKey;
+  if (sameSeals && sameStamp(cached.openStamp, openStamp)) {
+    // No seal and no retained byte moved since this process hydrated them.
+    return { ...cached.result, checked: 0, full: false };
+  }
+
+  // With no sealed segment there is nothing to hydrate, and a present segment without a trusted
+  // seal carries records this index cannot vouch for: read the retained log the ordinary way,
+  // which verifies every record it returns and keeps the checkpoint rules it always had.
+  const unsealed = checked.segments.filter((segment) => segment.state === 'unsealed').length;
+  if (checked.segments.length === 0 || unsealed > 0) {
+    const read = yield* readEventsSteps(project, root, home, { kept });
+    if (!read.ok) return read;
+    const entries: EventBrief[] = [];
+    let mapped = 0;
+    for (const event of read.events) {
+      entries.push(briefOfRecord(event));
+      mapped += 1;
+      if (mapped % READ_EVENTS_SLICE_LINES === 0) yield;
+    }
+    return {
+      ok: true,
+      entries,
+      checked: read.checked,
+      full: read.full,
+      path: read.path,
+      oldestSeq: read.oldestSeq,
+      newestSeq: read.newestSeq,
+      unverified: read.unverified,
+      unsealed,
+      sealedNewestSeq: null,
+    };
+  }
+
+  let sealedEntries: EventBrief[];
+  let sealedNewestSeq: number | null;
+  if (sameSeals) {
+    sealedEntries = cached.sealedEntries;
+    sealedNewestSeq = cached.sealedNewestSeq;
+  } else {
+    sealedEntries = [];
+    sealedNewestSeq = null;
+    let seenSealed = 0;
+    for (const segment of checked.segments) {
+      if (segment.state !== 'sealed' || segment.entries === undefined) continue;
+      for (const entry of segment.entries) {
+        sealedEntries.push(briefOfEntry(entry));
+        seenSealed += 1;
+        if (seenSealed % READ_EVENTS_SLICE_LINES === 0) yield;
+      }
+      sealedNewestSeq = segment.seal?.lastSeq ?? sealedNewestSeq;
+      yield;
+    }
+  }
+
+  const open = yield* openRecordsSteps(path, keyState, READ_EVENTS_SLICE_LINES);
+  if (open === null) return { ok: false, reason: 'the event log could not be read' };
+  const entries = sealedEntries.slice();
+  let seenOpen = 0;
+  for (const record of open.records) {
+    entries.push(briefOfRecord(record));
+    seenOpen += 1;
+    if (seenOpen % READ_EVENTS_SLICE_LINES === 0) yield;
+  }
+
+  const result: Extract<EventIndexReadResult, { ok: true }> = {
+    ok: true,
+    entries,
+    checked: open.checked,
+    full: false,
+    path,
+    oldestSeq: entries.length > 0 ? entries[0]!.seq : null,
+    newestSeq: entries.length > 0 ? entries[entries.length - 1]!.seq : null,
+    unverified: open.unverified,
+    unsealed: 0,
+    sealedNewestSeq,
+  };
+  if (keyState.kind === 'key' && open.unverified === 0) {
+    hydratedStores.set(cacheKey, {
+      keyPrint,
+      kept,
+      seals: sealKey,
+      openStamp,
+      result,
+      sealedEntries,
+      sealedNewestSeq,
+      openRecords: open.records,
+    });
+  } else {
+    hydratedStores.delete(cacheKey);
+  }
+  return result;
 }
 
 /** Reads all retained event log files (`events.jsonl.2`, `.1`, `events.jsonl`) in sequence order,
@@ -979,7 +2296,9 @@ export function* readEventsSteps(
   home: string,
   options: { kept?: number } = {},
 ): Generator<void, EventReadResult, void> {
-  const kept = options.kept ?? EVENT_LOG_KEPT;
+  // A reader that was not told the set's bound reads the team's segment-size word the way an
+  // append does; the count follows the same segment size, so both sides see the same files.
+  const kept = options.kept ?? eventLogSettingsFor(root, home).kept;
   const storeDir = storePath(project, root, home);
   const stateRoot = storesFolder(home);
   const configDir = dirname(stateRoot);
@@ -1241,6 +2560,106 @@ export function* readEventsSteps(
   return result;
 }
 
+/** What a matching read may ask of one record before any sealed byte is read: the kind and the
+ *  record id, the two fields a sealed segment's index carries and its seal signs. A predicate
+ *  never sees a payload the reader has not verified. */
+export type EventBriefFilter = (entry: { kind: string; record_id: string }) => boolean;
+
+/** The retained records whose kind or record id satisfies `filter`, read through the sealed
+ *  segments' signed indexes: for every matching index entry only that entry's own line is read
+ *  and its signature verified, and the open segment is read whole, line by line, as every read
+ *  does. Nothing is appended and nothing is written.
+ *
+ *  The index is trusted only where `verifyEventLogSealsCached` trusts its seal: a signed index
+ *  triple, chained to the trusted segment before it. When no segment is sealed, a present
+ *  segment is unsealed or missing, there is no key to check a candidate line with, or a candidate
+ *  line no longer parses as the record the index named under the key's signature, the read falls
+ *  back to the ordinary verified read of the whole retained log and filters it, so no answer
+ *  rests on an index the seal does not vouch for. */
+export function readEventsMatching(
+  project: string,
+  root: string,
+  home: string,
+  filter: EventBriefFilter,
+  options: { kept?: number } = {},
+): EventReadResult {
+  return drainSteps(readEventsMatchingSteps(project, root, home, filter, options));
+}
+
+function* readEventsMatchingSteps(
+  project: string,
+  root: string,
+  home: string,
+  filter: EventBriefFilter,
+  options: { kept?: number },
+): Generator<void, EventReadResult, void> {
+  const kept = options.kept ?? eventLogSettingsFor(root, home).kept;
+  const checked = verifyEventLogSealsCached(project, root, home, { kept });
+  if (!checked.ok) return checked;
+
+  const keyState = messageKeyState(home);
+  // Every present segment must be trusted, seal and index both: a hole in the chain leaves a
+  // stretch of the retained history no index accounts for, so the whole read stays ordinary.
+  const trusted =
+    checked.segments.length > 0
+    && checked.segments.every((segment) => segment.state === 'sealed' && segment.entries !== undefined);
+  if (!trusted || keyState.kind !== 'key') {
+    const read = yield* readEventsSteps(project, root, home, { kept });
+    if (!read.ok) return read;
+    return { ...read, events: read.events.filter((record) => filter(record.payload)) };
+  }
+
+  const events: SignedEventRecord[] = [];
+  let checkedLines = 0;
+  let disagree = false;
+  for (const segment of checked.segments) {
+    if (segment.state !== 'sealed' || segment.entries === undefined) continue;
+    for (const entry of segment.entries) {
+      if (!filter(entry)) continue;
+      checkedLines += 1;
+      const raw = readLineAt(segment.path, entry.offset);
+      const parsed = raw === null ? null : parseSignedEventLine(raw);
+      if (
+        parsed === null
+        || parsed.payload.seq !== entry.seq
+        || parsed.payload.kind !== entry.kind
+        || parsed.payload.record_id !== entry.record_id
+        || !verifyDomain(EVENT_DOMAIN, parsed.payload as unknown as Json, parsed.signature, keyState.key)
+      ) {
+        // The index named a line this segment no longer holds as that signed record: the sealed
+        // bytes and the index disagree, so the answer comes from the whole retained log instead.
+        disagree = true;
+        break;
+      }
+      events.push(parsed);
+    }
+    if (disagree) break;
+    yield;
+  }
+  if (disagree) {
+    const read = yield* readEventsSteps(project, root, home, { kept });
+    if (!read.ok) return read;
+    return { ...read, events: read.events.filter((record) => filter(record.payload)) };
+  }
+
+  const path = checked.open?.path ?? eventLogPath(project, root, home);
+  const open = yield* openRecordsSteps(path, keyState, READ_EVENTS_SLICE_LINES);
+  if (open === null) return { ok: false, reason: 'the event log could not be read' };
+  for (const record of open.records) {
+    if (filter(record.payload)) events.push(record);
+  }
+  return {
+    ok: true,
+    events,
+    unverified: open.unverified,
+    checked: checkedLines + open.checked,
+    full: false,
+    oldestSeq: events.length > 0 ? events[0]!.payload.seq : null,
+    newestSeq: events.length > 0 ? events[events.length - 1]!.payload.seq : null,
+    path,
+  };
+}
+
 /** Whether the retained `team.event-log-dropped` records cover every sequence in `from`..`to`.
  *  Ranges may abut and overlap; together they must reach the whole missing window. */
 function declaredDropCovers(events: SignedEventRecord[], from: number, to: number): boolean {
@@ -1287,6 +2706,36 @@ export async function readEventsFromCursorSliced(
   return driveSteps(readEventsFromCursorSteps(project, root, home, cursor, options));
 }
 
+/** The cursor answer built from the open segment's verified records: only records past the cursor
+ *  are returned, and a cursor past every record stays where it is. `newestSeq` falls back to the
+ *  sealed set's newest when the open file is empty. */
+function tailCursorResult(
+  records: SignedEventRecord[],
+  hydrated: Extract<EventIndexReadResult, { ok: true }>,
+  cursor: number,
+  checked: number,
+  unverified: number,
+): CursorReadResult {
+  const events = records.filter((record) => record.payload.seq > cursor);
+  const newestSeq = records.length > 0
+    ? records[records.length - 1]!.payload.seq
+    : hydrated.sealedNewestSeq;
+  const nextCursor = events.length > 0
+    ? events[events.length - 1]!.payload.seq
+    : (newestSeq !== null && newestSeq > cursor ? newestSeq : cursor);
+  return {
+    ok: true,
+    kind: 'events',
+    events,
+    cursor: nextCursor,
+    oldestSeq: hydrated.oldestSeq,
+    newestSeq,
+    checked,
+    full: false,
+    unverified,
+  };
+}
+
 export function* readEventsFromCursorSteps(
   project: string,
   root: string,
@@ -1294,7 +2743,47 @@ export function* readEventsFromCursorSteps(
   cursor: number,
   options: { kept?: number } = {},
 ): Generator<void, CursorReadResult, void> {
-  const read = yield* readEventsSteps(project, root, home, options);
+  const kept = options.kept ?? eventLogSettingsFor(root, home).kept;
+  const path = eventLogPath(project, root, home);
+  let anySeal = false;
+  for (let n = kept - 1; n >= 1; n--) {
+    if (heldAt(sealPathOf(`${path}.${String(n)}`)).kind === 'file') {
+      anySeal = true;
+      break;
+    }
+  }
+  // A cursor at or past the sealed set's newest record needs no sealed byte: the seals vouch for
+  // that history, and only the open segment can hold what the cursor has not seen. A cursor
+  // inside the history, an unsealed segment or a store with no seal takes the ordinary verified
+  // read below, with its gap and retention rules unchanged.
+  if (cursor > 0 && anySeal) {
+    const hydrated = yield* hydrateEventLogSteps(project, root, home, { kept });
+    if (!hydrated.ok) return hydrated;
+    if (
+      hydrated.unsealed === 0 &&
+      hydrated.sealedNewestSeq !== null &&
+      hydrated.oldestSeq !== null &&
+      cursor >= hydrated.sealedNewestSeq
+    ) {
+      // The hydration just parsed the open segment (or answered from its cache while that file
+      // was unchanged): those verified records answer this cursor without a second read.
+      const cacheKey = `${storePath(project, root, home)}\u0000${String(kept)}`;
+      const entry = hydratedStores.get(cacheKey);
+      if (
+        entry !== undefined &&
+        entry.keyPrint === keyPrintOf(home) &&
+        entry.sealedNewestSeq === hydrated.sealedNewestSeq &&
+        entry.result.oldestSeq === hydrated.oldestSeq &&
+        sameStamp(entry.openStamp, fileStamp(path))
+      ) {
+        return tailCursorResult(entry.openRecords, hydrated, cursor, hydrated.checked, hydrated.unverified);
+      }
+      const open = yield* openRecordsSteps(path, messageKeyState(home), READ_EVENTS_SLICE_LINES);
+      if (open === null) return { ok: false, reason: 'the event log could not be read' };
+      return tailCursorResult(open.records, hydrated, cursor, open.checked, open.unverified);
+    }
+  }
+  const read = yield* readEventsSteps(project, root, home, { kept });
   if (!read.ok) return read;
   const { events, oldestSeq, newestSeq } = read;
   if (cursor > 0 && oldestSeq !== null && cursor + 1 < oldestSeq) {
@@ -1353,6 +2842,11 @@ type WantedKey = { key: string; recordId: string };
  *  append that does not deduplicate and needs only the newest sequence). */
 type IndexRequest = WantedKey | 'all' | null;
 
+type SealedIndexBuffer = {
+  seal: StoredSeal;
+  indexBytes: Buffer;
+};
+
 type AppendIndex = {
   keyPrint: string;
   files: (LogFileStamp | null)[];
@@ -1364,10 +2858,14 @@ type AppendIndex = {
   covered: Set<string>;
   /** Every possible key is covered: the whole retained log was verified. */
   coveredAll: boolean;
-  /** Every record id the retained lines spell, with the place of each line that spells it. One
-   *  walk over the retained bytes builds it; a key searched later reads only its own lines
-   *  instead of re-reading the log. */
+  /** The candidate line places for each record id this index has searched (or for every record id
+   *  when `idsComplete` is true). */
   ids: Map<string, IdPlaces>;
+  idsComplete: boolean;
+  coveredIds: Set<string>;
+  sealedByFile: Map<number, SealedIndexBuffer>;
+  unsealedChunks: { file: number; base: number; bytes: Buffer }[];
+  named: Set<string>;
   /** Where the live file's complete lines end: the next tail read starts here, so a line a writer
    *  left half-written is read whole once it completes. */
   offset: number;
@@ -1402,13 +2900,20 @@ export function resetAppendIndexReads(): void {
  *  the whole reentrancy state: the nested drop declaration's append runs under the lock its
  *  caller already holds instead of waiting on itself. */
 const heldEventLocks = new Set<string>();
+/** Set while a holder has yielded the event loop and still holds the key. A nested append on
+ *  that turn would write into the middle of a seal commit, so it answers busy. A nested call
+ *  on the turn that is not yielding — the drop declaration — still runs under the hold. */
+const eventLockYielding = new Set<string>();
 
 /** Runs `work` under the store's event lock. A call made while this process already holds the
- *  lock — the drop declaration's append, from inside an append or from the prune pass — runs
- *  directly under the lock its caller holds. */
+ *  lock and has not yielded — the drop declaration's append, from inside an append or from the
+ *  prune pass — runs directly under the lock its caller holds. */
 function withEventLock<T>(storeDir: string, work: () => T, lockWaitMs?: number): T {
   const lockDir = join(storeDir, 'locks', 'events');
-  if (heldEventLocks.has(lockDir)) return work();
+  if (heldEventLocks.has(lockDir)) {
+    if (eventLockYielding.has(lockDir)) throw new LockBusyError(join(lockDir, LOCK_FILE), process.pid);
+    return work();
+  }
   return withLock(
     lockDir,
     () => {
@@ -1417,10 +2922,22 @@ function withEventLock<T>(storeDir: string, work: () => T, lockWaitMs?: number):
         return work();
       } finally {
         heldEventLocks.delete(lockDir);
+        eventLockYielding.delete(lockDir);
       }
     },
     lockWaitMs === undefined ? {} : { waitMs: lockWaitMs },
   );
+}
+
+/** Yields one turn while `lockDir` stays held. Other writers in this process answer busy for
+ *  that turn; the key stays on disk, so another process cannot take it either. */
+function* yieldEventLock(lockDir: string): Generator<void, void, void> {
+  eventLockYielding.add(lockDir);
+  try {
+    yield;
+  } finally {
+    eventLockYielding.delete(lockDir);
+  }
 }
 
 function eventKey(payload: Pick<EventPayload, 'kind' | 'record_id' | 'session'>): string {
@@ -1446,7 +2963,7 @@ function sameStamp(a: LogFileStamp | null, b: LogFileStamp | null): boolean {
 function keyPrintOf(home: string): string {
   const state = messageKeyState(home);
   if (state.kind !== 'key') return 'none';
-  return createHash('sha256').update(state.key.export({ type: 'pkcs8', format: 'pem' })).digest('hex');
+  return keyPrintOfKey(state.key);
 }
 
 /** Reads the bytes after `from` without following a link. Null when the file cannot be read that
@@ -1517,6 +3034,18 @@ function addPlace(into: Map<string, IdPlaces>, recordId: string, place: LinePlac
   else into.set(recordId, [held, place]);
 }
 
+function isRecordIdByte(byte: number): boolean {
+  return (
+    (byte >= 0x30 && byte <= 0x39) ||
+    (byte >= 0x41 && byte <= 0x5a) ||
+    (byte >= 0x61 && byte <= 0x7a) ||
+    byte === 0x3a ||
+    byte === 0x2e ||
+    byte === 0x5f ||
+    byte === 0x2d
+  );
+}
+
 /** Indexes one stretch of retained bytes by the record id every line spells, recording where
  *  each line starts (`base` is where the stretch starts in its file). A line this code wrote
  *  holds `"record_id"` and the id literally — every admitted id is an ASCII token
@@ -1553,6 +3082,70 @@ function indexRecordIds(bytes: Buffer, file: number, base: number, into: Map<str
   }
 }
 
+/** Finds every line in `bytes` where `wantedRecordId` occurs as a token and records the line's
+ *  start offset in `into`. Because `wantedRecordId` can appear inside another event's payload (for
+ *  example quoted inside `reason` on an earlier unrelated line), every matching line is recorded in
+ *  retained order and `findIndexedRecord` parses and verifies each candidate until one matches both
+ *  the event key and signature or none are left. */
+function indexWantedRecordIdInChunk(
+  bytes: Buffer,
+  file: number,
+  base: number,
+  wantedRecordId: string,
+  into: Map<string, IdPlaces>,
+): void {
+  if (wantedRecordId === '' || bytes.length === 0) return;
+  const needle = Buffer.from(wantedRecordId, 'utf8');
+  let searchFrom = 0;
+  while (searchFrom < bytes.length) {
+    const hit = bytes.indexOf(needle, searchFrom);
+    if (hit < 0) break;
+    const beforeOk = hit === 0 || !isRecordIdByte(bytes[hit - 1]!);
+    const afterIdx = hit + needle.length;
+    const afterOk = afterIdx >= bytes.length || !isRecordIdByte(bytes[afterIdx]!);
+    if (!beforeOk || !afterOk) {
+      searchFrom = hit + 1;
+      continue;
+    }
+    const lineStart = hit === 0 ? 0 : bytes.lastIndexOf(BYTE_NEWLINE, hit - 1) + 1;
+    const newline = bytes.indexOf(BYTE_NEWLINE, hit + needle.length);
+    const lineEnd = newline < 0 ? bytes.length : newline;
+    addPlace(into, wantedRecordId, { file, offset: base + lineStart });
+    searchFrom = lineEnd + 1;
+  }
+}
+
+/** Reads one whole retained file without following a link, yielding between chunks so a large
+ *  open log does not hold the event loop for the read. Null when it cannot be read that way.
+ *  The descriptor stays open across a yield and closes when the generator finishes or is closed. */
+function* readBytesYielding(path: string): Generator<void, Buffer | null, void> {
+  let fd: number;
+  try {
+    fd = openSync(path, constants.O_RDONLY | NOFOLLOW);
+  } catch {
+    return null;
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) return null;
+    const chunks: Buffer[] = [];
+    const buf = Buffer.allocUnsafe(256 * 1024);
+    let position = 0;
+    for (;;) {
+      const n = readSync(fd, buf, 0, buf.length, position);
+      if (n <= 0) break;
+      chunks.push(Buffer.from(buf.subarray(0, n)));
+      position += n;
+      yield;
+    }
+    return chunks.length === 0 ? Buffer.alloc(0) : Buffer.concat(chunks);
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /** Reads one whole retained file without following a link. Null when it cannot be read that way. */
 function readBytesNoFollow(path: string): Buffer | null {
   let fd: number;
@@ -1564,14 +3157,24 @@ function readBytesNoFollow(path: string): Buffer | null {
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile()) return null;
-    const chunks: Buffer[] = [];
-    const buf = Buffer.alloc(64 * 1024);
-    for (;;) {
-      const n = readSync(fd, buf, 0, buf.length, null);
-      if (n === 0) break;
-      chunks.push(Buffer.from(buf.subarray(0, n)));
+    if (stat.size === 0) return Buffer.alloc(0);
+    const bytes = Buffer.allocUnsafe(stat.size);
+    let position = 0;
+    while (position < stat.size) {
+      const n = readSync(fd, bytes, position, stat.size - position, position);
+      if (n <= 0) break;
+      position += n;
     }
-    return Buffer.concat(chunks);
+    const tail: Buffer[] = [];
+    for (;;) {
+      const extra = Buffer.allocUnsafe(64 * 1024);
+      const n = readSync(fd, extra, 0, extra.length, position);
+      if (n <= 0) break;
+      tail.push(extra.subarray(0, n));
+      position += n;
+    }
+    const base = position <= stat.size ? bytes.subarray(0, position) : bytes;
+    return tail.length === 0 ? base : Buffer.concat([base, ...tail]);
   } catch {
     return null;
   } finally {
@@ -1668,15 +3271,204 @@ function findIndexedRecord(
   return null;
 }
 
+/** The companion `.index.jsonl` buffer, read and checked against the seal's signed byte count and
+ *  SHA-256 digest without parsing every JSON line on a cold append. Null when the file is missing
+ *  or does not match its seal. */
+function verifiedIndexBytes(segmentPath: string, seal: StoredSeal): Buffer | null {
+  const bytes = readBytesNoFollow(indexPathOf(segmentPath));
+  if (bytes === null) return null;
+  if (bytes.length !== seal.index.bytes) return null;
+  if (createHash('sha256').update(bytes).digest('hex') !== seal.index.digest) return null;
+  if (seal.index.lines < 1 || bytes.length === 0 || bytes[bytes.length - 1] !== BYTE_NEWLINE) return null;
+  return bytes;
+}
+
+type SealAppendCache = { stamp: string; value: Map<string, SealedIndexBuffer> };
+
+const sealAppendChecks = new Map<string, SealAppendCache>();
+
+function sealAppendStamp(files: string[], stamps: (LogFileStamp | null)[]): string {
+  const parts: string[] = [];
+  for (let at = 0; at < files.length - 1; at += 1) {
+    const segStamp = stamps[at] ?? null;
+    if (segStamp === null) {
+      parts.push('-');
+      continue;
+    }
+    const segment = files[at]!;
+    parts.push(
+      `${stampText(segStamp)}:${stampText(fileStamp(sealPathOf(segment)))}:${stampText(fileStamp(indexPathOf(segment)))}`,
+    );
+  }
+  return parts.join('|');
+}
+
+/** Verifies each retained segment's seal chain and `.index.jsonl` SHA-256 digest, returning the
+ *  verified `.index.jsonl` buffers keyed by segment path. Cached by `sealAppendStamp` so repeated
+ *  appends in the same process reuse the verified buffers while sidecars and segment sizes are
+ *  unchanged. */
+function sealedSegmentsForAppendCached(
+  storeDir: string,
+  kept: number,
+  files: string[],
+  stamps: (LogFileStamp | null)[],
+  keyState: ReturnType<typeof messageKeyState>,
+  keyPrint: string,
+): Map<string, SealedIndexBuffer> {
+  const cacheKey = `${storeDir}\u0000${String(kept)}\u0000${keyPrint}`;
+  const stamp = sealAppendStamp(files, stamps);
+  const cached = sealAppendChecks.get(cacheKey);
+  if (cached !== undefined && cached.stamp === stamp) return cached.value;
+
+  const value = new Map<string, SealedIndexBuffer>();
+  const key = keyState.kind === 'key' ? keyState.key : null;
+  const closedCount = files.length - 1;
+
+  let oldestPresentAt = closedCount;
+  for (let at = 0; at < closedCount; at += 1) {
+    if (stamps[at] !== null && stamps[at] !== undefined) {
+      oldestPresentAt = at;
+      break;
+    }
+  }
+
+  let predecessor: { digest: string; trusted: boolean } | null = null;
+  for (let at = oldestPresentAt; at < closedCount; at += 1) {
+    const slot = kept - 1 - at;
+    const segmentPath = files[at]!;
+    const name = `${EVENT_LOG_FILE}.${String(slot)}`;
+    const segStamp = stamps[at] ?? null;
+    if (segStamp === null) {
+      predecessor = { digest: '', trusted: false };
+      continue;
+    }
+    const seal = readSeal(segmentPath, name, storeDir, keyPrint, key);
+    if (seal === null) {
+      predecessor = { digest: '', trusted: false };
+      continue;
+    }
+    if (segStamp.size !== seal.bytes) {
+      predecessor = { digest: seal.sealDigest, trusted: false };
+      continue;
+    }
+    const indexBytes = verifiedIndexBytes(segmentPath, seal);
+    if (indexBytes === null) {
+      predecessor = { digest: seal.sealDigest, trusted: false };
+      continue;
+    }
+    if (predecessor !== null && (!predecessor.trusted || seal.previous !== predecessor.digest)) {
+      predecessor = { digest: seal.sealDigest, trusted: false };
+      continue;
+    }
+    value.set(segmentPath, { seal, indexBytes });
+    predecessor = { digest: seal.sealDigest, trusted: true };
+  }
+
+  sealAppendChecks.set(cacheKey, { stamp, value });
+  return value;
+}
+
+/** Searches a SHA-256-verified `.index.jsonl` buffer for every occurrence of `wantedRecordId`,
+ *  parsing each candidate line and recording its offset in `into` and its key in `named`. Returns
+ *  false if a candidate line is malformed or names an out-of-range offset, so the caller can fall
+ *  back to reading the segment whole. */
+function indexWantedRecordIdInSealedIndex(
+  indexBytes: Buffer,
+  file: number,
+  seal: StoredSeal,
+  wantedRecordId: string,
+  into: Map<string, IdPlaces>,
+  named: Set<string>,
+): boolean {
+  if (wantedRecordId === '' || indexBytes.length === 0) return true;
+  const idToken = Buffer.from(`"${wantedRecordId}"`, 'utf8');
+  let searchFrom = 0;
+  while (searchFrom < indexBytes.length) {
+    const hit = indexBytes.indexOf(idToken, searchFrom);
+    if (hit < 0) break;
+    const lineStart = hit === 0 ? 0 : indexBytes.lastIndexOf(BYTE_NEWLINE, hit - 1) + 1;
+    const newline = indexBytes.indexOf(BYTE_NEWLINE, hit + idToken.length);
+    const lineEnd = newline < 0 ? indexBytes.length : newline;
+    const raw = indexBytes.toString('utf8', lineStart, lineEnd);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return false;
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false;
+    const row = parsed as Record<string, unknown>;
+    if (typeof row['seq'] !== 'number' || !Number.isInteger(row['seq']) || row['seq'] < 1) return false;
+    if (
+      typeof row['offset'] !== 'number' ||
+      !Number.isInteger(row['offset']) ||
+      row['offset'] < 0 ||
+      row['offset'] >= seal.bytes
+    ) {
+      return false;
+    }
+    if (typeof row['kind'] !== 'string' || typeof row['record_id'] !== 'string' || typeof row['session'] !== 'string') {
+      return false;
+    }
+    if (row['record_id'] === wantedRecordId) {
+      addPlace(into, row['record_id'], { file, offset: row['offset'] });
+      named.add(`${row['kind']}\u0000${row['record_id']}\u0000${row['session']}`);
+    }
+    searchFrom = lineEnd + 1;
+  }
+  return true;
+}
+
+/** Rebuild the whole retained id map from every file when a sealed index disagrees with its
+ *  segment line. */
+function rebuildFullAppendIndex(
+  index: AppendIndex,
+  files: string[],
+  keyState: ReturnType<typeof messageKeyState>,
+): boolean {
+  index.ids.clear();
+  index.duplicates.clear();
+  index.covered.clear();
+  index.coveredIds.clear();
+  index.sealedByFile.clear();
+  index.unsealedChunks.length = 0;
+  index.named.clear();
+  index.idsComplete = true;
+  index.newestSeq = null;
+  index.offset = 0;
+  const last = files.length - 1;
+  for (const [at, candidate] of files.entries()) {
+    if (heldAt(candidate).kind === 'missing') continue;
+    appendIndexFileReads += 1;
+    const bytes = readBytesNoFollow(candidate);
+    if (bytes === null) return false;
+    appendIndexBytesRead += bytes.length;
+    indexRecordIds(bytes, at, 0, index.ids);
+    const newest = lastVerifiedLineOf(bytes, keyState);
+    if (newest !== null) index.newestSeq = newest.payload.seq;
+    if (at === last) {
+      const complete =
+        bytes.length > 0 && bytes[bytes.length - 1] !== BYTE_NEWLINE
+          ? bytes.lastIndexOf(BYTE_NEWLINE) + 1
+          : bytes.length;
+      index.offset = Math.max(0, complete);
+    }
+  }
+  return true;
+}
+
 /** What `appendEvent` needs from the retained log, kept across appends: the first verified record
- *  for the key this append is about to write, and the last verified sequence. The first look reads
- *  each retained file once and verifies only the lines that can answer that key — plus the newest
- *  line of each file, for the sequence — so a fresh process appends to a log of any retained size
- *  without re-verifying every record it kept. Each later look reads only the bytes appended to
- *  `events.jsonl` since the last one, so a growing session costs O(bytes). A key this process has
- *  not searched for is searched when it is first appended; a caller that needs every key (the
- *  retention declaration) asks for the whole map and verifies everything once. A rotated or
- *  rewritten file — or a changed key — falls back to a fresh scan. */
+ *  for the key this append is about to write, and the last verified sequence. The first look
+ *  verifies each sealed segment's `.seal.json` and checks its `.index.jsonl` buffer against the
+ *  seal's signed SHA-256 digest, searches the verified index buffers and the open segment's bytes
+ *  for every occurrence of the record id, and reads and verifies only the candidate lines that can
+ *  answer that key — so a fresh process appends to a log of any retained size without reading a
+ *  sealed segment's bytes or parsing every index line. A segment without a trusted seal is still
+ *  read whole. Each later look reads only the bytes appended to `events.jsonl` since the last one,
+ *  so a growing session costs O(bytes). A key this process has not searched for is searched when
+ *  it is first appended; a caller that needs every key (the retention declaration) asks for the
+ *  whole map and verifies everything once. A rotated or rewritten file — or a changed key — falls
+ *  back to a fresh scan. */
 function appendIndexOf(
   project: string,
   root: string,
@@ -1704,7 +3496,7 @@ function appendIndexOf(
   }
 
   const keyState = messageKeyState(home);
-  const keyPrint = keyPrintOf(home);
+  const keyPrint = keyState.kind === 'key' ? keyPrintOfKey(keyState.key) : 'none';
   const stamps = files.map((candidate) => fileStamp(candidate));
   const cacheKey = `${storeDir}\u0000${String(kept)}`;
   const cached = appendIndexes.get(cacheKey);
@@ -1741,7 +3533,14 @@ function appendIndexOf(
       const bytes = Buffer.from(tail, 'utf8');
       const fresh = verifyInto(tail, keyState, cached.duplicates, cached.covered);
       if (fresh.length > 0) cached.newestSeq = fresh[fresh.length - 1]!.payload.seq;
-      indexRecordIds(bytes, last, cached.offset, cached.ids);
+      if (cached.idsComplete) {
+        indexRecordIds(bytes, last, cached.offset, cached.ids);
+      } else {
+        for (const id of cached.coveredIds) {
+          indexWantedRecordIdInChunk(bytes, last, cached.offset, id, cached.ids);
+        }
+        cached.unsealedChunks.push({ file: last, base: cached.offset, bytes });
+      }
       cached.offset += bytes.length;
       cached.files[last] = fileStamp(path) ?? stamps[last] ?? null;
       if (answers(cached)) return { ok: true, index: cached };
@@ -1749,9 +3548,12 @@ function appendIndexOf(
     }
   }
 
-  // No index this process can use: one walk over each retained file builds the id map (where
-  // every line starts), the newest verified sequence, and — for a whole-key request — the first
-  // verified record of every key. A key searched later reads only the lines its id starts.
+  // No index this process can use. A sealed segment's signed index already names every record it
+  // holds, and its seal vouches for both: the candidate places for `wantedKey` and the newest
+  // sequence come from those verified `.index.jsonl` buffers, so a fresh process reads only the
+  // open segment whole and the candidate lines the append's own key can start at. A retained
+  // segment without a trusted seal is read whole, exactly as before. A whole-key request (the
+  // retention declaration) keeps its one walk over every retained file.
   const index: AppendIndex = {
     keyPrint,
     files: stamps,
@@ -1759,35 +3561,88 @@ function appendIndexOf(
     covered: new Set(),
     coveredAll: wantAll,
     ids: new Map(),
+    idsComplete: wantAll,
+    coveredIds: new Set(),
+    sealedByFile: new Map(),
+    unsealedChunks: [],
+    named: new Set(),
     offset: 0,
     newestSeq: null,
     path,
   };
+  if (wantedKey !== null && !wantAll) {
+    index.coveredIds.add(wantedKey.recordId);
+  }
+  const sealed = wantAll
+    ? new Map<string, SealedIndexBuffer>()
+    : sealedSegmentsForAppendCached(storeDir, kept, files, stamps, keyState, keyPrint);
+  const noteOpen = (at: number, bytes: Buffer): void => {
+    if (at !== last) return;
+    // Only the live file can end in a line a writer is still finishing; the next tail read starts
+    // at the last complete line so that line comes back whole.
+    const complete = bytes.length > 0 && bytes[bytes.length - 1] !== BYTE_NEWLINE
+      ? bytes.lastIndexOf(BYTE_NEWLINE) + 1
+      : bytes.length;
+    index.offset = Math.max(0, complete);
+  };
   for (const [at, candidate] of files.entries()) {
-    if (heldAt(candidate).kind === 'missing') continue;
+    // The open segment is never a sealed one: its bytes are read and verified line by line.
+    const sealedBuf = at === last ? undefined : sealed.get(candidate);
+    if (sealedBuf !== undefined) {
+      let ok = true;
+      if (wantedKey !== null) {
+        ok = indexWantedRecordIdInSealedIndex(
+          sealedBuf.indexBytes,
+          at,
+          sealedBuf.seal,
+          wantedKey.recordId,
+          index.ids,
+          index.named,
+        );
+      }
+      if (ok) {
+        index.sealedByFile.set(at, sealedBuf);
+        index.newestSeq = sealedBuf.seal.lastSeq;
+        continue;
+      }
+    }
+    if (stamps[at] === null) continue;
     appendIndexFileReads += 1;
     const bytes = readBytesNoFollow(candidate);
     if (bytes === null) return { ok: false, reason: 'the event log could not be read' };
     appendIndexBytesRead += bytes.length;
-    indexRecordIds(bytes, at, 0, index.ids);
     if (wantAll) {
+      indexRecordIds(bytes, at, 0, index.ids);
       const verified = verifyInto(bytes.toString('utf8'), keyState, index.duplicates, index.covered);
       if (verified.length > 0) index.newestSeq = verified[verified.length - 1]!.payload.seq;
       continue;
     }
+    index.unsealedChunks.push({ file: at, base: 0, bytes });
+    if (wantedKey !== null) {
+      indexWantedRecordIdInChunk(bytes, at, 0, wantedKey.recordId, index.ids);
+    }
     const newest = lastVerifiedLineOf(bytes, keyState);
     if (newest !== null) index.newestSeq = newest.payload.seq;
-    if (at === last) {
-      // Only the live file can end in a line a writer is still finishing; the next tail read
-      // starts at the last complete line so that line comes back whole.
-      const complete = bytes.length > 0 && bytes[bytes.length - 1] !== BYTE_NEWLINE
-        ? bytes.lastIndexOf(BYTE_NEWLINE) + 1
-        : bytes.length;
-      index.offset = Math.max(0, complete);
+    noteOpen(at, bytes);
+  }
+  let found: SignedEventRecord | null = null;
+  let searched = false;
+  if (wantedKey !== null && !wantAll) {
+    found = findIndexedRecord(index, files, wantedKey, keyState);
+    searched = true;
+    if (found !== null) index.duplicates.set(wantedKey.key, found);
+    // The seal named this record, and its own line no longer verifies as the index says: the
+    // index disagrees with the segment, so no answer may rest on it. The ordinary verified walk
+    // over every retained file below answers as it always did.
+    else if (keyState.kind === 'key' && index.named.has(wantedKey.key)) {
+      searched = false;
+      if (!rebuildFullAppendIndex(index, files, keyState)) {
+        return { ok: false, reason: 'the event log could not be read' };
+      }
     }
   }
   if (wantedKey !== null) {
-    const found = findIndexedRecord(index, files, wantedKey, keyState);
+    if (!searched) found = findIndexedRecord(index, files, wantedKey, keyState);
     if (found !== null) index.duplicates.set(wantedKey.key, found);
     index.covered.add(wantedKey.key);
   }
@@ -1795,17 +3650,54 @@ function appendIndexOf(
   return { ok: true, index };
 }
 
-/** Answers an index for a key this process has not searched for yet: one lookup in the id map and
- *  a read of the lines that id starts, instead of a pass over the retained files. The newest
- *  sequence stays as the index has it: the caller already matched the file stamps under the event
- *  lock. */
+/** Answers an index for a key this process has not searched for yet: a byte search in the cached
+ *  verified `.index.jsonl` buffers and unsealed chunks for `wanted.recordId`, then a read of the
+ *  candidate lines that id starts, instead of a pass over the retained files. The newest sequence
+ *  stays as the index has it: the caller already matched the file stamps under the event lock. */
 function extendIndex(
   index: AppendIndex,
   files: string[],
   wanted: WantedKey,
   keyState: ReturnType<typeof messageKeyState>,
-): { ok: true; index: AppendIndex } {
-  const found = findIndexedRecord(index, files, wanted, keyState);
+): { ok: true; index: AppendIndex } | { ok: false; reason: string } {
+  if (!index.idsComplete && !index.coveredIds.has(wanted.recordId)) {
+    index.coveredIds.add(wanted.recordId);
+    const last = files.length - 1;
+    let indexOk = true;
+    for (let at = 0; at <= last; at += 1) {
+      const sealedBuf = index.sealedByFile.get(at);
+      if (sealedBuf !== undefined) {
+        if (
+          !indexWantedRecordIdInSealedIndex(
+            sealedBuf.indexBytes,
+            at,
+            sealedBuf.seal,
+            wanted.recordId,
+            index.ids,
+            index.named,
+          )
+        ) {
+          indexOk = false;
+          break;
+        }
+        continue;
+      }
+      for (const chunk of index.unsealedChunks) {
+        if (chunk.file !== at) continue;
+        indexWantedRecordIdInChunk(chunk.bytes, chunk.file, chunk.base, wanted.recordId, index.ids);
+      }
+    }
+    if (!indexOk && !rebuildFullAppendIndex(index, files, keyState)) {
+      return { ok: false, reason: 'the event log could not be read' };
+    }
+  }
+  let found = findIndexedRecord(index, files, wanted, keyState);
+  if (found === null && keyState.kind === 'key' && index.named.has(wanted.key)) {
+    if (!rebuildFullAppendIndex(index, files, keyState)) {
+      return { ok: false, reason: 'the event log could not be read' };
+    }
+    found = findIndexedRecord(index, files, wanted, keyState);
+  }
   if (found !== null) index.duplicates.set(wanted.key, found);
   index.covered.add(wanted.key);
   return { ok: true, index };
@@ -1877,16 +3769,33 @@ export function appendEvent(
     maxTotalBytes?: number;
     retentionSeconds?: number;
     /** When false the append performs no retention of its own: the drop record written by a
-     *  dropping pass uses this so declaring a drop cannot drop again. */
-    retain?: boolean;
+     *  dropping pass uses this so declaring a drop cannot drop again. When `'cap'`, a sender step
+     *  (`appendStep`) skips rotation, sealing, pruning, and drop declarations while the retained
+     *  bytes stay below `maxTotalBytes` (`EVENT_LOG_TOTAL_BYTES`, 100 MB), and runs the full
+     *  retaining path once the retained bytes reach that cap. */
+    retain?: boolean | 'cap';
     /** How long the append waits for the event lock. Omitted, it waits the lock's own budget;
      *  0 tries once and answers `busy` instead of pausing, so a caller on an event loop can
      *  defer the record without freezing the loop. */
     lockWaitMs?: number;
   } = {},
 ): EventAppendResult {
-  const maxBytes = options.maxBytes ?? MAX_EVENT_LOG_BYTES;
-  const kept = options.kept ?? EVENT_LOG_KEPT;
+  // The team's words answer whatever the caller left out; a caller that names the size, the set
+  // and the window is never sent through the policy store. A record that performs no retention
+  // (`retain: false`) needs only the set bound, so its append skips the chain too.
+  const settingsNeeded =
+    options.kept === undefined ||
+    (options.retain !== false &&
+      (options.maxBytes === undefined || options.retentionSeconds === undefined));
+  const settings = settingsNeeded ? eventLogSettingsFor(root, home) : null;
+  const maxBytes = options.maxBytes ?? settings?.segmentBytes ?? MAX_EVENT_LOG_BYTES;
+  const kept = options.kept ?? settings?.kept ?? EVENT_LOG_KEPT;
+  const retentionSeconds =
+    options.retentionSeconds ?? settings?.retentionSeconds ?? DEFAULT_EVENT_RETENTION_SECONDS;
+  const retention: EventLogRetention = {
+    ...(options.maxTotalBytes !== undefined ? { maxTotalBytes: options.maxTotalBytes } : {}),
+    retentionSeconds,
+  };
   const deduplicate = options.deduplicate ?? true;
 
   // Refused before the store is touched, with the reason a caller can act on. Parse holds the same
@@ -1909,10 +3818,22 @@ export function appendEvent(
   // that scan the same newest sequence would otherwise mint it twice, and one of the two records
   // would then be invisible to every cursor reader. A call made from inside this lock (the drop
   // declaration) skips the wrapper below and runs the append under the lock its caller holds.
+  // A holder that has yielded still owns the key; an append from another turn answers busy
+  // instead of writing into that commit.
   const lockDir = join(storeDir, 'locks', 'events');
-  if (!heldEventLocks.has(lockDir)) {
+  if (!heldEventLocks.has(lockDir) || eventLockYielding.has(lockDir)) {
     try {
-      return withEventLock(storeDir, () => appendEvent(project, root, home, input, options), options.lockWaitMs);
+      return withEventLock(
+        storeDir,
+        () =>
+          appendEvent(project, root, home, input, {
+            ...options,
+            maxBytes,
+            kept,
+            retentionSeconds,
+          }),
+        options.lockWaitMs,
+      );
     } catch (error) {
       if (error instanceof LockBusyError) {
         return { ok: false, busy: true, reason: 'the event log is busy; the record was not written' };
@@ -1921,16 +3842,76 @@ export function appendEvent(
     }
   }
 
+  const path = join(storeDir, EVENT_LOG_FILE);
+  const retainMode = options.retain ?? true;
+  const maxTotal = retention.maxTotalBytes ?? EVENT_LOG_TOTAL_BYTES;
+  let retain = retainMode === true;
+  const drops: DroppedSegment[] = [];
+  /** Declares whatever this append rotated away, on every exit that does not reach the write's
+   *  own declaration. Best effort: retention never fails the caller. */
+  const declare = (): void => {
+    if (drops.length === 0) return;
+    const pending = drops.splice(0, drops.length);
+    try {
+      declareDrop(project, root, home, kept, { ...retention, maxBytes }, pending, input.session);
+    } catch {
+      // The caller's own result stands either way.
+    }
+  };
+
+  // A live file already at or past the segment bound rotates before this append's index is
+  // built: the index then reads the set it will keep answering for, instead of reading the live
+  // file and re-reading it as the just-sealed segment on the next append. A file that still has
+  // room is left to the write path below, which knows the exact line length. Below the total cap
+  // (`maxTotal`), a sender (`retain: 'cap'`) or an unmigrated open file (`>= 2 * maxBytes`) leaves
+  // rotation to the daemon's housekeeping; once retained bytes reach `maxTotal`, the append runs
+  // the full retaining path so the cap holds even when the daemon is down.
+  if (retainMode === true) {
+    try {
+      const current = heldAt(path);
+      if (current.kind === 'file') {
+        const size = statSync(path).size;
+        const unmigratedBelowCap =
+          maxBytes >= 1_000 &&
+          size >= maxBytes * 2 &&
+          retainedLogBytes(project, root, home, { kept }) < maxTotal;
+        if (size > 0 && size >= maxBytes && !unmigratedBelowCap) {
+          const rotated = rotateLive(path, kept, storeDir, home, 'rotation');
+          if (rotated.dropped !== null) drops.push(rotated.dropped);
+          if (rotated.problem !== null) {
+            declare();
+            return { ok: false, reason: rotated.problem };
+          }
+          // Leave the new live segment in place, empty. The index built below then reads the set
+          // it will keep answering for; its next look reads only this file's appended bytes
+          // instead of re-reading the segment the rotation just sealed.
+          try {
+            closeSync(openSync(path, constants.O_WRONLY | constants.O_CREAT | NOFOLLOW, 0o600));
+          } catch {
+            // The write below creates the file when this cannot.
+          }
+        }
+      }
+    } catch {
+      // Retention never fails an append. A slot this attempt already removed is still declared.
+      declare();
+    }
+  }
+
   // The index answers for one key at a time: a fresh process reads each retained file once and
   // verifies only the lines that can hold the record it is about to append — plus the newest
   // line, for the sequence — instead of every record retention kept.
   const wanted: WantedKey | null = deduplicate ? { key: eventKey(input), recordId: input.record_id } : null;
   const indexed = appendIndexOf(project, root, home, kept, wanted);
-  if (!indexed.ok) return indexed;
+  if (!indexed.ok) {
+    declare();
+    return indexed;
+  }
 
   if (deduplicate) {
     const found = indexed.index.duplicates.get(eventKey(input));
     if (found !== undefined) {
+      declare();
       return { ok: true, record: found, duplicate: true, path: indexed.index.path };
     }
   }
@@ -1939,45 +3920,62 @@ export function appendEvent(
   // increment from the highest sequence seen across the retained files.
   const nextSeq = options.seqOverride ?? ((indexed.index.newestSeq ?? 0) + 1);
   const validated = eventPayloadOf(input, nextSeq);
-  if (validated === null) return { ok: false, reason: 'the event payload is invalid' };
+  if (validated === null) {
+    declare();
+    return { ok: false, reason: 'the event payload is invalid' };
+  }
 
   let signature: string;
   try {
     const key = messageKeyOf(home);
     signature = signDomain(EVENT_DOMAIN, validated as unknown as Json, key);
   } catch {
+    declare();
     return { ok: false, reason: 'the event could not be signed with the message key' };
   }
 
   const record: SignedEventRecord = { payload: validated, signature };
-  const path = join(storeDir, EVENT_LOG_FILE);
   const targetErr = fileProblem(path);
-  if (targetErr !== null) return { ok: false, reason: targetErr };
+  if (targetErr !== null) {
+    declare();
+    return { ok: false, reason: targetErr };
+  }
 
   const line = `${JSON.stringify(record)}\n`;
   const bytes = Buffer.from(line, 'utf8');
-  const retain = options.retain ?? true;
-  const drops: DroppedSegment[] = [];
 
   try {
-    if (retain) {
-      // An idle live file is sealed first, so the append starts a new segment and the records the
-      // old one holds are dropped by the prune below as one past-the-window segment.
-      try {
-        const retentionSeconds = options.retentionSeconds ?? DEFAULT_EVENT_RETENTION_SECONDS;
-        const sealed = sealIdleLiveFile(path, home, kept, Date.now() - retentionSeconds * 1_000);
-        if (sealed !== null) drops.push(sealed);
-      } catch {
-        // Retention never fails an append: the write below carries on.
+    if (retainMode !== false) {
+      let totalRetainedBytes = 0;
+      for (const stamp of indexed.index.files) {
+        if (stamp !== null) totalRetainedBytes += stamp.size;
       }
+      const atCap = totalRetainedBytes >= maxTotal || totalRetainedBytes + bytes.length > maxTotal;
+      if (atCap) retain = true;
       const current = heldAt(path);
-      if (current.kind === 'file') {
-        const size = statSync(path).size;
-        if (size > 0 && size + bytes.length > maxBytes) {
-          const captured = captureOldestSlot(path, kept, home, 'rotation');
-          const rotateErr = rotateEventLog(path, kept);
-          if (rotateErr !== null) return { ok: false, reason: rotateErr };
-          if (captured !== null) drops.push(captured);
+      const currentSize = current.kind === 'file' ? statSync(path).size : 0;
+      const unmigratedBelowCap = maxBytes >= 1_000 && currentSize >= maxBytes * 2 && !atCap;
+      if (retain && !unmigratedBelowCap) {
+        // An idle live file is sealed first, so the append starts a new segment and the records the
+        // old one holds are dropped by the prune below as one past-the-window segment.
+        try {
+          if (retentionSeconds > 0) {
+            const sealed = sealIdleLiveFile(path, home, kept, Date.now() - retentionSeconds * 1_000, storeDir);
+            if (sealed !== null) drops.push(sealed);
+          }
+        } catch {
+          // Retention never fails an append: the write below carries on.
+        }
+        if (heldAt(path).kind === 'file') {
+          const size = statSync(path).size;
+          if (size > 0 && size + bytes.length > maxBytes) {
+            const rotated = rotateLive(path, kept, storeDir, home, 'rotation');
+            if (rotated.dropped !== null) drops.push(rotated.dropped);
+            if (rotated.problem !== null) {
+              declare();
+              return { ok: false, reason: rotated.problem };
+            }
+          }
         }
       }
     }
@@ -1985,7 +3983,10 @@ export function appendEvent(
     const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | NOFOLLOW, 0o600);
     try {
       const stat = fstatSync(fd);
-      if (!stat.isFile()) return { ok: false, reason: 'the event log path is not a regular file' };
+      if (!stat.isFile()) {
+        declare();
+        return { ok: false, reason: 'the event log path is not a regular file' };
+      }
       if ((stat.mode & 0o777) !== 0o600) {
         fchmodSync(fd, 0o600);
       }
@@ -1997,25 +3998,15 @@ export function appendEvent(
     }
     if (retain) {
       try {
-        drops.push(...pruneSealed(path, home, kept, options));
+        drops.push(...pruneSealed(path, home, kept, retention));
       } catch {
         // Retention never fails an append: the record is written either way.
       }
-      try {
-        declareDrop(project, root, home, kept, { ...options, maxBytes }, drops, input.session);
-      } catch {
-        // Retention never fails an append: the record is written either way.
-      }
+      declare();
     }
     return { ok: true, record, duplicate: false, path };
   } catch {
-    if (drops.length > 0) {
-      try {
-        declareDrop(project, root, home, kept, { ...options, maxBytes }, drops, input.session);
-      } catch {
-        // The append already failed; the declaration is best effort too.
-      }
-    }
+    declare();
     return { ok: false, reason: 'the event log could not be written' };
   }
 }

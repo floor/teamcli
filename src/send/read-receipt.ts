@@ -11,7 +11,7 @@
 import { type KeyObject } from 'node:crypto';
 import { heldAt, type Held } from '../launch/rules-file.ts';
 import { flushReceipt, publishReadReceipt } from '../mcp/inbox-admission.ts';
-import { isRead, receiptFile, signReceiptPayload, type ReceiptPayload } from './record.ts';
+import { isRead, leadAckReceiptAt, receiptFile, signReceiptPayload, type ReceiptPayload } from './record.ts';
 import { clearUnread } from './unread-hint.ts';
 
 /** The message whose read is being recorded: its folder, its id, the seat it was addressed to,
@@ -31,6 +31,9 @@ export type RecordReadInput = {
   readBy?: string;
   /** The runtime epoch this reader was started under, when it has one. */
   epoch?: string;
+  /** The team's resolved lead, when the caller loaded the team: the one seat name a clearance
+   *  receipt may carry and still settle here. */
+  lead?: string;
 };
 
 /** What the act found or did. `held` names the entry at a receipt name this run will not touch;
@@ -52,12 +55,16 @@ export function publishRecordRead(input: RecordReadInput): RecordReadOutcome {
 }
 
 function publish(input: RecordReadInput): RecordReadOutcome {
-  const { dropDir, id, to, root, session, home, key, at, readBy, epoch } = input;
-  const context = { to, root, session };
+  const { dropDir, id, to, root, session, home, key, at, readBy, epoch, lead } = input;
+  const context = { to, root, session, ...(lead === undefined ? {} : { lead }) };
   const servedNow = (): boolean => isRead(dropDir, id, context, key);
   // The caller's own filter may already have asked `isRead`; this re-check is the race with every
   // other reader.
   if (servedNow()) return { kind: 'served' };
+  // A lead already cleared this message: its receipt holds the one read name, and the message is
+  // settled for the seat. A second sweep, or the seat's own later ack, finds the id served; the
+  // clearance is never rewritten as the seat's own read.
+  if (leadAckReceiptAt(dropDir, id, context, key) !== null) return { kind: 'served' };
   const readName = receiptFile(dropDir, id, 'read');
   const atRead = heldAt(readName);
   if (atRead.kind === 'file') return servedNow() ? { kind: 'served' } : { kind: 'held', status: 'read', entry: 'file' };

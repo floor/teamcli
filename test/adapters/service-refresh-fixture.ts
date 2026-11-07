@@ -106,6 +106,7 @@ export function refreshFixture(realWait = false, inPlace = false, baseDir = tmpd
   };
   const manager = darwinServiceManager({
     uid: 4242,
+    accountHome: home,
     runner,
     ...(realWait ? {} : { sleep: (ms: number) => { waits.push(ms); clock += ms; } }),
   });

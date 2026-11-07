@@ -46,10 +46,6 @@ seats:
 
 const ID = '0f8fad5b-d9cb-469f-a165-70867728950e';
 
-// Known for 0.5.12.1: the detached --finish-late child scenes and 700 ms exit bounds fail on
-// Ubuntu runners.
-const offDarwin = process.platform !== 'darwin';
-
 let base = '';
 let root = '';
 let home = '';
@@ -284,7 +280,7 @@ describe("the send's own post under the deadline", () => {
     expect(existsSync(join(dir, `${ID}.posted`))).toBe(false);
   }, 10_000);
 
-  test.skipIf(offDarwin)('a real child returns the sender at the deadline, and the late 2xx settles after that process is gone', async () => {
+  test('a real child returns the sender at the deadline, and the late 2xx settles after that process is gone', async () => {
     signedAtTeam('webhook-sender-deadline-ms', 500);
     const dir = dropFolder();
     const message = signRecord(messagePayload(), home);
@@ -344,7 +340,7 @@ describe("the send's own post under the deadline", () => {
     }
   }, 15_000);
 
-  test.skipIf(offDarwin)('a child whose stdin closes before the answer still settles and exits', async () => {
+  test('a child whose stdin closes before the answer still settles and exits', async () => {
     const dir = dropFolder();
     const server = Bun.serve({
       hostname: '127.0.0.1',
@@ -385,7 +381,7 @@ describe("the send's own post under the deadline", () => {
     expect(existsSync(join(dir, `${ID}.posted`))).toBe(true);
   }, 10_000);
 
-  test.skipIf(offDarwin)('when the parent destroys child.stdin at the exact deadline while fetch is in flight and stdout stays open, the child does not hang on feed.taken and settles the claim', async () => {
+  test('when the parent destroys child.stdin at the exact deadline while fetch is in flight and stdout stays open, the child does not hang on feed.taken and settles the claim', async () => {
     const dir = dropFolder();
     writeFileSync(join(dir, `${ID}.posting`), `${JSON.stringify({ state: 'sent', at: '2026-11-03T00:00:00.000Z' })}\n`, { mode: 0o600 });
     let hitServer!: () => void;
@@ -463,7 +459,7 @@ describe("the send's own post under the deadline", () => {
     }
   }, 10_000);
 
-  test.skipIf(offDarwin)('a real child that hits the 500 ms deadline writes unknown first, then the detached worker appends delivered (late) and settles the claim with one POST only', async () => {
+  test('a real child that hits the 500 ms deadline writes unknown first, then the detached worker appends delivered (late) and settles the claim with one POST only', async () => {
     signedAtTeam('webhook-sender-deadline-ms', 500);
     const dir = dropFolder();
     const message = signRecord(messagePayload(), home);
@@ -617,7 +613,7 @@ describe("the send's own post under the deadline", () => {
     }
   }, 15_000);
 
-  test.skipIf(offDarwin)('a real child whose detached continuation receives a late 5xx files failed under the late step, appends no late delivery, and keeps the claim sent', async () => {
+  test('a real child whose detached continuation receives a late 5xx files failed under the late step, appends no late delivery, and keeps the claim sent', async () => {
     signedAtTeam('webhook-sender-deadline-ms', 500);
     const dir = dropFolder();
     const message = signRecord(messagePayload(), home);
@@ -722,7 +718,7 @@ describe("the send's own post under the deadline", () => {
     }
   }, 15_000);
 
-  test.skipIf(offDarwin)('killing the detached continuation process while the slow endpoint waits leaves the claim in sent, writes no posted mark, and appends no late history', async () => {
+  test('killing the detached continuation process while the slow endpoint waits leaves the claim in sent, writes no posted mark, and appends no late history', async () => {
     signedAtTeam('webhook-sender-deadline-ms', 500);
     const dir = dropFolder();
     const message = signRecord(messagePayload(), home);
@@ -846,7 +842,7 @@ describe("the send's own post under the deadline", () => {
     }
   }, 15_000);
 
-  test.skipIf(offDarwin)('a real child that answers 2xx before the deadline settles in the sender and the detached worker does not double-settle', async () => {
+  test('a real child that answers 2xx before the deadline settles in the sender and the detached worker does not double-settle', async () => {
     signedAtTeam('webhook-sender-deadline-ms', 500);
     const dir = dropFolder();
     const message = signRecord(messagePayload(), home);

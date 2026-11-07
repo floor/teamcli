@@ -82,15 +82,21 @@ export type RuntimePushAdapter = {
 
 /**
  * The first line a runtime shows for a pushed message: the authentic sender's `seat@team`, the
- * message id, and the one `inbox_read` call that proves it — one line, and never the body. The
- * signed record supplies the sender; a name typed into the body cannot reach this line. Null when
- * the identity or id would make the line more than `TRIGGER_MAX` characters or more than one
- * line; the leg then hands the send to the next one, as a typed trigger that cannot be built is
- * refused rather than shortened.
+ * message id, and the one `inbox_read` call that proves it — one line, and never the body. When
+ * `sentAt` is the record's own send time, the line names it too, so a pointer that arrives late
+ * shows its age. The time is left off when adding it would pass `TRIGGER_MAX`. The signed record
+ * supplies the sender; a name typed into the body cannot reach this line. Null when the identity
+ * or id would make the line more than `TRIGGER_MAX` characters or more than one line; the leg
+ * then hands the send to the next one, as a typed trigger that cannot be built is refused rather
+ * than shortened.
  */
-export function pushPointer(id: string, sender: PushSender): string | null {
+export function pushPointer(id: string, sender: PushSender, sentAt?: string): string | null {
   if (id === '' || sender.seat === '' || sender.team === '' || /\s/.test(sender.seat) || /\s/.test(sender.team)) return null;
-  const line = `From ${sender.seat}@${sender.team}: New team message ${id}: call inbox_read({"id":"${id}"})`;
+  const base = `From ${sender.seat}@${sender.team}: New team message ${id}: call inbox_read({"id":"${id}"})`;
+  const timed = sentAt !== undefined && sentAt !== '' && !/\s/.test(sentAt)
+    ? `${base} sent ${sentAt}`
+    : base;
+  const line = timed.length <= TRIGGER_MAX ? timed : base;
   if (line.includes('\n') || line.length > TRIGGER_MAX) return null;
   return line;
 }

@@ -46,7 +46,7 @@ import { registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { readHistory, type HistoryEntry } from '../src/send/history.ts';
 import { signedRecordOf, verifyRecord } from '../src/send/record.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
-import type { DeliveryLeg } from '../src/settings/inherit.ts';
+import type { OrderWord } from '../src/settings/inherit.ts';
 import { keyOf, messageKeyState, verifyDomain } from '../src/store/keys.ts';
 import { fixtureBase, testIo } from './helpers.ts';
 
@@ -997,7 +997,7 @@ type WalkHost = SendHost & {
 function walkHost(
   w: WalkWorld,
   options: {
-    delivery?: Partial<Record<'seat' | 'team', readonly DeliveryLeg[]>>;
+    delivery?: Partial<Record<'seat' | 'team', readonly OrderWord[]>>;
     dial?: (socketPath: string, frame: string) => Promise<SendOutcome>;
     onDial?: () => void;
   } = {},
@@ -1092,8 +1092,9 @@ describe('the client send walk', () => {
     const frame = JSON.parse(host.frames[0] as string) as { type: string; message: { role: string; content: string }; msg_id: string };
     expect(frame.type).toBe('user');
     expect(frame.msg_id).toBe('drop-1');
+    // The client's socket frame opens with the compact client header and closes with the one-line footer.
     expect(frame.message.content).toBe(
-      'Message from Grok Bot (owner)\n\nhello orchestrator\n\nAnswer with team reply drop-1 "…" (this marks it read), or team ack drop-1 if no answer is needed.',
+      'Client Grok Bot (owner relay):\n\nhello orchestrator\n\n↩ team reply drop-1 "…" · team ack drop-1',
     );
     // One signed record and no receipt: only the seat writes a read receipt, so the taken frame
     // leaves the record unread and the watch re-wakes it like any other message.
@@ -1195,7 +1196,7 @@ describe('the client send walk', () => {
     if (messageKey.kind === 'key') expect(verifyRecord(parsed, messageKey.key)).toBe(true);
     // The frame names the sender as the person's client, never as a seat address.
     const frame = JSON.parse(host.frames[0] as string) as { message: { content: string } };
-    expect(frame.message.content).toContain('Message from Grok Bot (owner)');
+    expect(frame.message.content).toContain('Client Grok Bot (owner relay):');
     expect(frame.message.content).not.toContain('client:grok-bot@');
   });
 });

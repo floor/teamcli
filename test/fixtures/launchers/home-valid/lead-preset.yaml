@@ -1,0 +1,24 @@
+# Synthetic fixture: a named-seat preset on top of the endpoint chain, with a state-file
+# resume that TeamCLI's session argument beats.
+format: 1
+name: lead-preset
+kind: preset
+summary: The example lead seat
+harness: claude-code
+base: claude-on-acme
+writable_folders:
+  - { path: '{root}' }
+  - { path: '{team-home}' }
+args:
+  - --model
+  - acme-large-1
+arg_policy:
+  model: override
+  resume: override
+resume:
+  mode: state_file
+  path: '{team-home}/lead-session'
+  precedence: teamcli_wins
+env_policy:
+  mode: scrub
+  keep: [PATH, HOME, TERM, LANG]

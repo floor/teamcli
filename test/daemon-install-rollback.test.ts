@@ -176,9 +176,13 @@ function synthetic(script: Script): { runner: ServiceRunner; calls: string[] } {
 }
 
 /** The live adapter with the platform's command replaced and every wait recorded, not slept. */
-function managerWith(script: Script, sleeps: number[] = []): { manager: ServiceManager; calls: string[] } {
+function managerWith(
+  script: Script,
+  sleeps: number[] = [],
+  accountHome: string = join(bases[bases.length - 1] ?? '', 'home'),
+): { manager: ServiceManager; calls: string[] } {
   const { runner, calls } = synthetic(script);
-  const manager = darwinServiceManager({ runner, uid: 501, sleep: (ms) => sleeps.push(ms) });
+  const manager = darwinServiceManager({ runner, uid: 501, accountHome, sleep: (ms) => sleeps.push(ms) });
   return { manager, calls };
 }
 
@@ -214,6 +218,7 @@ function sourcesOf(
   if (!existsSync(join(home, 'app', 'v2', 'cli.js'))) programFiles(home, 'v2');
   return {
     home,
+    accountHome: home,
     program: { execPath: EXEC, entry: join(home, 'app', 'v2', 'cli.js') },
     version: 'test',
     service,
@@ -312,7 +317,7 @@ describe('a load that fails every time puts the previous unit back', () => {
       running = readFileSync(retained ?? '/nonexistent', 'utf8') === 'old known-good bytes';
       return { ...OK };
     };
-    const manager = darwinServiceManager({ runner, uid: 501, sleep: () => {} });
+    const manager = darwinServiceManager({ runner, uid: 501, accountHome: home, sleep: () => {} });
 
     // The package is upgraded in place; the copy the earlier unit names is untouched.
     writeFileSync(entry, 'new broken bytes');
@@ -635,6 +640,7 @@ describe('the dry run shows the steps a refresh takes', () => {
     expect(io.out).toContain('the previous daemon, if the service manager holds one, is stopped before the new one is offered');
     expect(io.out).toContain('the new daemon is started, offered again with a bounded, growing wait while the system\'s service manager refuses');
     expect(io.out).toContain('if it still cannot start, the previous unit is put back and its daemon started again');
+    expect(io.out).toContain('once the new daemon answers, the kit folders still standing in the lobby move into the runtime home, each held while a loaded unit names it');
     expect(io.out).toContain('nothing was written');
     expect(io.out).not.toContain('launchd');
   });
@@ -653,6 +659,8 @@ describe('the dry run shows the steps a refresh takes', () => {
       'the previous daemon, if the service manager holds one, is stopped before the new one is offered',
       'the new daemon is started, offered again with a bounded, growing wait while the system\'s service manager refuses',
       'if it still cannot start, the previous unit is put back and its daemon started again',
+      'once the mailbox router has reported a heartbeat, the shuttle units are stopped and removed',
+      'once the new daemon answers, the kit folders still standing in the lobby move into the runtime home, each held while a loaded unit names it',
     ]);
   });
 });

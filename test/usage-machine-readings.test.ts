@@ -73,11 +73,11 @@ test('a watch persists a Grok zero without team budgets; usage counts machine su
   const usage = testIo(root, { kind: 'owner' });
   expect(await runUsage(['--tree'], usage, { home, now: () => new Date(NOW + 120000) })).toBe(0);
   expect(usage.out).toContain('3 labs, 3 accounts');
-  expect(usage.out).toMatch(/xai\s+weekly\s+0%\s+100%\s+unknown/);
+  expect(usage.out).toMatch(/xai\s+weekly\s+0%\s+100%\s+not printed/);
   expect(usage.out).toContain('2m ago');
-  // The Antigravity account has a live reader of its own — the CLI's usage print — so with no
-  // reading it is `unknown`, not "not readable from a CLI screen".
-  expect(usage.out).toMatch(/google-antigravity\s+-\s+-\s+-\s+-\s+-\s+-\s+unknown/);
+  // No seat here runs the CLI whose usage print measures the Antigravity account, so with no
+  // reading the row says no screen on this machine can answer for it, not a bare `unknown`.
+  expect(usage.out).toMatch(/google-antigravity\s+-\s+-\s+-\s+-\s+-\s+-\s+unknown  not readable from a CLI screen/);
   expect(usage.out).toContain('lead  grok  xai');
   // The seat's own vendor forms a lab with no declared account: zero-config makes its seats one
   // account named after the lab, and no screen reads that name, so the lab stands for its seat in
@@ -91,7 +91,7 @@ test('a watch persists a Grok zero without team budgets; usage counts machine su
   // seat drawing on the walled account rather than inventing a destination.
   expect(usage.out).toContain('  xai  walled\n');
   expect(usage.out).toContain('    xai  walled  seats: lead\n');
-  expect(usage.out).toContain('      weekly  used 100%  left 0%  resets unknown  margin not known  (machine reading, read 2m ago)');
+  expect(usage.out).toContain('      weekly  used 100%  left 0%  resets not printed  pace not known  (estimated, 2m ago)');
   expect(usage.out).toContain('advice: swap lead off xai (walled): no other account has headroom');
 });
 
@@ -164,7 +164,7 @@ test('the entity form of the machine list counts the same figures, the zero amon
   expect(machine.machineAccounts).toEqual(['google-antigravity', 'xai']);
   expect(machine.counts).toEqual({ teams: 0, labs: 2, accounts: 2 });
   const text = reportText(reportOf(machine, view, NOW, []));
-  expect(text).toMatch(/xai\s+weekly\s+0%\s+100%\s+unknown/);
+  expect(text).toMatch(/xai\s+weekly\s+0%\s+100%\s+not printed/);
   expect(text).toMatch(/google-antigravity\s+-\s+-\s+-\s+-\s+-\s+-\s+unknown/);
   expect(text).not.toContain('nothing is counted');
 });
@@ -180,8 +180,8 @@ test('machine updates merge accounts and pools, reject older updates, and refres
   expect(readings.find((one) => one.pool === 'claude-gpt')?.resetsAt).toBe(NOW + 3601000);
   const view = { full: true, mine: null };
   const text = reportText(reportOf(machineUsage(home, NOW + 60000, view), view, NOW + 60000, []));
-  expect(text).toMatch(/google-antigravity \(gemini\)\s+weekly\s+10%/);
-  expect(text).toMatch(/google-antigravity \(claude-gpt\)\s+weekly\s+80%/);
+  expect(text).toMatch(/google-antigravity \(Gemini models\)\s+weekly\s+10%/);
+  expect(text).toMatch(/google-antigravity \(Claude and GPT models\)\s+weekly\s+80%/);
   expect(payingPoolOf({ cli: 'agy', launch: 'agy', vendor: 'anthropic', model: 'Gemini 3.1' })).toBe('gemini');
   expect(payingPoolOf({ cli: 'antigravity', launch: 'agy', vendor: 'google', model: 'Claude Opus' })).toBe('claude-gpt');
 });

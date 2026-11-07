@@ -23,7 +23,7 @@ import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { gitEnv, testIo } from './helpers.ts';
+import { gitEnv, recordRenames, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-11-05T04:15:00Z');
 const IDLE = readFileSync(new URL('./fixtures/codex/0.161.0/idle.txt', import.meta.url), 'utf8')
@@ -273,6 +273,7 @@ function buildMultiSources(options: {
     sleep: async () => {},
     now: () => NOW,
   };
+  recordRenames(launch);
 
   const doctor: DoctorSources = {
     version: () => '2.1.288',
@@ -680,7 +681,11 @@ describe('team up --all single-command multi-team restore', () => {
     expect(callersOfWriteToken).toEqual(['daemon/restore/spawn.ts']);
     expect(callersOfAcceptDoor).toEqual(['daemon/restore/entry.ts']);
     expect(callersOfRestoreInheritPath).toEqual(['daemon/restore/token.ts']);
-    expect(callersOfClaimOneUseToken.sort()).toEqual(['daemon/chores/token.ts', 'daemon/restore/token.ts']);
+    expect(callersOfClaimOneUseToken.sort()).toEqual([
+      'daemon/chores/token.ts',
+      'daemon/restore/token.ts',
+      'daemon/wake/token.ts',
+    ]);
     expect(callersOfSpawnChild).toEqual(['daemon/host.ts']);
     expect(filesWithUpInternal).toEqual(['commands/up.ts']);
     expect(filesWithOldRestoreReader).toEqual([]);
@@ -939,6 +944,7 @@ describe('team up --all single-command multi-team restore', () => {
     const machineUnitRealpath = realpathSync(machineUnitFile);
     const darwinService = systemServiceManager({
       platform: 'darwin',
+      accountHome: home,
       runner: () => ({
         status: 0,
         stdout: `\tpath = ${machineUnitRealpath}\n\tpid = ${String(DAEMON_PID)}\n\tprogram = ${process.execPath}\n`,

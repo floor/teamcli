@@ -2,8 +2,8 @@
 
 Three things: the team's own record, read and edited with `get`, `set`, `unset` and `edit` — what
 `.agents/team.yaml` used to hold, before [`team migrate`](migrate.md) moved it into the registry —
-one word of the owner's entity record, at `<entity>.names.unique`; and the settings registry,
-printed with `keys`.
+two keys of the owner's entity record, `<entity>.names.unique` and `<entity>.reminders`; and the
+settings registry, printed with `keys`.
 
 ## The team's record: get, set, unset, edit
 
@@ -43,21 +43,45 @@ team runs.
 | the path holds nothing (`get`), cannot be set, the caller is not the owner, or the change does not validate | 1 |
 | a bad invocation, no team found, a record that cannot be read, or the editor failed | 2 |
 
-## The entity's record: names.unique
+## The entity's and project's records: names.unique, reminders, and rules
 
     team config get <entity>.names.unique [--json]
     team config set <entity>.names.unique <word>
     team config set <entity>.names.unique <word> --general <grant.json> --key <client.key> [--json]
+    team config get <entity>.reminders [--json]
+    team config set <entity>.reminders <yaml list>
+    team config set <entity>.reminders <yaml list> --general <grant.json> --key <client.key> [--json]
+    team config get <entity>.rules [--json]
+    team config set <entity>.rules <yaml list> [--dry-run] [--json]
+    team config get project.<id>.rules [--json]
+    team config set project.<id>.rules <yaml list> [--dry-run] [--json]
+    team config get composed.rules [--json]
 
-A path whose last segment is `names.unique` names an entity's own word, not the team's record.
+A path whose last segment is `names.unique` or `reminders` names one key of an entity's own
+entry, not the team's record. Both live with the rest of the entry in the owner's entities file
+(`~/.config/team/entities.yaml`), and the form reads no team, so it runs outside a checkout and
+the entity name may itself carry dots (the last segment is the key). Likewise, `<entity>.rules`
+reads or writes the entity-wide standing rules in `~/.config/team/entities.yaml`, and
+`project.<id>.rules` (or `projects.<id>.rules`) reads or writes the project-wide standing rules in
+`~/.config/team/projects.yaml`. Passing `--dry-run` to `set` prints the planned change without
+writing to disk. `team config get composed.rules` prints the composed rules (entity, home project,
+and team) with their origin headings.
+
 `<entity>.names.unique` says how far apart seat nicknames stay — `entity` (the default, across
-every team of the entity), `project` (within one project), `team` (within one team) or `off` — and
-lives with the rest of the entity's entry in the owner's entities file
-(`~/.config/team/entities.yaml`). [`team init`](init.md) and the nicknames `team config set` places
-on a seat's label read it. It reads no team, so the form runs outside a checkout, and the entity
-name may itself carry dots (the last segment is the word).
+every team of the entity), `project` (within one project), `team` (within one team) or `off`.
+[`team init`](init.md) and the nicknames `team config set` places on a seat's label read it.
 
-The form edits that one line of an entry the file already declares: it creates no entry, keeps
+`<entity>.reminders` is the list [`team daemon`](daemon.md) fires: one YAML list of reminders,
+each a `name`, at least one `at` time and the seats it addresses `to`, with an optional `zone`,
+`catchUp` and `text`. The value is one-line YAML and must be a list; `[]` clears the entity's
+reminders, and there is no unset. The list is held to the daemon's own parser on the exact text
+that would be written: a bad field, a missing text, an address that is not `<seat>@<team>`, or a
+name another entity already holds refuses the write with the parser's own sentence, and nothing
+is written. A problem the file already carried on another entity never blocks the write; one on
+the entity being written does, whatever the file carried before, because the stored text must be
+one the daemon reads whole.
+
+The form edits that one key of an entry the file already declares: it creates no entry, keeps
 every other line (comments included) and writes nothing else; a word outside the four is refused
 with the four named before any file is opened. `get` is any caller's and prints what the entry
 spells — a word the check does not spell is printed as the file has it, with a note on stderr that
@@ -71,8 +95,8 @@ sets it directly when no grant admits it.
 
 | Outcome | Exit |
 | --- | --- |
-| the word printed, set, or already written | 0 |
-| the caller is neither the owner nor admitted by the grant, the word is not one of the four, or the file declares no such entry or word | 1 |
+| the key printed, set, or already written | 0 |
+| the caller is neither the owner nor admitted by the grant, the word is not one of the four, a reminder list the parser refuses, or the file declares no such entry or key | 1 |
 | the invocation is not one of the forms, or the entities file cannot be read | 2 |
 
 ## The settings registry: keys

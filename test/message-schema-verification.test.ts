@@ -37,6 +37,8 @@ const SESSION = 'acme';
 const SEAT = 'lead';
 const ID = '4f0b8d82-7a8e-4da2-9e6f-9b5aac2d3e45';
 const BODY = 'the body only the signed record may expose';
+/** The body as the reader serves it: nothing attests the fixture's claim, so it opens marked. */
+const SERVED = `from worker (owner):\n\n${BODY}`;
 const AT = '2026-10-23T09:00:00.000Z';
 
 type Place = { base: string; root: string; home: string; dropDir: string; cleanup(): void };
@@ -243,7 +245,7 @@ describe('a known field with a value this version does not know', () => {
       expect(auth.value.payload.work).toBe('#9001');
       // The inbox serves it, body and all, where an unsupported verdict refused it whole.
       const got = readMessage({ dropDir: at.dropDir, root: at.root, seat: SEAT, session: SESSION }, ID, at.home);
-      expect(got).toEqual({ ok: true, body: BODY });
+      expect(got).toEqual({ ok: true, body: SERVED });
       // A signed FIELD this version does not read is still refused on its own ground: the
       // forward-compatible reading is for a known field's unknown value, not for an unknown field.
       const unknownField = envelope(MESSAGE_DOMAIN, recordPayload(at, { future_display: 'amber' }), at.home);

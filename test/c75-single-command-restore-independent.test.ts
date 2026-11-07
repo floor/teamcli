@@ -33,7 +33,7 @@ import type { DoctorSources } from '../src/commands/doctor.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { readChildMessage, readHostMessage } from '../src/daemon/chores/protocol.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
-import { DAEMON_LABEL, daemonLogPath, daemonSocketPath, machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
+import { DAEMON_LABEL, daemonLabel, daemonLogPath, daemonSocketPath, machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
 import { DAEMON_PROTOCOL_VERSION } from '../src/daemon/protocol.ts';
 import { runRestoreSweepInChild } from '../src/daemon/restore/spawn.ts';
 import { acceptRestoreDoor, restoreDoorText, writeRestoreDoor } from '../src/daemon/restore/token.ts';
@@ -45,7 +45,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { installKey } from '../src/store/keys.ts';
-import { fixtureBase, gitEnv, testIo } from './helpers.ts';
+import { fixtureBase, gitEnv, recordRenames, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-11-05T04:15:00Z');
 const DAY_MS = 86_400_000;
@@ -112,15 +112,32 @@ function runEntry(
  *  manager is never asked. `unitHome`, when given, gets the installed unit the round-5
  *  `job(home)` gate requires, and the record names that unit's real path; `loadedPath` overrides
  *  what the record says so a scene can name another unit (the round-6 gate). */
+/** The account home a unit label is derived from. Darwin reads it the way the service manager
+ *  does, and a failed read is no home. Other hosts have no such lookup; the live service
+ *  manager is absent there, so the name is a fixture home the scene can write. */
+function accountHomeForUnit(): string | null {
+  if (process.platform !== 'darwin') return '/fixture-account';
+  try {
+    const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
+    const account = execFileSync('/usr/bin/id', ['-P', String(uid)], { encoding: 'utf8' });
+    const dir = (account.split('\n')[0] ?? '').split(':')[8] ?? '';
+    return dir.startsWith('/') ? dir : null;
+  } catch {
+    return null;
+  }
+}
+
 function fakeServiceRecord(dir: string, daemonPid: number, unitHome?: string, loadedPath?: string): string {
   mkdirSync(dir, { recursive: true });
   let path = loadedPath ?? '/nonexistent-unit';
   if (unitHome !== undefined) {
+    const label = daemonLabel(unitHome, accountHomeForUnit());
+    if (label === null) throw new Error('the account home could not be read');
     mkdirSync(join(unitHome, 'Library', 'LaunchAgents'), { recursive: true });
-    const unitFile = join(unitHome, 'Library', 'LaunchAgents', `${DAEMON_LABEL}.plist`);
+    const unitFile = join(unitHome, 'Library', 'LaunchAgents', `${label}.plist`);
     writeFileSync(
       unitFile,
-      `<plist version="1.0"><dict><key>Label</key><string>${DAEMON_LABEL}</string></dict></plist>\n`,
+      `<plist version="1.0"><dict><key>Label</key><string>${label}</string></dict></plist>\n`,
       { mode: 0o600 },
     );
     path = loadedPath ?? realpathSync(unitFile);
@@ -388,6 +405,7 @@ function fakeWorld(options: {
     sleep: async () => {},
     now: () => NOW,
   };
+  recordRenames(launch);
 
   const doctor: DoctorSources = {
     version: () => '2.1.288',

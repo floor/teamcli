@@ -478,7 +478,7 @@ describe('the chores policy', () => {
     const made = world();
     expect(choresPolicyFor(teamFile(), made.root, made.home, new Date(NOW))).toEqual({
       mode: 'per-root',
-      sliceMs: 2000,
+      sliceMs: 20,
       missedBeats: 2,
       backoffCapMs: 30_000,
     });
@@ -974,6 +974,197 @@ describe('the chores fleet', () => {
     tickAt(5000);
     expect(fleet.stateFor(made.root)?.why).toContain('missed 2 heartbeats');
     expect(made2[0]!.kills).toHaveLength(1);
+  });
+
+  test('a multi-second daemon stall followed by buffered pipe frames with stale timestamps spares a beating child and still ends a silent sibling', () => {
+    const made = world();
+    const second = join(made.base, 'other');
+    const clock = { at: NOW };
+    const made2: Fake[] = [];
+    const fleet = createChoresFleet({
+      home: made.home,
+      beatMs: 1000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [
+        routeInput(made.root, policy({ missedBeats: 2 })),
+        routeInput(second, policy({ missedBeats: 2 })),
+      ],
+      log: () => {},
+      cpuTimeOf: flatCpu,
+      factory: () => {
+        const child = fakeChild(4290 + made2.length * 10);
+        made2.push(child);
+        return child.child;
+      },
+    });
+    const tickAt = (offset: number): void => {
+      clock.at = NOW + offset;
+      fleet.tick(new Date(clock.at));
+    };
+    const rss = 44 * 1024 * 1024;
+    tickAt(0);
+    for (const [idx, pid] of [
+      [0, 4290],
+      [1, 4300],
+    ] as const) {
+      made2[idx]!.emit({ type: 'ready', pid, at: AT });
+      made2[idx]!.emit({ type: 'heartbeat', at: AT, rssBytes: rss, busy: null, markerCache: null });
+    }
+
+    // The daemon's event loop is blocked for 38 seconds; the timers phase fires first at +38_000
+    // (stalled = true) before the poll phase drains the children's buffered stdout pipes.
+    tickAt(38_000);
+    expect(made2[0]!.kills).toHaveLength(0);
+    expect(made2[1]!.kills).toHaveLength(0);
+
+    // Poll phase at +38_050 reads buffered frames written 33-35 seconds earlier during the stall.
+    clock.at = NOW + 38_050;
+    for (const staleOffset of [3000, 4000, 5000]) {
+      made2[0]!.emit({
+        type: 'heartbeat',
+        at: new Date(NOW + staleOffset).toISOString(),
+        rssBytes: rss,
+        busy: 'fallback',
+        markerCache: null,
+      });
+    }
+    made2[1]!.emit({
+      type: 'heartbeat',
+      at: new Date(NOW + 4000).toISOString(),
+      rssBytes: rss,
+      busy: null,
+      markerCache: null,
+    });
+
+    // Next on-time tick at +39_000 (stalled = false, 950 ms after the pipe read): neither child
+    // is charged for the 33-34 s age of the frame's own `at`, and `heartbeatAt` preserves the
+    // child's self-reported timestamp.
+    tickAt(39_000);
+    expect(made2[0]!.kills).toHaveLength(0);
+    expect(made2[1]!.kills).toHaveLength(0);
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      state: 'ok',
+      missed: 0,
+      heartbeatAt: new Date(NOW + 5000).toISOString(),
+      busy: 'fallback',
+    });
+    expect(fleet.stateFor(second)).toMatchObject({
+      state: 'ok',
+      missed: 0,
+      heartbeatAt: new Date(NOW + 4000).toISOString(),
+    });
+
+    // Child 0 continues beating at +39_900 while Child 1 genuinely stops beating after +38_050.
+    clock.at = NOW + 39_900;
+    made2[0]!.emit({
+      type: 'heartbeat',
+      at: new Date(NOW + 39_900).toISOString(),
+      rssBytes: rss,
+      busy: null,
+      markerCache: null,
+    });
+
+    tickAt(40_000);
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      state: 'ok',
+      missed: 0,
+      heartbeatAt: new Date(NOW + 39_900).toISOString(),
+      busy: null,
+    });
+    expect(fleet.stateFor(second)).toMatchObject({
+      state: 'late',
+      missed: 1,
+      heartbeatAt: new Date(NOW + 4000).toISOString(),
+      why: 'the child has missed 1 heartbeat',
+    });
+    expect(made2[1]!.kills).toHaveLength(0);
+
+    tickAt(41_000);
+    expect(made2[0]!.kills).toHaveLength(0);
+    expect(made2[1]!.kills).toHaveLength(1);
+    expect(made2[1]!.kills[0]).toContain('missed 2 heartbeats');
+  });
+
+  test('falls back heartbeatAt to the daemon read clock when a frame carries a non-ISO timestamp and resets read clock across replacement', async () => {
+    const made = world();
+    const clock = { at: NOW };
+    const made2: Fake[] = [];
+    const fleet = createChoresFleet({
+      home: made.home,
+      beatMs: 1000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [routeInput(made.root, policy({ missedBeats: 2 }))],
+      log: () => {},
+      cpuTimeOf: flatCpu,
+      factory: () => {
+        const child = fakeChild(4310 + made2.length);
+        made2.push(child);
+        return child.child;
+      },
+    });
+    const tickAt = (offset: number): void => {
+      clock.at = NOW + offset;
+      fleet.tick(new Date(clock.at));
+    };
+    const rss = 40 * 1024 * 1024;
+    tickAt(0);
+    made2[0]!.emit({ type: 'ready', pid: 4310, at: AT });
+    made2[0]!.emit({ type: 'heartbeat', at: AT, rssBytes: rss, busy: null, markerCache: null });
+    tickAt(1000);
+
+    // A second frame with a non-ISO `at` proves the child's run, still updates `lastBeatReadMs`
+    // to `now()`, and falls back `lastBeatMs` to `readAt` so `stateFor` never throws RangeError on `toISOString()`.
+    clock.at = NOW + 1500;
+    made2[0]!.emit({
+      type: 'heartbeat',
+      at: 'not-an-iso-timestamp',
+      rssBytes: rss,
+      busy: null,
+      markerCache: null,
+    });
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      state: 'ok',
+      missed: 0,
+      heartbeatAt: new Date(NOW + 1500).toISOString(),
+    });
+
+    tickAt(2500);
+    expect(fleet.stateFor(made.root)).toMatchObject({ state: 'ok', missed: 0 });
+    tickAt(3500);
+    expect(fleet.stateFor(made.root)).toMatchObject({ state: 'late', missed: 1 });
+    expect(made2[0]!.kills).toHaveLength(0);
+    tickAt(4500);
+    expect(made2[0]!.kills).toHaveLength(1);
+
+    // A proved run is replaced a minute after it ends. That start clears `beats`, `lastBeatMs`
+    // and `lastBeatReadMs`, so the replacement is judged from its own start.
+    made2[0]!.leave(null, 'SIGTERM');
+    await made2[0]!.child.exited;
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      state: 'restarting',
+      missed: 0,
+      heartbeatAt: null,
+    });
+    tickAt(64_500);
+    expect(made2).toHaveLength(2);
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      state: 'starting',
+      pid: 4311,
+      missed: 0,
+      heartbeatAt: null,
+    });
+    const replacementStart = new Date(NOW + 64_500).toISOString();
+    made2[1]!.emit({ type: 'ready', pid: 4311, at: replacementStart });
+    made2[1]!.emit({ type: 'heartbeat', at: replacementStart, rssBytes: rss, busy: null, markerCache: null });
+    made2[1]!.emit({ type: 'heartbeat', at: replacementStart, rssBytes: rss, busy: null, markerCache: null });
+    tickAt(65_500);
+    tickAt(66_500);
+    expect(made2[1]!.kills).toHaveLength(0);
+    tickAt(67_500);
+    expect(made2[1]!.kills).toHaveLength(1);
+    expect(made2[1]!.kills[0]).toContain('missed 2 heartbeats');
   });
 
   test('a replacement after a proved run waits the restart floor, and the beats still reset the wait', async () => {
@@ -2964,5 +3155,164 @@ describe('the store pass is per root and from the child\'s own start', () => {
     ]);
     expect(markerNow(due, 'm-due-1')).toBeNull();
     expect(markerNow(done, 'm-done-1')).toBeNull();
+  }, 30_000);
+});
+
+describe('the machine reminders under the fleet', () => {
+  test('the machine group is its own child: no routes, the hosted list, and its notes verbatim', async () => {
+    const made = world();
+    const log: string[] = [];
+    const configs: SpawnChoresInput[] = [];
+    const fakes: Fake[] = [];
+    let pid = 9100;
+    const fleet = createChoresFleet({
+      home: made.home,
+      beatMs: 100,
+      since: AT,
+      now: () => new Date(NOW),
+      routes: [routeInput(made.root, policy())],
+      machine: { reminders: { hosted: [made.root] } },
+      log: (line) => log.push(line),
+      factory: (input) => {
+        configs.push(input);
+        const fake = fakeChild(pid);
+        pid += 1;
+        fakes.push(fake);
+        return fake.child;
+      },
+    });
+    try {
+      // The first beat starts each group's child; the next one nudges it.
+      fleet.tick(new Date(NOW));
+      fleet.tick(new Date(NOW + 100));
+      expect(configs).toHaveLength(2);
+      const machine = configs.find((input) => input.config.machine !== undefined);
+      const routed = configs.find((input) => input.config.machine === undefined);
+      if (machine === undefined || routed === undefined) throw new Error('the fleet started no route and machine pair');
+      // The machine token serves no root and carries the checkouts the daemon hosts.
+      expect(machine.config.routes).toEqual([]);
+      expect(machine.config.machine).toEqual({ reminders: { hosted: [made.root] } });
+      // A route's child never carries the machine work.
+      expect(routed.config.routes).toHaveLength(1);
+      expect(routed.config.machine).toBeUndefined();
+
+      const machineFake = fakes[configs.indexOf(machine)];
+      const routedFake = fakes[configs.indexOf(routed)];
+      if (machineFake === undefined || routedFake === undefined) throw new Error('the fleet kept no fixture child');
+      // The beat nudges the machine child exactly as it nudges a root's.
+      expect(machineFake.sends.filter((message) => message.type === 'tick')).toHaveLength(1);
+      // Its words are the log's, as written: no root prefix is invented for a machine subject.
+      machineFake.emit({ type: 'reminder-note', text: 'reminders: sent 1, refused 0; late 5s' });
+      expect(log).toContain('reminders: sent 1, refused 0; late 5s');
+      expect(log.some((line) => line.startsWith('chores '))).toBe(false);
+      // The machine group has no row: the route's own row is the only one this reading answers.
+      expect(fleet.stateFor(made.root)?.pid).toBe(routedFake.child.pid);
+    } finally {
+      const stopping = fleet.stop('the test is done');
+      for (const fake of fakes) fake.leave(0, null);
+      await stopping;
+    }
+  }, 10_000);
+
+  test('with the fleet hosted the daemon reads no list itself: the machine child is the reader', async () => {
+    const made = world();
+    let reads = 0;
+    const configs: SpawnChoresInput[] = [];
+    const fakes: Fake[] = [];
+    let pid = 9200;
+    const started = await startMachineDaemon({
+      home: made.home,
+      roots: [made.root],
+      startedBy: 'manual',
+      version: '0.5.12-chores-test',
+      heartbeatMs: 50,
+      reminders: () => {
+        reads += 1;
+        return [];
+      },
+      reminderHosted: [made.root],
+      choresHosting: true,
+      choresFactory: (input) => {
+        configs.push(input);
+        const fake = fakeChild(pid);
+        pid += 1;
+        fakes.push(fake);
+        return fake.child;
+      },
+      restoreSweep: false,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      await waitUntil(() => configs.some((input) => input.config.machine !== undefined));
+      const machine = configs.find((input) => input.config.machine !== undefined);
+      if (machine === undefined) throw new Error('the daemon started no machine child');
+      expect(machine.config.routes).toEqual([]);
+      expect(machine.config.machine).toEqual({ reminders: { hosted: [made.root] } });
+      // Beats reach the children, and the daemon's own loop read the list none of those times:
+      // the beat it used to run here now runs in the machine child.
+      await waitUntil(() => fakes.some((fake) => fake.sends.some((message) => message.type === 'tick')));
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect(reads).toBe(0);
+    } finally {
+      // The fixture children take the exit the supervisor's kill asks for, so the close is the
+      // daemon's own wait and not the kill grace standing in for a process that never leaves.
+      for (const fake of fakes) fake.leave(0, null);
+      const closed = await Promise.race([
+        started.daemon.close().then(() => true),
+        new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => resolve(false), 5000);
+          timer.unref();
+        }),
+      ]);
+      expect(closed).toBe(true);
+    }
+  }, 30_000);
+
+  test('a caller\'s own transport keeps the inline path: no machine child is started', async () => {
+    const made = world();
+    let reads = 0;
+    const configs: SpawnChoresInput[] = [];
+    const fakes: Fake[] = [];
+    let pid = 9300;
+    const started = await startMachineDaemon({
+      home: made.home,
+      roots: [made.root],
+      startedBy: 'manual',
+      version: '0.5.12-chores-test',
+      heartbeatMs: 50,
+      reminders: () => {
+        reads += 1;
+        return [];
+      },
+      reminderSend: () => Promise.resolve({ ok: true, code: 0, id: null, staged: false, text: '' }),
+      choresHosting: true,
+      choresFactory: (input) => {
+        configs.push(input);
+        const fake = fakeChild(pid);
+        pid += 1;
+        fakes.push(fake);
+        return fake.child;
+      },
+      restoreSweep: false,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      // The daemon's own beat reads the list: a transport that cannot cross a pipe keeps the
+      // whole reminder here, and no machine child is built for a reminder this process sends.
+      await waitUntil(() => reads > 0);
+      expect(configs.every((input) => input.config.machine === undefined)).toBe(true);
+    } finally {
+      for (const fake of fakes) fake.leave(0, null);
+      const closed = await Promise.race([
+        started.daemon.close().then(() => true),
+        new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => resolve(false), 5000);
+          timer.unref();
+        }),
+      ]);
+      expect(closed).toBe(true);
+    }
   }, 30_000);
 });

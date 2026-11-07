@@ -14,7 +14,8 @@ import type { Seat, TeamFile } from '../file/types.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { agentStatus, foregroundArgv0, PANE_WINDOW, paneForeground, paneProcessInfoAsync, paneProcesses, paneProcessesOf, paneRead, paneReadAsync, paneRun, reportDisplayAgent, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { agentStatus, foregroundArgv0, PANE_WINDOW, paneForeground, paneProcessInfoAsync, paneProcesses, paneProcessesOf, paneRead, paneReadAsync, paneRun, reportDisplayAgent, SIDEBAR_TTL_CAP_MS, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { sidebarPolicy } from '../settings/sidebar-policy.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { readBacklogDepth, readQueueDepths } from '../queues.ts';
@@ -192,7 +193,7 @@ export type WatchSources = {
   /** Sidebar line 1. False is one line and the next pass tries the same title again. */
   renameWorkspace?(session: string, workspace: string, label: string): boolean;
   /** Sidebar line 2. False is one line and the next pass tries the same text again. */
-  reportDisplayAgent?(session: string, pane: string, text: string): boolean;
+  reportDisplayAgent?(session: string, pane: string, text: string, ttlMs?: number): boolean;
   /** The home whose store holds the override file. Absent in a test that does not set one. */
   home?: string;
   /** The unacked-record read this pass rings and reports from: a scan of every drop and legacy
@@ -283,9 +284,7 @@ async function prefetchBrokerWork(
   }
 }
 
-/** How many consecutive cut passes get the short retry before the loop goes back to its interval. */
-const CUT_RETRY_PASSES = 3;
-/** The short retry's ceiling, in seconds: never longer than the watch's own interval. */
+/** The initial retry after a cut pass, in seconds: doubles on each consecutive cut up to the watch's own interval. */
 const CUT_RETRY_SECONDS = 5;
 
 /**
@@ -337,9 +336,11 @@ function readGate(clock: () => number, limits: ReadLimits, signal: AbortSignal |
   };
 }
 
-/** The wait after a pass: the short retry while the cuts are young, the interval after. */
+/** The wait after a pass: a cut pass backs off from five seconds, doubling on each consecutive cut up to the interval. */
 function readWait(interval: number, cut: boolean, cutPasses: number): number {
-  return cut && cutPasses >= 1 && cutPasses <= CUT_RETRY_PASSES ? Math.min(CUT_RETRY_SECONDS, interval) : interval;
+  if (!cut || cutPasses < 1 || interval <= CUT_RETRY_SECONDS) return interval;
+  const shift = Math.min(cutPasses - 1, 30);
+  return Math.min(CUT_RETRY_SECONDS * (2 ** shift), interval);
 }
 
 /** One extra screen read inside the pass, bounded by what is left of its budget. */
@@ -414,7 +415,8 @@ export const realWatchSources: WatchSources = {
   home: homedir(),
   swapSources: restartSources,
   renameWorkspace: (session, workspace, label) => workspaceRename(workspace, label, session === 'default' ? undefined : session),
-  reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, session === 'default' ? undefined : session),
+  reportDisplayAgent: (session, pane, text, ttlMs = SIDEBAR_TTL_CAP_MS) =>
+    reportDisplayAgent(pane, text, session === 'default' ? undefined : session, ttlMs),
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, session === 'default' ? undefined : session),
   paneRun: (session, pane, command) => paneRun(pane, command, session === 'default' ? undefined : session),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, session === 'default' ? undefined : session),
@@ -768,8 +770,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   // Where the awaited whole-session read resumes its pane rotation after a cut: one cursor per
   // watch process, so one per root. A read that took every pane leaves it at the start.
   let readCursor = 0;
-  // Consecutive passes whose read phase was cut short by its budget: the short retry counts up
-  // to the cap, then the watch goes back to its interval.
+  // Consecutive passes whose read phase was cut short by its budget: the retry backs off by
+  // doubling from five seconds up to the watch's interval, and resets when a read completes.
   let cutPasses = 0;
   let statusEngine: SeatStatusEngine | undefined;
   /** The current pass's native hold, replaced before the status engine, the pass and every
@@ -906,6 +908,11 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       // spent, the panes not reached stay unread for this pass, and the awaited read resumes at
       // its cursor next pass.
       const limits = watchReadLimits(team, root, sources.home, sources.now());
+      const sidebar = sidebarPolicy(
+        sources.home === undefined
+          ? { home: '', root, team: null }
+          : { home: sources.home, root, team, now: sources.now() },
+      );
       const gate = readGate(() => sources.now().getTime(), limits, hosted?.signal);
       // Before the one whole-session read: a beat overdue from the last pass lands here, so the
       // other hosted routes are renewed going into a call that can hold the loop for seconds.
@@ -1022,7 +1029,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             const agent = live.agents.find((candidate) => candidate.name === seat.name);
             if (!agent) continue;
             panesBySeat[seat.name] = agent.pane;
-            const hasSidebarLabel = Boolean(memory.seatLabels[seat.name]?.title);
+            const hasSidebarLabel = hosted !== undefined || Boolean(memory.seatLabels[seat.name]?.title);
             const readScreenNow = shouldReadScreenForStatus(seat, agent.status, hasSidebarLabel);
             const liveScreen = live.screens[agent.pane];
             // The fallback read is the same bounded, awaited call when the source supplies one:
@@ -1170,7 +1177,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           project: projectLiveness(sources.home, root),
         };
         const mail = !foreign && sources.home !== undefined
-          ? new MailPass({ dir, root, session, home: sources.home })
+          ? new MailPass({ dir, root, session, home: sources.home, lead: team.orchestrator })
           : undefined;
         const mailbox = !foreign && sources.home
           ? (sources.readMailbox ?? mailboxWaiting)(root, dir, team, live, sources.home, new Date(now), mail)
@@ -1326,13 +1333,23 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         }
         for (const label of result.labels) {
           const slot = (memory.seatLabels[label.name] ??= {});
+          if (hosted !== undefined) {
+            if (label.title) slot.title = label.title;
+            if (label.displayAgent) {
+              slot.line = label.displayAgent;
+              slot.reportedAt = now;
+            }
+            continue;
+          }
           if (label.title && sources.renameWorkspace) {
             if (sources.renameWorkspace(session, label.workspace, label.title)) slot.title = label.title;
             else say(`${label.name}: its title was not reported`, false);
           }
           if (label.displayAgent && sources.reportDisplayAgent) {
-            if (sources.reportDisplayAgent(session, label.pane, label.displayAgent)) slot.line = label.displayAgent;
-            else say(`${label.name}: its display was not reported`, false);
+            if (sources.reportDisplayAgent(session, label.pane, label.displayAgent, sidebar.ttlMs)) {
+              slot.line = label.displayAgent;
+              slot.reportedAt = now;
+            } else say(`${label.name}: its display was not reported`, false);
           }
         }
         if (!foreign && statusEngine !== undefined) {
@@ -1374,9 +1391,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // an unverified pace holds the ring with the rest of the automatic work.
         // Resolve receipts before the ring: an inbox/drop receipt can prove this id was read
         // even when the matching mailbox record's separate receipt is not present.
+        const readOptions = () => gate.take();
         const promotedReads = !foreign
           ? promoteInboxDrops({
-            dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
+            dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say,
           })
           : new Set<string>();
         await yieldBeat();
@@ -1388,7 +1406,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           // receipt is read again here, and an already-read message is not reminded. The snapshot
           // held it only because the read came after that read.
           else if (promotedReads.has(`${ring.to}\n${ring.id}`)
-            || !listUnacked(root, team.session, sources.home).some((one) => one.id === ring.id && one.to === ring.to)) {
+            || !listUnacked(root, team.session, sources.home, team.orchestrator).some((one) => one.id === ring.id && one.to === ring.to)) {
             say(`ring not typed: message ${ring.id} is already read`, false);
           } else {
             await deliver({
@@ -1408,7 +1426,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // gives up. `--no-nudge` is the watch that types nothing, and this types too.
         if (!foreign && !quiet && hosted === undefined && paceVerified) {
           await retryHeldDrops({
-            dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
+            dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say,
             nativeHeld: nativeHeldNow,
             // The channel's one redelivery dials the receiving session's socket with the stored
             // signed record; a seat whose launch the socket gate refuses falls through to the
@@ -1436,11 +1454,11 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // so a watch without nudges still keeps that word for the sender.
         if (!foreign) {
           await expirePendingNative(
-            { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow },
+            { dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow },
             { noNudge: quiet },
           );
-          confirmTakenDrops({
-            dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
+          await confirmTakenDrops({
+            dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say,
           });
           await yieldBeat();
           // A delivery is a deposit until the seat's signed receipt follows: a message still
@@ -1490,11 +1508,11 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             stuckReading,
           );
           await wakeUnreadDrops(
-            { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow, ...(mail === undefined ? {} : { mail }) },
+            { dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow, ...(mail === undefined ? {} : { mail }) },
             { unreadAfter: inForce.unreadAfter, seatWindow: unreadWindowOf, rung, ...(quiet || !paceVerified ? { noNudge: true } : {}) },
           );
           reportUnreadDrops(
-            { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say, ...(mail === undefined ? {} : { mail }) },
+            { dir, session, root, home: sources.home, team, live, processes, readOptions, ownPane, sources, now: sources.now(), say, ...(mail === undefined ? {} : { mail }) },
             { unreadAfter: inForce.unreadAfter, seatWindow: unreadWindowOf },
             stuckReading,
           );
@@ -1590,8 +1608,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         paneGoneOnce = place === 'end';
         beatWatch(dir, session, sources.pid, sources.now().toISOString(), place === 'end' ? 'keep' : place, watchStartedAt);
       }
-      // The pass's read outcome: a cut pass retries shortly (up to the cap), then the watch goes
-      // back to its interval; a pass that read every pane it meant to clears both the count and
+      // The pass's read outcome: consecutive cut passes back off by doubling from five seconds up
+      // to the watch's interval; a pass that read every pane it meant to clears both the count and
       // the line, so a later cut is a new episode. The retry repeats no report: every line a
       // pass prints is deduplicated by `told`, and the cut line is one of them.
       if (gate.cut) {
@@ -1623,7 +1641,11 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           agents: last.agents,
           memory,
           read: (pane) => sources.screen(pane, session),
-          report: (pane, text) => sources.reportDisplayAgent?.(session, pane, text) ?? false,
+          report: (pane, text, ttlMs) =>
+            sources.reportDisplayAgent?.(session, pane, text, ttlMs ?? sidebar.ttlMs) ?? false,
+          now: sources.now().getTime(),
+          refreshMs: sidebar.refreshMs,
+          ttlMs: sidebar.ttlMs,
         });
         for (const seat of failed) say(`${seat.name}: its display was not reported`, false);
       };
@@ -1703,7 +1725,7 @@ function mailboxWaiting(root: string, dir: string, team: TeamFile, live: Live, h
   // every pass. Such a record still raises the owner's waiting note when its box is not free.
   // The pass's reading is used when one is handed in, so the unacked list and each seat's unread
   // list are taken once for the whole pass; absent, this call takes its own.
-  const scan = mail ?? new MailPass({ dir, root, session: team.session, home });
+  const scan = mail ?? new MailPass({ dir, root, session: team.session, home, lead: team.orchestrator });
   const servedByDrops = new Map<string, Set<string>>();
   const waitingIds = (seat: string): Set<string> => {
     let ids = servedByDrops.get(seat);

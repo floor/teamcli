@@ -1,7 +1,7 @@
 // The `owner-reply-to` policy: the entity-level address an owner-origin message names for the
-// seat that answers it. Entity `floor` ships `orchestrator@floor`; every other entity must
-// declare its own, and the reader answers an explicit missing or invalid reason rather than
-// inventing a seat or naming a pane.
+// seat that answers it. The release ships no address: every entity must declare its own, and
+// the reader answers an explicit missing or invalid reason rather than inventing a seat or
+// naming a pane.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -19,10 +19,10 @@ import {
   writePolicySet,
 } from '../src/policy/index.ts';
 import {
-  OWNER_REPLY_DEFAULT,
   ownerReplyToValueProblem,
   parseOwnerReplyToValue,
 } from '../src/settings/owner-reply.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { keyOf, signDomain } from '../src/store/keys.ts';
 
 const NOW = new Date('2026-10-19T12:00:00Z');
@@ -67,6 +67,18 @@ function world(entity: string | null = 'floor'): { home: string; root: string } 
   const lobby = entity === null ? lobbyDir(home) : resolveLobby(home, { entity });
   mkdirSync(lobby, { recursive: true });
   writeFileSync(join(root, '.agents/team.yaml'), teamText(root, lobby, entity));
+  // A team that names an entity is registered under that entity, so an `owner-reply-to` address
+  // whose `@team` is the entity word passes the write-time registry check.
+  if (entity !== null) {
+    upsertTeam(home, teamIdOf(root), {
+      project: entity,
+      entity,
+      session: entity,
+      root,
+      roster: [],
+      at: NOW.toISOString(),
+    });
+  }
   return { home, root };
 }
 
@@ -157,17 +169,18 @@ describe('the owner-reply-to vocabulary', () => {
 });
 
 describe('the owner-reply reader', () => {
-  test('entity floor with no declaration answers its shipped orchestrator', () => {
+  test('entity floor with no declaration is missing', () => {
     const { home, root } = world('floor');
-    expect(resolveOwnerReplyTo(root, home, 'floor', NOW)).toEqual({
-      ok: true,
-      entity: 'floor',
-      target: OWNER_REPLY_DEFAULT,
-      source: 'default',
-    });
+    const found = resolveOwnerReplyTo(root, home, 'floor', NOW);
+    expect(found.ok).toBe(false);
+    if (!found.ok) {
+      expect(found.reason).toBe('missing');
+      expect(found.entity).toBe('floor');
+      expect(found.why).toContain('no owner-reply-to');
+    }
   });
 
-  test('a signed floor declaration replaces the default', () => {
+  test('a signed floor declaration answers it', () => {
     const { home, root } = world('floor');
     declare(home, 'floor', 'inbox@floor');
     expect(resolveOwnerReplyTo(root, home, 'floor', NOW)).toEqual({
@@ -202,12 +215,12 @@ describe('the owner-reply reader', () => {
 
   test('the team file names the entity when the caller passes none', () => {
     const { home, root } = world('floor');
-    expect(resolveOwnerReplyTo(root, home, null, NOW)).toEqual({
-      ok: true,
-      entity: 'floor',
-      target: OWNER_REPLY_DEFAULT,
-      source: 'default',
-    });
+    const found = resolveOwnerReplyTo(root, home, null, NOW);
+    expect(found.ok).toBe(false);
+    if (!found.ok) {
+      expect(found.entity).toBe('floor');
+      expect(found.reason).toBe('missing');
+    }
   });
 
   test('a team that names no entity has no target', () => {
@@ -231,15 +244,15 @@ describe('the owner-reply reader', () => {
     }
   });
 
-  test('an expired floor declaration falls back to the shipped default', () => {
+  test('an expired floor declaration is missing', () => {
     const { home, root } = world('floor');
     declare(home, 'floor', 'inbox@floor', new Date(NOW.getTime() + 1_000).toISOString());
-    expect(resolveOwnerReplyTo(root, home, 'floor', new Date(NOW.getTime() + 60_000))).toEqual({
-      ok: true,
-      entity: 'floor',
-      target: OWNER_REPLY_DEFAULT,
-      source: 'default',
-    });
+    const found = resolveOwnerReplyTo(root, home, 'floor', new Date(NOW.getTime() + 60_000));
+    expect(found.ok).toBe(false);
+    if (!found.ok) {
+      expect(found.reason).toBe('missing');
+      expect(found.why).toContain('expired');
+    }
   });
 
   test('a signed declaration with an unreadable value is invalid', () => {

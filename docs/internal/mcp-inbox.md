@@ -1,6 +1,6 @@
 # The team inbox leg: routes, bounds and evidence
 
-`team mcp serve` is the seat-side half of the mcp-inbox delivery leg. The seat's launch line
+`team mcp serve` is the seat-side half of the retired mcp-inbox delivery name. The seat's launch line
 starts it with the seat's own CLI, the CLI calls `inbox_check` and `inbox_read`, and `inbox_read`
 writes the receipt that says the message was read. This page is the runbook: which CLIs carry a
 route in this build, what each registration writes, the bounds on every wait, and the evidence
@@ -192,8 +192,8 @@ The listener marker names the install the server started from — its `version`,
 short digest of the entry module it loaded) and the packed `head` when the package carries one. A
 sender of another version or another packed commit judges the marker stale and walks its next
 leg, exactly as it does for a dead pid, and a marker that records no identity cannot vouch for
-the server's code. The channel leg and the `mcp-inbox` leg both require a marker this build can
-vouch for.
+the server's code. The channel leg and the inbox read a record an older build named `mcp-inbox`
+both require a marker this build can vouch for.
 
 On every channel tick, and after each line its client writes, the server compares the install
 under it — the version and packed commit the installed entry names — with the one it started
@@ -259,7 +259,11 @@ every process finds the name held.
 
 The receipt is the only evidence this leg produces, and it is written by `inbox_read` before the
 body is returned, once the record's signature has been checked against the checkout's message
-key. It is the signed status receipt `team messages` writes — `{payload: {kind, status, id, to,
+key. That server path stays receipt-first. `team drops --read` prints the body first and writes
+the same receipt after the hand-over, so that CLI path is at-least-once: two racing readers can
+both print a body, and the exclusive receipt still means only one of them writes it. The mark on a sender belongs to the content, not the receipt: `inbox_check` reports
+`sender_attribution` on each item, and `inbox_read` serves every body with its attribution line
+marked, exactly as `team drops --read` serves it. It is the signed status receipt `team messages` writes — `{payload: {kind, status, id, to,
 root, session, at}, signature}` at `<id>.read.json`, signed with the same message key — so one
 module answers for the inbox, `team drops`, `team messages` and the watch, and each verifies the
 receipt rather than trusting the file's presence. A file that is not a signed record, or whose

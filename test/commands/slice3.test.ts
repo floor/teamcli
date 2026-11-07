@@ -311,7 +311,7 @@ describe('team approve', () => {
     );
     const changed = await approve(['--show'], WORKER);
     expect(changed.out).toContain(
-      '  - 106:     launch: grok --model grok-4.7\n  + 106:     launch: grok --model grok-4.7 --yolo\n',
+      '  -    launch: grok --model grok-4.7\n  +    launch: grok --model grok-4.7 --yolo\n',
     );
     expect(changed.out).toContain('Needs a new approval: `limits` changed; seat grok-acme changed.\n');
     expect(changed.out).toContain('Ceilings approved: 6 seats at most, 2 temporary, openai 1, deepseek 3.\n');
@@ -503,7 +503,7 @@ describe('team doctor', () => {
     expect(run.out).toContain(
       'warn  claude 2.2.0 (Claude Code) is newer than the tested 2.1.288 to 2.1.302: its screens are untested with this version; a seat that isn\'t read at launch is left out, never typed into\n',
     );
-    expect(run.out).toContain('warn  herdr 0.6.9 is older than the tested 0.7.1\n');
+    expect(run.out).toContain('0.6.9 is older than the tested 0.7.1 to 0.9.5\n');
     expect(run.out).toContain('note  claude-code: the login is not checked in this version\n');
     expect(run.code).toBe(0);
   });
@@ -525,6 +525,7 @@ describe('team doctor', () => {
     model: Grok
     version: "4.7"
     launch: cursor-agent
+    cwd: ../own-cursor-1
   - role: implementer
     name: agy-acme
     cli: antigravity
@@ -538,8 +539,14 @@ describe('team doctor', () => {
     vendor: xai
     model: Muse Spark
     version: "1.3"
-    launch: cursor-agent`,
+    launch: cursor-agent
+    cwd: ../own-cursor-2`,
+    ).replace(
+      '  - ../worktrees/acme-web/*    # its worktrees, by pattern\n',
+      '  - ../worktrees/acme-web/*    # its worktrees, by pattern\n  - ../own-cursor-1\n  - ../own-cursor-2\n',
     ));
+    mkdirSync(join(base, 'own-cursor-1'));
+    mkdirSync(join(base, 'own-cursor-2'));
     // No approval call: a missing record is not a refusal, and every warning below is about a model.
     const run = await doctor({
       version: (binary) => binary === 'claude'
@@ -554,9 +561,32 @@ describe('team doctor', () => {
       onPath: (binary) => binary === 'team-deepseek',
     });
     // cursor-agent started bare shows Grok 4.7, so this seat is checked on the running screen:
-    // no line for it. Muse Spark is a family the cursor rules cannot spell, so nothing checks
-    // that seat and the warning says so. `agy` shows Gemini Flash likewise.
-    expect(run.out).not.toContain('cursor-acme');
+    // no model warning names it. Muse Spark is a family the cursor rules cannot spell, so nothing
+    // checks that seat and the warning says so. `agy` shows Gemini Flash likewise. The legacy
+    // migration note does name the seat, as the cwd the suggested trust entry comes from.
+    const lines = run.out.split('\n');
+    const modelWarnings = lines.filter((line) =>
+      line.startsWith('warn  ')
+      && (line.includes('no model flag') || line.includes('names no model') || line.includes('the launch starts')),
+    );
+    expect(modelWarnings.join('\n')).not.toContain('cursor-acme');
+    const noteAt = lines.findIndex((line) => line.startsWith('note  the file is legacy:'));
+    const noteEnd = lines.findIndex((line, index) =>
+      index > noteAt && (
+        line.startsWith('ok  ')
+        || line.startsWith('warn  ')
+        || line.startsWith('MISS  ')
+        || line.startsWith('note  ')
+        || line.startsWith('team doctor:')
+      ),
+    );
+    const note = noteAt >= 0 && noteEnd > noteAt ? lines.slice(noteAt, noteEnd) : [];
+    const mentions = lines
+      .map((line, index) => ({ line, index }))
+      .filter(({ line }) => line.includes('cursor-acme'));
+    expect(note.join('\n')).toContain("where seat cursor-acme's cwd");
+    expect(mentions.length).toBeGreaterThan(0);
+    expect(mentions.every(({ index }) => index >= noteAt && index < noteEnd)).toBe(true);
     expect(run.out).toContain(
       "warn  cursor-other: no model flag, and this version can't read Muse Spark 1.3 on this CLI's screen: nothing checks that it runs it\n",
     );

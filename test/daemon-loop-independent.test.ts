@@ -26,7 +26,6 @@ import { execFileSync } from 'node:child_process';
 import {
   existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { loadTeamFile } from '../src/file/load.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
@@ -38,7 +37,7 @@ import {
 } from '../src/send/daemon.ts';
 import { readHistory } from '../src/send/history.ts';
 import type { NativePane } from '../src/send/native.ts';
-import { claudeBox } from './helpers.ts';
+import { claudeBox, shortSocketBase } from './helpers.ts';
 
 const PROJECT = 'acme';
 const SESSION = 'acme';
@@ -111,7 +110,7 @@ type World = {
 };
 
 function setupWorld(order = 'delivery_order: [typed]\n', helperExtra = ''): World {
-  const short = existsSync('/private/tmp') ? '/private/tmp' : tmpdir();
+  const short = shortSocketBase();
   base = realpathSync(mkdtempSync(join(short, 'rhad-dloop-')));
   const home = join(base, 'home');
   const root = join(base, PROJECT);
@@ -371,6 +370,7 @@ describe('the send endpoint reads its host off the loop (independent scenes)', (
           // staged drop's path and id, the world's temp folder and its salted store inside it.
           .replaceAll(worldBase, '<base>')
           .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '<id>')
+          .replace(/team (reply|ack|show) [0-9a-f]{8,}/g, 'team $1 <id>')
           .replace(/acme-[0-9a-f]{8,}/g, 'acme-<store>');
         return { response: response === null ? null : scrub(JSON.stringify(response)), lines, frames: frames.map(scrub) };
       };

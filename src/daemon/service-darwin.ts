@@ -22,8 +22,9 @@ import {
   realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { DAEMON_LABEL, daemonLogPath, daemonRuntimeRoot, machineConfigDir } from './paths.ts';
+import { DAEMON_LABEL, daemonLabel, daemonLogPath, daemonRuntimeRoot, machineConfigDir } from './paths.ts';
 import type {
+  LoadedServiceProgram,
   ServiceInstallFailure,
   ServiceInstallResult,
   ServiceJobRecord,
@@ -114,8 +115,10 @@ function plistStrings(text: string, key: string): string[] | null {
 }
 
 function programOf(program: ServiceProgram): string[] {
+  // The unit names no checkout. A service start hosts every registry team whose lifecycle is
+  // running; `root.added` asks it to read that list now, and the heartbeat reads it again so a
+  // missed notice still lands. A reinstall must not freeze yesterday's roots into the arguments.
   const args = [program.execPath, program.entry, 'daemon', 'run', '--started-by', 'service-manager'];
-  for (const root of program.roots) args.push('--root', root);
   // The unit records the same opt-ins a foreground run takes: each flag is written only when the
   // install program asked for it, so a plain unit hosts neither presence nor a watch.
   if (program.presence === true) args.push('--presence');
@@ -134,18 +137,30 @@ function namesAuthorization(text: string): boolean {
     .some((entry) => entry[1] === '--general' || entry[1] === '--key');
 }
 
-function unitText(home: string, program: string[], path?: string): string {
+function unitText(home: string, label: string, program: string[], path?: string): string {
   const args = program.map((arg) => `    <string>${escapeXml(arg)}</string>`).join('\n');
-  // The installer's PATH, so the service finds herdr and the CLIs where the owner's shell does.
-  const env = path === undefined || path === ''
-    ? ''
-    : `  <key>EnvironmentVariables</key>\n  <dict>\n    <key>PATH</key>\n    <string>${escapeXml(path)}</string>\n  </dict>\n`;
+  // The unit sets HOME, TMPDIR and the XDG directories to the home it serves so the process and
+  // the unit agree on which home they are; the installer's PATH lets the service find herdr and
+  // the CLIs where the owner's shell does.
+  const entries: [string, string][] = [
+    ['HOME', home],
+    ['TMPDIR', join(home, 'tmp')],
+    ['XDG_CONFIG_HOME', join(home, '.config')],
+    ['XDG_DATA_HOME', join(home, '.local', 'share')],
+    ['XDG_CACHE_HOME', join(home, '.cache')],
+    ['XDG_STATE_HOME', join(home, '.local', 'state')],
+  ];
+  if (path !== undefined && path !== '') entries.push(['PATH', path]);
+  const envBody = entries
+    .map(([key, value]) => `    <key>${escapeXml(key)}</key>\n    <string>${escapeXml(value)}</string>`)
+    .join('\n');
+  const env = `  <key>EnvironmentVariables</key>\n  <dict>\n${envBody}\n  </dict>\n`;
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>${DAEMON_LABEL}</string>
+  <string>${escapeXml(label)}</string>
   <key>ProgramArguments</key>
   <array>
 ${args}
@@ -175,9 +190,75 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
   const sleep = options.sleep ?? realSleep;
   const uid = options.uid ?? (typeof process.getuid === 'function' ? process.getuid() : 0);
 
-  const unitPath = (home: string): string => join(home, 'Library', 'LaunchAgents', `${DAEMON_LABEL}.plist`);
+  let cachedAccountHome: string | undefined =
+    options.accountHome !== undefined && options.accountHome !== '' && options.accountHome.startsWith('/')
+      ? options.accountHome
+      : undefined;
+  const invalidInjectedAccount =
+    options.accountHome !== undefined && (options.accountHome === '' || !options.accountHome.startsWith('/'));
+  const resolveAccountHome = (): string | null => {
+    if (invalidInjectedAccount) return null;
+    if (cachedAccountHome !== undefined) return cachedAccountHome;
+    const read = run('/usr/bin/id', ['-P', String(uid)]);
+    if (read.status !== 0) return null;
+    const line = read.stdout.split(/\r?\n/)[0] ?? '';
+    const fields = line.split(':');
+    const dir = fields[8] ?? '';
+    if (fields.length >= 9 && dir.startsWith('/')) {
+      cachedAccountHome = dir;
+      return dir;
+    }
+    return null;
+  };
+
+  const labelFor = (home: string): string | null => daemonLabel(home, resolveAccountHome());
+  const unitPathFor = (home: string, label: string): string => join(home, 'Library', 'LaunchAgents', `${label}.plist`);
+  const unitPath = (home: string): string => {
+    const label = labelFor(home);
+    if (label === null) throw new Error('the account home could not be read');
+    return unitPathFor(home, label);
+  };
+
+  /**
+   * Every loaded unit's label and program words: the manager's list for what is loaded (a
+   * pid stands in the first column), and each loaded unit's own file for what it runs.
+   * Both texts are parsed here and nowhere else. An unreadable list or unit file simply
+   * contributes nothing — a folder is held only on a word actually read.
+   */
+  const loadedPrograms = (home: string): LoadedServiceProgram[] => {
+    const listed = run('launchctl', ['list']);
+    if (listed.status !== 0) return [];
+    const loaded = new Set<string>();
+    for (const line of listed.stdout.split('\n')) {
+      const columns = line.trim().split(/\s+/);
+      if (columns.length >= 3 && columns[0] !== '-' && columns[0] !== 'PID') loaded.add(columns[2] as string);
+    }
+    const dir = join(home, 'Library', 'LaunchAgents');
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return [];
+    }
+    const programs: LoadedServiceProgram[] = [];
+    for (const name of names.sort()) {
+      if (!name.endsWith('.plist')) continue;
+      let text: string;
+      try {
+        const path = join(dir, name);
+        if (lstatSync(path).isSymbolicLink()) continue;
+        text = readFileSync(path, 'utf8');
+      } catch {
+        continue;
+      }
+      const label = plistString(text, 'Label');
+      if (label === null || !loaded.has(label)) continue;
+      programs.push({ label, program: plistStrings(text, 'ProgramArguments') ?? [] });
+    }
+    return programs;
+  };
   const domain = `gui/${String(uid)}`;
-  const service = `${domain}/${DAEMON_LABEL}`;
+  const serviceForLabel = (label: string): string => `${domain}/${label}`;
 
   /** Loads the unit at `path`, retrying a refusal with a bounded, growing wait. A refusal while
    *  the job this unit replaces is still leaving is the same answer as a unit the manager will
@@ -209,8 +290,10 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
    * ProgramArguments. This seat could not run the manager's commands itself, so the parser is
    * tolerant of both forms and its exact output is not claimed as measured here.
    */
-  const jobRecord = (): (ServiceJobRecord & { path: string | null }) | null => {
-    const printed = run('launchctl', ['print', service]);
+  const jobRecord = (home: string): (ServiceJobRecord & { path: string | null }) | null => {
+    const label = labelFor(home);
+    if (label === null) return null;
+    const printed = run('launchctl', ['print', `${domain}/${label}`]);
     if (printed.status === 0) {
       const pid = /^\s*pid = (\d+)\s*$/m.exec(printed.stdout)?.[1];
       const path = /^\s*path = (.+?)\s*$/m.exec(printed.stdout)?.[1];
@@ -224,7 +307,7 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
         path: path ?? null,
       };
     }
-    const listed = run('launchctl', ['list', DAEMON_LABEL]);
+    const listed = run('launchctl', ['list', label]);
     if (listed.status !== 0) return null;
     const pid = /^\s*"PID"\s*=\s*(\d+)\s*;/m.exec(listed.stdout)?.[1];
     const quoted = /^\s*"Program"\s*=\s*"((?:[^"\\]|\\.)*)"\s*;/m.exec(listed.stdout)?.[1];
@@ -241,7 +324,9 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
    * Unreadable is null: the caller refuses closed.
    */
   const unitRecord = (home: string): ServiceUnitRecord | null => {
-    const path = unitPath(home);
+    const label = labelFor(home);
+    if (label === null) return null;
+    const path = unitPathFor(home, label);
     let stats: ReturnType<typeof lstatSync>;
     try {
       stats = lstatSync(path);
@@ -632,6 +717,7 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
    */
   const restore = (
     home: string,
+    label: string,
     path: string,
     prior: { text: string; mode: number } | null,
     failDetail: string,
@@ -674,7 +760,7 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
       );
     }
     dropRuntime(home, sha, prior.text);
-    run('launchctl', ['bootout', service]);
+    run('launchctl', ['bootout', serviceForLabel(label)]);
     const back = loadWithRetry(path);
     if (back.status === 0) {
       return refused(
@@ -703,11 +789,12 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
    */
   const rollback = (
     home: string,
+    label: string,
     path: string,
     prior: { text: string; mode: number } | null,
     sha: string,
   ): ServiceInstallFailure => {
-    run('launchctl', ['bootout', service]);
+    run('launchctl', ['bootout', serviceForLabel(label)]);
     if (prior === null) {
       try {
         if (existsSync(path)) unlinkSync(path);
@@ -758,27 +845,31 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
 
   return {
     kind: 'system-service-manager',
+    accountHome: () => resolveAccountHome(),
     unitPath,
+    loadedPrograms,
     plan: (home, program): ServicePlan => {
+      const label = labelFor(home);
+      if (label === null) throw new Error('the account home could not be read');
       const set = runtimeSet(program);
       const listed = runtimeFiles(home, set);
       if (!listed.ok) throw new Error(`the program this unit would run could not be read whole: ${listed.detail}`);
       const sha = runtimeHash(listed.files);
       return {
-        unitPath: unitPath(home),
+        unitPath: unitPathFor(home, label),
         program: programOf({ ...program, entry: join(runtimeRoot(home), sha, set.entry) }),
       };
     },
     job: (home) => {
       const unit = unitRecord(home);
-      if (unit === null || unit.label !== DAEMON_LABEL) return null;
+      if (unit === null || unit.label !== labelFor(home)) return null;
       let expectedPath: string;
       try {
         expectedPath = realpathSync(unitPath(home));
       } catch {
         return null;
       }
-      const record = jobRecord();
+      const record = jobRecord(home);
       if (record === null || record.path === null) return null;
       let loadedPath = record.path;
       try {
@@ -792,7 +883,16 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
     unit: (home) => unitRecord(home),
 
     install(home, program): ServiceInstallResult {
-      const path = unitPath(home);
+      const label = labelFor(home);
+      if (label === null) {
+        return refused(
+          'the account home could not be read, so no service definition was written',
+          'the account record for this uid did not name an absolute home folder',
+          'refused',
+          false,
+        );
+      }
+      const path = unitPathFor(home, label);
       // A failed install must not leave a definition launchd could load at the next login. The
       // unit this install may overwrite is kept first, so a refusal restores the earlier,
       // already-installed definition rather than leaving the unregistered one in its place.
@@ -864,7 +964,7 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
       // after that point leaves no earlier unit for the command to point the owner at.
       let placed = false;
       const words = programOf({ ...program, entry: join(made.path, set.entry) });
-      const text = unitText(home, words, program.path);
+      const text = unitText(home, label, words, program.path);
       try {
         mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
         temporary = `${path}.${String(process.pid)}.tmp`;
@@ -899,7 +999,7 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
       // offered again with a bounded, growing wait while the manager refuses — the earlier stop
       // may still be finishing, and a refusal the install never retries past is the empty
       // machine this install must never leave.
-      const undo = (): ServiceInstallFailure => rollback(home, path, prior, sha);
+      const undo = (): ServiceInstallFailure => rollback(home, label, path, prior, sha);
       const succeeded = (): ServiceInstallResult => {
         // The copy the new unit runs, the copy the earlier unit names, and every copy a hosted
         // root's hook file names all stay: the health gate may still ask for the undo, which
@@ -924,17 +1024,25 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
       };
       const first = run('launchctl', ['bootstrap', domain, path]);
       if (first.status === 0) return succeeded();
-      run('launchctl', ['bootout', service]);
+      run('launchctl', ['bootout', serviceForLabel(label)]);
       const loaded = loadWithRetry(path);
       if (loaded.status === 0) return succeeded();
       // The new unit did not start after every bounded retry: the earlier definition is put
       // back and its daemon started, so a failure is reported and a daemon still runs.
-      return restore(home, path, prior, loadDetail(loaded), sha);
+      return restore(home, label, path, prior, loadDetail(loaded), sha);
     },
 
     uninstall(home): ServiceUninstallResult {
-      const path = unitPath(home);
-      const booted = run('launchctl', ['bootout', service]);
+      const label = labelFor(home);
+      if (label === null) {
+        return {
+          ok: false,
+          why: 'the account home could not be read, so no service unit was removed',
+          detail: 'the account record for this uid did not name an absolute home folder',
+        };
+      }
+      const path = unitPathFor(home, label);
+      const booted = run('launchctl', ['bootout', serviceForLabel(label)]);
       // Removing the unit file does not unload a job the service manager still holds, and a
       // loaded KeepAlive job would start the daemon again. Only a stop the manager accepted
       // permits the file to go; a unit with no accepted stop stays as the recovery state a retry
@@ -968,7 +1076,16 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
     },
 
     restart(home): ServiceRestartResult {
-      const path = unitPath(home);
+      const label = labelFor(home);
+      if (label === null) {
+        return {
+          ok: false,
+          reason: 'refused',
+          why: 'the account home could not be read, so the installed daemon could not be restarted',
+          detail: 'the account record for this uid did not name an absolute home folder',
+        };
+      }
+      const path = unitPathFor(home, label);
       // There is no daemon to restart without the unit: nothing is stopped, and the command
       // names the install that writes one.
       if (!existsSync(path)) {
@@ -984,7 +1101,7 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
       // install's own bounded, growing patience: a refusal while the stop is still finishing is
       // not a verdict on the unit.
       const offer = (): ServiceRunResult => {
-        run('launchctl', ['bootout', service]);
+        run('launchctl', ['bootout', serviceForLabel(label)]);
         return loadWithRetry(path);
       };
       // The command calls this only after the restarted daemon did not answer: the job it just
@@ -1011,6 +1128,20 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
         };
       }
       return { ok: true, unitPath: path, undo };
+    },
+    retireUnit(home, label) {
+      const path = join(home, 'Library', 'LaunchAgents', `${label}.plist`);
+      run('launchctl', ['bootout', `${domain}/${label}`]);
+      try {
+        if (existsSync(path)) unlinkSync(path);
+      } catch (error) {
+        return {
+          ok: false as const,
+          why: error instanceof Error ? error.message : 'the shuttle unit could not be removed',
+        };
+      }
+      if (existsSync(path)) return { ok: false as const, why: 'the shuttle unit is still on disk' };
+      return { ok: true as const };
     },
   };
 }

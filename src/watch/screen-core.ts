@@ -1,7 +1,7 @@
 // The screen core. Stage order, dialog primitives, the four composer modes and the
 // safety floor live here, never in a profile. A profile is data: it can add a
 // pattern, and it cannot move a stage or turn the floor off.
-import { allDimAfter, colourAfter, hasSgr, stripSgr } from '../ansi.ts';
+import { allDimAfter, colourAfter, dropPlainTail, hasSgr, stripSgr } from '../ansi.ts';
 import type { Reset, Screen } from './screen.ts';
 import type { BlockStep, LinePattern, Rule, ScreenData, TextSpec, Wrap } from './screen-data.ts';
 
@@ -32,6 +32,13 @@ export type ScreenOptions = {
   cwd?: string | null;
   home?: string;
   clock?: ReadClock;
+  /**
+   * Where a working phrase counts. `anywhere` (the default) means a phrase on any row is a
+   * live turn, so a path that closes, relaunches, or skips a seat as idle never reads a
+   * leftover spinner as the previous turn. `cluster` is the wake's reading only: a phrase
+   * more than eight rows above an empty idle prompt is that previous turn.
+   */
+  working?: 'anywhere' | 'cluster';
 };
 
 function screenClock(options?: ScreenOptions | ReadClock): ReadClock | undefined {
@@ -48,6 +55,12 @@ function screenExpectedCwd(options?: ScreenOptions | ReadClock): string | null |
 function screenHome(options?: ScreenOptions | ReadClock): string | undefined {
   if (!options || 'now' in options || 'budgetMs' in options) return undefined;
   return options.home;
+}
+
+/** The wake asks for the eight-row cluster. Every other read counts a working phrase anywhere. */
+function screenWorking(options?: ScreenOptions | ReadClock): 'anywhere' | 'cluster' {
+  if (!options || 'now' in options || 'budgetMs' in options) return 'anywhere';
+  return options.working ?? 'anywhere';
 }
 
 /**
@@ -98,7 +111,8 @@ function statusRowAt(
  * never read as the row a quota figure comes from. Where the profile pins the row's place, a
  * candidate that is not in its place is ordinary text: the scan skips it (the lines below a
  * lower candidate are then not the frame a place needs, so a higher one fails too). A row the
- * profile exempts from the place test keeps the trailing rule the other profiles read it by.
+ * profile exempts from the distance pin keeps the trailing rule, except the Cursor prompt,
+ * whose excepted row still needs the workspace line directly under it.
  * The classification and the quota read both take their line from here, so the two cannot
  * disagree about which line the composer's status line is.
  */
@@ -117,6 +131,13 @@ function statusIndex(
     if (composer.statusBelow && !composer.statusBelow.except?.test(lines[i] ?? '')) {
       if (statusRowAt(composer, lines, i)) return i;
       continue;
+    }
+    // Cursor's except skips the distance pin only. The dialect rewrites the arrow, so the
+    // compiled prompt starts `^ {2}\u2192`. The workspace line is still required under that
+    // row. Every other except keeps the grammar-only reading it had.
+    if (composer.statusBelow && composer.prompt.source.startsWith('^ {2}\\u2192')) {
+      const under = lines[i + 1] ?? '';
+      if (!composer.statusBelow.line.test(under)) continue;
     }
     const trailing = lines.slice(i + 1).filter((line) => line.trim());
     if (allowOneTrailing) {
@@ -393,6 +414,7 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
     const clock = screenClock(clockOrOptions);
     const expectedCwd = screenExpectedCwd(clockOrOptions);
     const home = screenHome(clockOrOptions);
+    const working = screenWorking(clockOrOptions);
     const now = clock?.now ?? Date.now;
     const budget = clock?.budgetMs ?? BUDGET_MS;
     const start = now();
@@ -444,6 +466,16 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
           // An `at_composer` match draws its reset from the same block, so a stale phrase
           // elsewhere on the pane cannot date a wall it does not belong to.
           if (hit) {
+            // A working rule matches a spinner or an interrupt hint on any row of the window,
+            // and this stage runs before the composer. The wake's cluster reading treats a
+            // match above that cluster, over an empty idle prompt, as the previous turn.
+            // Every other read keeps it: a phrase anywhere on the pane is a live turn, and
+            // a close, relaunch, or skip-as-idle must not take the seat.
+            if (
+              name === 'working'
+              && working === 'cluster'
+              && staleWorkingAboveIdle(data, plain, lines, tick, expectedCwd, home)
+            ) continue;
             const block = rule.atComposer ? edge([...(rule.any ?? []), ...(rule.all ?? [])]) : null;
             return asScreen(kind, plain, block === null ? undefined : new Set(block), rule.reason ?? stage.reason);
           }
@@ -1163,6 +1195,45 @@ function placedComposer(data: ScreenData): Extract<ScreenData['composer'], { mod
   return data.composer as Extract<ScreenData['composer'], { mode: 'status-last' | 'status-then-one' }>;
 }
 
+/** Rows above the composer's opening frame that still belong to the live turn. A status row
+ *  or a blank may sit between the spinner and the rule; a spinner further above an empty idle
+ *  prompt is the transcript of the turn that already ended. */
+const WORKING_BESIDE_COMPOSER = 8;
+
+function workingPatterns(data: ScreenData): LinePattern[] {
+  const patterns: LinePattern[] = [];
+  for (const rule of data.working?.rules ?? []) {
+    if (rule.any) patterns.push(...rule.any);
+    if (rule.all) patterns.push(...rule.all);
+  }
+  return patterns;
+}
+
+/** True when a working match is only a transcript row above an empty idle prompt. A composer
+ *  that is not that prompt, a pattern in the cluster beside it, or a read that runs out of
+ *  budget keeps the working classification. */
+function staleWorkingAboveIdle(
+  data: ScreenData,
+  plain: string[],
+  styled: string[],
+  tick: () => boolean,
+  expectedCwd?: string | null,
+  home?: string,
+): boolean {
+  const composed = compose(data, plain, styled, tick, expectedCwd, home);
+  if (composed.kind !== 'idle') return false;
+  const patterns = workingPatterns(data);
+  if (patterns.length === 0) return false;
+  const start = Math.max(0, composed.from - WORKING_BESIDE_COMPOSER);
+  for (let i = start; i < plain.length; i++) {
+    for (const pattern of patterns) {
+      const hit = matches(data, plain, i, pattern, tick, true);
+      if (hit === 'stop' || hit) return false;
+    }
+  }
+  return true;
+}
+
 function matches(data: ScreenData, lines: string[], at: number, pattern: LinePattern, tick: () => boolean, inWindow: boolean): boolean | 'stop' {
   if (tick()) return 'stop';
   const line = lines[at] ?? '';
@@ -1331,10 +1402,13 @@ function statusLast(
   // wrapped, after a blank line, or beginning with the prompt glyph. None is drawn at the
   // prompt column.
   //
-  // A window that starts at or inside the box, or a visible continuation or prompt row
-  // pressed against the prompt from above, is not the frame the captures draw, and the rows
-  // above it cannot be shown to be outside the box: fail closed rather than take the lowest
-  // prompt row for an input row.
+  // A window that starts inside the box, or a visible continuation or prompt row pressed
+  // against the prompt from above, is not the frame the captures draw, and the rows above it
+  // cannot be shown to be outside the box: fail closed rather than take the lowest prompt row
+  // for an input row. A Cursor window that opens on the prompt row itself is the live
+  // composer: the transcript has left the window and the first row is `  →`, with the status
+  // row under it. That row is the input. Any other profile still fails closed when its window
+  // starts on the prompt.
   let low = status - 1;
   while (low >= 0 && !composer.prompt.test(lines[low] ?? '')) low--;
   if (low < 0) return { kind: 'unknown' };
@@ -1365,6 +1439,9 @@ function statusLast(
     }
   }
   const above = lines[input - 1] ?? '';
+  // The dialect rewrites the arrow in the compiled prompt, so the source does not spell `→`.
+  // The row is the column: two spaces, then the arrow, at the top of the window.
+  const opensOnPrompt = input === 0 && /^ {2}→/u.test(lines[input] ?? '');
   let end = status;
   if (border && input > 0 && border.top.test(above)) {
     if (status - 1 <= input) return { kind: 'unknown' };
@@ -1382,7 +1459,7 @@ function statusLast(
       if ((lines[i] ?? '').trim() !== '') return { kind: 'unknown' };
     }
     end = status - 1;
-  } else if (input === 0 || above.trim() !== '') {
+  } else if (!opensOnPrompt && (input === 0 || above.trim() !== '')) {
     return { kind: 'unknown' };
   }
   // The lowest prompt row above the status line is the input row when it holds text: the
@@ -1508,15 +1585,14 @@ function stripTyped(line: string, composer: { prompt: RegExp; stripSuffix?: RegE
 // 1.4.14 draws its rotating hint in grey with no faint attribute at all. A listed equals line
 // follows the same rule and gets no shortcut of its own: faint or a declared colour, never an
 // undeclared one, so typed text that happens to equal a listed hint stays a draft. A mixed row,
-// a bold word, a cursor cell or an undeclared colour stays text. An all-faint row is
-// the suggestion, unless the composer names `slash-hint`: then the faint row must also be a
-// listed placeholder or a `/command …` hint, so a faint row of other words is text. A line
-// without styling (a plain read) leaves the list to decide, as does a composer
-// without the style. The slash shape is not asked on that plain read: a draft that starts
-// with `/` stays text.
+// a bold word, a cursor cell in the words, or an undeclared colour stays text. An all-faint
+// row is the suggestion, prose included. A composer that names `slash-hint` does not narrow
+// that: a faint sentence and a faint `/command …` hint are both the empty box. A line without
+// styling (a plain read) leaves the list to decide, as does a composer without the style. A
+// draft that starts with `/` stays text on that plain read.
 function placeholder(
   typed: string,
-  composer: { prompt: RegExp; placeholders: ScreenData['composer']['placeholders']; placeholderStyle?: ScreenData['composer']['placeholderStyle']; placeholderFg?: string[] },
+  composer: { prompt: RegExp; placeholders: ScreenData['composer']['placeholders']; placeholderStyle?: ScreenData['composer']['placeholderStyle']; placeholderFg?: string[]; stripSuffix?: RegExp | null },
   plainLine: string,
   styledLine: string | undefined,
 ): boolean {
@@ -1524,25 +1600,27 @@ function placeholder(
   if (composer.placeholderStyle === 'dim' && styledLine !== undefined && hasSgr(styledLine)) {
     const hit = composer.prompt.exec(plainLine);
     const skip = hit === null ? 0 : plainLine.slice(0, hit.index + hit[0].length).replace(/\s/g, '').length;
+    // The frame's own closing edge is not text. The same suffix the plain read drops is left
+    // out of the faint and colour checks, so a border drawn in the frame's colour does not
+    // turn an empty box, or a faint hint inside it, into a draft.
+    const judged = withoutFrameSuffix(styledLine, plainLine, composer.stripSuffix);
     // A declared hint foreground: the empty box when the row's text past the prompt is exactly
     // one of the colours the capture showed. An undeclared colour is text, as it always was.
     if (composer.placeholderFg !== undefined) {
-      const colour = colourAfter(styledLine, skip);
+      const colour = colourAfter(judged, skip);
       if (colour !== null && composer.placeholderFg.includes(colour)) return true;
     }
-    if (!allDimAfter(styledLine, skip)) return false;
-    // A composer that names slash-hint keeps a dim row only when it is a known placeholder or
-    // that hint shape. Every other dim composer still takes any faint row as the suggestion.
-    if (!composer.placeholders.some((entry) => 'shape' in entry && entry.shape === 'slash-hint')) return true;
-    return listed || slashHint(typed);
+    if (!allDimAfter(judged, skip)) return false;
+    return true;
   }
   return listed;
 }
 
-/** A rotating `/command …` hint: a slash, a command word, and text after it. A bare `/command`
- *  is a draft, and so is any row this does not describe. */
-function slashHint(typed: string): boolean {
-  return /^\/[A-Za-z][A-Za-z0-9-]*\s+\S/.test(typed);
+function withoutFrameSuffix(styled: string, plain: string, suffix: RegExp | null | undefined): string {
+  if (suffix === null || suffix === undefined) return styled;
+  const matched = plain.match(suffix);
+  if (matched === null || matched.index === undefined || matched.index + matched[0].length !== plain.length) return styled;
+  return dropPlainTail(styled, plain.length - matched.index);
 }
 
 // Rows under the input row that hold only a greyed suggestion: a suggestion longer than the box is

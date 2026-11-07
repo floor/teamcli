@@ -1,7 +1,8 @@
 // The one machine daemon's state record (`<home>/.config/team/daemon.state.json`, mode 0600).
 // The daemon writes it at start and refreshes `heartbeatAt` while it serves; `team status`,
 // `team check` and the daemon's own health answer read it through this module.
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { chmod, mkdir, rename, writeFile } from 'node:fs/promises';
 import { pidAlive } from '../state.ts';
 import { DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
 import type { HostedWatchState } from '../watch/hosted.ts';
@@ -89,6 +90,8 @@ export type DaemonRootFirstPass =
  *  daemon from a running daemon that silently hosts nothing for a checkout. */
 export type DaemonRootState = {
   root: string;
+  /** Set when this checkout was taken from the team registry rather than a unit argument. */
+  source?: 'registry';
   team: string | null;
   /** `starting` is written while the daemon is still bringing this root's endpoint up, so a
    *  reader can see the root registered before its first attempt finishes. */
@@ -177,6 +180,8 @@ export type DaemonChoresState = {
 
 export type DaemonState = {
   format: 1;
+  /** Internal opt-in owner nonce. Absent when native presence feed hosting is off. */
+  nativeFeedOwner?: string;
   pid: number;
   uid: number;
   since: string;
@@ -197,12 +202,18 @@ export type DaemonState = {
   features: DaemonFeatures;
   stuck: DaemonStuckRequest[];
   roots: DaemonRootState[];
+  /** The mailbox router's last heartbeat, when this daemon started one. Absent on a daemon
+   *  that has no router, and null until the child has answered a beat. */
+  mailbox?: { heartbeatAt: string | null };
 };
 
 export type DaemonStateRead =
   | { kind: 'missing' }
   | { kind: 'unreadable'; why: string }
   | { kind: 'ok'; state: DaemonState };
+
+/** A test swaps the path after the descriptor is open. Production passes none. */
+export type DaemonStateHooks = { afterOpen?: () => void };
 
 /** The machine folder, created 0700 when a daemon writes its record. */
 export function ensureMachineDir(home: string): string {
@@ -212,22 +223,37 @@ export function ensureMachineDir(home: string): string {
   return dir;
 }
 
-export function readDaemonState(home: string): DaemonStateRead {
+export function readDaemonState(home: string, hooks?: DaemonStateHooks): DaemonStateRead {
   const path = daemonStatePath(home);
-  if (!existsSync(path)) return { kind: 'missing' };
-  let parsed: unknown;
+  let fd: number;
   try {
-    parsed = JSON.parse(readFileSync(path, 'utf8'));
-  } catch {
-    return { kind: 'unreadable', why: 'the daemon state record is not readable JSON' };
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return { kind: 'missing' };
+    return { kind: 'unreadable', why: 'the daemon state record is not a regular file' };
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return { kind: 'unreadable', why: 'the daemon state record is not a JSON object' };
+  try {
+    const held = fstatSync(fd);
+    if (!held.isFile()) return { kind: 'unreadable', why: 'the daemon state record is not a regular file' };
+    if (held.size > 64 * 1024) return { kind: 'unreadable', why: 'the daemon state record exceeds 64 KiB' };
+    hooks?.afterOpen?.();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(fd, 'utf8'));
+    } catch {
+      return { kind: 'unreadable', why: 'the daemon state record is not readable JSON' };
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { kind: 'unreadable', why: 'the daemon state record is not a JSON object' };
+    }
+    const record = parsed as Record<string, unknown>;
+    const state = stateOf(record);
+    if (state === null) return { kind: 'unreadable', why: 'the daemon state record is missing required fields' };
+    return { kind: 'ok', state };
+  } finally {
+    closeSync(fd);
   }
-  const record = parsed as Record<string, unknown>;
-  const state = stateOf(record);
-  if (state === null) return { kind: 'unreadable', why: 'the daemon state record is missing required fields' };
-  return { kind: 'ok', state };
 }
 
 function stateOf(record: Record<string, unknown>): DaemonState | null {
@@ -252,8 +278,11 @@ function stateOf(record: Record<string, unknown>): DaemonState | null {
   }
   const roots = rootsOf(record.roots);
   if (roots === null) return null;
+  const mailbox = mailboxOf(record.mailbox);
   return {
     format: 1,
+    ...(typeof record.nativeFeedOwner === 'string' && /^[a-f0-9]{32}$/.test(record.nativeFeedOwner)
+      ? { nativeFeedOwner: record.nativeFeedOwner } : {}),
     pid: record.pid as number,
     uid: record.uid,
     since: record.since as string,
@@ -272,7 +301,19 @@ function stateOf(record: Record<string, unknown>): DaemonState | null {
     features: { broker: (features as Record<string, unknown>).broker as DaemonFeatures['broker'] },
     stuck: requests,
     roots,
+    ...(mailbox === undefined ? {} : { mailbox }),
   };
+}
+
+/** The router heartbeat was added after the first state records. A record without it reads as
+ *  no router; a malformed field is ignored rather than making the whole record unreadable. */
+function mailboxOf(raw: unknown): { heartbeatAt: string | null } | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const at = (raw as Record<string, unknown>).heartbeatAt;
+  if (at === null) return { heartbeatAt: null };
+  if (typeof at === 'string' && at !== '') return { heartbeatAt: at };
+  return undefined;
 }
 
 /** `roots` was added after the first state records were written: a record without it reads as
@@ -304,6 +345,7 @@ function rootsOf(raw: unknown): DaemonRootState[] | null {
     const chores = choresOf(entry.chores);
     roots.push({
       root: entry.root,
+      ...(entry.source === 'registry' ? { source: 'registry' as const } : {}),
       team: entry.team as string | null,
       send: entry.send as DaemonRootState['send'],
       bus: entry.bus as DaemonRootState['bus'],
@@ -502,15 +544,33 @@ function choresOf(raw: unknown): DaemonChoresState | null {
   };
 }
 
+/** The state record as it stands on disk: pretty JSON, one trailing newline. */
+export function serializeDaemonState(state: DaemonState): string {
+  return `${JSON.stringify(state, null, 2)}\n`;
+}
+
 /** Writes the state record atomically, 0600, in a 0700 machine folder. */
 export function writeDaemonState(home: string, state: DaemonState): void {
   ensureMachineDir(home);
   const path = daemonStatePath(home);
   const temporary = `${path}.${String(process.pid)}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(temporary, serializeDaemonState(state), { mode: 0o600 });
   chmodSync(temporary, 0o600);
   renameSync(temporary, path);
   chmodSync(path, 0o600);
+}
+
+/** The same atomic write off the event loop, for a caller that must never block on the disk. */
+export async function writeDaemonStateText(home: string, text: string): Promise<void> {
+  const dir = machineConfigDir(home);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await chmod(dir, 0o700);
+  const path = daemonStatePath(home);
+  const temporary = `${path}.${String(process.pid)}.tmp`;
+  await writeFile(temporary, text, { mode: 0o600 });
+  await chmod(temporary, 0o600);
+  await rename(temporary, path);
+  await chmod(path, 0o600);
 }
 
 /** Whether the recorded process still exists. A dead pid makes the record stale. */

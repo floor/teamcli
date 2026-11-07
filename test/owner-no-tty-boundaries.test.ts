@@ -33,7 +33,7 @@ import { brokerSocket } from '../src/broker/protocol.ts';
 import { approvalStanding, readApproval, storePath, writeApproval } from '../src/store/store.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
-import { claudeBox, gitEnv, testIo } from './helpers.ts';
+import { claudeBox, gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T09:00:00Z');
 
@@ -191,6 +191,9 @@ describe('every owner-gated command refuses the run with no terminal, through th
       sleep: async () => {},
       now: () => NOW,
     };
+
+
+    recordRenames(launch);
     return { launch, created: () => made };
   }
 
@@ -499,7 +502,10 @@ describe('every owner-gated command refuses the run with no terminal, through th
     io.env = { TEAM_OWNER_APPROVAL: approveFingerprint(checked(candidate)) };
     const code = await runApprove([], io, sources);
     expect(code).toBe(1);
-    expect(io.err).toBe(`team approve: ${DETACHED_REFUSAL}\n`);
+    expect(io.err).toBe(
+      'team approve: warning, line 3: session "acme-web" is not the default "acme" for this entity and project: kept as written; a drifted name is how a stale session gets reused\n'
+      + `team approve: ${DETACHED_REFUSAL}\n`,
+    );
     expect(readApproval(store)).toEqual(before);
     expect(existsSync(join(root, '.agents', 'team.log'))).toBe(false);
   });
@@ -559,6 +565,7 @@ describe('the owner at a terminal outside herdr still passes', () => {
       sleep: async () => {},
       now: () => NOW,
     };
+    recordRenames(launch);
     const io = atATerminal();
     const code = await runUp([], io, { sessionRunning: () => false, agents: () => [], home, now: () => NOW, launch });
     expect(code).toBe(0);

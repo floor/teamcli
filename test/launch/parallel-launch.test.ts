@@ -123,12 +123,27 @@ describe('launchConcurrency', () => {
     expect(launchConcurrency({ ...ample, memoryFree: null }, limits)).toBe(1);
     expect(launchConcurrency({ ...ample, loadPerCore: 2.0 }, limits)).toBe(1);
     expect(launchConcurrency({ ...ample, memoryFree: 20 }, limits)).toBe(1);
-    expect(launchConcurrency({ ...ample, swapFree: 2.5e9 }, limits)).toBe(1);
     // A warning level does not refuse a launch, but it runs the seats one at a time; a level that
     // wasn't read leaves the headroom rules to decide.
     expect(launchConcurrency({ ...ample, pressure: 'warn' }, limits)).toBe(1);
     expect(launchConcurrency({ ...ample, pressure: 'normal' }, limits)).toBe(8);
     expect(launchConcurrency({ ...ample, pressure: null }, limits)).toBe(8);
+  });
+
+  test('free swap never serializes launches, however little is free', () => {
+    const ample: Machine = {
+      loadPerCore: 0.3,
+      memoryFree: 60,
+      diskFree: 200e9,
+      swapTotal: 19e9,
+      swapFree: 0.9e9,
+      swapUsed: 18.1e9,
+    };
+    // Below `swap_free_min` and below 1.5x it alike: the figure the OS keeps nearly full
+    // decides nothing here; pressure and swap growth keep their refusals.
+    expect(launchConcurrency(ample, limits)).toBe(8);
+    expect(launchConcurrency({ ...ample, swapFree: 0 }, limits)).toBe(8);
+    expect(launchConcurrency({ ...ample, swapFree: null }, limits)).toBe(8);
   });
 });
 
@@ -468,6 +483,9 @@ describe('parallel launch execution', () => {
     let t = 0;
     const closedWorkspaces: string[] = [];
     const promptOrder: string[] = [];
+    // A rename herdr takes is listed under the seat's name afterwards: the naming step proves
+    // that listed name before the seat reaches ready.
+    const named = new Set<string>();
     const { out, sink: s } = sink(false);
     const records = progressWriter(s);
 
@@ -478,7 +496,10 @@ describe('parallel launch execution', () => {
       createWorkspace: (_session, _cwd, label) => ({ pane: `${label}-pane`, workspace: `${label}-ws` }),
       paneRun: () => true,
       typeLine: () => true,
-      renameAgent: () => true,
+      renameAgent: (_session, _pane, name) => {
+        named.add(name);
+        return true;
+      },
       closeWorkspace: (_session, ws) => {
         closedWorkspaces.push(ws);
         return true;
@@ -488,7 +509,7 @@ describe('parallel launch execution', () => {
       agentPanes: () => names.map((name) => `${name}-pane`),
       agentList: () =>
         names.map((name) => ({
-          name: null,
+          name: named.has(name) ? name : null,
           agent: 'claude',
           pane: `${name}-pane`,
           workspace: `${name}-ws`,
@@ -500,11 +521,12 @@ describe('parallel launch execution', () => {
         shell: 100,
         foreground: [200],
       }),
-      // seat-1 finishes immediately; seat-2 hits trust at t=0 and owner chooses 'q' (stopped);
-      // seat-3 is still working at t=0 and should be stopped and closed cleanly.
+      // seat-1 finishes immediately and is named before seat-2 reaches its trust prompt: a pane's
+      // prompt appears when its own CLI draws it, not on another seat's clock. The owner answers
+      // 'q' there (stopped); seat-3 is still working and should be stopped and closed cleanly.
       classify: (_session, pane): ScreenKind => {
         if (pane === 'seat-1-pane') return 'idle';
-        if (pane === 'seat-2-pane') return 'trust';
+        if (pane === 'seat-2-pane') return named.has('seat-1') ? 'trust' : 'working';
         return 'working';
       },
       sleep: async (ms) => {
@@ -598,8 +620,9 @@ describe('parallel launch execution', () => {
     };
 
     const report = await executePlan(plan, 'acme', host, { concurrency: 1 });
-    // The pane is named once, at create; the wait's ready return skips the post-pause rename.
-    expect(renamed).toEqual(['seat-1']);
+    // Nothing names the pane at create, and the wait's ready return skips the post-pause rename:
+    // the answer's own rename is the only one this run would ever see.
+    expect(renamed).toEqual([]);
     expect(delivered).toEqual([]);
     expect(stages).not.toContain('named');
     expect(stages.at(-1)).toBe('ready');

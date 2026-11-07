@@ -6,7 +6,7 @@ and `remove` — and never from an agent's word. The listing reads every team on
 it runs anywhere and needs no team file. It records what the launching command knew: a field no
 command measured is absent, and its cost prints as `unknown`, never as zero.
 
-`team resume` — reading a record back into a launch — is not part of this release.
+`team restart <seat> --resume <cli-session-id>` resumes a recorded conversation where the CLI supports it.
 
 ## Synopsis
 

@@ -13,11 +13,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import { agentsDir, findAgent, getAgent, readAgents, registerAgent, type Agent } from '../../src/registry/agents.ts';
-import { readProjects, upsertProject } from '../../src/registry/projects.ts';
+import { list, upsertProject } from '../../src/registry/projects.ts';
 import { registerEnd, registerLaunch, type RegistryTeam } from '../../src/registry/sync.ts';
 import { getTeam, readTeams, teamIdOf, upsertTeam } from '../../src/registry/teams.ts';
 import { admitSend, type AdmitContext } from '../../src/send/admit.ts';
 import { gitEnv } from '../helpers.ts';
+
+/** The admission context the send path builds: membership as the registry derives it from the
+ *  team records, not the legacy lists a project file stores. */
+function projectContext(home: string): AdmitContext['projects'] {
+  const projects: AdmitContext['projects'] = {};
+  for (const project of list(home)) if (project.id !== undefined) projects[project.id] = project;
+  return projects;
+}
 
 const TEAM_YAML = `format: 1
 project: acme
@@ -234,21 +242,25 @@ describe('a record confers no right', () => {
     const builder = record(world.home, teamB, 'builder', 's-b', 'w2:p1');
     upsertTeam(world.home, teamA, {
       project: 'alpha',
+      projectId: 'p1',
+      projects: ['p1'],
       session: 's-a',
       root: join(world.base, 'team-a'),
       roster: [{ agent: worker.id, seat: 'worker', role: 'implementer' }],
     });
     upsertTeam(world.home, teamB, {
       project: 'beta',
+      projectId: 'p1',
+      projects: ['p1'],
       session: 's-b',
       root: join(world.base, 'team-b'),
       roster: [{ agent: builder.id, seat: 'builder', role: 'implementer' }],
     });
-    // One project names both teams, so the project rules are in play — and admit neither.
-    upsertProject(world.home, 'p1', { name: 'P1', teams: [teamA, teamB], by: 'owner' });
+    // The team records name one project, so the project rules are in play — and admit neither.
+    upsertProject(world.home, 'p1', { name: 'P1', by: 'owner' });
 
     const teams = readTeams(world.home);
-    const context: AdmitContext = { projects: readProjects(world.home), crossTeams: {} };
+    const context: AdmitContext = { projects: projectContext(world.home), crossTeams: {} };
 
     const judged = admitSend(worker, builder, teams, undefined, context);
     expect(judged.ok).toBe(false);
@@ -277,18 +289,24 @@ describe('a record confers no right', () => {
     const builder = record(world.home, teamB, 'builder', 's-b', 'w2:p1');
     upsertTeam(world.home, teamA, {
       project: 'alpha',
+      projectId: 'p1',
+      projects: ['p1'],
+      entity: 'org',
       session: 's-a',
       root: join(world.base, 'team-a'),
       roster: [{ agent: worker.id, seat: 'worker', role: 'implementer' }],
     });
     upsertTeam(world.home, teamB, {
       project: 'beta',
+      projectId: 'p1',
+      projects: ['p1'],
+      entity: 'org',
       session: 's-b',
       root: join(world.base, 'team-b'),
       roster: [{ agent: builder.id, seat: 'builder', role: 'implementer' }],
     });
-    upsertProject(world.home, 'p1', { name: 'P1', teams: [teamA, teamB], by: 'owner' });
-    const context: AdmitContext = { projects: readProjects(world.home), crossTeams: {} };
+    upsertProject(world.home, 'p1', { name: 'P1', entity: 'org', by: 'owner' });
+    const context: AdmitContext = { projects: projectContext(world.home), crossTeams: {} };
 
     // The records already existed and admitted nothing; the capability, and only the capability,
     // changes the verdict.

@@ -28,8 +28,9 @@ A caller the placement cannot resolve reads nothing at all: no row, no body, no 
 `team send` writes the record: one signed message per send, into the recipient's folder
 `<root>/.agents/send-drops/<session>/<seat>/<id>`, before the leg that carries it runs. The
 record reaches the seat by one of its own event adapters — the channel push, the socket frame or
-its runtime's queue — by the drop leg, which leaves the record for its seat, or by the mcp-inbox
-leg, which puts the same record in the seat's inbox. No leg types into a seat. The watch types
+its runtime's queue — or by the drop leg, which leaves the record for its seat; the retired
+mcp-inbox name no longer carries one (a record an older build left in the seat's inbox is read
+the same way). No leg types into a seat. The watch types
 nothing for a record that is already there: this build reaches no seat by typing, so the record
 waits for the seat's turn-start read or a reader running `team messages`, and the watch never
 writes one. A message a
@@ -41,8 +42,16 @@ still goes to the log, and also to the desktop notification.
 
 The signature is integrity, not authenticity. Every seat runs as the owner-user, so a signature
 says the record was not rewritten after it was signed. It does not say which seat sent it. `from`
-is a name the writer put on the record. The receipt says a process was shown the body, not that
-the recipient acted on it.
+is a name the writer put on the record. A text reader says what that name rests on: `team
+messages` and `team drops` append `(unverified claim)` when the shared checkout key is the only
+binding, `(attributed)` when the launch brief is bound to the seat's current claim, and
+`(unattributed)` when no key could vouch for the file. `inbox_check` reports
+`sender_attribution`. The word **verified** is kept for an owner's own device-signed
+action. A record on the shared checkout key is an unverified claim in the text reading; the
+launch's own general seat brief, bound to the seat's current claim, is `launch-brief` in JSON
+and `(attributed)` in text. A raw drop, or a record no key could vouch for, is `none`, shown
+`(unattributed)`. The
+receipt says a process was shown the body, not that the recipient acted on it.
 
 The signature covers the complete payload exactly as it was parsed, and it is checked before any
 field is read: a field inserted, altered or removed after signing is a signature refusal whatever
@@ -68,13 +77,16 @@ directory, or bound to another root or session, does not verify.
 
 Writes the signed read receipt beside the record, `<id>.read.json` in the same folder — the older
 store keeps its own receipt shape at `.agents/messages/<seat>/<id>.read.json` — signed with the
-message key under its own domain. For a record in the transport tree the receipt is published
-before the body, through the same `link` the inbox uses, and it is flushed with its folder before
-the body is printed: exactly one reader — this run, `team drops --read` or `inbox_read` — wins
-the id, and a crash after the print leaves the receipt that proves the exposure. A receipt that
-cannot be published prints no body and leaves the id waiting; one that was linked but could not be
-flushed prints no body and spends the id. The older store keeps its original order: the body
-prints first and its receipt is written after `io.stdout` returns.
+message key under its own domain. For a record in the transport tree this run and `inbox_read`
+publish the receipt before the body, through the same `link` the inbox uses, and flush it with
+its folder before the body is printed: exactly one of those readers wins the id, and a crash
+after the print leaves the receipt that proves the exposure. A receipt that cannot be published
+prints no body and leaves the id waiting; one that was linked but could not be flushed prints no
+body and spends the id. `team drops --read` is the other reader of the same folder, and it is
+at-least-once: it prints the body first and writes the receipt after the hand-over returns, so
+two racing readers can both print a body, and a hand-over that never returns leaves the message
+unread. The exclusive receipt still means only one of them writes it. The older store keeps its
+original order: the body prints first and its receipt is written after `io.stdout` returns.
 
 A valid `read` or `replied` receipt at the name means another reader already served the message:
 the run skips it silently, with no row and no body. An entry at the read or replied receipt name
@@ -100,10 +112,12 @@ The second run, once every waiting record has a receipt, prints the zero-message
 table's headers and no rows, `note: nothing is waiting`, and `0 messages`.
 
 Under `--json` the reading is one `team.messages` v1 document on stdout, its `schema` tag first:
-`format`, `project`, `session`, every row as `{ id, from, to, sent, sent_display, status, body? }`
-— `sent` the exact ISO string `SENT` renders as an age, `body` only on a row whose record
-verified (a `shown` row, or a `waiting` row in the owner's reading), the status `shown`, `refused`
-or `waiting` — then
+`format`, `project`, `session`, every row as
+`{ id, from, to, sent, sent_display, status, sender_attribution, body? }` — `sent` the
+exact ISO string `SENT` renders as an age, `body` only on a row that verified, and the body stays
+the signed bytes even when the text reading marks it; `sender_attribution` is `unverified_claim`
+for a record only the shared checkout key verified, `launch-brief` for the seat's current general
+seat brief bound to its claim, and `none` for a row that was not vouched for; status is `shown`, `refused` or `waiting`, and an owner reading may carry another mailbox's verified body read-only — then
 `notes`, `differences` (each `{ what, repair, who }`), `summary` (the `differences` and
 `owner_differences` counts every reading envelope carries) and `counts` (`messages`, `shown`,
 `refused`, `waiting`, the table's own closing figures). An empty mailbox's document carries no
@@ -112,6 +126,16 @@ or key refusal
 under `--json` writes a `team.error` v1 document on stdout instead — `messages.invocation`,
 `messages.not-a-repo`, `messages.file`, `messages.caller` or `messages.key`, its `message` and a
 null `repair` — and stderr stays empty. The exit code is the same as without `--json`.
+
+A note for a reader of an older build: `sender_verified` and `sender_trust` were the fields of
+0.5.13's development builds and never reached a release. They are replaced by
+`sender_attribution`. Map the old pair forward as an old `sender_verified: true` was
+`launch-brief`; an old `sender_verified: false` with `sender_trust: shared-key-only` was a record
+the key did verify, now `unverified_claim`, or a claim nothing could vouch for, now `none`. The trust
+word is no longer emitted. A `config.changed` event the reconcile pass raised in an earlier build
+of this development line carried `sender_verified: "false"`; the event writer no longer stamps
+it, and a bus log line still carrying it is counted unverified and skipped until the log's
+retention passes it.
 
 `team init` lists `.agents/messages/` in `.git/info/exclude`, the same way it lists the team file.
 
@@ -268,7 +292,7 @@ not placed: an owner tool applies changes under a general grant from inside a te
 grant's own bounds — its ops, entities and expiry — cover that call. Keys stay under
 `~/.config/team-client`, and an external client outside the terminal host (an agent CLI included)
 is not refused. A usage error is still judged first and keeps exit 2. The guard is a machine
-guard, not a policy: no dev-mode setting lifts it (OD-20261019-49), and a caller inside a team
+guard, not a policy: no dev-mode setting lifts it, and a caller inside a team
 pane is refused alike with dev mode on or off — the lift would hand a seat's own process the key
 the guard keeps out of it.
 Seatbelt confinement of `~/.config/team-client` for guarded seats belongs to the pane guard

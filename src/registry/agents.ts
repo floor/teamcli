@@ -15,6 +15,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isSeatId, withLock } from '../state.ts';
+import { currentRunMemo } from '../run-memo.ts';
 import { parseYaml, toValue, type YamlValue } from '../yaml.ts';
 
 export const AGENT_ID_PATTERN = /^agt_[0-9a-f]{12}$/;
@@ -144,12 +145,38 @@ export function isAgentId(value: unknown): value is string {
   return typeof value === 'string' && AGENT_ID_PATTERN.test(value);
 }
 
-/** Every valid agent record, by id. A file that does not parse or validate is skipped, never fatal. */
+function cloneAgent(agent: Agent): Agent {
+  return {
+    ...agent,
+    signing: { ...agent.signing },
+    reach: { ...agent.reach },
+    mcp: [...agent.mcp],
+    skills: [...agent.skills],
+    provenance: {
+      ...agent.provenance,
+      ...(agent.provenance.delegated !== undefined ? { delegated: { ...agent.provenance.delegated } } : {}),
+    },
+    ...(agent.policies !== undefined ? { policies: { ...agent.policies } } : {}),
+    ...(agent.settings !== undefined ? { settings: { ...agent.settings } } : {}),
+  };
+}
+
+function cloneAgents(agents: readonly Agent[]): Agent[] {
+  return agents.map(cloneAgent);
+}
+
+/** Every valid agent record, by id. Invalid files are skipped; a numeric reach id refuses with a quoting repair. */
 export function readAgents(home: string): Agent[] {
+  const memo = currentRunMemo();
+  if (memo !== null) {
+    const cached = memo.agents.get(home);
+    if (cached !== undefined) return cloneAgents(cached);
+  }
   let names: string[];
   try {
     names = readdirSync(agentsDir(home));
   } catch {
+    memo?.agents.set(home, []);
     return [];
   }
   const agents: Agent[] = [];
@@ -160,11 +187,18 @@ export function readAgents(home: string): Agent[] {
     const agent = readAgentFile(join(agentsDir(home), name), id);
     if (agent) agents.push(agent);
   }
+  memo?.agents.set(home, cloneAgents(agents));
   return agents;
 }
 
 export function getAgent(home: string, id: string): Agent | null {
   if (!isAgentId(id)) return null;
+  const memo = currentRunMemo();
+  const cached = memo?.agents.get(home);
+  if (cached !== undefined) {
+    const found = cached.find((agent) => agent.id === id);
+    return found === undefined ? null : cloneAgent(found);
+  }
   return readAgentFile(agentFile(home, id), id);
 }
 
@@ -387,6 +421,7 @@ function writeAgentFile(path: string, agent: Agent): void {
   try {
     writeFileSync(temporary, emit(agent));
     renameSync(temporary, path);
+    currentRunMemo()?.agents.clear();
   } catch (error) {
     try {
       unlinkSync(temporary);
@@ -407,6 +442,13 @@ function readAgentFile(path: string, id: string): Agent | null {
     value = toValue(parseYaml(text));
   } catch {
     return null;
+  }
+  if (isObj(value) && isObj(value.reach)) {
+    for (const field of ['team', 'seat', 'session'] as const) {
+      if (typeof value.reach[field] === 'number') {
+        throw new Error(`${path}: reach.${field} must be text: quote it`);
+      }
+    }
   }
   const agent = fromValue(value);
   // The file name is the id: a file whose body says otherwise is not trusted. A record the writer
@@ -447,9 +489,9 @@ function strings(value: YamlValue | undefined): string[] | null {
   return out;
 }
 
-// A scalar the emitter wrote quoted always comes back a string; a plain number-looking value in a
-// hand-edited file (a version `5.5`) is read as a string too, since these fields are text.
-function text(value: YamlValue | undefined): string | null {
+// Model and version display fields retain compatibility with finite numbers in hand-edited files.
+// Identity fields use str instead, so a numeric scalar cannot become another identifier.
+function displayText(value: YamlValue | undefined): string | null {
   if (typeof value === 'string') return value;
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   return null;
@@ -483,15 +525,15 @@ function fromValue(value: YamlValue): Agent | null {
   const orphanedAt = strOrNull(value.orphaned_at);
   const id = str(value.id);
   const name = str(value.name);
-  const model = text(signing.model);
-  const version = text(signing.version);
-  const role = text(signing.role);
+  const model = displayText(signing.model);
+  const version = displayText(signing.version);
+  const role = str(signing.role);
   const lab = str(value.lab);
   const cli = str(value.cli);
   const launch = value.launch === undefined || value.launch === null ? '' : str(value.launch);
-  const team = text(reach.team);
-  const seat = text(reach.seat);
-  const session = text(reach.session);
+  const team = str(reach.team);
+  const seat = str(reach.seat);
+  const session = str(reach.session);
   const registeredBy = str(provenance.registered_by);
   const registeredAt = str(provenance.registered_at);
   const updatedAt = str(provenance.updated_at);
@@ -607,7 +649,7 @@ function emitPolicies(policies: Record<string, YamlValue>): string[] {
     if (isObj(entry)) {
       lines.push(`  ${quote(name)}:`);
       for (const [k, v] of Object.entries(entry)) {
-        lines.push(`    ${k}: ${emitYamlValue(v ?? null)}`);
+        lines.push(`    ${quote(k)}: ${emitYamlValue(v ?? null)}`);
       }
     } else {
       lines.push(`  ${quote(name)}: ${emitYamlValue(entry ?? null)}`);
@@ -625,7 +667,7 @@ function emitSettings(settings: Record<string, YamlValue>): string[] {
     if (isObj(entry)) {
       lines.push(`  ${quote(name)}:`);
       for (const [k, v] of Object.entries(entry)) {
-        lines.push(`    ${k}: ${emitYamlValue(v ?? null)}`);
+        lines.push(`    ${quote(k)}: ${emitYamlValue(v ?? null)}`);
       }
     } else {
       lines.push(`  ${quote(name)}: ${emitYamlValue(entry ?? null)}`);

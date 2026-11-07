@@ -13,6 +13,7 @@ import { readTeamConfig } from '../file/team-config.ts';
 import { endSession, type SessionEndReason } from '../sessions/registry.ts';
 import type { ActingCommand } from '../delegate-types.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
+import { membershipsOfFile } from '../file/memberships.ts';
 
 /** What every writer here is told about the team it writes for. */
 export type RegistryTeam = {
@@ -57,17 +58,23 @@ function noteOf(error: unknown): string {
  *  `noteTeam` never throws; the line it returns is why the record was not written. */
 function ensureTeam(input: RegistryTeam): string | null {
   const { team, root, home, by } = input;
+  const membership = membershipsOfFile(team);
   // `up --session alt` records the session it launches; the file's own session records the same
   // lobby beside it, so a plain `team check` still reads it back.
+  // A file that does not name `in_project` is not an instruction to leave a project. `noteTeam`
+  // treats null as "this team is its own project" and clears `project_id`; omitting the field
+  // leaves a membership the registry already holds.
   const seed = {
     project: team.project,
     entity: team.entity,
     session: input.session ?? team.session,
     lobby: team.lobby,
-    inProject: team.inProject,
+    ...(membership.home === null ? {} : { inProject: membership.home, alsoIn: membership.served }),
     aliasSession: team.session,
   };
-  return noteTeam(home, root, seed, 'running', by);
+  return noteTeam(home, root, seed, 'running', by, {
+    owner: input.owner === true && input.devMode !== true && input.delegated === undefined,
+  });
 }
 
 /** The rule one roster line is re-marked by: its `nickname` from the name the seat goes by — the
@@ -321,6 +328,14 @@ export function ensureSeatLine(input: RegistryTeam, seat: Pick<Seat, 'name'>): {
  */
 export function markOrphanedSeats(home: string, root: string, now: Date): string[] {
   const marked: string[] = [];
+  const teamId = teamIdOf(root);
+  let candidates: ReturnType<typeof readAgents>;
+  try {
+    candidates = readAgents(home).filter((agent) => agent.reach.team === teamId && agent.orphaned_at == null);
+  } catch {
+    return marked;
+  }
+  if (candidates.length === 0) return marked;
   let declared: Set<string>;
   try {
     const loaded = readTeamConfig(root, { home });
@@ -329,9 +344,8 @@ export function markOrphanedSeats(home: string, root: string, now: Date): string
   } catch {
     return marked;
   }
-  const teamId = teamIdOf(root);
-  for (const agent of readAgents(home)) {
-    if (agent.reach.team !== teamId || declared.has(agent.reach.seat) || agent.orphaned_at != null) continue;
+  for (const agent of candidates) {
+    if (declared.has(agent.reach.seat)) continue;
     try {
       updateAgent(home, agent.id, { orphaned_at: now.toISOString() });
       marked.push(agent.id);
@@ -388,13 +402,16 @@ export function registerRename(
  *
  * The session registry's record ends first, whatever the agent registry knows: the session is
  * the CLI process this command stopped, and its record names why (`why`, the word the design
- * note fixes). A registry that cannot be written is a note, as above; the end still happened.
+ * note fixes), and the handover path its checkpoint asked for when the ending command knows one
+ * (`handover`; a path on the record, never a claim the file exists). A registry that cannot be
+ * written is a note, as above; the end still happened.
  */
 export function registerEnd(
   input: RegistryTeam,
   seat: string,
   ending: Ending,
   why: SessionEndReason = 'owner-stop',
+  handover?: string,
 ): { note: string } | null {
   const notes: string[] = [];
   const closed = endSession({
@@ -404,6 +421,7 @@ export function registerEnd(
     session: input.session ?? input.team.session,
     seat,
     reason: why,
+    ...(handover === undefined ? {} : { handover }),
   });
   if ('note' in closed) notes.push(closed.note);
   try {

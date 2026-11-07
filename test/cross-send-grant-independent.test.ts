@@ -27,14 +27,14 @@ function scene(name: string, pair?: PairInput): Result {
   return result;
 }
 function refused(result: Result, id: string) {
-  expect(result.code).toBe(1);
+  expect(result.code, result.out + result.err).toBe(1);
   expect(JSON.parse(result.out).error.id).toBe(id);
   expect(result.records).toEqual([]);
   expect(result.paneWrites).toBe(0);
 }
 test('a signed architect grant reaches another team lead in the same entity', () => {
   const result = scene('allowed');
-  expect(result.code).toBe(0);
+  expect(result.code, result.out + result.err).toBe(0);
   expect(result.records).toHaveLength(1);
   expect(result.records[0]?.team).toBe('product');
   expect(result.records[0]?.body).toContain('admitted by: an owner-signed grant naming send (architect-outbound)');
@@ -44,7 +44,7 @@ test('a signed architect grant reaches another team lead in the same entity', ()
 for (const name of ['non-lead', 'other-entity', 'expired']) {
   test(`a signed grant refuses ${name} without delivery effects`, () => {
     const result = scene(name);
-    expect(result.code).toBe(1);
+    expect(result.code, result.out + result.err).toBe(1);
     expect(result.records).toEqual([]);
     expect(result.paneWrites).toBe(0);
     expect(result.out + result.err).toContain('no rule admits it');
@@ -62,7 +62,7 @@ for (const name of ['unsigned', 'bad-signature', 'wrong-key']) {
 }
 test('a seat cannot issue an outbound send grant', () => {
   const result = scene('seat-issue');
-  expect(result.code).toBe(1);
+  expect(result.code, result.out + result.err).toBe(1);
   expect(result.err).toContain('only the owner runs this');
   expect(result.issued).toBe(false);
 });
@@ -73,11 +73,11 @@ test('a send dry run shows the same unsigned-grant refusal and writes no record'
 });
 test('the exact printed repair arguments recreate a valid record and permit the next send', () => {
   const result = scene('reissue');
-  expect(result.before?.code).toBe(1);
+  expect(result.before?.code, (result.before?.out ?? '') + (result.before?.err ?? '')).toBe(1);
   expect(result.line).toStartWith('team grant --send');
-  expect(result.repair?.code).toBe(0);
+  expect(result.repair?.code, (result.repair?.out ?? '') + (result.repair?.err ?? '')).toBe(0);
   expect(result.verified?.map((value) => value.name)).toEqual(['architect-outbound']);
-  expect(result.after?.code).toBe(0);
+  expect(result.after?.code, (result.after?.out ?? '') + (result.after?.err ?? '')).toBe(0);
   expect(result.records).toHaveLength(1);
   expect(result.records[0]?.body).toContain('admitted by: an owner-signed grant naming send (architect-outbound)');
   expect(result.paneWrites).toBe(0);

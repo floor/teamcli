@@ -12,16 +12,33 @@ launch, so a mark that moves in the file moves the record with it. A file that s
 is one of that team's agents — so an agent the team no longer leads with is not left admitted as
 the project's lead.
 
-The hierarchy is entity, then project, then team, then seat, and the project level is where
-settings start: they inherit entity, then project, then team, then seat — a lower level may
-tighten, and loosen only where the level above allows it.
+The hierarchy is entity, then project, then team, then seat. Settings inherit through the
+machine, entity, home project, team and seat: a lower level may tighten, and may loosen only
+where the setting's catalogue allows that level to do so.
 
-A team names its project in its team file, `in_project`, holding the project's display name;
+A team names its home project in its team file, `in_project`, holding the project's display name,
+and may list additional served projects with `also_in: [project-y, project-z]`;
 today's `project:` field keeps meaning the team, so every file written before this build loads
-unchanged, and a team that names no project is its own project. A team belongs to one project at
-most: when the registry names a team in two, [`team check`](check.md) refuses it, naming both
-projects, and the repair is the registry file; and a file that sets `project_lead: true` without
-naming a project is refused as the file loads.
+unchanged, and a team that names no home project inherits no project defaults. The team record's
+`project_id` names its home; its `projects` list holds all memberships, home included. A record
+written before `projects` existed reads as the home alone, or an empty list when it has no home.
+Only the home supplies settings, policies and rules; project views list both home and served
+memberships. Serving another project does not make it another inheritance chain, and `project_lead: true`
+leads the home only.
+A file that sets `project_lead: true` without naming a project is refused as the file loads.
+[`team check`](check.md) accepts multiple memberships, refuses `also_in` without a home or with
+the home repeated, and still refuses two teams claiming the same home's lead. Both membership
+sections are non-owner and leave existing approval fingerprints intact.
+
+Declaring `also_in` alone changes no recorded reach. An owner launch or registration in force
+publishes the list on the team record, using only existing projects of the same entity. It
+creates no served project. Seat, delegated and dev-mode runs preserve the last owner-recorded
+list; an owner run also removes memberships dropped from the file. Admission skips foreign or
+unscoped projects even if an old team record names them.
+
+Crossing ordinary seats still requires the owner's signed `seats-cross-teams` policy from the
+asker's entity, home project, team and seat chain. A served project's opening supplies no policy
+to the asker. Expired declarations set nothing, and unsigned or unverifiable input opens nothing.
 
 ## Synopsis
 
@@ -29,14 +46,18 @@ naming a project is refused as the file loads.
 
 ## What it reads and writes
 
-Reads `~/.config/team/projects.yaml`, a map of project IDs to records:
+Reads project metadata from `~/.config/team/projects.yaml`, a map of project IDs to records:
 
     projects:
       teamcli:
         name: TeamCLI
         entity: floor
         lead: agt_2b9f
-        teams: ["1a2b3c4d5e6f", "6f5e4d3c2b1a"]
+
+Team IDs in the output are derived from `~/.config/team/teams.yaml`; legacy `teams` lists in
+project records do not determine membership. Project writers omit those lists. Reads change
+neither registry. Membership updates take the team lock before the project lock, ensure project
+metadata exists, then write the team record; there is no second membership write to interrupt.
 
 The ID is the display name lowercased, every run of characters outside letters, digits, `.`, `_`
 and `-` written as one `-` and nothing left at either end: `TeamCLI` is `teamcli`, `Team CLI` is
@@ -61,11 +82,17 @@ key and a seat's sit nearer in the chain than this word; a seat's reading resolv
 first, then its file's, then the project's. Any word outside the four is refused when the registry
 is read, naming the four the record may carry.
 
+A record may also carry `rules` — a list of project-wide standing rules (`projects.<id>.rules`),
+inherited by every seat of a team whose **home** project (`in_project` / `project_id`) is this
+project. A served project's rules do not apply. Project rules are rendered after the entity's rules
+(`<entity>.rules`) and before the team file's `rules` list under their own short heading in the
+seat's rules text.
+
 A missing file is no projects — every team is its own project — and prints the table header and
 `0 projects`. A
 file that does not read as a project registry (not a map with a `projects` key, a project without
 a name, a provenance that is not a map of three instants) is refused with the file's path and what
-is wrong; nothing is listed. Reads no team file and needs no caller. Writes nothing.
+is wrong; nothing is listed. Reads team registry records, no team file, and needs no caller. Writes nothing.
 
 The project level's other view is `team status --project <name>`, which covers every team the
 project names; the teams of one project are read there. `team send --list` prints each seat's
@@ -105,7 +132,7 @@ $ team projects --json ; echo "exit $?"
 exit 0
 ```
 
-A registry with two projects — the one this project belongs to, and one whose entity and lead are
+With team records assigning the displayed teams to these projects, project metadata — the one this project belongs to, and one whose entity and lead are
 not recorded — prints one line per project, shorter values padded:
 
 ```yaml file=../../.config/team/projects.yaml
@@ -114,14 +141,49 @@ projects:
     name: Beacon
     entity: acme
     lead: null
-    teams: ["7a8b9c0d1e2f"]
     provenance: { registered_by: team, registered_at: "2026-10-05T04:00:00.000Z", updated_at: "2026-10-05T04:00:00.000Z" }
   teamcli:
     name: TeamCLI
     entity: floor
     lead: agt_2b9f
-    teams: ["1a2b3c4d5e6f", "6f5e4d3c2b1a"]
     provenance: { registered_by: team, registered_at: "2026-10-05T04:00:00.000Z", updated_at: "2026-10-05T04:00:00.000Z" }
+```
+
+```yaml file=../../.config/team/teams.yaml
+teams:
+  7a8b9c0d1e2f:
+    project: beacon
+    project_id: beacon
+    entity: acme
+    session: beacon
+    root: /work/beacon
+    lobby: /home/lobby
+    roster:
+      - { agent: agt_0123456789ab, seat: seat-a, role: coordinator }
+    lifecycle: defined
+    provenance: { registered_by: owner, registered_at: "2026-10-05T04:00:00.000Z", updated_at: "2026-10-05T04:00:00.000Z" }
+  1a2b3c4d5e6f:
+    project: teamcli
+    project_id: teamcli
+    entity: floor
+    session: teamcli
+    root: /work/teamcli
+    lobby: /home/lobby
+    roster:
+      - { agent: agt_ba9876543210, seat: seat-b, role: coordinator }
+    lifecycle: defined
+    provenance: { registered_by: owner, registered_at: "2026-10-05T04:00:00.000Z", updated_at: "2026-10-05T04:00:00.000Z" }
+  6f5e4d3c2b1a:
+    project: teamcli-lab
+    project_id: teamcli
+    entity: floor
+    session: teamcli-lab
+    root: /work/teamcli-lab
+    lobby: /home/lobby
+    roster:
+      - { agent: agt_cd9876543210, seat: seat-c, role: implementer }
+    lifecycle: defined
+    provenance: { registered_by: owner, registered_at: "2026-10-05T04:00:00.000Z", updated_at: "2026-10-05T04:00:00.000Z" }
 ```
 
 ```console

@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { HerdrAgent, PaneProcesses } from '../herdr.ts';
+import { SIDEBAR_TTL_CAP_MS, type ConfigReload, type HerdrAgent, type PaneProcesses, type SidebarApply } from '../herdr.ts';
 
 function saveTextFile(path: string, text: string): boolean {
   try {
@@ -15,7 +15,9 @@ import { reportedAgentIsCli, reportedLiveAgent } from './agent.ts';
 import { refusalReport, type Refusal } from './deliver.ts';
 import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeTarget, withoutResume, conversationMissingOnScreen } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
-import { settleGrokSandbox, writeGrokSandbox } from './grok-sandbox.ts';
+import { ownStartFolderProblem } from '../worktree/place.ts';
+import { GROK_SANDBOX_UNAPPLIED, grokSandboxUnapplied, grokStartFolderProblem, settleGrokSandbox, writeGrokSandbox } from './grok-sandbox.ts';
+import { writeCursorCommandDeny } from './grok-command-deny.ts';
 import { launchedIdentity, paneHoldsOnlyShell, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
 import { restoreProof } from './restore-proof.ts';
 import type { CliWatcher } from './cli-hook.ts';
@@ -36,8 +38,10 @@ import { unreadIdle } from './unread.ts';
 import { recordWhat, cleanRecord, classificationOf, type Classification, type FinalRecord, type ProgressState } from './progress.ts';
 import type { LobbyRefusal } from '../lobby/gate.ts';
 import type { InboxRegistration } from '../mcp/register.ts';
+import { prepareChannelConfig } from '../mcp/launch-config.ts';
 import type { SeatState, WaitingRecord } from '../state.ts';
 import { continuitySessionOf } from '../registry/resume.ts';
+import { processStartOf } from '../watch/pane.ts';
 import { vendorNoticeRange, type Screen } from '../watch/screen.ts';
 import type { SessionEndReason } from '../sessions/registry.ts';
 import { endpointCleanupHost } from './endpoint-cleanup.ts';
@@ -119,7 +123,19 @@ export type Host = {
    */
   registerInbox?(cli: string, seat: string, cwd: string, session: string, teamFile?: string): InboxRegistration | null;
   /** Sets the pane's display_agent. False is reported in one line and does not leave the seat out. */
-  reportDisplayAgent?(session: string, pane: string, text: string): boolean;
+  reportDisplayAgent?(session: string, pane: string, text: string, ttlMs?: number): boolean;
+  /** Writes the terminal host's sidebar layout (`sidebar` op): backup, one-pass splice of both
+   *  keys, validate through the host, roll back from the bytes held in memory. The sessions to
+   *  reload are their own steps, so the apply takes none here. Absent on a host that writes no
+   *  config: the step then does nothing, and nothing is reloaded either. */
+  applySidebar?(rows: readonly (readonly string[])[], indicators: string): SidebarApply;
+  /** Reloads one running session's server onto the config the `sidebar` write left
+   *  (`sidebar-reload` op). Absent on a host that reloads nothing. */
+  reloadSidebar?(session: string): ConfigReload;
+  /** Records one applied reload, beside the entity-level sources in the TeamCLI config
+   *  directory. The executor calls it only after an applied reload; a host that records nothing
+   *  leaves the witness missing, and a later comparison names it. */
+  recordSidebarReload?(session: string, rows: readonly (readonly string[])[], indicators: string): void;
   /** Sets the workspace title. False is reported in one line and does not leave the seat out. */
   renameWorkspace?(session: string, workspace: string, label: string): boolean;
   /** The live exit typing; see `ExitTyping`. May wait: the pane draws typed text late, and the
@@ -152,6 +168,9 @@ export type Host = {
   ): Promise<boolean | 'no-agent' | Refusal>;
   renameAgent(session: string, pane: string, name: string): boolean;
   closeWorkspace(session: string, workspace: string): boolean;
+  /** A host may offer a team-file stop. A sandbox warning does not call it: that stop is
+   *  `sandbox_unapplied` on the seat's state, and the approved team file stays byte for byte. */
+  markStopped?(seat: string): boolean;
   /** Forgets the bus record once its workspace closed. */
   dropBus?(): void;
   stopSession(session: string): boolean;
@@ -193,6 +212,13 @@ export type Host = {
   agentStatus?(session: string, pane: string): string | null;
   /** The pane's process identity, read to record it for the seat; null when herdr can't tell. */
   processInfo?(session: string, pane: string): PaneProcesses | null;
+  /**
+   * The instant a process started, in epoch milliseconds, or null when it is gone or its start
+   * line does not read. Read once, when the seat's pane is created, to record the pane shell's
+   * start beside its pid: a pid the OS hands to another process after the shell exits is then
+   * told from the same shell. Absent: the run reads the process table itself.
+   */
+  processStartOf?(pid: number): number | null;
   sleep(ms: number): Promise<void>;
   now(): number;
   /** Null when this seat may launch. A string is the reason it may not. */
@@ -205,7 +231,13 @@ export type Host = {
       workspace?: string;
       rules?: 'option' | 'message' | 'prepend';
       createdWorkspace?: boolean;
+      /** The actual scoped start folder, written only after a channel workspace was created. */
+      start_cwd?: string;
       launched?: LaunchedIdentity;
+      /** The pane's own shell pid and that process's start instant, read when the pane was
+       *  created: the identity a pane herdr has not named yet is placed by. */
+      pane_shell?: number;
+      pane_shell_start?: number;
       /** The agent session read with the process, stored beside `launched`. */
       agent_session?: string;
       /** The declaration this launch reached the prompt with. `effort: null` clears a stored word. */
@@ -215,6 +247,8 @@ export type Host = {
       launch_line?: string;
       /** A waiting record to write, or null to remove the seat's waiting field. */
       waiting?: WaitingRecord | null;
+      /** A Grok launch whose frames said the sandbox was not applied. */
+      sandbox_unapplied?: { why: string };
       /** How this launch leaves the seat watching for drops (`CliWatcher`). */
       watcher?: CliWatcher;
     },
@@ -523,12 +557,12 @@ async function until(
   }
 }
 
-/** The naming wait re-asks the host to take a seat's name on a short backoff after a refusal.
- *  The host refuses a rename while the agent's startup is still pending, so the pane's
- *  foreground can name the CLI before the host will; the first pause is short and doubles up to
- *  the cap, and every pause is cut to what is left of the wait, so the retry never runs past it. */
-const RENAME_RETRY_MS = 250;
-const RENAME_RETRY_MAX_MS = 2000;
+/** How long the rename step reads the agent list for the seat's name after a rename call (2 s,
+ *  read every 200 ms), and how long it waits for herdr to detect the CLI as an agent before its
+ *  one retry (10 s). After that the seat is left at launched, with the reason reported. */
+const RENAME_VERIFY_MS = 2000;
+const RENAME_VERIFY_POLL_MS = 200;
+const RENAME_DETECT_MS = 10_000;
 
 /** Whether the host lists the pane under another seat's name now. A rename of it would take that
  *  seat's pane, so the naming stops there; an unreadable list is not such a reading. */
@@ -538,36 +572,35 @@ function namedForAnotherSeat(host: Host, session: string, pane: string, seat: st
     && agents.some((agent) => agent.pane === pane && agent.name !== null && agent.name !== seat);
 }
 
-/** What the naming settled on: the host took the name, the pane turned out to be another
- *  seat's, or the wait ran out (or was cancelled) with the name not taken. */
+/** What the naming settled on: the host holds the name and lists it, the pane turned out to be
+ *  another seat's, or the name was not listed when the attempts ran out. */
 type RenameOutcome = 'named' | 'other seat' | 'not named';
 
-/** Asks the host for the seat's name until it takes it or `leftMs` runs out. It pauses before
- *  the first ask: the call that led here was already made at this instant. A pane the host has
- *  begun naming for another seat ends the naming without a call. */
-async function retryRename(
+/** Reads the agent list until it shows the pane under `seat`, or `ms` runs out. A host with no
+ *  agent list answers at once: the herdr adapter names a pane only after reading the list back
+ *  (herdr.ts, `agentRename`), so its answer is the verified one, and the fake hosts of the suite
+ *  keep that reading. A clock that does not move ends the wait rather than spinning. */
+async function verifiedName(
   host: Host,
   session: string,
   pane: string,
   seat: string,
-  leftMs: number,
+  ms: number,
   sleep: (ms: number) => Promise<void>,
   cancelled: () => boolean,
-): Promise<RenameOutcome> {
-  if (leftMs <= 0) return 'not named';
-  const deadline = host.now() + leftMs;
-  let pause = RENAME_RETRY_MS;
+): Promise<boolean> {
+  if (host.agentList === undefined) return true;
+  const lists = (): boolean =>
+    host.agentList?.(session)?.some((agent) => agent.pane === pane && agent.name === seat) === true;
+  const deadline = host.now() + ms;
   for (;;) {
-    if (cancelled()) return 'not named';
-    const now = host.now();
-    if (now >= deadline) return 'not named';
-    await sleep(Math.min(pause, deadline - now));
-    if (cancelled()) return 'not named';
-    // A clock that does not move would spin. Treat that as the wait running out.
-    if (host.now() <= now) return 'not named';
-    if (namedForAnotherSeat(host, session, pane, seat)) return 'other seat';
-    if (host.renameAgent(session, pane, seat)) return 'named';
-    pause = Math.min(pause * 2, RENAME_RETRY_MAX_MS);
+    if (cancelled()) return false;
+    if (lists()) return true;
+    if (host.now() >= deadline) return false;
+    const before = host.now();
+    await sleep(Math.min(RENAME_VERIFY_POLL_MS, deadline - before));
+    if (cancelled()) return false;
+    if (host.now() <= before) return false;
   }
 }
 
@@ -603,6 +636,13 @@ export async function executePlan(
   const closing = options?.isClosing ?? (() => false);
   const places = new Map<string, Place>();
   const dropped = new Set<string>();
+  const invalidStart = new Set<string>();
+  const launches = new Map(steps.flatMap(step => step.do?.do === 'launch' ? [[step.do.seat, step.do] as const] : []));
+  const startProblem = (op: Extract<Op, { do: 'launch' }>): string | null => {
+    const problem = op.ownStartFolder === undefined ? null : ownStartFolderProblem(op.ownStartFolder);
+    return problem ?? (op.grokSandbox === undefined ? null :
+      grokStartFolderProblem(op.cwd ?? '', op.grokSandbox, op.ownStartFolder?.lobby));
+  };
   // Seats whose launch line carried their rules line as the CLI's initial prompt: their rules
   // file was written before the launch, and nothing is ever typed (0.5.9).
   const rulesAtLaunch = new Set<string>();
@@ -627,8 +667,6 @@ export async function executePlan(
   const created = new Map<string, { workspace: string; repairLine: string }>();
   /** Seats whose workspace this run closed: no path closes one twice. */
   const closed = new Set<string>();
-  /** Seats whose pane was already named right after creation, before any wait. */
-  const namedAtCreate = new Set<string>();
   /** Whether this run started the session: only then may `q` stop it. */
   let createdSession = false;
   // Restore bookkeeping, only read when the caller passed `restoreSeats`. A seat is repaired
@@ -813,6 +851,14 @@ export async function executePlan(
     return 'settled';
   };
 
+  const guardStart = (op: Extract<Op, { do: 'launch' }>): boolean => {
+    const problem = startProblem(op);
+    if (problem === null) return true;
+    invalidStart.add(op.seat);
+    leftOut(op.seat, problem);
+    return false;
+  };
+
   const dropRecord = (seat: string): boolean => {
     if (host.drop(seat)) return true;
     leftOut(seat, 'its endpoint was not stopped; its launch record was kept');
@@ -861,9 +907,9 @@ export async function executePlan(
   // idle wait that follows reads the line it typed for submission, gives a line still sitting
   // at the prompt one more guarded Enter, and takes its end from the foreground.
   const reusedPanes = new Set<string>();
-  // The base recipe each seat's record keeps when this run records it: the plan's pinned line for
-  // a launched seat, never the expanded command above. A seat this run did not launch has no
-  // entry, so every later record of it keeps what its own earlier launch wrote.
+  // The line each seat's record keeps when this run records it. A resolved launch stores the
+  // plan's command. Every other launch stores the pinned recipe, never the expanded command.
+  // A seat this run did not launch has no entry, so a later record keeps what an earlier launch wrote.
   const recordLines = new Map<string, string>();
   const recordSeat = (seat: string, patch: Parameters<Host['record']>[1]): void => {
     const line = recordLines.get(seat);
@@ -1134,6 +1180,11 @@ export async function executePlan(
     // `team answer` — has nothing left in the plan: a rename would overwrite the ready stage,
     // and a delivery would send the rules a second time while the first turn is still running.
     if (seat && ready.has(seat) && !leftover) return;
+    // A path can change after planning or workspace creation. Check before the first write
+    // for this seat, including inbox registration; a refused start also suppresses cleanup.
+    if (seat && invalidStart.has(seat)) return;
+    const launch = seat === undefined ? undefined : launches.get(seat);
+    if (launch !== undefined && !guardStart(launch)) return;
 
     if (step.kind === 'skip') {
       if (op?.do === 'record' && op.seat) {
@@ -1191,6 +1242,43 @@ export async function executePlan(
     };
 
     switch (op.do) {
+      case 'sidebar': {
+        if (!host.applySidebar) break;
+        const applied = host.applySidebar(op.rows, op.indicators);
+        if (applied.kind === 'refused') {
+          held = true;
+          abort = true;
+          const tail =
+            applied.restored === 'untouched'
+              ? ' (the config was left untouched)'
+              : applied.restored
+                ? ' (the prior config was restored)'
+                : ' (and the prior config could not be restored)';
+          const what = `the terminal host's sidebar layout was refused: ${applied.reason}${tail}`;
+          host.say(`sidebar: ${what}\n`);
+          host.log('sidebar', what);
+        }
+        break;
+      }
+      case 'sidebar-reload': {
+        if (!host.reloadSidebar) break;
+        const reloaded = host.reloadSidebar(op.session);
+        if (!reloaded.applied) {
+          const what = `session ${op.session}: its sidebar config did not reload: ${reloaded.text}`;
+          host.say(`sidebar: ${what}\n`);
+          host.log('sidebar', what);
+          break;
+        }
+        try {
+          host.recordSidebarReload?.(op.session, op.rows, op.indicators);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          const what = `session ${op.session}: its sidebar reload was not recorded: ${reason}`;
+          host.say(`sidebar: ${what}\n`);
+          host.log('sidebar', what);
+        }
+        break;
+      }
       case 'server': {
         if (!host.startServer(op.session)) {
           serverFailed = true;
@@ -1232,6 +1320,15 @@ export async function executePlan(
             final(op.seat, { kind: 'left out', reason: why });
             break;
           }
+        }
+        if (op.seat && op.channel !== undefined) {
+          const configured = prepareChannelConfig({ ...op.channel, seat: op.seat, session, cwd: op.cwd });
+          if (!configured.ok) {
+            dropped.add(op.seat);
+            final(op.seat, { kind: 'left out', reason: `the channel config was not prepared: ${configured.reason}` });
+            break;
+          }
+          configured.lease.release();
         }
         if (op.lobby && host.confirmLobby) {
           // The last look at the starting folder, with nothing between it and the create. The
@@ -1276,15 +1373,16 @@ export async function executePlan(
           // repair followed by a create — is not "already closed": the stop pass must close
           // this new workspace too.
           closed.delete(op.seat);
-          // Name the pane right after it is created, before any wait, so a left-out pane is
-          // always findable. A pane the host already lists under another seat's name is not
-          // this seat's to rename: the naming wait below leaves the seat out without touching it.
-          if (!namedForAnotherSeat(host, session, made.pane, op.seat)
-            && host.renameAgent(session, made.pane, op.seat)) {
-            namedAtCreate.add(op.seat);
-          } else {
-            namedAtCreate.delete(op.seat);
-          }
+          // The pane's own shell and its start instant are the identity a caller on this pane is
+          // placed by before herdr names the agent in it: a seat's launch starts its MCP servers
+          // during CLI boot, before any name exists (caller.ts). The shell outlives the CLI it
+          // runs, and the start instant tells a reused pid from the same shell. Both are read
+          // here, beside the create, and written with the pane record; a reading the host cannot
+          // give writes neither, and placement then keeps the refusal it had. The pane is not
+          // named here: herdr refuses a name on a pane with no effective agent, and an answer
+          // nothing verified must never skip the rename step, which owns naming.
+          const shell = host.processInfo?.(session, made.pane)?.shell ?? null;
+          const shellStart = shell === null ? null : (host.processStartOf ?? processStartOf)(shell);
           // A fresh workspace is a fresh seat: any waiting record named an older pane, and is
           // void here. Clearing it in the same write is what makes the whole-team repair
           // (`team down` then `team up`) clear the record the next `up` would otherwise resume.
@@ -1293,7 +1391,10 @@ export async function executePlan(
             pane: made.pane,
             workspace: made.workspace,
             createdWorkspace: true,
+            ...(op.channel === undefined ? {} : { start_cwd: op.cwd }),
             waiting: null,
+            ...(shell !== null ? { pane_shell: shell } : {}),
+            ...(shellStart !== null ? { pane_shell_start: shellStart } : {}),
             ...(op.watcher ? { watcher: op.watcher } : {}),
           });
           host.running(op.seat);
@@ -1377,6 +1478,17 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: why });
           break;
         }
+        if (!guardStart(op)) break;
+        const channel = op.channel === undefined ? undefined
+          : op.cwd === undefined || !created.has(op.seat)
+            ? { ok: false as const, reason: 'a Claude channel requires a fresh scoped workspace; restart the seat' }
+            : prepareChannelConfig({ ...op.channel, seat: op.seat, session, cwd: op.cwd });
+        if (channel !== undefined && !channel.ok) {
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: `the channel config was not prepared: ${channel.reason}` });
+          break;
+        }
+        try {
         // The seat's inbox is registered before its command runs, in the folder the command
         // starts in, for the session this launch serves and from the team file it read, when it
         // read one. A refused registration is retried once — a CLI's own add can fail
@@ -1395,6 +1507,7 @@ export async function executePlan(
             break;
           }
         }
+        if (!guardStart(op)) break;
         const here = place(op.seat, op.pane, op.workspace);
         // The rules line rides this launch: its file is written before anything starts, so the
         // CLI reads it on its first turn, and a file that cannot be written leaves the seat out
@@ -1422,7 +1535,28 @@ export async function executePlan(
         // attach is added only once an endpoint exists to attach to. A start that is not up
         // leaves the seat out. It does not append --no-daemon and continue. A line the plan
         // did not mark stays unmanaged and still launches on the line it had.
+        if (!guardStart(op)) break;
+        if (op.cursorCommandDeny !== undefined) {
+          if (op.ownStartFolder === undefined) {
+            leftOut(op.seat, 'its command-deny policy has no guarded own start folder; nothing was launched');
+            break;
+          }
+          const written = writeCursorCommandDeny(op.cursorCommandDeny, op.ownStartFolder);
+          if (!written.ok) {
+            leftOut(op.seat, `its command-deny file was not written and verified: ${written.why}; nothing was launched`);
+            break;
+          }
+          if (!guardStart(op)) break;
+        }
         let command = op.command;
+        let startedEndpoint = false;
+        let attachedEndpoint = false;
+        let freshFrom: string | undefined;
+        let launch = { command, sessionId: undefined as string | undefined, notice: undefined as string | undefined };
+        // The sandbox file and the managed endpoint belong to the file's own launch line.
+        // A resolved argv already carries the profile's words; those two stays are the next
+        // commit. Resume and the session mint still run: a resolved line is a seat launch.
+        if (op.resolved !== true) {
         // A Grok seat's sandbox profile is written before its command runs, the same place the
         // plan decided to name it. The profile is the seat's write wall, so a file that cannot
         // be written refuses the seat. Nothing is launched without it. The record names the
@@ -1433,14 +1567,18 @@ export async function executePlan(
             leftOut(op.seat, settled.why);
             break;
           }
+          const problem = startProblem({ ...op, grokSandbox: settled.sandbox });
+          if (problem !== null) {
+            invalidStart.add(op.seat);
+            leftOut(op.seat, problem);
+            break;
+          }
           const written = writeGrokSandbox(settled.sandbox);
           if (!written.ok) {
             leftOut(op.seat, `its sandbox profile was not written: ${written.why}; nothing was launched. Repair the sandbox file, then launch the seat again`);
             break;
           }
         }
-        let startedEndpoint = false;
-        let attachedEndpoint = false;
         if (op.codexEndpoint !== undefined) {
           const read = host.managedCodexEndpoint === undefined
             ? { kind: 'unmanaged' as const, why: 'this launch starts no managed Codex endpoint' }
@@ -1459,10 +1597,10 @@ export async function executePlan(
         if (op.cli === 'codex' && !attachedEndpoint && !codexCommandHasFlag(command, '--no-daemon')) {
           command = appendOnLaunchLine(command, '--no-daemon', 'codex').line;
         }
+        }
         // A resume of a conversation its CLI never wrote stops at the CLI's own error and leaves
         // the pane at its shell: the seat is launched fresh instead, and says so.
         const resumeTarget = namedResumeTarget(op.cli ?? '', command);
-        let freshFrom: string | undefined;
         if (resumeTarget && op.cwd !== undefined && host.conversationExists?.(op.cli ?? '', op.cwd, resumeTarget) === false) {
           const fresh = withoutResume(op.cli ?? '', command);
           if (fresh !== null) {
@@ -1473,7 +1611,8 @@ export async function executePlan(
         // The session id is minted here, not in the plan: the plan's command stays the
         // deterministic line a dry run prints, and each launch gets its own id. An id that could
         // not be placed where the CLI reads it is not recorded, and the run says so.
-        const launch = withLaunchSession(op.cli ?? '', command);
+        const minted = withLaunchSession(op.cli ?? '', command);
+        launch = { command: minted.command, sessionId: minted.sessionId, notice: minted.notice };
         if (launch.notice !== undefined) {
           hold(op.seat, `${op.seat}: ${launch.notice}\n`);
           host.log(op.seat, launch.notice);
@@ -1481,7 +1620,9 @@ export async function executePlan(
         launchedCommands.set(op.seat, launch.command);
         if (op.recordLine !== undefined) recordLines.set(op.seat, op.recordLine);
         launchedThisRun.add(op.seat);
-        if (!here || !host.paneRun(session, here.pane, launch.command)) {
+        let channelCurrent = true;
+        try { if (channel?.ok) channel.lease.check(); } catch { channelCurrent = false; }
+        if (!here || !channelCurrent || !host.paneRun(session, here.pane, launch.command)) {
           // The fresh-start fallback is logged with its real outcome, never as a launch that
           // did not happen: the terminal's scrollback loses this, so the log keeps the truth.
           if (freshFrom !== undefined) {
@@ -1522,6 +1663,9 @@ export async function executePlan(
         // created workspace to record it with.
         if (op.watcher) recordSeat(op.seat, { stage: 'launched', watcher: op.watcher });
         break;
+        } finally {
+          if (channel?.ok) channel.lease.release();
+        }
       }
       case 'idle': {
         reportProgress(op.seat, 'waiting for its prompt');
@@ -1636,7 +1780,7 @@ export async function executePlan(
         let freshAfterMissing = false;
         let herdrIdleBefore = false;
         const pollMs = IDLE_POLL_MS;
-        let outcome: 'idle' | 'permission' | 'plan approval' | 'confirmation' | 'login' | 'trust' | 'question' | 'vendor notice' | 'provider error' | 'rate limit' | 'ended' | 'timeout' = 'timeout';
+        let outcome: 'idle' | 'permission' | 'plan approval' | 'confirmation' | 'login' | 'trust' | 'question' | 'vendor notice' | 'provider error' | 'rate limit' | 'ended' | 'timeout' | 'sandbox unapplied' = 'timeout';
         let last: ScreenKind = 'unknown';
         let endedRead: string | null = null;
         let endedFor = 0;
@@ -1687,6 +1831,15 @@ export async function executePlan(
           }
           const kind = host.classify(session, here.pane, op.cli);
           last = kind;
+          // The first frames are the pane text. Grok draws `sandbox could not be applied` there
+          // (the same words it writes to stderr). Seen once, the wait stops before any key.
+          if (op.cli === 'grok') {
+            const frames = host.paneText?.(session, here.pane) ?? null;
+            if (frames !== null && grokSandboxUnapplied(frames)) {
+              outcome = 'sandbox unapplied';
+              break;
+            }
+          }
           // The pane's shell, read once this poll: the relaunch below types a line, and the ended
           // read further down reads the same evidence.
           const back = host.shellBack?.(session, here.pane) ?? null;
@@ -1859,6 +2012,21 @@ export async function executePlan(
           idleOnwards();
           break;
         }
+        if (outcome === 'sandbox unapplied') {
+          // The frames already said the sandbox was not applied. The stop is the seat's state
+          // record. The workspace is closed, no key is sent, and the team file is not rewritten.
+          recordSeat(op.seat, { stage: 'launched', sandbox_unapplied: { why: GROK_SANDBOX_UNAPPLIED } });
+          const workspace = here.workspace ?? places.get(op.seat)?.workspace;
+          const closed = workspace !== undefined && host.closeWorkspace(session, workspace);
+          dropped.add(op.seat);
+          if (!closed) held = true;
+          host.log(op.seat, GROK_SANDBOX_UNAPPLIED);
+          const detail = closed
+            ? '  its workspace was closed without input and the seat left out\n'
+            : '  its workspace did not close; nothing was typed\n';
+          final(op.seat, { kind: 'left out', reason: GROK_SANDBOX_UNAPPLIED }, detail);
+          break;
+        }
         const workspace = here.workspace ?? places.get(op.seat)?.workspace;
         if (outcome === 'permission' || outcome === 'plan approval' || outcome === 'confirmation' || outcome === 'login' || outcome === 'trust' || outcome === 'question' || outcome === 'vendor notice' || outcome === 'provider error' || outcome === 'rate limit') {
           const reading = outcome === 'trust' ? 'trust' : outcome;
@@ -1956,7 +2124,12 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: proof.why });
           break;
         }
-        if (!host.renameAgent(session, op.pane, op.seat)) {
+        // The rename is the host's verified one, and where the host lists its agents the list is
+        // read once more here: a call that returns true but leaves no name listed is held, and
+        // the seat is left as the host restored it.
+        const renamed = host.renameAgent(session, op.pane, op.seat)
+          && await verifiedName(host, session, op.pane, op.seat, RENAME_VERIFY_MS, sharedSleep, () => stopped || closing());
+        if (!renamed) {
           held = true;
           dropped.add(op.seat);
           final(op.seat, { kind: 'left out', reason: 'its pane was not named; left as the host restored it' });
@@ -1998,14 +2171,14 @@ export async function executePlan(
         const listed = (): boolean => host.agentPanes(session)?.includes(here.pane) === true;
         const runsCli = (): boolean =>
           reportedLiveAgent(host.foreground?.(session, here.pane) ?? null, processNames);
-        const namingStarted = host.now();
+        const cancelled = (): boolean => stopped || closing();
         const seen = await until(
           op.seconds,
           2000,
           host,
           () => listed() || runsCli(),
           sharedSleep,
-          () => stopped || closing(),
+          cancelled,
         );
         if (stopped || closing()) {
           // A closing host cancelled the wait: the pane exists but was never read into the agent
@@ -2019,47 +2192,58 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: 'was not in the agent list in time; left at launched' });
           break;
         }
-        // The host refuses a rename while the agent's startup is still pending, and only takes
-        // one for a pane it currently lists as an agent; the pane's foreground can name the CLI
-        // before the host will take the name. One refused call is not the seat's last chance:
-        // the retry keeps this wait's own budget, on a short backoff, until the host takes the
-        // name or the wait runs out — and only the wait running out leaves the seat unnamed.
-        // A pane the host has begun naming for another seat is never renamed here: it is that
-        // seat's, and a rename would take it.
-        let renamed = namedAtCreate.has(op.seat);
-        if (!renamed) {
-          let outcome: RenameOutcome;
-          if (namedForAnotherSeat(host, session, here.pane, op.seat)) {
-            outcome = 'other seat';
-          } else if (host.renameAgent(session, here.pane, op.seat)) {
-            outcome = 'named';
-          } else {
-            outcome = await retryRename(
-              host,
-              session,
-              here.pane,
-              op.seat,
-              op.seconds * 1000 - (host.now() - namingStarted),
-              sharedSleep,
-              () => stopped || closing(),
-            );
-          }
+        // Naming is one call, then one retry, and each answer is verified against the agent
+        // list: a rename that returns true but leaves no name listed is not a name. A pane the
+        // host already lists under the seat's name is not renamed again. A pane the host has
+        // begun naming for another seat is never renamed here: it is that seat's, and a rename
+        // would take it. The retry waits for herdr to detect the CLI as an agent first: its
+        // startup can still be pending when the CLI's own prompt appears. A name that is still
+        // not listed after both attempts leaves the seat at launched, with the reason reported.
+        const listsName = (): boolean =>
+          host.agentList?.(session)?.some((agent) => agent.pane === here.pane && agent.name === op.seat) === true;
+        const verify = (ms: number): Promise<boolean> =>
+          verifiedName(host, session, here.pane, op.seat, ms, sharedSleep, cancelled);
+        let outcome: RenameOutcome;
+        if (namedForAnotherSeat(host, session, here.pane, op.seat)) {
+          outcome = 'other seat';
+        } else if (listsName()) {
+          outcome = 'named';
+        } else if (host.renameAgent(session, here.pane, op.seat) && await verify(RENAME_VERIFY_MS)) {
+          outcome = 'named';
+        } else {
+          // The first answer is not a listed name: wait for herdr to detect the pane as an
+          // agent, then ask once more, and verify that answer the same way.
+          await until(RENAME_DETECT_MS / 1000, RENAME_VERIFY_POLL_MS, host, listed, sharedSleep, cancelled);
           if (stopped || closing()) {
             // A closing host cancelled the naming wait: the seat keeps the stage it had.
             stopped = true;
             abort = true;
             break;
           }
-          if (outcome === 'other seat') {
-            dropped.add(op.seat);
-            final(op.seat, { kind: 'left out', reason: 'its pane is named for another seat; left at launched' });
-            break;
+          if (namedForAnotherSeat(host, session, here.pane, op.seat)) {
+            outcome = 'other seat';
+          } else if (listsName()) {
+            outcome = 'named';
+          } else if (host.renameAgent(session, here.pane, op.seat) && await verify(RENAME_VERIFY_MS)) {
+            outcome = 'named';
+          } else {
+            outcome = 'not named';
           }
-          renamed = outcome === 'named';
         }
-        if (!renamed) {
+        if (stopped || closing()) {
+          // A closing host cancelled the naming wait: the seat keeps the stage it had.
+          stopped = true;
+          abort = true;
+          break;
+        }
+        if (outcome === 'other seat') {
           dropped.add(op.seat);
-          final(op.seat, { kind: 'left out', reason: 'was not named in time; left at launched' });
+          final(op.seat, { kind: 'left out', reason: 'its pane is named for another seat; left at launched' });
+          break;
+        }
+        if (outcome !== 'named') {
+          dropped.add(op.seat);
+          final(op.seat, { kind: 'left out', reason: 'its name was not listed after the rename; left at launched' });
           break;
         }
         recordSeat(op.seat, {
@@ -2084,7 +2268,11 @@ export async function executePlan(
         }
         // Line 2, after the name. Absent on a host that does not launch seats. A call that
         // fails is one line; the seat stays named, and nothing here reads the owner's terminal.
-        if (op.displayAgent && host.reportDisplayAgent && !host.reportDisplayAgent(session, here.pane, op.displayAgent)) {
+        if (
+          op.displayAgent &&
+          host.reportDisplayAgent &&
+          !host.reportDisplayAgent(session, here.pane, op.displayAgent, SIDEBAR_TTL_CAP_MS)
+        ) {
           sayForSeat(op.seat, `${op.seat}: its display was not reported\n`);
         }
         break;
@@ -2094,7 +2282,10 @@ export async function executePlan(
         if (host.renameWorkspace && !host.renameWorkspace(session, op.workspace, op.title)) {
           sayForSeat(op.seat, `${op.seat}: its title was not reported\n`);
         }
-        if (host.reportDisplayAgent && !host.reportDisplayAgent(session, op.pane, op.displayAgent)) {
+        if (
+          host.reportDisplayAgent &&
+          !host.reportDisplayAgent(session, op.pane, op.displayAgent, SIDEBAR_TTL_CAP_MS)
+        ) {
           sayForSeat(op.seat, `${op.seat}: its display was not reported\n`);
         }
         break;
@@ -2902,9 +3093,19 @@ export async function executePlan(
   } else {
     let start = 0;
     while (start < steps.length) {
-      const kind = steps[start]?.do?.do;
-      if (kind === 'server' || kind === 'wait-session') start++;
-      else break;
+      const step = steps[start];
+      const kind = step?.do?.do;
+      if (
+        kind === 'sidebar' ||
+        kind === 'sidebar-reload' ||
+        kind === 'server' ||
+        kind === 'wait-session' ||
+        (step?.kind === 'skip' && step.do === undefined && step.text.startsWith('sidebar:'))
+      ) {
+        start++;
+      } else {
+        break;
+      }
     }
     let end = steps.length;
     while (end > start) {

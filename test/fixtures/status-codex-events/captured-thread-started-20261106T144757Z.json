@@ -1,0 +1,50 @@
+{
+  "method": "thread/started",
+  "params": {
+    "thread": {
+      "id": "example-provider-id-1",
+      "environments": [
+        {
+          "environmentId": "example-provider-id-2",
+          "cwd": "example-private-path-2",
+          "runtimeWorkspaceRoots": [
+            "example-private-path-2"
+          ]
+        }
+      ],
+      "extra": null,
+      "sessionId": "example-provider-id-1",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": false,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "example-redacted-string",
+      "modelProvider": "openai",
+      "model": "gpt-6.1-sol",
+      "reasoningEffort": "high",
+      "createdAt": 1793976478,
+      "updatedAt": 1793976478,
+      "recencyAt": 1793976478,
+      "status": {
+        "type": "idle"
+      },
+      "path": "example-private-path-3",
+      "cwd": "example-private-path-2",
+      "cliVersion": "0.161.0",
+      "originator": "example-redacted-string",
+      "source": "example-redacted-string",
+      "canAcceptDirectInput": true,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "daybreakEnabled": null,
+      "turns": []
+    }
+  },
+  "emittedAtMs": 1793976478318
+}

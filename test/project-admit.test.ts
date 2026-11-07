@@ -5,8 +5,8 @@ import type { Agent } from '../src/registry/agents.ts';
 // The project level decides a send before the team rules do. The project record names the lead —
 // by agent id — and the teams; the `leads` capability decides which seat leads a team, never a
 // role's name, which is each team's own word in any language. These scenes pin the three project
-// rules, the setting that opens crossing seats and who may open it, and the two states that stay
-// refused: a pair whose teams share no project, and a team a second project names.
+// rules, the setting that opens crossing seats and who may open it, and shared membership in
+// several projects. A pair whose teams share no project stays refused.
 function agent(id: string, seat: string, team: string): Agent {
   return {
     id,
@@ -95,8 +95,8 @@ const teams: AdmitTeams = {
 };
 
 const projects = {
-  teamcli: { lead: LEAD_A, teams: ['cli', 'site', 'labs', 'legacy'] },
-  radio: { lead: RADIO_LEAD, teams: ['radio'] },
+  teamcli: { entity: 'teamcli', lead: LEAD_A, teams: ['cli', 'site', 'labs', 'legacy'] },
+  radio: { entity: 'radio', lead: RADIO_LEAD, teams: ['radio'] },
 };
 const context: AdmitContext = { projects };
 const crossed: AdmitContext = { ...context, crossTeams: { project: true } };
@@ -176,17 +176,33 @@ describe('project admission: the project decides its own pairs', () => {
     expect(admitSend(leadA, soloBuilder, teams, undefined, crossed).ok).toBe(false);
   });
 
-  test('a team named in two projects is refused, naming both', () => {
-    const cliTwice: AdmitContext = { projects: { ...projects, pOther: { lead: null, teams: ['cli'] } } };
+  test('a second membership preserves shared-project reach without connecting disjoint projects', () => {
+    const cliTwice: AdmitContext = { projects: { ...projects, pOther: { entity: 'teamcli', lead: null, teams: ['cli'] } } };
     expect(admitSend(leadA, leadB, teams, undefined, cliTwice)).toEqual({
-      ok: false,
-      why: 'lead-a@cli may not send to lead-b@site: team cli is named in 2 projects: pOther, teamcli',
+      ok: true,
+      rule: 'the project lead and the leads of its teams',
     });
-    const radioTwice: AdmitContext = { projects: { ...projects, pOther: { lead: null, teams: ['radio'] } } };
-    expect(admitSend(leadA, builder3, teams, undefined, radioTwice)).toEqual({
-      ok: false,
-      why: 'lead-a@cli may not send to builder-3@radio: team radio is named in 2 projects: pOther, radio',
+    const radioTwice: AdmitContext = { projects: { ...projects, pOther: { entity: 'radio', lead: null, teams: ['radio'] } } };
+    expect(admitSend(leadA, builder3, teams, undefined, radioTwice).ok).toBe(false);
+  });
+
+  test('a later shared project can supply project-lead reach', () => {
+    const shared: AdmitContext = {
+      projects: {
+        'project-a': { entity: 'teamcli', lead: null, teams: ['radio', 'site'] },
+        'project-b': { entity: 'teamcli', lead: RADIO_LEAD, teams: ['radio', 'site'] },
+      },
+    };
+    // Both teams belong to the shared project's entity. This sender is a project lead by id,
+    // but not its team's roster lead.
+    const sameEntity = { ...teams, radio: { ...teams.radio!, entity: 'teamcli' } };
+    expect(admitSend(radioLead, leadB, sameEntity, undefined, shared)).toEqual({
+      ok: true,
+      rule: 'the project lead and the leads of its teams',
     });
+    expect(admitSend(radioLead, builder2, sameEntity, undefined, shared).ok).toBe(false);
+    expect(admitSend(builder3, builder2, sameEntity, undefined, shared).ok).toBe(false);
+    expect(admitSend(builder3, builder2, sameEntity, undefined, { ...shared, crossTeams: { project: true, team: false } }).ok).toBe(false);
   });
 
   test('with no project context the project rules are not in play', () => {

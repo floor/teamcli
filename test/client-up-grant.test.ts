@@ -24,7 +24,7 @@ import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { LOG_FILE } from '../src/state.ts';
 import { keyOf } from '../src/store/keys.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const made: string[] = [];
 const realTmp = process.env.TMPDIR;
@@ -224,6 +224,8 @@ function sourcesOf(w: World, now: () => Date): { sources: UpSources; workspaces:
     sleep: async () => {},
     now,
   };
+
+  recordRenames(launch);
   const doctor: DoctorSources = {
     version: () => '2.1.288', onPath: () => true, loggedIn: () => true, herdrVersion: () => '0.7.1', sessionRunning: () => false, now, home: w.home,
   };

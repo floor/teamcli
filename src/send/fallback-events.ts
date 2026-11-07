@@ -18,7 +18,7 @@
 //      escalation event goes to the orchestrator (addressed), the sender and the receiver team's
 //      lead, by the same routing.
 //
-// Every attempt is appended whole to a durable ledger in the project's state store
+// Every attempt is appended whole to a durable ledger in the receiving team's state store
 // (`fallback-attempts-<key>.jsonl`, one JSON line per fact, never rotated). The marker beside the
 // message record (`<root>/.agents/send-drops/<session>/<seat>/<id>.fallback.json`) keeps a
 // bounded summary of recent attempts plus the lifecycle: `allFailedAt`, `dueAt`, `escalatedAt`,
@@ -71,7 +71,7 @@
 // episodes. Routing and delay are TeamCLI's, resolved from the signed chain; the transport
 // receives neither.
 import { createHash } from 'node:crypto';
-import { lstatSync, mkdirSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { type Dir, existsSync, lstatSync, mkdirSync, opendirSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, sep } from 'node:path';
 import { logTag, type Caller } from '../caller.ts';
 import { appendEvent, verifySignedEvent, type EventAppendInput, type SignedEventRecord } from '../bus/log.ts';
@@ -527,9 +527,10 @@ function noteLocked(
   };
 
   // Every attempt is recorded whole, before any state moves. A ledger that cannot be written
-  // refuses the call; the host may retry the same fact.
+  // refuses the call; the host may retry the same fact. The store is the receiving team's, so
+  // the ledger is where the receiver's own pass archives it from.
   const ledger = appendStoreLine(
-    ctx.team.project,
+    fact.recipient.team,
     fact.recipient.root,
     ctx.home,
     attemptLedgerFileName(fact.recipient, fact.messageId),
@@ -696,20 +697,6 @@ export type DeferredNoteDrainReport = {
   scanned: number;
 };
 
-/** How many directory or marker entries an intra-step scan walks before yielding to the slice
- *  driver's budget check. */
-export const FALLBACK_STEP_CHUNK_ENTRIES = 64;
-
-/** The wall-clock stretch (ms) an intra-step scan may spend before yielding to the slice driver's
- *  budget check. */
-export const FALLBACK_STEP_CHUNK_MS = 50;
-
-function drainGenerator<T>(steps: Generator<void, T>): T {
-  let step = steps.next();
-  while (!step.done) step = steps.next();
-  return step.value;
-}
-
 /**
  * Record the facts a non-blocking `noteTransportSoon` deferred, then remove their notes. Each note is
  * processed under its episode's key lock with `waitMs: 0`: a key another live holder keeps is
@@ -732,13 +719,17 @@ export function drainDeferredNotes(
   ctx: EscalationContext,
   options: { at?: Date; limit?: number; lockWaitMs?: number } = {},
 ): DeferredNoteDrainReport {
-  return drainGenerator(drainDeferredNotesSteps(ctx, options));
+  const steps = drainDeferredNotesSteps(ctx, options);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  if (!step.done) throw new Error('the pass did not run to its end');
+  return step.value;
 }
 
 /**
- * The deferred-note drain one work item at a time: it chunks the directory walk and yields before
- * each note, so a sliced caller checks its budget inside the step instead of only after the whole
- * batch of notes has been verified, signed and written.
+ * The deferred-note drain one work item at a time: directory entries and notes are walked in
+ * bounded chunks that yield, so a caller driving the pass a slice at a time checks its budget
+ * inside the walk rather than only after the whole store folder is read.
  */
 export function* drainDeferredNotesSteps(
   ctx: EscalationContext,
@@ -755,8 +746,7 @@ export function* drainDeferredNotesSteps(
     unreadable: [],
     scanned: 0,
   };
-  const notes = yield* notesUnderSteps(ctx.root, limit);
-  for (const found of notes) {
+  for (const found of yield* notesUnderSteps(ctx.root, limit)) {
     if (report.drained.length + report.refused.length + report.deferred.length + report.unreadable.length >= limit) break;
     yield;
     report.scanned += 1;
@@ -812,35 +802,19 @@ export function* drainDeferredNotesSteps(
 
 /** Every deferred note under a root's transport tree, sessions and seats sorted so a pass is
  *  ordered. `text` is null when the file cannot be read at all. */
-function notesUnder(root: string): { path: string; text: string | null }[] {
-  return drainGenerator(notesUnderSteps(root));
-}
-
-function* notesUnderSteps(
-  root: string,
-  limit = Number.POSITIVE_INFINITY,
-): Generator<void, { path: string; text: string | null }[]> {
+function* notesUnderSteps(root: string, limit = Number.POSITIVE_INFINITY): Generator<void, { path: string; text: string | null }[]> {
   const found: { path: string; text: string | null }[] = [];
   if (limit <= 0) return found;
   const base = join(root, '.agents', 'send-drops');
-  let entriesInChunk = 0;
-  let chunkStart = performance.now();
-  for (const session of folderNames(base)) {
+  for (const session of yield* folderNamesSteps(base)) {
     const sessionDir = join(base, session);
-    for (const seat of folderNames(sessionDir)) {
+    for (const seat of yield* folderNamesSteps(sessionDir)) {
       const seatDir = join(sessionDir, seat);
-      for (const name of fileNames(seatDir)) {
-        entriesInChunk += 1;
-        if (DEFERRED_NOTE_NAME.test(name)) {
-          const path = join(seatDir, name);
-          found.push({ path, text: readNoFollow(path) });
-          if (found.length >= limit) return found;
-        }
-        if (entriesInChunk >= FALLBACK_STEP_CHUNK_ENTRIES || performance.now() - chunkStart >= FALLBACK_STEP_CHUNK_MS) {
-          entriesInChunk = 0;
-          chunkStart = performance.now();
-          yield;
-        }
+      for (const name of yield* fileNamesSteps(seatDir, (entry) => DEFERRED_NOTE_NAME.test(entry))) {
+        yield;
+        const path = join(seatDir, name);
+        found.push({ path, text: readNoFollow(path) });
+        if (found.length >= limit) return found;
       }
     }
   }
@@ -971,9 +945,8 @@ export function* escalationSteps(
   const atIso = at.toISOString();
   const lockWaitMs = options.lockWaitMs ?? 10_000;
   const report: EscalationReport = { escalated: [], refused: [], deferred: [], unreadable: [], scanned: 0 };
-  const markers = yield* markersUnderSteps(ctx.root);
 
-  for (const found of markers) {
+  for (const found of yield* markersUnderSteps(ctx.root)) {
     yield;
     if (found.kind === 'unreadable') {
       report.unreadable.push(found.path);
@@ -1053,7 +1026,8 @@ export function finishedKind(marker: FallbackMarker): FinishedKind | null {
   return 'expired';
 }
 
-/** The retention word in force for a receiver, in seconds, or why it could not be read. */
+/** The retention word in force for a receiver, in seconds, or why it could not be read. A null
+ *  window with no refusal is the explicit keep-all word: no age retires an expired episode. */
 export type FallbackRetention = { seconds: number | null; refusal: string | null };
 
 /**
@@ -1090,7 +1064,10 @@ export function fallbackRetentionOf(
     const said = inForce.refusals.map((refusal) => refusal.message).join('; ');
     return { seconds: null, refusal: said === '' ? 'the event retention word could not be read' : said };
   }
-  return { seconds: inForce.thresholds.retention_days * 86_400, refusal: null };
+  // Zero is the explicit keep-all word: there is no age at which an expired episode stops being
+  // kept. A null window with no refusal is that choice; a refusal stays a refusal.
+  const days = inForce.thresholds.retention_days;
+  return { seconds: days === 0 ? null : days * 86_400, refusal: null };
 }
 
 /** One finished episode the store could retire, with the age that decides an expired one. */
@@ -1141,9 +1118,18 @@ export type RetirementReport = {
  * there to judge, so a store of delivered and escalated episodes costs no policy read.
  */
 export function planRetirement(ctx: EscalationContext, options: { at?: Date } = {}): RetirementPlan {
-  return drainGenerator(planRetirementSteps(ctx, options));
+  const steps = planRetirementSteps(ctx, options);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  if (!step.done) throw new Error('the pass did not run to its end');
+  return step.value;
 }
 
+/**
+ * The retirement planning walk in bounded chunks that yield: directory reads, marker inspections
+ * and candidate sorting yield along the way so a sliced caller checks its slice budget inside
+ * the walk.
+ */
 export function* planRetirementSteps(
   ctx: EscalationContext,
   options: { at?: Date } = {},
@@ -1152,48 +1138,44 @@ export function* planRetirementSteps(
   const plan: RetirementPlan = { at: at.toISOString(), candidates: [], unreadable: [], scanned: 0, retention: null };
   const words = new Map<string, FallbackRetention>();
   const ordered: { order: string; candidate: RetirementCandidate }[] = [];
-  const markers = yield* markersUnderSteps(ctx.root);
-  let entriesInChunk = 0;
-  let chunkStart = performance.now();
-  for (const found of markers) {
-    entriesInChunk += 1;
+  let count = 0;
+  for (const found of yield* markersUnderSteps(ctx.root)) {
+    count += 1;
+    if (count % DIR_SCAN_CHUNK === 0) yield;
     if (found.kind === 'unreadable') {
       plan.unreadable.push(found.path);
-    } else {
-      plan.scanned += 1;
-      const kind = finishedKind(found.marker);
-      if (kind !== null) {
-        const { recipient, messageId } = found.marker;
-        const ageSeconds = Math.max(0, Math.round((at.getTime() - Date.parse(found.marker.updatedAt)) / 1000));
-        let eligible = kind !== 'expired';
-        let until: string | null = null;
-        if (kind === 'expired') {
-          const key = fallbackKeyOf(recipient, '');
-          let word = words.get(key);
-          if (word === undefined) {
-            word = fallbackRetentionOf(ctx, recipient, at);
-            words.set(key, word);
-          }
-          if (plan.retention === null) plan.retention = word;
-          if (word.seconds !== null) {
-            until = new Date(Date.parse(found.marker.updatedAt) + word.seconds * 1000).toISOString();
-            eligible = at.getTime() >= Date.parse(until);
-          }
-          // With an unreadable word, `until` stays null and the episode stays: fail closed.
-        }
-        ordered.push({
-          order: `${found.marker.updatedAt}\u0000${messageId}\u0000${fallbackKeyOf(recipient, messageId)}`,
-          candidate: { messageId, recipient, kind, ageSeconds, eligible, until },
-        });
+      continue;
+    }
+    plan.scanned += 1;
+    const kind = finishedKind(found.marker);
+    if (kind === null) continue;
+    const { recipient, messageId } = found.marker;
+    const ageSeconds = Math.max(0, Math.round((at.getTime() - Date.parse(found.marker.updatedAt)) / 1000));
+    let eligible = kind !== 'expired';
+    let until: string | null = null;
+    if (kind === 'expired') {
+      const key = fallbackKeyOf(recipient, '');
+      let word = words.get(key);
+      if (word === undefined) {
+        yield;
+        word = fallbackRetentionOf(ctx, recipient, at);
+        words.set(key, word);
       }
+      if (plan.retention === null) plan.retention = word;
+      if (word.seconds !== null) {
+        until = new Date(Date.parse(found.marker.updatedAt) + word.seconds * 1000).toISOString();
+        eligible = at.getTime() >= Date.parse(until);
+      }
+      // With an unreadable word, `until` stays null and the episode stays: fail closed.
     }
-    if (entriesInChunk >= FALLBACK_STEP_CHUNK_ENTRIES || performance.now() - chunkStart >= FALLBACK_STEP_CHUNK_MS) {
-      entriesInChunk = 0;
-      chunkStart = performance.now();
-      yield;
-    }
+    ordered.push({
+      order: `${found.marker.updatedAt}\u0000${messageId}\u0000${fallbackKeyOf(recipient, messageId)}`,
+      candidate: { messageId, recipient, kind, ageSeconds, eligible, until },
+    });
   }
+  if (ordered.length >= DIR_SCAN_CHUNK) yield;
   ordered.sort((a, b) => (a.order < b.order ? -1 : a.order > b.order ? 1 : 0));
+  if (ordered.length >= DIR_SCAN_CHUNK) yield;
   plan.candidates = ordered.map((entry) => entry.candidate);
   return plan;
 }
@@ -1430,27 +1412,7 @@ export function* reclaimSteps(
 ): Generator<void, { reclaimed: number; kept: number; scanned: number }> {
   const locksDir = join(dirname(historyPath(ctx.team.project, ctx.root, ctx.home)), 'locks');
   const limit = options.limit ?? 64;
-  let entries: { name: string; isDirectory(): boolean }[] = [];
-  try {
-    entries = readdirSync(locksDir, { withFileTypes: true });
-  } catch {
-    entries = [];
-  }
-  const names: string[] = [];
-  let entriesInChunk = 0;
-  let chunkStart = performance.now();
-  for (const entry of entries) {
-    entriesInChunk += 1;
-    if (entry.isDirectory() && FALLBACK_LOCK_DIR.test(entry.name)) {
-      names.push(entry.name);
-    }
-    if (entriesInChunk >= FALLBACK_STEP_CHUNK_ENTRIES || performance.now() - chunkStart >= FALLBACK_STEP_CHUNK_MS) {
-      entriesInChunk = 0;
-      chunkStart = performance.now();
-      yield;
-    }
-  }
-  names.sort();
+  const names = yield* folderNamesSteps(locksDir, (name) => FALLBACK_LOCK_DIR.test(name));
   let reclaimed = 0;
   let kept = 0;
   let scanned = 0;
@@ -1464,9 +1426,12 @@ export function* reclaimSteps(
   return { reclaimed, kept, scanned };
 }
 
-/** The store of episodes whose record lives under `recipient.root`. */
+/** The episode's store, keyed by the RECEIVING team's project over the receiving root — the
+ *  same folder the receiver-side watch and sweep resolve. `CanonicalRecipient.team` is fixed to
+ *  the receiver's project when the send begins, so a cross-root episode has one lock folder, one
+ *  pair of ledgers and one archive whichever side acts. */
 function storeDirOf(ctx: EscalationContext, recipient: CanonicalRecipient): string {
-  return dirname(historyPath(ctx.team.project, recipient.root, ctx.home));
+  return dirname(historyPath(recipient.team, recipient.root, ctx.home));
 }
 
 function escalateOne(
@@ -1635,7 +1600,7 @@ function flushOutbox(
     duplicate = true;
   } else {
     const result = appendEvent(
-      ctx.team.project,
+      marker.recipient.team,
       marker.recipient.root,
       ctx.home,
       input,
@@ -1686,7 +1651,7 @@ type PublicationRead =
 
 function publicationPathOf(ctx: EscalationContext, recipient: CanonicalRecipient, messageId: string): string {
   return join(
-    dirname(historyPath(ctx.team.project, recipient.root, ctx.home)),
+    dirname(historyPath(recipient.team, recipient.root, ctx.home)),
     publicationLedgerFileName(recipient, messageId),
   );
 }
@@ -1700,6 +1665,45 @@ function publicationOf(
   recordId: string,
 ): PublicationRead {
   const path = publicationPathOf(ctx, recipient, messageId);
+  const direct = publicationAt(path, recordId, ctx.home);
+  // One release before the store key was made canonical, a cross-root episode filed this ledger
+  // under the SENDING team's project over the receiving root. An episode straddling the release
+  // may therefore have published under that sibling store, and honoring it is the difference
+  // between one escalation and two. The canonical ledger still decides alone; only its quiet
+  // `none` consults the sibling stores over the same root hash, and the bridge never refuses —
+  // it can only turn `none` into the published record. It reads, never writes, and one release
+  // after the key became canonical no new episode can leave a publication behind in a sibling.
+  if (direct.kind !== 'none') return direct;
+  // Every sibling is consulted in folder order until one holds a record that verifies for
+  // this recordId: an earlier sibling holding junk, an unrelated ledger or a foreign-signed
+  // record must not shadow the store that holds the real publication, or the replay would
+  // publish the escalation a second time. A sibling that does not verify is passed over,
+  // never a refusal — the bridge keeps its word either way.
+  for (const legacy of legacyPublicationCandidates(recipient, messageId, path)) {
+    const bridged = publicationAt(legacy, recordId, ctx.home);
+    if (bridged.kind === 'ok') return bridged;
+  }
+  return direct;
+}
+
+/** The one-release bridge's candidates, in stable folder order: the episode's publication
+ *  ledger under each sibling store folder of the same receiving root (the pre-fix,
+ *  sender-keyed ones) that holds the file. */
+function legacyPublicationCandidates(recipient: CanonicalRecipient, messageId: string, canonicalPath: string): string[] {
+  const canonicalDir = dirname(canonicalPath);
+  const suffix = basename(canonicalDir).match(/[0-9a-f]{12}$/);
+  if (suffix === null) return [];
+  const fileName = publicationLedgerFileName(recipient, messageId);
+  const candidates: string[] = [];
+  for (const name of folderNames(dirname(canonicalDir))) {
+    if (!name.endsWith(`-${suffix[0]}`) || name === basename(canonicalDir)) continue;
+    const candidate = join(dirname(canonicalDir), name, fileName);
+    if (existsSync(candidate)) candidates.push(candidate);
+  }
+  return candidates;
+}
+
+function publicationAt(path: string, recordId: string, home: string): PublicationRead {
   const text = readNoFollow(path);
   if (text === null) return { kind: 'unreadable', reason: `${path}: the publication ledger could not be read` };
   let found: SignedEventRecord | null = null;
@@ -1717,7 +1721,7 @@ function publicationOf(
     const entry = parsed as Record<string, unknown>;
     if (entry.recordId !== recordId) continue;
     const record = signedRecordOf(entry.record);
-    if (record === null || !verifies(record, ctx.home)) {
+    if (record === null || !verifies(record, home)) {
       return { kind: 'unreadable', reason: `${path}: the published record is not a verified event` };
     }
     found = record;
@@ -1732,7 +1736,7 @@ function recordPublication(
   record: SignedEventRecord,
 ): { ok: true } | { ok: false; reason: string } {
   const wrote = appendStoreLine(
-    ctx.team.project,
+    marker.recipient.team,
     marker.recipient.root,
     ctx.home,
     publicationLedgerFileName(marker.recipient, marker.messageId),
@@ -1849,71 +1853,116 @@ function markerAtCached(path: string): MarkerRead {
   return read;
 }
 
+/** Entries read from a directory or marker list before yielding to the slice clock. */
+export const FALLBACK_STEP_CHUNK_ENTRIES = 64;
+
+/** The wall-clock turn cap shared with the sliced fallback driver. */
+export const FALLBACK_STEP_CHUNK_MS = 50;
+
+const DIR_SCAN_CHUNK = FALLBACK_STEP_CHUNK_ENTRIES;
+
 /** All markers under a root's transport tree, sessions and seats sorted so a pass is ordered. A
  *  marker that cannot be trusted is returned as its path, never rewritten from a guess. */
-function markersUnder(root: string): ({ kind: 'ok'; path: string; marker: FallbackMarker } | { kind: 'unreadable'; path: string })[] {
-  return drainGenerator(markersUnderSteps(root));
-}
-
 function* markersUnderSteps(
   root: string,
 ): Generator<void, ({ kind: 'ok'; path: string; marker: FallbackMarker } | { kind: 'unreadable'; path: string })[]> {
   const found: ({ kind: 'ok'; path: string; marker: FallbackMarker } | { kind: 'unreadable'; path: string })[] = [];
   const base = join(root, '.agents', 'send-drops');
   const seen = new Set<string>();
-  let entriesInChunk = 0;
-  let chunkStart = performance.now();
-  for (const session of folderNames(base)) {
+  let markerCount = 0;
+  for (const session of yield* folderNamesSteps(base)) {
     const sessionDir = join(base, session);
-    for (const seat of folderNames(sessionDir)) {
+    for (const seat of yield* folderNamesSteps(sessionDir)) {
       const seatDir = join(sessionDir, seat);
-      for (const name of fileNames(seatDir)) {
-        entriesInChunk += 1;
-        if (name.endsWith('.fallback.json')) {
-          const path = join(seatDir, name);
-          seen.add(path);
-          const read = markerAtCached(path);
-          if (read.kind === 'ok') found.push({ kind: 'ok', path, marker: read.marker });
-          else if (read.kind === 'unreadable') found.push({ kind: 'unreadable', path });
-        }
-        if (entriesInChunk >= FALLBACK_STEP_CHUNK_ENTRIES || performance.now() - chunkStart >= FALLBACK_STEP_CHUNK_MS) {
-          entriesInChunk = 0;
-          chunkStart = performance.now();
-          yield;
-        }
+      for (const name of yield* fileNamesSteps(seatDir, (entry) => entry.endsWith('.fallback.json'))) {
+        markerCount += 1;
+        if (markerCount % DIR_SCAN_CHUNK === 0) yield;
+        const path = join(seatDir, name);
+        seen.add(path);
+        const read = markerAtCached(path);
+        if (read.kind === 'ok') found.push({ kind: 'ok', path, marker: read.marker });
+        else if (read.kind === 'unreadable') found.push({ kind: 'unreadable', path });
       }
     }
   }
   // A marker that vanished from this root leaves the cache with it, so a long-lived daemon holds
   // stamps for the tree it just walked and nothing older.
   const prefix = `${base}${sep}`;
+  let cacheScanned = 0;
   for (const path of markerCache.keys()) {
-    entriesInChunk += 1;
+    cacheScanned += 1;
+    if (cacheScanned % DIR_SCAN_CHUNK === 0) yield;
     if (path.startsWith(prefix) && !seen.has(path)) markerCache.delete(path);
-    if (entriesInChunk >= FALLBACK_STEP_CHUNK_ENTRIES || performance.now() - chunkStart >= FALLBACK_STEP_CHUNK_MS) {
-      entriesInChunk = 0;
-      chunkStart = performance.now();
-      yield;
-    }
   }
   return found;
+}
+
+function* folderNamesSteps(dir: string, predicate?: (name: string) => boolean): Generator<void, string[]> {
+  const names: string[] = [];
+  let opened: Dir | null = null;
+  try {
+    opened = opendirSync(dir);
+  } catch {
+    return [];
+  }
+  try {
+    let scanned = 0;
+    for (;;) {
+      const entry = opened.readSync();
+      if (entry === null) break;
+      scanned += 1;
+      if (scanned % DIR_SCAN_CHUNK === 0) yield;
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      if (predicate !== undefined && !predicate(entry.name)) continue;
+      names.push(entry.name);
+    }
+  } catch {
+    return [];
+  } finally {
+    try {
+      opened.closeSync();
+    } catch {}
+  }
+  if (names.length >= DIR_SCAN_CHUNK) yield;
+  names.sort();
+  return names;
+}
+
+function* fileNamesSteps(dir: string, predicate?: (name: string) => boolean): Generator<void, string[]> {
+  const names: string[] = [];
+  let opened: Dir | null = null;
+  try {
+    opened = opendirSync(dir);
+  } catch {
+    return [];
+  }
+  try {
+    let scanned = 0;
+    for (;;) {
+      const entry = opened.readSync();
+      if (entry === null) break;
+      scanned += 1;
+      if (scanned % DIR_SCAN_CHUNK === 0) yield;
+      if (!entry.isFile()) continue;
+      if (predicate !== undefined && !predicate(entry.name)) continue;
+      names.push(entry.name);
+    }
+  } catch {
+    return [];
+  } finally {
+    try {
+      opened.closeSync();
+    } catch {}
+  }
+  if (names.length >= DIR_SCAN_CHUNK) yield;
+  names.sort();
+  return names;
 }
 
 function folderNames(dir: string): string[] {
   try {
     return readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name)
-      .sort();
-  } catch {
-    return [];
-  }
-}
-
-function fileNames(dir: string): string[] {
-  try {
-    return readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isFile())
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
       .map((entry) => entry.name)
       .sort();
   } catch {

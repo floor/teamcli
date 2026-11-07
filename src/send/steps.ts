@@ -36,9 +36,19 @@ export function stepRecordId(id: string, step: string, tail?: string): string {
 }
 
 /** One step, appended under the message id's own record id. Never throws. */
-export function appendStep(store: StepStore, input: EventAppendInput, lockWaitMs = STEP_APPEND_MS): StepResult {
+export function appendStep(
+  store: StepStore,
+  input: EventAppendInput,
+  lockWaitMs = STEP_APPEND_MS,
+  options: { maxBytes?: number; kept?: number; maxTotalBytes?: number; retentionSeconds?: number } = {},
+): StepResult {
   try {
-    const result = appendEvent(store.project, store.root, store.home, input, { lockWaitMs, deduplicate: true });
+    const result = appendEvent(store.project, store.root, store.home, input, {
+      ...options,
+      lockWaitMs,
+      deduplicate: true,
+      retain: 'cap',
+    });
     return result.ok ? { ok: true, duplicate: result.duplicate } : { ok: false, reason: result.reason };
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : String(error) };
@@ -55,6 +65,7 @@ export type StepFields = {
   from: string;
   to: string;
   thread?: string;
+  rule?: string;
   ts: string;
 };
 
@@ -75,6 +86,7 @@ export function stagedStep(fields: StepFields): StepResult {
     ...base(fields),
     kind: 'message.staged',
     record_id: stepRecordId(fields.id, 'staged'),
+    ...(fields.rule === undefined ? {} : { rule: fields.rule }),
   });
 }
 
@@ -95,8 +107,15 @@ export function webhookStep(fields: StepFields, outcome: { kind: 'posted' | 'fai
 }
 
 /** One leg of the walk was attempted: the leg's name, the walk's outcome word and the
- *  milliseconds from the run's start to the attempt's end. */
-export function legStep(fields: StepFields, attempt: { route: string; outcome: string; ms: number; reason?: string }, lockWaitMs?: number): StepResult {
+ *  milliseconds from the run's start to the attempt's end. A typed wake that knows them adds the
+ *  two measurements the delivery bound is read from, both counted from the message's staging:
+ *  `submitMs` to the first read that showed its line gone after Enter, `workingMs` to the
+ *  profile's working screen. */
+export function legStep(
+  fields: StepFields,
+  attempt: { route: string; outcome: string; ms: number; submitMs?: number; workingMs?: number; reason?: string },
+  lockWaitMs?: number,
+): StepResult {
   return appendStep(
     fields.store,
     {
@@ -106,6 +125,8 @@ export function legStep(fields: StepFields, attempt: { route: string; outcome: s
       via: attempt.route,
       outcome: attempt.outcome,
       ms: Math.max(0, Math.round(attempt.ms)),
+      ...(attempt.submitMs === undefined ? {} : { submit_ms: Math.max(0, Math.round(attempt.submitMs)) }),
+      ...(attempt.workingMs === undefined ? {} : { working_ms: Math.max(0, Math.round(attempt.workingMs)) }),
       ...(attempt.reason === undefined ? {} : { reason: attempt.reason }),
     },
     lockWaitMs,

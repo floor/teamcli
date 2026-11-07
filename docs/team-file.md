@@ -13,8 +13,8 @@ one-line `{ }` and `[ ]`, plain and quoted values, comments; anchors, aliases, m
 block scalars, a second document and duplicate keys are refused, with the line number. The JSON
 Schema ships at `schema/team.schema.json`, and every write is validated against it and the rules
 behind it before it is stored. The format is walked below, by example; after it, this page
-documents the sections one by one: `tasks`, `seats`, `delivery_order`, `webhook`,
-`sender_name`, `grant`, `delegates`, tempo, and `budgets` with the format.
+documents the sections one by one: `tasks`, `seats`, `delivery_order`, `messaging.store`,
+`webhook`, `sender_name`, `grant`, `delegates`, tempo, and `budgets` with the format.
 
 ## Editing with team config
 
@@ -138,13 +138,30 @@ budgets:                      # the owner's: reserve or floor per account, marks
       sources: [status_line]  # the figure comes off Codex's status line
 ```
 
-- `session` names the herdr session and defaults to `project`; `--session` overrides it.
-- `in_project` names the project this team sits in, by the project's display name (one path
+- `session` names the herdr session; `--session` overrides it. The default is
+  `<entity>-<project>` for a team that sits in a project (`in_project:`) and is its namesake,
+  `<entity>-<project>-<team>` for one that is not — two teams of one project never share a
+  default — and `<entity>-<team>` (the team's name alone with no entity) for a team that is its
+  own project. An explicit `session:` still wins, and one that differs from the default draws a
+  one-line warning, because a name that drifts from its entity and project is how a stale
+  session gets reused. A team the registry already lists keeps its recorded session over any
+  default, so no default's move renames a live team; `team check` names the move and the
+  `session:` line that keeps the old name.
+- `in_project` names this team's home project, by the project's display name (one path
   segment, 128 characters at most), while `project:` keeps meaning the team's own name;
-  `project_lead: true` beside it marks the team that leads that project — one team per project,
+  `project_lead: true` beside it marks the team that leads its home project — one team per project,
   and `team check` refuses a second. The project's record then carries the lead: the agent of the
   seat this record's `leads: true` marks as the team's lead, re-resolved on every launch, so a
-  mark that moves in the record moves the record with it.
+  mark that moves in the record moves the record with it. Joining a project also moves the
+  default session, as the `session` bullet above states.
+- `also_in: [project-y, project-z]` lists additional projects this team serves, using the same
+  short display names as `in_project`. It requires `in_project`, cannot repeat the home or a
+  served project, and defaults to an empty list. Only the home supplies settings, policies and
+  rules; `project_lead: true` leads the home alone. Both membership fields are non-owner sections
+  and change no approval fingerprint.
+  Served reach is recorded only by an owner launch or registration in force, for existing
+  projects of the same entity. A seat, delegate or dev-mode run preserves the previously
+  recorded list; declaring an unknown or foreign served project creates no project or reach.
 - `entity` names the entity this team belongs to (one path segment, 128 characters at most): the
   level above its project that a setting, the lobby's `<entity>` folder and a lead pair's reach
   are read from, and the name that makes two teams one entity's when both records carry it.
@@ -153,7 +170,16 @@ budgets:                      # the owner's: reserve or floor per account, marks
   that lobby for the session. The `workspace.mode` bullet below states the whole resolution order.
 - `coordinator` and `operator` name seats: the coordinator dispatches work, the operator receives
   the watch's reports. `leads: true` on a seat is the same lead, spelled on the seat
-  the way `coordinator:` names it. `assistant: true` marks a seat as its entity's assistant — the
+  the way `coordinator:` names it.
+- `lead` names the seat that leads when no seat carries `leads: true`, by a seat name in this
+  file — the team level of the default lead's chain. It is a default, never a power:
+  the mark still decides the lead whenever the file has one, and the seat `lead` names is the
+  same resolved lead everything else already reads. A file that marks no seat takes its lead
+  from the narrowest level that declares one: its own `lead:`, then the home project's
+  `lead_seat:`, the entity's `lead:` in `entities.yaml`, and the universe's default — which
+  this build reads from a top-level `lead:` in `~/.config/team/settings.yaml` until the
+  universe's own reader lands. A word that names no declared seat is refused, at the level that
+  named it; a file and a chain that both name none keeps the refusal it always had. `assistant: true` marks a seat as its entity's assistant — the
   one seat `team send` admits to its entity's lead coordinator, by its place in the chain and
   never by a role's name. At most one seat of a record carries the mark, and never a seat with
   `count`; the entity's assistant is the first mark found walking its teams in chain order — the
@@ -515,6 +541,14 @@ declares it for every seat of that CLI in its profile (`public_only: true` there
 can only add the guard, never remove it, and `public_only: false` reads as absent. The key is
 part of the seat's digest, and a record that marks no seat keeps every digest it had.
 
+`compact_delivery` is optional on a seat: `compact_delivery: true` narrows a cross-session socket
+frame delivered to that seat to the compact sender header, the body's first non-empty content line,
+and the one-line reader footer `↩ team show <prefix> · team reply <prefix> · team ack <prefix>`. The
+stored record in `.agents/send-drops/<session>/<seat>/<id>` keeps the full body, and the seat reads
+the whole message on demand with [`team show <id>`](commands/show.md). `compact_delivery: false`
+reads as absent. The key is part of the seat's digest, and a record that marks no seat keeps every
+digest it had.
+
 `inbound` is optional on a seat: its own word on cross-session socket frames. `accept`
 authorizes a send's `socket` leg for any launch; `hold` and `refuse` never let it dial — the
 explicit opt-out — and an omitted key leaves the choice to the launch. A send always needs the
@@ -538,6 +572,15 @@ The levels above a seat declare their own words — the machine's `~/.config/tea
 an entity's `entities.yaml` entry, a project's record — all under `liveness`, and the watch
 section's `idle_first`, `idle_owner` and `blind_after` are the team's own, described in
 [`team watch`](commands/watch.md).
+
+`reach` is optional on a seat: the grant that projects the seat onto the machine's reach roster
+(`<lobby>/reach-roster.json`, regenerated by `up`, `add` and `remove`) for the bridge and shuttle
+readers. A seat is projected only when its `to` names a front the tool knows. Beside `to`, three
+words default from the seat itself: `alias` (the seat's name, lowercased), `route` (the alias),
+and `key_id` (`seat-<alias>-1`). `guard_dir` is the folder the seat's public key is read from —
+an absolute path, defaulting to `<lobby>/guard-floor-<alias>`; naming it is how a guard folder
+that moved (the runtime-home migration prints the line) is followed. The grant is part of the
+seat's digest, so writing or editing it needs a new approval.
 
 ## `delivery_order`
 
@@ -568,22 +611,27 @@ because the signed record is stored before the walk begins.
 delivery_order: [typed]
 ```
 
-- The word is one or more of `socket`, `native`, `mcp-inbox`, `typed`, `drop`, `headless-resume`
+- The word is one or more of `socket`, `native`, `typed`, `drop`, `headless-resume`
   and `session`, each at most once, in the order a send tries them. A written key with no
   legs is `delivery_order needs at least one leg:
-  socket, native, mcp-inbox, typed, drop, headless-resume, session` — the default order is the
+  socket, native, typed, drop, headless-resume, session` — the default order is the
   absence of
   the key. A word outside
-  the seven is `delivery_order "<word>" must be one of: socket, native, mcp-inbox, typed, drop, headless-resume, session`; a
-  repeated one is `delivery_order names "<word>" twice`.
+  the six is `delivery_order "<word>" must be one of: socket, native, typed, drop, headless-resume, session`; a
+  repeated one is `delivery_order names "<word>" twice`. A file that still names the retired
+  `mcp-inbox` word is read, never an error: the word is dropped from the order, and
+  `team check` says `delivery_order [...] in team config names mcp-inbox, which is no longer
+  a leg; remove it` once per team and per seat. A new write of the word through `team config`
+  is refused with that reason.
 - The seven legs: `socket` is this build's own frame on the receiving Claude session's
   cross-session socket, a signed copy written first, dialed only for a seat whose launch
   declares `crossSessionInbound: accept` — an `inbound: accept` here authorizes any launch, an
   explicit `hold` or `refuse` opts out, and with no word a seat TeamCLI launched is authorized
   by its launch; `native` is the sender's own cross-session SendMessage, recorded by the sender
-  with `--confirm`; `mcp-inbox` is a name this build reads and never walks — the MCP inbox is
-  the store's reader, and the walk reports the word `unavailable` rather than attempting the
-  leg; `typed` is the 0600 drop file and one composer trigger line; `drop` is the same 0600
+  with `--confirm`; `mcp-inbox` is no longer one of the legs — the MCP inbox is
+  the store's reader, so the name is retired: a word that still names it is read as an alias
+  and dropped from the order, and the walk never sees it;
+  `typed` is the 0600 drop file and one composer trigger line; `drop` is the same 0600
   drop file and nothing typed into the pane at all — no trigger line and no socket frame, its
   run ending `queued, not woken` until the seat's own read writes the receipt;
   `headless-resume` is the seat's own CLI resumed for one turn without a TUI pane, which no
@@ -625,6 +673,65 @@ delivery_order: [typed]
 - What a walk does with each leg — a leg takes the send or is recorded as a failure and the next
   one is tried — is [team send](commands/send.md)'s. A `--wait` send walks the same order and
   then awaits a reply record on the thread.
+
+## `messaging.store`
+
+The store a send leaves for this team's seats. It is not an owner section: writing or changing it
+is an ordinary change, and a file that writes none keeps the shipped value. It is written under
+the file's `messaging` key, or on a seat's own, and takes one of three values, ordered by how
+much a send keeps — the safe side is the default:
+
+- `first` (the shipped value) writes the signed record into the receiving seat's folder before any
+  leg wakes it, and leaves it there. The record is what the retry, the unread re-wake, the read
+  receipt and the `queued, not woken` flag read, and it is there for a seat no wake reached.
+- `parallel` starts that same write beside the first waking leg and ends the send only when both
+  settle: a frame the receiver took while the copy could not be written is `sent (unconfirmed)`,
+  never `delivered`, and a write that settles leaves the record and the wake in exactly the
+  `first` shape.
+- `none` keeps no copy at all. The walk is narrowed to the legs that carry the body themselves —
+  `socket` and `session` — and every other leg the order names is set aside with its reason (a
+  runtime queue or a headless resume only hands the seat a pointer to the stored copy, which
+  nothing writes under `none`); an order left with no body-carrying leg refuses the send before
+  anything is written. A socket frame under `none` carries the signed record's exact bytes in its
+  `record` field: they are signed, never stored, and a receiver verifies them with the same key
+  check it applies to the folder copy. What the copy would have carried is given up: the retry,
+  the unread re-wake, the read receipt and the `queued, not woken` flag. A person's pane is
+  reached by the stored copy alone, so a send to a seat the file marks `human: true` under `none`
+  is refused.
+
+```yaml
+messaging:
+  store: parallel
+```
+
+```yaml
+seats:
+  - role: implementer
+    name: helper
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Sonnet
+    version: "5.5"
+    launch: claude --model claude-sonnet-5-5
+    messaging:
+      store: none
+```
+
+A seat's word is a field of the built seat, so it is in the seat's digest — writing or changing
+it changes the digest, like its `delivery_order` — and it is omitted when the file writes none,
+so every file that wrote no word keeps the digest it had.
+
+The receiving seat's chain is read outermost first: the entity's signed record, the project's, the
+file's own word, then the seat's own. A signed record at a level shadows the file's word at that
+level — a record that is expired or holds a value the catalogue cannot read leaves the level
+silent rather than reviving the word it replaced. Durability is the safe side, so only the entity
+or the project may loosen the shipped `first`: a team or seat word that loosens (`first` toward
+`parallel` or `none`, `parallel` toward `none`) is set aside and the value in force stands, while
+either level may always tighten back toward `first`. A signed record the chain cannot read at the
+project, team or seat level refuses the send — it could hide a tightening word — while an entity
+source that cannot be read leaves `first` standing, which keeps at least as much as any word it
+could have held. `team check` notes every seat whose chain declares `none`, naming what its sends
+give up, or that a send to a person's seat is refused.
 
 ## `webhook`
 
@@ -758,10 +865,11 @@ grant:
     - reload
 ```
 
-- `session` is the team's own session: the `session` key, or `<entity>-<project>` when that key is
-  omitted and the record names an entity (the project name alone when it names none). Any other value
+- `session` is the team's own session: the `session` key, or the default the `session` bullet at
+  the top of this reference derives when that key is omitted. Any other value
   is `grant.session must be the file's session "<session>": "<written>"`.
-- `seat` is the orchestrator's name, the one `coordinator:` or `leads: true` resolves. The
+- `seat` is the orchestrator's name: the one `coordinator:` or `leads: true` resolves, or the
+  default the lead chain resolves when the file marks none. The
   operator's name, and any other name, is `grant.seat must name the orchestrator "<seat>":
   "<written>"`.
 - `scope` names acts from the closed set `up`, `down`, `approve`, `init`, `reload` and `swap`. The
@@ -864,3 +972,47 @@ items, one that is unchecked and carries no `claimed:` or `done:` marker; `team 
 idle workers with empty queues, and the unclaimed items left in that backlog, after
 `watch.team_idle`. See [queue reports](commands/watch.md#queue-reports) for the task format and
 unknown readings.
+
+## Grok command deny settings
+
+The signed team policy `grok-command-deny` accepts `off`, `git`, and `git-and-tests`; it is off
+unless declared at team scope. `team policy set team` writes the signed declaration under
+`policies:`. Entity, project, and seat declarations are refused.
+
+For Cursor seats launching Grok, each launch and restart adds `Shell(git)` to
+`permissions.deny` in `.cursor/cli.json` in the seat's own guarded start folder. `git-and-tests` also adds
+`Shell(bun test)`. Existing allow rules, deny rules, and unrelated settings stay in place;
+generation refuses malformed settings, and repeating it adds no duplicate. Turning the policy
+off contributes no rule and strips no existing deny settings or launch arguments.
+
+For native Grok, the launch receives repeatable arguments: `--deny 'Bash(git)'` and
+`--deny 'Bash(git *)'`, plus `--deny 'Bash(bun test)'` and `--deny 'Bash(bun test *)'` for
+`git-and-tests`. Arguments are placed before a prompt delimiter and retained on the recorded
+recipe. An unsupported or unreadable native launch is refused rather than guessing where an
+option value ends. These adapter inputs are tested with synthetic settings. The vendor formats
+are described in [Cursor permissions](https://docs.cursor.com/cli/reference/permissions) and
+[Grok permissions](https://docs.x.ai/build/features/permissions).
+
+These first-word rules are a guardrail for routine commands. Wrapper commands, aliases, and
+absolute executable paths may match differently; these synthetic tests do not measure the
+vendors’ matchers. Keep the narrowed Grok sandbox enabled: command denies do not replace its
+filesystem restrictions.
+
+Cursor placement requires the same own-folder proof as the launch. It merges through held
+directories, refuses links and malformed or oversized files, publishes the whole file, then
+verifies it before starting the command. A failure leaves the seat out. The relative-file
+adapter must be available: Bun supplies it; Node needs its FFI capability enabled (for example,
+`node --experimental-ffi dist/cli.js up`). The published CLI runs on Node: on a normal install,
+turning this policy on prevents affected Cursor seats from launching because guarded placement
+is unavailable. The default `off` writes nothing. Native Grok's argv placement needs no file
+adapter.
+
+The Cursor file remains writable by the seat. It can remove a deny mid-session and loosen its
+settings until its next launch or restart regenerates and verifies the file. Native Grok's
+required denies are launch arguments; editing a project config cannot remove those arguments.
+
+`team check` reads Cursor's file only in its recorded, guarded launch folder and checks native
+Grok's recorded launch arguments. Like launch, it uses a verified registry binding's model when
+one governs the seat, and the declared model otherwise. It names the seat and missing rules, or the absence of a safe
+recorded folder; it repairs no config. Missing, malformed, linked, or oversized Cursor files
+report a gap. Other models and human or stopped seats are left alone.

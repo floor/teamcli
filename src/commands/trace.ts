@@ -17,11 +17,12 @@
 
 import { homedir } from 'node:os';
 import { readArgs } from '../args.ts';
-import { EVENT_RECORD_ID, readEvents, type EventPayload } from '../bus/log.ts';
+import { EVENT_RECORD_ID, readEventsMatching, type EventPayload } from '../bus/log.ts';
 import { withoutFileOffer } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
 import { contextLine, hasJsonFlag, pluralCount, renderTable, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
+import { statusReaderReason } from '../status/reported-reason.ts';
 
 export const USAGE = `Usage: team trace <id> [--json]
 
@@ -79,15 +80,15 @@ export async function runTrace(argv: string[], io: Io, sources: TraceSources = r
   }
   const { team, root } = loaded;
 
-  const read = readEvents(team.project, root, sources.home);
+  // The record id is the key: the bare id is the arrival, and every step's id is the message id
+  // plus its own tail. Both match, and a full step id matches only its own step. The sealed
+  // segments' signed indexes answer the filter, so only the steps' own lines are read.
+  const read = readEventsMatching(team.project, root, sources.home, (entry) =>
+    entry.record_id === id || entry.record_id.startsWith(`${id}:`),
+  );
   if (!read.ok) return unreadable(io, read.reason, json);
 
-  // The record id is the key: the bare id is the arrival, and every step's id is the message id
-  // plus its own tail. Both match, and a full step id matches only its own step.
-  const found = read.events
-    .filter((record) => record.payload.record_id === id || record.payload.record_id.startsWith(`${id}:`))
-    .map((record) => record.payload)
-    .sort((a, b) => a.seq - b.seq);
+  const found = read.events.map((record) => record.payload).sort((a, b) => a.seq - b.seq);
   const steps: TraceStep[] = found.map((payload, index) => {
     const previous = index === 0 ? null : found[index - 1] as EventPayload;
     return { payload, delta: previous === null ? null : deltaOf(previous, payload) };
@@ -141,9 +142,17 @@ function deltaText(delta: number | null): string {
   return delta > 0 ? `+${String(delta)} ms` : `${String(delta)} ms`;
 }
 
+/** The NOTE a `seat.status` row shows. The reason is the seat's own word, quoted and labelled. */
+export function statusEventNote(payload: EventPayload): string {
+  return statusReaderReason(payload.seat ?? '', payload.status_reason ?? '');
+}
+
 /** One row: the step's own fields, never a word the event does not carry. */
 function rowOf(step: TraceStep): string[] {
   const payload = step.payload;
+  const note = payload.kind === 'seat.status'
+    ? statusEventNote(payload)
+    : payload.reason ?? (payload.rule === undefined ? '-' : `admitted by: ${payload.rule}`);
   return [
     timeOf(payload.ts),
     payload.kind,
@@ -151,7 +160,7 @@ function rowOf(step: TraceStep): string[] {
     payload.outcome ?? '-',
     payload.ms === undefined ? '-' : String(payload.ms),
     deltaText(step.delta),
-    payload.reason ?? '-',
+    note,
   ];
 }
 
@@ -180,9 +189,12 @@ function document(
         ...(payload.to === undefined ? {} : { to: payload.to }),
         ...(payload.seat === undefined ? {} : { seat: payload.seat }),
         ...(payload.thread === undefined ? {} : { thread: payload.thread }),
+        ...(payload.rule === undefined ? {} : { rule: payload.rule }),
         ...(payload.via === undefined ? {} : { via: payload.via }),
         ...(payload.outcome === undefined ? {} : { outcome: payload.outcome }),
         ...(payload.ms === undefined ? {} : { ms: payload.ms }),
+        ...(payload.submit_ms === undefined ? {} : { submit_ms: payload.submit_ms }),
+        ...(payload.working_ms === undefined ? {} : { working_ms: payload.working_ms }),
         ...(payload.reason === undefined ? {} : { reason: payload.reason }),
         delta_ms: step.delta,
       };

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendEvent, readEvents, type EventPayload } from '../src/bus/log.ts';
@@ -10,9 +10,9 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { appendHistory } from '../src/send/history.ts';
 import { dropMessage } from '../src/send/native.ts';
 import { markPending } from '../src/send/pending.ts';
-import { signRecord, type RecordPayload } from '../src/send/record.ts';
+import { signReceiptPayload, signRecord, type RecordPayload } from '../src/send/record.ts';
 import { emptySession, updateState } from '../src/state.ts';
-import { messageKeyOf, RECEIPT_DOMAIN, signDomain } from '../src/store/keys.ts';
+import { messageKeyOf, messageKeyPath, RECEIPT_DOMAIN, signDomain } from '../src/store/keys.ts';
 
 const dirs: string[] = [];
 
@@ -47,6 +47,9 @@ function makeScratch(): { root: string; home: string } {
   const root = join(base, 'repo');
   const home = join(base, 'home');
   mkdirSync(join(root, '.agents'), { recursive: true });
+  // The pass reads the team's configuration once to know which seat may write a clearance: a
+  // receipt naming any other seat raises nothing.
+  writeFileSync(join(root, '.agents', 'team.yaml'), SAMPLE_TEAM_YAML);
   return { root, home };
 }
 
@@ -90,11 +93,22 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     const seatDir = join(root, '.agents', 'send-drops', 'acme', 'worker-1');
     mkdirSync(seatDir, { recursive: true });
 
-    // 1. Signed drop record written by a tool that crashed before publishing to the bus.
+    // 1. Signed drop record written by a tool that crashed before publishing to the bus, with
+    //    the three receipts a read and an answer leave beside it. Every build writes them as
+    //    signed envelopes under the `.json` names, so the pass must raise each one.
     dropRecord({ root, home }, 'worker-1', 'drop-1', { ts: '2026-10-18T12:00:00.000Z' });
-    dropMessage(seatDir, 'drop-1.delivered', '{"ok":true}');
-    dropMessage(seatDir, 'drop-1.read', '{"ok":true}');
-    dropMessage(seatDir, 'drop-1.replied', '{"ok":true}');
+    for (const status of ['delivered', 'read', 'replied'] as const) {
+      const receipt = signReceiptPayload({
+        kind: 'receipt',
+        status,
+        id: 'drop-1',
+        to: 'worker-1',
+        root,
+        session: 'acme',
+        at: '2026-10-18T12:01:00.000Z',
+      }, home);
+      writeFileSync(join(seatDir, `drop-1.${status}.json`), `${JSON.stringify(receipt, null, 2)}\n`);
+    }
 
     // 2. Held send with `.pending` marker past held_threshold_seconds (15m old >= 600s).
     dropRecord({ root, home }, 'worker-1', 'drop-2', { from: 'owner', ts: '2026-10-18T11:55:00.000Z' });
@@ -192,6 +206,362 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
       .map((record) => record.payload.record_id);
     expect(arrived).toEqual(['drop-9']);
   });
+
+  test('a lead-ack receipt is raised as cleared by its writer, never as the seat\'s own read', () => {
+    const { root, home } = makeScratch();
+    const seatDir = join(root, '.agents', 'send-drops', 'acme', 'worker-1');
+    mkdirSync(seatDir, { recursive: true });
+    dropRecord({ root, home }, 'worker-1', 'drop-9');
+    dropRecord({ root, home }, 'worker-1', 'drop-10');
+    // The two receipts have the same name shape and signature; only the lead's names who cleared.
+    const cleared = signReceiptPayload({
+      kind: 'receipt',
+      status: 'read',
+      id: 'drop-9',
+      to: 'worker-1',
+      root,
+      session: 'acme',
+      at: '2026-10-18T12:05:00.000Z',
+      read_by: 'lead-ack:clerk',
+    }, home);
+    writeFileSync(join(seatDir, 'drop-9.read.json'), `${JSON.stringify(cleared, null, 2)}\n`);
+    const plain = signReceiptPayload({
+      kind: 'receipt',
+      status: 'read',
+      id: 'drop-10',
+      to: 'worker-1',
+      root,
+      session: 'acme',
+      at: '2026-10-18T12:06:00.000Z',
+    }, home);
+    writeFileSync(join(seatDir, 'drop-10.read.json'), `${JSON.stringify(plain, null, 2)}\n`);
+
+    const pass = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      now: new Date('2026-10-18T12:10:00.000Z'),
+    });
+    expect(pass.ok).toBe(true);
+    if (!pass.ok) return;
+    const reads = pass.raised.filter((record) => record.payload.kind === 'message.read');
+    const byId = (id: string) => reads.find((record) => record.payload.record_id === id);
+    // The lead's receipt is a clearance, and the step says who wrote it. It is still not the
+    // seat's read, so no `delivered (read)` consequence follows from it anywhere.
+    expect(byId('drop-9:read')?.payload.outcome).toBe('cleared by clerk');
+    expect(byId('drop-9:read')?.payload.reason).toBe('cleared by clerk');
+    // A receipt without `read_by` is the ordinary read it always was, with no clearance note.
+    expect(byId('drop-10:read')).toBeDefined();
+    expect(byId('drop-10:read')?.payload.outcome).toBeUndefined();
+    expect(byId('drop-10:read')?.payload.reason).toBeUndefined();
+  });
+
+  test('a clearance naming a seat that is not the lead raises no read step at all', () => {
+    // The message key is the checkout's, shared by every seat: a signed `read_by` naming any name
+    // proves only that a seat wrote it. The pass admits the owner or the team's own lead, so a
+    // receipt naming another seat is not a clearance and the reader is never reported as one.
+    const { root, home } = makeScratch();
+    const seatDir = join(root, '.agents', 'send-drops', 'acme', 'worker-1');
+    mkdirSync(seatDir, { recursive: true });
+    dropRecord({ root, home }, 'worker-1', 'drop-11');
+    const forged = signReceiptPayload({
+      kind: 'receipt',
+      status: 'read',
+      id: 'drop-11',
+      to: 'worker-1',
+      root,
+      session: 'acme',
+      at: '2026-10-18T12:05:00.000Z',
+      read_by: 'lead-ack:op-1',
+    }, home);
+    writeFileSync(join(seatDir, 'drop-11.read.json'), `${JSON.stringify(forged, null, 2)}\n`);
+
+    const pass = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      now: new Date('2026-10-18T12:10:00.000Z'),
+    });
+    expect(pass.ok).toBe(true);
+    if (!pass.ok) return;
+    // `op-1` is a listed seat, not the coordinator: nothing settled, so nothing is raised for it.
+    const reads = pass.raised.filter((record) => record.payload.kind === 'message.read');
+    expect(reads.map((record) => record.payload.record_id)).not.toContain('drop-11:read');
+  });
+
+  test('a key-blind pass stores no verdict, so a keyed pass raises the signed read', () => {
+    // A pass that cannot read the message key cannot tell a signed receipt from a plant. It must
+    // leave the file for the next pass: storing an `unverified` verdict by stamp would keep a
+    // receipt this checkout signed unraised for the bus's whole lifetime.
+    const { root, home } = makeScratch();
+    const seatDir = join(root, '.agents', 'send-drops', 'acme', 'worker-1');
+    mkdirSync(seatDir, { recursive: true });
+    dropRecord({ root, home }, 'worker-1', 'drop-14');
+    const read = signReceiptPayload({
+      kind: 'receipt',
+      status: 'read',
+      id: 'drop-14',
+      to: 'worker-1',
+      root,
+      session: 'acme',
+      at: '2026-10-18T12:05:00.000Z',
+    }, home);
+    writeFileSync(join(seatDir, 'drop-14.read.json'), `${JSON.stringify(read, null, 2)}\n`);
+
+    const keyPath = messageKeyPath(home);
+    const hidden = `${keyPath}.hidden`;
+    const state = createReconcileState();
+    renameSync(keyPath, hidden);
+    try {
+      const blind = reconcilePass({
+        project: 'acme',
+        root,
+        session: 'acme',
+        home,
+        state,
+        now: new Date('2026-10-18T12:10:00.000Z'),
+      });
+      expect(blind.ok).toBe(true);
+      if (!blind.ok) return;
+      expect(blind.raised.filter((record) => record.payload.kind === 'message.read')).toHaveLength(0);
+    } finally {
+      renameSync(hidden, keyPath);
+    }
+
+    const keyed = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      state,
+      now: new Date('2026-10-18T12:11:00.000Z'),
+    });
+    expect(keyed.ok).toBe(true);
+    if (!keyed.ok) return;
+    expect(keyed.raised.filter((record) => record.payload.kind === 'message.read').map((record) => record.payload.record_id))
+      .toEqual(['drop-14:read']);
+
+    const again = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      state,
+      now: new Date('2026-10-18T12:12:00.000Z'),
+    });
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.raised.filter((record) => record.payload.kind === 'message.read')).toHaveLength(0);
+  });
+
+  test('an unsigned receipt raises no read step, least of all a clearance', () => {
+    // A `.read.json` beside a drop is a signed envelope in this build. An unsigned plant whose
+    // bytes this checkout's key never signed proves nothing by its name: it must leave no
+    // clearance some lead wrote, and no read step either, exactly as the settle side reads the
+    // same file.
+    const { root, home } = makeScratch();
+    const seatDir = join(root, '.agents', 'send-drops', 'acme', 'worker-1');
+    mkdirSync(seatDir, { recursive: true });
+    dropRecord({ root, home }, 'worker-1', 'drop-12');
+    dropRecord({ root, home }, 'worker-1', 'drop-13');
+    const forged = (id: string, readBy: string | undefined): string => JSON.stringify({
+      payload: {
+        kind: 'receipt',
+        status: 'read',
+        id,
+        to: 'worker-1',
+        root,
+        session: 'acme',
+        at: '2026-10-18T12:05:00.000Z',
+        ...(readBy === undefined ? {} : { read_by: readBy }),
+      },
+    }, null, 2);
+    writeFileSync(join(seatDir, 'drop-12.read.json'), `${forged('drop-12', 'lead-ack:clerk')}\n`);
+    writeFileSync(join(seatDir, 'drop-13.read.json'), `${forged('drop-13', undefined)}\n`);
+
+    const pass = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      now: new Date('2026-10-18T12:10:00.000Z'),
+    });
+    expect(pass.ok).toBe(true);
+    if (!pass.ok) return;
+    const reads = pass.raised
+      .filter((record) => record.payload.kind === 'message.read')
+      .map((record) => record.payload.record_id);
+    expect(reads).not.toContain('drop-12:read');
+    expect(reads).not.toContain('drop-13:read');
+  });
+
+
+  test('a bare or unsigned reply marker raises no step; a signed receipt raises the reply it is', () => {
+    const { root, home } = makeScratch();
+    const seatDir = join(root, '.agents', 'send-drops', 'acme', 'worker-1');
+    mkdirSync(seatDir, { recursive: true });
+    for (const id of [
+      'drop-bare-replied',
+      'drop-bare-delivered',
+      'drop-bare-read',
+      'drop-unsigned',
+      'drop-signed',
+      'drop-signed-delivered',
+      'drop-other-seat',
+    ]) {
+      dropRecord({ root, home }, 'worker-1', id);
+    }
+
+    // A bare name is a spelling no build writes: its name says nothing, and no envelope was
+    // signed under it, so it raises no step and leaves no reply that could pre-empt the record's.
+    dropMessage(seatDir, 'drop-bare-replied.replied', '{"payload":{"status":"replied"}}');
+    dropMessage(seatDir, 'drop-bare-delivered.delivered', '{"payload":{"status":"delivered"}}');
+    dropMessage(seatDir, 'drop-bare-read.read', '{"payload":{"status":"read"}}');
+    // An envelope with the right name and no signature proves nothing either, even when every
+    // field it names is this message's.
+    writeFileSync(join(seatDir, 'drop-unsigned.replied.json'), JSON.stringify({
+      payload: {
+        kind: 'receipt',
+        status: 'replied',
+        id: 'drop-unsigned',
+        to: 'worker-1',
+        root,
+        session: 'acme',
+        at: '2026-10-18T12:05:00.000Z',
+      },
+    }, null, 2));
+
+    // The receipts a real read and a real answer leave: this checkout's signed envelopes.
+    const envelope = (id: string, status: 'replied' | 'delivered', to: string) => signReceiptPayload({
+      kind: 'receipt',
+      status,
+      id,
+      to,
+      root,
+      session: 'acme',
+      at: '2026-10-18T12:05:00.000Z',
+    }, home);
+    writeFileSync(
+      join(seatDir, 'drop-signed.replied.json'),
+      `${JSON.stringify(envelope('drop-signed', 'replied', 'worker-1'), null, 2)}\n`,
+    );
+    writeFileSync(
+      join(seatDir, 'drop-signed-delivered.delivered.json'),
+      `${JSON.stringify(envelope('drop-signed-delivered', 'delivered', 'worker-1'), null, 2)}\n`,
+    );
+    // Signed with this checkout's key, but written to another seat's name: not this folder's
+    // message, so it settles nothing here, exactly as the settle side reads it.
+    writeFileSync(
+      join(seatDir, 'drop-other-seat.replied.json'),
+      `${JSON.stringify(envelope('drop-other-seat', 'replied', 'op-1'), null, 2)}\n`,
+    );
+
+    const pass = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      now: new Date('2026-10-18T12:10:00.000Z'),
+    });
+    expect(pass.ok).toBe(true);
+    if (!pass.ok) return;
+    const raised = pass.raised.map((record) => `${record.payload.kind}:${record.payload.record_id}`);
+    expect(raised).not.toContain('message.replied:drop-bare-replied:replied');
+    expect(raised).not.toContain('message.delivered:drop-bare-delivered:delivered');
+    expect(raised).not.toContain('message.read:drop-bare-read:read');
+    expect(raised).not.toContain('message.replied:drop-unsigned:replied');
+    expect(raised).toContain('message.replied:drop-signed:replied');
+    expect(raised).toContain('message.delivered:drop-signed-delivered:delivered');
+    expect(raised).not.toContain('message.replied:drop-other-seat:replied');
+    // Every signed record beside them still arrives: the names skipped are receipts, not drops.
+    for (const id of ['drop-bare-replied', 'drop-unsigned', 'drop-signed', 'drop-signed-delivered', 'drop-other-seat']) {
+      expect(raised).toContain(`message.arrived:${id}`);
+    }
+    // The answered step names the message's addressee and the sender its record signed.
+    const replied = pass.raised.find((record) => record.payload.record_id === 'drop-signed:replied');
+    expect(replied?.payload.to).toBe('worker-1');
+    expect(replied?.payload.from).toBe('clerk');
+
+    // Idempotent: the same real receipts raise nothing on the next pass, and the plants stay out.
+    const again = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      now: new Date('2026-10-18T12:11:00.000Z'),
+    });
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.raised.filter((record) => record.payload.kind !== 'message.arrived')).toHaveLength(0);
+  });
+
+  test('a key-blind pass stores no verdict, so a keyed pass raises the signed reply', () => {
+    // A pass that cannot read the message key cannot tell a signed receipt from a plant. It must
+    // leave the file for the next pass: storing an `unverified` verdict by stamp would keep a
+    // reply this checkout signed unraised for the bus's whole lifetime.
+    const { root, home } = makeScratch();
+    const seatDir = join(root, '.agents', 'send-drops', 'acme', 'worker-1');
+    mkdirSync(seatDir, { recursive: true });
+    dropRecord({ root, home }, 'worker-1', 'drop-14');
+    const reply = signReceiptPayload({
+      kind: 'receipt',
+      status: 'replied',
+      id: 'drop-14',
+      to: 'worker-1',
+      root,
+      session: 'acme',
+      at: '2026-10-18T12:05:00.000Z',
+    }, home);
+    writeFileSync(join(seatDir, 'drop-14.replied.json'), `${JSON.stringify(reply, null, 2)}\n`);
+
+    const keyPath = messageKeyPath(home);
+    const hidden = `${keyPath}.hidden`;
+    const state = createReconcileState();
+    renameSync(keyPath, hidden);
+    try {
+      const blind = reconcilePass({
+        project: 'acme',
+        root,
+        session: 'acme',
+        home,
+        state,
+        now: new Date('2026-10-18T12:10:00.000Z'),
+      });
+      expect(blind.ok).toBe(true);
+      if (!blind.ok) return;
+      expect(blind.raised.filter((record) => record.payload.kind === 'message.replied')).toHaveLength(0);
+    } finally {
+      renameSync(hidden, keyPath);
+    }
+
+    const keyed = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      state,
+      now: new Date('2026-10-18T12:11:00.000Z'),
+    });
+    expect(keyed.ok).toBe(true);
+    if (!keyed.ok) return;
+    expect(keyed.raised.filter((record) => record.payload.kind === 'message.replied').map((record) => record.payload.record_id))
+      .toEqual(['drop-14:replied']);
+
+    const again = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      state,
+      now: new Date('2026-10-18T12:12:00.000Z'),
+    });
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.raised.filter((record) => record.payload.kind === 'message.replied')).toHaveLength(0);
+  });
+
 
   test('a pass verifies the whole log once, then only the events appended since its last read', () => {
     const { root, home } = makeScratch();

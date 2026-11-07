@@ -17,6 +17,7 @@ import { launchedCliBinary } from '../src/launch/line.ts';
 import { SWAP_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { writePolicySet } from '../src/policy/index.ts';
 import { beginSession } from '../src/sessions/registry.ts';
+import { askCheckpoint } from '../src/checkpoint/checkpoint.ts';
 import { readState } from '../src/state.ts';
 import type { Screen } from '../src/watch/screen.ts';
 import { CLAUDE_IDLE, claudeBox, testIo } from './helpers.ts';
@@ -253,7 +254,8 @@ function fakeHerdr(
     ...[...newPanes.entries()]
       .filter(([, slot]) => slot.agent)
       .map(([pane, slot]) => ({
-        name: slot.name ?? '',
+        // A blank herdr name is null. An empty string is another seat's name.
+        name: slot.name,
         agent: 'claude-code',
         pane,
         workspace: slot.workspace,
@@ -690,7 +692,7 @@ describe('team swap to another vendor of the same CLI', () => {
     expect(lead).toContain('model: GLM');
     expect(lead).toContain('version: "5.3"');
     expect(lead).toContain('display: GLM 5.3');
-    expect(lead).toContain(`launch: ${ZAI_LINE}`);
+    expect(lead).toContain(`launch: ${JSON.stringify(ZAI_LINE)}`);
     // The line the pane ran is the vendor line the seat row now holds.
     expect(world.did.runs.join('\n')).toContain('find-generic-password -s glm-api-key');
     expect(world.did.runs.join('\n')).not.toContain('claude-opus-5-5');
@@ -987,6 +989,12 @@ describe('team swap now and --run', () => {
 
   test('a recorded Grok session on an unchanged CLI resumes with -r <id>', async () => {
     place();
+    const own = join(dirname(root), 'own-grok');
+    mkdirSync(own, { recursive: true });
+    const file = join(root, '.agents', 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8')
+      .replace(/trust:\n(?:  - .*\n)+/, 'trust:\n  - .\n  - ../own-grok\n')
+      .replace('    launch: grok\n', '    launch: grok\n    cwd: ../own-grok\n'));
     setRule('*=!anthropic');
     plantSession('grok', GROK_SESSION);
     await swap(['queue', 'grok', '--to', 'grok:grok fast']);
@@ -1042,10 +1050,10 @@ describe('team swap now and --run', () => {
     const lead = yaml.slice(yaml.indexOf('name: lead'), yaml.indexOf('name: worker'));
     expect(lead).toContain('cli: claude-code');
     expect(lead).toContain('vendor: deepseek');
-    expect(lead).toContain('model: DeepSeek Flash');
+    expect(lead).toContain('model: "DeepSeek Flash"');
     expect(lead).toContain('version: "4.0"');
     expect(lead).toContain('display: DeepSeek Flash 4.0');
-    expect(lead).toContain('launch: claude --model deepseek-flash');
+    expect(lead).toContain('launch: "claude --model deepseek-flash"');
     const helper = yaml.slice(yaml.indexOf('name: helper'));
     expect(helper).toContain('vendor: openai');
     expect(helper).toContain('launch: codex --model gpt-sol');
@@ -1129,6 +1137,30 @@ describe('team swap now and --run', () => {
     expect(log).toContain(`lead: using the handover already at ${named}`);
     expect(log).toContain(`handover passed from ${named}`);
     expect(world.did.typed.join('\n')).not.toContain('write a handover');
+    expect(queue()).toEqual({});
+  });
+
+  // Context reset R2: a checkpoint ask standing for the seat never overrides the handover the
+  // queued swap itself named — the swap's own path is the one used and passed on, and the
+  // standing checkpoint is left for a restart to read.
+  test('a queued swap\'s own handover keeps precedence over a standing checkpoint', async () => {
+    place();
+    setRule('*=!anthropic');
+    await swap(['queue', 'lead', '--to', 'codex:gpt luna']);
+    const named = queue().lead!.handover!;
+    mkdirSync(dirname(named), { recursive: true });
+    writeFileSync(named, '# handover\n\nwhat is left\n');
+    // The checkpoint a boundary asked for in this session, its file there to tempt the read.
+    const checkpoint = askCheckpoint(join(root, '.agents'), 'lead', 'acme', 'the owner', new Date(NOW.getTime() + 60_000));
+    mkdirSync(dirname(checkpoint.path), { recursive: true });
+    writeFileSync(checkpoint.path, '# checkpoint handover\n\nwhat the checkpoint holds\n');
+    const world = fakeHerdr({ newScreen: CODEX_LUNA_IDLE, doctorVersion: '0.161.0' });
+    const ran = await swap(['--run'], OWNER, { sources: world.sources });
+    expect(ran.code, `${ran.err}${ran.out}`).toBe(0);
+    const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
+    expect(log).toContain(`lead: using the handover already at ${named}`);
+    expect(log).not.toContain(`lead: using the handover already at ${checkpoint.path}`);
+    expect(log).toContain(`handover passed from ${named}`);
     expect(queue()).toEqual({});
   });
 

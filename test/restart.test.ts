@@ -627,6 +627,9 @@ describe('team restart <seat>', () => {
       session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
     });
     const { sources, did } = makeHarness(fixture);
+    // The relaunched pane's own reading: a shell and the CLI in front of it. The restart writes
+    // it as the seat's new identity — the write `team register` may repeat, never make.
+    sources.upLaunch.processInfo = () => ({ shell: 300, foreground: [301] });
     const io = testIo(fixture.root, { kind: 'owner' });
 
     const code = await runRestart(['worker'], io, sources);
@@ -644,6 +647,10 @@ describe('team restart <seat>', () => {
     expect(after?.stage).toBe('ready');
     expect(after?.pane).toBe('pane-new');
     expect(after?.id).toBe('seat_0123456789ab');
+    // The launch's own write: the relaunched pane's process identity is the seat's new pane root.
+    // `team register` may repeat this record; only a launch the daemon started (or the owner's
+    // walk) makes one.
+    expect(after?.launched).toEqual({ shell: 300, cli: [301] });
 
     const log = readFileSync(join(fixture.dir, 'team.log'), 'utf8');
     expect(log).toContain('restart [owner] restarted worker; pane pane-old -> pane-new\n');
@@ -682,6 +689,39 @@ describe('team restart <seat>', () => {
     expect(doc.status).toBe('ready');
     expect(doc.pull_only).toBe('no agent record for this seat');
     expect(doc.action_summary).toContain('pull-only: no agent record for this seat');
+  });
+
+  // The automatic order pass hangs off the ready exit only: a ready restart offers the
+  // sidebar to it once (its hint rides the notes), and a dry run never does.
+  test('a ready restart offers the sidebar to the automatic order pass; a dry run does not', async () => {
+    const calls: string[] = [];
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    const sources = {
+      ...makeHarness(fixture).sources,
+      autoOrder: (input: { session: string; manage: boolean }) => {
+        calls.push(`${input.session}:${input.manage}`);
+        return 'the sidebar is out of roster order; run team order once its tail is idle';
+      },
+    };
+    expect(await runRestart(['worker', '--json'], io, sources)).toBe(0);
+    expect(calls).toEqual(['acme:true']);
+    const doc = JSON.parse(io.out) as { notes?: string[] };
+    expect(doc.notes?.some((note) => note.includes('run team order'))).toBe(true);
+
+    const dryFixture = makeFixture();
+    updateState(dryFixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    const dryIo = testIo(dryFixture.root, { kind: 'owner' });
+    const drySources = { ...makeHarness(dryFixture).sources, autoOrder: sources.autoOrder };
+    expect(await runRestart(['worker', '--dry-run'], dryIo, drySources)).toBe(0);
+    expect(calls).toEqual(['acme:true']);
   });
 
   // The Codex native route is addressed by the conversation the seat holds (`codex queue
@@ -1567,7 +1607,7 @@ describe('team restart <seat>', () => {
     expect(did.created).toBe(0);
   });
 
-  // The entity's main orchestrator reaches the entity's teams as their lead (OD-02), and the
+  // The entity's main orchestrator stands as, and reaches as, each team lead, and the
   // proof is its own head team's record, live file and recorded pane — never its seat name. The
   // target team's lead is named `orchestrator` too, so the name alone would refuse the pair.
   test("the entity's main orchestrator restarts a team's seat named like itself", async () => {
@@ -2237,6 +2277,12 @@ describe('team restart resumes the seat\'s own recorded session', () => {
         ...(opts.state === undefined ? {} : { agent_session: opts.state }),
       };
     });
+    if (opts.cli === 'grok' || opts.cli === 'cursor') {
+      const own = join(fixture.base, 'worker-tree'); mkdirSync(own);
+      updateState(fixture.dir, state => {
+        state.sessions.acme!.worktrees.worker = { path: own, branch: 'fix/worker', setup: 'ok' };
+      });
+    }
     let agentId: string | undefined;
     if (opts.registry !== undefined) {
       agentId = registerAgent(fixture.home, {
@@ -3829,3 +3875,25 @@ describe('a stored approval that does not verify', () => {
   });
 });
 
+
+
+describe('review: restart honors recorded own and peer folders', () => {
+  for (const cli of ['grok', 'cursor']) for (const occupied of [false, true]) {
+    test(`${cli} recorded worktree, occupied=${occupied}`, async () => {
+      const fixture = makeFixture(cli === 'grok' ? GROK_TEAM_YAML : CURSOR_TEAM_YAML);
+      const own = join(fixture.base, 'own'); mkdirSync(own);
+      updateState(fixture.dir, state => {
+        const session = state.sessions.acme ??= emptySession();
+        session.worktrees.task = { seat: 'worker', path: own, branch: 'fix/own', setup: 'ok' };
+        if (occupied) session.worktrees.peer = { seat: 'lead', path: own, branch: 'fix/peer', setup: 'ok' };
+      });
+      const run = makeHarness(fixture, { initialRunning: false, foregroundArgv0: cli === 'grok' ? 'grok' : 'cursor-agent' });
+      const io = testIo(fixture.root, { kind: 'owner' });
+      expect(await runRestart(['worker', '--dry-run'], io, run.sources), io.err).toBe(occupied ? 1 : 0);
+      if (occupied) expect(io.err).toContain('overlaps seat lead');
+      else expect(io.out).toContain(own);
+      expect(run.did.closed).toEqual([]);
+      expect(run.did.created).toBe(0);
+    });
+  }
+});

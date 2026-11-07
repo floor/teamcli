@@ -32,11 +32,13 @@ function formatCompileError(tsc: ReturnType<typeof spawnSync>, timeoutMs: number
   } else if (tsc.error) {
     details.push(`process failed: ${tsc.error.message}`);
   }
-  const output = (tsc.stderr?.toString().trim() || tsc.stdout?.toString().trim());
-  if (output) {
-    details.push(output);
+  // The compiler writes its diagnostics to stdout; the wrapper writes its own failure line to
+  // stderr. Both are printed, labeled, so a red compile names the file and the error code.
+  for (const [label, stream] of [['stderr', tsc.stderr], ['stdout', tsc.stdout]] as const) {
+    const text = stream?.toString().trim();
+    if (text) details.push(`${label}:\n${text}`);
   }
-  return `Failed to compile to temp directory: ${details.join(': ')}`;
+  return `Failed to compile to temp directory: ${details.join('\n')}`;
 }
 
 async function compileScreenFile(): Promise<any> {

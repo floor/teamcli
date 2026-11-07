@@ -166,7 +166,8 @@ test('a replayed delivery is served once by the real gate and takes its task onc
   const served = readMessage(target, id, home);
   expect(served.ok).toBe(true);
   if (!served.ok) return;
-  expect(served.body).toBe('run team next');
+  // The record's claim is marked: nothing attests the sender yet.
+  expect(served.body).toBe('from lead (team lead):\n\nrun team next');
   const first = testIo(root, lead);
   expect(await runNext([], first, { home, now: () => at })).toBe(0);
   expect(first.out).toBe(claim);

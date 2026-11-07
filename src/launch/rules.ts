@@ -6,8 +6,7 @@ import type { Seat, TeamFile } from '../file/types.ts';
 import { profileFor } from '../profiles/index.ts';
 import { readPolicyChain } from '../policy/sources.ts';
 import { landingRule, policyRuleLines, resolveWorkSettings, vaultRule, type WorkSettings } from '../policy/work-settings.ts';
-import { ofTeam as projectOfTeam } from '../registry/projects.ts';
-import { teamIdOf } from '../registry/teams.ts';
+import { homeProjectIdOf } from '../registry/projects.ts';
 
 /** Where the rules' wording comes from. A registry read names the team's registry config;
  *  a read of a real team.yaml (`--file`, `team migrate`, the file fallback) names the file. */
@@ -41,6 +40,12 @@ export interface RulesInput {
   orchestrator: string;
   /** The definition's own `rules`. */
   rules: readonly string[];
+  /** Entity name and entity-wide rules (`<entity>.rules` in `entities.yaml`), when present. */
+  entity?: string | null;
+  entityRules?: readonly string[];
+  /** Home project ID/name and project-wide rules (`projects.<id>.rules` in `projects.yaml`), when present. */
+  project?: string | null;
+  projectRules?: readonly string[];
   /** Registry wording when the team was read from the registry; file wording otherwise. */
   origin?: RulesOrigin;
   /** The seat's profile's own rules, over the file's: a safety line the CLI makes necessary.
@@ -72,12 +77,16 @@ const COMMIT_PLACE: Record<RulesInput['signature']['commitPosition'], string> = 
   anywhere: 'on a line of its own',
 };
 
-/**
- * The rules a seat gets at launch, one per line, in this order: the profile's
- * own (what `team` itself depends on), the rules the profile carries for
- * every seat of its CLI, the file's, the seat's signature, the workspace's.
- */
-export function seatRules(input: RulesInput): string[] {
+function ruleSections(input: RulesInput): {
+  own: string[];
+  profileRules: string[];
+  entityRules: string[];
+  projectRules: string[];
+  teamRules: string[];
+  signing: string[];
+  working: string[];
+  work: string[];
+} {
   const { signature, workspace } = input;
   const own = [
     'End every commit message and every pull request body with your signature, given below.',
@@ -115,7 +124,36 @@ export function seatRules(input: RulesInput): string[] {
   } else if (workspace.mode === 'shared' && workspace.cwd) {
     working.push(`Change to ${workspace.cwd} before any project work.`);
   }
-  return [...own, ...(input.profileRules ?? []), ...input.rules, ...signing, ...working, ...(input.work ?? [])];
+  return {
+    own,
+    profileRules: [...(input.profileRules ?? [])],
+    entityRules: [...(input.entityRules ?? [])],
+    projectRules: [...(input.projectRules ?? [])],
+    teamRules: [...input.rules],
+    signing,
+    working,
+    work: [...(input.work ?? [])],
+  };
+}
+
+/**
+ * The rules a seat gets at launch, one per line, in this order: the profile's
+ * own (what `team` itself depends on), the rules the profile carries for
+ * every seat of its CLI, the entity's, the home project's, the team file's,
+ * the seat's signature, the workspace's, and the work-settings lines.
+ */
+export function seatRules(input: RulesInput): string[] {
+  const s = ruleSections(input);
+  return [
+    ...s.own,
+    ...s.profileRules,
+    ...s.entityRules,
+    ...s.projectRules,
+    ...s.teamRules,
+    ...s.signing,
+    ...s.working,
+    ...s.work,
+  ];
 }
 
 /** How the rules reach a seat: typed as its first message, carried as a launch option, or
@@ -140,8 +178,75 @@ const CLOSING: Record<RulesDelivery, string> = {
 export function rulesText(input: RulesInput, delivery: RulesDelivery): string {
   // A file whose own rules already carry the form's closing line gets it once: as the closing line.
   const closing = CLOSING[delivery];
-  const rules = seatRules(input).filter((rule) => rule !== closing);
-  return [RULES_HEAD[input.origin ?? 'file'], ...rules.map((rule) => `- ${rule}`), closing].join('\n');
+  const s = ruleSections(input);
+  const entityLines = s.entityRules.filter((rule) => rule !== closing);
+  const projectLines = s.projectRules.filter((rule) => rule !== closing);
+  if (entityLines.length === 0 && projectLines.length === 0) {
+    const rules = seatRules(input).filter((rule) => rule !== closing);
+    return [RULES_HEAD[input.origin ?? 'file'], ...rules.map((rule) => `- ${rule}`), closing].join('\n');
+  }
+  const ownLines = [...s.own, ...s.profileRules].filter((rule) => rule !== closing);
+  const teamLines = s.teamRules.filter((rule) => rule !== closing);
+  const tailLines = [...s.signing, ...s.working, ...s.work].filter((rule) => rule !== closing);
+  const lines: string[] = [RULES_HEAD[input.origin ?? 'file']];
+  for (const rule of ownLines) lines.push(`- ${rule}`);
+  if (entityLines.length > 0) {
+    lines.push(`Entity rules${input.entity ? ` (${input.entity})` : ''}:`);
+    for (const rule of entityLines) lines.push(`- ${rule}`);
+  }
+  if (projectLines.length > 0) {
+    lines.push(`Project rules${input.project ? ` (${input.project})` : ''}:`);
+    for (const rule of projectLines) lines.push(`- ${rule}`);
+  }
+  if (teamLines.length > 0) {
+    lines.push('Team rules:');
+    for (const rule of teamLines) lines.push(`- ${rule}`);
+  }
+  for (const rule of tailLines) lines.push(`- ${rule}`);
+  lines.push(closing);
+  return lines.join('\n');
+}
+
+function rulesInputOf(
+  team: TeamFile,
+  seat: Seat,
+  root: string,
+  work: WorkSettings | null,
+  origin: RulesOrigin,
+): { input: RulesInput; delivery: RulesDelivery } {
+  const { commits, pullRequests } = team.identity.signature;
+  const profile = profileFor(seat.cli);
+  const delivery: RulesDelivery = profile?.rulesMode ?? 'message';
+  const input: RulesInput = {
+    orchestrator: team.orchestrator,
+    entity: work?.entityName ?? team.entity,
+    entityRules: work?.entityRules ?? [],
+    project: work?.projectName ?? team.inProject ?? null,
+    projectRules: work?.projectRules ?? [],
+    rules: team.rules,
+    profileRules: profile?.standingRules ?? [],
+    // The route the launch registers is the profile's measured one (`src/mcp/register.ts`);
+    // a CLI whose profile carries none gets no inbox, and no line about one.
+    inbox: profile?.mcpInbox != null,
+    seatName: seat.name,
+    signature: {
+      commit: renderSignature(commits.template, seat),
+      pullRequest: renderSignature(pullRequests.template, seat),
+      commitPosition: commits.position,
+    },
+    workspace: {
+      mode: seat.mode,
+      protected: team.workspace.protected,
+      branch: team.workspace.branch,
+      cwd: resolve(root, seat.cwd),
+    },
+    work: [
+      ...workLines(work, team.project),
+      ...policyRuleLines(work, { lead: isLeadSeat(team, seat.name), entity: team.entity !== null }),
+    ],
+    origin,
+  };
+  return { input, delivery };
 }
 
 /** The rules one seat gets at launch, with its own signature lines, as its delivery carries them:
@@ -152,40 +257,92 @@ export function rulesOf(
   team: TeamFile,
   seat: Seat,
   root: string,
-  work: WorkSettings | null = workSettingsFor(team, root),
+  work?: WorkSettings | null,
   origin: RulesOrigin = 'file',
+  home: string = homedir(),
 ): string {
-  const { commits, pullRequests } = team.identity.signature;
-  const profile = profileFor(seat.cli);
-  const delivery: RulesDelivery = profile?.rulesMode ?? 'message';
-  return rulesText(
-    {
-      orchestrator: team.orchestrator,
-      rules: team.rules,
-      profileRules: profile?.standingRules ?? [],
-      // The route the launch registers is the profile's measured one (`src/mcp/register.ts`);
-      // a CLI whose profile carries none gets no inbox, and no line about one.
-      inbox: profile?.mcpInbox != null,
-      seatName: seat.name,
-      signature: {
-        commit: renderSignature(commits.template, seat),
-        pullRequest: renderSignature(pullRequests.template, seat),
-        commitPosition: commits.position,
-      },
-      workspace: {
-        mode: seat.mode,
-        protected: team.workspace.protected,
-        branch: team.workspace.branch,
-        cwd: resolve(root, seat.cwd),
-      },
-      work: [
-        ...workLines(work, team.project),
-        ...policyRuleLines(work, { lead: isLeadSeat(team, seat.name), entity: team.entity !== null }),
-      ],
-      origin,
-    },
-    delivery,
-  );
+  const resolvedWork = work === undefined ? workSettingsFor(team, root, home) : work;
+  const { input, delivery } = rulesInputOf(team, seat, root, resolvedWork, origin);
+  return rulesText(input, delivery);
+}
+
+export type ComposedRuleOrigin =
+  | 'system'
+  | 'profile'
+  | 'entity'
+  | 'project'
+  | 'team'
+  | 'signature'
+  | 'workspace'
+  | 'policy';
+
+export type ComposedRuleEntry = {
+  origin: ComposedRuleOrigin;
+  source: string;
+  rule: string;
+};
+
+/**
+ * The composed rules for a seat in exact order, annotated with their origin (`entity`, `project`,
+ * `team`, etc.) so `team config` / rollout views and callers see where every line came from.
+ */
+export function composedRulesOf(
+  team: TeamFile,
+  seat: Seat,
+  root: string,
+  work?: WorkSettings | null,
+  origin: RulesOrigin = 'file',
+  home: string = homedir(),
+): ComposedRuleEntry[] {
+  const resolvedWork = work === undefined ? workSettingsFor(team, root, home) : work;
+  const { input } = rulesInputOf(team, seat, root, resolvedWork, origin);
+  const s = ruleSections(input);
+  const out: ComposedRuleEntry[] = [];
+  for (const rule of s.own) out.push({ origin: 'system', source: 'team', rule });
+  for (const rule of s.profileRules) out.push({ origin: 'profile', source: seat.cli, rule });
+  for (const rule of s.entityRules) {
+    out.push({ origin: 'entity', source: input.entity ?? team.entity ?? 'entity', rule });
+  }
+  for (const rule of s.projectRules) {
+    out.push({ origin: 'project', source: input.project ?? team.inProject ?? 'project', rule });
+  }
+  for (const rule of s.teamRules) out.push({ origin: 'team', source: team.project, rule });
+  for (const rule of s.signing) out.push({ origin: 'signature', source: seat.name, rule });
+  for (const rule of s.working) out.push({ origin: 'workspace', source: seat.mode, rule });
+  for (const rule of s.work) out.push({ origin: 'policy', source: 'policy', rule });
+  return out;
+}
+
+/**
+ * Human-readable view of the composed rules (entity -> project -> team) with their origin headings.
+ */
+export function formatComposedRules(
+  team: TeamFile,
+  seat: Seat,
+  root: string,
+  work?: WorkSettings | null,
+  home: string = homedir(),
+): string {
+  const resolvedWork = work === undefined ? workSettingsFor(team, root, home) : work;
+  const { input } = rulesInputOf(team, seat, root, resolvedWork, 'file');
+  const s = ruleSections(input);
+  const lines: string[] = [];
+  if (s.entityRules.length > 0) {
+    lines.push(`Entity rules (${input.entity ?? team.entity ?? 'entity'}):`);
+    for (const rule of s.entityRules) lines.push(`- ${rule}`);
+  }
+  if (s.projectRules.length > 0) {
+    lines.push(`Project rules (${input.project ?? team.inProject ?? 'project'}):`);
+    for (const rule of s.projectRules) lines.push(`- ${rule}`);
+  }
+  if (s.teamRules.length > 0) {
+    lines.push(`Team rules (${team.project}):`);
+    for (const rule of s.teamRules) lines.push(`- ${rule}`);
+  }
+  if (lines.length === 0) {
+    return `No entity, project, or team rules declared for ${team.project}.\n`;
+  }
+  return `${lines.join('\n')}\n`;
 }
 
 /** The work settings a seat's rules read: the signed chain for this team, or null when it cannot be read. */
@@ -193,7 +350,7 @@ export function workSettingsFor(team: TeamFile, root: string, home: string = hom
   try {
     let projectId: string | null = null;
     try {
-      projectId = projectOfTeam(home, teamIdOf(root))?.id ?? null;
+      projectId = homeProjectIdOf(home, root, team);
     } catch {}
     const work = resolveWorkSettings(readPolicyChain({ home, teamRoot: root, team, projectId }), {}, { home });
     return work.unreadable === undefined ? work : null;

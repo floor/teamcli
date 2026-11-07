@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { byName, get, list, ofTeam, projectIdOf, projectsFile, ProjectsError, readProjects, upsertProject } from '../../src/registry/projects.ts';
+import { upsertTeam } from '../../src/registry/teams.ts';
 import { unreadableTeamFolder } from '../helpers/registry-team.ts';
 
 const AT = '2026-10-17T00:30:00.000Z';
@@ -86,7 +87,7 @@ describe('the project registry file', () => {
     expect(readProjects(empty)).toEqual({});
   });
 
-  test('what the file holds reads back whole, the ID filled from the key', () => {
+  test('metadata reads back whole with derived membership instead of legacy lists', () => {
     writeProjects(twoProjects());
     expect(readProjects(home)).toEqual({
       site: {
@@ -94,7 +95,7 @@ describe('the project registry file', () => {
         name: 'TeamCLI.io',
         entity: null,
         lead: null,
-        teams: ['site-id'],
+        teams: [],
         provenance: { registered_by: 'owner', registered_at: AT, updated_at: AT },
       },
       teamcli: {
@@ -102,7 +103,7 @@ describe('the project registry file', () => {
         name: 'TeamCLI',
         entity: 'TeamCLI',
         lead: 'agt_0123456789ab',
-        teams: ['cli-id', 'shared-id'],
+        teams: [],
         provenance: { registered_by: 'owner', registered_at: AT, updated_at: AT },
       },
     });
@@ -141,6 +142,11 @@ describe('the project registry file', () => {
 });
 
 describe('byName, ofTeam', () => {
+  beforeEach(() => {
+    for (const [id, projectId] of [['cli-id', 'teamcli'], ['site-id', 'site'], ['shared-id', 'teamcli']]) {
+      upsertTeam(home, id!, { project: id!, session: id!, root: '/tmp/root-a', projectId: projectId! });
+    }
+  });
   test('byName is exact: the display name finds the project, its lowercased spelling does not', () => {
     writeProjects(twoProjects());
     expect(byName(home, 'TeamCLI')?.id).toBe('teamcli');
@@ -148,7 +154,7 @@ describe('byName, ofTeam', () => {
     expect(byName(home, 'TeamCLI.io')?.id).toBe('site');
   });
 
-  test('ofTeam answers by the project records` own team lists', () => {
+  test('ofTeam answers by the team records home project', () => {
     writeProjects(twoProjects());
     expect(ofTeam(home, 'cli-id')?.id).toBe('teamcli');
     expect(ofTeam(home, 'site-id')?.id).toBe('site');
@@ -160,10 +166,9 @@ describe('byName, ofTeam', () => {
     expect(ofTeam(home, 'unlisted-id')).toBeNull();
   });
 
-  test('a team two projects name is refused, naming both', () => {
+  test('stale project-side lists never override the home project', () => {
     writeProjects(twoProjects().replace('teams: [site-id]', 'teams: [site-id, cli-id]'));
-    expect(() => ofTeam(home, 'cli-id')).toThrow(ProjectsError);
-    expect(() => ofTeam(home, 'cli-id')).toThrow(/team cli-id is named in 2 projects: site, teamcli/);
+    expect(ofTeam(home, 'cli-id')?.id).toBe('teamcli');
   });
 
   test('two projects under one name are refused, naming both', () => {
@@ -171,10 +176,10 @@ describe('byName, ofTeam', () => {
     expect(() => byName(home, 'TeamCLI')).toThrow(/two projects are named TeamCLI: site, teamcli/);
   });
 
-  test('the two-project file reads whole: only ofTeam refuses, list and get answer', () => {
+  test('project views ignore stale project-side membership', () => {
     writeProjects(twoProjects().replace('teams: [site-id]', 'teams: [site-id, cli-id]'));
     expect(list(home).map((project) => project.id)).toEqual(['site', 'teamcli']);
-    expect(get(home, 'site')?.teams).toEqual(['site-id', 'cli-id']);
+    expect(get(home, 'site')?.teams).toEqual(['site-id']);
   });
 });
 
@@ -207,13 +212,11 @@ describe('upsertProject', () => {
         '    name: TeamCLI.io',
         '    entity: null',
         '    lead: null',
-        '    teams: []',
         `    provenance: { registered_by: team, registered_at: "${AT}", updated_at: "${AT}" }`,
         '  teamcli:',
         '    name: TeamCLI',
         '    entity: TeamCLI',
         '    lead: agt_0123456789ab',
-        '    teams: [cli-id, shared-id]',
         `    provenance: { registered_by: owner, registered_at: "${AT}", updated_at: "${AT}" }`,
         '',
       ].join('\n'),
@@ -228,7 +231,7 @@ describe('upsertProject', () => {
         name: 'TeamCLI',
         entity: 'TeamCLI',
         lead: 'agt_0123456789ab',
-        teams: ['cli-id'],
+        teams: [],
         provenance: { registered_by: 'owner', registered_at: AT, updated_at: AT },
       },
     });
@@ -242,7 +245,7 @@ describe('upsertProject', () => {
       name: 'TeamCLI',
       entity: 'TeamCLI',
       lead: 'agt_0123456789ab',
-      teams: ['cli-id', 'site-id'],
+      teams: [],
       provenance: { registered_by: 'owner', registered_at: AT, updated_at: later },
     });
     expect(readProjects(home).teamcli).toEqual({ ...updated, id: 'teamcli' });
@@ -308,7 +311,7 @@ describe('upsertProject', () => {
   test('an ID of digits, and text a plain scalar would misread, survive a round trip', () => {
     upsertProject(home, '123456789012', { name: 'true', lead: 'null', teams: ['1e5'], at: AT });
     const read = get(home, '123456789012');
-    expect(read).toMatchObject({ name: 'true', lead: 'null', teams: ['1e5'] });
+    expect(read).toMatchObject({ name: 'true', lead: 'null', teams: [] });
     expect(read?.provenance.updated_at).toBe(AT);
   });
 
@@ -341,7 +344,7 @@ describe('delivery_order', () => {
     writeProjects(record('delivery_order: typed'));
     expect(() => readProjects(home)).toThrow(/project teamcli: "delivery_order" must be a list of legs/);
     writeProjects(record('delivery_order: [telepathy]'));
-    expect(() => readProjects(home)).toThrow(/project teamcli: delivery_order line 1 must be one of: socket, native, mcp-inbox, typed, drop, headless-resume, session/);
+    expect(() => readProjects(home)).toThrow(/project teamcli: delivery_order line 1 must be one of: socket, native, typed, drop, headless-resume, session/);
     writeProjects(record('delivery_order: [typed, typed]'));
     expect(() => readProjects(home)).toThrow(/project teamcli: "delivery_order" names a leg twice/);
   });
@@ -355,7 +358,6 @@ describe('delivery_order', () => {
         '    name: TeamCLI',
         '    entity: null',
         '    lead: null',
-        '    teams: []',
         '    delivery_order: [typed]',
         `    provenance: { registered_by: owner, registered_at: "${AT}", updated_at: "${AT}" }`,
         '',
@@ -363,14 +365,29 @@ describe('delivery_order', () => {
     );
     upsertProject(home, 'teamcli', { teams: ['cli-id'], at: AT });
     expect(get(home, 'teamcli')?.deliveryOrder).toEqual(['typed']);
-    expect(get(home, 'teamcli')?.teams).toEqual(['cli-id']);
+    expect(get(home, 'teamcli')?.teams).toEqual([]);
+  });
+
+  test('a write naming the retired mcp-inbox alias is refused, and a row an older build wrote still loads', () => {
+    upsertProject(home, 'teamcli', { name: 'TeamCLI', at: AT });
+    const before = readFileSync(projectsFile(home), 'utf8');
+    // The upsert is a write: no new record names the alias, alone or beside live legs.
+    expect(() => upsertProject(home, 'teamcli', { deliveryOrder: ['mcp-inbox'] })).toThrow('delivery_order names mcp-inbox, which is no longer a leg; remove it');
+    expect(() => upsertProject(home, 'teamcli', { deliveryOrder: ['mcp-inbox', 'typed'] })).toThrow('delivery_order names mcp-inbox, which is no longer a leg; remove it');
+    expect(readFileSync(projectsFile(home), 'utf8')).toBe(before);
+    // The load is a read: a record an older build wrote keeps the word and reads back with it.
+    writeProjects(
+      'projects:\n  teamcli:\n    name: TeamCLI\n    entity: null\n    lead: null\n    teams: []\n' +
+        `    delivery_order: [mcp-inbox, typed]\n    provenance: { registered_by: owner, registered_at: "${AT}", updated_at: "${AT}" }\n`,
+    );
+    expect(get(home, 'teamcli')?.deliveryOrder).toEqual(['mcp-inbox', 'typed']);
   });
 
   test('a patch with a word the reader would refuse is refused, and the file stays as it was', () => {
     upsertProject(home, 'teamcli', { name: 'TeamCLI', at: AT });
     const before = readFileSync(projectsFile(home), 'utf8');
     expect(() => upsertProject(home, 'teamcli', { deliveryOrder: [] })).toThrow('"delivery_order" must name at least one leg');
-    expect(() => upsertProject(home, 'teamcli', { deliveryOrder: ['telepathy'] as never })).toThrow('a "delivery_order" leg must be one of: socket, native, mcp-inbox, typed, drop, headless-resume, session');
+    expect(() => upsertProject(home, 'teamcli', { deliveryOrder: ['telepathy'] as never })).toThrow('a "delivery_order" leg must be one of: socket, native, typed, drop, headless-resume, session');
     expect(() => upsertProject(home, 'teamcli', { deliveryOrder: ['typed', 'typed'] })).toThrow('"delivery_order" names a leg twice');
     expect(readFileSync(projectsFile(home), 'utf8')).toBe(before);
   });

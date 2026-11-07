@@ -1,26 +1,28 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { cpus, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { verifiedOf } from '../src/approve/approval.ts';
 import { loadReadings, loadSpendReadings, saveReadings, type Seen } from '../src/budgets/readings.ts';
 import { runDrops } from '../src/commands/drops.ts';
+import { runAck } from '../src/commands/ack.ts';
 import { runStatus } from '../src/commands/status.ts';
-import { listUnacked, plantMessage, plantRecord, type MessagePayload } from '../src/commands/messages.ts';
+import { listUnacked, plantMessage, plantRecord, runMessages, type MessagePayload } from '../src/commands/messages.ts';
 import { signReceiptPayload, writeReceipt } from '../src/send/record.ts';
 import { runWatch, USAGE } from '../src/commands/watch.ts';
 import { readTriggerLine } from '../src/send/native.ts';
 import { findRoot } from '../src/file/load.ts';
 import { deliverBriefForAttribution } from '../src/launch/general-brief.ts';
-import { listUnread } from '../src/mcp/inbox.ts';
+import { listUnread, peekMessage } from '../src/mcp/inbox.ts';
+import { runMcpServe } from '../src/mcp/serve.ts';
 import type { WatchSources } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { launchLimit, parseLoadavg, parseMeminfo, parseMemoryPressure, parsePsiMemory, parseSwapUsage, parseVmPressureLevel, readMachine, readingsText, swapTotalProblem } from '../src/watch/machine.ts';
+import { launchLimit, parseLoadavg, parseMeminfo, parseMemoryPressure, parsePsiMemory, parseSwapUsage, parseVmPressureLevel, readMachine, readingsText } from '../src/watch/machine.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { watchLabel } from '../src/watch/pane.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
@@ -172,6 +174,29 @@ describe('reading a screen of Claude Code', () => {
     const finished = `✻ Churned for 51s · done 9:51 PM\n\n${RULE}\n❯ \n${RULE}\n${STATUS}\n`;
     expect(readScreen('claude-code', finished).kind).toBe('idle');
   });
+  test('a spinner left above an empty idle prompt is the previous turn only for the wake', () => {
+    const transcript = [
+      '✶ Transfiguring… (9m 34s · ↓ 64.5k tokens)',
+      '',
+      '● The turn ended. The answer is already on the pane.',
+      '● A second row of that answer sits under it.',
+      '● A third row keeps the spinner out of the status cluster.',
+      '● A fourth row is still the finished turn.',
+      '● A fifth row is transcript, not the live status.',
+      '● A sixth row stays above the box.',
+      '● A seventh row is the same finished turn.',
+      '● An eighth row leaves the spinner outside the cluster.',
+      '● A ninth row is the last of that answer.',
+      '',
+      RULE,
+      '❯ ',
+      RULE,
+      STATUS,
+    ].join('\n');
+    expect(readScreen('claude-code', transcript).kind).toBe('working');
+    expect(readScreen('claude-code', transcript, { working: 'cluster' }).kind).toBe('idle');
+    expect(readScreen('claude-code', busy).kind).toBe('working');
+  });
 });
 
 describe('the machine\'s figures', () => {
@@ -238,26 +263,6 @@ describe('the machine\'s figures', () => {
     const { pressure, ...figures } = machine;
     for (const value of Object.values(figures)) expect(value === null || Number.isFinite(value)).toBe(true);
     expect(pressure === null || pressure === 'normal' || pressure === 'warn' || pressure === 'critical').toBe(true);
-  });
-
-  test('the swap total the check can never meet', () => {
-    const limits: TeamFile['machine'] = {
-      loadStart: 3, loadMax: 6, memoryStart: 25, memoryMin: 15, diskMin: 10e9,
-      swapFreeMin: 2e9, swapGrowthMax: 1e9, swapGrowthWindow: 600,
-    };
-    const small: Machine = { loadPerCore: 0.4, memoryFree: 62, diskFree: 120e9, swapTotal: 1e9, swapFree: 0.5e9, swapUsed: 0.5e9 };
-    expect(swapTotalProblem(small, limits)).toBe(
-      'the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so this reading cannot meet it; set `machine.swap_free_min` to a figure this machine can keep',
-    );
-    // The check can pass in principle — its floor sits under the machine's total — and the free
-    // figure is low right now: the watch's finding, and nothing here.
-    expect(swapTotalProblem({ ...small, swapTotal: 16e9, swapFree: 0.5e9 }, limits)).toBeNull();
-    // Exactly the total the check asks for is meetable.
-    expect(swapTotalProblem({ ...small, swapTotal: 2e9 }, limits)).toBeNull();
-    // A figure that wasn't read is neither fine nor bad: a machine with no swap at all leaves
-    // both null, and neither this warning nor `launchLimit` can fire there.
-    expect(swapTotalProblem({ ...small, swapTotal: null, swapFree: null }, limits)).toBeNull();
-    expect(swapTotalProblem({ ...small, swapFree: null }, limits)).toBeNull();
   });
 
   test('the launch gate: critical pressure refuses, free swap alone never does', () => {
@@ -823,14 +828,13 @@ describe('a pass of the watch', () => {
     expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 0, memory: newMemory() }).reports).toEqual([]);
   });
 
-  test('the machine: load per core, memory, disk and free swap, each against its threshold', () => {
+  test('the machine: load per core, memory and disk, each against its threshold; free swap is never reported', () => {
     const tight: Machine = { loadPerCore: 6.5, memoryFree: 10, diskFree: 5e9, swapTotal: 23.3e9, swapFree: 0.3e9, swapUsed: 23e9 };
     const reports = pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: tight, now: 0, memory: newMemory() }).reports;
     expect(reports.map((report) => report.text)).toEqual([
       'the load is 6.5 per core, above 6',
       'free memory is 10%, below 15%',
       'free disk is 5.0 GB, below 10.0 GB',
-      'free swap is 0.3 GB, below 2.0 GB',
     ]);
     expect(reports.every((report) => report.to === 'owner')).toBe(true);
   });
@@ -1187,6 +1191,7 @@ describe('team watch', () => {
   test('a status line changed between passes reaches line 2 on the sweep, once per change', async () => {
     const io = testIo(dir, { kind: 'owner' });
     const pushed: string[] = [];
+    const ttls: (number | undefined)[] = [];
     // Nobody idle: no ring, so the pane text the sweep reads is only what this test sets.
     const working = live({ 'deepseek-acme': { status: 'working', screen: busy }, 'deepseek-acme-2': { status: 'working', screen: busy } });
     let waits = 0;
@@ -1194,7 +1199,7 @@ describe('team watch', () => {
       live: () => working,
       // The pane as the owner's /model and /effort left it, some seconds after the pass.
       screen: () => '  main · Sonnet 4.5\nwith high effort\n',
-      reportDisplayAgent: (_session, pane, text) => { pushed.push(`${pane} ${text}`); return true; },
+      reportDisplayAgent: (_session, pane, text, ttlMs) => { pushed.push(`${pane} ${text}`); ttls.push(ttlMs); return true; },
       wait: async (_seconds, onTick) => { waits += 1; onTick?.(); onTick?.(); return false; },
     }));
     expect(code).toBe(0);
@@ -1204,6 +1209,75 @@ describe('team watch', () => {
     expect(pushed.filter((line) => line.startsWith('w1:p1 '))).toEqual([
       'w1:p1 Claude Opus 5.5 default',
       'w1:p1 Claude Sonnet 4.5 high',
+    ]);
+    expect(ttls.length).toBeGreaterThanOrEqual(2);
+    expect(ttls.every((t) => t === 86_400_000)).toBe(true);
+  });
+
+  test('an unchanged status line is re-reported on the sweep once the refresh window has elapsed, carrying the resolved TTL', async () => {
+    const home = join(dir, 'home');
+    const now = new Date(clock);
+    expect(
+      writePolicySet(
+        home,
+        {
+          level: 'team',
+          target: teamIdOf(dir),
+          teamRoot: dir,
+          name: 'daemon.sidebar-ttl-ms',
+          value: 7_200_000,
+        },
+        { now },
+      ).ok,
+    ).toBe(true);
+    expect(
+      writePolicySet(
+        home,
+        {
+          level: 'team',
+          target: teamIdOf(dir),
+          teamRoot: dir,
+          name: 'daemon.sidebar-refresh-ms',
+          value: 600_000,
+        },
+        { now },
+      ).ok,
+    ).toBe(true);
+
+    const io = testIo(dir, { kind: 'owner' });
+    const pushed: { at: number; text: string; ttlMs: number | undefined }[] = [];
+    const working = live({ 'deepseek-acme': { status: 'working', screen: busy }, 'deepseek-acme-2': { status: 'working', screen: busy } });
+    const coordinatorPane = working.agents[0]?.pane;
+    const start = clock;
+    const code = await runWatch(['--file', file], io, sources(1, {
+      home,
+      live: () => working,
+      // The screen never changes: it stays on the file's own Opus 5.5 default.
+      screen: () => '  main · Opus 5.5\n',
+      reportDisplayAgent: (_session, pane, text, ttlMs) => {
+        if (pane === coordinatorPane) {
+          pushed.push({ at: clock - start, text, ttlMs });
+        }
+        return true;
+      },
+      wait: async (_seconds, onTick) => {
+        // Immediate tick and a tick 1 ms before the 600_000 ms refresh window: silent.
+        onTick?.();
+        clock = start + 599_999;
+        onTick?.();
+        // At the 600_000 ms mark the unchanged line is re-reported once, updating reportedAt.
+        clock = start + 600_000;
+        onTick?.();
+        // Another tick inside the new window is silent again.
+        clock = start + 601_000;
+        onTick?.();
+        return false;
+      },
+    }));
+    expect(code).toBe(0);
+    expect(pushed).toEqual([
+      { at: 0, text: 'Claude Opus 5.5 default', ttlMs: 7_200_000 },
+      { at: 600_000, text: 'Claude Opus 5.5 default', ttlMs: 7_200_000 },
     ]);
   });
 
@@ -2150,6 +2224,78 @@ describe('team watch', () => {
     expect(existsSync(join(dir, '.agents', 'messages', 'deepseek-acme', 'm1.read.json'))).toBe(false);
   });
 
+  test('a lead-cleared body never returns through drops, messages, inbox_read, peek or watch', async () => {
+    const current = team();
+    const session = current.session;
+    const seat = 'deepseek-acme';
+    const lead = current.orchestrator;
+    const leadPane = 'notice-lead-pane';
+    const seatPane = 'notice-worker-pane';
+    const root = findRoot(dir);
+    if (!root) throw new Error('the watch fixture is not a git checkout');
+    const home = join(dir, 'home'); mkdirSync(home, { recursive: true });
+    const agents = join(root, '.agents');
+    const dropDir = join(agents, 'send-drops', session, seat);
+    const id = '44444444-4444-4444-8444-444444444444';
+    const body = 'gone9f38';
+    const stale = new Date(clock - 10 * 24 * 60 * 60 * 1000);
+    const path = dropWaiting(seat, body, stale.toISOString(), id);
+    for (const name of readdirSync(dropDir)) {
+      if (name === id || name.startsWith(`${id}.`)) utimesSync(join(dropDir, name), stale, stale);
+    }
+    updateState(agents, (state) => {
+      const one = state.sessions[session] ??= emptySession();
+      one.seats[lead] = { stage: 'ready', pane: leadPane };
+      one.seats[seat] = { stage: 'ready', pane: seatPane };
+    });
+    writeFileSync(file, example.replace('    name: deepseek-acme\n', '    name: deepseek-acme\n    stopped: true\n'));
+    const clear = testIo(dir, { kind: 'seat', name: lead, pane: leadPane, session });
+    expect(await runAck(['--seat', seat, '--older-than', '7d'], clear, { home, now: () => new Date(clock) }), clear.err).toBe(0);
+    expect(clear.out).toContain('1 marked read');
+    // Restore the seat so a lifecycle refusal cannot hide an exposed body.
+    writeFileSync(file, example);
+    expect(existsSync(path)).toBe(true);
+
+    const peek = peekMessage({ dropDir, root, seat, session, lead }, id, home, current.seats.map((one) => one.name));
+    const messages = testIo(dir, { kind: 'owner' });
+    expect(await runMessages(['--json'], messages, { home, now: () => new Date(clock) }), messages.err).toBe(0);
+    const reader = () => testIo(dir, { kind: 'seat', name: seat, pane: seatPane, session });
+    const drops = reader();
+    expect(await runDrops(['--read', '--seat', seat, '--session', session], drops, { home }), drops.err).toBe(0);
+    const mcp = reader();
+    const replies: string[] = [];
+    expect(await runMcpServe({ seat, session, file }, mcp, {
+      lines: (async function* () {
+        yield JSON.stringify({ jsonrpc: '2.0', id: 'cleared', method: 'tools/call', params: { name: 'inbox_read', arguments: { id } } });
+      })(),
+      write: (line) => { replies.push(line); },
+    }, { home, build: { version: '0.0.0-fixture', build: 'fixture', builtAt: 0, head: null }, restart: () => { throw new Error('unexpected install restart'); } }), mcp.err).toBe(0);
+    expect(replies).toHaveLength(1);
+    expect(JSON.parse(replies[0]!).result).toBeDefined();
+
+    // Live unread mail proves that the watch can still reach this restored seat.
+    const control = 'live9f38';
+    dropWaiting(seat, control, new Date(clock).toISOString(), '55555555-5555-4555-8555-555555555555');
+    scene = live({ 'deepseek-acme': { status: 'idle', screen: idle }, 'deepseek-acme-2': { status: 'working', screen: busy } });
+    const worker = scene.agents.find((one) => one.name === seat);
+    if (!worker) throw new Error('the synthetic live scene has no worker');
+    scene.screens[seatPane] = scene.screens[worker.pane] ?? '';
+    worker.pane = seatPane;
+    const watched = testIo(dir, { kind: 'owner' });
+    expect(await runWatch(['--file', file], watched, sources(2, { home })), watched.err).toBe(0);
+    expect({
+      drops: `${drops.out}${drops.err}`.includes(body),
+      messages: `${messages.out}${messages.err}`.includes(body),
+      inbox_read: `${replies.join('')}${mcp.out}${mcp.err}`.includes(body),
+      peek: JSON.stringify(peek).includes(body),
+      watch: `${watched.out}${watched.err}${typed.join('')}${notified.join('')}`.includes(body),
+    }).toEqual({ drops: false, messages: false, inbox_read: false, peek: false, watch: false });
+    expect(messages.out).not.toContain(id);
+    expect(drops.out).toBe('');
+    expect(drops.err).toContain(`${id}: already read at`);
+    expect(typed.join('')).toContain(control);
+  });
+
   test('a superseded brief dropped from the claim is not offered for read or rung', async () => {
     const currentTeam = team();
     const session = currentTeam.session;
@@ -2198,8 +2344,11 @@ describe('team watch', () => {
 
     const retry = testIo(dir, { kind: 'seat', name: seat, pane: 'pane-reader', session });
     expect(await runDrops(['--read', '--seat', seat, '--session', session], retry, { home })).toBe(0);
+    // The next turn names that read on stderr, so a hook that forwards stdout stays quiet, and serves no body.
     expect(retry.out).toBe('');
-    expect(retry.err).toBe('');
+    expect(retry.out).not.toContain('from the launch');
+    expect(retry.err).toContain('no unread drops');
+    expect(retry.err).toContain(`${third.id}: already read at`);
 
     const io = testIo(dir, { kind: 'owner' });
     expect(await runWatch(['--file', file], io, sources(2, { home }))).toBe(0);
@@ -2484,7 +2633,8 @@ describe('the sidebar of a running seat', () => {
     cursorSeat.model = 'Grok';
     cursorSeat.version = '4.7';
     cursorSeat.display = 'Grok 4.7';
-    const cursorScene = live({ 'claude-operator-acme': { status: 'idle', screen: '  Grok 4.7 256K High\n' } });
+    // The pane draws the workspace line under the status row. Without it the row does not count.
+    const cursorScene = live({ 'claude-operator-acme': { status: 'idle', screen: '  Grok 4.7 256K High\n  <workspace>\n' } });
     const cursor = pass({ team: file, watch: file.watch, state: emptySession(), live: cursorScene, machine: fine, now: 0, memory: newMemory() });
     expect(line(cursor, 'claude-operator-acme')).toBe('Grok 4.7 high');
 

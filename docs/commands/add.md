@@ -15,6 +15,11 @@ the project folder, every other seat in the team's lobby outside repositories, v
 lobby gate. `--worktree` names the worktree a temporary seat works in. `add` makes the lobby when it
 needs it, and refuses the same folders `up` refuses, before it writes anything.
 
+A seat that lands ready sits at the sidebar's end; the automatic order pass then runs on its
+own when the out-of-order tail is idle, or this command's answer carries its one hint line —
+[`team order`](order.md) says how the pass decides, and how the sidebar policy's manage word
+silences it.
+
 ## Synopsis
 
     team add <name> [--like <seat>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]

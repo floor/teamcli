@@ -101,6 +101,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-or-leads',
       why: 'the `start` row for a seat: as `start`',
     },
+    checkpoint: {
+      kind: 'owner-or-leads',
+      why: 'recording a standing checkpoint ask for a seat: the owner or `leads`, as `restart`',
+    },
     reload: {
       kind: 'owner-or-leads',
       why: 'the `start` row for a running seat, as `restart`: closing and relaunching one seat is the same act',
@@ -160,6 +164,10 @@ function buildGates(): Record<string, Gate> {
     'ask-show': {
       kind: 'any-caller',
       why: 'it verifies signed ask and marker files under a key the caller already holds: no team file, no seat and no terminal is read',
+    },
+    analyse: {
+      kind: 'any-caller',
+      why: 'the command runs its own analyser gate before any project file or git history is read: only the owner or a seat named in the owner\'s analyser setting for the target scope is admitted, and a public-only analyser is refused on a non-public project',
     },
     broker: {
       kind: 'owner-only',
@@ -397,6 +405,11 @@ function buildGates(): Record<string, Gate> {
       kind: 'team-read',
       why: 'one seat\'s settings and where each value comes from: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `--file` is the owner\'s alone, and set and unset are the owner\'s outright (their rows below)',
     },
+    show: {
+      kind: 'owner-or-own-team',
+      why: 'showing a message record is the record\'s addressee on its own pane, or the owner: it reads only the caller\'s own mailbox and writes the same signed read receipt team messages and team ack write',
+      terminal: { who: 'the owner or a seat of this team', where: 'a terminal outside herdr or its own pane' },
+    },
     swap: {
       kind: 'team-read',
       why: 'the view and `--rule` read is the team\'s: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `queue`, `now` and `cancel` have their own rows, and `--run` changes the team through the same verdict they call',
@@ -499,6 +512,10 @@ function buildGates(): Record<string, Gate> {
     batch: {
       kind: 'any-caller',
       why: 'it records several owner-seat actions as one request, or runs a batch the owner seat already signed; it does not grant, change owner-signers, or change approval-mode',
+    },
+    'policy:keys': {
+      kind: 'any-caller',
+      why: 'the listing reads the built-in policy names and changes nothing, so any caller reads it without an account or team record',
     },
     'policy:set': {
       kind: 'owner-only',

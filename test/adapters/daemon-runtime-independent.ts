@@ -26,6 +26,6 @@ export function inertRuntimeManager(home: string) {
     }
     throw new Error(`unexpected adapter verb ${String(args[0])}`);
   };
-  const manager = darwinServiceManager({ runner, uid: process.getuid?.() ?? 0, sleep: () => {}, now: () => new Date('2026-11-01T12:00:00Z') });
+  const manager = darwinServiceManager({ runner, uid: process.getuid?.() ?? 0, accountHome: home, sleep: () => {}, now: () => new Date('2026-11-01T12:00:00Z') });
   return { manager, calls, active: () => active };
 }

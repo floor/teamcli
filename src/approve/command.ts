@@ -15,10 +15,11 @@ import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { grantGate, logGranted } from '../grant.ts';
+import { readLauncherCover, withLauncherCover } from '../launch/launcher-cover.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { OVERRIDE_CHANGED, overrideFile } from '../profiles/overrides.ts';
-import { approvalStanding, approvedRecordOf, findStore, LEGACY_LINE, otherMatchingStores, otherStoreNote, readApproval, storePath, writeApproval, type Ceilings } from '../store/store.ts';
+import { approvalStanding, approvedRecordOf, findStore, LEGACY_LINE, otherMatchingStores, otherStoreNote, readApproval, storePath, writeApproval, type ApprovalRecord, type Ceilings } from '../store/store.ts';
 import { keyFingerprint, keyOf, keyRefusal, keyState, recordedGeneration } from '../store/keys.ts';
 
 // What a read of the terminal found: a canonical-mode line is queued (`waiting`), nothing is
@@ -42,6 +43,16 @@ export type ApproveSources = {
   /** The grant read. Left out, the real one. */
   grantGate?: typeof grantGate;
 };
+
+/** The record a diff is read against. Only a verified approval may lend its pin to the read of
+ *  its stored copy: an unverified record's `lead` was written outside the chain, and trusting it
+ *  would read the approved text under the very value that was swapped in. With no verified pin
+ *  the copy is read with none, so a chain-led text cannot match it and the change stays visible. */
+function diffBaseline(record: ApprovalRecord, verifiedPin: string | undefined): ApprovalRecord {
+  if (verifiedPin !== undefined) return { ...record, approval: { ...record.approval, lead: verifiedPin } };
+  const { lead: _unverified, ...approval } = record.approval;
+  return { ...record, approval };
+}
 
 const NONBLOCKING = constants.O_RDONLY | constants.O_NONBLOCK;
 
@@ -286,17 +297,26 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
         .join('\n')}\n\n`,
     );
   } else {
+    // The pin the diff reads the approved copy under: the verified record's, never the unverified
+    // `readApproval` copy's — that one was written outside the chain and may have been swapped to
+    // make a lead change read as layout.
+    const verifiedPin = standing.kind === 'verified' ? standing.record.approval.lead : undefined;
     const changes = [
-      ...compare(approvedFingerprints(previous), fingerprints(team), team).map(describe),
+      ...compare(approvedFingerprints(diffBaseline(previous, verifiedPin), sources.home), fingerprints(team), team).map(describe),
       ...checkDrift(previous.approval.checks, resolved.checks),
       // A record that does not verify is not an approval: this one is needed whatever the diff says.
       ...(standing.kind === 'legacy' ? ['the record predates signed records'] : []),
       ...(standing.kind === 'refused' ? ['the stored record does not verify'] : []),
     ];
     const lines = formatDiff(previous.file, text);
+    const previousRecord = approvedRecordOf(previous.file, {
+      home: sources.home,
+      root,
+      ...(verifiedPin !== undefined ? { lead: verifiedPin } : {}),
+    });
     if (lines.length === 0)
       io.stdout(`${path}: the same text as the copy approved on ${previous.approval.approvedAt}.\n\n`);
-    else if (approvedRecordOf(previous.file) !== null && approvedRecordOf(previous.file) === approvedRecordOf(text))
+    else if (previousRecord !== null && previousRecord === approvedRecordOf(text, { home: sources.home, root }))
       // The signature covers the canonical record: a reordered or reformatted file is the same record.
       io.stdout(`${path}: the same record as the copy approved on ${previous.approval.approvedAt}; only its layout changed.\n\n`);
     else {
@@ -338,7 +358,9 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
   // The out-of-band owner-authorization fingerprint: the agent shows it with `--show`, the owner
   // reads it back ("yes <fingerprint>"), and the agent reruns with `TEAM_OWNER_APPROVAL=<it>`. It
   // is recomputed from the live file, so a post-yes edit prints — and demands — a different hex.
-  const approveFp = approveFingerprint(team);
+  const launcherCover = readLauncherCover(root);
+  const launcherDigest = launcherCover.ok && launcherCover.present ? launcherCover.digest : undefined;
+  const approveFp = approveFingerprint(team, launcherDigest);
   io.stdout(`Owner-authorization fingerprint: ${approveFp}\n`);
 
   // exit: approve.show
@@ -359,7 +381,7 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
       store,
       // `pane` is the approved delegate's on a delegated approval: the record names it as the
       // actor beside the owner's signature, and the signed payload covers it.
-      { approval: { ...approvalOf(team, root, now, resolved.checks, pane), overrides: live.text }, file: text },
+      { approval: { ...withLauncherCover(approvalOf(team, root, now, resolved.checks, pane), root), overrides: live.text }, file: text },
       team.seats,
       sources.home,
       now,
@@ -540,7 +562,7 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
   const changed =
     (delegatedPane === undefined && grantedSeat === undefined) || previous === null
       ? undefined
-      : compare(approvedFingerprints(previous), fingerprints(team), team).map(describe).join('; ');
+      : compare(approvedFingerprints(previous, sources.home), fingerprints(team), team).map(describe).join('; ');
   if (grantedSeat !== undefined) return writeApproved(caller, undefined, changed, grantedSeat);
   return delegatedPane === undefined ? writeApproved(caller) : writeApproved(caller, delegatedPane, changed);
 }

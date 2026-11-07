@@ -20,7 +20,7 @@ import type { Terminal } from '../src/launch/terminal.ts';
 import { beginSession, SESSIONS_FILE, readStoreSessions } from '../src/sessions/registry.ts';
 import { readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, recordRenames, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-19T03:00:00Z');
 const OWNER = { kind: 'owner' as const };
@@ -133,7 +133,7 @@ type World = {
   /** `up` reads an empty agent list as on a machine whose herdr has none yet; scenes that start
    *  from recorded seats turn it on so herdr lists what the launch left. */
   reporting: { on: boolean };
-  /** The screen a seat's launch draws: the seat name is known by the time the line runs. */
+  /** The screen the held seat's codex line draws. The name arrives after the line runs, so the line is what selects it. */
   screens: Map<string, string>;
 };
 
@@ -150,7 +150,8 @@ function makeWorld(root: string): World {
   const agents = (): HerdrAgent[] => (reporting.on ? [...slots]
     .filter(([, slot]) => slot.running)
     .map(([pane, slot]) => ({
-      name: slot.name ?? pane,
+      // Unnamed until the rename. A pane id in this field is another seat's name, and the launch leaves the seat at launched.
+      name: slot.name,
       agent: 'claude-code',
       pane,
       workspace: slot.workspace,
@@ -193,7 +194,8 @@ function makeWorld(root: string): World {
         // The line may start with the run's own environment assignments; the CLI is the first
         // word after them.
         slot.cli = command.split(' ').find((word) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) ?? 'zsh';
-        slot.box = (slot.name !== null ? screens.get(slot.name) : undefined) ?? screenFor(command);
+        // The rename follows the line, so the seat name is not on the slot yet. The held seat is the one codex line.
+        slot.box = (slot.cli === 'codex' ? screens.get('held') : undefined) ?? screenFor(command);
       }
       return true;
     },
@@ -220,6 +222,7 @@ function makeWorld(root: string): World {
     sleep: async () => {},
     now: () => NOW,
   };
+  recordRenames(launch);
   return { launch, slots, procs, runs, session, reporting, screens };
 }
 

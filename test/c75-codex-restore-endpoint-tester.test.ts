@@ -166,8 +166,9 @@ type Scene = {
 function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
   const trace: Trace = { created: [], closed: [], typed: [], runs: [], renamed: [], managed: [] };
   let exited = false;
+  let listedName = scene.name === undefined ? null : scene.name;
   const agents = (): HerdrAgent[] | null => [{
-    name: scene.name === undefined ? null : scene.name,
+    name: listedName,
     agent: 'codex',
     pane: PANE,
     workspace: SPACE,
@@ -197,6 +198,7 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
     sendKey: () => true,
     renameAgent(_session, pane, name) {
       trace.renamed.push({ pane, name });
+      listedName = name;
       return true;
     },
     closeWorkspace(_session, workspace) {
@@ -290,6 +292,7 @@ test('a dead endpoint relaunches the seat in place on a freshly ensured endpoint
   expect(seatRuns(made.trace)[0]?.command).toContain(`resume ${THREAD}`);
   expect(seatRuns(made.trace)[0]?.command).toContain(`--remote ${APP_URL}`);
   expect(made.trace.managed).toEqual([{ dir, seat: SEAT }]);
+  expect(made.trace.renamed).toEqual([]);
   expect(seatState()?.stage).toBe('ready');
   expect(seatState()?.pane).toBe(PANE);
   expect(seatState()?.workspace).toBe(SPACE);

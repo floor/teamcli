@@ -4,25 +4,28 @@
 // no `last_valid` copy, no log line, no lock, no state. It runs nothing, reads no pane, no vendor file, no vendor key.
 // The live quota sources (a seat's status line, a CLI's usage command, a quota screen) live in
 // `quota-observe.ts` and are handed in as observations; nothing here reaches a pane itself.
-import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { budgetsInForceOf, notInForce, watchInForceOf } from '../approve/approval.ts';
 import { describe } from '../approve/fingerprint.ts';
 import { checkOf, countedFor, paceFrom, recall, recallSpend, screenOf, type ReadingSource, type Seen, type SpendReading } from '../budgets/readings.ts';
-import { budgetTable, budgetLine, reserveOf, sourcesOf, span, whenWord, WINDOWS, type BudgetRow, type BudgetState } from '../budgets/table.ts';
+import { budgetTable, budgetLine, reserveOf, sourceText, sourcesOf, span, whenWord, WINDOWS, WINDOW_MS, type BudgetRow, type BudgetState } from '../budgets/table.ts';
 import { money } from '../budgets/gate.ts';
 import { walkCaller } from '../caller.ts';
-import { TEAM_FILE } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
+import { loadTeamText, TEAM_FILE } from '../file/load.ts';
 import type { BudgetAccount, Seat, TeamFile } from '../file/types.ts';
-import { validateTeamFile, defaultBudgets } from '../file/validate.ts';
+import { defaultBudgets } from '../file/validate.ts';
 import type { Io } from '../io.ts';
 import { collapseNotes, renderTable } from '../output/index.ts';
-import { labOfSeat, machineAccountsByEntityOf, machineAccountsOf, ownerEntityOf, payingAccountOf, payingPoolOf } from './machine-accounts.ts';
+import { teamConfigRecordPath } from '../registry/team-config-store.ts';
+import { teamIdOf } from '../registry/teams.ts';
+import { labOfSeat, machineAccountsByEntityOf, machineAccountsOf, machineCreditsOf, machinePlansOf, ownerEntityOf, payingAccountOf, payingPoolOf, type MachineCredit } from './machine-accounts.ts';
 import { readMachineReadings, type MachineReading } from './machine-readings.ts';
 import { overridesInForceOf, quotaWith, type ProfileOverride } from '../profiles/overrides.ts';
 import { shippedQuotaAccounts } from '../profiles/profile.ts';
 import type { WindowName } from '../profiles/quota.ts';
-import { marginOf, marginWord, NEAR_CAP, QUOTA_STALE_MS, quotaOf, quotaText, PANE_UNREAD, USAGE_ACCOUNTS, USAGE_UNANSWERED, windowState, type CostObservation, type QuotaLabInput, type QuotaObservation, type QuotaState, type ReportQuota } from './quota.ts';
+import { accountLabel, amountText, expiredLabel, marginOf, marginWord, NEAR_CAP, QUOTA_STALE_MS, quotaOf, quotaText, PANE_UNREAD, USAGE_ACCOUNTS, USAGE_UNANSWERED, windowState, type CostObservation, type QuotaLabInput, type QuotaObservation, type QuotaState, type ReportQuota, type ReportQuotaAccount, type ReportQuotaWindow } from './quota.ts';
 import { readState, type State } from '../state.ts';
 import { approvalStanding, readApproval, storesFolder, type ApprovalRecord, type Standing } from '../store/store.ts';
 
@@ -177,6 +180,11 @@ export type ProjectUsage = {
    *  first, then the state): the filter turns them into the restricted words and the reader who
    *  stands here reads `text`. */
   problems: TeamProblem[];
+  /** The file the read tried when the live file cannot be read — the registry's record when the
+   *  definition lives there, the team file otherwise — so a note about it names what to repair.
+   *  Null when the read named none (a read that threw before a file was chosen) and when the
+   *  file was read. */
+  unreadableFile: string | null;
   /** What the block prints as its `note:` lines: for a caller who is not the owner, the fixed
    *  lines for stored readings the file does not bind (`UNBOUND_ACCOUNT`, `UNBOUND_SHAPE`). The
    *  state's own reason is a `problems` entry now, structured, so no raw message is left here. */
@@ -204,9 +212,9 @@ export type ProjectUsageOptions = {
 
 /**
  * One project's block: the accounts its budgets in force name, and any reading its state still
- * holds, each row exactly as `status` builds it. The team file is read through
- * `validateTeamFile`; when it cannot be read, `project` is null and there are no rows
- * (`NO_FIGURES`). The state is read
+ * holds, each row exactly as `status` builds it. The team is read through the one seam
+ * (`readTeamConfig`), so a definition the registry holds reads exactly as one still in its file;
+ * when it cannot be read, `project` is null and there are no rows (`NO_FIGURES`). The state is read
  * once and never written, and nothing here opens a lock, a pane or a vendor file; it never opens a
  * CLI's session file or a lab's credential; it reads TeamCLI's own key only to verify the
  * agreement, as `status` does. The key read is `approvalStanding`'s, and it was promised away in
@@ -222,7 +230,8 @@ export type ProjectUsageOptions = {
 export function projectUsage(root: string, options: ProjectUsageOptions): ProjectUsage {
   const { home, now, restricted } = options;
   const standing = approvalStanding(root, home);
-  const team = teamOf(root, home);
+  const read = teamOf(root, home);
+  const team = read.team;
   // The machine's own accounts, read once for this block: every team draws on them, so they
   // count for this one whatever its own file declares.
   const machine = machineAccountsOf(home);
@@ -244,11 +253,11 @@ export function projectUsage(root: string, options: ProjectUsageOptions): Projec
     stateProblem = { kind: 'state', tail: stateTailOf(message), text: shownNote(message, root, restricted, home) };
   }
   if (team === null) {
-    // The live file cannot be read: no figures at all (`NO_FIGURES`),
-    // plus the state's own problem when there is one.
-    const problems: TeamProblem[] = [{ kind: 'unreadable-file', text: NO_FIGURES }];
+    // The live file cannot be read: no figures at all (`NO_FIGURES`, naming the file when the
+    // read named one), plus the state's own problem when there is one.
+    const problems: TeamProblem[] = [{ kind: 'unreadable-file', text: unreadableText(read.file, root, restricted, home) }];
     if (stateProblem !== null) problems.push(stateProblem);
-    return { project: null, rows: [], whyNotCounted: null, spend: [], watch: 'not-known', staleAfter: defaultBudgets().staleAfter, accounts: [], seatAccounts: [], session: null, borrows: [], quotaAccounts: [], vendors: [], whys: [], problems, notes };
+    return { project: null, rows: [], whyNotCounted: null, spend: [], watch: 'not-known', staleAfter: defaultBudgets().staleAfter, accounts: [], seatAccounts: [], session: null, borrows: [], quotaAccounts: [], vendors: [], whys: [], problems, unreadableFile: read.file, notes };
   }
   // The live file is the record for every caller: the budgets in force, the project name and
   // the seats all read from it, the owner and a caller who is not the owner alike. Before any
@@ -306,6 +315,7 @@ export function projectUsage(root: string, options: ProjectUsageOptions): Projec
       return why === null ? [] : [{ account, why }];
     }),
     problems,
+    unreadableFile: null,
     notes,
   };
 }
@@ -471,21 +481,23 @@ function whyNotCountedOf(standing: Standing, team: TeamFile, budgets: TeamFile['
   return null;
 }
 
-/** Validate the live team file; an unreadable or invalid file has no fallback. */
-function teamOf(root: string, home: string): TeamFile | null {
-  const live = readText(join(root, TEAM_FILE));
-  if (live !== null) {
-    const checked = validateTeamFile(live, { home, root });
-    if (checked.ok) return checked.team;
-  }
-  return null;
-}
-
-function readText(path: string): string | null {
+/** The team's definition, read through the one seam: a definition the registry holds reads the
+ *  same as one still in its file, and a store root that is not a repository falls through to the
+ *  file exactly as before. An unreadable or invalid definition has no fallback, and the result
+ *  names the file that read was about: the registry's record when the record was the definition,
+ *  the team file when the file was. */
+function teamOf(root: string, home: string): { team: TeamFile | null; file: string | null } {
   try {
-    return readFileSync(path, 'utf8');
+    const loaded = readTeamConfig(root, { home });
+    if (loaded.ok) return { team: loaded.team, file: null };
+    const file = loaded.source === 'registry'
+      ? teamConfigRecordPath(home, teamIdOf(root))
+      : loaded.path ?? null;
+    return { team: null, file };
   } catch {
-    return null;
+    // A record this reader cannot open is this team's unreadable definition, not the machine
+    // report's failure: the other teams' blocks still print.
+    return { team: null, file: null };
   }
 }
 
@@ -497,6 +509,25 @@ function readText(path: string): string | null {
  *  the state's, quoted as it stands, for both callers. */
 function shownNote(message: string, root: string, restricted: boolean, home: string): string {
   return restricted ? message.replaceAll(join(root, '.agents'), '.agents') : tildify(message, home);
+}
+
+/** The line a block prints when its live file cannot be read, naming the file when the read
+ *  names one: the owner asked a vague `could not be read` note to say what to repair. A caller
+ *  who is not the owner reads the project's own file relative to its root (`.agents/team.yaml`),
+ *  a file under the home as `~/…`, and never a location this machine derived. With no printable
+ *  file the line is the plain `NO_FIGURES`. */
+function unreadableText(file: string | null, root: string, restricted: boolean, home: string): string {
+  if (file === null) return NO_FIGURES;
+  const shown = restricted ? restrictedFile(file, root, home) : tildify(file, home);
+  return shown === null ? NO_FIGURES : `no figures (the file ${shown} could not be read)`;
+}
+
+/** A file as a caller who is not the owner may read it named: this project's own file relative to
+ *  its root, or a `~/…` path. Anything else stays unnamed. */
+function restrictedFile(file: string, root: string, home: string): string | null {
+  if (file === join(root, TEAM_FILE)) return TEAM_FILE;
+  const shown = tildify(file, home);
+  return shown.startsWith('~/') ? shown : null;
 }
 
 /** The home folder in a message as `~/…`: the owner's rule that a report names no absolute path.
@@ -568,6 +599,10 @@ export type TeamEntry = {
    *  the machine counted the team under before its file broke, so a team whose file cannot be
    *  read still prints by name — never by path. */
   recorded?: string;
+  /** Set false when the machine's own answer says the team's session is gone or stopped: a
+   *  record, not a team. Absent when the answer was running, or was not asked, or could not be
+   *  given — only a known-dead session is ever called dead. */
+  live?: boolean;
 };
 /** A store whose own record cannot be read: `text` is the read's message, the owner's to see. */
 export type StoreEntry = { kind: 'store'; text: string };
@@ -605,6 +640,12 @@ export type MachineUsage = {
   /** The home folder the walk read, so a path in a note prints as `~/…` (the report's rule). */
   home: string;
   machineAccounts: string[];
+  /** Each account's plan, in the owner's words, from the machine file's `plans:` map. An account
+   *  with no entry has none, and its labels stay its own name. */
+  plans: Map<string, string>;
+  /** Each account's credit figures, in the owner's words, from the machine file's `credits:` map.
+   *  An account with no entry has none and prints no credits line. */
+  credits: Map<string, MachineCredit>;
   readings: MachineReading[];
   /** Every team the walk read, in walk order. */
   teams: TeamEntry[];
@@ -649,6 +690,24 @@ export function realKey(path: string): string {
 export type SessionLiveness = (session: string) => boolean | null;
 
 /**
+ * The session a team's approved record names, for a team whose live file names none: the store
+ * keeps the text that was approved (`ApprovalRecord.file`), so a team whose file cannot be read
+ * still answers whether its session runs — the record is the machine's own copy of the team as
+ * approved, and asking under it is evidence, not a guess. Null when the recorded text names no
+ * session or no longer loads: no evidence, and the team is left alone.
+ */
+function approvedSessionOf(text: string, root: string, home: string): string | null {
+  try {
+    const loaded = loadTeamText(text, root, join(root, TEAM_FILE), { home, checkOnly: true });
+    if (!loaded.ok) return null;
+    const session: unknown = loaded.team.session;
+    return typeof session === 'string' && session !== '' ? session : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Every store this machine holds, read the one way the design note rules (§ 2.1): the stores
  * folder listed, each name ending `-<12 hex>`, each record read whole for its root, each root
  * read by `projectUsage` under this caller's view. One bad store, one moved project, one
@@ -666,6 +725,8 @@ export type SessionLiveness = (session: string) => boolean | null;
  */
 export function machineUsage(home: string, now: number, view: UsageView, sessions?: SessionLiveness, running?: RunningModels): MachineUsage {
   const machineAccounts = machineAccountsOf(home);
+  const plans = machinePlansOf(home);
+  const credits = machineCreditsOf(home);
   const readings = readMachineReadings(home);
   const folder = storesFolder(home);
   let names: string[];
@@ -679,6 +740,11 @@ export function machineUsage(home: string, now: number, view: UsageView, session
   const mineKey = view.mine === null ? null : realKey(view.mine);
   const entries: MachineTeam[] = [];
   const seen = new Set<string>();
+  // The session each entry's liveness is asked under. The live file's own session is the first
+  // answer; a file that cannot be read names none, and the store's approved record still does —
+  // the record is the machine's own copy of the team as approved, so asking under it is
+  // evidence, not a guess.
+  const asked = new Map<TeamEntry, string | null>();
   for (const name of names.filter(isStoreName).sort()) {
     const store = join(folder, name);
     let record: ApprovalRecord | null;
@@ -706,10 +772,15 @@ export function machineUsage(home: string, now: number, view: UsageView, session
     }
     // The store's folder names the team (`<project>-<12 hex>`, `store.ts:59-64`): the recorded
     // name rides the entry so a file that cannot be read still prints as a team, by name.
-    entries.push({ kind: 'team', root, recorded: name.replace(/-[0-9a-f]{12}$/, ''), usage });
+    const entry: TeamEntry = { kind: 'team', root, recorded: name.replace(/-[0-9a-f]{12}$/, ''), usage };
+    entries.push(entry);
+    asked.set(entry, usage.session ?? approvedSessionOf(record.file, root, home));
   }
   if (view.mine !== null && !seen.has(realKey(view.mine))) {
-    entries.push({ kind: 'team', root: view.mine, usage: projectUsage(view.mine, { home, now, restricted, ...(running === undefined ? {} : { running }) }) });
+    const usage = projectUsage(view.mine, { home, now, restricted, ...(running === undefined ? {} : { running }) });
+    const entry: TeamEntry = { kind: 'team', root: view.mine, usage };
+    entries.push(entry);
+    asked.set(entry, usage.session);
   }
   const teams = entries.filter((entry): entry is TeamEntry => entry.kind === 'team');
   // A team whose herdr session no longer runs is a record: the file still declares what it
@@ -718,7 +789,9 @@ export function machineUsage(home: string, now: number, view: UsageView, session
   // session herdr cannot be asked about (null) is left alone: no evidence, no removal.
   if (sessions !== undefined) {
     for (const team of teams) {
-      if (team.usage.session === null || sessions(team.usage.session) !== false) continue;
+      const session = asked.get(team) ?? null;
+      if (session === null || sessions(session) !== false) continue;
+      team.live = false;
       team.usage.seatAccounts = [];
       team.usage.vendors = [];
     }
@@ -791,7 +864,7 @@ export function machineUsage(home: string, now: number, view: UsageView, session
   }
   return {
     home,
-    machineAccounts, readings,
+    machineAccounts, plans, credits, readings,
     teams,
     stores: entries.filter((entry): entry is StoreEntry => entry.kind === 'store').map((entry) => entry.text),
     counts: { teams: entries.length, labs: labs.size, accounts: accountNames.size },
@@ -800,7 +873,7 @@ export function machineUsage(home: string, now: number, view: UsageView, session
 }
 
 function byName(a: TeamEntry, b: TeamEntry): number {
-  const name = (team: TeamEntry) => team.usage.project ?? team.root;
+  const name = teamNameOf;
   return name(a) < name(b) ? -1 : name(a) > name(b) ? 1 : 0;
 }
 
@@ -917,6 +990,9 @@ export type ReportMachine = {
   state: BudgetState;
   inside: boolean;
   reserve: number | null;
+  /** The newest counted reading is older than its own window: the line shows no figure, its age
+   *  and source still print, and the state cell says `no fresh reading`. */
+  expired: boolean;
   /** The pace the newest reading's figure is being used at (§ 3-S3): null when there is none to
    *  read, and null in the restricted view when the newest reading is another team's — that pace
    *  is that team's figure, withheld. The renderer omits the element on that line rather than
@@ -950,6 +1026,9 @@ export type ReportSpendMachine = {
  *  Each field here is copied in `reportRowOf`; a field absent here is absent from both faces. */
 export type ReportRow = {
   account: string;
+  /** The plan's words the owner wrote for the account, when there is one: the row prints its
+   *  account by that label, and a script reads the account itself from `account`. */
+  plan?: string;
   window: WindowName | null;
   left: number | null;
   used: number | null;
@@ -961,6 +1040,9 @@ export type ReportRow = {
   state: BudgetState;
   inside: boolean;
   reserve: number | null;
+  /** The counted reading is older than its own window: its figures belong to a passed window
+   *  instance, so `left`/`used`/`resetsIn` are null and the line says `no fresh reading`. */
+  expired: boolean;
   /** The pace the row's figure is being used at (§ 3-S3): null when there is none to read. */
   pace: number | null;
 };
@@ -985,7 +1067,7 @@ export type ReportSpendRow = {
 
 /** One machine line's entry. One entry per line, so the text and the array walk side by side. */
 export type ReportAccount =
-  | { account: string; kind: 'subscription'; machine: ReportMachine; teams: ReportTeamRow[]; readable: boolean; pool?: 'gemini' | 'claude-gpt' }
+  | { account: string; kind: 'subscription'; machine: ReportMachine; teams: ReportTeamRow[]; readable: boolean; pool?: 'gemini' | 'claude-gpt'; plan?: string }
   | { account: string; kind: 'spend'; machine: ReportSpendMachine; teams: ReportSpendRow[] };
 
 export type ReportLab = {
@@ -1000,7 +1082,14 @@ export type ReportLab = {
 };
 
 export type ReportWhy = { scope: string; account: string; why: string };
-export type ReportNote = { scope: string; why: string; count?: number };
+export type ReportNote = {
+  scope: string;
+  why: string;
+  count?: number;
+  /** The seats a live note is about, sorted and distinct — whose panes could not be read. Absent
+   *  for a note that is not about named seats. */
+  seats?: string[];
+};
 
 /** One quota figure a seat's own screen (or the watch's record of it) gave: the window, its two
  *  percentages, the reset and margin the report already reads, and whether this run measured the
@@ -1011,6 +1100,9 @@ export type ReportSeatWindow = {
   window: WindowName;
   /** The account the figure measures — not always the account that pays for the seat. */
   account: string;
+  /** The plan the owner wrote for that account, when there is one: the line prints the account
+   *  by that label, and a script reads the account itself from `account`. */
+  plan?: string;
   left: number | null;
   used: number | null;
   resetsAt: string | null;
@@ -1024,6 +1116,9 @@ export type ReportSeatWindow = {
   readAt: string | null;
   age: string;
   stale: boolean;
+  /** The record is older than its own window: no figure and no reset prints, only the age and
+   *  the source, with the words `no fresh reading`. */
+  expired: boolean;
 };
 
 /** A seat's spend in money, per run. `source` carries the session registry's own two words
@@ -1056,6 +1151,8 @@ export type ReportSeatRow = {
   seat: string;
   cli: string;
   account: string;
+  /** The paying account's plan, in the owner's own words (`machinePlansOf`), when one is set. */
+  plan?: string;
   pool?: 'gemini' | 'claude-gpt';
   /** The team file's herdr session: the run the seat and its readings belong to. */
   run?: string;
@@ -1074,7 +1171,8 @@ export type QuotaFacts = {
   observations: QuotaObservation[];
   /** The money figures the same live read produced; absent from a caller with no cost source. */
   costs?: readonly CostObservation[];
-  notes: Array<{ why: string; count: number }>;
+  /** One entry per distinct why with its count; a pane note also names the seats it is about. */
+  notes: Array<{ why: string; count: number; seats?: string[] }>;
 };
 
 /** The one report both renderers print (design § 2.3, restricted shape). */
@@ -1089,6 +1187,10 @@ export type UsageReport = {
    *  states, seats and the one advice line. Built from observations the caller handed in and the
    *  machine's own reading store; never from a team the view hides. */
   quota: ReportQuota;
+  /** The credit figures the machine file writes down, keyed by the account they belong to and
+   *  copied field by field (never the owner's map by reference, the `ReportRow` rule). Present
+   *  only for a declared account this view prints a row for; absent when the owner wrote none. */
+  credits?: Record<string, MachineCredit>;
   unknown: ReportWhy[];
   notes: ReportNote[];
   /** The per-team seat breakdowns this view prints: the caller's own team by default, every
@@ -1110,6 +1212,7 @@ const WHY_WORDS: Record<UnknownWhy, string> = {
  * fragment is the tool's own, never a read's message, so nothing another team's read produced
  * can cross.
  */
+const NOT_RUNNING = 'a team on this machine is not running';
 const ANON: Array<{ why: string; sentence: (count: number) => string }> = [
   {
     why: 'its file could not be read',
@@ -1146,6 +1249,10 @@ const ANON: Array<{ why: string; sentence: (count: number) => string }> = [
   {
     why: 'its project folder is not there anymore',
     sentence: (n) => (n === 1 ? "1 team's project folder is not there anymore" : `${n} teams' project folders are not there anymore`),
+  },
+  {
+    why: NOT_RUNNING,
+    sentence: (n) => (n === 1 ? '1 team on this machine is not running' : `${n} teams on this machine are not running`),
   },
   {
     why: 'a store on this machine cannot be read',
@@ -1297,10 +1404,16 @@ function synthesizeAccounts(
       if (known === undefined || one.observedAt > known.observedAt) newest.set(one.window, one);
     }
     for (const one of newest.values()) {
+      // The map holds only observations whose window is known: the loop above skipped the rest.
+      const window = one.window;
+      if (window === null) continue;
       const source = one.source === 'status line' ? 'status_line' as const
         : one.source === 'cli usage' ? 'cli_usage' as const
           : one.source === 'machine reading' ? 'machine_reading' as const : null;
       const fresh = now - one.observedAt < QUOTA_STALE_MS && (one.resetsAt === null || one.resetsAt > now);
+      // A row synthesized from a reading is bound by the same rule as a budget row: an observation
+      // older than its own window is of a passed instance and carries no figure.
+      const expired = now - one.observedAt >= WINDOW_MS[window];
       lab.accounts.push({
         account: info.lab,
         kind: 'subscription',
@@ -1309,9 +1422,9 @@ function synthesizeAccounts(
         teams: [],
         machine: {
           window: one.window,
-          left: one.left,
-          used: one.used,
-          resetsIn: one.resetsAt === null ? one.resetText : span(Math.max(0, one.resetsAt - now)),
+          left: expired ? null : one.left,
+          used: expired ? null : one.used,
+          resetsIn: expired || one.resetsAt === null ? null : span(Math.max(0, one.resetsAt - now)),
           changedAt: new Date(one.observedAt).toISOString(),
           observedAt: new Date(one.observedAt).toISOString(),
           age: span(Math.max(0, now - one.observedAt)),
@@ -1320,6 +1433,7 @@ function synthesizeAccounts(
           state: fresh ? 'fresh' : 'stale',
           inside: false,
           reserve: null,
+          expired,
           pace: null,
           other: false,
           seat: one.seat,
@@ -1363,6 +1477,7 @@ function synthesizeAccounts(
         state: 'unknown',
         inside: false,
         reserve: null,
+        expired: false,
         pace: null,
         other: false,
         seat: null,
@@ -1383,6 +1498,15 @@ function synthesizeAccounts(
 }
 
 /**
+ * The name a team prints under: its live project name, the name its store recorded when the
+ * live file cannot be read, and the root only when neither is known — the same rule the
+ * unreadable-file note follows, so no face names a team by a path where its name is on record.
+ */
+function teamNameOf(team: TeamEntry): string {
+  return team.usage.project ?? (team.recorded !== undefined && team.recorded !== '' ? team.recorded : team.root);
+}
+
+/**
  * The one filter: the machine's facts in, exactly the report's fields out. A team the caller does
  * not own contributes counts, fixed sentences and figures of accounts the caller's own file
  * names — never a name, a root, a seat, a path or a message a read produced. When the caller
@@ -1394,19 +1518,41 @@ function synthesizeAccounts(
 export function reportOf(machine: MachineUsage, view: UsageView, now: number, mineNotes: readonly string[], allTeams = false, live: QuotaFacts | null = null): UsageReport {
   const mineEntry = view.mine === null ? null : machine.teams.find((team) => realKey(team.root) === realKey(view.mine as string)) ?? null;
   const mineName = mineEntry?.usage.project ?? null;
-  const nameOf = (team: TeamEntry) => team.usage.project ?? team.root;
+  const nameOf = teamNameOf;
   /** The name a member's own material prints under: its name, or `mine` when it has none. */
   const scopeOf = (team: TeamEntry) => (team === mineEntry ? mineName ?? 'mine' : view.full ? nameOf(team) : 'another');
   // The accounts the caller's own file names: the only accounts the restricted view may name.
   const mineAccounts = new Set((mineEntry?.usage.accounts ?? []).map((declared) => declared.account));
   for (const account of machine.machineAccounts) mineAccounts.add(account);
   const visible = (account: string) => view.full || mineAccounts.has(account);
-  // The accounts a CLI screen on this machine can expose a figure for: any shipped quota
-  // pattern's account, plus any account a team's own seats' patterns read. An account outside
-  // the set prints `not readable from a CLI screen` — the truth about where its figure can come
-  // from, never `unknown`, which reads as a figure not yet seen.
+  // The accounts a stored reading may count for: any shipped quota pattern's account, plus any
+  // account a team's own seats' patterns read. The store is machine-wide and outlives a seat, so
+  // the gate for it is every account a profile or a team's overrides can name.
   const readable = new Set<string>([...shippedQuotaAccounts(), ...USAGE_ACCOUNTS]);
   for (const team of machine.teams) for (const account of team.usage.quotaAccounts) readable.add(account);
+  // The accounts a screen on this machine can answer for NOW: a seat's CLI either has a pattern
+  // for it, or is a CLI whose own usage print measures it. A shipped pattern is the tool's
+  // knowledge of a CLI, not a screen — with no seat running that CLI here, nothing can answer.
+  // An account outside this set prints `not readable from a CLI screen` — the truth about where
+  // its figure can come from, never `unknown`, which reads as a figure not yet seen.
+  const screenReadable = new Set<string>();
+  for (const team of machine.teams) {
+    for (const account of team.usage.quotaAccounts) screenReadable.add(account);
+    for (const seat of team.usage.seatAccounts) {
+      if (seat.cli === 'antigravity' || seat.cli === 'agy') for (const account of USAGE_ACCOUNTS) screenReadable.add(account);
+    }
+  }
+  // The accounts a seat's own screen printed a live limit for: a wall is a reading of the
+  // account however little figure it carries, so the one line that stands for a lab nothing else
+  // answered on must not swallow the rows that would say when the limit lifts (item 8).
+  const liveWalls = new Set<string>();
+  if (live !== null) {
+    for (const one of live.observations) {
+      if (!one.wall || one.account === '') continue;
+      if (one.resetsAt !== null && one.resetsAt <= now) continue;
+      liveWalls.add(`${one.account}\0${one.pool ?? ''}`);
+    }
+  }
 
   const labs: ReportLab[] = [];
   /** The accounts some line of this report carries a figure for: the why-lines print only under
@@ -1437,7 +1583,7 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
         accounts.push(entry);
       } else {
         for (const line of account.lines) {
-          const entry = subscriptionEntryOf(account.account, line, view, mineEntry, now, readable.has(account.account), allTeams);
+          const entry = subscriptionEntryOf(account.account, line, view, mineEntry, now, screenReadable.has(account.account), allTeams, machine.plans.get(account.account));
           if (entry.machine.state !== 'unknown') withFigure.add(account.account);
           accounts.push(entry);
         }
@@ -1448,7 +1594,10 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
     // on: count them, so the one line that stands for the lab says how many instead of the lab
     // printing an `unknown` row that reads as a figure not yet seen.
     const noFigure = accounts.length === 0 || accounts.every((entry) =>
-      entry.machine.state === 'unknown' && entry.kind === 'subscription' && !entry.readable);
+      entry.kind === 'subscription'
+      && entry.machine.state === 'unknown'
+      && !entry.readable
+      && !liveWalls.has(`${entry.account}\0${entry.pool ?? ''}`));
     let seats = 0;
     if (noFigure && others === 0) {
       for (const team of machine.teams) {
@@ -1476,15 +1625,23 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
       && Date.parse(previous.machine.changedAt) > reading.observedAt) continue;
     lab.accounts = lab.accounts.filter((entry) => entry.account !== reading.account || entry.kind !== 'subscription'
       || (entry.machine.window !== null && (entry.machine.window !== reading.window || entry.pool !== reading.pool)));
+    // A stored figure older than its own window describes a window instance that passed: the row
+    // keeps the age and the source, withholds the percentage and the reset, and says so.
+    const expired = now - reading.observedAt >= WINDOW_MS[reading.window];
+    const planOfReading = machine.plans.get(reading.account);
     lab.accounts.push({ account: reading.account, kind: 'subscription', readable: true,
-      ...(reading.pool ? { pool: reading.pool } : {}), teams: previous?.kind === 'subscription' ? previous.teams : [],
-      machine: { window: reading.window, left: reading.left, used: reading.used,
-        resetsIn: reading.resetsAt === null ? null : span(Math.max(0, reading.resetsAt - now)),
+      ...(reading.pool ? { pool: reading.pool } : {}),
+      ...(planOfReading === undefined ? {} : { plan: planOfReading }),
+      teams: previous?.kind === 'subscription' ? previous.teams : [],
+      machine: { window: reading.window,
+        left: expired ? null : reading.left,
+        used: expired ? null : reading.used,
+        resetsIn: expired || reading.resetsAt === null ? null : span(Math.max(0, reading.resetsAt - now)),
         changedAt: new Date(reading.observedAt).toISOString(), observedAt: new Date(reading.observedAt).toISOString(),
         age: span(Math.max(0, now - reading.observedAt)),
         source: 'status_line', fallback: false, state: now - reading.observedAt < 300000
           && (reading.resetsAt === null || reading.resetsAt > now) ? 'fresh' : 'stale',
-        inside: false, reserve: null, pace: null, other: false, seat: null } });
+        inside: false, reserve: null, expired, pace: null, other: false, seat: null } });
     lab.accounts.sort(byLine);
     withFigure.add(reading.account);
   }
@@ -1515,7 +1672,7 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
   // The zero-config accounts: a figure no visible lab names lands under its lab's own account
   // name, and gets the table rows above from the freshest reading. A declared account never
   // comes here, so `accounts.yaml` is still the way to name an account or split a lab.
-  const synthesized = synthesizeAccounts(labs, machine, view, mineEntry, now, observations, withFigure, readable);
+  const synthesized = synthesizeAccounts(labs, machine, view, mineEntry, now, observations, withFigure, screenReadable);
   const quotaLabs: QuotaLabInput[] = labs.map((lab) => {
     const seenAccounts = new Set<string>();
     const accounts: QuotaLabInput['accounts'] = [];
@@ -1544,17 +1701,59 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
           else seatsOther += 1;
         }
       }
-      accounts.push({ account: entry.account, ...(entry.pool ? { pool: entry.pool } : {}), seats, ...(seatsOther > 0 ? { seatsOther } : {}) });
+      const plan = machine.plans.get(entry.account);
+      accounts.push({
+        account: entry.account,
+        ...(entry.pool ? { pool: entry.pool } : {}),
+        ...(plan === undefined ? {} : { plan }),
+        seats,
+        ...(seatsOther > 0 ? { seatsOther } : {}),
+      });
     }
     return { lab: lab.lab, accounts };
   });
-  const quota = quotaOf({ labs: quotaLabs, observations: synthesized.observations, accountsFile: ACCOUNTS_FILE, now });
+  // The windows whose budget row is older than its own window, in the block's spelling: a team's
+  // stored reading may never reach the block (the block reads the machine's own store and this
+  // run's live sources), and the advice must still name it with how to read a fresh one.
+  const expired = [...new Set(labs.flatMap((lab) => lab.accounts.flatMap((entry) =>
+    entry.kind === 'subscription' && entry.machine.expired && entry.machine.window !== null
+      ? [expiredLabel(entry, lab.lab, entry.machine.window)]
+      : [])))];
+  // The owner's credit figures, for the accounts whose rows this view prints: a subscription's
+  // credits pay usage past the plan's limit, and an account this view hides gets no entry here,
+  // exactly like its rows. Copied field by field, so the owner's map never rides the JSON by
+  // reference. The advice reads the same map, so a near-cap account's overage answer is the
+  // credits line's own figures, never a second reading.
+  const credits: Record<string, MachineCredit> = {};
+  for (const lab of labs) {
+    for (const entry of lab.accounts) {
+      if (entry.kind !== 'subscription' || credits[entry.account] !== undefined) continue;
+      const credit = machine.credits.get(entry.account);
+      if (credit === undefined) continue;
+      credits[entry.account] = {
+        available: credit.available,
+        currency: credit.currency,
+        ...(credit.cap === undefined ? {} : { cap: credit.cap }),
+        ...(credit.autoReload === undefined ? {} : { autoReload: credit.autoReload }),
+      };
+    }
+  }
+  const quota = quotaOf({
+    labs: quotaLabs,
+    observations: synthesized.observations,
+    accountsFile: ACCOUNTS_FILE,
+    now,
+    ...(expired.length > 0 ? { expired } : {}),
+    ...(Object.keys(credits).length === 0 ? {} : { credits }),
+  });
 
   // Every why-line, the caller's own first, then by the words and the account: the order holds
-  // in both views, so hiding a name cannot reshuffle the lines around it.
+  // in both views, so hiding a name cannot reshuffle the lines around it. A team that is not
+  // running explains nothing about this machine: its why-lines are the same history its notes
+  // are, and the one summary line below says how many such teams there are.
   const mineWhys = (mineEntry?.usage.whys ?? []).map((one) => ({ team: mineEntry as TeamEntry, ...one }));
   const otherWhys = machine.teams
-    .filter((team) => team !== mineEntry)
+    .filter((team) => team !== mineEntry && team.live !== false)
     .flatMap((team) => team.usage.whys.map((one) => ({ team, ...one })))
     .filter((one) => visible(one.account));
   const byWord = (a: { account: string; why: UnknownWhy }, b: { account: string; why: UnknownWhy }): number =>
@@ -1571,8 +1770,8 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
   const notes: ReportNote[] = [];
   // The live source's own problems, already collapsed to one entry per distinct why: a pane that
   // would not read and a CLI usage command that did not answer each print one counted note, never
-  // one per seat.
-  if (live !== null) for (const note of live.notes) notes.push({ scope: 'usage', why: note.why, ...(note.count > 1 ? { count: note.count } : {}) });
+  // one per seat. A pane note carries the seats it is about, so the line says which panes.
+  if (live !== null) for (const note of live.notes) notes.push({ scope: 'usage', why: note.why, ...(note.count > 1 ? { count: note.count } : {}), ...(note.seats === undefined ? {} : { seats: note.seats }) });
   for (const text of mineNotes) notes.push({ scope: mineName ?? 'mine', why: text });
   const teamOrder = [...machine.teams].sort(byName);
   if (mineEntry !== null) {
@@ -1583,22 +1782,28 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
   // the owner's rule is one summary line for the teams with no data, never one note per team —
   // and the sentence names no team, so a name the view holds back never rides one. The caller's
   // own team's problems keep their own words above (`mineEntry`), and a store's message is the
-  // machine's, not a team's, and keeps its own rule below.
+  // machine's, not a team's, and keeps its own rule below. A team the machine reports as not
+  // running contributes neither a grouped sentence nor a named one: its problems are history.
   const groups = new Map<string, number>();
   const namedTeams: ReportNote[] = [];
   for (const team of teamOrder) {
-    if (team === mineEntry) continue;
+    if (team === mineEntry || team.live === false) continue;
     for (const problem of team.usage.problems) {
       if (!shownProblem(problem)) continue;
       // A team the machine still records by name keeps its name: the store's own folder is the
       // record of which team this is, and the owner asked a team whose file cannot be read to
       // print by that name and its `~/…` root (the report's own rule for a path) as one sentence.
       // A `~/…` root prints in every view, so a seat's line says what the owner's says; a root
-      // outside the home is a location this tool derived, and only the owner reads it.
+      // outside the home is a location this tool derived, and only the owner reads it. The file
+      // the read tried follows the same rule, in the sentence's parenthetical tail: the owner
+      // asked the note to name what to repair, and a caller who is not the owner reads only a
+      // `~/…` file, never a location this machine derived.
       if (problem.kind === 'unreadable-file' && team.recorded !== undefined && team.recorded !== '') {
         const shownRoot = tildify(team.root, machine.home);
+        const namedFile = team.usage.unreadableFile === null ? null : tildify(team.usage.unreadableFile, machine.home);
+        const shownFile = namedFile !== null && (view.full || namedFile.startsWith('~/')) ? namedFile : null;
         namedTeams.push(view.full || shownRoot.startsWith('~/')
-          ? { scope: 'named-team', why: `the team "${team.recorded}" (${shownRoot}): its file could not be read.` }
+          ? { scope: 'named-team', why: `the team "${team.recorded}" (${shownRoot}): its file could not be read${shownFile === null ? '' : ` (${shownFile})`}.` }
           : { scope: team.recorded, why: 'its file could not be read' });
         continue;
       }
@@ -1610,6 +1815,12 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
     notes.push({ scope: 'another', why, ...(count > 1 ? { count } : {}) });
   }
   for (const note of namedTeams) notes.push(note);
+  // The other teams whose sessions the machine reports as gone are one counted line, never one
+  // note each: such a team is a record, and the report says how many records it is not showing.
+  // The caller's own team is not in the count — its block always prints. The sentence names no
+  // team in either view — the names are history, and `--all` is the flag that prints their blocks.
+  const notRunning = teamOrder.filter((team) => team !== mineEntry && team.live === false);
+  if (notRunning.length > 0) notes.push({ scope: 'usage', why: NOT_RUNNING, ...(notRunning.length > 1 ? { count: notRunning.length } : {}) });
   // A store problem's message is the read's own and carries the store's path: the owner reads it
   // as it stands; every other caller reads the fixed sentence with the count (§ 2.3's note rule).
   if (view.full) for (const message of machine.stores) notes.push({ scope: 'store', why: message });
@@ -1627,12 +1838,12 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
   // team's store.
   const breakdowns: ReportTeamBlock[] = [];
   if (mineEntry !== null && mineName !== null) {
-    breakdowns.push({ team: mineName ?? 'mine', seats: seatRowsOf(mineEntry, live, now) });
+    breakdowns.push({ team: mineName ?? 'mine', seats: seatRowsOf(mineEntry, live, now, machine.plans) });
   }
   if (allTeams && view.full) {
     for (const team of teamOrder) {
       if (team === mineEntry) continue;
-      breakdowns.push({ team: nameOf(team), root: team.root, seats: seatRowsOf(team, live, now) });
+      breakdowns.push({ team: nameOf(team), root: team.root, seats: seatRowsOf(team, live, now, machine.plans) });
     }
   }
   if (allTeams && !view.full) {
@@ -1655,6 +1866,7 @@ export function reportOf(machine: MachineUsage, view: UsageView, now: number, mi
     },
     labs,
     quota,
+    ...(Object.keys(credits).length === 0 ? {} : { credits }),
     unknown,
     notes,
     teams: breakdowns,
@@ -1673,7 +1885,7 @@ const SEAT_COST_UNREAD = 'no money cost was read from this seat\'s screen this r
  * the windows the live read did not answer, marked `estimated`. A seat with neither carries no
  * window at all — the tree prints `unknown`, never a zero.
  */
-function seatRowsOf(entry: TeamEntry, live: QuotaFacts | null, now: number): ReportSeatRow[] {
+function seatRowsOf(entry: TeamEntry, live: QuotaFacts | null, now: number, plans: Map<string, string>): ReportSeatRow[] {
   const run = entry.usage.session;
   let stored: Seen[] = [];
   try {
@@ -1696,13 +1908,15 @@ function seatRowsOf(entry: TeamEntry, live: QuotaFacts | null, now: number): Rep
     const paid = costs
       .filter((one) => one.seat === row.seat && mine(one))
       .sort((a, b) => b.observedAt - a.observedAt)[0] ?? null;
+    const plan = plans.get(row.account);
     return {
       seat: row.seat,
       cli: row.cli,
       account: row.account,
+      ...(plan === undefined ? {} : { plan }),
       ...(row.pool ? { pool: row.pool } : {}),
       ...(run === null ? {} : { run }),
-      windows: seatWindowsOf(row.seat, measured, bound, now),
+      windows: seatWindowsOf(row.seat, measured, bound, now, plans),
       cost: costOf(paid, now),
     };
   });
@@ -1726,26 +1940,36 @@ function costOf(paid: CostObservation | null, now: number): ReportSeatCost {
  *  for every account and window the live read left open. `measured` is this run's own read of
  *  the seat's screen; `estimated` is the watch's earlier record. The state is the project's own,
  *  so its readings need no session stamp: within one project a seat name is one seat. */
-function seatWindowsOf(seat: string, measured: readonly QuotaObservation[], stored: readonly Seen[], now: number): ReportSeatWindow[] {
+function seatWindowsOf(seat: string, measured: readonly QuotaObservation[], stored: readonly Seen[], now: number, plans: Map<string, string>): ReportSeatWindow[] {
   const windows = new Map<string, ReportSeatWindow>();
+  // The plan the owner wrote for a window's account, when there is one: the line the figure
+  // prints on leads with it (`Google AI Ultra, Gemini models`), as the machine table's rows do.
+  const planOf = (account: string): { plan?: string } => {
+    const plan = plans.get(account);
+    return plan === undefined ? {} : { plan };
+  };
   for (const one of measured) {
     if (one.window === null) continue;
     const window = one.window;
     const stale = now - one.observedAt > QUOTA_STALE_MS || (one.resetsAt !== null && one.resetsAt <= now);
+    // Older than the window itself: the figure and its reset describe an instance that passed.
+    const expired = now - one.observedAt >= WINDOW_MS[window];
     const key = `${one.account}\0${window}`;
     const candidate: ReportSeatWindow = {
       window,
       account: one.account,
-      left: one.left,
-      used: one.used,
-      resetsAt: one.resetsAt === null ? null : new Date(one.resetsAt).toISOString(),
-      resetsIn: one.resetsAt === null ? one.resetText : span(one.resetsAt - now),
-      margin: stale ? null : marginOf(one, now),
+      ...planOf(one.account),
+      left: expired ? null : one.left,
+      used: expired ? null : one.used,
+      resetsAt: expired || one.resetsAt === null ? null : new Date(one.resetsAt).toISOString(),
+      resetsIn: expired || one.resetsAt === null ? null : span(one.resetsAt - now),
+      margin: expired || stale ? null : marginOf(one, now),
       mark: 'measured',
       source: one.source,
       readAt: new Date(one.observedAt).toISOString(),
       age: span(now - one.observedAt),
       stale,
+      expired,
     };
     const known = windows.get(key);
     if (known === undefined || (known.readAt ?? '') < (candidate.readAt ?? '')) windows.set(key, candidate);
@@ -1757,14 +1981,16 @@ function seatWindowsOf(seat: string, measured: readonly QuotaObservation[], stor
     if (windows.has(key)) continue;
     const resetsAt = one.resetsAt;
     const stale = now - one.changedAt > QUOTA_STALE_MS || (resetsAt !== null && resetsAt <= now);
+    const expired = now - one.changedAt >= WINDOW_MS[one.window];
     windows.set(key, {
       window: one.window,
       account: one.account,
-      left: one.left,
-      used: one.used,
-      resetsAt: resetsAt === null ? null : new Date(resetsAt).toISOString(),
-      resetsIn: resetsAt === null ? null : span(resetsAt - now),
-      margin: stale || (one.window !== 'session' && one.window !== 'weekly') ? null : marginOf({ used: one.used, window: one.window, resetsAt, margin: null }, now),
+      ...planOf(one.account),
+      left: expired ? null : one.left,
+      used: expired ? null : one.used,
+      resetsAt: expired || resetsAt === null ? null : new Date(resetsAt).toISOString(),
+      resetsIn: expired || resetsAt === null ? null : span(resetsAt - now),
+      margin: expired || stale || (one.window !== 'session' && one.window !== 'weekly') ? null : marginOf({ used: one.used, window: one.window, resetsAt, margin: null }, now),
       mark: 'estimated',
       // Not the word `watch`: the watch clause is the machine line's own, and a seat figure
       // read from the project state must not read as one.
@@ -1772,6 +1998,7 @@ function seatWindowsOf(seat: string, measured: readonly QuotaObservation[], stor
       readAt: new Date(one.changedAt).toISOString(),
       age: span(now - one.changedAt),
       stale,
+      expired,
     });
   }
   // The account first, the table's window order inside it: the same order the machine lines
@@ -1804,14 +2031,16 @@ function subscriptionEntryOf(
   now: number,
   readable: boolean,
   allTeams: boolean,
+  plan?: string,
 ): ReportAccount {
   const newest = line.newest;
   const other = newest !== null && newest.team !== mineEntry;
+  const expired = newest?.row.expired ?? false;
   const machine: ReportMachine = {
     window: line.window,
-    left: newest?.row.left ?? null,
-    used: newest?.row.used ?? null,
-    resetsIn: newest?.row.resetsIn ?? null,
+    left: expired ? null : newest?.row.left ?? null,
+    used: expired ? null : newest?.row.used ?? null,
+    resetsIn: expired ? null : newest?.row.resetsIn ?? null,
     changedAt: newest === null ? null : new Date(newest.changedAt).toISOString(),
     age: newest?.row.age ?? null,
     source: newest?.row.source ?? null,
@@ -1819,10 +2048,13 @@ function subscriptionEntryOf(
     state: newest?.row.state ?? 'unknown',
     inside: newest?.row.inside ?? false,
     reserve: newest?.row.reserve ?? null,
+    expired,
     pace: other && !view.full ? null : newest?.pace ?? null,
     other,
-    ...(newest !== null && newest.team.usage.watch !== 'recording' ? { watch: newest.team.usage.watch } : {}),
-    ...(view.full && newest !== null ? { team: newest.team.usage.project ?? newest.team.root } : {}),
+    // A watch cannot record for a team that is not running: the clause that says so is about a
+    // live gap, and a stale team's name here would read as a problem of its own.
+    ...(newest !== null && newest.team.live !== false && newest.team.usage.watch !== 'recording' ? { watch: newest.team.usage.watch } : {}),
+    ...(view.full && newest !== null ? { team: teamNameOf(newest.team) } : {}),
     ...(newest !== null && (view.full || !other) ? { seat: newest.row.seat } : {}),
   };
   const rows = view.full && allTeams ? line.rows : line.rows.filter((one) => one.team === mineEntry);
@@ -1830,27 +2062,30 @@ function subscriptionEntryOf(
     .map((one) => {
       const from = borrowedOf(one.team, account);
       return {
-        team: view.full ? one.team.usage.project ?? one.team.root : one.team.usage.project ?? '',
+        team: view.full ? teamNameOf(one.team) : one.team.usage.project ?? '',
         ...(view.full ? { root: one.team.root } : {}),
-        row: reportRowOf(one.row, one.pace),
+        row: reportRowOf(one.row, one.pace, plan),
         ...(from === undefined ? {} : { borrowedFrom: from }),
       };
     })
     .sort((a, b) => (a.team < b.team ? -1 : 1));
-  return { account, kind: 'subscription', machine, teams, readable };
+  return { account, kind: 'subscription', machine, teams, readable, ...(plan === undefined || plan === '' ? {} : { plan }) };
 }
 
 /** The row's figure, copied field by field — `BudgetRow`'s own order, so the `--json` face stays
  *  byte-identical. The report is `JSON.stringify`'d, so a row carried by reference would print
  *  whatever field the internal type grows next; a field away from this list is away from both
  *  faces. The spend row's `reading` (`spendEntryOf`) is the same rule for the same reason. */
-function reportRowOf(row: BudgetRow, pace: number | null): ReportRow {
+function reportRowOf(row: BudgetRow, pace: number | null, plan?: string): ReportRow {
   return {
     account: row.account,
+    ...(plan === undefined || plan === '' ? {} : { plan }),
     window: row.window,
-    left: row.left,
-    used: row.used,
-    resetsIn: row.resetsIn,
+    // A figure older than its own window is not the current window's: both faces withhold it,
+    // and `expired` says why the cells are empty.
+    left: row.expired ? null : row.left,
+    used: row.expired ? null : row.used,
+    resetsIn: row.expired ? null : row.resetsIn,
     seat: row.seat,
     age: row.age,
     source: row.source,
@@ -1858,6 +2093,7 @@ function reportRowOf(row: BudgetRow, pace: number | null): ReportRow {
     state: row.state,
     inside: row.inside,
     reserve: row.reserve,
+    expired: row.expired,
     pace,
   };
 }
@@ -1874,14 +2110,14 @@ function spendEntryOf(account: MachineAccount & { kind: 'spend' }, view: UsageVi
     source: newest === null ? null : 'check',
     state: newest === null ? 'unknown' : now - newest.reading.at < staleAfterMs * 1000 ? 'fresh' : 'stale',
     other,
-    ...(view.full && newest !== null ? { team: newest.team.usage.project ?? newest.team.root } : {}),
+    ...(view.full && newest !== null ? { team: teamNameOf(newest.team) } : {}),
   };
   const rows = view.full && allTeams ? account.spend.rows : account.spend.rows.filter((one) => one.team === mineEntry);
   const teams: ReportSpendRow[] = rows
     .map((one) => {
       const from = borrowedOf(one.team, account.account);
       return {
-        team: view.full ? one.team.usage.project ?? one.team.root : one.team.usage.project ?? '',
+        team: view.full ? teamNameOf(one.team) : one.team.usage.project ?? '',
         ...(view.full ? { root: one.team.root } : {}),
         reading: {
           amount: one.reading.amount,
@@ -1940,12 +2176,22 @@ export function reportText(report: UsageReport, tree = false): string {
           for (const row of entry.teams) extras.push(teamRowText(row));
         }
       }
+      // The owner's credit figures print once under the account they belong to, with the one
+      // answer the figures allow about the overage. They are the owner's words in the machine
+      // file, not a reading: no CLI prints them, so the line carries no age.
+      if (first.kind === 'subscription') {
+        const credit = report.credits?.[first.account];
+        if (credit !== undefined) extras.push(creditText(first, credit, quotaAccountOn(report.quota, first.account, first.pool)));
+      }
       // A not-readable account's `no pattern can read this account` why is the same fact the
       // machine row above it just said, machine-wide; every other why still prints, named by its
       // account now that the line no longer sits directly under it.
       const unreadable = first.kind === 'subscription' && !first.readable;
+      // The why names the account, never one of its buckets: the entry stands for the whole
+      // account, and a plan's words name it for the owner when they wrote one.
+      const whyName = first.kind === 'subscription' ? accountLabel({ account: first.account, plan: first.plan }) : first.account;
       for (const why of report.unknown.filter((one) => one.account === first.account && !(unreadable && one.why === WHY_WORDS['no-pattern']))) {
-        extras.push(`  ${first.account}  (${why.scope === 'another' ? 'another team' : why.scope}: ${why.why})`);
+        extras.push(`  ${whyName}  (${why.scope === 'another' ? 'another team' : why.scope}: ${why.why})`);
       }
       at = end;
     }
@@ -1984,7 +2230,7 @@ export function reportText(report: UsageReport, tree = false): string {
     lines.push('', block.team);
     lines.push(...renderTable({
       headers: ['SEAT', 'CLI', 'ACCOUNT'],
-      rows: block.seats.map((seat) => [seat.seat, seat.cli, `${seat.account}${seat.pool ? ` (${seat.pool})` : ''}`]),
+      rows: block.seats.map((seat) => [seat.seat, seat.cli, accountLabel(seat)]),
     }));
     // The seat figures are the tree's detail: the default table stays the table it was, and
     // `--tree` adds each seat's own windows, their marks and the one spend line under it.
@@ -1997,31 +2243,63 @@ export function reportText(report: UsageReport, tree = false): string {
   return `${lines.join('\n')}\n`;
 }
 
+/** The credits line under an account's rows: the money the owner wrote down, its monthly cap and
+ *  the reload state, then the one answer these figures allow about the overage. Overage is
+ *  expected when the account's own state is `walled` or `near cap` — a window past its cap or on
+ *  course to empty before it resets. The expected overage in money is a figure no CLI prints and
+ *  no plan price would give, so the line answers with the limit the credits are spent to: the
+ *  whole cap when the credit reaches it, else how far short of the cap the credit stops. A state
+ *  no reading can say prints neither answer, rather than a claim the figures do not hold. */
+function creditText(entry: { account: string; plan?: string }, credit: MachineCredit, account: ReportQuotaAccount | null): string {
+  const parts = [`${amountText(credit.available, credit.currency)} available`];
+  if (credit.cap !== undefined) parts.push(`${amountText(credit.cap, credit.currency)} monthly cap`);
+  if (credit.autoReload !== undefined) parts.push(credit.autoReload ? 'auto-reload on' : 'auto-reload off');
+  const state = account?.state ?? 'unknown';
+  if (state === 'walled' || state === 'near cap') {
+    const head = 'overage is expected before the reset';
+    if (credit.cap === undefined) parts.push(`${head}; the credits cover it until they are spent`);
+    else if (credit.available >= credit.cap) parts.push(`${head}; the credits cover the whole cap`);
+    else parts.push(`${head}; the credits cover it until they are spent, ${amountText(credit.cap - credit.available, credit.currency)} short of the cap`);
+  } else if (state === 'ok') {
+    parts.push('no overage is expected before the reset');
+  } else {
+    parts.push('no fresh reading, so overage cannot be expected or ruled out');
+  }
+  const label = accountLabel({ account: entry.account, ...(entry.plan === undefined ? {} : { plan: entry.plan }) });
+  return `  ${label}  credits  ${parts.join('  ')}`;
+}
+
 /** One team's per-seat figures, under its seat table in the tree: the run the seats belong to,
- *  one line per figure with its window, reset, margin and mark, one spend line per seat, and
- *  `unknown  no reading for this seat` where neither this run nor the watch's record has a
- *  figure. A quota figure a screen printed is `measured`; one read from the watch's per-seat
- *  record is `estimated`; a spend a screen printed is `measured`, and one no screen printed is
- *  `unknown` with its reason — never `0`. */
+ *  one line per figure with its window, reset, margin and where it was read, one spend line per
+ *  seat, and `unknown  no reading for this seat` where neither this run nor the watch's record
+ *  has a figure. A quota figure a screen printed says so in the plain words every face shares
+ *  (`sourceText`); one read from the watch's per-seat record is `estimated`; a spend a screen
+ *  printed says where, and one no screen printed is `unknown` with its reason — never `0`. */
 function seatFiguresText(block: ReportTeamBlock): string[] {
   // The run rides the rows (`run`, `--json`), not a line of its own: the block's header is the
   // team the caller already read, and a session name here would be one more line to keep true.
   const lines: string[] = [];
   for (const seat of block.seats) {
-    if (seat.windows.length === 0) lines.push(`  ${seat.seat}  ${seat.cli}  ${seat.account}  unknown  no reading for this seat`);
+    const label = accountLabel(seat);
+    if (seat.windows.length === 0) lines.push(`  ${seat.seat}  ${seat.cli}  ${label}  unknown  no reading for this seat`);
     for (const one of seat.windows) {
+      const account = accountLabel(one);
+      if (one.expired) {
+        lines.push(`  ${seat.seat}  ${seat.cli}  ${account}  ${one.window}  no fresh reading  ${sourceText(one.source)}, ${one.age} ago`);
+        continue;
+      }
       const left = one.left === null ? 'left unknown' : `left ${one.left}%`;
       const used = one.used === null ? 'used unknown' : `used ${one.used}%`;
-      const reset = one.resetsIn === null ? 'resets unknown' : `resets in ${one.resetsIn}`;
+      const reset = one.resetsIn === null ? 'resets not printed' : `resets in ${one.resetsIn}`;
       const stale = one.stale ? '  stale' : '';
-      lines.push(`  ${seat.seat}  ${seat.cli}  ${one.account}  ${one.window}  ${left}  ${used}  ${reset}  ${marginWord(one.margin)}  ${one.mark}  ${one.source}  read ${one.age} ago${stale}`);
+      lines.push(`  ${seat.seat}  ${seat.cli}  ${account}  ${one.window}  ${left}  ${used}  ${reset}  ${marginWord(one.margin)}  ${sourceText(one.source)}, ${one.age} ago${stale}`);
     }
     // The spend line belongs to its seat: the amount is the pane's own session, so two seats on
     // one account print their own figures, and one no screen answered for prints `unknown`.
     const cost = seat.cost.source === 'unknown' || seat.cost.amount === null
       ? `unknown  ${seat.cost.why ?? SEAT_COST_UNREAD}`
-      : `$${seat.cost.amount}  ${seat.cost.source}  ${seat.cost.readFrom ?? 'status line'}${seat.cost.age === undefined ? '' : `  read ${seat.cost.age} ago`}`;
-    lines.push(`  ${seat.seat}  ${seat.cli}  ${seat.account}  cost  ${cost}`);
+      : `$${seat.cost.amount}  ${sourceText(seat.cost.readFrom ?? 'status line')}${seat.cost.age === undefined ? '' : `, ${seat.cost.age} ago`}`;
+    lines.push(`  ${seat.seat}  ${seat.cli}  ${label}  cost  ${cost}`);
   }
   return lines;
 }
@@ -2040,7 +2318,10 @@ function paceWord(pace: number | null): string {
  *  stands in its place, since `pace not known` would read as a failed computation where the
  *  figure is real and withheld. Every other row keeps its word, in either view. */
 function accountCells(entry: ReportAccount, report: UsageReport): string[] {
-  const account = entry.kind === 'subscription' && entry.pool ? `${entry.account} (${entry.pool})` : entry.account;
+  // A subscription row leads with the owner's own words for it when they wrote a plan down, and
+  // always names its bucket the way the CLI does (`Gemini models`, `Claude and GPT models`):
+  // `claude-gpt` is the tool's private word for a pool and means nothing at a terminal.
+  const account = entry.kind === 'subscription' ? accountLabel(entry) : entry.account;
   if (entry.kind === 'spend') {
     const m = entry.machine;
     if (m.state === 'unknown' || m.amount === null || m.currency === null || m.age === null) {
@@ -2051,64 +2332,109 @@ function accountCells(entry: ReportAccount, report: UsageReport): string[] {
         ? `read by another team, ${m.age} ago`
         : `read by ${m.team}, ${m.age} ago`
       : `read ${m.age} ago`;
-    return [account, 'spend', `${money(m.amount)} ${m.currency}`, '-', '-', '-', read, 'check', m.state];
+    return [account, 'spend', `${money(m.amount)} ${m.currency}`, '-', '-', '-', read, sourceText(m.source ?? 'check'), m.state];
   }
   const m = entry.machine;
+  const source = sourceWordOf(m);
+  if (m.expired) {
+    // The figure belongs to a window instance that passed: the cells carry no percentage or
+    // reset, the provenance and the source still say what was read and when, and the state cell
+    // says why nothing else is there.
+    return [account, m.window ?? '-', '-', '-', '-', '-', provenanceOf(m, report), source, 'no fresh reading'];
+  }
   if (m.state === 'unknown' || m.left === null || m.used === null) {
+    const known = quotaAccountOn(report.quota, entry.account, entry.kind === 'subscription' ? entry.pool : undefined);
+    // A live wall a seat's own screen printed is a reading of this account: the row says when the
+    // limit lifts and when it was seen, in place of dashes with no reason. The account is read,
+    // so the not-readable marker is not this row's fact.
+    if (known?.wall !== undefined) {
+      const resets = known.wall.resets === null ? 'unknown' : known.wall.resets;
+      return [account, m.window ?? '-', '-', '-', '-', '-', '-', '-', `walled  limit reached, resets ${resets}  read ${known.wall.age} ago`];
+    }
     // An account no CLI screen can expose a figure for says so, machine-wide: `unknown` reads as
     // a figure not yet seen, and this account cannot be seen at all. The state word stays one of
     // the block's four — a wall with no figure is `walled` here — and the readability is the
     // marker after it, never the word itself.
-    const state = quotaAccountState(report.quota, entry.account, entry.kind === 'subscription' ? entry.pool : undefined);
+    const state = known?.state ?? 'unknown';
     return [account, m.window ?? '-', '-', '-', '-', '-', '-', '-', `${state}${entry.readable ? '' : '  not readable from a CLI screen'}`];
   }
-  const reset = m.resetsIn === null ? 'unknown' : `in ${m.resetsIn}`;
-  const from = m.source === 'status_line' ? 'status line'
-    : m.source === 'check' ? 'check'
-      : m.source === 'cli_usage' ? 'cli usage'
-        : m.source === 'machine_reading' ? 'machine reading' : 'unknown source';
-  const source = m.fallback ? `${from} (fallback)` : from;
+  // The figure's source is the fact: a surface that printed a percentage and no reset printed
+  // no reset — the reset is not unknown to the CLI, it is simply not on the surface this tool
+  // reads (the Codex bar carries percentages only; the reset lives in its status view).
+  const reset = m.resetsIn === null ? 'not printed' : `in ${m.resetsIn}`;
   const reserve = m.inside && m.reserve !== null ? `inside reserve ${m.reserve}%` : '-';
-  // The pace where one is known; where it is not, the margin the tree reads for the same row —
-  // one report, two faces, and the table never says `pace not known` beside a margin the other
-  // view prints (owner, 2026-10-17). With neither, the tool's own words stand.
-  const margin = m.pace === null ? marginOnRow(report.quota, entry.account, entry.kind === 'subscription' ? entry.pool : undefined, m.window) : null;
-  const pace = m.other && report.view === 'restricted' ? '' : m.pace === null && margin !== null ? marginWord(margin) : paceWord(m.pace);
+  // The block's own window for this row: its state, its margin and its clock, one lookup so the
+  // two faces cannot disagree. The pace where one is known; where it is not, the margin the tree
+  // reads for the same row — one report, two faces, and the table never says `pace not known`
+  // beside a margin the other view prints (owner, 2026-10-17). A window running ahead of its own
+  // clock by the headroom band says when it runs out instead, in both hours. With neither, the
+  // tool's own words stand.
+  const window = windowOnRow(report.quota, entry.account, entry.kind === 'subscription' ? entry.pool : undefined, m.window);
+  const margin = m.pace === null ? window?.margin ?? null : null;
+  const runsOut = window?.runsOutIn == null ? null : `runs out in about ${window.runsOutIn}, before the reset in ${window.resetsIn}`;
+  const pace = m.other && report.view === 'restricted' ? '' : runsOut ?? (m.pace === null && margin !== null ? marginWord(margin) : paceWord(m.pace));
   // The STATE cell is the block's four words — ok, near cap, walled, unknown — with freshness as
-  // the marker after them: an account at 89% used and half a window
-  // ahead said `fresh` and nothing else, which is where it was read, not where it stands.
-  const state = quotaStateOnRow(report.quota, entry.account, entry.kind === 'subscription' ? entry.pool : undefined, m.window)
-    ?? figureState(m);
+  // the marker after them: an account at 89% used and half a window ahead said `fresh` and
+  // nothing else, which is where it was read, not where it stands.
+  const state = (window === null ? null : windowState(window)) ?? figureState(m);
   const stale = m.state === 'stale' ? '  stale' : '';
-  const cell = `${state}  ${pace}${stale}${watchOf(m, report)}`.trimEnd();
+  // A window near its cap with its clock still on pace says both facts (item 13): the used floor
+  // put it near the cap, the pace says the spend is not running out, and the room left before the
+  // reset is what the credits and the advice answer for. A run-out sentence already carries both
+  // hours, so this clause never stands beside it.
+  const room = state === 'near cap' && pace === 'on pace' && m.left !== null && m.resetsIn !== null
+    ? `, ${m.left}% left, resets in ${m.resetsIn}`
+    : '';
+  const cell = `${state}  ${pace}${room}${stale}${watchOf(m, report)}`.trimEnd();
   return [account, m.window ?? '-', `${m.left}%`, `${m.used}%`, reset, reserve, provenanceOf(m, report), source, cell];
 }
 
+/** The SOURCE cell: where the machine line's figure was read, in the plain words every face
+ *  shares (`sourceText`), with the fallback clause the budget rows carry. One spelling for the
+ *  fresh and the expired line alike. */
+function sourceWordOf(m: ReportMachine): string {
+  const from = sourceText(m.source);
+  return m.fallback ? `${from} (fallback)` : from;
+}
+
 /** The state a row's own figure reads, when the quota block carries no window for it: fresh at
- *  `NEAR_CAP` or above is near cap, at 100 walled, anything else ok; not fresh is unknown. The
- *  margin's half-window-ahead reading is the block's (it needs the window's clock), and a block
- *  window that exists always wins through `quotaStateOnRow`. */
+ *  `NEAR_CAP` or above is near cap, at 100 walled, anything else ok; not fresh is unknown. This
+ *  is the fallback for a row the block has no clock for (a state reading the block never saw):
+ *  the margin decides the state where one exists, and a block window always wins through
+ *  `windowOnRow`. */
 function figureState(m: ReportMachine): QuotaState {
   if (m.state !== 'fresh' || m.used === null) return 'unknown';
   if (m.used >= 100) return 'walled';
   return m.used >= NEAR_CAP ? 'near cap' : 'ok';
 }
 
-/** The quota state the block reads for one machine row: the same account, pool and window, and
- *  that window's own state — so a row at 89% used but half a window ahead says `near cap`, the
- *  same word the tree prints. Null when the block carries no window of that name, so the row's
- *  own figure decides (`figureState`). */
-function quotaStateOnRow(
+/** The quota block's window for one machine row: the same account, pool and window. Null when
+ *  the block carries no window of that name, so the row's own figure decides. */
+function windowOnRow(
   quota: ReportQuota,
   account: string,
   pool: 'gemini' | 'claude-gpt' | undefined,
   window: string | null,
-): QuotaState | null {
+): ReportQuotaWindow | null {
   for (const lab of quota.labs) {
     for (const entry of lab.accounts) {
       if (entry.account !== account || entry.pool !== pool) continue;
-      const one = entry.windows.find((w) => w.window === window);
-      return one === undefined ? null : windowState(one);
+      return entry.windows.find((w) => w.window === window) ?? null;
+    }
+  }
+  return null;
+}
+
+/** The quota block's account for one machine row: the same account and pool. Null when the
+ *  block carries no account of that name, so the row's own figure decides. */
+function quotaAccountOn(
+  quota: ReportQuota,
+  account: string,
+  pool: 'gemini' | 'claude-gpt' | undefined,
+): ReportQuotaAccount | null {
+  for (const lab of quota.labs) {
+    for (const entry of lab.accounts) {
+      if (entry.account === account && entry.pool === pool) return entry;
     }
   }
   return null;
@@ -2121,31 +2447,7 @@ function quotaAccountState(
   account: string,
   pool: 'gemini' | 'claude-gpt' | undefined,
 ): QuotaState {
-  for (const lab of quota.labs) {
-    for (const entry of lab.accounts) {
-      if (entry.account === account && entry.pool === pool) return entry.state;
-    }
-  }
-  return 'unknown';
-}
-
-/** The margin the quota block reads for one machine row: the same account, pool and window, and
- *  a fresh figure only — the block's own staleness rule decides, so the table and the tree can
- *  never disagree about a margin. Null when the block carries none. */
-function marginOnRow(
-  quota: ReportQuota,
-  account: string,
-  pool: 'gemini' | 'claude-gpt' | undefined,
-  window: string | null,
-): number | null {
-  for (const lab of quota.labs) {
-    for (const entry of lab.accounts) {
-      if (entry.account !== account || entry.pool !== pool) continue;
-      const one = entry.windows.find((w) => w.window === window && !w.stale);
-      if (one !== undefined) return one.margin;
-    }
-  }
-  return null;
+  return quotaAccountOn(quota, account, pool)?.state ?? 'unknown';
 }
 
 /** How a machine line says where its figure came from: the caller's own reading prints as its own
@@ -2169,11 +2471,13 @@ function watchOf(m: ReportMachine, report: UsageReport): string {
  *  longer sits under the account's own line, then the team, then the figure the team's reading
  *  holds. */
 function teamRowText(row: ReportTeamRow): string {
-  return `  ${row.row.account}  ${row.team}  ${budgetLine(row.row).slice(row.row.account.length + 2)}  ${paceWord(row.row.pace)}${borrowedClause(row.borrowedFrom)}`;
+  // The row leads with the account's label when the owner wrote its plan down; the rest of the
+  // line is the budget row's own words, which still begin with the account itself.
+  return `  ${accountLabel(row.row)}  ${row.team}  ${budgetLine(row.row).slice(row.row.account.length + 2)}  ${paceWord(row.row.pace)}${borrowedClause(row.borrowedFrom)}`;
 }
 
 function spendRowText(account: string, row: ReportSpendRow): string {
-  return `  ${account}  ${row.team}  spend  ${money(row.reading.amount)} ${row.reading.currency} left  read ${row.reading.age} ago  check  ${row.reading.state}${borrowedClause(row.borrowedFrom)}`;
+  return `  ${account}  ${row.team}  spend  ${money(row.reading.amount)} ${row.reading.currency} left  read ${row.reading.age} ago  ${sourceText(row.reading.source)}  ${row.reading.state}${borrowedClause(row.borrowedFrom)}`;
 }
 
 /** The borrowing clause a team's row carries: the owning entity, in the parenthesised tail the
@@ -2183,7 +2487,9 @@ function borrowedClause(from: string | undefined): string {
 }
 
 /** One `note:` line's words: an anonymized machine problem is its fixed sentence for the count,
- *  the caller's own notes are printed as they stand, and any other note is named. A note with a
+ *  the caller's own notes are printed as they stand, and any other note is named. A counted
+ *  sentence that is about named seats appends them after a colon (`2 seat panes could not be
+ *  read: coda, lead`), so the reader knows which panes to look at. A note with a
  *  team's own name in its scope is named, never replaced by the counted sentence: a team whose
  *  file cannot be read prints by name (the owner's rule), and the counted sentence speaks only
  *  for the anonymous scope. A store's own message is printed as it stands for the owner; the
@@ -2196,6 +2502,9 @@ function noteText(note: ReportNote): string {
   if (note.scope === 'store' && !ANON.some((one) => one.why === note.why)) return note.why;
   if (note.scope !== 'another' && note.scope !== 'usage' && note.scope !== 'store') return `${note.scope}: ${note.why}`;
   const anon = ANON.find((one) => one.why === note.why);
-  if (anon !== undefined) return anon.sentence(note.count ?? 1);
+  if (anon !== undefined) {
+    const sentence = anon.sentence(note.count ?? 1);
+    return note.seats === undefined || note.seats.length === 0 ? sentence : `${sentence}: ${note.seats.join(', ')}`;
+  }
   return `${note.scope}: ${note.why}`;
 }

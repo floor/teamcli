@@ -20,7 +20,7 @@ import type { HerdrAgent } from '../src/herdr.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T09:00:00Z');
 const OWNER = { kind: 'owner' as const };
@@ -177,6 +177,8 @@ function harness(options: {
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(launch);
   return { sources: { launch, home, now: () => new Date(clock) }, closed, commands };
 }
 

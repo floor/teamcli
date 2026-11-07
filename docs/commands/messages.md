@@ -5,8 +5,10 @@ it was shown. A send writes the message as one signed record into the recipient'
 `<root>/.agents/send-drops/<session>/<seat>/<id>`; `team messages` reads every record still waiting
 there, verifies its signature with this checkout's message key, publishes the signed read receipt
 (`<id>.read.json`) with an exclusive, no-clobber link, makes it durable, and prints the body. The
-receipt is the read-once gate every reader shares, so a record another reader already served is
-skipped, and a body is never printed without the receipt that proves it went out. A record that
+receipt is the read-once gate this run and `inbox_read` share, so a record another reader already
+served is skipped, and this run never prints a body without the receipt that proves it went out.
+`team drops --read` prints first and writes the receipt after, so two racing readers can both
+print a body. A record that
 does not verify prints no body and writes nothing. A waiting general seat brief is not shown here:
 it belongs to the seat's own turn-start reader, and the run skips it and notes the seat (see below).
 An entry at a receipt name that
@@ -76,8 +78,17 @@ body prints under
 its own `<seat>/<id>:` heading, then the notes and the differences print, and one summary line
 (`<n> message` or `<n> messages`) closes it. `SENT` is the record's own timestamp read as its age; `--json` also
 carries the exact ISO string as `sent`. The `FROM` cell reads the sender as the project's
-[`sender_name`](../team-file.md#sender_name) word asks; `--json` carries the record's own `from`,
-and the signed record keeps the sender's registry id apart from it. A `waiting` row writes no
+[`sender_name`](../team-file.md#sender_name) word asks, followed by `(unverified claim)` when the
+shared checkout key is all that vouches for the record — every seat can read that key, so it
+proves the bytes were not changed after signing, not who wrote them — `(attributed)` when the
+launch brief is bound to the seat's current claim, or `(unattributed)` when no key could vouch
+for the file. A printed body is rendered the same way [`team drops --read`](drops.md)
+renders one: its `from … — admitted by: …` line is folded into the compact header (`from <name> (<short rule>):`, `Client <Display> (owner relay):`, or `<Kind> seat <name> (<short rule>):` for a non-Claude seat), and a
+body with no such line folds its record sender and rule into the same compact header (`from <sender> (<short rule>):` or `from <sender>:`), the message's own words
+untouched. `--json` carries the record's own `from` with `sender_attribution` beside it
+(`unverified_claim`, `launch-brief`, or `none`), its `body` stays the signed bytes — only the text
+reading marks it — and the signed record keeps the sender's registry id apart from it.
+A `waiting` row writes no
 receipt: it says the record is there for its own mailbox's reader, and a seat's run carries no
 body for it. The owner's run is read-only over the whole session and does carry the verified body
 on a `waiting` row; a record that does not verify carries none, whichever the caller. `--json`

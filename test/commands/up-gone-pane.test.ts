@@ -7,7 +7,7 @@ import { runApprove } from '../../src/approve/command.ts';
 import { runUp, type Launch, type UpSources } from '../../src/commands/up.ts';
 import { type HerdrAgent } from '../../src/herdr.ts';
 import { readState, type SeatState } from '../../src/state.ts';
-import { CLAUDE_IDLE, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, testIo, recordRenames } from '../helpers.ts';
 
 // The boundaries of the waiting-seat heal: a pane the host no longer lists is replaced, and
 // nothing else is. These tests pin the other side of each line the heal draws — the seats whose
@@ -136,6 +136,8 @@ function world(text: string = IDLE): World {
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(state.launch);
   return state;
 }
 
@@ -182,6 +184,7 @@ describe('team up, a pane that is gone or unknown', () => {
       // gone with it. A process read of a pane that no longer exists is null.
       const listed = () => [agent('deepseek-acme', 'w2:p1'), agent('deepseek-acme-2', 'w3:p1')];
       made.launch.agents = listed;
+      recordRenames(made.launch);
       made.launch.processInfo = (_session, pane) =>
         pane === 'w2:p1' ? { shell: 500, foreground: [500, 501] } :
         pane === 'w3:p1' ? { shell: 510, foreground: [510, 511] } : null;
@@ -237,6 +240,7 @@ describe('team up, a pane that is gone or unknown', () => {
       agent('deepseek-acme-2', 'w3:p1'),
     ];
     made.launch.agents = listed;
+    recordRenames(made.launch);
     made.launch.processInfo = (_session, pane) =>
       pane === 'w9:p1' ? { shell: 400, foreground: [777] } :
       pane === 'w2:p1' ? { shell: 500, foreground: [500, 501] } :
@@ -287,6 +291,7 @@ describe('team up, a pane that is gone or unknown', () => {
       agent('deepseek-acme-2', 'w3:p1'),
     ];
     made.launch.agents = listed;
+    recordRenames(made.launch);
     made.launch.processInfo = (_session, pane) =>
       pane === 'w9:p1' ? null :
       pane === 'w2:p1' ? { shell: 500, foreground: [500, 501] } :
@@ -343,6 +348,7 @@ describe('team up, a pane that is gone or unknown', () => {
       agent('deepseek-acme-2', 'w3:p1'),
     ];
     made.launch.agents = listed;
+    recordRenames(made.launch);
     made.launch.processInfo = (_session, pane) =>
       pane === 'w7:p1' ? { shell: 700, foreground: [700, 888] } :
       pane === 'w3:p1' ? { shell: 510, foreground: [510, 511] } : null;
@@ -398,6 +404,7 @@ describe('team up, two runs and the watchdog', () => {
       agent('deepseek-acme-2', 'w3:p1'),
     ];
     made.launch.agents = named;
+    recordRenames(made.launch);
     const second = testIo(root, { kind: 'owner' });
     const code2 = await runUp(FILE, second, sources({
       sessionState: () => 'running',
@@ -434,6 +441,7 @@ describe('team up, two runs and the watchdog', () => {
       agent('deepseek-acme-2', 'w3:p1'),
     ];
     made.launch.agents = named;
+    recordRenames(made.launch);
     const second = testIo(root, { kind: 'owner' });
     const code2 = await runUp(FILE, second, sources({
       sessionState: () => 'running',
@@ -473,6 +481,7 @@ describe('team up, two runs and the watchdog', () => {
       agent('deepseek-acme-2', 'w3:p1'),
     ];
     made.launch.agents = named;
+    recordRenames(made.launch);
     const second = testIo(root, { kind: 'owner' });
     const code2 = await runUp(FILE, second, sources({
       sessionState: () => 'running',
@@ -503,6 +512,7 @@ describe('team up, two runs and the watchdog', () => {
       agent('deepseek-acme-2', 'w3:p1'),
     ];
     made.launch.agents = listed;
+    recordRenames(made.launch);
     made.launch.processInfo = (_session, pane) =>
       pane === 'w1:p1' ? { shell: 400, foreground: [400, 401] } :
       pane === 'w2:p1' ? { shell: 500, foreground: [500, 501] } :

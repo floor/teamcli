@@ -237,7 +237,7 @@ screen:
           - '^\s*→'
           # The composer's own status row, character for character — the same expressions in all
           # three places that must recognise it.
-          - '^  Grok\s+\d.*'
+          - '^  Grok \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?(?:  +Run Everything)?$'
           - '^  Grok \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
           - '^  GPT-\d+(?:\.\d+)* Sol(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
           - '^  Gemini \d+(?:\.\d+)* Flash(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
@@ -312,7 +312,7 @@ screen:
               - '^\s*[⠀-⣿]'
               - '^\s*Tip:'
               - '^\s*→\s*(?:Add a follow-up|Plan, search, build anything)?\s*$'
-              - '^  Grok\s+\d.*'
+              - '^  Grok \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?(?:  +Run Everything)?$'
               - '^  Grok \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
               - '^  GPT-\d+(?:\.\d+)* Sol(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
               - '^  Gemini \d+(?:\.\d+)* Flash(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
@@ -364,15 +364,18 @@ screen:
     # never the row, and it leaves the screen unknown. A grammar line with no workspace line
     # under it reads no row at all.
     #
-    # Grok rows are the exception (`except`): main read any `  Grok <digit>` tail wherever it
-    # sat, and the follow-up-queue captures — transcribed rather than captured — draw Grok rows
-    # without `Run Everything`; pinning those rows' place would move readings main makes and
-    # every shipped Grok fixture keeps. The new families' rows have only ever been seen in
-    # place, so they carry the place test. The same expressions are used, character for
-    # character, in the trust dialog's none_after and in the working queue's exception, so the
-    # three places that decide whether a line is the status row cannot disagree.
+    # Grok rows skip the distance pin (`except`): the follow-up-queue captures — transcribed
+    # rather than captured — draw them without `Run Everything`, and pinning that distance
+    # would move readings those captures keep. The first pattern is the same closed tokens as
+    # the others, with `Run Everything` optional, and it ends at the line: words after the
+    # version are not the row. The workspace line is still required directly under the row, on
+    # the except path as on the others. A grammar line with no workspace line under it reads
+    # no row at all. The new families' rows have only ever been seen in place, so they carry
+    # the full place test. The same expressions are used, character for character, in the trust
+    # dialog's none_after and in the working queue's exception, so the three places that
+    # decide whether a line is the status row cannot disagree.
     status_line:
-      - '^  Grok\s+\d.*'
+      - '^  Grok \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?(?:  +Run Everything)?$'
       - '^  Grok \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
       - '^  GPT-\d+(?:\.\d+)* Sol(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'
       - '^  Gemini \d+(?:\.\d+)* Flash(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files? edited)?  +Run Everything$'

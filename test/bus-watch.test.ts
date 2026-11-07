@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PRIVILEGED_SELF_SUBSCRIPTION_RULE } from '../src/bus/kinds.ts';
-import { createSequenceTracker, readEvents, type SignedEventRecord } from '../src/bus/log.ts';
+import { appendEvent, createSequenceTracker, readEvents, type SignedEventRecord } from '../src/bus/log.ts';
 import { reconcilePass } from '../src/bus/reconcile.ts';
 import {
   busSocket,
@@ -20,7 +20,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import type { Io } from '../src/io.ts';
 import { registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
-import { signRecord, type RecordPayload } from '../src/send/record.ts';
+import { signReceiptPayload, signRecord, type RecordPayload } from '../src/send/record.ts';
 import { emptySession } from '../src/state.ts';
 import type { CheckContext, Report, SeatObservation } from '../src/watch/check.ts';
 import { attention as checkAttention } from '../src/watch/checks/attention.ts';
@@ -251,7 +251,7 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
     if (started.kind !== 'serving') return;
     handles.push(started.handle);
 
-    const published = await publishToBus(root, {
+    const published = appendEvent(parsed.team.project, root, home, {
       ts: '2026-10-18T12:00:00.000Z',
       kind: 'message.delivered',
       session: 'acme',
@@ -259,7 +259,7 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
       from: 'clerk',
       to: 'worker-1',
     });
-    expect(published.kind).toBe('published');
+    expect(published.ok).toBe(true);
 
     // Subscribing by the agent id, with the pane the registry holds, reaches the agent's seat.
     const byId = await subscribeBusOnce(root, { seat: agent.id, pane: 's1:p3', cursor: 0 });
@@ -380,14 +380,14 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
       ['record.invalid', 'r-1'],
       ['security.refused', 's-1'],
     ] as const) {
-      const published = await publishToBus(root, {
+      const published = appendEvent(parsed.team.project, root, home, {
         ts: '2026-10-18T12:02:00.000Z',
         kind,
         session: 'acme',
         record_id: id,
         rule: 'signature',
       });
-      expect(published.kind).toBe('published');
+      expect(published.ok).toBe(true);
     }
 
     const ownerSub = await subscribeBusOnce(root, { seat: 'owner', cursor: 0 });
@@ -427,14 +427,14 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
     handles.push(started.handle);
 
     // An event the policy routes to the lead, the subject and the owner.
-    const grant = await publishToBus(root, {
+    const grant = appendEvent(parsed.team.project, root, home, {
       ts: '2026-10-18T12:00:00.000Z',
       kind: 'team.grant-issued',
       session: 'acme',
       record_id: 'grant-1',
       subject: 'worker-1',
     });
-    expect(grant.kind).toBe('published');
+    expect(grant.ok).toBe(true);
 
     // The name alone receives nothing: the seat is a plain recipient like any other.
     const plain = await subscribeBusOnce(root, { seat: 'watch', cursor: 0 });
@@ -818,6 +818,20 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
     // t1 (during the gap): m-1 gets delivered + read receipts (seq 3..4), and worker-1 returns to idle.
     // `fullReplayFollower` steps at t1 (2 new events <= bufferLimit 2, so no gap); `gapFollower` misses t1.
     const t1Iso = '2026-10-18T12:17:00.000Z';
+    // The bus steps come from the signed envelopes a read leaves; the bare names stay beside
+    // them because this scene also exercises the follower's own disk rebuild, which reads those.
+    for (const status of ['delivered', 'read'] as const) {
+      const receipt = signReceiptPayload({
+        kind: 'receipt',
+        status,
+        id: 'm-1',
+        to: 'worker-1',
+        root: gapRoot,
+        session: 'acme',
+        at: t1Iso,
+      }, gapHome);
+      writeFileSync(join(dropDirWorker1, `m-1.${status}.json`), `${JSON.stringify(receipt, null, 2)}\n`);
+    }
     writeFileSync(join(dropDirWorker1, 'm-1.delivered'), '2026-10-18T12:16:20.000Z\n', { mode: 0o600 });
     writeFileSync(join(dropDirWorker1, 'm-1.read'), '2026-10-18T12:16:40.000Z\n', { mode: 0o600 });
     reconcilePass({ project: 'acme', root: gapRoot, session: 'acme', home: gapHome, now: new Date(t1Iso) });

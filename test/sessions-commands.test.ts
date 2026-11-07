@@ -19,7 +19,7 @@ import type { HerdrAgent } from '../src/herdr.ts';
 import { SESSIONS_FILE, readStoreSessions } from '../src/sessions/registry.ts';
 import { LOG_FILE, readState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, recordRenames, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-19T03:00:00Z');
 const OWNER = { kind: 'owner' as const };
@@ -122,7 +122,8 @@ function makeWorld(root: string): World {
   const agents = (): HerdrAgent[] => (reporting.on ? [...slots]
     .filter(([, slot]) => slot.running)
     .map(([pane, slot]) => ({
-      name: slot.name ?? pane,
+      // Unnamed until the rename. A pane id in this field is another seat's name, and the launch leaves the seat at launched.
+      name: slot.name,
       agent: 'claude-code',
       pane,
       workspace: slot.workspace,
@@ -178,6 +179,13 @@ function makeWorld(root: string): World {
     foreground: (_session, pane) => (slots.get(pane)?.running ? ['claude'] : ['zsh']),
     sleep: async () => {},
     now: () => NOW,
+  };
+  recordRenames(launch);
+  // A closed pane stays in the rename record. The list a later command reads is the panes still open.
+  const withRenames = launch.agents!;
+  launch.agents = (session) => {
+    const list = withRenames.call(launch, session);
+    return list?.filter((agent) => slots.has(agent.pane)) ?? null;
   };
   const down: DownLaunch = {
     typeText(_session, pane, text) {

@@ -20,7 +20,7 @@ import { SEAT_ID_PATTERN, STATE_FILE, emptySession, readState, updateState } fro
 import type { Live } from '../src/status/compare.ts';
 import type { Standing } from '../src/store/store.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T09:00:00Z');
 const OWNER = { kind: 'owner' as const };
@@ -320,6 +320,9 @@ ${seatBlock('worker', 'implementer', ['    count: 1'])}
       },
       now: () => new Date(clock),
     };
+
+
+    recordRenames(launch);
     const sources: UpSources = {
       sessionRunning: () => session === 'running',
       sessionState: () => session,

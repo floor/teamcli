@@ -150,7 +150,7 @@ key.
 | `entity` | string \| null | yes | `null` | 0.5.0 | The entity's name |
 | `lead` | string \| null | yes | `null` | 0.5.0 | The project lead, by agent id; never a seat or role name |
 | `teams` | string[] | yes | `[]` | 0.5.0 | The team ids this project groups |
-| `deliveryOrder` | array of `native` \| `mcp-inbox` \| `typed` | no | absent | 0.5.0 | The project's word on the delivery order; no command writes it in this build |
+| `deliveryOrder` | array of `native` \| `mcp-inbox` \| `typed` | no | absent | 0.5.0 | The project's word on the delivery order; no command writes it in this build. A record written before 0.5.13 may still name `mcp-inbox`; the word is read as a retired alias and dropped from any order |
 | `liveness` | map | no | absent | 0.5.0 | `idle_lead_seconds`, `idle_owner_seconds`, `blind_after_seconds`; whole seconds, at least one |
 | `policies` | map | no | absent | 0.5.0 | Owner-signed project-level policy declarations |
 | `provenance` | `{ registered_by, registered_at, updated_at }` | yes | — | 0.5.0 | Who wrote it and when |
@@ -284,7 +284,8 @@ roster line, and types nothing into the pane. Its outcomes are the exit-codes re
    `assistant`; a line written before those marks existed MUST read as not known to hold them.
    *Source:* `src/registry/teams.ts` (`RosterEntry`). *Proof:* `test/registry-teams.test.ts`.
 8. **A project id is derived once and never moved; a rename moves `name`.** Two projects MUST NOT
-   share one name, and a team two projects name MUST be refused, naming both. *Source:*
+   share one name. A team MAY belong to several projects, with one home for inheritance;
+   project readers MUST derive membership from team records, never a stored project-side list. *Source:*
    `src/registry/projects.ts` (`projectIdOf`, `byName`, `ofTeam`). *Proof:*
    `test/registry/projects.test.ts`.
 9. **A project's `liveness` holds only the three keys, each a whole number of seconds, at least

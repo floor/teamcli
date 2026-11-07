@@ -135,7 +135,9 @@ steps for it to the receiving team's event log, so the whole story of one id can
 order. Six kinds carry those steps — `message.staged` (the signed record reached the receiving
 drop folder), `message.arrived` (the bus's own verified arrival; this is the delivery),
 `webhook.posted` (a post to the seat's adapter, with its outcome and its cost), `leg.tried` (one
-leg of the walk: `via` names it, `outcome` is the walk's word, `ms` the cost), `wake.retried`
+leg of the walk: `via` names it, `outcome` is the walk's word, `ms` the cost; a typed wake's leg
+also carries the two times the delivery bound is read from, `submit_ms` and `working_ms`),
+`wake.retried`
 (the watch woke a seat for a record already left behind, `via` the leg and the try number) and
 `message.read` (the seat's own read receipt). The four that are not in the table above join its
 closed list after the pinned ref; the table's own thirty stay each cited to its line. They carry
@@ -147,6 +149,10 @@ A step's record id is the message id plus the step's tail: `<id>:staged`, `<id>:
 `<id>:replied` and `<id>:held`, and the arrival is the bare `<id>`. A step's payload carries two
 fields the other kinds do not: `outcome`, the step's own machine word (`posted`, `delivered`,
 `refused`, `unreachable`, …), and `ms`, the whole milliseconds the step took, zero included. A
+typed wake's `leg.tried` carries two more measurements, both counted from the moment the message
+was staged: `submit_ms` ends at the first read that showed the wake's line gone after Enter (the
+gated point), and `working_ms` ends at the first read that showed the profile's working screen
+with the line gone (reported only); either is absent when no read showed it. A
 step appended twice is one event: the log's own key (kind, record id, session) reports the second
 append as a duplicate. A step that cannot be appended is dropped with its reason; it never fails
 the step it records.
@@ -200,15 +206,16 @@ reply tool writes the reply record. Nothing is typed into the pane.
 
 ### The delivery order, with `drop`
 
-`DELIVERY_LEGS` at the tip: `socket`, `native`, `mcp-inbox`, `typed`, `drop`, `headless-resume`,
+`DELIVERY_LEGS` at the tip: `socket`, `native`, `typed`, `drop`, `headless-resume`,
 `session`; `channel` is the seat's own server push, implied by its launch rather than named by an
 order. The fallback order (`src/settings/inherit.ts`): `typed`, then `drop`. The walk that uses the
 order is the owner's cascade (ADR `zeus-message-path`, D1): channel-class legs first — a serving
 `channel` ahead of them, then the ones the chain names, in its own order — then the sender-posted
 webhook where the seat declares an adapter row, then the typed leg, then the mailbox.
 
-- `mcp-inbox` is not a delivery leg in this build: the MCP inbox is the store's reader, and the
-  walk reports the word `unavailable` rather than attempting it.
+- `mcp-inbox` is a retired name, no longer a leg: the MCP inbox is the store's reader. A word
+  that still names it is read as an alias and dropped from the order, never an error, and the
+  walk never sees it.
 - `typed` is the leg that wakes an idle seat, and only a profile that declares a typed wake has
   it: one trigger line into a box the wake read twice as the empty idle prompt, then the seat's
   own drop read. The profile's working screen after that Enter is `delivered (typed wake)`; the
@@ -271,7 +278,7 @@ webhook where the seat declares an adapter row, then the typed leg, then the mai
     while the thread is open, neither seat has been removed, and no revocation or deny applies to
     the pair; the rule is named on the record, and the owner may switch it off per team. A
     seat's answer to the entity's main orchestrator is the reach's own reply direction
-    (OD-20261103-02): admitted only on the thread that orchestrator opened, under the same
+    (owner decision, 2026-11-03): admitted only on the thread that orchestrator opened, under the same
     `seats_cross_teams` setting as the reach, named on the record, and never by reopening a
     closed thread. A thread admits nothing by itself.
 11. **No typing into a pane a human types in.** A typed line is refused for the owner's own seat
@@ -315,7 +322,7 @@ webhook where the seat declares an adapter row, then the typed leg, then the mai
   record), while the accepted amendment names the lead and the owner. Both positions are kept
   here: the code defines Today, and the amendment's lead-and-owner requirement stands for
   reconciliation.
-- Owner question 5 is settled (OD-20261018-05, under the owner's direction, revisable by the
+- Owner question 5 is settled (owner decision, 2026-10-18, under the owner's direction, revisable by the
   owner): at once, only a blocker or a decision that needs the owner, a release ready for his go,
   and a security refusal or a forged or invalid record; the rest batched in the lead's summary. The
   same word settles which kinds `privileged-kinds` grows to.
@@ -330,7 +337,7 @@ webhook where the seat declares an adapter row, then the typed leg, then the mai
 
 - **Draft** (the writer, 2026-10-18): lifted from the send-events amendment's v2 draft; read at
   int/0.5.1 (8acb470b).
-- **Folded** (the writer, 2026-10-19): owner question 5 recorded as settled by OD-20261018-05 (the
+- **Folded** (the writer, 2026-10-19): owner question 5 recorded as settled by owner decision, 2026-10-18 (the
   blocker or decision, the release ready, the security or invalid record at once; the rest
   batched), matching the amendment's v2 fold.
 - **Fix round 1** (the writer, 2026-10-18, on the architect's line): §3's kinds table is one row per

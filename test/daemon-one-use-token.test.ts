@@ -2,27 +2,47 @@
 // rename, so of two children started with one nonce exactly one passes and the other refuses.
 // The restore child's own scenes live beside its spawner; these pin the chores child (which
 // serves until its input ends, so "ran" is a live child that answers `ready` and exits 0 when
-// its input ends) and the claim helper itself. The last scene is the other side of the same
-// rule: a machine folder this uid cannot claim in starts nothing.
-import { afterEach, describe, expect, test } from 'bun:test';
+// its input ends) and the claim helper itself. The last scenes cover the sweep that removes the
+// claimed copies a process left when it died between the claim and the unlink. No scene asks the
+// machine whether a pid exists: every scene that plants a claimed copy injects its own answer,
+// and `pidAlive` is exercised only with an injected `kill`.
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { shortSocketBase } from './helpers.ts';
 import { fileURLToPath } from 'node:url';
-import { machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
-import { claimOneUseToken } from '../src/daemon/one-use-token.ts';
+import { choresInheritPath, machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
+import { claimOneUseToken, pidAlive, sweepSpentClaims, type KillProbe, type LivenessProbe } from '../src/daemon/one-use-token.ts';
 import { readChoresInherit, writeChoresInherit } from '../src/daemon/chores/token.ts';
 import { acceptRestoreDoor, restoreDoorText, restoreRequestProblem, writeRestoreDoor } from '../src/daemon/restore/token.ts';
 import type { ChoresChildConfig } from '../src/daemon/chores/protocol.ts';
 
-/** Timed scenes run under /private/tmp where a bun child starts quickly. */
-const BASE = existsSync('/private/tmp') ? '/private/tmp' : tmpdir();
+/** Timed scenes run under the short temp folder, where a bun child starts quickly. */
+const BASE = shortSocketBase();
 
 const ENTRY = fileURLToPath(new URL('../src/daemon/chores/entry.ts', import.meta.url));
 
 const bases: string[] = [];
 const live: ChildProcess[] = [];
+const realProcessKill = process.kill;
+const realKillCalls: Array<[number, number | string | undefined]> = [];
+
+beforeEach(() => {
+  realKillCalls.length = 0;
+  process.kill = ((pid: number, signal?: number | string) => {
+    realKillCalls.push([pid, signal]);
+    throw new Error(`real process.kill must never be reached in tests (called with pid=${pid}, signal=${String(signal)})`);
+  }) as typeof process.kill;
+});
+
+/** A liveness answer from the scene: only the pids named are alive. */
+function aliveOnly(...pids: number[]): LivenessProbe {
+  return (pid) => pids.includes(pid);
+}
+
+/** A liveness answer from the scene: every pid is gone. */
+const noneAlive: LivenessProbe = () => false;
 
 function scratch(): { base: string; root: string; home: string } {
   const base = realpathSync(mkdtempSync(join(BASE, 'team-one-use-token-')));
@@ -93,17 +113,19 @@ async function until(check: () => boolean, ms = 5_000): Promise<void> {
 }
 
 afterEach(() => {
+  process.kill = realProcessKill;
   for (const proc of live.splice(0)) {
     if (proc.exitCode === null) proc.kill('SIGKILL');
   }
   for (const base of bases.splice(0)) rmSync(base, { recursive: true, force: true });
+  expect(realKillCalls).toEqual([]);
 });
 
 describe('one nonce starts one child', () => {
   test('two children started with one token at once: exactly one serves', async () => {
     const { root, home } = scratch();
     for (let round = 0; round < 4; round += 1) {
-      const nonce = writeChoresInherit(configOf(home, root));
+      const nonce = writeChoresInherit(configOf(home, root), { isAlive: noneAlive });
       const first = startChild(home, nonce, root);
       const second = startChild(home, nonce, root);
       // The claim is the file system's rename, which admits one mover, so one child refuses
@@ -136,7 +158,7 @@ describe('one nonce starts one child', () => {
 
   test('a machine folder this child cannot claim in refuses the token', () => {
     const { root, home } = scratch();
-    const nonce = writeChoresInherit(configOf(home, root));
+    const nonce = writeChoresInherit(configOf(home, root), { isAlive: noneAlive });
     const dir = machineConfigDir(home);
     // Traversal and reading stay possible for this uid; only the claim (a rename in the folder)
     // is not. The child must refuse rather than serve.
@@ -166,6 +188,276 @@ describe('one nonce starts one child', () => {
     expect(claimOneUseToken(path)).toEqual({ kind: 'refused', why: 'no one-use token names this child' });
     // Neither the token nor a claimed copy is left behind.
     expect(readdirSync(base).filter((name) => name.startsWith('token.json'))).toEqual([]);
+  });
+});
+
+describe('the claimed copies a process left when it died between claim and unlink', () => {
+  const DEAD = 900_001;
+  const LIVE = 900_002;
+
+  test("a token write removes a dead pid's claimed copy and leaves every other shape alone", () => {
+    const { base, root, home } = scratch();
+    const dir = machineConfigDir(home);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const stale = join(dir, `restore.inherit.${'a'.repeat(32)}.json.claim.${DEAD}`);
+    writeFileSync(stale, '{"stale":true}\n');
+    const live = join(dir, `restore.inherit.${'b'.repeat(32)}.json.claim.${LIVE}`);
+    writeFileSync(live, '{"live":true}\n');
+    const notAPid = join(dir, `restore.inherit.${'c'.repeat(32)}.json.claim.not-a-pid`);
+    writeFileSync(notAPid, 'x\n');
+    const unrelated = join(dir, 'daemon.state.json');
+    writeFileSync(unrelated, '{}\n');
+    const target = join(base, 'outside-target.txt');
+    writeFileSync(target, 'target\n');
+    const link = join(dir, `restore.inherit.${'d'.repeat(32)}.json.claim.${DEAD}`);
+    symlinkSync(target, link);
+    const neighbour = join(home, `restore.inherit.${'e'.repeat(32)}.json.claim.${DEAD}`);
+    writeFileSync(neighbour, 'neighbour\n');
+    // A folder carrying the exact claimed spelling: only a regular file is a claim.
+    const folder = join(dir, `restore.inherit.${'9'.repeat(32)}.json.claim.${DEAD}`);
+    mkdirSync(folder);
+
+    writeRestoreDoor({ version: 1, home, root }, { isAlive: aliveOnly(LIVE) });
+
+    // The dead process's claimed copy is the only thing the write removed.
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(live)).toBe(true);
+    expect(existsSync(notAPid)).toBe(true);
+    expect(existsSync(unrelated)).toBe(true);
+    // A link is never followed, and the file outside the machine folder is untouched.
+    expect(existsSync(target)).toBe(true);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(existsSync(neighbour)).toBe(true);
+    expect(lstatSync(folder).isDirectory()).toBe(true);
+    // The write's own token is there.
+    expect(readdirSync(dir).some((name) => /^restore\.inherit\.[0-9a-f]{32}\.json$/.test(name))).toBe(true);
+  });
+
+  /** Plants one file under the machine folder and sweeps with every pid dead: the file stays
+   *  unless its whole name is the spelling a claim produces. */
+  function sweepOne(name: string): boolean {
+    const { root, home } = scratch();
+    const dir = machineConfigDir(home);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const path = join(dir, name);
+    writeFileSync(path, 'x\n');
+    writeRestoreDoor({ version: 1, home, root }, { isAlive: noneAlive });
+    return existsSync(path);
+  }
+
+  test('a file ending in a dead claim but headed by another name stays', () => {
+    expect(sweepOne('foo.claim.99999')).toBe(true);
+  });
+
+  test('a file whose whole name is a claim tail stays', () => {
+    expect(sweepOne('.claim.123')).toBe(true);
+  });
+
+  test('a claimed name whose pid has a leading zero stays: no claim writes that spelling', () => {
+    expect(sweepOne(`restore.inherit.${'f'.repeat(32)}.json.claim.0900001`)).toBe(true);
+  });
+
+  test('a pid the machine refuses to signal is alive: its claimed copy stays', () => {
+    const { root, home } = scratch();
+    const dir = machineConfigDir(home);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const protectedPid = 900_003;
+    const stale = join(dir, `restore.inherit.${'a'.repeat(32)}.json.claim.${protectedPid}`);
+    writeFileSync(stale, '{}\n');
+    const asked: Array<[number, number]> = [];
+    const kill: KillProbe = (pid, signal) => {
+      asked.push([pid, signal]);
+      // The process exists; this uid is simply not allowed to signal it.
+      throw Object.assign(new Error('not permitted'), { code: 'EPERM' });
+    };
+    writeRestoreDoor({ version: 1, home, root }, { isAlive: (pid) => pidAlive(pid, kill) });
+    expect(existsSync(stale)).toBe(true);
+    expect(asked).toEqual([[protectedPid, 0]]);
+  });
+
+  test('the chores token write sweeps the same way', () => {
+    const { root, home } = scratch();
+    const dir = machineConfigDir(home);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const stale = join(dir, `chores.inherit.${'a'.repeat(32)}.json.claim.${DEAD}`);
+    writeFileSync(stale, '{}\n');
+    const live = join(dir, `chores.inherit.${'b'.repeat(32)}.json.claim.${LIVE}`);
+    writeFileSync(live, '{}\n');
+    writeChoresInherit(configOf(home, root), { isAlive: aliveOnly(LIVE) });
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(live)).toBe(true);
+  });
+
+  test('adversarial probe: source tokens, live claims, EPERM claims, symlinks (file, dir, dangling), folders, and malformed names are never removed across restore and chores writes', () => {
+    const { base, root, home } = scratch();
+    const dir = machineConfigDir(home);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+
+    const DEAD_RESTORE = 800_001;
+    const DEAD_CHORES = 800_002;
+    const LIVE_RESTORE = 800_003;
+    const LIVE_CHORES = 800_004;
+    const EPERM_RESTORE = 800_005;
+    const EPERM_CHORES = 800_006;
+
+    // 1. Pre-existing unclaimed source tokens for both families must never be removed or probed.
+    const existingRestoreSource = restoreInheritPath(home, '1'.repeat(32));
+    const existingChoresSource = choresInheritPath(home, '2'.repeat(32));
+    writeFileSync(existingRestoreSource, '{"source":"restore"}\n', { mode: 0o600 });
+    writeFileSync(existingChoresSource, '{"source":"chores"}\n', { mode: 0o600 });
+
+    // 2. Dead claims (should be removed).
+    const deadRestoreClaim = join(dir, `restore.inherit.${'3'.repeat(32)}.json.claim.${DEAD_RESTORE}`);
+    const deadChoresClaim = join(dir, `chores.inherit.${'4'.repeat(32)}.json.claim.${DEAD_CHORES}`);
+    writeFileSync(deadRestoreClaim, '{"dead":"restore"}\n');
+    writeFileSync(deadChoresClaim, '{"dead":"chores"}\n');
+
+    // 3. Live claims (must stay).
+    const liveRestoreClaim = join(dir, `restore.inherit.${'5'.repeat(32)}.json.claim.${LIVE_RESTORE}`);
+    const liveChoresClaim = join(dir, `chores.inherit.${'6'.repeat(32)}.json.claim.${LIVE_CHORES}`);
+    writeFileSync(liveRestoreClaim, '{"live":"restore"}\n');
+    writeFileSync(liveChoresClaim, '{"live":"chores"}\n');
+
+    // 4. EPERM claims (must stay when probed via pidAlive).
+    const epermRestoreClaim = join(dir, `restore.inherit.${'7'.repeat(32)}.json.claim.${EPERM_RESTORE}`);
+    const epermChoresClaim = join(dir, `chores.inherit.${'8'.repeat(32)}.json.claim.${EPERM_CHORES}`);
+    writeFileSync(epermRestoreClaim, '{"eperm":"restore"}\n');
+    writeFileSync(epermChoresClaim, '{"eperm":"chores"}\n');
+
+    // 5. Symlinks with dead-claim spellings: symlink to file, symlink to directory, and dangling symlink (must stay, targets untouched).
+    const fileTarget = join(base, 'target-file.json');
+    writeFileSync(fileTarget, '{"target":true}\n');
+    const dirTarget = join(base, 'target-dir');
+    mkdirSync(dirTarget);
+    writeFileSync(join(dirTarget, 'inside.txt'), 'keep\n');
+    const linkToFile = join(dir, `restore.inherit.${'a'.repeat(32)}.json.claim.${DEAD_RESTORE}`);
+    const linkToDir = join(dir, `chores.inherit.${'b'.repeat(32)}.json.claim.${DEAD_CHORES}`);
+    const danglingLink = join(dir, `restore.inherit.${'c'.repeat(32)}.json.claim.${DEAD_RESTORE}`);
+    symlinkSync(fileTarget, linkToFile);
+    symlinkSync(dirTarget, linkToDir);
+    symlinkSync(join(base, 'does-not-exist'), danglingLink);
+
+    // 6. Folders with dead-claim spellings: empty folder and non-empty folder (must stay).
+    const emptyFolder = join(dir, `restore.inherit.${'d'.repeat(32)}.json.claim.${DEAD_RESTORE}`);
+    const nonEmptyFolder = join(dir, `chores.inherit.${'e'.repeat(32)}.json.claim.${DEAD_CHORES}`);
+    mkdirSync(emptyFolder);
+    mkdirSync(nonEmptyFolder);
+    writeFileSync(join(nonEmptyFolder, 'nested.txt'), 'nested\n');
+
+    // 7. Boundary/malformed claim names that must neither be probed nor removed:
+    //    - uppercase hex in nonce
+    //    - 31-hex and 33-hex nonces
+    //    - unknown family prefix
+    //    - pid 0, negative pid, leading-zero pid, unsafe integer pid (> MAX_SAFE_INTEGER), trailing suffix
+    const boundaryNames = [
+      `restore.inherit.${'0'.repeat(31)}A.json.claim.${DEAD_RESTORE}`,
+      `restore.inherit.${'f'.repeat(31)}.json.claim.${DEAD_RESTORE}`,
+      `restore.inherit.${'f'.repeat(33)}.json.claim.${DEAD_RESTORE}`,
+      `other.inherit.${'f'.repeat(32)}.json.claim.${DEAD_RESTORE}`,
+      `restore.inherit.${'f'.repeat(32)}.json.claim.0`,
+      `restore.inherit.${'f'.repeat(32)}.json.claim.-9`,
+      `restore.inherit.${'f'.repeat(32)}.json.claim.0${DEAD_RESTORE}`,
+      `restore.inherit.${'f'.repeat(32)}.json.claim.9007199254740992`,
+      `restore.inherit.${'f'.repeat(32)}.json.claim.${DEAD_RESTORE}.bak`,
+    ];
+    for (const name of boundaryNames) {
+      writeFileSync(join(dir, name), 'boundary\n');
+    }
+
+    const killCalls: Array<[number, number]> = [];
+    const fakeKill: KillProbe = (pid, signal) => {
+      killCalls.push([pid, signal]);
+      if (pid === LIVE_RESTORE || pid === LIVE_CHORES) return;
+      if (pid === EPERM_RESTORE || pid === EPERM_CHORES) {
+        throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
+      }
+      if (pid === DEAD_RESTORE || pid === DEAD_CHORES) {
+        throw Object.assign(new Error('no such process'), { code: 'ESRCH' });
+      }
+      throw new Error(`unexpected pid probed: ${pid}`);
+    };
+
+    const { nonce: restoreNonce } = writeRestoreDoor(
+      { version: 1, home, root },
+      { isAlive: (pid) => pidAlive(pid, fakeKill) },
+    );
+    const choresNonce = writeChoresInherit(
+      configOf(home, root),
+      { isAlive: (pid) => pidAlive(pid, fakeKill) },
+    );
+
+    // Dead regular-file claims of both families were removed on the first sweep.
+    expect(existsSync(deadRestoreClaim)).toBe(false);
+    expect(existsSync(deadChoresClaim)).toBe(false);
+
+    // Pre-existing source tokens and newly written source tokens are intact.
+    expect(readFileSync(existingRestoreSource, 'utf8')).toBe('{"source":"restore"}\n');
+    expect(readFileSync(existingChoresSource, 'utf8')).toBe('{"source":"chores"}\n');
+    expect(existsSync(restoreInheritPath(home, restoreNonce))).toBe(true);
+    expect(existsSync(choresInheritPath(home, choresNonce))).toBe(true);
+
+    // Live claims and EPERM claims are intact.
+    expect(readFileSync(liveRestoreClaim, 'utf8')).toBe('{"live":"restore"}\n');
+    expect(readFileSync(liveChoresClaim, 'utf8')).toBe('{"live":"chores"}\n');
+    expect(readFileSync(epermRestoreClaim, 'utf8')).toBe('{"eperm":"restore"}\n');
+    expect(readFileSync(epermChoresClaim, 'utf8')).toBe('{"eperm":"chores"}\n');
+
+    // Symlinks (file, directory, dangling) and their targets are intact.
+    expect(lstatSync(linkToFile).isSymbolicLink()).toBe(true);
+    expect(lstatSync(linkToDir).isSymbolicLink()).toBe(true);
+    expect(lstatSync(danglingLink).isSymbolicLink()).toBe(true);
+    expect(readFileSync(fileTarget, 'utf8')).toBe('{"target":true}\n');
+    expect(readFileSync(join(dirTarget, 'inside.txt'), 'utf8')).toBe('keep\n');
+
+    // Folders (empty and non-empty) are intact.
+    expect(lstatSync(emptyFolder).isDirectory()).toBe(true);
+    expect(lstatSync(nonEmptyFolder).isDirectory()).toBe(true);
+    expect(readFileSync(join(nonEmptyFolder, 'nested.txt'), 'utf8')).toBe('nested\n');
+
+    // All boundary/malformed filenames are intact and were never passed to fakeKill.
+    for (const name of boundaryNames) {
+      expect(readFileSync(join(dir, name), 'utf8')).toBe('boundary\n');
+    }
+
+    // Every fakeKill probe used signal 0, and real process.kill was never called.
+    expect(killCalls.every(([, sig]) => sig === 0)).toBe(true);
+    expect(realKillCalls).toEqual([]);
+
+    // Direct sweepSpentClaims on a missing directory is a safe no-op and never probes.
+    sweepSpentClaims(join(base, 'nonexistent-machine-dir'), () => {
+      throw new Error('must not probe when directory is absent');
+    });
+  });
+});
+
+describe('pidAlive asks with signal 0 and only "no such process" means gone', () => {
+  test('a pid that answers the probe is alive, and the probe asked with signal 0', () => {
+    const asked: Array<[number, number]> = [];
+    const kill: KillProbe = (pid, signal) => {
+      asked.push([pid, signal]);
+    };
+    expect(pidAlive(4242, kill)).toBe(true);
+    expect(asked).toEqual([[4242, 0]]);
+  });
+
+  test('ESRCH is the one dead answer', () => {
+    const kill: KillProbe = () => {
+      throw Object.assign(new Error('no such process'), { code: 'ESRCH' });
+    };
+    expect(pidAlive(4242, kill)).toBe(false);
+  });
+
+  test('every other error counts as alive: this uid cannot signal a process it has', () => {
+    for (const code of ['EPERM', 'EINVAL', 'EACCES']) {
+      const kill: KillProbe = () => {
+        throw Object.assign(new Error(code), { code });
+      };
+      expect(pidAlive(4242, kill)).toBe(true);
+    }
+    const codeless: KillProbe = () => {
+      throw new Error('no code');
+    };
+    expect(pidAlive(4242, codeless)).toBe(true);
   });
 });
 
@@ -327,4 +619,3 @@ describe('independent adversarial checks: one-use token, malformed nonces, unrea
     expect(readdirSync(machineConfigDir(home)).filter((name) => name.startsWith('restore.inherit.'))).toEqual([]);
   });
 });
-

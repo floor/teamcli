@@ -154,7 +154,7 @@ seats:
       expect(await runUsage(['--tree'], tree, { home, now: () => NOW, observe: () => ({ observations: [], costs: [cost], notes: [] }) })).toBe(0);
       // The measured figure stands on its own seat, with the surface and its age; the grok seat
       // and the seat with no state record print `unknown` and the one reason, never a zero.
-      expect(tree.out).toContain('  lead  claude-code  anthropic  cost  $5.8  measured  status line  read 0m ago\n');
+      expect(tree.out).toContain('  lead  claude-code  anthropic  cost  $5.8  read from a seat’s status bar, 0m ago\n');
       expect(tree.out).toContain(`  mystery  grok  xai  cost  unknown  ${UNREAD}\n`);
       expect(tree.out).toContain(`  ghost  claude-code  anthropic  cost  unknown  ${UNREAD}\n`);
       // The same run's document carries the session registry's cost vocabulary on every seat.

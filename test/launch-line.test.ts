@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { emptySession } from '../src/state.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import {
   launchBinary,
@@ -417,4 +418,22 @@ describe('the launch line check', () => {
     expect(stopped?.level).toBe('miss');
     expect(launchLineFindings(text, root, sources()).length).toBe(0);
   });
+});
+
+
+describe('review: launch diagnostics use occupied own-folder placement', () => {
+  for (const cli of ['grok', 'cursor']) for (const kind of ['own', 'ancestor', 'occupied']) {
+    test(`${cli} diagnostic checks ${kind} from the recorded placement`, () => {
+      const own = join(base, 'worktrees/acme/own'); mkdirSync(own, { recursive: true });
+      file(join(own, 'tools/run.sh'));
+      const original = team('./tools/run.sh');
+      const worker = { ...original.seats.find(s => s.name === 'worker')!, cli, cwd: kind === 'ancestor' ? home : '.' };
+      const declared = { ...original, seats: original.seats.map(s => s.name === worker.name ? worker : s) };
+      const state = emptySession(); state.worktrees.task = { seat: 'worker', path: own, branch: 'fix/own', setup: 'ok' };
+      if (kind === 'occupied') state.worktrees.peer = { seat: 'lead', path: own, branch: 'fix/peer', setup: 'ok' };
+      const found = launchLineFinding(declared, worker, root, sources({ state }));
+      if (kind === 'own') expect(found).toBeNull();
+      else { expect(found?.level).toBe('miss'); expect(found?.why).toContain(kind === 'ancestor' ? 'own worktree' : 'overlaps seat lead'); }
+    });
+  }
 });

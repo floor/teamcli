@@ -1,0 +1,13 @@
+# Synthetic fixture: a custom command (the escape hatch), with a working-directory change
+# and caller args refused. A custom command declares no writable_folders: TeamCLI cannot
+# enforce them for it, and declared-but-unenforced folders refuse the launch (fail-closed).
+format: 1
+name: legacy-tool
+kind: custom
+summary: Legacy wrapper kept verbatim during migration
+argv:
+  - /bin/zsh
+  - /opt/example/wrappers/legacy.sh
+  - --fixed flag with spaces
+args_mode: refuse
+cwd: /srv/example/seats/legacy

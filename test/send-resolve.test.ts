@@ -328,7 +328,7 @@ describe('resolveTarget by the team\'s lead address and by nickname', () => {
     ]);
     signNickname(w.home, builder.id, 'wren');
     const path = join(agentsDir(w.home), `${builder.id}.yaml`);
-    writeFileSync(path, readFileSync(path, 'utf8').replace('value: "wren"', 'value: "crow"'));
+    writeFileSync(path, readFileSync(path, 'utf8').replace('"value": "wren"', '"value": "crow"'));
 
     // Falling back to the roster's projection would resolve an address the store disowns; the
     // send refuses and names the record instead.
@@ -340,12 +340,13 @@ describe('resolveTarget by the team\'s lead address and by nickname', () => {
     expect(target.error).toContain('signature verification failed');
   });
 
-  test('a project record the roster line never names is still read: the project registry supplies the context', () => {
+  test('a project record the roster line never names is still read: the team record\'s project supplies the context', () => {
     const w = world('alpha', 'alpha', 'atlas', [seatBlock('coordinator', 'atlas', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
     const id = teamIdOf(w.root);
     const atlas = agent(w.home, { name: 'atlas', role: 'coordinator', cli: 'claude-code', team: id, seat: 'atlas', session: 'alpha', pane: 'pane-alpha-atlas' });
     const builder = agent(w.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: id, seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
-    // The team record carries a roster line and names no project; the project registry names it.
+    // The roster line names no project; the team record joins one, and that is the context the
+    // signed project record is read through.
     team(w.home, id, 'alpha', 'alpha', w.root, [
       { agent: atlas.id, seat: 'atlas', role: 'coordinator', leads: true },
       { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false, nickname: 'zeus' },
@@ -355,7 +356,11 @@ describe('resolveTarget by the team\'s lead address and by nickname', () => {
       { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false, nickname: 'zeus' },
     ] });
     expect(record.projectId).toBeNull();
-    upsertProject(w.home, 'acme-proj', { name: 'Acme', teams: [id] });
+    // Membership is stored on the team record: the project side's legacy `teams` list is
+    // diagnostics only, so the join is the team's own write.
+    upsertProject(w.home, 'acme-proj', { name: 'Acme' });
+    const joined = upsertTeam(w.home, id, { projectId: 'acme-proj', projects: ['acme-proj'] });
+    expect(joined.projectId).toBe('acme-proj');
     installKey(w.home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
     // A record at a level the key does not reach is damage the resolution must see, not skip.
     const signed = signConfigRecord(
@@ -483,10 +488,10 @@ describe('resolveTarget by @nickname', () => {
     const id = teamIdOf(w.root);
     const atlas = agent(w.home, { name: 'atlas', role: 'coordinator', cli: 'claude-code', team: id, seat: 'atlas', session: 'alpha', pane: 'pane-alpha-atlas' });
     team(w.home, id, 'alpha', 'alpha', w.root, [{ agent: atlas.id, seat: 'atlas', role: 'coordinator', leads: true }]);
-    const [, betaBuilder] = secondTeam(w, 'beta', [{ seat: 'atlas', nickname: 'hera', leads: true }, { seat: 'builder-1', nickname: 'hermes' }], 'alpha');
+    const [, betaBuilder] = secondTeam(w, 'beta', [{ seat: 'lead', nickname: 'guide', leads: true }, { seat: 'builder-1', nickname: 'worker' }], 'alpha');
     secondTeam(w, 'gamma', [{ seat: 'atlas', nickname: 'ares', leads: true }], 'other');
 
-    const entitySibling = resolveTarget(w.home, '@hermes', { cwd: w.root });
+    const entitySibling = resolveTarget(w.home, '@worker', { cwd: w.root });
     if ('error' in entitySibling) throw new Error(`the entity sibling's nickname did not resolve: ${entitySibling.error}`);
     expect(entitySibling.agent.id).toBe(betaBuilder!.id);
 
@@ -505,8 +510,8 @@ describe('resolveTarget by @nickname', () => {
     const outside = join(w.base, 'nowhere');
     mkdirSync(outside, { recursive: true });
 
-    expect(resolveTarget(w.home, '@hermes', { cwd: w.root })).toEqual({
-      error: '@hermes: no seat carries the nickname "hermes"; `team send --list` shows the addresses',
+    expect(resolveTarget(w.home, '@worker', { cwd: w.root })).toEqual({
+      error: '@worker: no seat carries the nickname "worker"; `team send --list` shows the addresses',
     });
     // Outside any team's folder the caller's own team is unknown, so every registry record is
     // asked; two answers are refused rather than one picked.
@@ -931,7 +936,7 @@ describe('the whole command on a registry-resolved spec', () => {
 });
 
 describe('the whole command from a folder that is no team', () => {
-  /** A team whose lead is `atlas` and whose builder carries the nickname `hermes`. */
+  /** A team whose lead is the coordinator seat and whose builder carries the nickname `worker`. */
   function teamWorld(): { w: World; lead: Agent; builder: Agent } {
     const w = world('alpha', 'alpha', 'atlas', [seatBlock('coordinator', 'atlas', 'claude-code', 'anthropic'), seatBlock('builder', 'builder-1', 'claude-code', 'anthropic')]);
     const id = teamIdOf(w.root);
@@ -939,7 +944,7 @@ describe('the whole command from a folder that is no team', () => {
     const builder = agent(w.home, { name: 'builder-1', role: 'builder', cli: 'claude-code', team: id, seat: 'builder-1', session: 'alpha', pane: 'pane-builder' });
     team(w.home, id, 'alpha', 'alpha', w.root, [
       { agent: lead.id, seat: 'atlas', role: 'coordinator', leads: true, nickname: 'zeus' },
-      { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false, nickname: 'hermes' },
+      { agent: builder.id, seat: 'builder-1', role: 'builder', leads: false, nickname: 'worker' },
     ]);
     return { w, lead, builder };
   }
@@ -961,7 +966,7 @@ describe('the whole command from a folder that is no team', () => {
   test('a full address still resolves: seat@team, nickname@team, the lead address and an agent id', async () => {
     const { w, lead, builder } = teamWorld();
 
-    for (const spec of ['builder-1@alpha', 'hermes@alpha', builder.id]) {
+    for (const spec of ['builder-1@alpha', 'worker@alpha', builder.id]) {
       const sent = await sends(w, spec);
       expect(sent.code).toBe(0);
       const typed = sent.panes['builder-1'].typed;

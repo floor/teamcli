@@ -8,7 +8,8 @@ starts; `install` writes and registers the user service unit that starts it at l
 it after a failure; `restart` stops the daemon that unit runs and starts that same unit again,
 writing nothing; `uninstall` removes that unit; `status` is the one-line health reading;
 `fault-watch` asks a running daemon to end one hosted watch's run as a counted fault, so the
-recovery path can be seen on a real daemon.
+recovery path can be seen on a real daemon. Every start also beats the machine's reminder list,
+read from the owner's entity record ([Reminders](#reminders)).
 
 The daemon reads no credential store. The broker feature is not hosted in this build, and a
 machine with no broker handler never falls back to a per-clone broker.
@@ -17,9 +18,9 @@ machine with no broker handler never falls back to a per-clone broker.
 
     team daemon status [--json]
     team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
-    team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
+    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
     team daemon restart [--dry-run] [--json]
-    team daemon uninstall [--json]
+    team daemon uninstall [--home <folder>] [--json]
     team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
 
 A subcommand is required. `--root` is repeatable and names the checkouts this one daemon hosts;
@@ -135,6 +136,19 @@ steps and stops or starts nothing.
 `team daemon: not installed; nothing to remove`, exit 0; a removed unit prints
 `team daemon: uninstalled; the system's service manager no longer starts it`.
 
+`--home <folder>` on `install` or `uninstall` serves a home other than the account home: a
+throwaway home, for a trial or a test, whose unit, state, socket and log are that folder's own.
+Its unit goes to the service manager under a label derived from that folder, so the manager
+holds it apart from the machine daemon, which keeps its own label; `uninstall --home` removes
+only the throwaway home's unit and leaves the machine daemon's unit and label untouched. The
+account home here is the login account's home, read from the account record, never from the
+shell's home setting. The flag is refused, exit 2 with the usage, when the folder is empty or
+not a folder, names the account home itself, ends in a trailing slash, cannot be resolved, or
+is a symbolic link or is reached through one: name the folder itself. When the account home
+itself cannot be read, `install` and `uninstall` fail closed, exit 1, with or without
+`--home`, rather than guess which label belongs to which home. Every other subcommand refuses
+the flag: it belongs to `install` and `uninstall` only.
+
 `fault-watch` asks the one running daemon to end exactly one hosted watch's in-flight run, as a
 diagnostic of the recovery path. It names one checkout with `--root` and that checkout's route id
 with `--route`; the command derives the expected id from the checkout's own team file and refuses
@@ -148,10 +162,112 @@ another daemon run, is not a private 0600 file, or matches no required live watc
 `not reached` for one still pending when it closes. `--dry-run` proves admission, the checkout and
 the route and writes nothing. `fault-watch --json` prints the `team.daemon-fault` document.
 
+`run` also beats the machine's reminder list on the same heartbeat: the list is read from the
+owner's entity record and sent under the daemon's identity, with no opt-in flag, and the next
+section is the whole of it. The read and the sends run in a supervised child of the daemon, not on
+the daemon's own loop.
+
+## Reminders
+
+The daemon beats one machine-scoped list of reminders: each is a message it sends under its own
+verified identity to seats of this machine's teams, at wall-clock times the owner chose. The list
+is read from the owner's entity record in the machine folder, `~/.config/team/entities.yaml`,
+under an entity's own key — the same record [`team config`](config.md) edits, at
+`<entity>.reminders` for the list and `<entity>.names.unique` for that entity's word. The form
+is:
+
+    acme:
+      reminders:
+        - name: daily
+          at: ["07:00", "19:00"]
+          zone: Europe/Paris
+          text: "Stand-up for {team}."
+          to:
+            - lead@acme
+            - to: helper@acme
+              text: "{seat}: your part of the stand-up."
+
+`name`, `at` and `to` are required; `zone`, `catchUp` and `text` are optional:
+
+| Key | Value | Effect |
+| --- | --- | --- |
+| `name` | lower-case letters, digits and hyphens | the reminder's key in the state record, the log and `status`; unique across the record |
+| `at` | one or more `HH:MM` | local times in the entry's zone; a repeated time is read once |
+| `zone` | a zone this runtime knows | the zone the times are read in; without it, the machine's own zone |
+| `catchUp` | `true` or `false` | whether an instant noticed late may still be caught up; on without it |
+| `text` | a sentence | the text a target that has none of its own receives |
+| `to` | one or more targets | each `<seat>@<team>`, or a map of `to:` and `text:` |
+
+A target's own `text:` wins over the entry's. `{team}`, `{seat}` and `{name}` are filled in either,
+per target, with the team's project name, the seat's name and the reminder's name; any other
+brace text stands as written.
+
+An address names a team through the machine's team registry — by id, then project name, then
+session name — and then a seat that checkout's team file declares by name or nickname; `lead`
+names the team's coordinator seat. The team must be inside the reminder's entity: a team whose
+file declares another entity, or whose registry record does when the file declares none, is
+refused naming both, and a team that declares no entity anywhere is refused too — a reminder
+never reaches outside the entity it belongs to. A scope two registry records answer is refused
+naming both, and the owner, a seat the file marks as a person's and a name no seat declares are
+refused too.
+A refused entry is refused alone: a configuration entry the parser refuses, and an address the
+resolver refuses, are each named `<entity>.reminders: <why>` in the daemon's log, once per
+change of the file rather than on every beat, and the entries around it still run. `status`'s
+`remindersError` carries the parser's refusals; the resolver's are the daemon's, since `status`
+reads no checkout's team file.
+
+The beat decides by these rules. Only the most recent due instant is considered. An instant
+noticed late may be caught up for half the gap to the next instant, never more than six hours;
+with `catchUp: false` only a tick within one beat of the instant sends. A first run — the first
+beat on which the state record holds no key for the reminder's name — remembers the latest
+instant without sending, so a new reminder never sends an instant that is already old; an
+instant past its window is recorded as missed and skipped; a clock that moves back more than five
+minutes never repeats a stored instant. The
+state record reserves an instant before the send's first byte and settles it after its last, so
+a daemon that stops mid-walk loses results, never an instant; a transport that fails is retried
+on later beats under the message id it already staged, until the window closes, while a refused
+send stands as it is.
+
+A reminder is machine-scoped: one list, run by the one daemon in a supervised child of its own.
+The child reads the list and walks each send, so neither the registry reads nor a delivery walk
+run on the daemon's own loop; the daemon starts the child, nudges it on every beat and logs every
+line it writes. Each send proves the authority of the daemon that started the child — the state
+record, the single-instance lock and the heartbeat — and the child's own parentage is what proves
+it is that daemon's sender, since only the daemon can start a process under it. The send then
+admits its target by the same rules a direct send does. A reminder that names a checkout this
+daemon does not host is refused when the list is read — the whole reminder, named with the
+checkout, since a partial instruction would carry no sign that it was partial — so nothing of it
+fires. The chore runs whenever the daemon runs — there is no opt-in flag, and an entity that
+writes no reminder fires nothing.
+
+The chore keeps `reminders.state.json` beside the daemon's own state record: mode 0600 in the
+0700 machine folder, written atomically. For every reminder name it holds the wall-clock key
+last satisfied, the instant that key stood for, when the send ran and how late, and one result
+per recipient; only the daemon writes it, and `status` reads it. A record that cannot be read
+stops every reminder firing on that beat — it would otherwise repeat or erase an instant — and
+the failure is named in the log and in `status`.
+
+## Seat health
+
+The chores child also runs a seat-health slice for each hosted root with a route: once a beat it
+reads every declared non-human seat that is not stopped, and acts only on proof. A dialog is
+told to the team's lead at once and never restarted over; a permission, trust or login dialog
+the `seat.dialog.answer` policy names exactly (a login dialog never) is answered where it
+stands. A seat is restarted only when the whole stall proof holds for the
+`seat-health.watchdog.after` window — the seat reconciles as working, its plain screen and its
+last presence instant never change, and no process but its own CLI and pane shell is alive — and
+then once: `team restart <seat> --json`, read from the record, with no handover and no
+checkpoint ask. A live child process is never a stall: the lead is told once instead. The
+watchdog starts at most one restart per slice and returns before it finishes; a restart that
+does not come back ready, a seat with no resume form, and a second stall after an automatic
+restart are each told to the lead once. `seat-health.watchdog.auto-restart` at `0` turns the
+restart off and leaves the telling ([`team policy`](policy.md) carries the three words).
+
 ## Flags
 
 | Flag | Value | Effect |
 | --- | --- | --- |
+| `--home` | a folder | serve a throwaway home other than the account home, under a label derived from that folder; belongs to `install` and `uninstall`, and is refused for the account home, a trailing slash, an unresolvable folder, or a symbolic link |
 | `--root` | a checkout folder | host that checkout; repeatable, and validated when the unit is written; belongs to `run` and `install` |
 | `--started-by` | `service-manager`, `manual` or `team-up` | the launcher recorded in the state; belongs to `run`, and defaults to `manual` |
 | `--presence` | — | host each checkout's presence pipeline; belongs to `run` and `install`, is written into the unit by `install`, and is off by default |
@@ -171,7 +287,12 @@ the one log `daemon.log`, and the single-instance lock `daemon.lock`. `install` 
 remove the user service unit the platform adapter owns; `restart` reads that unit and writes
 nothing; no command prints that path as prose except under `--json` and in the refusal of an
 install that leaves no daemon running, which names where a kept unit is. Each hosted checkout's team file is read to find its send and bus
-endpoints. Under `run --presence` the daemon additionally reads each hosted checkout's presence
+endpoints. On every beat the daemon also reads the machine folder's entity record for the
+reminder list, holding it on a stamp of the file's modification time and size so an unchanged
+file is not re-parsed, and resolves each target's address through the team registry and that
+checkout's team file, refusing a reminder whose target checkout it does not host. It writes the
+reminder state record `reminders.state.json` (mode 0600,
+written atomically) beside its own. Under `run --presence` the daemon additionally reads each hosted checkout's presence
 folders `<team-file-folder>/presence/<session>/<seat>/` — the `spool` of staged records, the
 append-only `events.jsonl` and the `current.json` projection — writes the ingester's `events.jsonl`,
 `current.json` and session `status.json`, and writes the applied fence
@@ -233,12 +354,25 @@ a start that names `service-manager` without the manager's record to back it is 
 `status --json` prints `{"schema": {"name": "team.daemon-status", "version": 1}, "format": 1,
 "daemon": …}` with the health reading's fields: `state`, `running`, `pid`, `uid`, `since`,
 `startedBy`, `version`, `gitHead`, `heartbeatAt`, `heartbeatSeconds`, `features`, `stuck`, `probe`,
-`why` and `socket`. `gitHead` is the commit a packaged install was built from; it is `null` in a
-source checkout, and an install that changes the version or the packaged commit is a new daemon
-identity. `heartbeatSeconds` is the whole seconds of the `daemon.heartbeat` word the daemon runs;
-`null` when no word is known, as for a daemon on an injected test beat or an older record.
+`why` and `socket`. It also carries `reminders`: one reading per configured reminder, in the
+configured order — `name`, `nextAt` (the next instant, ISO 8601, or null), `lastDue` (the most
+recent scheduled wall-clock key), `lastResult` (the stored key's outcome: `kind` is `first-run`,
+`missed`, `sent` or `pending`, with `due`, `sent`, `refused`, `lateMs` and `at`) and `missed` —
+and `remindersError` names a refused configuration entry and an unreadable state record when
+there is one.
+The one-line status does not carry the reminder reading. `gitHead` is the commit a packaged
+install was built from; it is `null` in a source checkout, and an install that changes the
+version or the packaged commit is a new daemon identity. `heartbeatSeconds` is the whole seconds
+of the `daemon.heartbeat` word the daemon runs; `null` when no word is known, as for a daemon on
+an injected test beat or an older record.
+An install that the new daemon answers also moves the known kit folders still standing in
+the machine lobby into the runtime home under the machine folder (`runtime/kits/`), one
+line per folder moved, held (a unit still loaded names it), refused, or left for a later
+lane. A moved guard folder prints the exact `guard_dir` line to re-approve and the
+migration is reported moved, not complete until `team check` shows the new path. A dry
+run prints the same lines as would-move and moves nothing.
 `install --json` and `uninstall --json` print `team.daemon-install` with `command`, `dry_run`,
-`installed`, `unit_path`, `program` and `roots` (`install`), or `unit_path` and `removed`
+`installed`, `unit_path`, `program`, `roots` and `runtime_migration` (`install`), or `unit_path` and `removed`
 (`uninstall`). A dry run's `install` document also carries `steps`: the neutral sentences the
 plain dry run prints, so a script sees the same stop, retry and rollback plan. `restart --json`
 prints `team.daemon-restart` with `command`, `dry_run`, `restarted` and `unit_path`; its dry run

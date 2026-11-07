@@ -102,6 +102,12 @@ function body(text: string, block: SeatBlock): string[] {
   return text.split('\n').slice(block.start, block.end);
 }
 
+/** Bare only when a YAML 1.1 read would keep the same text. A digit-leading id (`12e45`, all digits) is quoted. */
+function yamlWord(text: string): string {
+  const bare = /^[A-Za-z_/~][A-Za-z0-9_./@~-]*$/.test(text) && !/^(~|null|true|false)$/i.test(text);
+  return bare ? text : JSON.stringify(text);
+}
+
 function setValue(line: string, value: string): string {
   const match = /^(\s*(?:-\s+)?[A-Za-z0-9_-]+:\s*)(.*)$/.exec(line);
   if (!match) return line;
@@ -111,11 +117,12 @@ function setValue(line: string, value: string): string {
   // The value keeps the line's own quoting style, so the quote characters inside it have to be
   // escaped for that style: a shell word may carry `"$USER"` or a quoted argument, and writing
   // those raw into a double-quoted scalar ended the string early and left the file unparseable.
+  // A bare line that would not round-trip (a float-shaped or all-digit id) is quoted instead.
   const quoted = raw.startsWith('"')
     ? `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
     : raw.startsWith("'")
       ? `'${value.replaceAll("'", "''")}'`
-      : value;
+      : yamlWord(value);
   return `${match[1]}${quoted}${comment}`;
 }
 
@@ -401,7 +408,7 @@ function instanceLines(approved: string, source: SeatBlock, name: string): strin
 
 /**
  * Rewrites `fromName` to `toName` in the file's `seats:` list, and also updates
- * top-level `coordinator:` / `operator:` or `grant.seat:` when they name `fromName`.
+ * top-level `coordinator:` / `operator:` / `lead:` or `grant.seat:` when they name `fromName`.
  */
 export function renameSeat(text: string, fromName: string, toName: string): string {
   const block = seatBlocks(text).find((item) => item.name === fromName && item.count <= 1);
@@ -424,7 +431,7 @@ export function renameSeat(text: string, fromName: string, toName: string): stri
       continue;
     }
     if (ind === 0) {
-      const m = /^(coordinator|operator):\s*(.*)$/.exec(line);
+      const m = /^(coordinator|operator|lead):\s*(.*)$/.exec(line);
       if (m && scalar(m[2] ?? '') === fromName) {
         lines[i] = setValue(line, toName);
       }
@@ -435,5 +442,71 @@ export function renameSeat(text: string, fromName: string, toName: string): stri
       }
     }
   }
+  return lines.join('\n');
+}
+
+/**
+ * Rewrites top-level `project:`, optional `in_project:`, and optional `session:` (plus `grant.session`
+ * when `session` moves) in a team YAML text while preserving surrounding lines and comments.
+ */
+export function renameTeamIdentity(
+  text: string,
+  opts: { project: string; inProject?: string; session?: string; oldSession?: string },
+): string {
+  const lines = text.split('\n');
+  let projectIdx = -1;
+  let entityIdx = -1;
+  let inProjectIdx = -1;
+  let sessionIdx = -1;
+  let inGrant = false;
+  let grantIndent = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    if (line.trim() === '' || /^\s*#/.test(line)) continue;
+    const ind = indent(line);
+    if (inGrant && ind <= grantIndent) inGrant = false;
+    if (/^grant:\s*(#.*)?$/.test(line)) {
+      inGrant = true;
+      grantIndent = ind;
+      continue;
+    }
+    if (ind === 0) {
+      if (/^project:\s*(.*)$/.test(line)) {
+        projectIdx = i;
+        lines[i] = setValue(line, opts.project);
+      } else if (/^entity:\s*(.*)$/.test(line)) {
+        entityIdx = i;
+      } else if (/^in_project:\s*(.*)$/.test(line)) {
+        inProjectIdx = i;
+        if (opts.inProject !== undefined) {
+          lines[i] = setValue(line, opts.inProject);
+        }
+      } else if (/^session:\s*(.*)$/.test(line)) {
+        sessionIdx = i;
+        if (opts.session !== undefined) {
+          lines[i] = setValue(line, opts.session);
+        }
+      }
+    } else if (inGrant && opts.session !== undefined) {
+      const m = /^\s+session:\s*(.*)$/.exec(line);
+      if (m && (opts.oldSession === undefined || scalar(m[1] ?? '') === opts.oldSession)) {
+        lines[i] = setValue(line, opts.session);
+      }
+    }
+  }
+
+  if (opts.inProject !== undefined && inProjectIdx < 0) {
+    const after = entityIdx >= 0 ? entityIdx : projectIdx >= 0 ? projectIdx : 0;
+    lines.splice(after + 1, 0, `in_project: ${yamlWord(opts.inProject)}`);
+    if (sessionIdx > after) sessionIdx++;
+    inProjectIdx = after + 1;
+  }
+
+  if (opts.session !== undefined && sessionIdx < 0) {
+    const after = inProjectIdx >= 0 ? inProjectIdx : entityIdx >= 0 ? entityIdx : projectIdx >= 0 ? projectIdx : 0;
+    lines.splice(after + 1, 0, `session: ${yamlWord(opts.session)}`);
+  }
+
   return lines.join('\n');
 }

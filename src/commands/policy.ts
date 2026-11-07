@@ -46,6 +46,7 @@ import { teamIdOf } from '../registry/teams.ts';
 import { seatNumberingOf } from '../settings/inherit.ts';
 
 export const USAGE = `Usage: team policy [--seat <name>] [--file <path>] [--json]
+       team policy keys [--json]
        team policy set <level> <name> <value> [--until <iso>] [--kind <enforced|advised>] [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]
        team policy unset <level> <name> [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]
 
@@ -95,12 +96,14 @@ export async function runPolicy(
     const sub = args.rest[0];
     if (sub === undefined) {
       outcome = executePolicyView(args.values, args.flags, rawIo, io, json, options);
+    } else if (sub === 'keys') {
+      outcome = executePolicyKeys(rawIo, io, json);
     } else if (sub === 'set') {
       outcome = executePolicySet(args.rest.slice(1), args.values, args.flags, rawIo, io, json, options);
     } else if (sub === 'unset') {
       outcome = executePolicyUnset(args.rest.slice(1), args.values, args.flags, rawIo, io, json, options);
     } else {
-      const why = `unexpected "${sub}"; expected "set", "unset", or no subcommand`;
+      const why = `unexpected "${sub}"; expected "keys", "set", "unset", or no subcommand`;
       if (json) {
         writeJsonError(rawIo, 'policy.invocation', plainText(why), null);
       } else {
@@ -194,6 +197,20 @@ export function resolveProjectIdForTeam(home: string, root: string, team: TeamFi
   } catch {
     return null;
   }
+}
+
+function executePolicyKeys(rawIo: Io, io: Io, json: boolean): PolicyOutcome {
+  const keys = [...ENFORCED_POLICY_NAMES, ...ADVISED_POLICY_NAMES];
+  if (json) {
+    writeJson(rawIo, 'team.policy', {
+      format: 1 as const,
+      status: 'ok' as const,
+      keys,
+    });
+    return 'ok';
+  }
+  for (const name of keys) io.stdout(`${name}\n`);
+  return 'ok';
 }
 
 function executePolicyView(

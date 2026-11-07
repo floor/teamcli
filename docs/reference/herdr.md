@@ -8,9 +8,9 @@ under `test/` drive scratch sessions of their own), every call that works inside
 `--session <name>`, and what a command does to a team is one of the calls below.
 
 This page is herdr as `team` uses it: the objects, the calls, and which part of a team makes each.
-The transcripts are runs against **herdr 0.7.1** — the version this build is run with
-(`src/herdr.ts`'s `HERDR_TESTED`; `team doctor` reads `herdr --version` and names it), in a scratch
-session of the author's, whose own name reads as `beacon` below. They are quoted as they printed:
+The transcripts are runs against **herdr 0.7.1 to 0.9.5** — the version range this build is run with
+(`src/herdr.ts`'s `HERDR_TESTED = { from: '0.7.1', to: '0.9.5' }`; `team doctor` reads `herdr --version` and names it), in a scratch
+session of the author's, whose own name reads as `beacon` below (with the sidebar layout and metadata-TTL probes captured against **herdr 0.9.5** on 2026-11-04). They are quoted as they printed:
 `…` marks text left out of a long line, and `~` stands for this machine's home folder. They are evidence, not fixtures — `bun run ci`
 executes the examples of the [command pages](../commands/README.md), and nothing on this page.
 
@@ -37,10 +37,12 @@ and one server answers it. It runs headless:
 the connection's own refusal (`Error: Os { code: 61, kind: ConnectionRefused, … }`), which is what
 `team doctor` reports as herdr not answering.
 
-The definition names the session (`session:`, defaulting to `<entity>-<project>` when it names
-an entity and to the project's name when it does not). When that key is omitted and the team
+The definition names the session (`session:`, defaulting to `<entity>-<project>` for a team in a
+project it namesakes, `<entity>-<project>-<team>` for one it does not, and `<entity>-<team>` —
+the team's name alone with no entity — for a team that is its own project). When that key is
+omitted and the team
 registry already records a session for this checkout, `up`, `send`, `status`, `restart` and
-`down` address the recorded session, not a name derived again as `<entity>-<project>`. `--file`
+`down` address the recorded session, not a name derived again from the file. `--file`
 reads the file it names as written, so an omitted key there stays the derived name. The session
 is never herdr's own `default`; that one is the only session a call of `team`'s aims at with no flag. The session's own calls name it in their arguments instead: `server`, `list`, `stop` and
 `delete`. `team` starts a server only when the session is absent — a second server for one that is
@@ -161,13 +163,66 @@ Each seat's pane is given a `display_agent` — the file's `display` and `effort
     (no output, exit 0)
 
 `report-metadata` carries the id of the source that is reporting — `team`, for everything `team`
-reports — and writes the pane's `display_agent`. The watch repaints it while a seat runs: the
-display off the screen when the pane names a different model or effort than the file does, the
-file's own otherwise, and only when the line changed since the last pass (`src/watch/pass.ts`). A
-report that fails is one line on the watch's own output — `${seat}: its display was not reported` —
-and changes nothing else: nothing is typed, no seat is stopped, and the pass goes on. `up` paints
-both lines for a seat it launches, and repaints them for a seat that is already ready
-(`src/launch/plan.ts`), which is what gives a seat started before the labels existed its name back.
+reports — and writes the pane's `display_agent`. Since herdr 0.9.5, `report-metadata` accepts
+`--ttl-ms <N>` (capped by the host at `86400000`, one day; a value above the cap is refused):
+
+    $ herdr --session beacon pane report-metadata <pane> --source team --display-agent 'Claude Opus 5.5 default' --ttl-ms 86400000
+    (no output, exit 0)
+
+    $ herdr --session beacon pane report-metadata <pane> --source team --display-agent 'Claude Opus 5.5 default' --ttl-ms 86400001
+    {"error":{"code":"invalid_metadata_ttl","message":"metadata ttl_ms must be 86400000 or less"}}
+    (exit 1)
+
+`pane list --workspace <id>` carries `display_agent` per pane while the TTL holds, and omits the
+field once the TTL expires (no expiry timestamp is readable back from `pane list`, `pane get` or
+`agent list`, and `agent list` omits panes whose CLI has not reported an agent). Every
+`reportDisplayAgent` call site — `up`, `add`, `register`, `restart`, `reload`, the watch pass, the
+watch's label sweep, the supervised chores child (`src/daemon/chores/sidebar.ts`), and `team check
+--repair` — passes `--ttl-ms` (resolved from `daemon.sidebar-ttl-ms`, clamped to `86400000`). The
+watch repaints the display line on change and re-reports an unchanged line once
+`daemon.sidebar-refresh-ms` (default 6 h) has elapsed (`src/watch/label-tick.ts`); the supervised
+chores pass refreshes each declared seat's recorded pane at the same cadence under a read-back
+guard (reporting when `display_agent` is absent or equal to `displayAgent(seat)`, and skipping with
+a note when a live watch observation differs). A report that fails is one line on the watch's own
+output — `${seat}: its display was not reported` — and changes nothing else: nothing is typed, no
+seat is stopped, and the pass goes on. `up` paints both lines for a seat it launches, and repaints
+them for a seat that is already ready (`src/launch/plan.ts`), which is what gives a seat started
+before the labels existed its name back.
+
+## Sidebar layout and status indicators (`config.toml`, `config check`, `server reload-config`)
+
+Herdr 0.9.5 lays out sidebar agent rows from `[ui.sidebar.agents] rows` and draws agent status
+indicators from `[ui] status_indicators` in `~/.config/herdr/config.toml` (or
+`$XDG_CONFIG_HOME/herdr/config.toml`). Probed against herdr 0.9.5 on 2026-11-04 in a scratch
+`HOME` and scratch session:
+
+    $ herdr config check
+    config: ok
+
+    # With status_indicators = "bogus" in [ui]:
+    $ herdr config check
+    unknown variant `bogus`, expected `dots` or `symbols`
+
+    $ herdr --session beacon server reload-config
+    {"result":{"diagnostics":[],"status":"applied"}}
+
+`config` exposes `check` and `reset-keys` (no write verb); the write path is the file.
+`server reload-config` is session-scoped (`--session <name>`), because each session runs its own
+server behind its own socket (`session list --json` lists one `socket_path` per session), and
+neither `api snapshot` nor `session list --json` exposes the live sidebar row template or a reload
+timestamp. When `workspace.sidebar.manage` is on (the release default) or on the owner's explicit
+`team check --repair`, `team` backs up the existing file to `config.toml.team-backup` (0600, never
+through a link), splices the marked `[ui.sidebar.agents] # managed by team` table (`rows` from
+`workspace.sidebar.rows`, default `[[state_icon, machine, workspace, tab], [state_text, agent]]`)
+and the marked `status_indicators = "symbols" # managed by team` assignment in `[ui]`
+(`workspace.sidebar.status_indicators`, `symbols` or `dots`) in a single pass preserving all other
+tables, keys and comments byte-for-byte, validates the result with `herdr config check` (rolling
+back from the pre-edit bytes in memory on any failure), reloads every running session of the
+entity's teams with `herdr --session <name> server reload-config`, and records each applied reload
+in `~/.config/team/sidebar-reloads.yaml`. Because the config file is machine-global, two teams on
+one machine with different `workspace.sidebar.rows` templates disagree; the write runs only at `up`
+and at the owner's `team check --repair` (never on a timer), and `team check` names any layout or
+per-session reload difference.
 
 ## The agent a pane reports
 
@@ -209,18 +264,25 @@ The launch below is `up`, `add` and the seat-launching module behind them.
 | `workspace create --cwd --label --no-focus` | the launch, the watch | one workspace per seat, started in the seat's folder; `up` and a lone owner `watch` (on the team's own session, without `--no-nudge` or `--no-notify`) make the watch's too (`Watch · <project>`, in the project folder) |
 | `workspace rename` | the launch (a seat already ready), the watch | the seat's label, and the label a file edit moved |
 | `workspace close` | the launch (on `down`'s, `remove`'s, `up`'s and `add`'s behalf), the watch | a workspace a run is finished with, or a watch workspace whose command did not start |
-| `workspace list`, `pane list --workspace` | `doctor`, `status`, `check`, the launch, the watch | the session's workspaces, and the panes in one |
+| `workspace list`, `pane list --workspace` | `doctor`, `status`, `check`, the launch, the watch, the supervised chores child | the session's workspaces, the panes in one, and each pane's `display_agent` |
 | `pane process-info` | the caller gate, and the seat checks behind the launch, `down`, `remove`, `answer`, `status`, `check`, `send`, the watch | the pane's shell and foreground processes: the seat `team` launched, or not, and the pane the watch runs in |
 | `pane get` | `down`, `remove`, `answer` | the folder a pane's foreground program works in, matched against the line the shell's prompt prints |
 | `pane read --source visible` | the launch's idle wait, the watch, `doctor`, `status`, `check`, `down`, `answer`, `send` | the screen: an idle prompt, a dialog, a seat's exit question |
 | `pane run` | the launch (a seat's launch line; `up` also runs the watch's own line), the watch (its own line, when started alone) | a whole command, typed and sent |
 | `pane send-text`, `pane send-keys` | the launch, `down`, `remove`, the watch, `answer`, `send` | one key, or text with no Enter of its own |
-| `pane report-metadata --source team --display-agent` | the launch, the watch | the seat's display line |
+| `pane report-metadata --source team --display-agent --ttl-ms` | the launch, `register`, `restart`, `reload`, the watch, the supervised chores child, `check --repair` | the seat's display line, with its TTL (`daemon.sidebar-ttl-ms`, capped at `86400000`) |
+| `config check` | `up` (under `workspace.sidebar.manage: on`), `check --repair` | read-only validation of `~/.config/herdr/config.toml` after splicing the marked sidebar layout block and status-indicator key (rolling back on any failure) |
+| `--session <name> server reload-config` | `up` (under `workspace.sidebar.manage: on`), `check --repair` | reloads each running session of the entity's teams onto the updated sidebar config |
 | `agent list` | the caller gate, the launch, `down`, `status`, `check`, `doctor`, `answer`, `send`, `team list`, the watch | which panes report an agent, and each one's status |
 | `agent rename` | the launch (the seat's name), `answer` (back to it), `remove` (out of it) | so a pane answers to the seat's name, or stops answering to it |
 | `agent focus` | `up`'s pause, on the owner's `o` | to bring a seat's pane up; nothing is typed |
 | `--version` | `doctor` | the version, against the range this build was run with |
 
-`team` never runs a `tab`, `worktree`, `notification`, `integration`, `config` or `channel`
-subcommand, never herdr's blocking `wait` calls, and never `session attach`. A seat's pane is where
-the seat works; herdr's own window is where the person watches it.
+`team` never runs a `tab`, `worktree`, `notification`, `integration`, `config reset-keys` or
+`channel` subcommand, never herdr's blocking `wait` calls, and never `session attach`. In
+`~/.config/herdr/config.toml` (when `workspace.sidebar.manage` is on, or on the owner's `team check
+--repair`), `team` splices only the marked `[ui.sidebar.agents]` block and the marked
+`status_indicators` line in `[ui]`, validates the file through `herdr config check` (rolling back on
+any failure), reloads each running session with `herdr --session <name> server reload-config`, and
+touches nothing else in the owner's window. A seat's pane is where the seat works; herdr's own
+window is where the person watches it.

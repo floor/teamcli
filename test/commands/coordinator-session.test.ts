@@ -25,7 +25,7 @@ import type { HerdrAgent } from '../../src/herdr.ts';
 import { GENERAL_BRIEF_SHA256, generalBriefBody, generalBriefId } from '../../src/launch/general-brief.ts';
 import { lobbyDir } from '../../src/lobby/gate.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
-import { CLAUDE_IDLE, claudeBox, testIo, type TestIo } from '../helpers.ts';
+import { CLAUDE_IDLE, claudeBox, testIo, type TestIo, recordRenames } from '../helpers.ts';
 
 const SESSION = 'acme-web';
 const OTHER = 'other-web';
@@ -1018,6 +1018,8 @@ function upHost(): { counts: Record<'starts' | 'creates' | 'runs' | 'renames' | 
     sleep: async () => {},
     now: () => new Date(0),
   };
+
+  recordRenames(launch);
   return { counts, launch };
 }
 
@@ -1300,7 +1302,7 @@ function launching(): Launch {
   let n = 0;
   let running = false;
   const panes = new Map<string, { text: string; agent: boolean; cli: string; status: string }>();
-  return {
+  const launch: Launch = {
     sessionState: () => (running ? 'running' : 'absent'),
     startServer() {
       running = true;
@@ -1349,6 +1351,9 @@ function launching(): Launch {
     sleep: async () => {},
     now: () => new Date(0),
   };
+  // A rename the host accepts is listed back, which is what the launch reads before it calls the seat ready.
+  recordRenames(launch);
+  return launch;
 }
 
 type UpState = {

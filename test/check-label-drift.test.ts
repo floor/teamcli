@@ -4,7 +4,7 @@
 // watch's own line, `src/labels/observe.ts`), so only a line the file and the pane both fail to
 // explain is drift. Both repairs are `team register <seat>`, which re-applies the file's two lines
 // without a relaunch.
-import { describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -44,7 +44,20 @@ const TITLE = workspaceLabel(seat);
 /** Line 2 as the file writes it: `Claude Opus 5.5 default`, the seat sets no effort. */
 const DISPLAY = displayAgent(seat);
 
+let savedXdg: string | undefined;
+
+beforeEach(() => {
+  savedXdg = process.env.XDG_CONFIG_HOME;
+  delete process.env.XDG_CONFIG_HOME;
+});
+
+afterEach(() => {
+  if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = savedXdg;
+});
+
 function place(): { base: string; root: string; home: string } {
+  delete process.env.XDG_CONFIG_HOME;
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-check-drift-')));
   const root = join(base, 'acme');
   const home = join(base, 'home');
@@ -87,6 +100,16 @@ function check(root: string, home: string, session: Live): { code: number; out: 
     standing: (at) => approvalStanding(at, home),
     now: () => NOW,
     home,
+    sidebar: {
+      paneDisplays: (_s, workspace) =>
+        session.agents
+          .filter((agent) => agent.workspace === workspace)
+          .map((agent) => ({
+            pane: agent.pane,
+            workspace: agent.workspace,
+            ...(agent.displayAgent === undefined ? {} : { displayAgent: agent.displayAgent }),
+          })),
+    },
   });
   return { code, out: `${io.out}${io.err}` };
 }
@@ -126,12 +149,12 @@ describe('the sidebar the file is entitled to', () => {
     rmSync(base, { recursive: true, force: true });
   });
 
-  test('a pane herdr holds no display for is not drift', () => {
+  test('a running seat whose pane holds no display is named as missing or expired', () => {
     const { base, root, home } = place();
-    // Many panes never had a display reported, and the file does not require one: only a line
-    // something else wrote is a difference.
-    const { out } = check(root, home, live(TITLE, undefined));
-    expect(out).not.toContain('its herdr display');
+    const { code, out } = check(root, home, live(TITLE, undefined));
+    expect(out).toContain(`difference: lead: its sidebar display line is missing or expired; the file's line is "${DISPLAY}"`);
+    expect(out).toContain('  repair: team register lead');
+    expect(code).toBe(1);
     rmSync(base, { recursive: true, force: true });
   });
 

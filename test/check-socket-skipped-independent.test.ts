@@ -19,12 +19,13 @@ import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import type { HerdrAgent, PaneProcesses } from '../src/herdr.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
+import { writePolicySet } from '../src/policy/index.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { declaredInboundOf, heldSocketPath, recordHeldSocket } from '../src/send/inbound.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { approvalStanding } from '../src/store/store.ts';
-import { deliverBriefs, testIo } from './helpers.ts';
+import { deliverBriefs, duringAddressWrite, testIo } from './helpers.ts';
 import { NOW, fake, owner, world, type ExtraSeat, type World } from './send-native-fixtures.ts';
 
 // Pids no real session holds: the socket folder walked is the fixture's own temp folder.
@@ -92,6 +93,14 @@ function entity(made: World, name = 'floor'): void {
   mkdirSync(lobby, { recursive: true });
   const text = readFileSync(path, 'utf8').replace(lobbyDir(made.home), lobby);
   writeFileSync(path, `${text}entity: ${name}\n`);
+  duringAddressWrite(made.home, made.root, 'acme', name, NOW, () => {
+    const wrote = writePolicySet(
+      made.home,
+      { level: 'entity', target: name, name: 'owner-reply-to', value: 'lead@acme' },
+      { now: NOW },
+    );
+    if (!wrote.ok) throw new Error(wrote.why);
+  });
 }
 
 /** Rewrite the file's first `inbound` word: every fixture declares `accept` on its first two

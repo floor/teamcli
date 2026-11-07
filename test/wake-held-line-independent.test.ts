@@ -1,10 +1,10 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { boxHoldsOther, boxHoldsText } from '../src/launch/deliver.ts';
 import { deliverTypedWake, MAX_WAKE_ENTERS, type TypedWakeHost } from '../src/send/typed-wake.ts';
 import { composeMessageLine } from '../src/settings/message-display.ts';
-import { listedPlaceholderEquals, readBox, readScreen } from '../src/watch/screen.ts';
+import { listedPlaceholderEquals, readBox, readScreen, type ReadClock, type ScreenOptions } from '../src/watch/screen.ts';
 
 const AGY_DIR = join(import.meta.dir, 'fixtures', 'antigravity', '1.4.12');
 const AGY_142_DIR = join(import.meta.dir, 'fixtures', 'antigravity', '1.4.2');
@@ -22,6 +22,37 @@ const CURSOR_WORKING = readFileSync(join(CURSOR_DIR, 'working.txt'), 'utf8');
 const CURSOR_PERMISSION = readFileSync(join(CURSOR_1014_DIR, 'permission.txt'), 'utf8');
 
 const FAST = { settleMs: 1, enterSettleMs: 1, pollMs: 1, verifyMs: 1 };
+
+// The screen reader spends a real 100 ms budget when no clock is handed in. A frozen clock
+// and an explicit budget make every read in this file finish on the seam, including the
+// reads deliverTypedWake makes through Date.now. Nothing here waits on the wall clock.
+const FROZEN = 1_763_000_000_000;
+const CLOCK: ReadClock = { now: () => FROZEN, budgetMs: 60_000 };
+const READ: ScreenOptions = { clock: CLOCK };
+const realNow = Date.now;
+
+beforeEach(() => {
+  Date.now = CLOCK.now;
+});
+afterEach(() => {
+  Date.now = realNow;
+});
+
+function readScreenAt(cli: string, screen: string) {
+  return readScreen(cli, screen, CLOCK);
+}
+
+function readBoxAt(cli: string, screen: string) {
+  return readBox(cli, screen, READ);
+}
+
+function holdsText(cli: string, text: string, screen: string) {
+  return boxHoldsText(cli, text, screen, READ);
+}
+
+function holdsOther(cli: string, text: string, screen: string) {
+  return boxHoldsOther(cli, text, screen, READ);
+}
 
 const WAKE_LINE = composeMessageLine(
   'Message from owner (owner@acme): hello',
@@ -71,11 +102,12 @@ function makeFakeHost(
   waits: number[];
 } {
   const typed: string[] = [];
+  const prompts: string[] = [];
   const waits: number[] = [];
   let enters = 0;
   let reads = 0;
   const host: TypedWakeHost = {
-    read: () => screenAt(reads++, enters, typed),
+    read: () => screenAt(reads++, enters, prompts.length > 0 ? prompts : typed),
     type: (_pane: string, text: string) => {
       typed.push(text);
       return options.typeOk ?? true;
@@ -83,6 +115,11 @@ function makeFakeHost(
     enter: () => {
       enters += 1;
       return options.enterOk ?? true;
+    },
+    prompt: (_pane: string, text: string) => {
+      prompts.push(text);
+      enters += 1;
+      return true;
     },
     wait: async (ms: number) => {
       waits.push(ms);
@@ -108,25 +145,26 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
     );
     expect(WAKE_LINE.length).toBeLessThanOrEqual(80);
 
-    // Antigravity: sitting line is read twice, never typed again, submitted with 1 Enter.
+    // Antigravity submits by agent prompt. A line already sitting is not prompted again:
+    // prompting would leave it sitting, and every later wake would prompt again.
     const agyHeld = agyBox(WAKE_LINE);
-    expect(readScreen('antigravity', agyHeld).kind).toBe('unsent');
-    expect(boxHoldsText('antigravity', WAKE_LINE, agyHeld)).toBe(true);
-    expect(boxHoldsOther('antigravity', WAKE_LINE, agyHeld)).toBeNull();
+    expect(readScreenAt('antigravity', agyHeld).kind).toBe('unsent');
+    expect(holdsText('antigravity', WAKE_LINE, agyHeld)).toBe(true);
+    expect(holdsOther('antigravity', WAKE_LINE, agyHeld)).toBeNull();
 
     const agyScene = makeFakeHost((_read, enters) => (enters > 0 ? AGY_WORKING : agyHeld));
     const agyRes = await deliverTypedWake(agyScene.host, 'pane-agy', WAKE_LINE, 'antigravity', FAST);
     expect(agyRes).toEqual({
-      delivered: true,
-      typed: true,
-      tries: 1,
-      reason: 'the working screen showed after 1 Enter',
+      delivered: false,
+      typed: false,
+      tries: 0,
+      reason: 'the box already held the line; the agent prompt was not sent and nothing was typed',
     });
     expect(agyScene.typed).toEqual([]);
-    expect(agyScene.enters).toBe(1);
+    expect(agyScene.enters).toBe(0);
 
-    // Antigravity: even if the transcript above the box changes between read 1 and read 2,
-    // both reads still hold the exact wake line, so Enter is pressed without typing.
+    // Antigravity: a transcript change between the two looks still holds the exact line, so
+    // the prompt is still not sent.
     const agyHeldCompacted = agyBox(WAKE_LINE, [], AGY_IDLE_COMPACTED);
     const agyTranscriptChanged = makeFakeHost((read, enters) => {
       if (enters > 0) return AGY_WORKING;
@@ -140,19 +178,19 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
       FAST,
     );
     expect(agyChangedRes).toEqual({
-      delivered: true,
-      typed: true,
-      tries: 1,
-      reason: 'the working screen showed after 1 Enter',
+      delivered: false,
+      typed: false,
+      tries: 0,
+      reason: 'the box already held the line; the agent prompt was not sent and nothing was typed',
     });
     expect(agyTranscriptChanged.typed).toEqual([]);
-    expect(agyTranscriptChanged.enters).toBe(1);
+    expect(agyTranscriptChanged.enters).toBe(0);
 
     // Cursor: sitting line is read twice, never typed again, submitted with 1 Enter.
     const cursorHeld = cursorBox(WAKE_LINE);
-    expect(readScreen('cursor', cursorHeld).kind).toBe('unsent');
-    expect(boxHoldsText('cursor', WAKE_LINE, cursorHeld)).toBe(true);
-    expect(boxHoldsOther('cursor', WAKE_LINE, cursorHeld)).toBeNull();
+    expect(readScreenAt('cursor', cursorHeld).kind).toBe('unsent');
+    expect(holdsText('cursor', WAKE_LINE, cursorHeld)).toBe(true);
+    expect(holdsOther('cursor', WAKE_LINE, cursorHeld)).toBeNull();
 
     const cursorScene = makeFakeHost((_read, enters) => (enters > 0 ? CURSOR_WORKING : cursorHeld));
     const cursorRes = await deliverTypedWake(
@@ -167,6 +205,8 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
       typed: true,
       tries: 1,
       reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
     });
     expect(cursorScene.typed).toEqual([]);
     expect(cursorScene.enters).toBe(1);
@@ -177,8 +217,8 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
     const firstRow = WAKE_LINE.slice(0, splitAt - 1);
     const secondRow = WAKE_LINE.slice(splitAt);
     const cursorWrapped = cursorBox(firstRow, [secondRow]);
-    expect(readScreen('cursor', cursorWrapped).kind).toBe('unsent');
-    expect(boxHoldsText('cursor', WAKE_LINE, cursorWrapped)).toBe(true);
+    expect(readScreenAt('cursor', cursorWrapped).kind).toBe('unsent');
+    expect(holdsText('cursor', WAKE_LINE, cursorWrapped)).toBe(true);
 
     const cursorWrappedScene = makeFakeHost((_read, enters) =>
       enters > 0 ? CURSOR_WORKING : cursorWrapped,
@@ -195,6 +235,8 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
       typed: true,
       tries: 1,
       reason: 'the working screen showed after 1 Enter',
+      submittedAt: expect.any(Number),
+      workingAt: expect.any(Number),
     });
     expect(cursorWrappedScene.typed).toEqual([]);
     expect(cursorWrappedScene.enters).toBe(1);
@@ -207,14 +249,26 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
     ] as const) {
       const retryScene = makeFakeHost((_read, enters) => (enters >= 2 ? working : held));
       const retryRes = await deliverTypedWake(retryScene.host, `pane-${cli}`, WAKE_LINE, cli, FAST);
-      expect(retryRes).toEqual({
-        delivered: true,
-        typed: true,
-        tries: 2,
-        reason: 'the working screen showed after 2 Enters',
-      });
+      if (cli === 'antigravity') {
+        expect(retryRes).toEqual({
+          delivered: false,
+          typed: false,
+          tries: 0,
+          reason: 'the box already held the line; the agent prompt was not sent and nothing was typed',
+        });
+        expect(retryScene.enters).toBe(0);
+      } else {
+        expect(retryRes).toEqual({
+          delivered: true,
+          typed: true,
+          tries: 2,
+          reason: 'the working screen showed after 2 Enters',
+          submittedAt: expect.any(Number),
+          workingAt: expect.any(Number),
+        });
+        expect(retryScene.enters).toBe(2);
+      }
       expect(retryScene.typed).toEqual([]);
-      expect(retryScene.enters).toBe(2);
     }
   });
 
@@ -227,16 +281,16 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
     const cursorHints = listedPlaceholderEquals('cursor');
     expect(cursorHints).toEqual(['Plan, search, build anything', 'Add a follow-up']);
 
-    // 2a. Antigravity: every exact listed hint row under a sitting wake line is submitted with Enter, typing nothing.
+    // 2a. Antigravity: a sitting wake line, even with the exact hint row under it, is not prompted.
     for (const hint of agyHints) {
       const withExactHint = agyBox(WAKE_LINE, [hint]);
-      expect(readScreen('antigravity', withExactHint).kind).toBe('unsent');
-      expect(readBox('antigravity', withExactHint)).toMatchObject({
+      expect(readScreenAt('antigravity', withExactHint).kind).toBe('unsent');
+      expect(readBoxAt('antigravity', withExactHint)).toMatchObject({
         first: WAKE_LINE,
         rows: [`  ${hint}`],
       });
-      expect(boxHoldsText('antigravity', WAKE_LINE, withExactHint)).toBe(true);
-      expect(boxHoldsOther('antigravity', WAKE_LINE, withExactHint)).toBeNull();
+      expect(holdsText('antigravity', WAKE_LINE, withExactHint)).toBe(true);
+      expect(holdsOther('antigravity', WAKE_LINE, withExactHint)).toBeNull();
 
       const sittingScene = makeFakeHost((_read, enters) =>
         enters > 0 ? AGY_WORKING : withExactHint,
@@ -249,15 +303,15 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
         FAST,
       );
       expect(sittingOut).toEqual({
-        delivered: true,
-        typed: true,
-        tries: 1,
-        reason: 'the working screen showed after 1 Enter',
+        delivered: false,
+        typed: false,
+        tries: 0,
+        reason: 'the box already held the line; the agent prompt was not sent and nothing was typed',
       });
       expect(sittingScene.typed).toEqual([]);
-      expect(sittingScene.enters).toBe(1);
+      expect(sittingScene.enters).toBe(0);
 
-      // Freshly typed line that draws with the exact hint row under it is also submitted.
+      // A line drawn after two idle reads, with the exact hint row under it, is still prompted.
       const typedScene = makeFakeHost((read, enters) =>
         read < 2 ? AGY_IDLE : enters > 0 ? AGY_WORKING : withExactHint,
       );
@@ -272,18 +326,20 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
         delivered: true,
         typed: true,
         tries: 1,
-        reason: 'the working screen showed after 1 Enter',
+        reason: 'the working screen showed after the agent prompt',
+        submittedAt: expect.any(Number),
+        workingAt: expect.any(Number),
       });
-      expect(typedScene.typed).toEqual([WAKE_LINE]);
+      expect(typedScene.typed).toEqual([]);
       expect(typedScene.enters).toBe(1);
     }
 
     // 2b. Cursor: every exact listed placeholder row under a sitting wake line is submitted with Enter, typing nothing.
     for (const hint of cursorHints) {
       const withExactHint = cursorBox(WAKE_LINE, [hint]);
-      expect(readScreen('cursor', withExactHint).kind).toBe('unsent');
-      expect(boxHoldsText('cursor', WAKE_LINE, withExactHint)).toBe(true);
-      expect(boxHoldsOther('cursor', WAKE_LINE, withExactHint)).toBeNull();
+      expect(readScreenAt('cursor', withExactHint).kind).toBe('unsent');
+      expect(holdsText('cursor', WAKE_LINE, withExactHint)).toBe(true);
+      expect(holdsOther('cursor', WAKE_LINE, withExactHint)).toBeNull();
 
       const sittingScene = makeFakeHost((_read, enters) =>
         enters > 0 ? CURSOR_WORKING : withExactHint,
@@ -300,6 +356,8 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
         typed: true,
         tries: 1,
         reason: 'the working screen showed after 1 Enter',
+        submittedAt: expect.any(Number),
+        workingAt: expect.any(Number),
       });
       expect(sittingScene.typed).toEqual([]);
       expect(sittingScene.enters).toBe(1);
@@ -315,9 +373,9 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
     ];
     for (const badRow of agyPrefixRows) {
       const frame = agyBox(WAKE_LINE, [badRow]);
-      expect(readScreen('antigravity', frame).kind).toBe('unsent');
-      expect(boxHoldsText('antigravity', WAKE_LINE, frame)).toBe(false);
-      expect(boxHoldsOther('antigravity', WAKE_LINE, frame)).toBe(badRow);
+      expect(readScreenAt('antigravity', frame).kind).toBe('unsent');
+      expect(holdsText('antigravity', WAKE_LINE, frame)).toBe(false);
+      expect(holdsOther('antigravity', WAKE_LINE, frame)).toBe(badRow);
 
       // Present on first read -> refuses immediately, types nothing, presses no Enter.
       const openScene = makeFakeHost(() => frame);
@@ -350,7 +408,7 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
         delivered: false,
         typed: false,
         tries: 0,
-        reason: 'the box held text other than the line; no Enter was pressed',
+        reason: 'the box held text other than the line between the two looks; no Enter was pressed',
       });
       expect(secondScene.typed).toEqual([]);
       expect(secondScene.enters).toBe(0);
@@ -367,11 +425,11 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
       expect(afterTypeOut).toEqual({
         delivered: false,
         typed: true,
-        tries: 0,
-        reason: 'the box held text other than the line after the line was typed; no Enter was pressed',
+        tries: 1,
+        reason: 'no working screen showed after the agent prompt',
       });
-      expect(afterTypeScene.typed).toEqual([WAKE_LINE]);
-      expect(afterTypeScene.enters).toBe(0);
+      expect(afterTypeScene.typed).toEqual([]);
+      expect(afterTypeScene.enters).toBe(1);
     }
 
     const cursorPrefixRows = [
@@ -382,9 +440,9 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
     ];
     for (const badRow of cursorPrefixRows) {
       const frame = cursorBox(WAKE_LINE, [badRow]);
-      expect(readScreen('cursor', frame).kind).toBe('unsent');
-      expect(boxHoldsText('cursor', WAKE_LINE, frame)).toBe(false);
-      expect(boxHoldsOther('cursor', WAKE_LINE, frame)).toBe(badRow);
+      expect(readScreenAt('cursor', frame).kind).toBe('unsent');
+      expect(holdsText('cursor', WAKE_LINE, frame)).toBe(false);
+      expect(holdsOther('cursor', WAKE_LINE, frame)).toBe(badRow);
 
       const openScene = makeFakeHost(() => frame);
       const openOut = await deliverTypedWake(
@@ -415,7 +473,7 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
         delivered: false,
         typed: false,
         tries: 0,
-        reason: 'the box held text other than the line; no Enter was pressed',
+        reason: 'the box held text other than the line between the two looks; no Enter was pressed',
       });
       expect(secondScene.typed).toEqual([]);
       expect(secondScene.enters).toBe(0);
@@ -438,8 +496,8 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
         ['cursor', CURSOR_IDLE, (t: string) => cursorBox(t), cursorBox(WAKE_LINE)],
       ] as const) {
         const draftFrame = makeBox(draft);
-        expect(readScreen(cli, draftFrame).kind).toBe('unsent');
-        expect(boxHoldsText(cli, WAKE_LINE, draftFrame)).toBe(false);
+        expect(readScreenAt(cli, draftFrame).kind).toBe('unsent');
+        expect(holdsText(cli, WAKE_LINE, draftFrame)).toBe(false);
 
         // 1. Draft present on first read: nothing typed, no Enter pressed.
         const firstRead = makeFakeHost(() => draftFrame);
@@ -484,12 +542,13 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
           delivered: false,
           typed: false,
           tries: 0,
-          reason: 'the box held text other than the line; no Enter was pressed',
+          reason: 'the box held text other than the line between the two looks; no Enter was pressed',
         });
         expect(replacedBeforeEnter.typed).toEqual([]);
         expect(replacedBeforeEnter.enters).toBe(0);
 
-        // 4. Sitting wake line takes 1 Enter, then changes to other text: no second Enter is pressed.
+        // 4. Sitting wake line. Antigravity refuses before a prompt. Cursor presses one Enter,
+        // then the box changes and no second Enter is pressed.
         const replacedAfterFirstEnter = makeFakeHost((_read, enters) =>
           enters === 0 ? heldWake : draftFrame,
         );
@@ -500,14 +559,24 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
           cli,
           FAST,
         );
-        expect(outAfterEnter).toEqual({
-          delivered: false,
-          typed: true,
-          tries: 1,
-          reason: 'the box held text other than the line and no working screen showed',
-        });
+        if (cli === 'antigravity') {
+          expect(outAfterEnter).toEqual({
+            delivered: false,
+            typed: false,
+            tries: 0,
+            reason: 'the box already held the line; the agent prompt was not sent and nothing was typed',
+          });
+          expect(replacedAfterFirstEnter.enters).toBe(0);
+        } else {
+          expect(outAfterEnter).toEqual({
+            delivered: false,
+            typed: true,
+            tries: 1,
+            reason: 'the box held text other than the line and no working screen showed',
+          });
+          expect(replacedAfterFirstEnter.enters).toBe(1);
+        }
         expect(replacedAfterFirstEnter.typed).toEqual([]);
-        expect(replacedAfterFirstEnter.enters).toBe(1);
       }
     }
 
@@ -538,8 +607,8 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
       // 4a. Extra words on the same row.
       for (const withExtraWords of extraSameRowVariants) {
         const frame = makeBox(withExtraWords);
-        expect(readScreen(cli, frame).kind).toBe('unsent');
-        expect(boxHoldsText(cli, WAKE_LINE, frame)).toBe(false);
+        expect(readScreenAt(cli, frame).kind).toBe('unsent');
+        expect(holdsText(cli, WAKE_LINE, frame)).toBe(false);
 
         // Sitting at the start -> refused on first read, nothing typed, no Enter.
         const startScene = makeFakeHost(() => frame);
@@ -566,7 +635,7 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
           delivered: false,
           typed: false,
           tries: 0,
-          reason: 'the box held text other than the line; no Enter was pressed',
+          reason: 'the box held text other than the line between the two looks; no Enter was pressed',
         });
         expect(secondScene.typed).toEqual([]);
         expect(secondScene.enters).toBe(0);
@@ -580,21 +649,32 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
           cli,
           FAST,
         );
-        expect(afterTypeOut).toEqual({
-          delivered: false,
-          typed: true,
-          tries: 0,
-          reason: 'the box held text other than the line after the line was typed; no Enter was pressed',
-        });
-        expect(afterTypeScene.typed).toEqual([WAKE_LINE]);
-        expect(afterTypeScene.enters).toBe(0);
+        if (cli === 'antigravity') {
+          expect(afterTypeOut).toEqual({
+            delivered: false,
+            typed: true,
+            tries: 1,
+            reason: 'no working screen showed after the agent prompt',
+          });
+          expect(afterTypeScene.typed).toEqual([]);
+          expect(afterTypeScene.enters).toBe(1);
+        } else {
+          expect(afterTypeOut).toEqual({
+            delivered: false,
+            typed: true,
+            tries: 0,
+            reason: 'the box held text other than the line after the line was typed; no Enter was pressed',
+          });
+          expect(afterTypeScene.typed).toEqual([WAKE_LINE]);
+          expect(afterTypeScene.enters).toBe(0);
+        }
       }
 
       // 4b. Exact trigger line on row 1 plus extra words on row 2 inside the box.
       const extraSecondRow = makeBox(WAKE_LINE, ['and run the tests']);
-      expect(readScreen(cli, extraSecondRow).kind).toBe('unsent');
-      expect(boxHoldsText(cli, WAKE_LINE, extraSecondRow)).toBe(false);
-      expect(boxHoldsOther(cli, WAKE_LINE, extraSecondRow)).toBe('and run the tests');
+      expect(readScreenAt(cli, extraSecondRow).kind).toBe('unsent');
+      expect(holdsText(cli, WAKE_LINE, extraSecondRow)).toBe(false);
+      expect(holdsOther(cli, WAKE_LINE, extraSecondRow)).toBe('and run the tests');
 
       const rowScene = makeFakeHost(() => extraSecondRow);
       const rowOut = await deliverTypedWake(rowScene.host, `pane-${cli}`, WAKE_LINE, cli, FAST);
@@ -628,33 +708,55 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
         CURSOR_PERMISSION,
       ],
     ] as const) {
-      // 5a. Sitting line stays in the box across all MAX_WAKE_ENTERS (3) Enters with no working screen.
+      // 5a. A sitting line. Antigravity does not prompt into it. Cursor presses Enter up to the bound.
       const stuckUnsent = makeFakeHost(() => heldWake);
       const outStuck = await deliverTypedWake(stuckUnsent.host, `pane-${cli}`, WAKE_LINE, cli, FAST);
-      expect(outStuck).toEqual({
-        delivered: false,
-        typed: true,
-        tries: MAX_WAKE_ENTERS,
-        reason: `the line stayed in the box through ${String(MAX_WAKE_ENTERS)} Enters and no working screen showed`,
-      });
+      if (cli === 'antigravity') {
+        expect(outStuck).toEqual({
+          delivered: false,
+          typed: false,
+          tries: 0,
+          reason: 'the box already held the line; the agent prompt was not sent and nothing was typed',
+        });
+        expect(stuckUnsent.enters).toBe(0);
+      } else {
+        expect(outStuck).toEqual({
+          delivered: false,
+          typed: true,
+          tries: MAX_WAKE_ENTERS,
+          reason: `the line stayed in the box through ${String(MAX_WAKE_ENTERS)} Enters and no working screen showed`,
+        });
+        expect(stuckUnsent.enters).toBe(MAX_WAKE_ENTERS);
+      }
       expect(stuckUnsent.typed).toEqual([]);
-      expect(stuckUnsent.enters).toBe(MAX_WAKE_ENTERS);
 
       // 5b. Enter empties the box to idle, but no working screen ever shows.
+      // Antigravity never reaches that Enter: the two looks already hold the line.
       const goesIdle = makeFakeHost((_read, enters) => (enters > 0 ? idle : heldWake));
       const outIdle = await deliverTypedWake(goesIdle.host, `pane-${cli}`, WAKE_LINE, cli, FAST);
-      expect(outIdle).toEqual({
-        delivered: false,
-        typed: true,
-        tries: 1,
-        reason: 'the screen read idle and no working screen showed',
-      });
+      if (cli === 'antigravity') {
+        expect(outIdle).toEqual({
+          delivered: false,
+          typed: false,
+          tries: 0,
+          reason: 'the box already held the line; the agent prompt was not sent and nothing was typed',
+        });
+        expect(goesIdle.enters).toBe(0);
+      } else {
+        expect(outIdle).toEqual({
+          delivered: false,
+          typed: true,
+          tries: 1,
+          reason: 'the screen read idle and no working screen showed',
+          submittedAt: expect.any(Number),
+        });
+        expect(goesIdle.enters).toBe(1);
+      }
       expect(goesIdle.typed).toEqual([]);
-      expect(goesIdle.enters).toBe(1);
 
       // 5c. Working screen shows after Enter, but the box still holds the wake line through verifyMs.
-      expect(readScreen(cli, workingHoldingWake).kind).toBe('working');
-      expect(boxHoldsText(cli, WAKE_LINE, workingHoldingWake)).toBe(true);
+      expect(readScreenAt(cli, workingHoldingWake).kind).toBe('working');
+      expect(holdsText(cli, WAKE_LINE, workingHoldingWake)).toBe(true);
       const workingStillHeld = makeFakeHost((_read, enters) =>
         enters > 0 ? workingHoldingWake : heldWake,
       );
@@ -665,17 +767,27 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
         cli,
         { ...FAST, verifyMs: 3 },
       );
-      expect(outWorkingHeld).toEqual({
-        delivered: false,
-        typed: true,
-        tries: 1,
-        reason:
-          'the working screen showed with the line still in the box after 1 Enter; the line was not submitted',
-      });
+      if (cli === 'antigravity') {
+        expect(outWorkingHeld).toEqual({
+          delivered: false,
+          typed: false,
+          tries: 0,
+          reason: 'the box already held the line; the agent prompt was not sent and nothing was typed',
+        });
+        expect(workingStillHeld.enters).toBe(0);
+      } else {
+        expect(outWorkingHeld).toEqual({
+          delivered: false,
+          typed: true,
+          tries: 1,
+          reason: 'the working screen showed with the line still in the box after 1 Enter; the line was not submitted',
+        });
+        expect(workingStillHeld.enters).toBe(1);
+      }
       expect(workingStillHeld.typed).toEqual([]);
-      expect(workingStillHeld.enters).toBe(1);
 
       // 5d. Working screen initially holds the wake line after Enter, then empties before verifyMs runs out -> delivered!
+      // Antigravity refuses before the prompt, so that later empty never happens.
       let postEnterPolls = 0;
       const workingThenEmpties = makeFakeHost((_read, enters) => {
         if (enters === 0) return heldWake;
@@ -689,15 +801,28 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
         cli,
         { ...FAST, verifyMs: 4 },
       );
-      expect(postEnterPolls).toBe(3);
-      expect(outEmpties).toEqual({
-        delivered: true,
-        typed: true,
-        tries: 1,
-        reason: 'the working screen showed after 1 Enter',
-      });
+      if (cli === 'antigravity') {
+        expect(postEnterPolls).toBe(0);
+        expect(outEmpties).toEqual({
+          delivered: false,
+          typed: false,
+          tries: 0,
+          reason: 'the box already held the line; the agent prompt was not sent and nothing was typed',
+        });
+        expect(workingThenEmpties.enters).toBe(0);
+      } else {
+        expect(postEnterPolls).toBe(3);
+        expect(outEmpties).toEqual({
+          delivered: true,
+          typed: true,
+          tries: 1,
+          reason: 'the working screen showed after 1 Enter',
+          submittedAt: expect.any(Number),
+          workingAt: expect.any(Number),
+        });
+        expect(workingThenEmpties.enters).toBe(1);
+      }
       expect(workingThenEmpties.typed).toEqual([]);
-      expect(workingThenEmpties.enters).toBe(1);
 
       // 5e. Working screen shows on the second read BEFORE any Enter was pressed -> not claimed as delivered!
       const workingBeforeEnter = makeFakeHost((read) => (read === 0 ? heldWake : working));
@@ -729,25 +854,45 @@ describe('independent C7.3 verification: fix/wake-held-line (bc55d76a5)', () => 
         cli,
         FAST,
       );
-      expect(outPerm).toEqual({
-        delivered: false,
-        typed: true,
-        tries: 1,
-        reason: 'the screen read permission and no working screen showed',
-      });
+      if (cli === 'antigravity') {
+        expect(outPerm).toEqual({
+          delivered: false,
+          typed: false,
+          tries: 0,
+          reason: 'the box already held the line; the agent prompt was not sent and nothing was typed',
+        });
+        expect(showsPermission.enters).toBe(0);
+      } else {
+        expect(outPerm).toEqual({
+          delivered: false,
+          typed: true,
+          tries: 1,
+          reason: 'the screen read permission and no working screen showed',
+        });
+        expect(showsPermission.enters).toBe(1);
+      }
       expect(showsPermission.typed).toEqual([]);
-      expect(showsPermission.enters).toBe(1);
 
       const goesNull = makeFakeHost((_read, enters) => (enters > 0 ? null : heldWake));
       const outNull = await deliverTypedWake(goesNull.host, `pane-${cli}`, WAKE_LINE, cli, FAST);
-      expect(outNull).toEqual({
-        delivered: false,
-        typed: true,
-        tries: 1,
-        reason: 'the screen could not be read and no working screen showed; no further Enter was pressed',
-      });
+      if (cli === 'antigravity') {
+        expect(outNull).toEqual({
+          delivered: false,
+          typed: false,
+          tries: 0,
+          reason: 'the box already held the line; the agent prompt was not sent and nothing was typed',
+        });
+        expect(goesNull.enters).toBe(0);
+      } else {
+        expect(outNull).toEqual({
+          delivered: false,
+          typed: true,
+          tries: 1,
+          reason: 'the screen could not be read and no working screen showed; no further Enter was pressed',
+        });
+        expect(goesNull.enters).toBe(1);
+      }
       expect(goesNull.typed).toEqual([]);
-      expect(goesNull.enters).toBe(1);
     }
   });
 });

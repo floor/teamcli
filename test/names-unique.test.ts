@@ -21,6 +21,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { approveOwnerAction } from '../src/client/owner-action.ts';
 import { nicknameChangeGate } from '../src/registry/names.ts';
 import { readStoredTeamConfig } from '../src/registry/team-config-store.ts';
+import { writePolicySet } from '../src/policy/index.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { emptySession, updateState } from '../src/state.ts';
@@ -144,6 +145,16 @@ async function ownerSet(world: World, folder: string, path: string, value: strin
 /** A placed team walked to the clean state a check reads: every seat ready on its own pane, a
  *  brief dropped and read, and a watch pass recent enough that the run itself is no difference —
  *  so the only note left is the one a scene is about. */
+/** The entity names an owner-reply endpoint, so a nickname scene is not also that difference. */
+function declareOwnerReply(home: string): void {
+  const wrote = writePolicySet(
+    home,
+    { level: 'entity', target: 'floor', name: 'owner-reply-to', value: 'lead@acme' },
+    { now: NOW },
+  );
+  if (!wrote.ok) throw new Error(wrote.why);
+}
+
 function settle(world: World, folder: string, text: string): string {
   const root = world.roots[folder]!;
   const parsed = validateTeamFile(text);
@@ -286,6 +297,7 @@ describe('the nickname a write brings, and the one a team already carries', () =
     // Both teams were imported carrying Cicero: the duplicate predates any check, and a running
     // team is never refused for it.
     const world = place({ acme: ACA, site: ACA.replace('project: acme', 'project: site') });
+    declareOwnerReply(world.home);
     const root = settle(world, 'acme', ACA);
     const io = testIo(root, { kind: 'owner' });
     const code = runTeamCheck({ file: '.agents/team.yaml' }, io, {
@@ -305,6 +317,7 @@ describe('the nickname a write brings, and the one a team already carries', () =
 
   test('the same teams under `team` draw no such note', () => {
     const world = place({ acme: ACA, site: ACA.replace('project: acme', 'project: site') }, 'team');
+    declareOwnerReply(world.home);
     const root = settle(world, 'acme', ACA);
     const io = testIo(root, { kind: 'owner' });
     const code = runTeamCheck({ file: '.agents/team.yaml' }, io, {

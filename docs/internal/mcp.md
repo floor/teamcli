@@ -48,7 +48,10 @@ relaunched while an old process lives is served nothing by it — no list, no bo
 and a push it would have made is not written.
 
 `inbox_read` writes `<id>.read.json` beside the message **before** it returns the body — a read that
-cannot leave that receipt is refused, so the server never hands over a body it did not record. The
+cannot leave that receipt is refused, so the server never hands over a body it did not record.
+That server path stays receipt-first. The CLI mailbox reader, `team drops --read`, prints the body
+first and writes the receipt after the hand-over, so it is at-least-once: two racing readers can
+both print a body. The
 receipt is the signed status receipt `team messages` also writes: `{payload: {kind, status, id, to,
 root, session, at}, signature}`, signed with the checkout's message key, so the inbox, `team
 drops`, `team messages` and the watch all verify the same file rather than trusting its presence.
@@ -326,7 +329,6 @@ can't be read):
 | `team mcp serve: this server serves seat "lead" and starts inside that seat's own process; this call is unplaced (<reason>)` | 2 |
 | `team mcp serve: the team state records no session "acme", so this server cannot prove which seat started it` | 2 |
 | `team mcp serve: --epoch "run_aaaaaaaaaaaa" names a launch the seat's state no longer holds; start the server from the seat's launch line` | 2 |
-| `team mcp serve: seat "lead" has a current brief claim and this server was started without its epoch; start the server from the seat's launch line` | 2 |
 | `team mcp serve: --epoch "run_aaaaaaaaaaaa" is not the seat's current launch epoch; start the server from the seat's launch line` | 2 |
 | `team mcp serve: the team state cannot be read, so this server cannot prove the launch it belongs to: <reason>` | 2 |
 | `team mcp serve: the inbox folder is not a real folder: a link, a file or a failed write stands in its path` | 2 |
@@ -337,6 +339,11 @@ A start refusal is `mcp.serve-refused`, not `mcp.invocation`; a clean end of std
 every tool call, so a folder that becomes a link after start, or a seat stopped, moved or
 relaunched under a running server, makes the call fail (`isError: true`, carrying the same
 sentence without the `team mcp serve: ` prefix) instead of serving a body or writing a receipt.
+A start that already finds a current claim and no `--epoch` binds to that claim's epoch and
+serves; a claim that holds no launch epoch is served with none bound. A server that started
+with no claim, under which a claim then appears, refuses the call with `seat "lead" has a
+current brief claim and this server was started without its epoch; start the server from the
+seat's launch line`.
 
 ```console
 $ team mcp  ; echo "exit $?"

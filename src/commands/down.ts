@@ -11,6 +11,7 @@ import { plainText } from '../launch/plain.ts';
 import { processNameMatches } from '../clis.ts';
 import { devModeCallerGate, devModeExpiryNote, devModeFileApproval, devModeLevelNote, devModeOwnerLiftAtCwd, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
+import { latestCheckpoint } from '../checkpoint/checkpoint.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../delegate.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
@@ -1148,7 +1149,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       refusal: 'only the owner abandons a team, from a terminal outside herdr',
       ...(sources.home !== undefined ? { home: sources.home } : {}),
       now: sources.now(),
-      // Ruling D5: the placed operator may abandon, under the lead-gates policy.
+      // The placed operator may abandon, under the lead-gates policy.
       admitsOperator: true,
     });
     if (lift === null || !lift.lifted) {
@@ -1669,11 +1670,16 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
         }
         if (pane) forgetLaunchedPane(sources.home ?? homedir(), pane, session);
         // The registry: the seat's agent ends with its pane. A temporary seat is gone for good.
+        // The end event names the standing checkpoint's path when one stands in this terminal-host
+        // session, so the chain holds its ask from both sides — the same truth restart's own end
+        // writes.
         if (sources.home !== undefined) {
           const ended = registerEnd(
             { home: sources.home, team, root, by: describeCaller(caller), session },
             name,
             temporaryDropped ? 'retired' : 'stopped',
+            'owner-stop',
+            latestCheckpoint(readState(dir), name, session)?.path,
           );
           if (ended) {
             if (json) collect(ended.note);

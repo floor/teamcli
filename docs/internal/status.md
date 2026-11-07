@@ -160,7 +160,10 @@ fresh, unconfirmed, stale, refusing, or unknown. A row's account is the seat's o
 when the file names one, its `vendor` when it doesn't, so one vendor's two accounts are two rows.
 A figure inside its reserve says so on that row, including when it is still fresh.
 When the counted figure did not come from the first source the account names, the row names the
-source it did come from and marks it: `status line (fallback)`.
+source it did come from and marks it: `read from a seat’s status bar (fallback)`. A source prints
+in the one plain-words vocabulary `sourceText` (`budgets/table.ts`) gives every face —
+`read from a seat’s status bar`, `read from the CLI`, or `estimated` — never the model's own
+spelling.
 An old figure with no known reset reads unknown while it could still matter — inside its reserve,
 or within the reserve again outside it. Further out — more than the reserve again — it is still
 shown, its when column saying `last seen 40m ago`: the room the figure last held.
@@ -389,9 +392,9 @@ team beacon, session "beacon"
   claude-keeper  missing  Claude Opus 5.5  -      typed
   claude-beacon  working  Claude Opus 5.5  w1:p1  socket
 budgets:
-  openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh
-  openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
-  openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
+  openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  estimated  fresh
+  openai  daily  left 70%  used 30%  resets not printed  claude-beacon  last seen 40m ago  read from a seat’s status bar (fallback)  stale
+  openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  read from a seat’s status bar (fallback)  fresh, inside reserve 20%
 difference: claude-keeper is in the file and is not running
   repair: team restart claude-keeper
   who: the team's lead
@@ -506,37 +509,9 @@ team beacon, session "beacon"
   claude-keeper  idle     Claude Opus 5.5  w2:p1  typed
   claude-beacon  working  Claude Opus 5.5  w1:p1  socket
 budgets:
-  openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh
-  openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
-  openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
+  openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  estimated  fresh
+  openai  daily  left 70%  used 30%  resets not printed  claude-beacon  last seen 40m ago  read from a seat’s status bar (fallback)  stale
+  openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  read from a seat’s status bar (fallback)  fresh, inside reserve 20%
 no differences
 exit 0
 ```
-
-The machine's own swap is read for one case only: the check in force — the 2GB default, or the
-file's own `swap_free_min` — asks for more free swap than this reading says the machine has in
-total. The same fact `doctor` warns about is one note, with both figures and the repair, in the
-reading's own words — `cannot meet it`, never a promise about a later run; `--json` carries it
-in `notes` in the same place:
-
-```console machine="small-swap"
-$ team status ; echo "exit $?"
-team beacon, session "beacon"
-  SEAT           STATE    MODEL            PANE   REACH
-  claude-keeper  idle     Claude Opus 5.5  w2:p1  typed
-  claude-beacon  working  Claude Opus 5.5  w1:p1  socket
-budgets:
-  openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh
-  openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
-  openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
-note: the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so this reading cannot meet it; set `machine.swap_free_min` to a figure this machine can keep
-no differences
-exit 0
-```
-
-A check that merely fails right now — the machine has the swap in total, and not enough of it
-free at this moment — prints no note here: the watch reports what it reads. The note above
-describes the reading it came from: on macOS the total moves with pressure, so it promises
-nothing about a later reading. The total is read on macOS from `sysctl -n vm.swapusage`, and on
-Linux from `/proc/meminfo`'s `SwapTotal`; a machine with no swap at all is not this case, and
-nothing is said when the total can't be read.

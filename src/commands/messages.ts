@@ -25,7 +25,8 @@ import { runClientMessages } from '../client/inbox.ts';
 import { isNoRepository, withoutFileOffer } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
-import { isGeneralBriefRecord } from '../launch/general-brief.ts';
+import { currentClaimIn } from '../mcp/inbox.ts';
+import { isGeneralBriefRecord, type CurrentBriefClaim } from '../launch/general-brief.ts';
 import { heldAt, type Held } from '../launch/rules-file.ts';
 import {
   contextLine,
@@ -56,7 +57,9 @@ import {
   type Json,
 } from '../store/keys.ts';
 import {
-  isRead,
+  fileStatStamp,
+  isReadOrCleared,
+  keyPrintForCache,
   recordAuthOfSealed,
   recordFile,
   sealedRecordOf,
@@ -68,6 +71,7 @@ import {
 } from '../send/record.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
 import { noteUnread } from '../send/unread-hint.ts';
+import { attributedBody, attributeSenderClaim, senderReading, type SenderAttribution } from '../send/sender-claim.ts';
 
 export const USAGE = `Usage: team messages [--json]
 Usage: team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--follow] [--json]
@@ -302,10 +306,18 @@ function candidates(root: string, session: string): Candidate[] {
  *  verifies for this message and inbox. A reply counts as the read that came before it, the same
  *  answer `readMessage`, `team drops` and the watch share, so no reader shows a body again and the
  *  watch does not ring for a message that was already answered. */
-function recordReadHeld(candidate: Candidate, root: string, session: string, key: KeyObject): boolean {
-  const context = { to: candidate.seat, root, session: candidate.session ?? session };
-  return isRead(recordDir(root, context.session, candidate.seat), candidate.id, context, key);
+function recordReadHeld(candidate: Candidate, root: string, session: string, key: KeyObject, lead?: string): boolean {
+  const context = {
+    to: candidate.seat,
+    root,
+    session: candidate.session ?? session,
+    ...(lead === undefined ? {} : { lead }),
+  };
+  return isReadOrCleared(recordDir(root, context.session, candidate.seat), candidate.id, context, key);
 }
+
+const UNACKED_STAMP_CACHE_LIMIT = 4096;
+const unackedStampCache = new Map<string, { stamp: string; scope: string; value: UnackedMessage | null }>();
 
 /**
  * The payload of a record another user owns, read the way this list read every record before the
@@ -340,46 +352,87 @@ export function listUnackedMessages(
   session: string,
   home: string,
   records?: RecordReader,
+  lead?: string,
 ): UnackedMessage[] {
   const state = messageKeyState(home);
   if (state.kind !== 'key') return [];
   const readRecordAt: RecordReader = records ?? ((path, id) => verifiedRecordAt(path, id, state.key));
+  const keyPrint = keyPrintForCache(state.key);
+  let realRoot = root;
+  try {
+    realRoot = realpathSync(root);
+  } catch {
+    realRoot = root;
+  }
   const out: UnackedMessage[] = [];
   for (const candidate of [...recordNames(root, session), ...legacyCandidates(root)]) {
     if (candidate.store === 'legacy') {
       if (legacyReceiptMatches(receiptFile(root, candidate.seat, candidate.id), candidate.seat, candidate.id, root, session, state.key)) continue;
+      const stamp = fileStatStamp(candidate.path);
+      const scope = `legacy\0${keyPrint}\0${candidate.id}\0${candidate.seat}\0${session}\0${realRoot}`;
+      if (stamp !== null && keyPrint !== '') {
+        const cached = unackedStampCache.get(candidate.path);
+        if (cached !== undefined && cached.stamp === stamp && cached.scope === scope) {
+          if (cached.value !== null) out.push(cached.value);
+          continue;
+        }
+      }
       const parsed = readJson(candidate.path);
       const payload = messagePayload(parsed);
-      if (!payload || !isRecord(parsed) || !text(parsed.signature)) continue;
-      if (payload.id !== candidate.id || payload.to !== candidate.seat) continue;
-      if (payload.session !== session || !samePath(payload.root, root)) continue;
-      if (!verifyDomain(MESSAGE_DOMAIN, payload as Json, parsed.signature, state.key)) continue;
-      // A legacy message carries no agent id and no subject: its sender is its signed `from`.
-      out.push({ id: candidate.id, to: candidate.seat, at: payload.at, from: payload.from, from_id: null, body: payload.body });
+      let entry: UnackedMessage | null = null;
+      if (
+        payload &&
+        isRecord(parsed) &&
+        text(parsed.signature) &&
+        payload.id === candidate.id &&
+        payload.to === candidate.seat &&
+        payload.session === session &&
+        samePath(payload.root, root) &&
+        verifyDomain(MESSAGE_DOMAIN, payload as Json, parsed.signature, state.key)
+      ) {
+        // A legacy message carries no agent id and no subject: its sender is its signed `from`.
+        entry = { id: candidate.id, to: candidate.seat, at: payload.at, from: payload.from, from_id: null, body: payload.body };
+      }
+      if (stamp !== null && keyPrint !== '') {
+        if (unackedStampCache.size >= UNACKED_STAMP_CACHE_LIMIT) unackedStampCache.clear();
+        unackedStampCache.set(candidate.path, { stamp, scope, value: entry });
+      }
+      if (entry !== null) out.push(entry);
       continue;
     }
-    if (recordReadHeld(candidate, root, session, state.key)) continue;
+    if (recordReadHeld(candidate, root, session, state.key, lead)) continue;
+    const targetSession = candidate.session ?? session;
+    const stamp = fileStatStamp(candidate.path);
+    // The clearance depends on the team's lead, so the lead is part of the cached scope: a
+    // caller that knows the team and one that does not never share an answer.
+    const scope = `record\0${keyPrint}\0${candidate.id}\0${candidate.seat}\0${targetSession}\0${realRoot}\0${lead ?? ''}`;
+    if (stamp !== null && keyPrint !== '') {
+      const cached = unackedStampCache.get(candidate.path);
+      if (cached !== undefined && cached.stamp === stamp && cached.scope === scope) {
+        if (cached.value !== null) out.push(cached.value);
+        continue;
+      }
+    }
     const payload = readRecordAt(candidate.path, candidate.id) ?? foreignRecordPayload(candidate.path, state.key);
-    if (payload === null) continue;
-    // The complete raw payload authenticates before any field this list would report is read.
-    if (payload.id !== candidate.id || payload.to !== candidate.seat) continue;
-    if (payload.session !== (candidate.session ?? session) || !samePath(payload.root, root)) continue;
-    out.push({
-      id: candidate.id,
-      to: candidate.seat,
-      at: payload.at,
-      from: payload.from,
-      from_id: payload.from_id,
-      body: payload.body,
-      ...(payload.subject === undefined ? {} : { subject: payload.subject }),
-    });
+    let entry: UnackedMessage | null = null;
+    if (payload !== null && payload.id === candidate.id && payload.to === candidate.seat &&
+        payload.session === targetSession && samePath(payload.root, root)) {
+      entry = { id: candidate.id, to: candidate.seat, at: payload.at, from: payload.from,
+        from_id: payload.from_id, body: payload.body,
+        ...(payload.subject === undefined ? {} : { subject: payload.subject }) };
+    }
+    if (stamp !== null && keyPrint !== '') {
+      if (unackedStampCache.size >= UNACKED_STAMP_CACHE_LIMIT) unackedStampCache.clear();
+      unackedStampCache.set(candidate.path, { stamp, scope, value: entry });
+    }
+    if (entry !== null) out.push(entry);
   }
   return out;
 }
 
 /** The ids of the records with no verifying read receipt: the ring's recheck. */
-export function listUnacked(root: string, session: string, home: string): Unacked[] {
-  return listUnackedMessages(root, session, home).map((record) => ({ id: record.id, to: record.to, at: record.at }));
+export function listUnacked(root: string, session: string, home: string, lead?: string): Unacked[] {
+  return listUnackedMessages(root, session, home, undefined, lead).map((record) => ({ id: record.id, to: record.to, at: record.at }));
 }
 
 /**
@@ -437,7 +490,17 @@ export function plantRecord(
 
 type Problem = { kind: 'shape' | 'id' | 'seat' | 'root' | 'session' | 'signature' | 'unsupported'; text: string };
 
-type Verified = { from: string; from_id: string | null; to: string; at: string; body: string };
+type Verified = {
+  from: string;
+  from_id: string | null;
+  to: string;
+  at: string;
+  body: string;
+  rule?: string;
+  id: string;
+  incarnation?: string;
+  brief_sha256?: string;
+};
 
 function recordProblem(candidate: Candidate, root: string, session: string, key: KeyObject): Problem | Verified {
   const where = `${candidate.seat}/${candidate.id}`;
@@ -466,7 +529,17 @@ function recordProblem(candidate: Candidate, root: string, session: string, key:
   if (payload.session !== (candidate.session ?? session)) {
     return { kind: 'session', text: `${where} does not verify: it is bound to session ${JSON.stringify(payload.session)}` };
   }
-  return { from: payload.from, from_id: payload.from_id, to: payload.to, at: payload.at, body: payload.body };
+  return {
+    from: payload.from,
+    from_id: payload.from_id,
+    to: payload.to,
+    at: payload.at,
+    body: payload.body,
+    rule: payload.rule,
+    id: payload.id,
+    ...(payload.incarnation === undefined ? {} : { incarnation: payload.incarnation }),
+    ...(payload.brief_sha256 === undefined ? {} : { brief_sha256: payload.brief_sha256 }),
+  };
 }
 
 function problemOf(candidate: Candidate, root: string, session: string, key: KeyObject): Problem | Verified {
@@ -491,7 +564,7 @@ function problemOf(candidate: Candidate, root: string, session: string, key: Key
     return { kind: 'signature', text: `${where} does not verify: the signature is not the message key's` };
   }
   // The older store never carried the sender's registry id.
-  return { from: payload.from, from_id: null, to: payload.to, at: payload.at, body: payload.body };
+  return { from: payload.from, from_id: null, to: payload.to, at: payload.at, body: payload.body, id: payload.id };
 }
 
 /**
@@ -544,6 +617,7 @@ function openRecord(
   home: string,
   key: KeyObject,
   at: string,
+  lead?: string,
 ): ReadGate {
   const recordSession = candidate.session ?? session;
   const outcome = publishRecordRead({
@@ -555,6 +629,7 @@ function openRecord(
     home,
     key,
     at,
+    ...(lead === undefined ? {} : { lead }),
   });
   if (outcome.kind === 'published') return { kind: 'shown' };
   if (outcome.kind === 'served') return { kind: 'served' };
@@ -615,12 +690,17 @@ type MailboxRow = {
   to: string | null;
   sent: string | null;
   sent_display: string;
-  status: 'shown' | 'refused' | 'waiting';
+  status: 'shown' | 'refused' | 'waiting' | 'read';
   /** The verified body: a served record's on a `shown` row, and, in the owner's reading only, a
    *  record of another mailbox on its `waiting` row. The owner reading is read-only — it carries
    *  the body and publishes no receipt — and a seat's reading never carries another mailbox's
    *  body at all. A record that does not verify carries none, whatever the caller. */
   body?: string;
+  /** How the sender is known: `unverified_claim` on the shared checkout key, `launch-brief` when
+   *  the launch's own seat brief is bound to the seat's current claim, or `none`. A refused row's
+   *  record was not vouched for, so it is `none`. */
+  sender_attribution: SenderAttribution;
+  renderedBody?: string;
 };
 
 /** The record's path as the caller reads it in the refusal's repair. */
@@ -661,6 +741,8 @@ function waitingRow(
   key: KeyObject | null,
   now: Date,
   withBody: boolean,
+  home: string,
+  claim: CurrentBriefClaim | null,
 ): MailboxRow {
   const verified = key === null ? null : problemOf(candidate, root, session, key);
   const fields = verified !== null && !('text' in verified) ? verified : null;
@@ -673,7 +755,26 @@ function waitingRow(
     sent: fields?.at ?? null,
     sent_display: formatRelativeTime(fields?.at, now),
     status: 'waiting',
-    ...(withBody && fields !== null ? { body: fields.body } : {}),
+    sender_attribution: fields === null
+      ? 'none'
+      : attributeSenderClaim({
+          from: fields.from,
+          rule: fields.rule ?? '',
+          id: fields.id,
+          ...(fields.incarnation === undefined ? {} : { incarnation: fields.incarnation }),
+          ...(fields.brief_sha256 === undefined ? {} : { brief_sha256: fields.brief_sha256 }),
+        }, { briefClaim: claim }),
+    ...(withBody && fields !== null
+      ? {
+          body: fields.body,
+          renderedBody: attributedBody(fields.body, fields.from ?? candidate.seat, {
+            home,
+            root,
+            ...(fields.from_id === null ? {} : { fromId: fields.from_id }),
+            ...(fields.rule === undefined ? {} : { rule: fields.rule }),
+          }),
+        }
+      : {}),
   };
 }
 
@@ -735,7 +836,8 @@ function bodyLines(body: string): string[] {
  * proof are one ordered act and a receipt that cannot be made durable shows no body. The older
  * store's body prints first and its receipt is written after `io.stdout` returns, as it always
  * was. A record that does not verify prints no body and writes nothing; it is a `refused` row and
- * a difference, and the run exits 1. A record another reader already served is skipped silently.
+ * a difference, and the run exits 1. A record another reader already served is a `read` row
+ * with no body.
  * An empty mailbox is a `0 messages` reading with the note that nothing is waiting, and creates
  * no key. The run serves one mailbox: the owner's, or the seat the caller is placed as, and the
  * receipt records that the addressed party's reader was shown the body. Records for other
@@ -825,9 +927,21 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
   const naming = namingFor({ home: sources.home, root, viewerTeam: teamIdOf(root), file: loaded.team });
   const state = messageKeyState(sources.home);
   const waiting = candidates(root, session).filter((candidate) => {
-    if (state.kind !== 'key') return true;
-    if (candidate.store === 'record') return !recordReadHeld(candidate, root, session, state.key);
-    return !legacyReceiptMatches(receiptFile(root, candidate.seat, candidate.id), candidate.seat, candidate.id, root, session, state.key);
+    if (state.kind === 'key') {
+      const readHeld =
+        candidate.store === 'record'
+          ? recordReadHeld(candidate, root, session, state.key, loaded.team.orchestrator)
+          : legacyReceiptMatches(receiptFile(root, candidate.seat, candidate.id), candidate.seat, candidate.id, root, session, state.key);
+      // A receipt already settled this id, including a lead's clearance. It is not waiting
+      // mail: no row, no count, and no body, whoever is reading.
+      if (readHeld) return false;
+    }
+    // A body file written before the record spine is plain text. It stays in the folder for
+    // its seat to read, but it names no message: the inbox neither shows nor refuses it. A
+    // JSON file is held to the record's shape. Checked only after the read receipt gate so
+    // already-read records are never opened.
+    if (candidate.store === 'record' && readJson(candidate.path) === undefined) return false;
+    return true;
   });
   if (waiting.length === 0) {
     // An empty inbox is a reading, not a refusal: the table has its headers and no rows, the note
@@ -876,11 +990,20 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
   const differences: OutputDifference[] = [];
   /** Seats whose waiting general seat brief this mailbox does not serve, in first-seen order. */
   const briefSeats: string[] = [];
+  /** Each seat's current general-brief claim, read once per seat and session for this reading. */
+  const claims = new Map<string, CurrentBriefClaim | null>();
+  const claimOf = (seat: string, at: string): CurrentBriefClaim | null => {
+    const name = `${at}\u0000${seat}`;
+    if (!claims.has(name)) claims.set(name, currentClaimIn(root, at, seat));
+    return claims.get(name) ?? null;
+  };
   for (const candidate of waiting) {
     if (candidate.seat !== mailbox) {
-      // Addressed to another mailbox: listed, never shown, never receipted. The owner's reading
-      // carries the verified body; a seat's never does.
-      rows.push(waitingRow(candidate, root, session, key, now, ownerView));
+      // Addressed to another mailbox: listed, never shown, never receipted. A record a receipt
+      // already settled is not waiting, so it is not listed and its body is not shown. The
+      // owner's reading carries the verified body of what is still waiting; a seat's never does.
+      if (key !== null && recordReadHeld(candidate, root, session, key, loaded.team.orchestrator)) continue;
+      rows.push(waitingRow(candidate, root, session, key, now, ownerView, sources.home, claimOf(candidate.seat, candidate.session ?? session)));
       continue;
     }
     // Every record of this mailbox reaching here is the key's to verify: a keyless run with one
@@ -900,6 +1023,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
         sent: parsedLike?.at ?? null,
         sent_display: formatRelativeTime(parsedLike?.at, now),
         status: 'refused',
+        sender_attribution: 'none',
       });
       differences.push({ what: result.text, repair: repairOf(candidate, result, parsedLike), who: 'any seat' });
       // The refusal is raised to the owner as its rule and object — the record's id, its seat
@@ -919,14 +1043,31 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
     if (recordPayload !== null && isGeneralBriefRecord(recordPayload)) {
       // A brief's read is bound to the seat's current claim and belongs to the seat's own reader.
       // This checkout-wide mailbox writes no receipt for one, so the seat's reader still serves it.
+      // A brief already served is not waiting mail, and it adds no note.
+      if (key !== null && recordReadHeld(candidate, root, session, key, loaded.team.orchestrator)) continue;
       if (!briefSeats.includes(candidate.seat)) briefSeats.push(candidate.seat);
       continue;
     }
     if (candidate.store === 'record') {
+      // A receipt already settles this id. It is not waiting mail, so it adds no row and no body.
+      if (key !== null && recordReadHeld(candidate, root, session, key, loaded.team.orchestrator)) continue;
       // The receipt is published and flushed before the body: one reader wins the id, and the
       // proof of exposure survives a crash that follows it.
-      const gate = openRecord(candidate, root, session, sources.home, key, sources.now().toISOString());
-      if (gate.kind === 'served') continue; // another reader already spent this id: no row, no body
+      const gate = openRecord(candidate, root, session, sources.home, key, sources.now().toISOString(), loaded.team.orchestrator);
+      if (gate.kind === 'served') {
+        rows.push({
+          id: candidate.id,
+          seat: candidate.seat,
+          from: result.from,
+          from_id: result.from_id,
+          to: result.to,
+          sent: result.at,
+          sent_display: formatRelativeTime(result.at, now),
+          status: 'read',
+          sender_attribution: 'none',
+        });
+        continue;
+      }
       if (gate.kind === 'refused') {
         rows.push({
           id: candidate.id,
@@ -937,11 +1078,19 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
           sent: result.at,
           sent_display: formatRelativeTime(result.at, now),
           status: 'refused',
+          sender_attribution: 'none',
         });
         differences.push({ what: gate.what, repair: gate.repair, who: 'any seat' });
         continue;
       }
     }
+    // The sender is attributed against the recipient seat's own current brief claim: the launch's
+    // delivery the seat holds is the one record bound to something beyond the shared key. An older
+    // store's message has no claim fields, so its sender rests on the shared key like every other
+    // record.
+    const senderAttribution = recordPayload === null
+      ? 'unverified_claim' as const
+      : attributeSenderClaim(recordPayload, { briefClaim: claimOf(candidate.seat, candidate.session ?? session) });
     const row: MailboxRow = {
       id: candidate.id,
       seat: candidate.seat,
@@ -952,6 +1101,11 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
       sent_display: formatRelativeTime(result.at, now),
       status: 'shown',
       body: result.body,
+      sender_attribution: senderAttribution,
+      renderedBody: attributedBody(result.body, result.from ?? candidate.seat, {
+        record: recordPayload, home: sources.home, root,
+        ...(recordPayload?.rule === undefined ? {} : { rule: recordPayload.rule }),
+      }),
     };
     rows.push(row);
     shownCount += 1;
@@ -973,6 +1127,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
         sent: row.sent,
         sent_display: row.sent_display,
         status: row.status,
+        sender_attribution: row.sender_attribution,
         ...(row.body !== undefined ? { body: row.body } : {}),
       })),
       notes,
@@ -1023,8 +1178,11 @@ function renderMailbox(
   naming: SenderNaming,
 ): string {
   const lines = [contextLine(project, session)];
-  const readableFrom = (row: MailboxRow): string | null =>
-    row.from === null ? null : senderDisplayName({ seat: row.from, id: row.from_id }, naming);
+  const readableFrom = (row: MailboxRow): string | null => {
+    if (row.from === null) return null;
+    const name = senderDisplayName({ seat: row.from, id: row.from_id }, naming);
+    return `${name} ${senderReading(row.sender_attribution)}`;
+  };
   lines.push(
     ...renderTable({
       headers: ['ID', 'FROM', 'TO', 'SENT', 'STATUS'],
@@ -1035,7 +1193,7 @@ function renderMailbox(
   );
   for (const row of rows) {
     if (row.body === undefined) continue;
-    lines.push('', `${row.seat}/${row.id}:`, ...bodyLines(row.body));
+    lines.push('', `${row.seat}/${row.id}:`, ...bodyLines(row.renderedBody ?? row.body));
   }
   if (notes.length > 0) lines.push('', ...renderNotes(notes));
   if (differences.length > 0) lines.push('', ...renderDifferences(differences, style));

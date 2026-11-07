@@ -9,6 +9,16 @@ into — and its sidebar is rewritten from the file either way. A seat the file 
 is a human's own pane: the plan skips it — nothing is launched into it or typed into it; left as
 it is — and it does not count as short of ready.
 
+A Claude seat whose launch enables the `team-inbox` development channel starts in its own
+`<lobby>/<seat>/` folder, including a lead seat. The lobby must already be registered and trusted.
+After the launch claim exists and before workspace creation and Claude startup, TeamCLI writes
+that folder's `.mcp.json` with the exact claimed epoch and adds the named `team-inbox` approval
+to `.claude/settings.local.json`. It preserves other server entries, enabled names and settings,
+refuses malformed settings, explicit local rejection and unsafe or changed paths, and rechecks
+both files under the same exclusive lease before spawn. It adds no approve-all switch or CLI
+trust entry; Claude's workspace trust remains a separate condition. A failed start leaves the
+bounded config for the next launch and releases only its own config claim.
+
 The watch is read against both records: the watch the session's state carries and the hosted watch
 the machine daemon records for this route. A hosted watch that is not standing by is already
 watching the session, so the run starts no pane watch beside it; a standing-by hosted watch yields
@@ -215,8 +225,8 @@ a question in a pane: the answer is a signature from the owner's own device. `te
 2. The owner answers on the owner page (`team owner-seat serve`): **Approve once**, **Always allow**
    or **Deny**, confirmed with Touch ID on the Mac or with the iPhone passkey. **Approve once** is
    a one-time approval. A migration needs that, and its card offers only **Approve once** and
-   **Deny**. The answer is signed by an accepted owner signer whose key TeamCLI confirms against
-   the credential store.
+   **Deny** as decisions (the later words are on every card, but they decide nothing). The answer
+   is signed by an accepted owner signer whose key TeamCLI confirms against the credential store.
 3. The caller runs the same command with `--approval <id>`. TeamCLI verifies the signed answer is
    bound to this id, this action, this repository, team, `HEAD` and arguments, claims it once for
    this action, and writes an audit entry in `~/.config/team/action-audit/`. `--dry-run` verifies

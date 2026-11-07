@@ -20,7 +20,7 @@ import { namesUniqueFor, type NicknameScope } from '../entities.ts';
 import { seatNickname } from '../file/sections/seats.ts';
 import type { TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
-import { readStoredTeamConfig } from './team-config-store.ts';
+import { readStoredTeamConfig, type StoredTeamConfig } from './team-config-store.ts';
 import { readTeams, teamIdOf, TeamsError, type TeamRecord } from './teams.ts';
 
 /** The comparison the setting names: case-insensitive, so `Cicero` and `cicero` are one name. */
@@ -79,14 +79,14 @@ function projectOf(
 /** A team's seats as its stored record text writes them, or null when that text is missing or
  *  does not read — the caller then falls back to the roster. */
 function storedSeats(home: string, id: string): { team: TeamFile; seats: Array<{ seat: string; nickname: string }> } | null {
-  let text: string | null = null;
+  let stored: StoredTeamConfig | null = null;
   try {
-    text = readStoredTeamConfig(home, id)?.text ?? null;
+    stored = readStoredTeamConfig(home, id);
   } catch {
     return null;
   }
-  if (text === null) return null;
-  const parsed = validateTeamFile(text);
+  if (stored === null) return null;
+  const parsed = validateTeamFile(stored.text, { home, root: stored.root });
   if (!parsed.ok) return null;
   const seats = parsed.team.seats.flatMap((seat) => {
     const nickname = heldNickname(parsed.team.seats, seat);

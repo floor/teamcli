@@ -9,12 +9,12 @@
 //
 // The one push is the development channel: when the launch carries the flag naming this server,
 // the server declares `claude/channel`, pushes each new record as one notification, writes a
-// `<id>.channel-push.json` marker beside it, and writes the seat-signed read receipt as it hands
-// the notification to its client (`read_by: channel-push`). It also serves the `ack` tool, which
-// writes the same receipt with `read_by: channel` for a message the push never carried. Without
+// `<id>.channel-push.json` reservation beside it. Handoff is not a consumer read: the `ack` tool
+// writes the signed read receipt with `read_by: channel` only when the client acknowledges the
+// message. `inbox_read` and reply also settle it through their ordinary read paths. Without
 // the flag, MCP is client-pull and the seat notices a message when it calls `inbox_check`, with
 // the drop-folder watch as the bounded fall-back.
-import { createHash, type KeyObject } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { realpathSync } from 'node:fs';
@@ -23,7 +23,7 @@ import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { followBus, followBusRetrying, type BusFollow } from '../bus/follow.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
-import { callerOf, callerVerdict, describeCaller } from '../caller.ts';
+import { callerOf, callerVerdict, describeCaller, type SeatAtPane } from '../caller.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { LoadResult, TeamFile } from '../file/types.ts';
 import type { Io } from '../io.ts';
@@ -31,25 +31,30 @@ import { isBriefEpoch } from '../launch/brief-id.ts';
 import { currentBriefClaim, isGeneralBriefRecord } from '../launch/general-brief.ts';
 import { registeredRootOf } from '../registry/teams.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
-import { readSealedRecord, recordAuthOfSealed } from '../send/record.ts';
-import { wakeHead } from '../send/native.ts';
-import { wakeTrigger } from '../send/wake.ts';
+import { namingFor, senderDisplayName } from '../send/names.ts';
+import { alreadyReadSentence, readSealedRecord, recordAuthOfSealed, settledReadOf } from '../send/record.ts';
+import { attributedBody } from '../send/sender-claim.ts';
 import { messageKeyState } from '../store/keys.ts';
-import { readState, type State } from '../state.ts';
+import { readState, type SeatState, type State } from '../state.ts';
 import { buildIdentity, installIdentity, version } from '../version.ts';
 import type { BuildIdentity, InstallIdentity } from '../version.ts';
+import { admitChannelDelivery } from './channel-admit.ts';
 import {
   CHANNEL_CAPABILITY,
   CHANNEL_INSTRUCTIONS,
   CHANNEL_METHOD,
-  CHANNEL_PUSH_READ_BY,
   CHANNEL_PUSH_STATUS,
   CHANNEL_READ_BY,
   CHANNEL_SAFETY_MS,
   CHANNEL_TICK_MS,
+  channelAborted,
   channelLaunchEnabled,
+  channelNotified,
   channelPushHeld,
+  markChannelNotified,
+  recordChannelEmitted,
   recordChannelPush,
+  withChannelCommit,
 } from './channel.ts';
 import {
   MESSAGE_ID,
@@ -94,6 +99,9 @@ export type ServeHost = {
   build?: BuildIdentity;
   installed?: () => InstallIdentity;
   restart?: (installed: InstallIdentity) => void;
+  /** Test seam. When set, replaces the completion-flag write. False means the handoff marker
+   *  stays and no read receipt is written. */
+  channelMark?: (dropDir: string, id: string) => boolean;
 };
 
 export const realServeHost: ServeHost = { home: homedir() };
@@ -212,6 +220,8 @@ type Serving = {
   dropDir: string;
   home: string;
   team: TeamFile;
+  /** The team file as it stands now; admission must not use the startup snapshot. */
+  loadTeam: () => TeamFile | null;
   /** True when this seat's launch carries the development channel naming this server. */
   channel: boolean;
   brief?: BriefRead;
@@ -219,6 +229,7 @@ type Serving = {
    *  channel push asks before it exposes a record or writes a receipt: a stopped, replaced or
    *  relaunched seat's left-over process is inert, not a second reader. */
   alive?: () => string | null;
+  channelMark?: (dropDir: string, id: string) => boolean;
 };
 
 /** Whether two roots are the same folder once links are resolved, as the inbox checks do. */
@@ -308,9 +319,8 @@ function negotiate(params: unknown): string {
 
 /** One channel notification: the message-display header, then the signed body whole. The record's
  *  complete raw payload must carry this key's signature before any field is read: a tampered or
- *  unsupported record is shown nowhere, not even as a header. The key that verified the record is
- *  returned too, so the push signs its read with the same key it trusted. */
-function channelPushOf(serving: Serving, id: string): { content: string; meta: Record<string, string>; key: KeyObject } | null {
+ *  unsupported record is shown nowhere, not even as a header. */
+function channelPushOf(serving: Serving, id: string): { content: string; meta: Record<string, string> } | null {
   const looked = readSealedRecord(join(serving.dropDir, id));
   if (!looked.ok || looked.sealed === null) return null;
   const key = messageKeyState(serving.home);
@@ -323,14 +333,41 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
   // brief is served at the turn start under its claim, and an ack here would hold the receipt
   // name that reader needs.
   if (payload.from_client !== undefined || isGeneralBriefRecord(payload)) return null;
-  const sender = wakeTrigger(payload, serving.home, { root: serving.root, session: serving.session, team: serving.team });
-  if (sender === null) return null;
-  const header = wakeHead(sender);
-  if (header === '') return null;
+  const team = serving.loadTeam();
+  if (team === null) return null;
+  const admitted = admitChannelDelivery({
+    payload,
+    home: serving.home,
+    root: serving.root,
+    session: serving.session,
+    seat: serving.seat,
+    team,
+  });
+  if (!admitted.ok) return null;
+  // Render authority independently of content. Only one known stored envelope may be folded:
+  // nested headers are literal message text, including a worker quoting the owner's header.
+  const displayName = payload.from === 'owner' ? 'the owner' : senderDisplayName(
+    { seat: payload.from, id: payload.from_id },
+    namingFor({ home: serving.home, root: serving.root, file: team }),
+  );
+  const leadingClaim = /^from ([^\n]*?) — admitted by: ([^\n]*)\n\n?/;
+  const envelope = leadingClaim.exec(payload.body);
+  const knownEnvelope = envelope !== null
+    && (envelope[1] === payload.from || envelope[1] === displayName)
+    && envelope[2] === payload.rule;
+  const body = knownEnvelope ? payload.body.slice(envelope[0].length) : payload.body;
+  // The renderer receives an empty body so it cannot parse a content line as sender/rule.
+  const content = attributedBody('', payload.from, {
+    record: { ...payload, rule: admitted.rule },
+    home: serving.home,
+    root: serving.root,
+    rule: admitted.rule,
+    displayName,
+  }) + body;
+  if (content.trim() === '') return null;
   return {
-    content: `${header}\n\n${payload.body}`,
+    content,
     meta: { id, from: payload.from, seat: serving.seat, team: serving.project },
-    key: key.key,
   };
 }
 
@@ -338,11 +375,10 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
  * Watches the inbox for signed records that arrive after this server starts, and writes one
  * channel notification per new record. Mail already waiting at startup is left to `inbox_check`,
  * so a fresh session starts quiet. Each push writes its `<id>.channel-push.json` marker before
- * the notification, as the id's exclusive reservation, and then writes the seat-signed read
- * receipt (`read_by: channel-push`) once the notification is handed to the client: the push is
- * where the message is shown, so the seat records the read there. The signed record itself is
- * never touched, and `ack` and `inbox_read` still write their own receipts for a message a push
- * never carried.
+ * the notification, as the id's exclusive reservation. A notification handed to stdio proves no
+ * consumer read, so only an explicit `ack`, `inbox_read` or reply writes a signed read receipt.
+ * An ignored notification stays unread and eligible for the watch's bounded recovery. The signed
+ * record itself is never touched.
  *
  * `notice`, when given, is read at the top of every tick: true means this process has been found
  * to run an install that is no longer on disk, so it stops pushing and never writes another
@@ -386,61 +422,50 @@ function watchChannel(
     // An earlier server may have pushed this id before this one started, and a sender whose own
     // walk takes the message leaves a held marker at the same name: either marker says this id
     // is not to be pushed, and a second notification is a duplicate wake.
-    if (channelPushHeld(serving.dropDir, id)) return;
+    if (channelPushHeld(serving.dropDir, id) || channelNotified(serving.dropDir, id) || channelAborted(serving.dropDir, id)) return;
     const push = channelPushOf(serving, id);
     if (push === null) {
       // Not this seat's signed record yet (or never): a later read may still find it.
       seen.delete(id);
       return;
     }
-    // The declaration is looked at again after the record verified and before the reservation:
-    // a seat stopped, dropped or moved while its record was read pushes nothing and writes no
-    // marker. The last look is before the notification itself; if it refuses there, the marker
-    // stands (it is a reservation, not an exposure) and the body does not leave.
-    const beforeMarker = serving.alive?.();
-    if (beforeMarker !== undefined && beforeMarker !== null) return;
-    // The marker is the reservation: it is written exclusively before the notification, so a
-    // sender's held marker that lands after the check above wins the name and this server
-    // never pushes the id; a marker this server cannot write means no push at all.
-    const reserved = recordChannelPush(serving.dropDir, {
-      v: 1,
-      kind: 'channel-push',
-      id,
-      seat: serving.seat,
-      session: serving.session,
-      root: serving.root,
-      at: new Date().toISOString(),
-      meta: push.meta as { id: string; from: string; seat: string; team: string },
-      content_sha256: createHash('sha256').update(push.content).digest('hex'),
-      status: CHANNEL_PUSH_STATUS,
+    // The abort check, the reservation, the handoff marker, the notification write, and the
+    // completion flag share one lock with the sender's fallback. The handoff marker is written
+    // before the line. If the completion flag cannot be published, the sender sees that marker
+    // and does not start another leg. The record stays unread until ack, inbox read, or reply.
+    // A stream write still does not prove the client processed the line.
+    const committed = withChannelCommit(serving.dropDir, id, () => {
+      if (channelAborted(serving.dropDir, id) || channelNotified(serving.dropDir, id) || channelPushHeld(serving.dropDir, id)) {
+        return 'skip' as const;
+      }
+      const beforeMarker = serving.alive?.();
+      if (beforeMarker !== undefined && beforeMarker !== null) return 'skip' as const;
+      const reserved = recordChannelPush(serving.dropDir, {
+        v: 1,
+        kind: 'channel-push',
+        id,
+        seat: serving.seat,
+        session: serving.session,
+        root: serving.root,
+        at: new Date().toISOString(),
+        meta: push.meta as { id: string; from: string; seat: string; team: string },
+        content_sha256: createHash('sha256').update(push.content).digest('hex'),
+        status: CHANNEL_PUSH_STATUS,
+      });
+      if (!reserved || channelAborted(serving.dropDir, id)) return 'skip' as const;
+      const beforeWrite = serving.alive?.();
+      if (beforeWrite !== undefined && beforeWrite !== null) return 'skip' as const;
+      if (!recordChannelEmitted(serving.dropDir, id, new Date().toISOString())) return 'skip' as const;
+      write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: push }));
+      const marked = serving.channelMark
+        ? serving.channelMark(serving.dropDir, id)
+        : markChannelNotified(serving.dropDir, id);
+      if (!marked) return 'uncertain' as const;
+      return 'pushed' as const;
     });
-    if (!reserved) return;
-    // The body leaves here: the declaration is asked one last time, after the reservation, so a
-    // seat that lost its place during the marker write receives no notification.
-    const beforeWrite = serving.alive?.();
-    if (beforeWrite !== undefined && beforeWrite !== null) return;
-    // What the client shows is the content and its meta; the key that verified the record signs
-    // the read receipt below and never rides in the notification.
-    const { key: signingKey, ...notification } = push;
-    write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: notification }));
-    // The push is the show: the notification is with the client now, so the seat signs its read
-    // receipt here, with the key that verified the record — never the sender. A receipt that
-    // cannot be written leaves the record unread and the watch's ordinary confirmation window
-    // applies. The stream write acknowledges nothing, so a client that never rendered the
-    // notification is indistinguishable at this point; that is the same bound the push already
-    // has, and it is why the receipt is written after the handoff rather than before it.
-    publishRecordRead({
-      dropDir: serving.dropDir,
-      id,
-      to: serving.seat,
-      root: serving.root,
-      session: serving.session,
-      home: serving.home,
-      key: signingKey,
-      at: new Date().toISOString(),
-      readBy: CHANNEL_PUSH_READ_BY,
-      ...(serving.brief?.epoch === undefined ? {} : { epoch: serving.brief.epoch }),
-    });
+    if (committed === 'busy') {
+      seen.delete(id);
+    }
   };
   /** The whole inbox, read and verified: the startup prime, the fallback poll without a bus, and
    *  the slow safety pass beside a live one. */
@@ -448,7 +473,7 @@ function watchChannel(
     if (halted()) return;
     const unread = listUnread(
       serving.dropDir,
-      { to: serving.seat, root: serving.root, session: serving.session },
+      { to: serving.seat, root: serving.root, session: serving.session, lead: serving.team.orchestrator },
       serving.home,
     );
     if (!primed) {
@@ -530,6 +555,7 @@ function ackTool(args: unknown, serving: Serving): unknown {
     key: key.key,
     at: new Date().toISOString(),
     readBy: CHANNEL_READ_BY,
+    lead: serving.team.orchestrator,
     ...(serving.brief?.epoch === undefined ? {} : { epoch: serving.brief.epoch }),
   });
   if (outcome.kind === 'held') {
@@ -560,7 +586,7 @@ function callTool(params: unknown, serving: Serving): unknown {
     // file stays where it is; `team drops --read` still counts it as unserved.
     const unread = listUnread(
       serving.dropDir,
-      { to: serving.seat, root: serving.root, session: serving.session },
+      { to: serving.seat, root: serving.root, session: serving.session, lead: serving.team.orchestrator },
       serving.home,
     ).filter((message) => !legacyDropAt(join(serving.dropDir, message.id)));
     return toolText(JSON.stringify({ unread }));
@@ -572,7 +598,7 @@ function callTool(params: unknown, serving: Serving): unknown {
       return toolError('the inbox folder is not a real folder: a link or a file stands in its path');
     }
     const read = readMessage(
-      { dropDir: serving.dropDir, root: serving.root, seat: serving.seat, session: serving.session },
+      { dropDir: serving.dropDir, root: serving.root, seat: serving.seat, session: serving.session, lead: serving.team.orchestrator },
       id,
       serving.home,
       serving.brief,
@@ -582,6 +608,18 @@ function callTool(params: unknown, serving: Serving): unknown {
       () => serving.alive?.() ?? null,
     );
     if (!read.ok) {
+      if (read.served === 'already-served') {
+        const key = messageKeyState(serving.home);
+        if (key.kind === 'key') {
+          const settled = settledReadOf(
+            serving.dropDir,
+            id,
+            { to: serving.seat, root: serving.root, session: serving.session, lead: serving.team.orchestrator },
+            key.key,
+          );
+          if (settled !== null) return toolText(alreadyReadSentence(id, settled.at, settled.readBy, serving.team.seats.map((one) => one.name)));
+        }
+      }
       // A drop an earlier build wrote is refused like any file that is not a record, but it is not
       // a record that could have been admitted: it is not raised to the owner. A record-shaped file
       // that fails — tampered, truncated or foreign — keeps its refusal and its event.
@@ -684,6 +722,31 @@ function registeredRoot(
   }
 }
 
+/** The one seat a session's records hold at `pane`, with the shell its launch anchored there.
+ *  Null when none records the pane, or more than one does: an ambiguous pane proves nothing.
+ *  The shell prefers the create-time `pane_shell`; a record written before it existed falls back
+ *  to the launch identity's shell, which carries no start instant and stands at the named-pane
+ *  strength (`placedAtRecordedPane` in caller.ts). Built from the same state read placement uses,
+ *  so the proof and the refusal read one snapshot. */
+function seatAtPaneOf(seats: Record<string, SeatState>, pane: string): SeatAtPane | null {
+  const found: { name: string; seat: SeatState }[] = [];
+  for (const [name, seat] of Object.entries(seats)) {
+    if (seat.pane === pane) found.push({ name, seat });
+  }
+  if (found.length !== 1) return null;
+  const { name, seat } = found[0]!;
+  if (seat.pane_shell !== undefined) {
+    return {
+      name,
+      shell: seat.pane_shell,
+      from: 'create',
+      ...(seat.pane_shell_start !== undefined ? { start: seat.pane_shell_start } : {}),
+    };
+  }
+  const shell = seat.launched?.shell;
+  return shell === undefined ? null : { name, shell, from: 'launched' };
+}
+
 /**
  * The state's own proof that the caller is the seat this server serves: the caller must place as
  * that seat, on the pane the state records for it in the team's session. The server is started by
@@ -691,8 +754,10 @@ function registeredRoot(
  * inbox is opened, and a seat stopped while its process survives is refused on its next call. The
  * team's session is the one read, never another session's: a seat the state records elsewhere is
  * not this server's seat, and the state's record for the served session is the only standing.
+ * A pane herdr lists with no agent name yet — the window this server starts in — is placed by the
+ * shell the seat's own record anchors there, through the sources read below.
  */
-function placementOf(io: Io, stateDir: string, session: string, name: string): { ok: true } | { ok: false; why: string } {
+export function placementOf(io: Io, stateDir: string, session: string, name: string): { ok: true } | { ok: false; why: string } {
   let sessions: State['sessions'];
   try {
     sessions = readState(stateDir).sessions;
@@ -702,7 +767,8 @@ function placementOf(io: Io, stateDir: string, session: string, name: string): {
   if (sessions[session] === undefined) {
     return { ok: false, why: `the team state records no session ${JSON.stringify(session)}, so this server cannot prove which seat started it` };
   }
-  const caller = callerOf(io, session);
+  const seats = sessions[session]?.seats ?? {};
+  const caller = callerOf(io, session, { seatAtPane: (pane) => seatAtPaneOf(seats, pane) });
   const verdict = callerVerdict(caller, name, { session, recordedPane: sessions[session]?.seats?.[name]?.pane });
   if (verdict.kind === 'ok') return { ok: true };
   // The caller is placed in the served session under this seat's name: the pane is what does not
@@ -724,27 +790,92 @@ function placementOf(io: Io, stateDir: string, session: string, name: string): {
   return { ok: false, why: `this server serves seat ${JSON.stringify(name)} and starts inside that seat's own process; this call is ${describeCaller(caller)}` };
 }
 
-/** The launch the seat's state names now: the current brief claim's epoch, no claim, or a state
- *  this server cannot read. */
-type Generation = { kind: 'claim'; epoch: string } | { kind: 'none' } | { kind: 'unreadable'; message: string };
+/** How long `mcp serve` re-proves its caller's placement at start, and the pause between reads.
+ *  A seat's CLI starts its MCP servers during boot, before herdr has detected an agent in the
+ *  pane and before the launch's own naming step reaches it. The wait is bounded and happens
+ *  once, at start; `alive()` re-proves with a single reading on every use and never waits. */
+export const SERVE_PLACEMENT_WAIT_MS = 5000;
+const SERVE_PLACEMENT_POLL_MS = 250;
+
+/** The pane the state records for a seat, or undefined when the state cannot be read or records
+ *  none; the start's wait is only for a pane this says the server runs in. */
+function recordedPaneOf(stateDir: string, session: string, name: string): string | undefined {
+  try {
+    return readState(stateDir).sessions[session]?.seats?.[name]?.pane;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A scene's clock and sleep for the start placement wait. `now` is the clock. Production
+ *  passes neither, and the wait uses `Date.now` and a real timeout. */
+export type PlacementClock = {
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+};
+
+/**
+ * The start placement, with its one bounded wait: the first refusal is answered at once unless
+ * the environment names the pane the seat's record holds — the one case where the launch's own
+ * name is still arriving. Then placement is re-proved every 250 ms for up to 5 s, and the last
+ * refusal is the one returned. A wait whose record stops naming that pane ends at once: a seat
+ * relaunched elsewhere is not this server's to wait for. `deps` lets a scene hand in its clock
+ * and sleep, so the bound is measured without a real wait.
+ */
+export async function placementAtStart(
+  io: Io,
+  stateDir: string,
+  session: string,
+  name: string,
+  deps: PlacementClock = {},
+): Promise<{ ok: true } | { ok: false; why: string }> {
+  const first = placementOf(io, stateDir, session, name);
+  if (first.ok) return first;
+  const recorded = recordedPaneOf(stateDir, session, name);
+  if (recorded === undefined || io.env.HERDR_PANE_ID !== recorded) return first;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const now = deps.now ?? Date.now;
+  const deadline = now() + SERVE_PLACEMENT_WAIT_MS;
+  let last: { ok: true } | { ok: false; why: string } = first;
+  while (now() < deadline) {
+    await sleep(SERVE_PLACEMENT_POLL_MS);
+    if (io.env.HERDR_PANE_ID !== recordedPaneOf(stateDir, session, name)) return last;
+    last = placementOf(io, stateDir, session, name);
+    if (last.ok) return last;
+  }
+  return last;
+}
+
+/** The launch the seat's state names now: the current brief claim's epoch, a claim that holds no
+ *  launch epoch, no claim, or a state this server cannot read. */
+type Generation =
+  | { kind: 'claim'; epoch: string }
+  | { kind: 'unbound' }
+  | { kind: 'none' }
+  | { kind: 'unreadable'; message: string };
 
 function generationOf(stateDir: string, session: string, name: string): Generation {
   try {
-    const claim = currentBriefClaim(readState(stateDir).sessions[session]?.briefs?.[name]);
-    return claim === null ? { kind: 'none' } : { kind: 'claim', epoch: claim.epoch };
+    const raw = readState(stateDir).sessions[session]?.briefs?.[name];
+    const claim = currentBriefClaim(raw);
+    if (claim !== null) return { kind: 'claim', epoch: claim.epoch };
+    // An older build, or a CLI change, can leave a claim with an id and a time and no launch
+    // epoch. It is not a current claim, and it is not the absence of one.
+    return raw === undefined ? { kind: 'none' } : { kind: 'unbound' };
   } catch (error) {
     return { kind: 'unreadable', message: (error as Error).message };
   }
 }
 
-/** Why a server started with `epoch` no longer belongs to the seat's launch, or null while it
- *  does. A server started without an epoch serves only while the seat has no current claim: the
- *  claim a relaunch writes makes every earlier server, and every server that named no delivery,
- *  stop serving that seat's inbox. */
+/** Why a server bound to `epoch` no longer belongs to the seat's launch, or null while it does.
+ *  A claim with no launch epoch is served: the seat still gets its inbox. A server that bound
+ *  no epoch serves only while the seat has no current claim: the claim a relaunch writes makes
+ *  every earlier server stop serving that seat's inbox. */
 function staleLaunch(generation: Generation, epoch: string | undefined, name: string): string | null {
   if (generation.kind === 'unreadable') {
     return `the team state cannot be read, so this server cannot prove the launch it belongs to: ${generation.message}`;
   }
+  if (generation.kind === 'unbound') return null;
   if (generation.kind === 'none') {
     return epoch === undefined
       ? null
@@ -756,6 +887,16 @@ function staleLaunch(generation: Generation, epoch: string | undefined, name: st
   return epoch === generation.epoch
     ? null
     : `--epoch ${JSON.stringify(epoch)} is not the seat's current launch epoch; start the server from the seat's launch line`;
+}
+
+/** The epoch this process is bound to for the rest of its life. A launch line that omitted
+ *  `--epoch` while a current claim already exists takes that claim's epoch, so a restart whose
+ *  line did not carry one still serves. A claim with no launch epoch binds nothing, and a
+ *  leftover `--epoch` is not treated as the launch. */
+function boundEpochOf(generation: Generation, asked: string | undefined): string | undefined {
+  if (generation.kind === 'claim' && asked === undefined) return generation.epoch;
+  if (generation.kind === 'unbound') return undefined;
+  return asked;
 }
 
 /**
@@ -791,6 +932,7 @@ export async function runMcpServe(
   io: Io,
   streams: ServeStreams = processStreams(),
   host: ServeHost = realServeHost,
+  deps: PlacementClock = {},
 ): Promise<number> {
   const refuse = (message: string): number => {
     io.stderr(`team mcp serve: ${message}\n`);
@@ -828,9 +970,11 @@ export async function runMcpServe(
   // seat on its recorded pane, and the epoch is the claim the state holds now. Both checks run
   // before the inbox folder or the listener is written, so a refused start leaves no trace.
   const stateDir = dirname(loaded.path);
-  const placed = placementOf(io, stateDir, team.session, seat.name);
+  const placed = await placementAtStart(io, stateDir, team.session, seat.name, deps);
   if (!placed.ok) return refuse(placed.why);
-  const stale = staleLaunch(generationOf(stateDir, team.session, seat.name), options.epoch, seat.name);
+  const generation = generationOf(stateDir, team.session, seat.name);
+  const boundEpoch = boundEpochOf(generation, options.epoch);
+  const stale = staleLaunch(generation, boundEpoch, seat.name);
   if (stale !== null) return refuse(stale);
   const dropDir = ensureInboxFolder(loaded.root, team.session, seat.name);
   if (dropDir === null) {
@@ -853,6 +997,7 @@ export async function runMcpServe(
     build: build.build,
     ...(build.head === null ? {} : { head: build.head }),
     ...(channel ? { channel: true as const } : {}),
+    ...(boundEpoch === undefined ? {} : { epoch: boundEpoch }),
   };
   if (!writeListener(dropDir, listener)) return refuse('the inbox listener marker could not be written');
   // A server keeps the code it started with, and an install neither reloads it nor ends it. The
@@ -879,9 +1024,10 @@ export async function runMcpServe(
     streams.close?.();
     return true;
   };
-  // The launch's own brief is served under the claim its state holds. The epoch is the one the
-  // registration was started with, when it has one: a server started before a relaunch serves
-  // nothing of the claim that relaunch wrote, until the seat is launched again.
+  // The launch's own brief is served under the claim its state holds. The epoch is the one this
+  // process bound at start: the registration's, or the current claim's when the launch line named
+  // none. A server that bound none serves nothing of a claim a later relaunch writes, until the
+  // seat is launched again.
   const claimOf = () => {
     try {
       return currentBriefClaim(readState(stateDir).sessions[team.session]?.briefs?.[seat.name]);
@@ -889,7 +1035,7 @@ export async function runMcpServe(
       return null;
     }
   };
-  const brief: BriefRead = { claim: claimOf, ...(options.epoch === undefined ? {} : { epoch: options.epoch }) };
+  const brief: BriefRead = { claim: claimOf, ...(boundEpoch === undefined ? {} : { epoch: boundEpoch }) };
   const serving: Serving = {
     project: team.project,
     seat: seat.name,
@@ -898,8 +1044,13 @@ export async function runMcpServe(
     dropDir,
     home: host.home,
     team,
+    loadTeam: () => {
+      const file = readTeam();
+      return file.ok ? file.team : null;
+    },
     channel,
     brief,
+    ...(host.channelMark === undefined ? {} : { channelMark: host.channelMark }),
     // Re-proved on every use, not only at start: the seat may be stopped, replaced or relaunched
     // while this process lives, and a launcher-written config that names it again must not make
     // the old process a reader of the new seat. The team file itself is read again: the
@@ -908,7 +1059,7 @@ export async function runMcpServe(
     alive: () => {
       const now = placementOf(io, stateDir, team.session, seat.name);
       if (!now.ok) return now.why;
-      const staleLaunchNow = staleLaunch(generationOf(stateDir, team.session, seat.name), options.epoch, seat.name);
+      const staleLaunchNow = staleLaunch(generationOf(stateDir, team.session, seat.name), boundEpoch, seat.name);
       if (staleLaunchNow !== null) return staleLaunchNow;
       const file = readTeam();
       if (!file.ok) {

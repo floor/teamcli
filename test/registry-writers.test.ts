@@ -14,10 +14,10 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { findAgent, getAgent, readAgents, registerAgent } from '../src/registry/agents.ts';
 import { getTeam, readTeams, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
-import { get as getProject, projectIdOf, projectsFile, readProjects, upsertProject } from '../src/registry/projects.ts';
+import { get as getProject, projectIdOf, projectsFile, upsertProject } from '../src/registry/projects.ts';
 import { admitSend, PROJECT_RULES } from '../src/send/admit.ts';
 import { emptySession, updateState } from '../src/state.ts';
-import { claudeBox, gitEnv, testIo } from './helpers.ts';
+import { claudeBox, gitEnv, testIo, recordRenames } from './helpers.ts';
 import { intoRegistry, storedTeam, underRegistry } from './helpers/registry-team.ts';
 
 const NOW = new Date('2026-10-16T02:00:00Z');
@@ -321,6 +321,7 @@ describe('the project a team leads, read through the launch', () => {
   function leadFixture(): { fixture: Fixture; input: RegistryTeam } {
     const fixture = makeFixture();
     const yaml = TEAM_YAML
+      .replace('project: acme\n', 'project: acme\nentity: org-alpha\n')
       .replace('workspace:\n', `trust:\n  - ~/.config/team/lobby\n  - ${fixture.root}\nworkspace:\n`)
       .replace('workspace:\n', 'in_project: TeamCLI\nproject_lead: true\nworkspace:\n');
     writeFileSync(fixture.file, yaml);
@@ -350,6 +351,7 @@ describe('the project a team leads, read through the launch', () => {
     }).id;
     upsertTeam(fixture.home, teamId, {
       project: 'other',
+      entity: 'org-alpha',
       session: 'other',
       root,
       roster: [{ agent: leadId, seat: 'lead', role: 'coordinator', leads: true }],
@@ -359,7 +361,8 @@ describe('the project a team leads, read through the launch', () => {
     const projectId = projectIdOf('TeamCLI');
     const held = getProject(fixture.home, projectId);
     if (held === null) throw new Error('the second team joins a project the scene must already have written');
-    upsertProject(fixture.home, projectId, { teams: [...held.teams, teamId] });
+    // Membership is the team record's own: the second team joins by naming the project there.
+    upsertTeam(fixture.home, teamId, { projectId, projects: [projectId] });
     return { teamId, leadId };
   }
 
@@ -419,24 +422,28 @@ describe('the project a team leads, read through the launch', () => {
     // ...and admission reads the record: the pair a stale lead admits is refused now. The stale
     // record is hand-built so the scene shows it was the record, not another rule, doing the work.
     const teams = readTeams(fixture.home);
-    const stored = readProjects(fixture.home);
+    // Admission reads the registry's derived view, not the raw file: membership lives on the
+    // team records, and a raw project record keeps only a legacy stored list.
+    const storedProject = getProject(fixture.home, projectId);
+    if (storedProject === null) throw new Error('the scene must already have written the project');
+    const stored = { [projectId]: storedProject };
     const oldLead = getAgent(fixture.home, leadId)!;
     const otherLead = getAgent(fixture.home, other.leadId)!;
-    const stale = { [projectId]: { ...stored[projectId]!, lead: leadId } };
+    const stale = { [projectId]: { ...storedProject, lead: leadId } };
     expect(admitSend(oldLead, otherLead, teams, undefined, { projects: stale })).toEqual({ ok: true, rule: PROJECT_RULES[0] });
     expect(admitSend(oldLead, otherLead, teams, undefined, { projects: stored }).ok).toBe(false);
   });
 
-  test('a team that leaves the project takes its lead out of the record, and the other teams stay', () => {
+  test('a launch that drops in_project keeps the membership and the lead already recorded', () => {
     const { fixture, input } = leadFixture();
     const lead = input.team.seats.find((seat) => seat.name === 'lead')!;
     const worker = input.team.seats.find((seat) => seat.name === 'worker')!;
     const projectId = projectIdOf('TeamCLI');
     const leadId = (registerLaunch(input, lead, 'pane-l') as { id: string }).id;
-    const other = addOtherLeadTeam(fixture);
     expect(getProject(fixture.home, projectId)?.lead).toBe(leadId);
 
-    // The file stops naming the project; `project_lead` cannot stay without it.
+    // The file stops naming the project. That does not clear a membership the registry holds,
+    // and `project_lead` cannot stay in the file without `in_project`.
     const yaml = readFileSync(fixture.file, 'utf8')
       .replace('in_project: TeamCLI\n', '')
       .replace('project_lead: true\n', '');
@@ -446,8 +453,9 @@ describe('the project a team leads, read through the launch', () => {
     registerLaunch({ ...input, team: parsed.team }, worker, 'pane-w');
 
     const project = getProject(fixture.home, projectId);
-    expect(project?.lead).toBeNull();
-    expect(project?.teams).toEqual([other.teamId]);
+    expect(project?.lead).toBe(leadId);
+    expect(project?.teams).toEqual([teamIdOf(fixture.root)]);
+    expect(getTeam(fixture.home, teamIdOf(fixture.root))?.projectId).toBe(projectId);
   });
 
   test("a leave clears only the leaving team's lead: another team's lead stays on record", () => {
@@ -765,6 +773,8 @@ function makeHarness(fixture: Fixture): { sources: RestartSources } {
     sleep: async () => {},
     now: () => NOW,
   };
+
+  recordRenames(upLaunch);
 
   const doctor: DoctorSources = {
     version: () => '2.1.288',

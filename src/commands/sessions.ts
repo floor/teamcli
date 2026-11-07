@@ -30,7 +30,7 @@ the CLI can resume it, and, when a command recorded them, its tokens, cost and l
 command measured is absent, and its cost prints as \`unknown\` — never as zero.
 
 \`--by\` groups the listing by model, team or entity. \`<seat>\` narrows it to one seat name.
-\`team resume\` is not part of this release.
+\`team restart <seat> --resume <cli-session-id>\` resumes a recorded conversation where the CLI supports it.
 
 The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying sessions for: it lists the records of that one team, as signed, and not the other teams on this machine. It changes nothing and never prompts.
 

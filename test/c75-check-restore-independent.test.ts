@@ -31,7 +31,7 @@ import { teamIdOf } from '../src/registry/teams.ts';
 import type { Live } from '../src/status/compare.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { gitEnv, testIo } from './helpers.ts';
+import { gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-11-05T12:00:00Z');
 const SESSION = 'acme';
@@ -246,6 +246,8 @@ function makeUpSourcesFromLive(live: Live): {
     sleep: async () => {},
     now: () => NOW,
   };
+
+  recordRenames(launch);
 
   const doctor: DoctorSources = {
     version: () => '2.1.288',

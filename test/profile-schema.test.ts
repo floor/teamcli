@@ -156,6 +156,15 @@ describe("the profiles' schema", () => {
     expect(errors(doc(true)).length).toBeGreaterThan(0);
   });
 
+  test('admitting agent-prompt wake still rejects an unknown wake value', () => {
+    const doc = (wake: string): unknown => ({
+      format: 1, cli: 'sample', exit: 'bye', typed_wake: 'screen', wake,
+      screen: { composer: COMPOSER },
+    });
+    expect(errors(doc('agent-prompt'))).toEqual([]);
+    expect(errors(doc('unknown-wake'))).toEqual(['profile.wake: is not one of agent-prompt']);
+  });
+
   test('a rule may carry on_footer and without_rule, the loader’s flags', () => {
     const trust = (rule: unknown): unknown => ({ format: 1, cli: 'sample', exit: 'bye', screen: { trust: [rule], composer: COMPOSER } });
     expect(errors(trust({ any: ['^x$'], on_footer: true }))).toEqual([]);

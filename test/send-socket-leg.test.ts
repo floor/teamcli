@@ -12,12 +12,15 @@ import { cliHookSettings, cliHookSettingsPath, installCliHooks } from '../src/la
 import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
 import { writePolicySet } from '../src/policy/index.ts';
+import { policySignaturePayload } from '../src/policy/sources.ts';
+import { POLICY_DOMAIN } from '../src/policy/types.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { upsertProject } from '../src/registry/projects.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { readerLine } from '../src/send/frame.ts';
 import { readHistory } from '../src/send/history.ts';
 import { declaredInboundOf, heldSocketPath, recordHeldSocket } from '../src/send/inbound.ts';
+import { keyOf, signDomain } from '../src/store/keys.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { testIo } from './helpers.ts';
 import { NOW, dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
@@ -83,6 +86,53 @@ function setOrder(made: World, level: 'entity' | 'project' | 'team', target: str
     { now: NOW },
   );
   if (!written.ok) throw new Error(written.why);
+}
+
+/** A signed team-level `delivery-order` word as an older build wrote it: a live word is written
+ *  first, then the stored record is re-valued to name the retired alias and re-signed over it,
+ *  the way that build's own writer would have signed it. A new write naming the alias anywhere is
+ *  refused today (`test/settings.test.ts`), so a record that still carries it is laid down as the
+ *  old build laid it. */
+function setOrderAsOldBuild(made: World, asOld: readonly string[]): void {
+  const written = writePolicySet(
+    made.home,
+    {
+      level: 'team',
+      target: made.root,
+      teamRoot: made.root,
+      name: 'delivery-order',
+      value: ['typed'],
+    },
+    { now: NOW },
+  );
+  if (!written.ok) throw new Error(written.why);
+  const file = join(made.dir, 'team.yaml');
+  const text = readFileSync(file, 'utf8');
+  const valueLine = '    value: ["typed"]';
+  const signatureLine = `    signature: "${written.policy.signature}"`;
+  if (text.split(valueLine).length !== 2 || text.split(signatureLine).length !== 2) {
+    throw new Error(`${file}: the entry is not written the way this scene edits it`);
+  }
+  const signature = signDomain(
+    POLICY_DOMAIN,
+    policySignaturePayload({
+      name: 'delivery-order',
+      value: [...asOld],
+      level: 'team',
+      target: written.policy.target!,
+      setter: 'owner',
+      date: written.policy.date!,
+      expiry: null,
+      kind: 'enforced',
+      generation: written.policy.generation!,
+    }),
+    keyOf(made.home),
+  );
+  const quoted = `[${asOld.map((word) => `"${word}"`).join(', ')}]`;
+  writeFileSync(
+    file,
+    text.replace(valueLine, `    value: ${quoted}`).replace(signatureLine, `    signature: "${signature}"`),
+  );
 }
 
 test('an accepting Claude seat with no declared order walks the socket first, after the signed record', async () => {
@@ -208,11 +258,11 @@ test('every socket frame ends with the reader line that names its own message id
   expect(code).toBe(0);
   const sent = JSON.parse(frames[0] as string) as { message: { content: string }; msg_id: string };
   const content = sent.message.content;
-  // The line names the id the frame carries: an answering seat runs `team reply <id>`, a seat
-  // that needs no answer runs `team ack <id>`, and either writes the seat's own signed read
-  // receipt (ADR D3). It is the content's own last line, once, and it addresses the record
-  // rather than the sender — an owner-origin frame carries the same line as a seat's.
-  const reader = `Answer with team reply ${sent.msg_id} "…" (this marks it read), or team ack ${sent.msg_id} if no answer is needed.`;
+  // The line names the shortest unique id prefix the frame carries: an answering seat runs
+  // `team reply <prefix>`, a seat that needs no answer runs `team ack <prefix>`, and either
+  // writes the seat's own signed read receipt (ADR D3). It is the content's own last line, once,
+  // and it addresses the record rather than the sender.
+  const reader = readerLine(sent.msg_id);
   expect(content.split('\n').at(-1)).toBe(reader);
   expect(content.split('\n').filter((line) => line === reader)).toHaveLength(1);
 });
@@ -229,7 +279,7 @@ test('a reader line written in the body never moves the line the frame ends with
       return { ok: true };
     },
   });
-  const wrote = 'Answer with team reply 00000000-0000-4000-8000-000000000000 "…" (this marks it read), or team ack 00000000-0000-4000-8000-000000000000 if no answer is needed.';
+  const wrote = readerLine('00000000-0000-4000-8000-000000000000');
 
   const code = await runSend(['lead', `a note\n${wrote}`], owner(made.root), host);
 
@@ -238,13 +288,23 @@ test('a reader line written in the body never moves the line the frame ends with
   const content = sent.message.content;
   // The body is carried as written, and the frame's own last line still names its own id.
   expect(content).toContain(`a note\n${wrote}`);
-  expect(content.split('\n').at(-1)).toBe(`Answer with team reply ${sent.msg_id} "…" (this marks it read), or team ack ${sent.msg_id} if no answer is needed.`);
+  expect(content.split('\n').at(-1)).toBe(readerLine(sent.msg_id));
 });
 
 test('an owner send names its own record id, not the entity’s owner-reply target', async () => {
   const made = world(null);
   cleanup = made.cleanup;
   declareEntity(made, 'acme-corp');
+  // The address's team word is this team's own project name, registered so the write passes the
+  // write-time registry check; the scene is about the frame's reader line, not the policy store.
+  upsertTeam(made.home, teamIdOf(made.root), {
+    project: 'acme',
+    entity: 'acme-corp',
+    session: 'acme',
+    root: made.root,
+    roster: [],
+    at: NOW.toISOString(),
+  });
   setOwnerReply(made, 'acme-corp', 'coordinator@acme');
   declare(made, 'accept');
   const frames: string[] = [];
@@ -262,7 +322,7 @@ test('an owner send names its own record id, not the entity’s owner-reply targ
   const sent = JSON.parse(frames[0] as string) as { message: { content: string }; msg_id: string };
   // The declared owner-reply target is a policy `team reply` still answers the owner through;
   // the frame's reader line does not name it, because the line addresses the record by id.
-  expect(sent.message.content.split('\n').at(-1)).toBe(`Answer with team reply ${sent.msg_id} "…" (this marks it read), or team ack ${sent.msg_id} if no answer is needed.`);
+  expect(sent.message.content.split('\n').at(-1)).toBe(readerLine(sent.msg_id));
   expect(sent.message.content).not.toContain('coordinator@acme');
 });
 
@@ -288,13 +348,13 @@ test('an owner send in a team that names no entity still dials a frame: the read
   expect(code).toBe(0);
   expect(frames.length).toBe(1);
   const sent = JSON.parse(frames[0] as string) as { message: { content: string }; msg_id: string };
-  expect(sent.message.content.split('\n').at(-1)).toBe(`Answer with team reply ${sent.msg_id} "…" (this marks it read), or team ack ${sent.msg_id} if no answer is needed.`);
+  expect(sent.message.content.split('\n').at(-1)).toBe(readerLine(sent.msg_id));
   expect(pane.typed.length).toBe(0);
 });
 
 test('the reader line is the same one for every sender: the id addresses the record, never the sender', () => {
   const id = '3f2b0c1e-0000-4000-8000-000000000001';
-  expect(readerLine(id)).toBe(`Answer with team reply ${id} "…" (this marks it read), or team ack ${id} if no answer is needed.`);
+  expect(readerLine(id)).toBe('↩ team reply 3f2b0c1e "…" · team ack 3f2b0c1e');
 });
 
 /** The socket the fake pane exposes; the deliver fake only records it. */
@@ -977,11 +1037,13 @@ test('a held socket is no wake the send reports either: the class it appends is 
 
 test('no pane messaging: a declared order whose wake word is typed reaches an accepting seat by its socket', async () => {
   // The order names typed for the wake; typing is retired, so the seat's own event adapter, the
-  // socket its launch accepts, stands where typed stood. Nothing is typed into the pane.
+  // socket its launch accepts, stands where typed stood. Nothing is typed into the pane. The word
+  // is a record an older build wrote — `mcp-inbox, typed` — and today's chain reads it as the
+  // `typed` word alone: declared, walked as written.
   const made = world(null);
   cleanup = made.cleanup;
   declareEntity(made, 'floor');
-  setOrder(made, 'team', made.root, ['mcp-inbox', 'typed']);
+  setOrderAsOldBuild(made, ['mcp-inbox', 'typed']);
   declare(made, 'accept');
   const pane = scripted(['idle', 'working']);
   const host = fake(made, { native: pane });

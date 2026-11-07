@@ -29,6 +29,11 @@ refused, never replaced or followed — [`team brief rollout --apply`](brief.md)
 delivery at the claim's next attempt. A delivery that cannot be written is said and logged, and
 the restart goes on; [`team check`](check.md) names the seat.
 
+A restarted seat's fresh workspace sits at the sidebar's end; the automatic order pass then
+runs on its own when the out-of-order tail is idle, or this command's answer carries its one
+hint line — [`team order`](order.md) says how the pass decides, and how the sidebar policy's
+manage word silences it.
+
 ## After a restore
 
 The team a restart reads is proven by one of three authorities, in order: the team this session
@@ -54,7 +59,7 @@ and `--abandon` replaces what is in that pane only under the same name.
 
 ## Synopsis
 
-    team restart <seat> [--abandon] [--fresh] [--dry-run] [--session <name>] [--file <path>] [--json]
+    team restart <seat> [--abandon] [--fresh] [--resume <cli-session-id>] [--dry-run] [--session <name>] [--file <path>] [--json]
     team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
 
 ## Flags
@@ -63,6 +68,7 @@ and `--abandon` replaces what is in that pane only under the same name.
 | --- | --- | --- |
 | `--abandon` | — | close the workspace of a stuck seat without typing into its pane, and replace a `replaced` pane herdr still names as the seat; a seat caller cannot abandon a `working` seat or a lead seat |
 | `--fresh` | — | start a new conversation instead of resuming the recorded one; a launch line that itself names a conversation is refused, and a seat mid-turn is left as it is |
+| `--resume` | `<cli-session-id>` | pin which recorded conversation of the seat to resume instead of the latest; refused for a foreign or unbound id, or beside `--fresh` or `--abandon` |
 | `--dry-run` | — | check the seat and print the stop and launch plan without touching the session |
 | `--session` | `<name>` | the herdr session, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's alone |

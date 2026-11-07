@@ -85,11 +85,11 @@
               "enum": [
                 "socket",
                 "native",
-                "mcp-inbox",
                 "typed",
                 "drop",
                 "headless-resume",
-                "session"
+                "session",
+                "mcp-inbox"
               ]
             }
           },

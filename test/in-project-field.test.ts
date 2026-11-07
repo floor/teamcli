@@ -63,6 +63,94 @@ describe('a team names the project it sits in', () => {
   });
 });
 
+describe('the default session of a team in a project', () => {
+  /** A file with an entity, a project the team sits in, and optionally an explicit session. */
+  function fileInProject(team: string, inProject: string | null, entity: string | null, session: string | null = null): string {
+    return [
+      'format: 1',
+      `project: ${team}`,
+      ...(entity === null ? [] : [`entity: ${entity}`]),
+      ...(inProject === null ? [] : [`in_project: ${inProject}`]),
+      ...(session === null ? [] : [`session: ${session}`]),
+      'operator: lead',
+      'trust: []',
+      'workspace:',
+      '  mode: shared',
+      'seats:',
+      '  - role: coordinator',
+      '    name: lead',
+      '    cli: claude-code',
+      '    vendor: anthropic',
+      '    model: Claude Opus',
+      '    version: "5.5"',
+      '    launch: claude --model claude-opus-5-5',
+      '    leads: true',
+      '',
+    ].join('\n');
+  }
+
+  test('a team that is its project\'s namesake collapses to <entity>-<project>', () => {
+    const result = loaded(fileInProject('teamcli', 'TeamCLI', 'floor'));
+    if (!result.ok) throw new Error(JSON.stringify(result.errors));
+    expect(result.team.session).toBe('floor-teamcli');
+    expect(result.warnings).toEqual([]);
+  });
+
+  test('a team that is not the namesake derives <entity>-<project>-<team>', () => {
+    const result = loaded(fileInProject('web', 'TeamCLI', 'floor'));
+    if (!result.ok) throw new Error(JSON.stringify(result.errors));
+    expect(result.team.session).toBe('floor-teamcli-web');
+  });
+
+  test('two teams in one project never share a default session', () => {
+    const web = loaded(fileInProject('web', 'TeamCLI', 'floor'));
+    const api = loaded(fileInProject('api', 'TeamCLI', 'floor'));
+    const own = loaded(fileInProject('teamcli', 'TeamCLI', 'floor'));
+    if (!web.ok || !api.ok || !own.ok) throw new Error('a file was refused');
+    expect(new Set([web.team.session, api.team.session, own.team.session])).toEqual(
+      new Set(['floor-teamcli-web', 'floor-teamcli-api', 'floor-teamcli']),
+    );
+  });
+
+  test('a team with no in_project keeps <entity>-<team>, and a team with no entity keeps its own name', () => {
+    const withEntity = loaded(fileInProject('docs', null, 'floor'));
+    const bare = loaded(fileInProject('docs', null, null));
+    if (!withEntity.ok || !bare.ok) throw new Error('a file was refused');
+    expect(withEntity.team.session).toBe('floor-docs');
+    expect(bare.team.session).toBe('docs');
+  });
+
+  test('with no entity the project id leads: <project> or <project>-<team>', () => {
+    const namesake = loaded(fileInProject('teamcli', 'TeamCLI', null));
+    const other = loaded(fileInProject('web', 'TeamCLI', null));
+    if (!namesake.ok || !other.ok) throw new Error('a file was refused');
+    expect(namesake.team.session).toBe('teamcli');
+    expect(other.team.session).toBe('teamcli-web');
+  });
+
+  test('an explicit session still wins, and draws no warning when it matches the default', () => {
+    const matching = loaded(fileInProject('teamcli', 'TeamCLI', 'floor', 'floor-teamcli'));
+    if (!matching.ok) throw new Error(JSON.stringify(matching.errors));
+    expect(matching.team.session).toBe('floor-teamcli');
+    expect(matching.warnings).toEqual([]);
+    const own = loaded(fileInProject('teamcli', 'TeamCLI', 'floor', 'mine'));
+    if (!own.ok) throw new Error(JSON.stringify(own.errors));
+    expect(own.team.session).toBe('mine');
+  });
+
+  test('an explicit session off the default is named in one warning line', () => {
+    const result = loaded(fileInProject('web', 'project-x', 'entity-a', 'stale-name'));
+    if (!result.ok) throw new Error(JSON.stringify(result.errors));
+    expect(result.team.session).toBe('stale-name');
+    expect(result.warnings).toEqual([
+      {
+        line: 5,
+        message: 'session "stale-name" is not the default "entity-a-project-x-web" for this entity and project: kept as written; a drifted name is how a stale session gets reused',
+      },
+    ]);
+  });
+});
+
 describe('a team says whether it leads the project it sits in', () => {
   test('`project_lead: true` reads as the lead, beside the project it names', () => {
     const result = loaded(file('TeamCLI', ['project_lead: true']));

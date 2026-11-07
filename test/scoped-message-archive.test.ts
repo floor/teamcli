@@ -77,7 +77,6 @@ beforeEach(() => {
   execSync('git init -q -b main', { cwd: root });
   writeFileSync(join(root, '.agents', 'team.yaml'), TEAM);
   place('lead', 'pane-lead');
-  place('worker', 'pane-worker');
 });
 
 afterEach(() => {

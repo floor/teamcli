@@ -373,6 +373,7 @@ export function seatRegistryRows(
           ...(declared !== undefined ? { declared } : {}),
           ...(recorded !== undefined ? { state: recorded } : {}),
           ...(traceSources.home !== undefined ? { home: traceSources.home } : {}),
+          lead: team.orchestrator,
           now,
         })
       : undefined;

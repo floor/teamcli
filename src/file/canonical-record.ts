@@ -102,12 +102,20 @@ export function canonicalRecordBytes(value: unknown): Buffer {
   return Buffer.from(canonicalRecord(value), 'utf8');
 }
 
-/** A validated team as a record: the same value without the seats' source positions. Pure. */
+/** A validated team as a record: the same value without the seats' source positions. Empty
+ *  messaging and alsoIn are loaded defaults for omitted words; leave them out so old files keep
+ *  their frozen record bytes. Nonempty declarations keep their meaning. Pure. */
 export function teamRecordOf(team: { seats?: readonly object[] } & Record<string, unknown>): Record<string, unknown> {
-  if (!Array.isArray(team.seats)) return { ...team };
+  const copy: Record<string, unknown> = { ...team };
+  const messaging = copy.messaging;
+  if (messaging !== null && typeof messaging === 'object' && !Array.isArray(messaging) && Object.keys(messaging).length === 0) {
+    delete copy.messaging;
+  }
+  if (Array.isArray(copy.alsoIn) && copy.alsoIn.length === 0) delete copy.alsoIn;
+  if (!Array.isArray(copy.seats)) return copy;
   return {
-    ...team,
-    seats: team.seats.map((seat) =>
+    ...copy,
+    seats: (copy.seats as readonly object[]).map((seat) =>
       Object.fromEntries(Object.entries(seat).filter(([key]) => !SEAT_SOURCE_FIELDS.includes(key))),
     ),
   };

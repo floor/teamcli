@@ -47,6 +47,8 @@ const allCommandNames = Array.from(
  */
 export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
   ack: "writes one signed read receipt into the addressee's folder",
+  analyse: 'reads a project only after an owner-signed analyser is named; the cold smoke fixture names none, so it cannot produce the team.analyse report',
+  show: "prints one message record from the addressee's folder and writes a signed read receipt",
   approvals: 'lists or revokes owner-seat always rules under the owner home',
   forget: 'removes a team registry record from the owner home',
   fallback: "lists the project's finished fallback episodes and, with --apply, retires them and reclaims stale lock folders; its --json output has no registered schema",
@@ -54,6 +56,7 @@ export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
   batch: 'records several owner-seat actions as one request, or runs a batch the owner seat already signed',
   answer: 'types an answer into a live herdr pane dialog',
   archive: 'stops the team as down does and moves its state into an archive folder, with no registered output schema',
+  checkpoint: 'records a standing checkpoint ask in .agents/team.state.json for a named seat',
   order: 'closes and re-creates workspaces through team restart against the live pane host, with no registered output schema',
   client: 'writes an Ed25519 client key pair into an owner folder and reads no project state',
   'development-mode': 'reads or writes the machine development-mode record, which is an owner setting with no registered output schema',

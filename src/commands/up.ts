@@ -32,15 +32,20 @@ import {
   agentList,
   agentStatus,
   agentRename,
+  applySidebarLayout,
   focusAgent,
+  hostConfigCheck,
   paneForeground,
   paneProcesses,
   paneRead,
   paneRun,
+  reloadConfig,
   reportDisplayAgent,
+  SIDEBAR_TTL_CAP_MS,
   workspaceRename,
   paneShellBack,
   sessionDelete,
+  sessionList,
   sessionStop,
   typeText,
   pressEnter,
@@ -52,16 +57,25 @@ import {
   workspaceCreate,
   workspaceList,
   workspacePanes,
+  type ConfigReload,
   type HerdrAgent,
   type HerdrWorkspace,
   type PaneProcesses,
   type SessionState,
+  type SidebarApply,
 } from '../herdr.ts';
+import { sidebarConfigText, sidebarStepOf } from '../launch/sidebar-step.ts';
+import { sidebarPolicy } from '../settings/sidebar-policy.ts';
+import { sidebarRowsWord } from '../policy/types.ts';
+import { recordSidebarReloads } from '../registry/sidebar-reloads.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { endpointCleanupHost } from '../launch/endpoint-cleanup.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { executePlan, launchKind, restoreSummaryOf, type Report, type RestoreSweepSummary } from '../launch/execute.ts';
+import { launcherCoverRefusal } from '../launch/launcher-cover.ts';
+import { loadTeamLaunchers, rawAgentSession } from '../launch/resolve-flag.ts';
+import { channelLobbyFolder } from '../mcp/launch-config.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
 import { isSocketFile, launchCodexEndpoint, processStartOf, recordedEndpointState, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { bindCodexSeatThread } from '../launch/codex-thread-binding.ts';
@@ -74,6 +88,7 @@ import { launchLineFinding, launchedCliBinary } from '../launch/line.ts';
 import { launchRefusal, readEntityModelRule, type EntityModelRule } from '../launch/model-guard.ts';
 import { charterGate } from '../charter/check.ts';
 import { charterFolderPretrust, grantedFolderPretrust, lobbyPretrustLine, projectRootPretrust } from '../launch/pretrust.ts';
+import { pretrustModeOf } from '../policy/first-minute.ts';
 import { codexCommandHasFlag, formatPlan, launchWillRun, managedCodexLaunch, registryLaunches, upPlan, type Op, type UpSeat } from '../launch/plan.ts';
 import { runPause, type PauseHost, type PauseInput } from '../launch/pause.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -114,7 +129,7 @@ import { watchSitting } from '../watch/liveness.ts';
 import { busLabel, watchIdentity, watchLabel } from '../watch/pane.ts';
 import { busAnswers } from '../bus/follow.ts';
 import { readScreen } from '../watch/screen.ts';
-import { seatStart } from '../worktree/place.ts';
+import { placedStartFolders, seatStart } from '../worktree/place.ts';
 import { registerInbox, type InboxRegistration } from '../mcp/register.ts';
 import { expiryPhrase } from '../client/duration-policy.ts';
 
@@ -183,11 +198,29 @@ export type UpSources = {
     isSocket(path: string): boolean;
     runtimeRoot?: string;
   };
+  /** Every session the terminal host lists, with its running state, for the sidebar layout step.
+   *  Absent: no sidebar step is planned unless `launch` carries a sidebar seam, so a world that
+   *  does not probe the host's sessions plans none. */
+  hostSessions?(): readonly { name: string; running: boolean }[] | null;
+  /** The terminal host's config text for the sidebar step (`''` when absent, `null` when
+   *  unreadable). Absent: reads `hostConfigPath(home)` on disk. */
+  sidebarConfigText?(home: string): string | null;
 };
 
 export type Launch = {
   /** Whether a resume line's conversation is on disk; absent in fixtures, so nothing is read. */
   conversationExists?(cli: string, cwd: string, id: string): boolean | null;
+  /** Writes the sidebar layout (`rows` and `indicators`) to the terminal host's config, validates
+   *  it through the host, and rolls back on failure. Absent: runs `applySidebarLayout` on
+   *  `sources.home` with `checkSidebarConfig`. */
+  applySidebar?(rows: readonly (readonly string[])[], indicators: string): SidebarApply;
+  /** The host's `config check` answer for the default `applySidebar` path. */
+  checkSidebarConfig?(): { ok: boolean; text: string };
+  /** Reloads one running session's server onto the sidebar config (`server reload-config`). */
+  reloadSidebar?(session: string): ConfigReload;
+  /** Records one applied session reload in the machine-scoped reload store. Absent: writes to
+   *  `sidebar-reloads.yaml` under `sources.home`. */
+  recordSidebarReload?(session: string, rows: readonly (readonly string[])[], indicators: string): void;
   sessionState(session: string): SessionState | null;
   startServer(session: string): boolean;
   sessionUp(session: string): boolean | null;
@@ -207,7 +240,7 @@ export type Launch = {
     stop(input: { dir: string; session: string; seat: string; expectedUrl?: string }): EndpointStopRead;
   };
   /** Sets the pane's display_agent after launch. False is one line and does not leave the seat out. */
-  reportDisplayAgent?(session: string, pane: string, text: string): boolean;
+  reportDisplayAgent?(session: string, pane: string, text: string, ttlMs?: number): boolean;
   /** Sets the workspace title of a seat already running. False is one line and does not leave it out. */
   renameWorkspace?(session: string, workspace: string, label: string): boolean;
   renameAgent(session: string, pane: string, name: string): boolean;
@@ -229,6 +262,9 @@ export type Launch = {
   shellBack?(session: string, pane: string): boolean | null;
   /** The pane's process identity, compared with the one recorded for the seat. */
   processInfo?(session: string, pane: string): PaneProcesses | null;
+  /** The instant a process started, read beside the create when the pane's shell is known;
+   *  absent: the run reads the process table itself. */
+  processStartOf?(pid: number): number | null;
   /** Brings the pane to the owner's attention, without sending a key or a text into it. */
   focus?(session: string, pane: string): boolean;
   /** Stops the session (`q` in the pause, only for a session this invocation started). */
@@ -314,6 +350,8 @@ export function watchCommand(session: string): string {
 
 const realLaunch: Launch = {
   conversationExists: (cli, cwd, id) => conversationOnDisk(cli, cwd, id),
+  checkSidebarConfig: () => hostConfigCheck(),
+  reloadSidebar: (session) => reloadConfig(session),
   sessionState,
   startServer,
   sessionUp: sessionRunning,
@@ -325,7 +363,8 @@ const realLaunch: Launch = {
     managed: (input) => launchCodexEndpoint(input),
     stop: (input) => stopSeatCodexEndpoint(input),
   },
-  reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
+  reportDisplayAgent: (session, pane, text, ttlMs = SIDEBAR_TTL_CAP_MS) =>
+    reportDisplayAgent(pane, text, aim(session), ttlMs),
   renameWorkspace: (session, workspace, label) => workspaceRename(workspace, label, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
@@ -363,6 +402,8 @@ const realLaunch: Launch = {
 export const realSources: UpSources = {
   sessionRunning,
   sessionState,
+  hostSessions: () => sessionList(),
+  sidebarConfigText: (home) => sidebarConfigText(home),
   agents: (session) => agentList(aim(session)),
   workspaces: (session) => workspaceList(aim(session)),
   home: homedir(),
@@ -394,7 +435,7 @@ export const realSources: UpSources = {
 /** The reason the hold `up --no-launch` places carries. */
 export const QUIET_HOLD_REASON = 'quiet start (team up --no-launch): the watch wakes no seat; release with team hold --release';
 
-export const USAGE = 'Usage: team up [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]\n       team up --all [--dry-run] [--serial] [--no-launch] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--json]\n       team up --general <grant.json> --key <client-key> [--all] [--dry-run] [--serial] [--no-launch] [--json]\n       team up --request [--reason <text>] [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--json]\n\n--all runs the restore pass across every registered team whose session is running in the terminal host with recorded seats, in parent-first then session order, without cold-starting inactive teams.\n\n--no-launch is a quiet start: the seats get their rules only, told to read their inbox and act on what is addressed to them, and not to continue earlier work unless a message asks for it; no general seat brief (the launch message) is dropped or typed, and a team hold stops the watch typing anything automatic until team hold --release.\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
+export const USAGE = 'Usage: team up [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--session <name>] [--file <path>] [--json]\n       team up --all [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --general <grant.json> --key <client-key> [--all] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]\n       team up --request [--reason <text>] [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--resolve-launch] [--json]\n\n--all runs the restore pass across every registered team whose session is running in the terminal host with recorded seats, in parent-first then session order, without cold-starting inactive teams.\n\n--resolve-launch takes the named launcher argv as the base line and still places the profile launch words on it. It is off unless named, and a launch without it runs the launch line the file already has. A resolution that cannot be placed refuses that seat and starts it nowhere.\n\n--no-launch is a quiet start: the seats get their rules only, told to read their inbox and act on what is addressed to them, and not to continue earlier work unless a message asks for it; no general seat brief (the launch message) is dropped or typed, and a team hold stops the watch typing anything automatic until team hold --release.\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
 
 export const up: Command = (argv, io) => runUp(argv, io, realSources);
 export default up;
@@ -679,6 +720,7 @@ function seatPlan(
     name: seat.name,
     cli: seat.cli,
     launch: registry?.launch ?? seat.launch,
+    ...(seat.launcher !== undefined ? { launcher: seat.launcher } : {}),
     cwd: seat.cwd,
     label: workspaceLabel(seat),
     displayAgent: displayAgent(seat),
@@ -696,7 +738,7 @@ function seatPlan(
     ...(seat.human ? { human: true as const } : {}),
     // An option seat's launch line and a message seat's rules file both come from the live
     // file. A stored copy is not the text a seat is told to obey.
-    rules: rulesOf(team, seat, root, undefined, origin),
+    rules: rulesOf(team, seat, root, undefined, origin, home),
     sessionName: seatSessionName(seat, {
       team: teamIdOf(root),
       teamName: team.project,
@@ -1793,7 +1835,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval', 'general', 'reason'], ['dry-run', 'serial', 'json', 'request', 'no-launch', 'all']);
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval', 'general', 'reason'], ['dry-run', 'serial', 'json', 'request', 'no-launch', 'all', 'resolve-launch']);
+  const resolveLaunch = args.flags.has('resolve-launch');
   // The lines plain output writes beside the records ride on the document as notes under
   // `--json`; stdout carries the one document and nothing else.
   const jsonNotes: string[] = [];
@@ -2516,13 +2559,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     const resumeCwd = recorded?.seats[seat.name]?.start_cwd;
     const line = doctor
       ? placed
-        ? launchLineFinding(team, seat, root, { onPath: (binary) => doctor.onPath(binary), home: doctor.home })
+        ? launchLineFinding(team, seat, root, { onPath: (binary) => doctor.onPath(binary), home: doctor.home, state: recorded })
         : typeof resumeCwd === 'string' && resumeCwd !== ''
           ? launchLineFinding(
               team,
               seat,
               root,
-              { onPath: (binary) => doctor.onPath(binary), home: doctor.home },
+              { onPath: (binary) => doctor.onPath(binary), home: doctor.home, state: recorded },
               { cwd: resolve(root, resumeCwd), folder: resumeCwd },
             )
           : {
@@ -2559,10 +2602,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         ...launchProblem,
         ...(budget.kind === 'clear' ? {} : { budget }),
         ...(tree === undefined ? {} : { worktree: tree.path }),
+        ...(resumeCwd === undefined ? {} : { startCwd: resumeCwd }),
       });
       continue;
     }
-    const start = seatStart({ ...team, session }, seat, root, sources.home);
+    const tree = worktreeOf(recorded, seat.name);
+    const start = seatStart({ ...team, session }, seat, root, sources.home, undefined, tree?.path, recorded);
     if ('problem' in start) {
       if (!start.once || !refused.has(start.problem)) {
         refused.add(start.problem);
@@ -2571,7 +2616,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       continue;
     }
     const budget = budgetOf(seat);
-    const tree = worktreeOf(recorded, seat.name);
     seats.push({
       ...planned,
       cwd: start.cwd,
@@ -2579,6 +2623,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       ...launchProblem,
       ...(budget.kind === 'clear' ? {} : { budget }),
       ...(tree === undefined ? {} : { worktree: tree.path }),
+      ...(resumeCwd === undefined ? {} : { startCwd: resumeCwd }),
     });
   }
   // Records the file no longer declares: a removal that could not drop its state, or a file
@@ -2631,7 +2676,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     else if ('path' in gate) {
       verifiedLobby = gate.path;
       lobbySeen = { path: gate.path, dev: gate.dev, ino: gate.ino, files: gate.files };
-      for (const seat of seats) if (seat.lobby) seat.cwd = gate.path;
+      for (const seat of seats) if (seat.lobby) seat.cwd = channelLobbyFolder(gate.path, seat);
     } else if (launchingIntoLobby) createLobby = !dry;
   }
   // The team's event bus: started beside the watch unless the file sets `bus.autostart: false`,
@@ -2754,8 +2799,36 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     ...(fresh.includes(name) ? { fresh: true as const } : {}),
   }));
   let cliHooks = plannedCliHooks(dir, session, hookSeats());
+  const planSidebar =
+    sources.hostSessions !== undefined ||
+    sources.sidebarConfigText !== undefined ||
+    sources.launch?.applySidebar !== undefined ||
+    sources.launch?.checkSidebarConfig !== undefined ||
+    sources.launch?.reloadSidebar !== undefined;
+  const sidebar = planSidebar
+    ? sidebarStepOf({
+        home: sources.home,
+        root,
+        session,
+        team,
+        now: sources.now?.() ?? new Date(),
+        hostSessions: () => sources.hostSessions?.() ?? null,
+        configText: () => (sources.sidebarConfigText ?? sidebarConfigText)(sources.home),
+      })
+    : null;
   // Built where it is needed: on a dry run, just below, before anything is made; on a real run,
   // after the lock, so the lobby made there under it is already every lobby seat's `cwd`.
+  if (resolveLaunch) {
+    const covered = launcherCoverRefusal(
+      root,
+      standing.kind === 'verified' ? standing.record.approval.fingerprints.sections : undefined,
+    );
+    if (covered !== null) refusals.push({ id: 'up.launcher-cover', message: covered });
+    for (const seat of seats) {
+      const raw = rawAgentSession(dir, session, seat.name);
+      if (raw !== undefined) seat.resolveSession = raw;
+    }
+  }
   const buildPlan = () => upPlan({
     root,
     session,
@@ -2763,6 +2836,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     // One that is still `stopped` here is not this team's: the refusal already stopped the run.
     sessionRunning: state === 'running' || state === 'stopped',
     seats,
+    startFolders: placedStartFolders(team.seats, recorded),
     watchLabel: watchLabel(team.project),
     watchAlive,
     ...(watchPid !== null ? { watchPid } : {}),
@@ -2790,6 +2864,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     // A launch surface with no endpoint seam plans none: the marker is what makes the launch
     // start one, and a scene's fake launch must never reach a real process.
     ...(sources.launch?.codexEndpoint === undefined ? {} : { stateDir: dir }),
+    ...(sidebar === null ? {} : { sidebar }),
+    ...(resolveLaunch ? { resolveLaunch: true, launcherDiscovery: loadTeamLaunchers(root) } : {}),
   });
 
   /** The legacy watch workspaces this run closes, or would close on a dry run: only when the
@@ -2809,15 +2885,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // the records below, after the lobby exists.
   const stampLobbyTrust = (write: boolean) => {
     const now = sources.now?.() ?? new Date();
+    const mode = pretrustModeOf({ home: sources.home, entity: team.entity, teamRoot: root, team, now });
     for (let index = 0; index < seats.length; index++) {
       const seat = seats[index];
       if (!seat) continue;
-      const line = lobbyPretrustLine(seat, sources.home, { write, now });
+      const line = lobbyPretrustLine(seat, sources.home, { write, now, mode });
       if (line) seats[index] = { ...seat, launchProblem: line };
       // The project root, for a seat that starts there: pre-accepted in its CLI's own record.
       // A start folder under a charter root is pre-accepted the same way, wherever it sits.
       else if (write) {
-        projectRootPretrust(seat, sources.home, { now, root });
+        projectRootPretrust(seat, sources.home, { now, root, mode });
         charterFolderPretrust(seat, sources.home, { now, store: sources.ownerSeatStore });
       }
     }
@@ -2830,11 +2907,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   const stampGrantedTrust = () => {
     if (!createGranted || ordinaryAdmitted) return;
     const now = sources.now?.() ?? new Date();
+    const mode = pretrustModeOf({ home: sources.home, entity: team.entity, teamRoot: root, team, now });
     const grant = {
       covers: (folder: string) => entityGrantAdmits(root, io, { home: sources.home, now, cwd: folder }),
       listed: (folder: string) => insideTrust(folder, team.trust ?? [], root, sources.home),
     };
-    for (const seat of seats) grantedFolderPretrust(seat, sources.home, { now, grant });
+    for (const seat of seats) grantedFolderPretrust(seat, sources.home, { now, grant, root, mode });
   };
 
   // Dev mode says the no-approval lines and the caller-placement line once, as a warning,
@@ -3080,7 +3158,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       if ('path' in gate) {
         verifiedLobby = gate.path;
         lobbySeen = { path: gate.path, dev: gate.dev, ino: gate.ino, files: gate.files };
-        for (const seat of seats) if (seat.lobby) seat.cwd = gate.path;
+        for (const seat of seats) if (seat.lobby) seat.cwd = channelLobbyFolder(gate.path, seat);
       }
     }
     // A stopped session this team's state records is cleared here, under the run lock, before
@@ -3308,10 +3386,44 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         ? { registerInbox: (cli: string, seat: string, cwd: string, session: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, session, teamFile) }
         : {}),
       ...(launch.reportDisplayAgent
-        ? { reportDisplayAgent: (session: string, pane: string, text: string) => launch.reportDisplayAgent!(session, pane, text) }
+        ? {
+            reportDisplayAgent: (session: string, pane: string, text: string) =>
+              launch.reportDisplayAgent!(
+                session,
+                pane,
+                text,
+                sidebarPolicy({ home: sources.home, root, team, now: now() }).ttlMs,
+              ),
+          }
         : {}),
       ...(launch.renameWorkspace
         ? { renameWorkspace: (session: string, workspace: string, label: string) => launch.renameWorkspace!(session, workspace, label) }
+        : {}),
+      ...(planSidebar
+        ? {
+            applySidebar:
+              launch.applySidebar ??
+              ((rows, indicators) =>
+                applySidebarLayout(sources.home, rows, indicators, [], {
+                  checkConfig: () => launch.checkSidebarConfig?.() ?? { ok: true, text: 'config: ok' },
+                  reload: () => ({ applied: true, text: 'applied' }),
+                })),
+            reloadSidebar: (targetSession: string) =>
+              launch.reloadSidebar?.(targetSession) ?? { applied: true, text: 'applied' },
+            recordSidebarReload:
+              launch.recordSidebarReload ??
+              ((targetSession, rows, indicators) =>
+                recordSidebarReloads(sources.home, [
+                  {
+                    session: targetSession,
+                    record: {
+                      rows: sidebarRowsWord(rows),
+                      indicators,
+                      at: now().toISOString(),
+                    },
+                  },
+                ])),
+          }
         : {}),
       typeLine: () => false,
       // The bare restored CLI's exit, typed in place by a wrapper seat's relaunch: the same two
@@ -3396,6 +3508,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       shellBack: (session, pane) => launch.shellBack?.(session, pane) ?? null,
       agentStatus: (session, pane) => launch.agentStatus?.(session, pane) ?? null,
       processInfo: (session, pane) => launch.processInfo?.(session, pane) ?? null,
+      ...(launch.processStartOf ? { processStartOf: launch.processStartOf } : {}),
       sleep: sharedSleep,
       now: () => now().getTime(),
       allow(name) {
@@ -3440,7 +3553,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
           const last_active = patch.stage === 'ready'
             ? now().toISOString()
             : (prior.last_active ?? retained?.last_active);
-          let start_cwd = prior.start_cwd;
+          let start_cwd = patch.start_cwd ?? prior.start_cwd;
           if (!start_cwd && patch.createdWorkspace) {
             const planned = seats.find((item) => item.name === name);
             if (planned?.lobby) {
@@ -3473,6 +3586,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
           // either refuse a healthy seat or adopt a stranger. A patch that names the new
           // identity writes it; one that does not leaves the field empty until the pane is read.
           if (patch.pane && prior.pane && patch.pane !== prior.pane && rest.launched === undefined) delete seat.launched;
+          if (patch.stage === 'ready' && patch.sandbox_unapplied === undefined) delete seat.sandbox_unapplied;
           current.seats[name] = seat;
           if (patch.pane) {
             replaced = prior.pane !== patch.pane ? prior.pane : undefined;

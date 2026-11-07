@@ -10,8 +10,10 @@ import { description, homepage, license, version } from './version.ts';
 // Each command is loaded only when it is called. A slice adds its line here. The table is exported
 // so a test can walk it: every command, `--help`, `-h` and a usage line.
 export const commands: Record<string, () => Promise<{ default: Command; USAGE: string }>> = {
+  analyse: () => import('./commands/analyse.ts'),
   brief: () => import('./commands/brief.ts'),
   check: () => import('./commands/check.ts'),
+  checkpoint: () => import('./commands/checkpoint.ts'),
   client: () => import('./commands/client.ts'),
   commits: () => import('./commands/commits.ts'),
   doctor: () => import('./commands/doctor.ts'),
@@ -56,6 +58,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   send: () => import('./commands/send.ts'),
   reply: () => import('./commands/reply.ts'),
   ack: () => import('./commands/ack.ts'),
+  show: () => import('./commands/show.ts'),
   route: () => import('./commands/route.ts'),
   feed: () => import('./commands/feed.ts'),
   release: () => import('./commands/release.ts'),
@@ -200,7 +203,7 @@ export async function main(argv: string[], io: Io): Promise<number> {
   if (name === 'presence-hook') {
     if (rest.includes('--help') || rest.includes('-h')) return printHelp(io, PRESENCE_HOOK_USAGE);
     const { default: run } = await import('./daemon/presence/hook.ts');
-    return run(rest);
+    return run(rest, undefined, io);
   }
   const load = commands[name];
   if (!load) {

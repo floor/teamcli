@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { approveOwnerAction } from '../src/client/owner-action.ts';
 import { actionRequestsFolder } from '../src/client/team-create.ts';
 import { realSources, runAdd } from '../src/commands/add.ts';
+import { unreadMachine } from '../src/watch/machine.ts';
 import { runConfig } from '../src/commands/config.ts';
 import { findRoot } from '../src/file/load.ts';
 import { readAgents } from '../src/registry/agents.ts';
@@ -77,7 +78,8 @@ function configSources(at: Place) {
 }
 
 function addSources(at: Place) {
-  return { ...realSources, home: at.home, ownerSeatStore: at.store, now: () => NOW };
+  // The launch guard reads this injected load, one per core, under the start limit.
+  return { ...realSources, home: at.home, ownerSeatStore: at.store, now: () => NOW, machine: () => ({ ...unreadMachine(), loadPerCore: 1 }) };
 }
 
 function requestId(text: string): string {
@@ -153,15 +155,17 @@ describe('a team whose root is a plain folder', () => {
     const at = place({ git: false });
     expect(findRoot(at.root)).toBeNull();
     await underRegistry(async () => {
-      const sources = addSources(at);
+      // The host does not answer. The seat is a new name, so the add is one this run would
+      // start. Filing the request still records it and starts nothing.
+      const sources = { ...addSources(at), sessionState: (): null => null };
       const before = storedTeam(at.root, at.home)!.text;
       const io = testIo(at.root, { kind: 'owner' });
-      expect(await runAdd(['worker', '--like', 'lead', '--request'], io, sources), io.err).toBe(0);
+      expect(await runAdd(['extra', '--like', 'worker', '--request'], io, sources), io.err).toBe(0);
       const id = requestId(io.out);
       expect(id).not.toBe('');
       const request = requestOf(at.home, id);
       expect(request.params).toMatchObject({ root: at.root, team: 'acme', head: null });
-      expect(request.params.words).toEqual({ 'team-add': ['worker', '--like', 'lead'] });
+      expect(request.params.words).toEqual({ 'team-add': ['extra', '--like', 'worker'] });
       expect(storedTeam(at.root, at.home)!.text).toBe(before);
       expect(readAgents(at.home)).toEqual([]);
       expect(existsSync(join(at.root, '.agents', 'team.yaml'))).toBe(false);
@@ -170,6 +174,17 @@ describe('a team whose root is a plain folder', () => {
 });
 
 describe('the unchanged gates', () => {
+  test('an add that is not a request still refuses when the host does not answer, and files nothing', async () => {
+    const at = place({ git: false });
+    await underRegistry(async () => {
+      const sources = { ...addSources(at), sessionState: (): null => null };
+      const io = testIo(at.root, { kind: 'owner' });
+      expect(await runAdd(['extra', '--like', 'lead'], io, sources)).toBe(1);
+      expect(existsSync(actionRequestsFolder(at.home))).toBe(false);
+      expect(existsSync(join(at.root, '.agents', 'team.yaml'))).toBe(false);
+    });
+  });
+
   test('a git root still files and applies the same request', async () => {
     const at = place({ git: true });
     expect(findRoot(at.root)).toBe(at.root);

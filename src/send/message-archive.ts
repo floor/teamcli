@@ -12,7 +12,8 @@ import { dirname, join, relative } from 'node:path';
 import { legacyReceiptMatches, messagePayload } from '../commands/messages.ts';
 import { ensureFoldersBelow } from './history.ts';
 import { GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE, isGeneralBriefRecord } from '../launch/general-brief.ts';
-import { isRead, recordAuthOf, sameFolder, statusOf, type RecordPayload } from './record.ts';
+import { isReadOrCleared, recordAuthOf, sameFolder, statusOf, type RecordPayload } from './record.ts';
+import { readState } from '../state.ts';
 import { MESSAGE_DOMAIN, verifyDomain, type Json } from '../store/keys.ts';
 
 /** A family member's suffixes in move order: the receipts in status order, the thread close, and
@@ -58,9 +59,54 @@ export type PlannedMove = {
 
 export type ArchiveScan = { move: PlannedMove[]; stays: Stay[]; scanned: number };
 
+/** A record a lead's sweep may clear: its id, and the signed sender, body and thread the history
+ *  line the clearance writes carries. */
+export type AckDue = { id: string; from: string; body: string; thread: string };
+
 /** What the scoped ack read: the records it may write a receipt for, the ones a receipt already
  *  serves, and the families that stay for a reason. */
-export type AckScan = { due: { id: string }[]; already: number; stays: Stay[]; scanned: number };
+export type AckScan = { due: AckDue[]; already: number; stays: Stay[]; scanned: number };
+
+/** Whether one seat's backlog is the scoped calls' to clear. A lead clears a stopped or retired
+ *  seat's stale mail, never a running seat's: the seat is still there to read it. */
+export type SeatClearTarget =
+  | { kind: 'admitted' }
+  | { kind: 'running' }
+  | { kind: 'unknown' }
+  | { kind: 'unreadable'; reason: string };
+
+/**
+ * The lifecycle gate for `team ack --seat` and `team archive --seat`. A seat the team file
+ * declares and the state records is running, and stays its own reader. One the file declares and
+ * the state does not record — or the file marks `stopped: true` — is stopped, and admitted. One
+ * the file no longer declares is retired, and admitted while its own folder (transport or the
+ * older store) or a leftover state entry remembers it; a name with none of those was never a seat
+ * here. A state file that cannot be read is reported, never treated as an empty one: a running
+ * seat must not be cleared because its record is unreadable.
+ */
+export function seatClearTargetStatus(options: {
+  agents: string;
+  session: string;
+  seat: string;
+  seats: readonly { name: string; stopped: boolean }[];
+}): SeatClearTarget {
+  const { agents, session, seat, seats } = options;
+  const declared = seats.find((member) => member.name === seat);
+  let recorded: unknown;
+  try {
+    recorded = readState(agents).sessions[session]?.seats?.[seat];
+  } catch (error) {
+    return { kind: 'unreadable', reason: messageOf(error) };
+  }
+  if (declared !== undefined) {
+    if (declared.stopped !== true && recorded !== undefined) return { kind: 'running' };
+    return { kind: 'admitted' };
+  }
+  if (recorded !== undefined) return { kind: 'admitted' };
+  if (realDir(join(agents, 'send-drops', session, seat))) return { kind: 'admitted' };
+  if (realDir(join(agents, 'messages', seat))) return { kind: 'admitted' };
+  return { kind: 'unknown' };
+}
 
 export type MovedFile = { digest: string; bytes: number; source: string; dest: string };
 
@@ -175,8 +221,11 @@ export function scanAckSeat(options: {
   key: KeyObject;
   olderThanMs: number;
   now: Date;
+  /** The team's resolved lead: the only seat name a clearance receipt may carry and settle. */
+  lead?: string;
 }): AckScan {
   const { root, session, seat, key } = options;
+  const context = { to: seat, root, session, ...(options.lead === undefined ? {} : { lead: options.lead }) };
   const cutoff = options.now.getTime() - options.olderThanMs;
   const dir = join(root, '.agents', 'send-drops', session, seat);
   const scan: AckScan = { due: [], already: 0, stays: [], scanned: 0 };
@@ -223,11 +272,13 @@ export function scanAckSeat(options: {
       stay(scan, name, 'too-recent');
       continue;
     }
-    if (isRead(dir, name, { to: seat, root, session }, key)) {
+    // A message the seat read, or one a lead already cleared, is not due again: the receipt name
+    // is held by the first serving and is never rewritten.
+    if (isReadOrCleared(dir, name, context, key)) {
       scan.already += 1;
       continue;
     }
-    scan.due.push({ id: name });
+    scan.due.push({ id: name, from: payload.from, body: payload.body, thread: payload.thread });
   }
   return scan;
 }
@@ -244,8 +295,11 @@ export function scanArchiveSeat(options: {
   key: KeyObject;
   olderThanMs: number;
   now: Date;
+  /** The team's resolved lead: the only seat name a clearance receipt may carry and settle. */
+  lead?: string;
 }): ArchiveScan {
   const { root, session, seat, key } = options;
+  const context = { to: seat, root, session, ...(options.lead === undefined ? {} : { lead: options.lead }) };
   const cutoff = options.now.getTime() - options.olderThanMs;
   const dir = join(root, '.agents', 'send-drops', session, seat);
   const scan: ArchiveScan = { move: [], stays: [], scanned: 0 };
@@ -303,8 +357,9 @@ export function scanArchiveSeat(options: {
       stay(scan, name, 'too-recent');
       continue;
     }
-    const context = { to: seat, root, session };
-    if (!isRead(dir, name, context, key)) {
+    // A lead's clearance settles the family exactly as the seat's own read does: it is eligible
+    // to move, and its clearance receipt travels with it.
+    if (!isReadOrCleared(dir, name, context, key)) {
       stay(scan, name, statusOf(dir, name, context, key) === 'delivered' ? 'delivered-only' : 'unread');
       continue;
     }

@@ -10,6 +10,7 @@ import { appendConfigChanged } from '../src/config/events.ts';
 import { planConfigSet, readSeatConfigSource, writeConfigSet } from '../src/config/sources.ts';
 import type { SignedConfigRecord } from '../src/config/record.ts';
 import { readEvents } from '../src/bus/log.ts';
+import { ownerDeliveryText } from '../src/bus/owner.ts';
 import { reconcilePass } from '../src/bus/reconcile.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { agentsDir, getAgent, registerAgent, type AgentInit } from '../src/registry/agents.ts';
@@ -105,7 +106,12 @@ describe('reconcile: a signed settings record with no config.changed event', () 
     expect(payload.reconciled).toBe('true');
     expect(payload.seat).toBe(SEAT);
     expect(payload.subject).toBe(SEAT);
-    expect(payload.from).toBe('owner');
+    // The signed generation verifies with the checkout's approval key, which every seat can read:
+    // the pass cannot claim the owner wrote it. No from key is stamped, and the event says the
+    // author is unattributed. The owner's one line says a change was found on disk.
+    expect(payload.from).toBeUndefined();
+    expect('sender_verified' in payload).toBe(false);
+    expect(ownerDeliveryText(payload)).toBe('model changed on disk [unattributed author]');
     expect(payload.ts).toBe(record.date);
   });
 
@@ -140,6 +146,9 @@ describe('reconcile: a signed settings record with no config.changed event', () 
     const events = configEvents();
     expect(events.length).toBe(1);
     expect(events[0]!.payload.reconciled).toBeUndefined();
+    // A report the writing process raised itself keeps its own author and carries no mark.
+    expect(events[0]!.payload.from).toBe('owner');
+    expect('sender_verified' in events[0]!.payload).toBe(false);
   });
 
   test('an event appended by another session stands: reconcile appends none', () => {

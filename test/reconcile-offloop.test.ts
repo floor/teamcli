@@ -18,8 +18,8 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { shortSocketBase } from './helpers.ts';
 import { appendEvent, eventLogPath, EVENT_DOMAIN, readEvents, type SignedEventRecord } from '../src/bus/log.ts';
 import { createReconcileState, reconcilePass, reconcilePassAsync, type ReconcileResult } from '../src/bus/reconcile.ts';
 import { nudgeBus, startBus } from '../src/bus/server.ts';
@@ -29,7 +29,7 @@ import { daemonDifferences, daemonNotes } from '../src/daemon/health_display.ts'
 import type { DaemonHealth } from '../src/daemon/health.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
 import { readDaemonState } from '../src/daemon/state.ts';
-import { signRecord, type RecordPayload } from '../src/send/record.ts';
+import { signReceiptPayload, signRecord, type RecordPayload } from '../src/send/record.ts';
 import type { SendDaemonHandle } from '../src/send/daemon.ts';
 import { emptySession, LOCK_FILE, updateState } from '../src/state.ts';
 import { messageKeyOf, RECEIPT_DOMAIN, signDomain, type Json } from '../src/store/keys.ts';
@@ -64,7 +64,7 @@ const bases: string[] = [];
 function scratch(): { root: string; home: string } {
   // A short base keeps the bus and send socket paths under the platform's limit; the OS temp
   // folder itself can be long on a desktop.
-  const short = existsSync('/private/tmp') ? '/private/tmp' : tmpdir();
+  const short = shortSocketBase();
   const base = realpathSync(mkdtempSync(join(short, 'team-offloop-')));
   bases.push(base);
   const root = join(base, 'repo');
@@ -109,6 +109,20 @@ function signedDrop(
     thread: options.thread ?? id,
   };
   writeFileSync(join(dir, id), `${JSON.stringify(signRecord(payload, home), null, 2)}\n`);
+}
+
+/** One receipt as a read or a reply leaves it beside its record: a signed `.json` envelope. */
+function signedReceipt(root: string, home: string, id: string, status: 'read' | 'replied'): void {
+  const receipt = signReceiptPayload({
+    kind: 'receipt',
+    status,
+    id,
+    to: 'worker-1',
+    root,
+    session: 'acme',
+    at: '2026-11-01T00:02:00.000Z',
+  }, home);
+  writeFileSync(join(dropsDir(root), `${id}.${status}.json`), `${JSON.stringify(receipt, null, 2)}\n`);
 }
 
 function raisedKeys(pass: ReconcileResult): string[] {
@@ -286,8 +300,8 @@ describe('the archive findings are regression probes', () => {
     expect(raisedKeys(first)).toContain('message.arrived:rec-late');
     // The record leaves the live tree the way a move does; the receipts are written afterwards.
     unlinkSync(join(dir, 'rec-late'));
-    writeFileSync(join(dir, 'rec-late.read'), '{"ok":true}');
-    writeFileSync(join(dir, 'rec-late.replied'), '{"ok":true}');
+    signedReceipt(root, home, 'rec-late', 'read');
+    signedReceipt(root, home, 'rec-late', 'replied');
     const second = reconcilePass({ project: 'acme', root, session: 'acme', home, state });
     if (!second.ok) throw new Error(second.reason);
     expect(raisedKeys(second)).toContain('message.read:rec-late:read');
@@ -303,7 +317,7 @@ describe('the archive findings are regression probes', () => {
     const { root, home } = scratch();
     const dir = dropsDir(root);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'rec-lone.read'), '{"ok":true}');
+    signedReceipt(root, home, 'rec-lone', 'read');
     const pass = reconcilePass({ project: 'acme', root, session: 'acme', home });
     if (!pass.ok) throw new Error(pass.reason);
     expect(raisedKeys(pass)).toContain('message.read:rec-lone:read');
@@ -322,14 +336,14 @@ describe('the archive findings are regression probes', () => {
     // arrive. The pass's own map has forgotten the sender by now; the log has not.
     unlinkSync(join(dir, 'rec-gap'));
     expect(raisedKeys(reconcilePass({ project: 'acme', root, session: 'acme', home, state }))).toEqual([]);
-    writeFileSync(join(dir, 'rec-gap.replied'), '{"ok":true}');
+    signedReceipt(root, home, 'rec-gap', 'replied');
     const last = reconcilePass({ project: 'acme', root, session: 'acme', home, state });
     if (!last.ok) throw new Error(last.reason);
     expect(raisedKeys(last)).toContain('message.replied:rec-gap:replied');
     expect(last.raised.find((record) => record.payload.record_id === 'rec-gap:replied')?.payload.from)
       .toBe('clerk');
     // A fresh state has no map at all, only the log: the same answer, an event and a restart later.
-    writeFileSync(join(dir, 'rec-gap.read'), '{"ok":true}');
+    signedReceipt(root, home, 'rec-gap', 'read');
     const fresh = reconcilePass({ project: 'acme', root, session: 'acme', home });
     if (!fresh.ok) throw new Error(fresh.reason);
     expect(raisedKeys(fresh)).toContain('message.read:rec-gap:read');
@@ -347,7 +361,7 @@ describe('the archive findings are regression probes', () => {
     // A different sender and thread carry a different signed payload, so the record's own stamp
     // moved: the pass reads it again rather than serving the verdict it cached for the old bytes.
     signedDrop(root, home, 'rec-rewrite', { from: 'alice', thread: 'rewritten-thread' });
-    writeFileSync(join(dir, 'rec-rewrite.read'), '{"ok":true}');
+    signedReceipt(root, home, 'rec-rewrite', 'read');
     const second = reconcilePass({ project: 'acme', root, session: 'acme', home, state });
     if (!second.ok) throw new Error(second.reason);
     expect(state.stats.filesRead).toBe(1);
@@ -681,7 +695,14 @@ describe('a bus can host its first pass in the background', () => {
     }
     try {
       // Bound and answering, with the first pass still scanning: the start did not wait for it.
-      const running = handle.firstPass();
+      // The resolved start need not have reached the pass's first slice yet, so give the
+      // background walk a turn to scan before reading the live counters. The held event lock
+      // keeps it from settling however many turns that takes.
+      let running = handle.firstPass();
+      for (let turn = 0; turn < 100 && running.scanned === 0; turn += 1) {
+        await sleep(1);
+        running = handle.firstPass();
+      }
       expect(running.running).toBe(true);
       if (running.running) expect(running.scanned).toBeGreaterThanOrEqual(1);
       expect(appended()).toBe(0);
@@ -938,7 +959,12 @@ describe('the daemon heartbeat and endpoint supervision', () => {
       expect(starts).toBeGreaterThanOrEqual(3);
       expect(fatal).toHaveLength(1);
       expect(fatal[0]).toContain('failed 2 restarts in a row');
-      const written = readStateOk(home);
+      // The refresh writes the record after it reports the stop, so the scene waits for that row.
+      const written = await waitForValue(() => {
+        const read = readDaemonState(home);
+        if (read.kind !== 'ok') return null;
+        return read.state.roots[0]?.send === 'failed' ? read.state : null;
+      }, 5_000);
       expect(written.roots[0]?.send).toBe('failed');
       expect(written.roots[0]?.sendWhy).toContain('another send server holds the project socket');
       expect(typeof written.roots[0]?.sendFailedAt).toBe('string');

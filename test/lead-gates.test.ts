@@ -1,4 +1,4 @@
-// The `lead-gates` policy (ruling D5, owner answer A3): the file's own `operator:` place is
+// The `lead-gates` policy: the file's own `operator:` place is
 // admitted to five of the dev-mode lead gates — `check --repair`, `remove --abandon`,
 // `down --abandon`, `policy set` and `policy unset`, `daemon restart` — and to `team answer`,
 // while dev mode is on and the effective value reads `lead+operator` for the caller's chain.
@@ -351,7 +351,7 @@ describe('the lift itself, gate by gate', () => {
     leadGates(home, root, 'lead+operator');
     expect(lift(root, home, OPS_ELSEWHERE, 'check', true).lifted).toBe(false);
     expect(lift(root, home, LEAD, 'check').lifted).toBe(true);
-    expect(lift(root, home, LEAD, 'check').role).toBe('orchestrator');
+    expect(lift(root, home, LEAD, 'check').role).toBe('lead');
   });
 
   test('a seat spelled both operator and lead is the lead, never the operator', () => {
@@ -359,7 +359,7 @@ describe('the lift itself, gate by gate', () => {
     devModeOn(home, root);
     const loaded = loadTeamFile(root, { home });
     if (!loaded.ok) throw new Error(loaded.errors.map((error) => error.message).join('; '));
-    expect(devModeOwnerRoleOf('lead', loaded.team)).toBe('orchestrator');
+    expect(devModeOwnerRoleOf('lead', loaded.team)).toBe('lead');
     expect(devModeOwnerRoleOf('ops', loaded.team)).toBe(null);
     expect(devModeOwnerRoleOf('helper', loaded.team)).toBe(null);
   });
@@ -675,7 +675,7 @@ seats:
       admitsOperator: true,
     });
     expect(parentLeadLift.lifted).toBe(true);
-    expect(parentLeadLift.role).toBe('orchestrator');
+    expect(parentLeadLift.role).toBe('lead');
 
     // Parent's placed operator (`OPS` in session `acme`) is REFUSED on the child's gate: `roleElsewhere` admits only `orchestrator`.
     const parentOpsLift = devModeOwnerLift(testIo(childRoot, OPS), {

@@ -41,6 +41,8 @@ export type AdmitTeam = {
   operator?: string | null;
   /** The session the team runs in, when the record carries it; a grant may spell a team by it. */
   session?: string | null;
+  /** Previous team names carried across a rename during the grace window. */
+  previousNames?: { name: string; until: string }[];
   /** The roster lines, and, where the record holds them, the capabilities that make a seat's
    *  place in the chain what it is: `leads`, the only thing that makes a seat its team's lead to
    *  admission, and `assistant`, which puts a seat at the entity's assistant position. */
@@ -51,11 +53,10 @@ export type AdmitTeam = {
 export type AdmitTeams = Record<string, AdmitTeam>;
 
 /** One registered project as admission reads it: the lead, by agent id, and the teams it names.
- *  The project registry's own record (`readProjects`) is wider and satisfies this shape as it
- *  stands. */
-export type AdmitProject = { lead: string | null; teams: string[] };
+ *  The project registry's public reads derive these memberships from team records. */
+export type AdmitProject = { entity?: string | null; lead: string | null; teams: string[] };
 
-/** Every registered project, by project id — `readProjects`' own shape. */
+/** Every registered project, keyed by id, with memberships derived from team records. */
 export type AdmitProjects = Record<string, AdmitProject>;
 
 /** The two reply contexts a reply command may hand in: the general open-thread reply, and the
@@ -156,7 +157,7 @@ export const REPLY_RULE = 'a reply to the sender of a record on an open thread';
 
 /**
  * The rule a seat's reply to the entity's main orchestrator is admitted by — the main
- * orchestrator's reach (OD-20261103-02) in the direction of an answer: the main orchestrator
+ * orchestrator's reach in the direction of an answer: the main orchestrator
  * wrote to the seat on a thread it opened, and the seat answers there, on that thread, and
  * nowhere else. The caller sets the marker only after it verified the record, its sender and
  * the thread's opening record; admission asks the chain place and the setting again. It is never
@@ -216,10 +217,10 @@ export function admitSend(
   // The project rules, asked first when the caller's records know their projects: the project
   // record decides its own pairs, and the `leads` capability decides which seat leads a team.
   if (context !== undefined) {
-    const twice = duplicateProjectName(callerTeamId, targetTeamId, context.projects);
-    if (twice !== null) return { ok: false, why: `${seatAt(caller)} may not send to ${seatAt(target)}: ${twice}` };
-    const project = sharedProject(callerTeamId, targetTeamId, context.projects);
-    if (project !== null) {
+    for (const [, project] of projectsNaming(callerTeamId, context.projects)) {
+      if (!project.teams.includes(targetTeamId)) continue;
+      // Membership is reach within one recorded entity, never a bridge to another entity.
+      if (project.entity == null || project.entity !== callerTeam?.entity || project.entity !== targetTeam?.entity) continue;
       const crossing = callerTeamId !== targetTeamId;
       const callerLead = leadSeat(callerTeam);
       const targetLead = leadSeat(targetTeam);
@@ -278,7 +279,7 @@ export function admitSend(
   // whose project is the entity itself reaches every seat below it, one entity and no further.
   // The seat is the chain place `onMainCoordinator` reads — the `leads` capability on the head
   // team, never a role's word — and the reach is a setting: the same `seats_cross_teams` word the
-  // lead pair reads, with its own default on (the owner's OD-20261103-02) and the project as the
+  // lead pair reads, with its own default on and the project as the
   // only level that may reopen it.
   const entity = callerTeam?.entity ?? null;
   if (
@@ -374,8 +375,8 @@ export function sendGrantFor(
   for (const grant of grants) {
     const expMs = Date.parse(grant.expires);
     if (!Number.isFinite(expMs) || nowMs >= expMs) continue;
-    if (!grantFromNames(grant.from, caller, teams)) continue;
-    if (!grantToNames(grant.to, target, caller, teams)) continue;
+    if (!grantFromNames(grant.from, caller, teams, nowMs)) continue;
+    if (!grantToNames(grant.to, target, caller, teams, nowMs)) continue;
     return { name: grant.name };
   }
   return undefined;
@@ -401,19 +402,19 @@ export function unverifiedGrantFor(
     if (grant.state === 'verified') continue;
     const expMs = Date.parse(grant.expires);
     if (!Number.isFinite(expMs) || nowMs >= expMs) continue;
-    if (!grantFromNames(grant.from, caller, teams)) continue;
-    if (!grantToNames(grant.to, target, caller, teams)) continue;
+    if (!grantFromNames(grant.from, caller, teams, nowMs)) continue;
+    if (!grantToNames(grant.to, target, caller, teams, nowMs)) continue;
     return grant;
   }
   return undefined;
 }
 
 /** Whether a grant's `from` names this caller: an agent id, `seat@team`, or `session/seat`. */
-function grantFromNames(from: string, caller: SendSide, teams: AdmitTeams): boolean {
+function grantFromNames(from: string, caller: SendSide, teams: AdmitTeams, nowMs: number): boolean {
   if (from.startsWith('agt_')) return 'reach' in caller && caller.id === from;
   const at = from.lastIndexOf('@');
   if (at > 0) {
-    return seatOf(caller) === from.slice(0, at) && teamSpelled(teamOf(caller), from.slice(at + 1), teams);
+    return seatOf(caller) === from.slice(0, at) && teamSpelled(teamOf(caller), from.slice(at + 1), teams, nowMs);
   }
   const slash = from.indexOf('/');
   if (slash > 0) {
@@ -425,7 +426,7 @@ function grantFromNames(from: string, caller: SendSide, teams: AdmitTeams): bool
 /** Whether a grant's `to` names this receiver: an agent id, `seat@team`, `session/seat`, a bare
  *  seat, which only the caller's own team makes unambiguous — or the reserved
  *  `orchestrator@<entity>`, the lead seat of a team of the sender's own entity. */
-function grantToNames(to: string, target: SendSide, caller: SendSide, teams: AdmitTeams): boolean {
+function grantToNames(to: string, target: SendSide, caller: SendSide, teams: AdmitTeams, nowMs: number): boolean {
   if (to.startsWith('agt_')) return 'reach' in target && target.id === to;
   const at = to.lastIndexOf('@');
   if (at > 0) {
@@ -444,7 +445,7 @@ function grantToNames(to: string, target: SendSide, caller: SendSide, teams: Adm
         && targetTeam?.entity === entity
         && seatOf(target) === leadSeat(targetTeam);
     }
-    return seatOf(target) === seat && teamSpelled(teamOf(target), spelled, teams);
+    return seatOf(target) === seat && teamSpelled(teamOf(target), spelled, teams, nowMs);
   }
   const slash = to.indexOf('/');
   if (slash > 0) {
@@ -453,11 +454,28 @@ function grantToNames(to: string, target: SendSide, caller: SendSide, teams: Adm
   return seatOf(target) === to && teamOf(target) === teamOf(caller);
 }
 
-/** Whether `spelled` names the team `id`: the record's own id, its project or its session. */
-function teamSpelled(id: string, spelled: string, teams: AdmitTeams): boolean {
+/**
+ * Whether `spelled` names the team `id`: the record's own id, its project, its session, or an
+ * unexpired `previousNames` entry while `TEAM_RENAME_GRACE` is not `'off'` and no registered team
+ * currently holds `spelled` by id, project or session.
+ */
+function teamSpelled(id: string, spelled: string, teams: AdmitTeams, nowMs: number): boolean {
   if (id === spelled) return true;
   const team = teams[id];
-  return team !== undefined && (team.project === spelled || team.session === spelled);
+  if (team === undefined) return false;
+  if (team.project === spelled || team.session === spelled) return true;
+  if (process.env.TEAM_RENAME_GRACE === 'off') return false;
+  if (teams[spelled] !== undefined) return false;
+  for (const other of Object.values(teams)) {
+    if (other.project === spelled || other.session === spelled) return false;
+  }
+  return Boolean(
+    team.previousNames?.some((entry) => {
+      if (entry.name !== spelled) return false;
+      const untilMs = Date.parse(entry.until);
+      return Number.isFinite(untilMs) && untilMs > nowMs;
+    }),
+  );
 }
 
 /**
@@ -468,11 +486,14 @@ function teamSpelled(id: string, spelled: string, teams: AdmitTeams): boolean {
  * `sender_name` word (`src/send/names.ts`), so a person sees a nickname or `seat@team` where an
  * earlier build printed `agt_…`.
  */
-export function senderHeader(caller: SendSide | 'owner' | 'watch', rule: string, naming: SenderNaming = defaultNaming()): string {
+export function senderHeader(caller: SendSide | 'owner' | 'watch' | 'daemon', rule: string, naming: SenderNaming = defaultNaming()): string {
   if (caller === 'owner') return `from the owner — admitted by: ${rule}\n`;
   // The watch's own direct-work principal: a non-seat sender, named by its reserved word so no
   // reader mistakes it for the owner or for the lead's seat.
   if (caller === 'watch') return `from the watch — admitted by: ${rule}\n`;
+  // The daemon's reminder principal: a non-seat sender, named by its reserved word for the same
+  // reason — no reader mistakes it for the owner, the lead's seat or the watch.
+  if (caller === 'daemon') return `from the daemon — admitted by: ${rule}\n`;
   const readable = senderDisplayName(senderIdentityOf(caller), naming);
   // A declared seat: the id the receiver would judge by is the one the registry has not written
   // yet, so the header says whose seat it is instead of an id.
@@ -581,8 +602,8 @@ function leadsAcrossTeams(declared: Partial<Record<SettingLevel, boolean | undef
 
 /**
  * The main orchestrator's reach over the entity's teams: the same `seats_cross_teams` word the
- * lead pair reads, with this reach's own default — on, the owner's decision that the entity's
- * main orchestrator reaches any seat of the entity's teams (OD-20261103-02) — and the same
+ * lead pair reads, with this reach's own default — on, so the entity's
+ * main orchestrator reaches any seat of the entity's teams — and the same
  * project loosening level. A word at any level of the asker's chain that closes it closes this
  * reach; only the project may reopen what an entity closed.
  */
@@ -615,8 +636,8 @@ function entityAssistant(entity: string | null | undefined, teams: AdmitTeams): 
   return null;
 }
 
-/** The registered projects naming a team, in project-id order, with their ids — the reverse index
- *  `ofTeam` reads from the live registry, over the records admission was handed. */
+/** All registered memberships of a team, in project-id order, over the derived records
+ *  admission was handed. Home inheritance is resolved separately by the caller. */
 function projectsNaming(teamId: string, projects: AdmitProjects): [string, AdmitProject][] {
   return Object.keys(projects)
     .sort()
@@ -624,29 +645,6 @@ function projectsNaming(teamId: string, projects: AdmitProjects): [string, Admit
       const project = projects[id];
       return project !== undefined && project.teams.includes(teamId) ? [[id, project] as [string, AdmitProject]] : [];
     });
-}
-
-/** The one project naming both teams, or null — the record a pair's project rules are read from.
- *  A team named by two projects never gets here: `duplicateProjectName` refuses first. A pair
- *  whose teams share no project reaches no project rule at all, so nothing crosses projects. */
-function sharedProject(callerTeamId: string, targetTeamId: string, projects: AdmitProjects): AdmitProject | null {
-  for (const [, project] of projectsNaming(callerTeamId, projects)) {
-    if (project.teams.includes(targetTeamId)) return project;
-  }
-  return null;
-}
-
-/** The refusal when a team of this pair is named by more than one project — the state the project
- *  readers refuse, naming both — so admission refuses it too rather than pick one silently. Null
- *  when neither team is named twice. */
-function duplicateProjectName(callerTeamId: string, targetTeamId: string, projects: AdmitProjects): string | null {
-  for (const teamId of callerTeamId === targetTeamId ? [callerTeamId] : [callerTeamId, targetTeamId]) {
-    const named = projectsNaming(teamId, projects);
-    if (named.length > 1) {
-      return `team ${teamId} is named in ${named.length} projects: ${named.map(([id]) => id).join(', ')}`;
-    }
-  }
-  return null;
 }
 
 /** True when the target is the coordinator of `entity`: the lead seat of the entity's own team,

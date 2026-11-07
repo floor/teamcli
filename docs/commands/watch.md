@@ -130,9 +130,9 @@ the screen holds both. For Cursor the
 profile pins the status row's place: a line the row's grammar matches is the row only when the
 workspace line sits directly below it, that line is the pane's last non-blank one, and the input
 row sits above it within the captured distance — a grammar-looking line anywhere else is ordinary
-text that names no row and no model. Grok rows are the profile's exception — selected by their
-grammar wherever they sit — and every Grok row in the captures carries exactly the two spaces that
-grammar spells.
+text that names no row and no model. Grok rows are the profile's exception to the distance pin —
+the workspace line still sits directly below them — and every Grok row in the captures carries
+exactly the two spaces that grammar spells.
 
 The box's own border requires the complete frame or nothing: the 2026-10-05 captures draw the input
 rows between a ` ▄▄…` row directly above them and a ` ▀▀…` row directly below them — each one space
@@ -245,7 +245,6 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | `the load is <n> per core, above <n>` | over `machine.load_max` |
 | `free memory is <n>%, below <n>%` | under `machine.memory_min` |
 | `free disk is <n> GB, below <n> GB` | under `machine.disk_min` |
-| `free swap is <n> GB, below <n> GB` | under `machine.swap_free_min` |
 | `swap grew by <n> GB in <n> minutes, above <n> GB` | over `machine.swap_growth_max` inside `machine.swap_growth_window` |
 | `<account> <window> is <n>% used, past the <n>% mark` | the account's figure is at or past a mark of `budgets.marks`, once per window |
 | `<account> <window> left <n>%, inside its <n>% reserve` | a subscription account at or inside its `reserve` |
@@ -817,6 +816,6 @@ seats:
 ```console
 $ team up ; echo "exit $?"
 team up: line 9: watch.checks can't turn off attention: attention, missing, model-drift, model-rule, prompt-escalation, approval always run
-team up: line 10: unknown check "disks" in watch.checks: the checks are missing, restored, model-drift, model-rule, attention, provider-error, unsent, idle, extra, team-idle, prompt-escalation, approval, load, memory, disk, swap-free, swap-growth, budget
+team up: line 10: unknown check "disks" in watch.checks: the checks are missing, restored, model-drift, model-rule, attention, provider-error, unsent, idle, extra, team-idle, prompt-escalation, approval, load, memory, disk, swap-growth, budget
 exit 2
 ```

@@ -43,7 +43,8 @@ import { teamIdOf } from '../registry/teams.ts';
 import { deliveryChainOf, DeliveryChainUnreadable, type DeliveryChain } from '../send/delivery.ts';
 import type { FallbackNote } from '../send/fallback-events.ts';
 import { beginFallbackWalk, type FallbackWalk, type WalkAttempt } from '../send/fallback-walk.ts';
-import { frameFor, readerLine } from '../send/frame.ts';
+import { compactReaderLine, existingRecordIdsIn, frameFor, readerLine } from '../send/frame.ts';
+import { attributedBody } from '../send/sender-claim.ts';
 import {
   declaredInboundOf,
   heldSocketPath,
@@ -85,7 +86,6 @@ import {
   type SignedRecord,
 } from '../send/record.ts';
 import type { DeliveryLeg, SettingLevel } from '../settings/inherit.ts';
-import { MCP_INBOX_UNAVAILABLE } from '../send/walk-cascade.ts';
 import { deliveryOrder } from '../settings/resolve.ts';
 import { messageKeyState } from '../store/keys.ts';
 import type { Dial, RelayReceipt as PackageRelayReceipt, RelayStage } from '../../packages/relay/index.js';
@@ -132,6 +132,7 @@ export type DaemonRelayRoutePlan = {
   version?: string;
   launch?: string;
   human: boolean;
+  compactDelivery?: boolean;
   directOnly: boolean;
   home: string;
   stateDir: string;
@@ -239,9 +240,6 @@ function humanSkipReasonFor(leg: DeliveryLeg): string {
       return "the pane is a human's, and no frame is sent";
     case 'headless-resume':
       return "the pane is a human's, and no session is resumed";
-    case 'mcp-inbox':
-      // No seat walks this name (ADR D1): the store's reader, never a spared pane leg.
-      return MCP_INBOX_UNAVAILABLE;
     case 'channel':
       return "the pane is a human's, and the drop leg is the only one walked";
     case 'session':
@@ -261,7 +259,6 @@ function relayRouteOfLeg(leg: DeliveryLeg): RuntimeRelayRoute | null {
       return 'headless-resume';
     case 'drop':
       return 'durable-copy';
-    case 'mcp-inbox':
     case 'channel':
     case 'typed':
       // The session leg runs the receiving CLI's own call, which only the sender's walk makes:
@@ -457,11 +454,9 @@ export function selectDaemonRelayRoutes(
       skippedLegs.push({
         leg,
         reason:
-          leg === 'mcp-inbox'
-            ? MCP_INBOX_UNAVAILABLE
-            : selfSend && leg === 'typed'
-              ? `own-seat self-send (${seat} -> ${seat}): nothing is typed into the sender's own active pane`
-              : 'handled outside the relay runtime-adapter walk',
+          selfSend && leg === 'typed'
+            ? `own-seat self-send (${seat} -> ${seat}): nothing is typed into the sender's own active pane`
+            : 'handled outside the relay runtime-adapter walk',
       });
       continue;
     }
@@ -496,6 +491,7 @@ export function selectDaemonRelayRoutes(
       ...(declaredSeat.version === undefined ? {} : { version: declaredSeat.version }),
       ...(declaredSeat.launch === undefined ? {} : { launch: declaredSeat.launch }),
       human,
+      ...(declaredSeat.compactDelivery === true ? { compactDelivery: true } : {}),
       directOnly,
       home,
       stateDir,
@@ -891,12 +887,27 @@ function defaultVerifyReadReceiptFor(
 
 function resolveSocketFrameFor(
   input: DaemonRelaySendInput,
+  plan: DaemonRelayRoutePlan,
+  record: SignedRecord['payload'] | undefined,
   id: string,
   body: string | undefined,
+  from: string,
 ): string | undefined {
   if (input.frame !== undefined) return input.frame;
   if (body === undefined) return undefined;
-  return frameFor(body, id, readerLine(id));
+  const compact = plan.compactDelivery === true;
+  const content = attributedBody(body, from, {
+    ...(record === undefined ? {} : { record }),
+    home: plan.home,
+    root: plan.route.root,
+    compact,
+  });
+  const existingIds = existingRecordIdsIn(plan.dropDir);
+  return frameFor(
+    content,
+    id,
+    compact ? compactReaderLine(id, existingIds) : readerLine(id, existingIds),
+  );
 }
 
 /**
@@ -1140,7 +1151,7 @@ export async function handleDaemonRelaySend(
     },
   );
 
-  const frame = resolveSocketFrameFor(input, id, body);
+  const frame = resolveSocketFrameFor(input, plan, parsedRecord?.payload, id, body, from);
   const message: RuntimeRelayMessage = {
     id,
     record: recordText,

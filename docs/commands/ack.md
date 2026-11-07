@@ -42,7 +42,9 @@ would hold the name that reader needs.
     team ack <id> [--json]
     team ack --seat <seat> --older-than <dur> [--dry-run] [--json]
 
-`<id>` is the record being marked read, as it is named in the caller's folder.
+`<id>` is the record being marked read, as it is named in the caller's folder (or an unambiguous
+prefix of at least 8 characters in that mailbox; an ambiguous prefix is refused naming the
+matching ids).
 
 ## Flags
 

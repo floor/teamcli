@@ -1,5 +1,6 @@
 // Two commands share this name through 0.3.3 (design note §2.3, §3). An invocation made only of
-// the team check's own options (`--session`, `--file`, `--repair`) — or of nothing at all — is the team check
+// the team check's own options (`--session`, `--file`, `--repair`, `--close-orphans`) — or of
+// nothing at all — is the team check
 // (`runTeamCheck`): is anything wrong with this team that someone should act on. Anything else —
 // a `<ref>`, `--pr`, `--since`, any other word or option — is the old spelling of `team commits
 // check` and `team pr check`: one notice line per half on stderr, then the shared run
@@ -17,7 +18,7 @@ import { runCommits, type CommitsRun } from './commits.ts';
 export { loadConfig };
 export type { LoadConfig };
 
-export const USAGE = `Usage: team check [--session <name>] [--file <path>] [--repair] [--json]
+export const USAGE = `Usage: team check [--session <name>] [--file <path>] [--repair] [--close-orphans] [--json]
 
   --session <name>  the session to read; the file's own when absent
   --file <path>     a team file, instead of the registry record (team config)
@@ -26,6 +27,11 @@ export const USAGE = `Usage: team check [--session <name>] [--file <path>] [--re
                     no seat of the team in it), re-record a seat an agent
                     registered under dev mode, and set herdr's drifted sidebar
                     lines back from the file
+  --close-orphans   the team's lead's or the owner's close, one act: end the live
+                    agent processes no pane holds, after one question at the
+                    terminal; a process the check cannot re-prove just before it
+                    is signalled is left and named. Not with --repair; not with
+                    --json
   --json            the report as one JSON document on stdout
 
 Exits 0 when nothing needs acting on, 1 when something does, 2 when the check
@@ -68,7 +74,7 @@ can't run.
 const VALUE_OPTIONS = ['pr', 'since', 'session', 'file'] as const;
 // The team check's own switches: taken with no value, and only by the team check — the old
 // spelling meets `--repair` with its unknown-option refusal.
-const FLAG_OPTIONS = ['repair', 'json'] as const;
+const FLAG_OPTIONS = ['repair', 'close-orphans', 'json'] as const;
 type Option = (typeof VALUE_OPTIONS)[number];
 type FlagOption = (typeof FLAG_OPTIONS)[number];
 const OLD_OPTIONS: readonly Option[] = ['pr', 'since', 'file'];
@@ -121,15 +127,15 @@ function spelledForTheTeam(argv: string[]): boolean {
     if (!argument.startsWith('--')) return false;
     const name = argument.slice(2).split('=', 1)[0] as string;
     const valued = name === 'session' || name === 'file';
-    if (!valued && name !== 'repair' && name !== 'json') return false;
-    // Only a valued option takes the next word; `--repair` and `--json` stand alone.
+    if (!valued && name !== 'repair' && name !== 'close-orphans' && name !== 'json') return false;
+    // Only a valued option takes the next word; the switches stand alone.
     if (valued && !argument.includes('=')) index += 1;
   }
   return true;
 }
 
 type Dispatched =
-  | { kind: 'team'; args: { session?: string; file?: string; repair?: boolean; json?: boolean } }
+  | { kind: 'team'; args: { session?: string; file?: string; repair?: boolean; closeOrphans?: boolean; json?: boolean } }
   | { kind: 'commits'; args: CommitsRun }
   | { kind: 'refused'; text: string; usage: string };
 
@@ -141,12 +147,22 @@ function dispatch(argv: string[]): Dispatched {
     if (parsed.positional.length > 0) {
       return { kind: 'refused', text: `unexpected "${parsed.positional[0]}"`, usage: USAGE };
     }
+    // Two acts never share one run: the repair writes the state, the close ends processes, and a
+    // run that did both could not say which left what. The close also needs the terminal it asks
+    // at, which the one-JSON-document form does not have.
+    if (parsed.flags.has('close-orphans') && parsed.flags.has('repair')) {
+      return { kind: 'refused', text: '--close-orphans and --repair are two acts; run one of them', usage: USAGE };
+    }
+    if (parsed.flags.has('close-orphans') && parsed.flags.has('json')) {
+      return { kind: 'refused', text: '--close-orphans asks at a terminal; it cannot run with --json', usage: USAGE };
+    }
     return {
       kind: 'team',
       args: {
         ...(parsed.values.session !== undefined ? { session: parsed.values.session } : {}),
         ...(parsed.values.file !== undefined ? { file: parsed.values.file } : {}),
         ...(parsed.flags.has('repair') ? { repair: true } : {}),
+        ...(parsed.flags.has('close-orphans') ? { closeOrphans: true } : {}),
         ...(parsed.flags.has('json') ? { json: true } : {}),
       },
     };

@@ -36,13 +36,15 @@ import { isGeneralBriefRecord } from '../launch/general-brief.ts';
 import type { Command, Io } from '../io.ts';
 import { contextLine, hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { gateVerdict } from '../permissions/who.ts';
-import { parseDuration, scanAckSeat } from '../send/message-archive.ts';
-import { recordNameOk } from '../send/record.ts';
+import { appendHistory } from '../send/history.ts';
+import { parseDuration, scanAckSeat, seatClearTargetStatus } from '../send/message-archive.ts';
+import { LEAD_ACK_PREFIX, recordNameOk } from '../send/record.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
 import { messageKeyState } from '../store/keys.ts';
 import {
   findRecord,
   legacyHolds,
+  MIN_ID_PREFIX_LEN,
   raiseSecurityRefusal,
   recordHits,
   samePath,
@@ -144,6 +146,7 @@ function receiptPath(session: string, seat: string, id: string, status: 'read' |
 export async function runAck(argv: string[], io: Io, host: AckHost): Promise<number> {
   // Raw argv, before the parser: `--nope --json` must still answer with the structured document.
   const json = hasJsonFlag(argv);
+  if (io.general !== undefined && scopedAck(argv)) return refused(io, json, 'a client acknowledgement needs an exact UUID; scoped acknowledgement is for seats and the owner');
   if (scopedAck(argv)) return await runScopedAck(argv, io, host, json);
   const args = readArgs(argv, [], ['json']);
   if (args.error) return usage(io, json, args.error);
@@ -151,6 +154,9 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
   if (id === undefined) return usage(io, json, '<id> is required');
   if (args.rest.length > 1) return usage(io, json, `unexpected "${args.rest[1]}"`);
   if (!recordNameOk(id)) return usage(io, json, `"${id}" is not a record id`);
+  if (io.general !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    return refused(io, json, 'a client acknowledgement needs an exact UUID; short prefixes are for seats and the owner');
+  }
 
   // The walk decides the one detached refusal — the owner with no terminal. It places a caller
   // under herdr as `unplaced` without reading a session, so it must never decide who may
@@ -190,6 +196,9 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
     if (legacyHolds(root, id)) {
       return refused(io, json, `the message ${id} was written by an earlier build; it is read with team messages, not acknowledged`);
     }
+    if (id.length < MIN_ID_PREFIX_LEN) {
+      return refused(io, json, `record prefix "${id}" is shorter than ${String(MIN_ID_PREFIX_LEN)} characters; pass at least ${String(MIN_ID_PREFIX_LEN)} characters`);
+    }
     return refused(io, json, `no record named ${id} waits in this project's session "${session}"`);
   }
 
@@ -207,6 +216,7 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
   if (lookup.kind === 'refused') return refused(io, json, lookup.why);
   const found = lookup.found;
   const acknowledged = found.record.payload;
+  const resolvedId = acknowledged.id;
 
   // A record a client wrote carries the grant that opened its thread. A plain grant's read
   // belongs to the client inbox, as it always has. A bundle grant whose signed op list carries
@@ -220,7 +230,7 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
       return refused(io, json, `the record's originating grant ${acknowledged.from_client.grant_id} does not verify in the canonical store: ${origin.why}; nothing was written`);
     }
     if (origin.kind === 'grant') {
-      return refused(io, json, `record ${id} was written by a client; its read belongs to the client inbox, not to this command`);
+      return refused(io, json, `record ${resolvedId} was written by a client; its read belongs to the client inbox, not to this command`);
     }
     const grant = origin.grant;
     if (grant.clientId !== acknowledged.from_client.client_id) {
@@ -232,10 +242,10 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
       return refused(io, json, `the record's bundle grant ${grant.grantId} carries ${grant.ops.join(', ') || 'no op'}, not ack; only a bundle that carries ack admits this acknowledgement; nothing was written`);
     }
     if (acknowledged.thread !== acknowledged.id) {
-      return refused(io, json, `record ${id} answers another record; a client thread is the client's own opening record, and only it is acknowledged; nothing was written`);
+      return refused(io, json, `record ${resolvedId} answers another record; a client thread is the client's own opening record, and only it is acknowledged; nothing was written`);
     }
     if (acknowledged.to_id === null) {
-      return refused(io, json, `record ${id} carries no to_id; the seat the bundle grant reaches cannot be matched to it; nothing was written`);
+      return refused(io, json, `record ${resolvedId} carries no to_id; the seat the bundle grant reaches cannot be matched to it; nothing was written`);
     }
     const resolved = resolveBundleSendTarget(host.home, grant, acknowledged.to);
     if (!resolved.ok) return refused(io, json, `the bundle grant's recipient cannot be resolved: ${resolved.why}; nothing was written`);
@@ -244,7 +254,7 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
       return refused(io, json, `the bundle grant's recipient lives in another checkout or session than this record; nothing was written`);
     }
     if (acknowledged.to !== target.recipientSeat || acknowledged.to_id !== target.recipientId) {
-      return refused(io, json, `record ${id} is addressed to "${acknowledged.to}" (${acknowledged.to_id}), not to the recipient the bundle grant reaches, "${target.recipientSeat}" (${target.recipientId}); nothing was written`);
+      return refused(io, json, `record ${resolvedId} is addressed to "${acknowledged.to}" (${acknowledged.to_id}), not to the recipient the bundle grant reaches, "${target.recipientSeat}" (${target.recipientId}); nothing was written`);
     }
     if (me !== target.recipientSeat) {
       return refused(io, json, `seat ${me} is not the recipient of the client thread; only ${target.recipientSeat} acknowledges it; nothing was written`);
@@ -255,25 +265,26 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
   // receipt against that binding: a plain receipt here would hold the receipt name the seat's own
   // turn-start reader needs, so the brief would never be served. Read it there, not here.
   if (isGeneralBriefRecord(acknowledged)) {
-    return refused(io, json, `record ${id} is the general seat brief; it is read by the seat's own turn-start reader, not acknowledged`);
+    return refused(io, json, `record ${resolvedId} is the general seat brief; it is read by the seat's own turn-start reader, not acknowledged`);
   }
   if (acknowledged.session !== session) {
-    return refused(io, json, `record ${id} is bound to session "${acknowledged.session}", not to "${session}"`);
+    return refused(io, json, `record ${resolvedId} is bound to session "${acknowledged.session}", not to "${session}"`);
   }
   if (!samePath(acknowledged.root, root)) {
-    return refused(io, json, `record ${id} is bound to another checkout`);
+    return refused(io, json, `record ${resolvedId} is bound to another checkout`);
   }
 
   const at = host.now().toISOString();
   const publish = () => publishRecordRead({
     dropDir: recordDir(root, session, found.seat),
-    id,
+    id: resolvedId,
     to: found.seat,
     root,
     session,
     home: host.home,
     key,
     at,
+    lead: team.orchestrator,
   });
   let outcome: ReturnType<typeof publishRecordRead>;
   if (clientOrigin === null) {
@@ -307,35 +318,35 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
     outcome = settled.outcome;
   }
   if (outcome.kind === 'held') {
-    const where = receiptPath(session, found.seat, id, outcome.status);
+    const where = receiptPath(session, found.seat, resolvedId, outcome.status);
     const what = outcome.entry === 'file'
       ? `the ${outcome.status} receipt name is held by a file that does not verify for this message`
       : `the ${outcome.status} receipt path is held by something that is not a file`;
     return refused(
       io,
       json,
-      `${id}: not marked read: ${what}`,
+      `${resolvedId}: not marked read: ${what}`,
       `inspect ${where}: it is left as it is, because it may record a read that already happened`,
     );
   }
   if (outcome.kind === 'unwritten') {
     if (outcome.reason === 'changed') {
-      return refused(io, json, `${id}: not marked read: the read receipt name changed while it was being published; run team ack again`);
+      return refused(io, json, `${resolvedId}: not marked read: the read receipt name changed while it was being published; run team ack again`);
     }
     if (outcome.reason === 'write') {
-      return refused(io, json, `${id}: not marked read: the read receipt could not be written; run team ack again once the receipt folder can be written`);
+      return refused(io, json, `${resolvedId}: not marked read: the read receipt could not be written; run team ack again once the receipt folder can be written`);
     }
-    return refused(io, json, `${id}: not marked read: the read receipt could not be made durable; leave it in place, it already records this read`);
+    return refused(io, json, `${resolvedId}: not marked read: the read receipt could not be made durable; leave it in place, it already records this read`);
   }
 
-  const summary = `${id}: read`;
+  const summary = `${resolvedId}: read`;
   return written(io, json, {
     format: 1,
     status: 'read',
     action_summary: summary,
     project: team.project,
     session,
-    record: id,
+    record: resolvedId,
     to: found.seat,
     thread: acknowledged.thread,
     written: outcome.kind === 'published',
@@ -373,8 +384,16 @@ async function runScopedAck(argv: string[], io: Io, host: AckHost, json: boolean
   const { team, root } = loaded;
   const dir = dirname(loaded.path);
   const session = team.session;
-  if (!team.seats.some((member) => member.name === seat)) {
+  // A retired seat is still a seat while its own folder remembers it: the clearance is exactly
+  // what a lead needs after `team down` removed the name from the file. A running seat is not a
+  // target at all; the gate below refuses it once the caller is admitted, so a seat that is not a
+  // lead learns nothing about another seat's lifecycle from this call.
+  const target = seatClearTargetStatus({ agents: dir, session, seat, seats: team.seats });
+  if (target.kind === 'unknown') {
     return usage(io, json, `"${seat}" is not a seat of this team`);
+  }
+  if (target.kind === 'unreadable') {
+    return configuration(io, json, `the team state cannot be read, so "${seat}" cannot be known to have stopped: ${target.reason}`);
   }
   const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
     gateVerdict(who, team, root, host.home, 'archive', at, host.now);
@@ -387,11 +406,24 @@ async function runScopedAck(argv: string[], io: Io, host: AckHost, json: boolean
       `only the owner or a seat this team marks \`leads\` acknowledges another seat's messages; this call is ${describeCaller(judged.caller)}`,
     );
   }
+  if (target.kind === 'running') {
+    return scopedRefused(io, json, `seat ${seat} is running; stop or retire ${seat} before clearing its messages`);
+  }
   const keyState = messageKeyState(host.home);
   if (keyState.kind !== 'key') return scopedRefused(io, json, 'no message key; nothing was written');
 
+  // The receipt is the lead's, not the seat's: its signed `read_by` names who cleared the mail,
+  // and the history line beside it says the same. Neither ever reads as the seat's own read.
+  // The archive gate admits the owner or a seat, so a lead's sweep always has a name here; the
+  // last arm keeps a receipt truthful rather than inventing one if that ever changes.
+  const actor = judged.caller.kind === 'owner'
+    ? 'owner'
+    : judged.caller.kind === 'seat'
+      ? judged.caller.name
+      : judged.caller.kind;
+  const readBy = `${LEAD_ACK_PREFIX}${actor}`;
   const now = host.now();
-  const scan = scanAckSeat({ root, session, seat, key: keyState.key, olderThanMs, now });
+  const scan = scanAckSeat({ root, session, seat, key: keyState.key, olderThanMs, now, lead: team.orchestrator });
   const notDue = scan.stays.length;
   const failures: string[] = [];
   let read = 0;
@@ -407,8 +439,23 @@ async function runScopedAck(argv: string[], io: Io, host: AckHost, json: boolean
         home: host.home,
         key: keyState.key,
         at,
+        readBy,
+        lead: team.orchestrator,
       });
-      if (outcome.kind === 'published' || outcome.kind === 'served') {
+      if (outcome.kind === 'published') {
+        read += 1;
+        // The line the feed reads says who cleared it, never `delivered (read)`: the seat did
+        // not read its mail, and nothing may report that it did.
+        appendHistory(team.project, root, host.home, {
+          ts: at,
+          from: due.from,
+          to: seat,
+          body: due.body,
+          id: due.id,
+          outcome: `cleared by ${actor}`,
+          thread: due.thread,
+        });
+      } else if (outcome.kind === 'served') {
         read += 1;
       } else if (outcome.kind === 'held') {
         const what = outcome.entry === 'file'

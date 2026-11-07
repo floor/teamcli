@@ -180,7 +180,7 @@ function ruleSubjectAdmits(
   for (const held of ruleTeams(home, rule.scope)) {
     if (held.team.project !== rule.team) continue;
     const proof = ownerSubjectProof(io, { home, team: held.team, root: held.root, dir: held.dir });
-    if (proof !== null && proof.role === 'orchestrator') return true;
+    if (proof !== null && proof.role === 'lead') return true;
   }
   return false;
 }

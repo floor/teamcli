@@ -52,6 +52,7 @@ import {
   reportDisplayAgent,
   sessionRunning,
   sessionState,
+  SIDEBAR_TTL_CAP_MS,
   startServer,
   typeText,
   workspaceClose,
@@ -61,6 +62,7 @@ import {
   type HerdrAgent,
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
+import { maybeAutoOrder, realAutoOrderSources } from '../launch/auto-order.ts';
 import { boxHoldsText, deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { executePlan, launchKind, type Host } from '../launch/execute.ts';
 import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
@@ -73,6 +75,8 @@ import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/id
 import { launchRefusal, readEntityModelRule } from '../launch/model-guard.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { formatPlan, registryLaunches, upPlan, type DownSeat, type UpSeat } from '../launch/plan.ts';
+import { launcherCoverRefusal } from '../launch/launcher-cover.ts';
+import { loadTeamLaunchers } from '../launch/resolve-flag.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
@@ -82,12 +86,14 @@ import { logLine } from '../log.ts';
 import { registerInbox } from '../mcp/register.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 import { captureDraft, pasteDraftBack, type DeliverHost } from '../send/deliver.ts';
+import { sidebarPolicy } from '../settings/sidebar-policy.ts';
 import { dropMessage } from '../send/native.ts';
 import { nativePushBindingFor } from '../send/push.ts';
 import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, worktreeOf, type SeatState, type SessionState } from '../state.ts';
-import { recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
+import { pinnedSeatSession, recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
+import { latestCheckpoint } from '../checkpoint/checkpoint.ts';
 import { ensureSeatLine, registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
@@ -98,16 +104,18 @@ import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
-import { seatStart } from '../worktree/place.ts';
+import { placedStartFolders, seatStart } from '../worktree/place.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
 import { realSources as downSources, stateOfPane } from './down.ts';
 import { stopRunning, type RemoveSources } from './remove.ts';
 import type { Launch } from './up.ts';
 
-export const USAGE = `Usage: team restart <seat> [--abandon] [--fresh] [--dry-run] [--session <name>] [--file <path>] [--json]
+export const USAGE = `Usage: team restart <seat> [--abandon] [--fresh] [--resume <cli-session-id>] [--resolve-launch] [--dry-run] [--session <name>] [--file <path>] [--json]
        team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
 
-The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying restart for: it restarts a seat of that one team, as signed, and nothing else. It never prompts, never abandons a pane (--abandon, --fresh, --file and --session are the owner's and take no --client), and is never the owner.
+The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying restart for: it restarts a seat of that one team, as signed, and nothing else. It never prompts, never abandons a pane (--abandon, --fresh, --resume, --file and --session are the owner's and take no --client), and is never the owner.
+
+--resolve-launch takes the named launcher argv as the base line and still places the profile's launch words on it. It is off unless named. A resolution that cannot be placed refuses that seat and starts it nowhere.
 
 Exits 0 when the seat is restarted or the dry-run plan is printed, 1 when restart is refused or fails, 2 when the invocation or team file can't be read.
 `;
@@ -124,6 +132,8 @@ export type RestartSources = RemoveSources & {
   /** Reads the threads a managed Codex endpoint holds, for the seat state and record a fresh
    *  pane could not fill. Absent: this run reads no endpoint and the seat stays pull-only. */
   codexThreads?: (endpoint: string) => Promise<CodexLoadedThreadsRead>;
+  /** The automatic order pass after a ready restart. Absent: the real one. */
+  autoOrder?: typeof maybeAutoOrder;
 };
 
 function aim(session: string): string | undefined {
@@ -143,7 +153,8 @@ const realUpLaunch: Launch = {
     managed: (endpoint) => launchCodexEndpoint(endpoint),
     stop: (endpoint) => stopSeatCodexEndpoint(endpoint),
   },
-  reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
+  reportDisplayAgent: (session, pane, text, ttlMs = SIDEBAR_TTL_CAP_MS) =>
+    reportDisplayAgent(pane, text, aim(session), ttlMs),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
   agentPanes(session) {
@@ -270,18 +281,26 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team'], ['abandon', 'fresh', 'dry-run', 'json']);
-  const clientProblem = args.error === undefined && args.rest.length === 1
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'resume'], ['abandon', 'fresh', 'dry-run', 'json', 'resolve-launch']);
+  const resumeProblem = args.error === undefined && args.values.resume !== undefined
+    ? args.values.resume.trim() === ''
+      ? '--resume requires a session id'
+      : (args.flags.has('abandon') || args.flags.has('fresh'))
+        ? '--resume cannot be combined with --abandon or --fresh'
+        : null
+    : null;
+  const clientProblem = args.error === undefined && args.rest.length === 1 && resumeProblem === null
     ? clientFormProblem(args.values, 'team restart <seat> --client <grant-file> --key <client-key-file>')
-      ?? (args.values.client !== undefined && (args.values.file !== undefined || args.values.session !== undefined || args.flags.has('abandon') || args.flags.has('fresh'))
-        ? "--client restarts a seat of the one team its grant names: --file, --session, --abandon and --fresh are the owner's and take no --client"
+      ?? (args.values.client !== undefined && (args.values.file !== undefined || args.values.session !== undefined || args.values.resume !== undefined || args.flags.has('abandon') || args.flags.has('fresh'))
+        ? "--client restarts a seat of the one team its grant names: --file, --session, --abandon, --fresh and --resume are not for --client"
         : null)
     : null;
-  if (args.error || args.rest.length !== 1 || clientProblem !== null) {
-    const reason = args.error ?? (args.rest.length > 1 ? `unexpected "${plainLine(args.rest[1] ?? '')}"` : args.rest.length === 0 ? 'a seat name is required' : clientProblem ?? 'the invocation cannot be read');
+  if (args.error || args.rest.length !== 1 || resumeProblem !== null || clientProblem !== null) {
+    const reason = args.error ?? resumeProblem ?? (args.rest.length > 1 ? `unexpected "${plainLine(args.rest[1] ?? '')}"` : args.rest.length === 0 ? 'a seat name is required' : clientProblem ?? 'the invocation cannot be read');
     return usage(out, json, reason);
   }
   const name = args.rest[0] ?? '';
+  const pinnedResume = args.values.resume;
   const abandon = args.flags.has('abandon');
   // `--fresh` decides the conversation only: it is not `--abandon`, and never changes what the
   // stop may do to a pane.
@@ -422,8 +441,8 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   const ceilings = ceilingsOf(team);
 
   const mayChange = verdictOf(caller, standingOf(dir, session, caller));
-  // The entity's main orchestrator stands as this team's lead (OD-02): proven by its own head
-  // team's record, live file and recorded pane, never by its seat name. A run that proves it
+  // The entity's main orchestrator stands as, and reaches as, each team lead: proven by its own
+  // head team's record, live file and recorded pane, never by its seat name. A run that proves it
   // passes the gate the way a lead of this team would, and the guard below decides the rest.
   const mainOrchestrator = entityMainOrchestrator(io, { home, root, entity: team.entity });
   // The who-may-run-it gate: the caller, its placement, and the owner rule. Set to exactly
@@ -557,7 +576,34 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     : boundSession.kind === 'bound' && boundSession.recorded.launch
       ? { id: boundSession.recorded.sessionId, launch: boundSession.recorded.launch }
       : undefined;
-  if (ownSession.kind === 'refused') {
+  if (pinnedResume !== undefined) {
+    const pinnedRead = pinnedSeatSession({
+      home,
+      root,
+      herdrSession: session,
+      project: team.project,
+      seat: declared,
+      state: recordedSeat,
+      sessionId: pinnedResume,
+    });
+    if (pinnedRead.kind !== 'bound') {
+      return notReadyRefused(
+        out,
+        json,
+        `${name}: cannot resume session ${plainLine(pinnedResume)} (${pinnedRead.why}); left as it is`,
+      );
+    }
+    const pinnedLaunch = pinnedRead.recorded.launch ?? declared.launch;
+    const carried = resumeCarry(declared.cli, pinnedLaunch, pinnedResume);
+    if (carried.kind !== 'line') {
+      return notReadyRefused(
+        out,
+        json,
+        `${name}: cannot resume session ${plainLine(pinnedResume)} (${carried.why}); left as it is`,
+      );
+    }
+    resume = pinnedResume;
+  } else if (ownSession.kind === 'refused') {
     noResume(ownSession.why);
   } else if (resumeCandidate !== undefined) {
     const recordedPane = recordedSeat?.pane;
@@ -655,6 +701,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     endReason: 'restart',
     dry,
     ...(resume === undefined ? {} : { resume }),
+    ...(pinnedResume === undefined ? {} : { pinnedResume: true }),
     ...(resumeNote === undefined ? {} : { resumeNote }),
     ...(continuity === undefined ? {} : { continuity }),
     // The sign-off this run lifts is cleared in the same write that carries the launch: after
@@ -664,6 +711,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       ? { declare: () => declareRevived(path, name, home), restore: () => declareStopped(path, name, home) }
       : {}),
     ...(boundSession.kind === 'bound' && boundSession.recorded.launch ? { registryLaunch: boundSession.recorded.launch } : {}),
+    ...(args.flags.has('resolve-launch') ? { resolveLaunch: true } : {}),
     now: sources.now,
     sources,
   });
@@ -688,7 +736,23 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       return herdrRefused(out, json);
     case 'run-lock':
       return runLockRefused(out, json, performed.held, session, dir, performed.startedAt);
-    case 'ready':
+    case 'ready': {
+      // The restarted seat sits at the sidebar's end: the automatic order pass runs
+      // detached when the tail is idle, or the answer carries its one hint line. Off
+      // under the sidebar policy's manage word, and silent inside an order pass. The
+      // restart is already earned; this never bends its answer.
+      const orderNote = (sources.autoOrder ?? maybeAutoOrder)(
+        {
+          root, dir, team, session,
+          ...(args.values.file !== undefined ? { file: args.values.file } : {}),
+          manage: sidebarPolicy({ home, root, team, now: sources.now() }).manage,
+        },
+        { ...realAutoOrderSources, workspaces: sources.workspaces, agents: sources.agents },
+      );
+      if (orderNote !== null) {
+        if (!json) out.stdout(`team restart: ${plainText(orderNote)}\n`);
+        notes.push(`team restart: ${orderNote}`);
+      }
       return readyExit(
         out,
         json,
@@ -702,7 +766,10 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         session,
         notes,
         performed.pullOnly,
+        performed.handoverAsked,
+        performed.handover,
       );
+    }
     default: {
       // Every result the launch sequence returns is handled above. This arm is the contract the
       // exit gate reads: a run that ends in a shape this version does not know can only be a bug.
@@ -764,6 +831,8 @@ export type PerformInput = {
   /** The recorded CLI session id the new launch resumes, where a swap keeps the conversation.
    *  Absent when the CLI changed or cannot resume: the run asks for a handover instead. */
   resume?: string;
+  /** True when `resume` was explicitly pinned via `--resume <cli-session-id>`. */
+  pinnedResume?: boolean;
   /** Plain words for the pre-close context line when `resume` is absent: no recorded
    *  conversation, not resuming one with its reason, or a carried one dropped before the launch.
    *  The line then states why the relaunch starts a fresh conversation. */
@@ -790,6 +859,8 @@ export type PerformInput = {
   restore?: () => { ok: true } | { ok: false; why: string };
   now(): Date;
   sources: RestartSources;
+  /** The launch argv comes from the seat's declarative launcher. Absent keeps today's line. */
+  resolveLaunch?: boolean;
 };
 
 /** What the launch's own screen says the new conversation is, read back after ready. */
@@ -814,6 +885,10 @@ export type PerformResult =
       /** The handover file the launch was actually given. Absent when no file was there to read,
        *  so a caller never reports a handover the launch did not get. */
       handover?: string;
+      /** The checkpoint that was on record when no file was there: the ask's own path, so the
+       *  caller can tell the lead the restart ran from the previous checkpoint and it may be
+       *  stale. Absent when no ask stood, and when one stood and the file was there (`handover`). */
+      handoverAsked?: string;
       /** Why the registry holds no record binding this seat, when it does not: the seat runs,
        *  but native delivery cannot resolve it and only pull reaches it. */
       pullOnly?: string;
@@ -876,7 +951,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   for (const problem of placedProblems(team, root, home, undefined, session)) {
     return { kind: 'not-ready', message: problem.message };
   }
-  const start = seatStart({ ...team, session }, next, root, home);
+  const start = seatStart({ ...team, session }, next, root, home, undefined, worktreeOf(recordedSession, next.name)?.path, recordedSession);
   if ('problem' in start) {
     return { kind: 'not-ready', message: start.problem };
   }
@@ -917,6 +992,15 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   const planSeat = buildUpSeat(standing, team, next, start, root, home, liveRules, input.rulesOrigin ?? 'file');
   const tree = worktreeOf(recordedSession, next.name);
   if (tree !== undefined) planSeat.worktree = tree.path;
+  if (input.resolveLaunch === true && input.resume !== undefined) planSeat.resolveSession = input.resume;
+  if (input.resolveLaunch === true) {
+    const covered = launcherCoverRefusal(
+      root,
+      standing.kind === 'verified' ? standing.record.approval.fingerprints.sections : undefined,
+    );
+    if (covered !== null) return { kind: 'not-ready', message: covered };
+  }
+  const launcherDiscovery = input.resolveLaunch === true ? loadTeamLaunchers(root) : undefined;
   if (input.registryLaunch) planSeat.launch = input.registryLaunch;
   const declaredLaunch = planSeat.launch;
   // The recorded conversation, resumed on the new declaration. The profile decides whether the
@@ -976,6 +1060,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       session,
       sessionRunning: true,
       seats: [planSeat],
+      startFolders: placedStartFolders(team.seats, recordedSession),
       watchAlive: true,
       teamFile: launchFile,
       cliHooks: plannedCliHooks(dir, session, [planSeat]),
@@ -984,6 +1069,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       // The home and the team let the plan read the seat's codex-daemon policy, as `team up` does.
       home,
       team,
+      ...(input.resolveLaunch === true ? { resolveLaunch: true as const, launcherDiscovery } : {}),
     });
     // The stop comes before the launch the plan prints; a seat that is not running is a skip.
     const stopPlan: PlanStep[] = inspected.agent
@@ -1017,19 +1103,36 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     // and this one no longer names the conversation this run would start with, so the launch goes
     // out fresh and says why. A restart never resumes an id the current records do not bind.
     if (input.command === 'restart' && resumed !== undefined) {
-      // The same reader the resume was chosen with: the registry binding, refused by a state
-      // that names another id. A state copy that merely names none no longer cancels the resume.
-      const freshOwn = recordedSeatContinuity({
-        home,
-        root,
-        herdrSession: session,
-        seat: declared,
-        state: freshRecorded,
-      });
+      // The same reader the resume was chosen with: the registry binding (or the pinned session
+      // check when `--resume` was passed), refused by a state that names another id. A state copy
+      // that merely names none no longer cancels the resume.
+      const freshOwn = input.pinnedResume
+        ? pinnedSeatSession({
+            home,
+            root,
+            herdrSession: session,
+            project: team.project,
+            seat: declared,
+            state: freshRecorded,
+            sessionId: resumed,
+          })
+        : recordedSeatContinuity({
+            home,
+            root,
+            herdrSession: session,
+            seat: declared,
+            state: freshRecorded,
+          });
       if (freshOwn.kind !== 'bound' || freshOwn.recorded.sessionId !== resumed) {
         const why = freshOwn.kind === 'bound'
           ? 'the seat record changed before the launch'
           : freshOwn.why;
+        if (input.pinnedResume) {
+          return {
+            kind: 'not-ready',
+            message: `${name}: cannot resume session ${plainLine(resumed)} (${why}); left as it is`,
+          };
+        }
         planSeat.launch = declaredLaunch;
         resumed = undefined;
         continuitySession = undefined;
@@ -1081,6 +1184,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     };
     const oldPane = rechecked.agent?.pane ?? freshRecorded?.pane ?? 'none';
     let handoverPath: string | undefined;
+    let handoverAsked: string | undefined;
     let stopObs: Extract<InspectedSeat, { kind: 'ok' }> = rechecked;
 
     if (rechecked.agent) {
@@ -1107,16 +1211,26 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         noteIo.stdout(`${unreadAdvice(name, rechecked.unrecognised)}\n`);
       }
 
+      // The checkpoint the boundary asked for (context reset R2): a caller that named no handover
+      // of its own — a hand restart, the watchdog's `team restart <seat>` — has the seat's
+      // standing ask in this terminal-host session read here, so both entry points get one rule.
+      // A swap that needs a handover names its own path, and that keeps precedence.
+      const checkpoint = input.handover === undefined ? latestCheckpoint(readState(dir), name, session) : null;
+      const handoverAsk = input.handover ?? (checkpoint === null ? undefined : { path: checkpoint.path });
       // The handover is read at the boundary, before the stop: the new conversation is given the
       // file a previous attempt already wrote. Nothing is typed into the old conversation to ask
       // for one. The pane is read again after this, so the stop acts on the screen it is about
       // to close, never the one the preflight read.
-      if (input.handover !== undefined) {
+      if (handoverAsk !== undefined) {
         handoverPath = askForHandover({
           name,
-          path: input.handover.path,
+          path: handoverAsk.path,
           log: (said) => logLine(dir, input.command, who, said, sources.now()),
         });
+        // A checkpoint on record with no file there is the stale case: the launch goes on, and
+        // the result names the ask that was not answered, so the lead is told the checkpoint may
+        // be stale. A swap's own missing handover keeps its existing wording.
+        if (handoverPath === undefined && checkpoint !== null) handoverAsked = checkpoint.path;
         const fresh = sources.agents(session);
         if (fresh === null) return { kind: 'herdr' };
         const seen = inspectSeat(session, name, declared, readState(dir).sessions[session]?.seats[name], fresh, abandon, owner, sources, input.broken === true, input.command === 'restart', continuitySession);
@@ -1186,7 +1300,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       });
       if (priorPane) forgetLaunchedPane(sources.home, priorPane, session);
       // The old pane is closed: the seat's agent is stopped until the relaunch below re-points it.
-      const ended = registerEnd({ home, team, root, by: who, session }, name, 'stopped', input.endReason);
+      // The end event names the ask's path when one stood — file or not — so the chain holds its
+      // checkpoint from both sides.
+      const ended = registerEnd({ home, team, root, by: who, session }, name, 'stopped', input.endReason, handoverPath ?? handoverAsked);
       if (ended) logLine(dir, input.command, who, ended.note, sources.now());
     } else {
       // Nothing was stopped in this run, so the launch's one machine decision is taken here,
@@ -1292,6 +1408,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       session,
       sessionRunning: true,
       seats: [planSeat],
+      startFolders: placedStartFolders(team.seats, recordedSession),
       watchAlive: true,
       teamFile: launchFile,
       cliHooks: installed,
@@ -1302,6 +1419,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       home,
       team,
       ...(sources.upLaunch.codexEndpoint === undefined ? {} : { stateDir: dir }),
+      ...(input.resolveLaunch === true ? { resolveLaunch: true as const, launcherDiscovery } : {}),
     });
     // The old pane is closed: whatever its last turn wrote says nothing about the seat this
     // plan starts.
@@ -1438,6 +1556,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       pane: afterwards.pane,
       readBack: readBackOf(launching, sources.screenText(session, afterwards.pane, next.cli)),
       ...(handoverPath === undefined ? {} : { handover: handoverPath }),
+      ...(handoverAsked === undefined ? {} : { handoverAsked }),
       ...(record.kind === 'bound' ? {} : { pullOnly: bindWhy ?? record.why }),
     };
   } finally {
@@ -1746,6 +1865,7 @@ function buildUpSeat(
     name: seat.name,
     cli: seat.cli,
     launch: seat.launch,
+    ...(seat.launcher !== undefined ? { launcher: seat.launcher } : {}),
     cwd: start.cwd,
     label: workspaceLabel(seat),
     displayAgent: displayAgent(seat),
@@ -1755,7 +1875,7 @@ function buildUpSeat(
     stopped: false,
     // A human's pane: no launch, no key, no line. The plan skips it before any of that.
     ...(seat.human ? { human: true as const } : {}),
-    rules: rulesOf(team, seat, root, undefined, origin),
+    rules: rulesOf(team, seat, root, undefined, origin, home),
     sessionName: seatSessionName(seat, {
       team: teamIdOf(root),
       teamName: team.project,
@@ -1820,7 +1940,15 @@ function hostOf(input: {
       ? { registerInbox: (cli: string, seat: string, cwd: string, session: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, session, teamFile) }
       : {}),
     ...(launch.reportDisplayAgent
-      ? { reportDisplayAgent: (s: string, pane: string, text: string) => launch.reportDisplayAgent!(s, pane, text) }
+      ? {
+          reportDisplayAgent: (s: string, pane: string, text: string) =>
+            launch.reportDisplayAgent!(
+              s,
+              pane,
+              text,
+              sidebarPolicy({ home: input.home, root: input.root, team: input.team, now: input.now() }).ttlMs,
+            ),
+        }
       : {}),
     typeLine: () => false,
     deliverRules: async (s, pane, cli, file, seconds) => {
@@ -1913,7 +2041,7 @@ function hostOf(input: {
         const last_active = patch.stage === 'ready'
           ? input.now().toISOString()
           : (prior.last_active ?? retained?.last_active);
-        const start_cwd = prior.start_cwd ?? (patch.createdWorkspace ? input.startCwd : undefined);
+        const start_cwd = patch.start_cwd ?? prior.start_cwd ?? (patch.createdWorkspace ? input.startCwd : undefined);
         const { waiting: written, effort: patchedEffort, ...rest } = patch;
         const seatState: SeatState = {
           ...prior,
@@ -2191,11 +2319,11 @@ function callerRefused(
 /**
  * The entity's main orchestrator, when this run is it: the lead seat of the team whose project
  * is the entity itself — the head team send admission reads in `onMainCoordinator` — placed in
- * that team's own session on the pane its state records. The reach is the same one OD-02 names
- * for sends, limited to the entity: the target's registry record must name that entity, and the
- * proof comes from the caller's own team's record, live file and state. A name alone is never
- * this proof, and the target team is never the head team this reach comes from: its own
- * orchestrator is judged by this team's map, exactly as before.
+ * that team's own session on the pane its state records. The entity main orchestrator stands as,
+ * and reaches as, each team lead, limited to the entity: the target's registry record must name
+ * that entity, and the proof comes from the caller's own team's record, live file and state. A
+ * name alone is never this proof, and the target team is never the head team this reach comes
+ * from: its own orchestrator is judged by this team's map, exactly as before.
  */
 function entityMainOrchestrator(
   io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
@@ -2444,9 +2572,15 @@ function readyExit(
   session: string,
   notes: readonly string[],
   pullOnly?: string,
+  handoverAsked?: string,
+  handover?: string,
 ): number {
   logLine(dir, 'restart', who, `restarted ${name}; pane ${fromPane} -> ${toPane}`, now);
-  const summary = `team restart: restarted ${plainLine(name)}; pane ${plainLine(fromPane)} -> ${plainLine(toPane)}${pullOnly === undefined ? '' : `; pull-only: ${plainLine(pullOnly)}`}`;
+  // The stale-checkpoint line is the design's own words for the case: the restart ran from the
+  // previous checkpoint, and the lead is told it may be stale. The path is named so the lead can
+  // see the ask the seat never answered.
+  const stale = handoverAsked === undefined ? '' : `; the checkpoint may be stale: no handover at ${plainLine(handoverAsked)}`;
+  const summary = `team restart: restarted ${plainLine(name)}; pane ${plainLine(fromPane)} -> ${plainLine(toPane)}${pullOnly === undefined ? '' : `; pull-only: ${plainLine(pullOnly)}`}${stale}`;
   if (json) {
     writeJson(out, 'team.restart', {
       format: 1 as const,
@@ -2459,6 +2593,8 @@ function readyExit(
       pane: toPane,
       notes,
       ...(pullOnly === undefined ? {} : { pull_only: pullOnly }),
+      ...(handover === undefined ? {} : { handover }),
+      ...(handoverAsked === undefined ? {} : { handover_asked: handoverAsked }),
     });
   } else {
     out.stdout(`${summary}\n`);

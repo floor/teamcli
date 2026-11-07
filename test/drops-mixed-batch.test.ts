@@ -118,7 +118,7 @@ describe('team drops --read over a mixed valid and unverifiable batch', () => {
 
     // Existing contract, kept: a batch with a body in it serves the turn and exits 0.
     expect(result.code).toBe(0);
-    expect(result.out).toBe('the served body\n');
+    expect(result.out).toBe('from lead (team lead):\n\nthe served body\n');
     // Invariants first: no body reaches the turn, and the uncertain entry is never rewritten.
     expect(result.out + result.err).not.toContain('the occupied body');
     expect(snapshot(at)).toBe(before);
@@ -145,7 +145,7 @@ describe('team drops --read over a mixed valid and unverifiable batch', () => {
     const result = await read();
 
     expect(result.code).toBe(0);
-    expect(result.out).toBe('the served body\n');
+    expect(result.out).toBe('from lead (team lead):\n\nthe served body\n');
     expect(result.out + result.err).not.toContain('the occupied body');
     expect(snapshot(at)).toBe(before);
     expect(existsSync(join(dropDir, OCCUPIED))).toBe(true);
@@ -163,7 +163,7 @@ describe('team drops --read over a mixed valid and unverifiable batch', () => {
     const result = await read();
 
     expect(result.code).toBe(0);
-    expect(result.out).toBe('the served body\n');
+    expect(result.out).toBe('from lead (team lead):\n\nthe served body\n');
     expect(result.out + result.err).not.toContain('the occupied body');
     expect(snapshot(at)).toBe(before);
     expect(result.err).toContain(OCCUPIED);
@@ -206,7 +206,7 @@ describe('team drops --read over a mixed valid and unverifiable batch', () => {
     const result = await read();
 
     expect(result.code).toBe(0);
-    expect(result.out).toBe('the served body\n');
+    expect(result.out).toBe('from lead (team lead):\n\nthe served body\n');
     expect(result.out + result.err).not.toContain('the occupied body');
     expect(snapshot(at)).toBe(before);
     expect(existsSync(receiptOf(SERVED))).toBe(true);
@@ -241,7 +241,7 @@ describe('team drops --read over a mixed valid and unverifiable batch', () => {
     const result = await read();
 
     expect(result.code).toBe(0);
-    expect(result.out).toBe('the served body\n');
+    expect(result.out).toBe('from lead (team lead):\n\nthe served body\n');
     expect(result.err).toBe('');
     expect(existsSync(receiptOf(OCCUPIED))).toBe(false);
     const events = readEvents('acme', root, home);

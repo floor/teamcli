@@ -44,11 +44,13 @@ seats:
     display: Grok 4.7
     effort: high
     launch: grok --model grok-4.7
+    cwd: ../own-grok
 ${irisStopped ? '    stopped: true\n' : ''}`;
 }
 
 function trusted(text: string, root: string): string {
-  return text.replace('workspace:', `trust:\n  - ~/.config/team/lobby\n  - ${root}\nworkspace:`);
+  mkdirSync(join(root, '..', 'own-grok'));
+  return text.replace('workspace:', `trust:\n  - .\n  - ../own-grok\nworkspace:`);
 }
 
 function place() {

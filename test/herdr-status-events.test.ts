@@ -1243,4 +1243,46 @@ seats:
     expect(claudeDoneStep.status).toBe('done');
     expect(claudeDoneStep.events.map((ev) => ev.input.kind)).toEqual(['seat.done']);
   });
+
+  test('herdrStatusSource and createSeatStatusEngine use async pane reads in observe, waitSeatOnce, and pollUnreliableSeat without calling synchronous readPane', async () => {
+    const team = parseTeam();
+    let syncReads = 0;
+    let asyncReads = 0;
+    const permissionScreen = 'Allow Bash(git status)?\n❯ 1. Yes\n  2. No\n';
+    const source = herdrStatusSource({
+      waitFn: async () => ({
+        outcome: 'changed',
+        status: 'blocked',
+        pane: 'fixture-pane-2',
+      }),
+      readPane: () => {
+        syncReads += 1;
+        return permissionScreen;
+      },
+      readPaneAsync: async () => {
+        asyncReads += 1;
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        return permissionScreen;
+      },
+      now: () => 5_000,
+    });
+
+    const engine = createSeatStatusEngine({
+      team,
+      source,
+      now: () => 5_000,
+    });
+
+    const waited = await engine.waitSeatOnce('worker-1', 1_000, 'fixture-pane-2');
+    expect(waited.outcome).toBe('changed');
+    expect(waited.events).toHaveLength(1);
+    expect(waited.events[0]!.input.kind).toBe('seat.at-prompt');
+    expect(waited.events[0]!.input.prompt).toBe('permission');
+
+    const polled = await engine.pollUnreliableSeat('jules-1', undefined, 6_000, 'fixture-pane-4');
+    expect(polled.status).toBe('unknown');
+
+    expect(syncReads).toBe(0);
+    expect(asyncReads).toBeGreaterThanOrEqual(2);
+  });
 });

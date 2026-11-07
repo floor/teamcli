@@ -10,7 +10,7 @@
 //     receiver's pane and carries the rule; the same lead to a plain seat of teamcli.io → refused
 //     while `seats_cross_teams` is off, and nothing is typed;
 // (3) `team status --project TeamCLI` covers both teams, each with its session and seat count;
-// (4) a team two projects name is a difference, naming both and the file to fix;
+// (4) a team serving two projects is a membership the team record owns, not a difference;
 // (5) every existing fixture team file still loads unchanged: the same team, and the new project
 //     fields neutral (`inProject` null, `projectLead` false) — while the schema fixtures that
 //     were refused stay refused.
@@ -30,10 +30,11 @@ import type { HerdrAgent } from '../src/herdr.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { readAgents } from '../src/registry/agents.ts';
 import * as projectRegistry from '../src/registry/projects.ts';
-import { readTeams, teamIdOf } from '../src/registry/teams.ts';
+import { readTeams, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import type { NativePane } from '../src/send/native.ts';
+import { updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T01:00:00Z');
 const OWNER = { kind: 'owner' as const };
@@ -87,6 +88,8 @@ function world(): World {
   };
   file(rootA, `format: 1
 project: teamcli
+entity: org-alpha
+lobby: ${lobbyDir(home)}
 in_project: TeamCLI
 project_lead: true
 coordinator: lead
@@ -104,6 +107,8 @@ delivery_order: [mcp-inbox, typed]
 `);
   file(rootB, `format: 1
 project: teamcli.io
+entity: org-alpha
+lobby: ${lobbyDir(home)}
 in_project: TeamCLI
 coordinator: lead-io
 operator: lead-io
@@ -242,7 +247,7 @@ describe('two team files register into one project', () => {
     const idB = teamIdOf(w.rootB);
     const project = projectRegistry.get(w.home, 'teamcli');
     expect(project?.name).toBe('TeamCLI');
-    expect(project?.teams).toEqual([idA, idB]);
+    expect(project?.teams).toEqual([idA, idB].sort());
     expect(project?.lead).toBe(leadAgent?.id);
     const teams = readTeams(w.home);
     expect(teams[idA]?.projectId).toBe(project?.id);
@@ -341,18 +346,37 @@ describe('team status --project TeamCLI', () => {
   });
 });
 
-// ---- (4) a team two projects name ----
+// ---- (4) a team serving two projects ----
 
-describe('a team named in two projects', () => {
-  test('is a difference in team check, naming both and the file to fix', async () => {
+describe('a team serving two projects', () => {
+  test('is a membership the team record owns, and not a project-registry difference', async () => {
     const w = world();
     await registered(w, w.rootA, 'lead');
     const idA = teamIdOf(w.rootA);
-    // The registry's own writer takes both: a file can be edited into this state, and the
-    // refusal is the reader's — `ofTeam` here, and `team check` repeats it.
-    projectRegistry.upsertProject(w.home, 'site', { name: 'Site', teams: [idA], at: NOW.toISOString() });
+    // Membership is the team record's own: the record names its home and the project it serves,
+    // and each project view derives the team list from that record. A legacy project-side
+    // `teams` list no longer decides a membership.
+    projectRegistry.upsertProject(w.home, 'site', { name: 'Site', at: NOW.toISOString() });
+    upsertTeam(w.home, idA, { projects: ['site', 'teamcli'] });
+    expect(projectRegistry.get(w.home, 'site')?.teams).toEqual([idA]);
+    expect(projectRegistry.get(w.home, 'teamcli')?.teams).toEqual([idA]);
+
     const parsed = validateTeamFile(readFileSync(join(w.rootA, '.agents', 'team.yaml'), 'utf8'));
     if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+    // Registration delivers the brief; a settled seat has also read it on its first turn.
+    deliverBriefs({
+      dir: join(w.rootA, '.agents'),
+      root: w.rootA,
+      session: parsed.team.session,
+      seats: parsed.team.seats.map((seat) => seat.name),
+      home: w.home,
+      at: NOW.toISOString(),
+    });
+    updateState(join(w.rootA, '.agents'), (state) => {
+      const session = state.sessions[parsed.team.session];
+      if (session === undefined) throw new Error('the fixture session was not registered');
+      session.watch = { pid: 1, heartbeat: NOW.toISOString() };
+    });
     const quiet: Live = {
       running: true,
       agents: [{ name: 'lead', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null }],
@@ -360,7 +384,7 @@ describe('a team named in two projects', () => {
       screens: { 'w1:p1': CLAUDE_IDLE },
     };
     const io = testIo(w.rootA, OWNER);
-    const code = runTeamCheck({ file: '.agents/team.yaml' }, io, {
+    runTeamCheck({ file: '.agents/team.yaml' }, io, {
       live: () => quiet,
       branch: () => 'main',
       standing: (at) => standingSource(w.home)(at),
@@ -368,9 +392,8 @@ describe('a team named in two projects', () => {
       home: w.home,
     });
     const out = `${io.out}${io.err}`;
-    expect(out).toContain(`difference: the project registry: team ${idA} is named in 2 projects: site, teamcli`);
-    expect(out).toContain('  repair: fix the project registry (~/.config/team/projects.yaml)');
-    expect(code).toBe(1);
+    expect(out).not.toContain('difference: the project registry');
+    expect(out).not.toContain('is named in 2 projects');
   });
 });
 

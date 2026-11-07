@@ -519,7 +519,7 @@ describe('team mcp serve', () => {
     try {
       signed(at, 'lead', LEAD_ID, 'the body');
       const { replies } = await preloaded(at.root, at.home, [call('1', 'inbox_read', { id: LEAD_ID }), call('2', 'inbox_check')]);
-      expect(replies[0]!.result).toEqual({ content: [{ type: 'text', text: 'the body' }] });
+      expect(replies[0]!.result).toEqual({ content: [{ type: 'text', text: 'Codex seat worker (owner):\n\nthe body' }] });
       const receipt = readReceipt(at, 'lead', LEAD_ID);
       expect(receipt.payload).toMatchObject({
         kind: 'receipt',
@@ -629,7 +629,7 @@ describe('an inbox read serves only a record it verified', () => {
       signed(at, 'lead', LEAD_ID, 'the draft is ready');
       const { replies } = await preloaded(at.root, at.home, [call('1', 'inbox_read', { id: LEAD_ID })]);
       expect(replies[0]!.result.isError).toBeUndefined();
-      expect(replies[0]!.result.content[0].text).toBe('the draft is ready');
+      expect(replies[0]!.result.content[0].text).toBe('Codex seat worker (owner):\n\nthe draft is ready');
       const receipt = readReceipt(at, 'lead', LEAD_ID);
       expect(receipt.payload).toMatchObject({ kind: 'receipt', status: 'read', id: LEAD_ID, to: 'lead' });
     } finally {
@@ -903,13 +903,10 @@ describe('the serve is bound to the seat and launch it was started for', () => {
       const gone = await start(EPOCH_ONE, null);
       expect(gone.code).toBe(2);
       expect(gone.io.err).toContain(`--epoch ${JSON.stringify(EPOCH_ONE)} names a launch the seat's state no longer holds`);
-      const unbound = await start(undefined, EPOCH_ONE);
-      expect(unbound.code).toBe(2);
-      expect(unbound.io.err).toContain('seat "lead" has a current brief claim and this server was started without its epoch');
       const moved = await start(EPOCH_ONE, EPOCH_TWO);
       expect(moved.code).toBe(2);
       expect(moved.io.err).toContain(`--epoch ${JSON.stringify(EPOCH_ONE)} is not the seat's current launch epoch`);
-      expect([gone.feed.replies, unbound.feed.replies, moved.feed.replies]).toEqual([[], [], []]);
+      expect([gone.feed.replies, moved.feed.replies]).toEqual([[], []]);
       expect(existsSync(join(at.root, '.agents', 'send-drops', SESSION, 'lead'))).toBe(false);
     } finally {
       at.cleanup();

@@ -1,6 +1,7 @@
 import { format } from './format.ts';
 import { project } from './project.ts';
 import { inProject } from './in_project.ts';
+import { alsoIn } from './also_in.ts';
 import { projectLead } from './project_lead.ts';
 import { bus } from './bus.ts';
 import { entity } from './entity.ts';
@@ -12,6 +13,7 @@ import { machine } from './machine.ts';
 import { rules } from './rules.ts';
 import { identity } from './identity.ts';
 import { workspace } from './workspace.ts';
+import { lead } from './lead.ts';
 import { orchestrator } from './orchestrator.ts';
 import { operator } from './operator.ts';
 import { session } from './session.ts';
@@ -23,6 +25,7 @@ import { watchChecks } from './watch-checks.ts';
 import { seats } from './seats.ts';
 import { deliveryOrder } from './delivery_order.ts';
 import { senderName } from './sender_name.ts';
+import { messaging } from './messaging.ts';
 import { policies } from './policies.ts';
 import { releases } from './releases.ts';
 import { delegates } from './delegate.ts';
@@ -46,6 +49,8 @@ export const SECTIONS: readonly Section[] = [
   // The project the team makes its own above; the project it sits in here. Non-owner and
   // additive, like `entity` and `lobby` below: absent in every file written before Phase 0b.
   inProject,
+  // Served projects add membership, never an owner section or another inheritance chain.
+  alsoIn,
   // The team-side `leads: true`: set by the one team that leads the project `in_project` names,
   // and read by the registry's writers. Non-owner and additive too, and it reads `in_project`, so
   // it runs after it.
@@ -66,6 +71,10 @@ export const SECTIONS: readonly Section[] = [
   rules,
   identity,
   workspace,
+  // The team file's own default lead word, `lead: <seat>`: it names the seat the team leads by
+  // when no seat carries `leads: true`. It runs before the lead's own section, whose value is
+  // the resolved lead either way.
+  lead,
   // The lead's section, canonical name `orchestrator`, declared key `coordinator`: the position,
   // the `after` and the owner bucket stay where they were, under the canonical name.
   orchestrator,
@@ -85,6 +94,9 @@ export const SECTIONS: readonly Section[] = [
   // `delivery_order`, so a file written before it keeps every digest and approval it had. The
   // seat-level word sits on a seat and is read by the seats section above.
   senderName,
+  // The file's word on the store a send leaves for its seats (ADR D8): non-owner and additive,
+  // like `delivery_order`. The seat-level word sits on a seat and is read by the seats section.
+  messaging,
   // Owner-signed team-level policies (Kernel amendment 02 §2.12). Non-owner in the section list
   // so existing approval digests stay intact; each entry carries its own Ed25519 signature.
   policies,

@@ -271,6 +271,8 @@ describe('the turn-start folder read', () => {
   const ID2 = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
   const ID3 = '01234567-89ab-cdef-0123-456789abcdef';
   const HEADER = 'from the owner — admitted by: the owner\n\n';
+  /** A planted record whose verified from is `the owner` opens with that compact header. */
+  const MARK = 'from the owner (owner):\n\n';
   const PANE = 'pane-worker';
 
   let project: string;
@@ -413,9 +415,12 @@ seats:
     const id = readdirSync(dir).find((name) => MESSAGE_ID.test(name));
     if (id === undefined) throw new Error('the send wrote no drop');
 
-    // The end-to-end proof: the installed hook command reads the record, and its body reaches
-    // the turn only after a signed read receipt is on disk.
-    expect(landing(run(command))).toBe(`${HEADER}hello`);
+    // The hook takes the sender from the verified record. This send's claimed from is owner,
+    // so the header is `from owner (owner):`. The opening names "the owner", which is not that
+    // name, and the body is served verbatim under the header.
+    const held = readRecord(join(dir, id), id);
+    if (!held.ok || held.record === null) throw new Error('the drop record does not read');
+    expect(landing(run(command))).toBe(`from owner (owner):\n\n${held.record.payload.body}`);
     expectReadReceipt(dir, id);
     expect(listUnread(dir, { to: SEAT, root: project, session: SESSION }, home)).toEqual([]);
     // The receipt is what says it was handed over: the next turn prints nothing.
@@ -511,7 +516,7 @@ seats:
     const dir = dropsAt();
     plant(ID1, 'hello');
     const command = dropCommand(install());
-    expect(landing(run(command))).toBe('hello');
+    expect(landing(run(command))).toBe(`${MARK}hello`);
     expectReadReceipt(dir, ID1);
     expect(run(command)).toBe('');
   }, 30_000);
@@ -564,7 +569,7 @@ seats:
     const body = `from the owner\n\n$(touch ${join(base, 'surprise')}) \`whoami\` "quoted"`;
     plant(ID1, body);
     const command = dropCommand(install());
-    expect(landing(run(command))).toBe(body);
+    expect(landing(run(command))).toBe(`${MARK}${body}`);
     expect(existsSync(join(base, 'surprise'))).toBe(false);
   }, 30_000);
 
@@ -572,7 +577,7 @@ seats:
     const body = 'a "quoted" line \\ with a backslash\tand a tab\x01 and \x1f\x08\x0c';
     plant(ID1, `${body}\nsecond line`);
     const command = dropCommand(install());
-    expect(landing(run(command))).toBe(`${body}\nsecond line`);
+    expect(landing(run(command))).toBe(`${MARK}${body}\nsecond line`);
   }, 30_000);
 
   test('two messages land as two paragraphs, newest first', () => {
@@ -581,7 +586,7 @@ seats:
     utimesSync(one, new Date(NOW.getTime() - 2_000), new Date(NOW.getTime() - 2_000));
     utimesSync(join(dropsAt(), ID2), new Date(NOW.getTime() - 1_000), new Date(NOW.getTime() - 1_000));
     const command = dropCommand(install());
-    expect(landing(run(command))).toBe('second\n\nfirst');
+    expect(landing(run(command))).toBe(`${MARK}second\n\n${MARK}first`);
   }, 30_000);
 
   test('one turn reads ten messages at most, and the rest wait for the next', () => {

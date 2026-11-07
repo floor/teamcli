@@ -83,7 +83,7 @@ const TEAMS: Record<string, TeamSpec> = {
     project: 'beta',
     entity: 'beta',
     session: 'beta',
-    seats: [{ name: 'beta-lead', role: 'guide', leads: true, nickname: 'hermes' }],
+    seats: [{ name: 'beta-lead', role: 'guide', leads: true, nickname: 'worker' }],
   },
   data: {
     project: 'data',
@@ -314,7 +314,7 @@ describe('cross-team sends inside an entity', () => {
     refused(await send({ team: 'web', seat: 'web-helper' }, 'zeus@api'));
     // Another entity's lead, by its own nickname: the same cross-entity refusal the seat form
     // gets.
-    refused(await send({ team: 'api', seat: 'api-lead' }, 'hermes@beta'));
+    refused(await send({ team: 'api', seat: 'api-lead' }, 'worker@beta'));
   });
 
   test('the lead address resolves to the team\'s lead, and another entity\'s lead is out of reach', async () => {

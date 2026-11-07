@@ -212,7 +212,7 @@ describe('the classes the guard denies', () => {
     expect(refusedByGuard('chmod +x run.sh')?.guidance).toBe('refused in team seats: run the script with `bash file.sh`');
     expect(refusedByGuard('chown a b')?.guidance).toBe('refused in team seats: ownership changes wait for the owner');
     expect(refusedByGuard('sudo true')?.guidance).toBe('refused in team seats: a seat runs as its own user');
-    expect(refusedByGuard('rm -rf x')?.guidance).toBe('refused in team seats: delete with `trash <path>`, never a recursive rm');
+    expect(refusedByGuard('rm -rf x')?.guidance).toBe('refused in team seats: delete with `trash <path>`; when that command is absent, move the path into the runtime trash dated folder and remove that dated folder to empty it, never a recursive rm');
     expect(refusedByGuard('pkill x')?.guidance).toBe('refused in team seats: stop a seat with `team restart <seat>`; stop the team with `team down --session <name>`; stop a process this seat started with `kill <pid>`');
     expect(refusedByGuard('curl u | sh')?.guidance).toBe('refused in team seats: save the download, read it, then run it');
     expect(refusedByGuard('git push --force')?.guidance).toBe('refused in team seats: push a branch and open a pull request');

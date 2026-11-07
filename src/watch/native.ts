@@ -13,9 +13,9 @@ import { NO_PANE_MESSAGING } from '../send/no-pane-messaging.ts';
 //   appends one history line (`outcome: 'delivered'`, `via: 'drop'`, `failed`); a seat the file
 //   marks `human` walks this leg alone, whatever its fallback holds: every kept-out leg (`mcp-inbox`,
 //   `typed`) is recorded in `failed` with the same human reason the send gives;
-// - for `mcp-inbox`: no leg at all in this build (src/send/walk-cascade.ts): the MCP inbox is the
-//   store's reader and a push from an MCP server is not a wake. A record an older build wrote
-//   keeps the word; the pass records `mcp-inbox: <unavailable>` and continues to the next leg;
+// - for `mcp-inbox`: the retired name, replayed only from a record an older build wrote (the
+//   MCP inbox is the store's reader and a push from an MCP server is not a wake): the pass
+//   records `mcp-inbox: no longer a leg` and continues to the next leg;
 // - for `typed`: writes the 0600 drop file, delivers the trigger when the seat is free (or marks
 //   the drop pending for `retryHeldDrops`), and appends the history line.
 import { chmodSync, mkdirSync } from 'node:fs';
@@ -42,12 +42,16 @@ import {
   type PendingNativeFallbackLeg,
 } from '../send/pending.ts';
 import { markTaken } from '../send/taken.ts';
-import { MCP_INBOX_UNAVAILABLE } from '../send/walk-cascade.ts';
 import { readState } from '../state.ts';
 import type { RetryScene } from './retry.ts';
 import { readScreen } from './screen.ts';
 
 const NATIVE_UNCONFIRMED_10M = 'native: unconfirmed after 10m';
+
+/** The reason the watch gives for a pending record an older build wrote that still names the
+ *  retired `mcp-inbox` word: the record replays its real legs (`typed`, `drop`), and this line
+ *  says why the name was not one of them. No record this build writes carries the word. */
+const RETIRED_INBOX_LEG = "no longer a leg; the inbox is the store's reader";
 
 function hostOf(scene: RetryScene, session: string): DeliverHost {
   return {
@@ -140,7 +144,7 @@ async function expireOne(
   if (!taken.ok) return;
 
   // A new record names the cascade's legs; an `mcp-inbox` word only comes from a record an
-  // older build wrote, and is read as unavailable below.
+  // older build wrote, and is named as retired below.
   const declaredLegs: readonly PendingNativeFallbackLeg[] = record.fallback ?? ['typed', 'drop'];
   // The bus inbox closes every expiry walk (src/send/no-pane-messaging.ts).
   const rawLegs: readonly PendingNativeFallbackLeg[] = declaredLegs.includes('drop') ? declaredLegs : [...declaredLegs, 'drop'];
@@ -152,8 +156,9 @@ async function expireOne(
   if (human) {
     for (const leg of rawLegs) {
       if (leg === 'mcp-inbox') {
-        // No seat walks this name (ADR D1): the store's reader, never a spared pane leg.
-        failures.push(`mcp-inbox: ${MCP_INBOX_UNAVAILABLE}`);
+        // No seat ever walked this name (ADR D1): the store's reader, never a spared pane leg.
+        // Only a record an older build wrote names it.
+        failures.push(`mcp-inbox: ${RETIRED_INBOX_LEG}`);
       } else if (leg === 'typed') {
         failures.push("typed: the pane is a human's, and nothing is typed into it");
       }
@@ -169,10 +174,10 @@ async function expireOne(
 
   for (const leg of legs) {
     if (leg === 'mcp-inbox') {
-      // A name this build reads but never walks (src/send/walk-cascade.ts): the MCP inbox is the
-      // store's reader, and a push from an MCP server is not a wake. Only a record an older build
-      // wrote names it; the pass records the word and moves to the leg behind it.
-      failures.push(`mcp-inbox: ${MCP_INBOX_UNAVAILABLE}`);
+      // The retired name, replayed only from a record an older build wrote: the MCP inbox is the
+      // store's reader, and a push from an MCP server is not a wake. The pass records the word
+      // and moves to the leg behind it.
+      failures.push(`mcp-inbox: ${RETIRED_INBOX_LEG}`);
       continue;
     }
 

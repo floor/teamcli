@@ -76,6 +76,8 @@ pointers — is written again from the file, and the session's own record is lef
 save for a launch's id and process identity it is missing: a record a launch that predates them
 left short is completed where the seat stands — the id `team seats` shows, and the identity
 `team doctor`'s "launched before team recorded its process" note names — and nothing is launched.
+That completion is the owner's run's: a seat's run may repeat an identity the record already
+holds and the live pane still matches, never fill one in (see "Who may run it").
 
 The record a refresh writes carries the seat's stable handle, the id the native route binds the
 agent by, so the refresh rebinds one only on proof: the pane's live processes must be the ones the
@@ -107,10 +109,18 @@ declares, and every gate wired to the bridge refuses it what the file says it ho
 | --- | --- |
 | the owner | run it, from a terminal outside herdr; `--session` is the owner's own |
 | a run with no terminal | nothing: `team register: only the owner or a seat of this team runs this, from a terminal outside herdr or its own pane` — a caller outside herdr has no registry record, so no record admits it |
-| a seat of this team | run it: the record it writes belongs to the seat's own team, its own seat's included |
-| a caller the file's `delegates` section names for `up` | run it: a delegate gate that passes admits the record write, exactly as it admits the launch that would have written it |
-| the seat the file's `grant` names for `up`, where the row above does not admit it | run it: the grant gate that admits the owner's `team up` admits the record write, and the write is audited as the grant's; a verified grant that names another seat or pane, or leaves `up` out of its scope, refuses it. The grant is the fallback for a caller the row refused: a run the row admitted is neither refused nor audited by it, and a file with no `grant` section grants nothing. `--session` is refused in the grant's words — the owner's flag |
+| a seat of this team | run it: the record it writes belongs to the seat's own team, its own seat's included; it refreshes a record whose launch identity the live pane still holds, and records no pane root of its own |
+| a caller the file's `delegates` section names for `up` | run it: a delegate gate that passes admits the record write, exactly as it admits the launch that would have written it; a delegate records no pane root either |
+| the seat the file's `grant` names for `up`, where the row above does not admit it | run it: the grant gate that admits the owner's `team up` admits the record write, and the write is audited as the grant's; a verified grant that names another seat or pane, or leaves `up` out of its scope, refuses it. The grant is the fallback for a caller the row refused: a run the row admitted is neither refused nor audited by it, and a file with no `grant` section grants nothing. `--session` is refused in the grant's words — the owner's flag; a granted run records no pane root |
 | anyone else | nothing: `team register: only the owner or a seat of this team registers a running seat; this call is <caller>` |
+
+A pane root — the process identity a launch records — is the launch's own write. The owner's run
+may record one: it adopts a pane, and it completes a launch's record that predates the identity. A
+seat's run, a delegate's and a granted seat's may repeat the identity the record already holds and
+the live pane still matches — a run in the seat's own unchanged pane, the pane a `team restart`
+wrote — and they may do everything else this command does; they may not make a root. A first
+record, a record short of its identity, and a replaced process are each `register.launch-only`, in
+every mode and under `--dry-run` too: dev mode folds the caller gate, never this one.
 
 ## Output and exit codes
 
@@ -161,6 +171,7 @@ its `id` is the contract row for that refusal (`register.caller`, `register.no-s
 | `team register: <name>: pane <pane> holds no process in front of its shell; nothing was registered` | 1 |
 | `team register: <name>: pane <pane> holds no \`<cli>\` process; nothing was registered` | 1 |
 | `team register: <name>: pane <pane> holds a process other than the one its record's launch started; the record was not refreshed` — the refresh has no proven continuity to rebind the record's handle on | 1 |
+| `team register: <name>: pane <pane> is not a process identity this record's launch wrote; only the owner records a pane root, from a terminal outside herdr` — a caller other than the owner would record a pane root: a first record, a record short of its identity, or a replaced process (the owner's run says `register.replaced` on the already path instead) | 1 |
 | `team register: <name>: the id its record holds (<id>) is <seat>'s handle; the record was not refreshed` — another seat's live agent record already carries it | 1 |
 | `team register: <name>: its pane is not the seat at its prompt (<reading>); nothing was registered` | 1 |
 | `team register: pane <pane> is named <other agent> in session "<session>"; --pane names a pane herdr never named, nothing was registered` — `--pane` named a pane herdr already names as another agent | 1 |
@@ -228,8 +239,10 @@ claude-beacon: already registered — pane w1:p1; the record was refreshed from 
 exit 0
 ```
 
-The seat is now `team send`'s and `team down`'s to address. A seat of this team registers its
-session's seats — its own included; a caller outside the team registers nothing:
+The seat is now `team send`'s and `team down`'s to address. A seat of this team refreshes its
+session's seats — its own included — where the live pane still holds the identity the record's
+launch wrote; a seat records no pane root of its own, and a caller outside the team registers
+nothing:
 
 ```console
 $ team register claude-keeper ; echo "exit $?"

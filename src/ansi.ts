@@ -55,6 +55,35 @@ export function stripSgr(text: string): string {
   return text.replace(ESCAPES, '');
 }
 
+/** The styled line with its last `drop` plain characters removed. Escape sequences stay with
+ *  the characters they precede. `drop` of zero returns the line. A `drop` past the end leaves
+ *  the leading escapes and no text. */
+export function dropPlainTail(styled: string, drop: number): string {
+  if (drop <= 0) return styled;
+  ESCAPES.lastIndex = 0;
+  const plain = styled.replace(ESCAPES, '');
+  const keep = Math.max(0, plain.length - drop);
+  let seen = 0;
+  let out = '';
+  let cursor = 0;
+  const take = (chunk: string): boolean => {
+    for (const ch of chunk) {
+      if (seen === keep) return true;
+      out += ch;
+      seen++;
+    }
+    return false;
+  };
+  ESCAPES.lastIndex = 0;
+  for (const match of styled.matchAll(ESCAPES)) {
+    if (take(styled.slice(cursor, match.index))) return out;
+    if (seen < keep) out += match[0];
+    cursor = match.index + match[0].length;
+  }
+  take(styled.slice(cursor));
+  return out;
+}
+
 /** Whether the text carries any SGR styling at all — a colour, faint, bold, anything. */
 export function hasSgr(text: string): boolean {
   return /\x1b\[[0-9;:]*m/.test(text);

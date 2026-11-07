@@ -15,11 +15,13 @@ import { ADD_DELEGATE_EDIT, delegateGate, logDelegated } from '../delegate.ts';
 import { devModeExpiryNote, devModeFileApproval, devModeMark, devModeOwnerLift, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import type { ActingCommand } from '../delegate-types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
+import { maybeAutoOrder, realAutoOrderSources } from '../launch/auto-order.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { removeRulesFile, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
 import { nextFreeSeatNumber, type SeatNumbering } from '../seat-names.ts';
 import { seatNumberingInForce } from '../settings/seat-numbering.ts';
+import { sidebarPolicy } from '../settings/sidebar-policy.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
 import { branchProblem, resultPathProblem } from '../end/until.ts';
 import { copySeat, hasSeat, seatIsStopped } from '../file/lines.ts';
@@ -30,14 +32,14 @@ import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/
 import { derivedTrust, migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
-import { displayAgent, LEAD_NAME, workspaceLabel } from '../file/sections/seats.ts';
+import { DAEMON_NAME, displayAgent, LEAD_NAME, workspaceLabel } from '../file/sections/seats.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { defaultLabel, validateTeamFile } from '../file/validate.ts';
 import { recheckLobby, verifyLobby, type FsReader, type LobbyRefusal, type LobbySeen } from '../lobby/gate.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
 import {
   agentList, agentRename, agentStatus, paneForeground, paneProcesses, paneRead, paneRun, paneShellBack, pressEnter, reportDisplayAgent, sendKey, sessionRunning,
-  sessionState, startServer, typeText, workspaceClose, workspaceCreate, workspaceList, workspacePanes,
+  sessionState, SIDEBAR_TTL_CAP_MS, startServer, typeText, workspaceClose, workspaceCreate, workspaceList, workspacePanes,
   type HerdrAgent, type PaneProcesses,
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
@@ -71,13 +73,16 @@ import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
-import { seatStart, type SeatStart } from '../worktree/place.ts';
+import { placedStartFolders, seatStart, type SeatStart } from '../worktree/place.ts';
 import { registerInbox } from '../mcp/register.ts';
+import { channelLobbyFolder } from '../mcp/launch-config.ts';
 import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
 
 export type AddSources = {
   /** The credential store an owner-seat answer's signer key is confirmed against. Absent: the system one. */
   ownerSeatStore?: OwnerSeatKeyStore;
+  /** Whether a request is presented to the owner seat's Touch ID signer at once. */
+  present?: boolean;
   home: string;
   getuid?(): number;
   fs?: FsReader;
@@ -97,6 +102,8 @@ export type AddSources = {
   // The delegate gate, overridable so a test can hand a delegated run its verdict. Absent: the
   // real gate (`src/delegate.ts`).
   delegateGate?: typeof delegateGate;
+  /** The automatic order pass after a ready launch. Absent: the real one. */
+  autoOrder?: typeof maybeAutoOrder;
 };
 
 const realLaunch: Launch = {
@@ -111,7 +118,8 @@ const realLaunch: Launch = {
     managed: (endpoint) => launchCodexEndpoint(endpoint),
     stop: (endpoint) => stopSeatCodexEndpoint(endpoint),
   },
-  reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
+  reportDisplayAgent: (session, pane, text, ttlMs = SIDEBAR_TTL_CAP_MS) =>
+    reportDisplayAgent(pane, text, aim(session), ttlMs),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
   agentPanes(session) {
@@ -245,29 +253,30 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (!wantsJson) io.stderr(`client grant ${clientRun.grant.grantId}: ${clientRun.grant.clientId} for team ${clientRun.grant.up.project} at ${clientRun.root}, until ${clientRun.grant.expires}\n`);
   }
   const clientText = clientRun === null ? null : `client:${clientRun.grant.clientId}`;
-  // The owner-seat door (src/client/owner-action-step.ts): `--request` asks the owner seat and
-  // returns; `--approval <id>` admits this run when the owner seat signed for exactly it.
+  // The owner-seat door (src/client/owner-action-step.ts): `--request` asks the owner seat after
+  // every validation gate below has passed, so a command that would fail locally never opens an
+  // owner card or prompts Touch ID; `--approval <id>` and a signed charter still admit here.
   // The root it records and admits is the one the record's readers resolve: a checkout's root, or
   // the plain folder itself (the registry record is keyed by that folder). The step's own
   // findRoot alone refused every team whose folder is not a repository.
+  const approvalRefused = (): number => {
+    // exit: add.approval-refused
+    return 1;
+  };
   const seatRoot = findRoot(io.cwd) ?? resolve(io.cwd);
   const seatStep = clientRun !== null && (args.flags.has('request') || args.values.approval !== undefined)
     ? (refuse(io, json, 'add', { id: 'add.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
-    : ownerSeatStep('add', 'team-add', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, { ...sources, root: seatRoot });
-  if (seatStep.kind === 'requested') {
-    // exit: add.approval-requested
-    return 0;
-  }
-  if (seatStep.kind === 'refused') {
-    // exit: add.approval-refused
-    return 1;
-  }
+    : args.flags.has('request') && args.values.approval !== undefined
+      ? (refuse(io, json, 'add', { id: 'add.approval-refused', message: '--request asks the owner seat and --approval runs an answered request: pass one', repair: null }), { kind: 'refused' as const })
+      : ownerSeatStep('add', 'team-add', argv, { request: false, approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, { ...sources, root: seatRoot });
+  if (seatStep.kind === 'refused') return approvalRefused();
   const seatApproved = seatStep.kind === 'admitted';
+  const requesting = args.flags.has('request') && !seatApproved;
   // No create-grant admits a run with no terminal: the record matches the caller's own registry
   // record, and a caller outside herdr has none. This sentence is answered before any file is
   // read, as `down` and `init` ask it; the route names who may run it, so the sentence does not
   // send every reader to the owner.
-  const detached = clientRun !== null || seatApproved ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or an approved delegate', where: 'a terminal outside herdr or its own pane' });
+  const detached = clientRun !== null || seatApproved || requesting ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or an approved delegate', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) {
     refuse(io, json, 'add', { id: 'add.detached', message: detached, repair: null });
     // exit: add.detached
@@ -379,6 +388,15 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.reserved-name
     return 2;
   }
+  // The machine daemon's own reminder sends are named `daemon` in every record and history line
+  // they write, with no registry id, so no new seat may take the word: a seat of that name would
+  // be indistinguishable from the daemon. A file written before this rule may already declare
+  // one; it keeps loading, and re-adding it is a restart, never a new name.
+  if (!temporary && args.rest[0] === DAEMON_NAME && !team.seats.some((seat) => seat.name === DAEMON_NAME)) {
+    out.stderr(`team add: "${DAEMON_NAME}" is reserved: the machine daemon's reminders send under that name, so no new seat takes it as a name\n${USAGE}`);
+    // exit: add.reserved-daemon
+    return 2;
+  }
   // The create-grant, decided on the loaded root: the team this run would change must be under
   // the granted paths. The early detached sentence above stands alone: no record admits a
   // caller with no terminal.
@@ -412,7 +430,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // run. The map's own rows are the judge; a caller it refuses is refused before any standing.
   const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
     gateVerdict(who, team, root, sources.home, 'add', at, sources.now);
-  const mayChange = verdictOf(caller, standingOf(dir, session, caller));
+  const mayChange = requesting ? { kind: 'ok' as const } : verdictOf(caller, standingOf(dir, session, caller));
   // A create-grant the record holds for this loaded root is the run's admission: the ordinary
   // rule's sentence is then not a refusal, and the delegate gate — which the ordinary refusal
   // alone summons — has nothing to replace. Asked only where the ordinary rule has just refused,
@@ -544,7 +562,11 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
   const ceilings = ceilingsOf(team);
 
-  const live = sources.sessionState(session);
+  // A request records the add and starts nothing, so a session the host cannot read is not a
+  // refusal. The approval run reads the session when it adds. Until then the session counts as
+  // absent: no live agents, and no launch.
+  const read = sources.sessionState(session);
+  const live = read === null && requesting ? 'absent' : read;
   if (live === null) {
     refuse(io, json, 'add', { id: 'add.herdr', message: 'herdr doesn\'t answer', repair: null });
     // exit: add.herdr
@@ -570,7 +592,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
 
   const recorded = readState(dir).sessions[session] ?? emptySession();
 
-  const original = readTeamText(path, { home: sources.home ?? homedir() });
+  const original = loaded.text ?? readTeamText(path, { home: sources.home ?? homedir() });
   // The place the refusals below name: the file this run read, or the registry's record when that
   // is the team's source — a seat the team does not declare is absent from that, not from a file
   // a registry team need not have.
@@ -579,8 +601,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const built = temporary
     ? temporarySeat(args.values, original, team, recorded, agents, root, team.workspace.base, sources.home, sources.now(), place)
     : args.values.like !== undefined
-      ? copiedSeat(asked, args.values.like, original, team, sources.home, sources.fs, place)
-      : declaredSeat(asked, original, team, sources.home, sources.fs, place);
+      ? copiedSeat(asked, args.values.like, original, team, sources.home, sources.fs, place, root)
+      : declaredSeat(asked, original, team, sources.home, sources.fs, place, root);
   if ('error' in built) {
     // The builder names the row its refusal is (`add.no-seat`, `add.until`, `add.branch-missing`,
     // …); the plain line is the sentence it always printed, and the repair, when the builder has
@@ -621,7 +643,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // Refusing first would skip that write.
   if (continuity === 'restored' && held?.agent_session && proc) {
     const next = launchedIdentity(proc);
-    if (next) {
+    if (next && !requesting) {
       const sessionId = held.agent_session;
       updateState(dir, (file) => {
         const seat = file.sessions[session]?.seats[built.name];
@@ -672,7 +694,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // still ends here.
   if (delegatePane !== null) {
     const stanza = fingerprints(team).seats[built.name];
-    const inCopy = standing.kind === 'verified' ? approvedFingerprints(standing.record).seats[built.name] : undefined;
+    const inCopy = standing.kind === 'verified' ? approvedFingerprints(standing.record, sources.home).seats[built.name] : undefined;
     let admitted = built.edited === original && inCopy !== undefined && inCopy === stanza;
     // The seat a delegate adds by copy is new to the file, so the record cannot hold it: the
     // source is what is compared, hash for hash with the record's own seat, and the edit is the
@@ -681,7 +703,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // owner's.
     if (!admitted && built.copiedFrom !== undefined && standing.kind === 'verified') {
       const beside = fingerprints(team).seats[built.copiedFrom];
-      const held = approvedFingerprints(standing.record).seats[built.copiedFrom];
+      const held = approvedFingerprints(standing.record, sources.home).seats[built.copiedFrom];
       admitted = held !== undefined && held === beside && copySeat(original, built.copiedFrom, built.name) === built.edited;
     }
     if (!admitted) {
@@ -700,7 +722,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.no-profile
     return 1;
   }
-  if (!temporary && (args.values.model !== undefined || args.values.effort !== undefined) && !ownerRun) {
+  if (!temporary && (args.values.model !== undefined || args.values.effort !== undefined) && !ownerRun && !seatApproved && !requesting) {
     refuse(io, json, 'add', {
       id: 'add.override-owner',
       message: "--model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat",
@@ -777,9 +799,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     return 1;
   }
   // Nothing here is held to the entity's `names.unique` word: an add never sets a new nickname.
-  // A plain `team add` writes `label: <name>`, the seat's own name, and a copy repeats the
-  // source's `nickname:` line, which the file's own check refuses as a duplicate above (exit 2)
-  // before this point. A team file's own wording is the only nickname an add can bring.
+  // A plain `team add` writes `label: <name>`, the seat's own name, and a copy drops the source's
+  // `nickname:` line so the new seat takes no persona. A team file's own wording is the only
+  // nickname an add can bring.
   // The session this run addresses — `--session`, or the caller's own placement — reads its own
   // recorded lobby, which is the file's own unless the run names another.
   const runTeam = { ...prepared.team, session };
@@ -799,10 +821,11 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (json) jsonNotes.push(`team add: ${derived.warning}`);
     else out.stderr(`team add: ${plainText(derived.warning)}\n`);
   }
+  const recordedTree = worktreeOf(recorded, built.name);
   // Where the seat waits: the lobby the gate verified, or a refusal — before the file is edited.
   const start: SeatStart = startProblem
     ? { problem: startProblem }
-    : seatStart(runTeam, built.seat, root, sources.home, verifiedLobby ?? undefined);
+    : seatStart(runTeam, built.seat, root, sources.home, verifiedLobby ?? undefined, recordedTree?.path, recorded);
   if ('problem' in start) {
     refuse(io, json, 'add', { id: 'add.start', message: start.problem, repair: null });
     // exit: add.start
@@ -826,13 +849,14 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     ? launchLineFinding(prepared.team, built.seat, root, {
         onPath: (binary) => sources.doctor.onPath(binary),
         home: sources.doctor.home,
+        state: recorded,
       })
     : typeof resumeCwd === 'string' && resumeCwd !== ''
       ? launchLineFinding(
           prepared.team,
           built.seat,
           root,
-          { onPath: (binary) => sources.doctor.onPath(binary), home: sources.doctor.home },
+          { onPath: (binary) => sources.doctor.onPath(binary), home: sources.doctor.home, state: recorded },
           { cwd: resolve(root, resumeCwd), folder: resumeCwd },
         )
       : {
@@ -896,6 +920,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       : []),
   ]) {
     if (blocksLaunch(finding)) {
+      // A request records the add and starts nothing, so a launch miss does not refuse it.
+      // The approval run reads those misses when it adds.
+      if (requesting) continue;
       // A missing approval record is the live file, the same way `up` reads it. The doctor's
       // never-approved miss is that record's absence, and it does not stop this add.
       if (finding.text.includes('team approve') || finding.text.includes('never approved')) continue;
@@ -988,6 +1015,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const wouldLaunch = planned.stage === undefined || !planned.pane || (planned.stage === 'launched' && !planned.agentLive);
   const seatForPlan = {
     ...planned,
+    ...(recordedTree === undefined ? {} : { worktree: recordedTree.path }),
     ...(launchProblem && wouldLaunch
       ? { launchProblem, ...(launchProblemDetail ? { launchProblemDetail } : {}) }
       : {}),
@@ -1028,6 +1056,14 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     const line = lobbyPretrustLine(trustSeat, sources.home, { write: false, now: sources.now() });
     if (line) return refusePretrust(io, json, built.name, line, dry);
   }
+  if (requesting) {
+    const askedStep = ownerSeatStep('add', 'team-add', argv, { request: true, approval: undefined, dry, json, reason: args.values.reason }, io, { ...sources, root });
+    if (askedStep.kind === 'requested') {
+      // exit: add.approval-requested
+      return 0;
+    }
+    if (askedStep.kind === 'refused') return approvalRefused();
+  }
   if (dry) {
     if (decision.kind === 'unknown') out.stdout(`${plainLine(built.name)}: ${plainText(decision.text)}\n`);
     const preview = upPlan({
@@ -1035,6 +1071,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       session,
       sessionRunning: live === 'running',
       seats: [seatForPlan],
+      startFolders: placedStartFolders(prepared.team.seats, recorded),
+      team: prepared.team,
       watchAlive: true,
       teamFile: launchTeamFile(loaded),
       cliHooks: plannedCliHooks(dir, session, [seatForPlan]),
@@ -1151,7 +1189,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // file, the invalid edit, the pretrust question — returned with the folder as it was.
     if (liftAudit !== null) liftAudit();
 
-    const planSeat = verifiedLobby && seatForPlan.lobby ? { ...seatForPlan, cwd: verifiedLobby } : seatForPlan;
+    const planSeat = verifiedLobby && seatForPlan.lobby ? { ...seatForPlan, cwd: channelLobbyFolder(verifiedLobby, seatForPlan) } : seatForPlan;
     const tree = worktreeOf(readState(dir).sessions[session], planSeat.name);
     if (tree !== undefined) planSeat.worktree = tree.path;
     const who = clientText ?? describeCaller(caller);
@@ -1197,7 +1235,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
       logLine(dir, 'add', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
     }
-    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, teamFile: launchTeamFile(loaded), cliHooks: installed, briefEpochs: currentBriefEpochs(dir, session), watchLabel: watchLabel(prepared.team.project), home: sources.home, team: prepared.team, ...(sources.launch.codexEndpoint === undefined ? {} : { stateDir: dir }) });
+    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], startFolders: placedStartFolders(prepared.team.seats, recorded), watchAlive: true, teamFile: launchTeamFile(loaded), cliHooks: installed, briefEpochs: currentBriefEpochs(dir, session), watchLabel: watchLabel(prepared.team.project), home: sources.home, team: prepared.team, ...(sources.launch.codexEndpoint === undefined ? {} : { stateDir: dir }) });
     // A new seat starts from no reading at all: nothing a previous run left says what it is doing.
     resetCliHookState(dir, session, [planSeat.name]);
     const outcome = { swallowed: false, unknown: false, launched: false };
@@ -1248,6 +1286,23 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     }
     if (launched && built.temporary) {
       recordLedger(storePath(team.project, root, sources.home), [built.seat]);
+    }
+    // The new seat sits at the sidebar's end: the automatic order pass runs detached when
+    // the tail is idle, or the answer carries its one hint line. Off under the sidebar
+    // policy's manage word. The launch is already earned; this never bends its answer.
+    const orderNote = launched && !report.serverFailed && !outcome.swallowed
+      ? (sources.autoOrder ?? maybeAutoOrder)(
+        {
+          root, dir, team: prepared.team, session,
+          ...(args.values.file !== undefined ? { file: args.values.file } : {}),
+          manage: sidebarPolicy({ home: sources.home, root, team: prepared.team, now: sources.now() }).manage,
+        },
+        { ...realAutoOrderSources, workspaces: sources.workspaces, agents: sources.agents },
+      )
+      : null;
+    if (orderNote !== null) {
+      if (json) jsonNotes.push(`team add: ${orderNote}`);
+      else out.stdout(`team add: ${plainText(orderNote)}\n`);
     }
     if (json) {
       if (outcome.swallowed) {
@@ -1302,7 +1357,7 @@ function declaringForm(name: string): string {
 }
 
 function declaredSeat(
-  name: string, current: string, team: TeamFile, home: string, fs: FsReader | undefined, place: string,
+  name: string, current: string, team: TeamFile, home: string, fs: FsReader | undefined, place: string, root?: string,
 ): Built | BuildRefusal {
   const seat = team.seats.find((item) => item.name === name);
   if (!seat) return { id: 'add.no-seat', error: `${place} has no seat ${JSON.stringify(name)}`, repair: declaringForm(name) };
@@ -1315,7 +1370,7 @@ function declaredSeat(
     if (!cleared.ok) return { id: 'add.not-restored', error: `couldn't clear the stopped mark on ${name} in ${place}: ${cleared.why}` };
     edited = cleared.text;
   }
-  const again = validateTeamFile(edited, { home, fs });
+  const again = validateTeamFile(edited, { home, fs, root });
   const restored = again.ok ? again.team.seats.find((item) => item.name === name) : undefined;
   if (!restored) return { id: 'add.not-restored', error: `couldn't put ${name} back into ${place}` };
   return { name, seat: { ...restored, stopped: false }, edited, temporary: undefined };
@@ -1323,12 +1378,13 @@ function declaredSeat(
 
 /**
  * The new declared seat `team add <name> --like <seat>` writes: the file gains one entry, named
- * `name`, that the source describes field for field except for the name, the title and the
- * stopped flag. The copy starts now, so it is written without `stopped: true` and launched like
- * any declared seat. A source that is a human's pane is refused: nothing is launched over it.
+ * `name`, that the source describes field for field except for the name, the title, the nickname
+ * and the stopped flag. The copy starts now, so it is written without `stopped: true` or
+ * `nickname:` and launched like any declared seat. A source that is a human's pane is refused:
+ * nothing is launched over it.
  */
 function copiedSeat(
-  name: string, like: string, current: string, team: TeamFile, home: string, fs: FsReader | undefined, place: string,
+  name: string, like: string, current: string, team: TeamFile, home: string, fs: FsReader | undefined, place: string, root?: string,
 ): Built | BuildRefusal {
   const source = team.seats.find((item) => item.name === like);
   if (!source) return { id: 'add.no-like', error: `${place} has no seat ${JSON.stringify(like)}`, repair: declaringForm(name) };
@@ -1340,14 +1396,14 @@ function copiedSeat(
   if (edited === current || !hasSeat(edited, name)) {
     return { id: 'add.not-restored', error: `couldn't copy ${like} into ${place} as ${name}` };
   }
-  // A copy the file refuses — a second `leads`, `assistant` or nickname — is read here so the
-  // seat carries what the file would say; the validation before the write then refuses it by
-  // name and the file is never touched.
-  const again = validateTeamFile(edited, { home, fs });
+  // A copy the file refuses — a second `leads` or `assistant` — is read here so the seat carries
+  // what the file would say; the validation before the write then refuses it by name and the file
+  // is never touched.
+  const again = validateTeamFile(edited, { home, fs, root });
   const copied = again.ok ? again.team.seats.find((item) => item.name === name) : undefined;
   return {
     name,
-    seat: copied ? { ...copied, stopped: false } : { ...source, name, label: name, stopped: false },
+    seat: copied ? { ...copied, stopped: false } : { ...source, name, label: name, nickname: undefined, stopped: false },
     edited,
     copiedFrom: like,
     temporary: undefined,
@@ -1441,7 +1497,7 @@ function seatPlan(
     // A human's pane: no launch, no key, no line. The plan skips it before any of that.
     ...(seat.human ? { human: true as const } : {}),
     // An option seat's launch line and a message seat's rules file both come from the live file.
-    rules: rulesOf(team, seat, root, undefined, origin),
+    rules: rulesOf(team, seat, root, undefined, origin, home),
     sessionName: seatSessionName(seat, {
       team: teamIdOf(root),
       teamName: team.project,
@@ -1575,7 +1631,15 @@ function hostOf(input: {
       ? { registerInbox: (cli: string, seat: string, cwd: string, session: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, session, teamFile) }
       : {}),
     ...(launch.reportDisplayAgent
-      ? { reportDisplayAgent: (session: string, pane: string, text: string) => launch.reportDisplayAgent!(session, pane, text) }
+      ? {
+          reportDisplayAgent: (session: string, pane: string, text: string) =>
+            launch.reportDisplayAgent!(
+              session,
+              pane,
+              text,
+              sidebarPolicy({ home: input.home, root: input.root, team: input.team, now: input.now() }).ttlMs,
+            ),
+        }
       : {}),
     typeLine: () => false,
     deliverRules: async (session, pane, cli, file, seconds) => {
@@ -1650,6 +1714,7 @@ function hostOf(input: {
     shellBack: (_name, pane) => launch.shellBack?.(session, pane) ?? null,
     agentStatus: (_name, pane) => launch.agentStatus?.(session, pane) ?? null,
     processInfo: (_name, pane) => launch.processInfo?.(session, pane) ?? null,
+    ...(launch.processStartOf ? { processStartOf: launch.processStartOf } : {}),
     sleep: launch.sleep,
     now: () => input.now().getTime(),
     allow(name) {
@@ -1685,7 +1750,7 @@ function hostOf(input: {
         const last_active = patch.stage === 'ready'
           ? input.now().toISOString()
           : (prior.last_active ?? retained?.last_active);
-        let start_cwd = prior.start_cwd;
+        let start_cwd = patch.start_cwd ?? prior.start_cwd;
         if (!start_cwd && patch.createdWorkspace) {
           if (input.inLobby) {
             if (input.verifiedLobby) start_cwd = input.verifiedLobby;

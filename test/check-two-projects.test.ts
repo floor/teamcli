@@ -1,12 +1,13 @@
-// `team check` and the registries (`src/registry/projects.ts`, `src/registry/teams.ts`): a team
-// is named in one project at most, and a team two projects both name is a difference — the
-// registry's own refusal, repeated in the check's line, with the registry file named as the
-// repair. A team no project names is its own project, a machine with no registry has no projects,
-// and a check with no home answers for no registry at all: none of those is a difference. A
-// project is led by one team: when this team declares `project_lead: true`, the project's other
-// teams are read through the team registry, and one more declaring team is a difference. The team
-// registry is read for every team, not only a lead's: an unreadable registry is a difference
-// wherever the check runs.
+// `team check` and the registries (`src/registry/projects.ts`, `src/registry/teams.ts`): project
+// membership is the team record's own — a team names its home project (`projectId`) and the
+// projects it serves (`projects`), and the project views derive their team lists from those
+// records. A project-side `teams` list is diagnostics only, so a team serving two projects is
+// not a difference. A team no project names is its own project, a machine with no registry has
+// no projects, and a check with no home answers for no registry at all: none of those is a
+// difference. A project is led by one team: when this team declares `project_lead: true`, the
+// project's other teams are read through the team registry, and one more declaring team is a
+// difference. The team registry is read for every team, not only a lead's: an unreadable registry
+// is a difference wherever the check runs.
 import { describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -120,6 +121,21 @@ function check(root: string, home: string | undefined): { code: number; out: str
 }
 
 describe('a team and its projects', () => {
+  for (const [extra, message] of [
+    ['also_in: [project-y]\n', 'also_in needs in_project'],
+    ['in_project: project-x\nalso_in: [project-x]\n', 'also_in repeats the home project'],
+    ['also_in: [project-y]\nproject_lead: true\n', 'project_lead needs in_project'],
+  ] as const) {
+    test(`team check refuses ${message}`, () => {
+      const { base, root, home } = place();
+      writeFileSync(join(root, '.agents', 'team.yaml'), TEXT + extra);
+      const { code, out } = check(root, home);
+      expect(code).toBe(2);
+      expect(out).toContain(message);
+      rmSync(base, { recursive: true, force: true });
+    });
+  }
+
   test('a machine with no registry has no projects to answer with', () => {
     const { base, root, home } = place();
     const { code, out } = check(root, home);
@@ -136,26 +152,44 @@ describe('a team and its projects', () => {
     rmSync(base, { recursive: true, force: true });
   });
 
-  test('a team one project names is not a difference', () => {
+  test('a team whose record names one project is not a difference', () => {
     const { base, root, home } = place();
-    upsertProject(home, 'teamcli', { name: 'TeamCLI', teams: [teamIdOf(root)], at: NOW.toISOString() });
+    const id = teamIdOf(root);
+    upsertProject(home, 'teamcli', { name: 'TeamCLI', at: NOW.toISOString() });
+    upsertTeam(home, id, {
+      project: 'acme',
+      session: 'acme',
+      root,
+      projectId: 'teamcli',
+      projects: ['teamcli'],
+      roster: [{ agent: 'agt_0123456789ab', seat: 'lead', role: 'coordinator' }],
+      at: NOW.toISOString(),
+    });
     const { code, out } = check(root, home);
     expect(out).not.toContain('the project registry');
     expect(code).toBe(0);
     rmSync(base, { recursive: true, force: true });
   });
 
-  test('a team two projects name is a difference, naming both and the file to fix', () => {
+  test('a team serving two projects is not a difference: membership is the record\'s own', () => {
     const { base, root, home } = place();
     const id = teamIdOf(root);
-    // The registry's own writer takes both: a file can be edited into this state, and the
-    // refusal is the reader's — `ofTeam` here, and `team check` repeats it.
-    upsertProject(home, 'site', { name: 'Site', teams: [id], at: NOW.toISOString() });
-    upsertProject(home, 'teamcli', { name: 'TeamCLI', teams: [id], at: NOW.toISOString() });
+    // A team record names its home project and the projects it serves; both are memberships the
+    // project views derive, and neither is a difference.
+    upsertProject(home, 'site', { name: 'Site', at: NOW.toISOString() });
+    upsertProject(home, 'teamcli', { name: 'TeamCLI', at: NOW.toISOString() });
+    upsertTeam(home, id, {
+      project: 'acme',
+      session: 'acme',
+      root,
+      projectId: 'teamcli',
+      projects: ['teamcli', 'site'],
+      roster: [{ agent: 'agt_0123456789ab', seat: 'lead', role: 'coordinator' }],
+      at: NOW.toISOString(),
+    });
     const { code, out } = check(root, home);
-    expect(out).toContain(`difference: the project registry: team ${id} is named in 2 projects: site, teamcli`);
-    expect(out).toContain('  repair: fix the project registry (~/.config/team/projects.yaml)');
-    expect(code).toBe(1);
+    expect(out).not.toContain('difference:');
+    expect(code).toBe(0);
     rmSync(base, { recursive: true, force: true });
   });
 
@@ -195,6 +229,35 @@ describe('a team and its projects', () => {
 });
 
 describe('a project and its lead teams', () => {
+  test('a home lead may serve another project whose lead is not counted against the home', () => {
+    const { base, root, home } = place(`${LEAD}also_in: [Other]\n`);
+    const other = sibling(base, SIBLING.replace('in_project: TeamCLI', 'in_project: Other'));
+    upsertTeam(home, other.id, {
+      project: 'site',
+      session: 'site',
+      root: other.root,
+      projectId: 'other',
+      projects: ['other', 'teamcli'],
+      at: NOW.toISOString(),
+    });
+    upsertTeam(home, teamIdOf(root), {
+      project: 'teamcli',
+      session: 'teamcli',
+      root,
+      projectId: 'teamcli',
+      projects: ['teamcli', 'other'],
+      roster: [{ agent: 'agt_0123456789ab', seat: 'lead', role: 'coordinator', leads: true }],
+      at: NOW.toISOString(),
+    });
+    upsertProject(home, 'teamcli', { name: 'TeamCLI', at: NOW.toISOString() });
+    upsertProject(home, 'other', { name: 'Other', at: NOW.toISOString() });
+    const { code, out } = check(root, home);
+    expect(out).not.toContain('lead teams');
+    expect(out).not.toContain('is named in 2 projects');
+    expect(code, out).toBe(0);
+    rmSync(base, { recursive: true, force: true });
+  });
+
   test('a lead team whose project is not registered has nothing to compare', () => {
     const { base, root, home } = place(LEAD);
     const { code, out } = check(root, home);
@@ -206,8 +269,15 @@ describe('a project and its lead teams', () => {
   test('one team declaring the lead is not a difference', () => {
     const { base, root, home } = place(LEAD);
     const other = sibling(base, SIBLING_QUIET);
-    upsertTeam(home, other.id, { project: 'site', session: 'site', root: other.root, at: NOW.toISOString() });
-    upsertProject(home, 'teamcli', { name: 'TeamCLI', teams: [teamIdOf(root), other.id], at: NOW.toISOString() });
+    upsertTeam(home, other.id, {
+      project: 'site',
+      session: 'site',
+      root: other.root,
+      projectId: 'teamcli',
+      projects: ['teamcli'],
+      at: NOW.toISOString(),
+    });
+    upsertProject(home, 'teamcli', { name: 'TeamCLI', at: NOW.toISOString() });
     const { code, out } = check(root, home);
     expect(out).not.toContain('lead teams');
     expect(code).toBe(0);
@@ -217,8 +287,15 @@ describe('a project and its lead teams', () => {
   test('two teams declaring the lead are a difference, naming both', () => {
     const { base, root, home } = place(LEAD);
     const other = sibling(base);
-    upsertTeam(home, other.id, { project: 'site', session: 'site', root: other.root, at: NOW.toISOString() });
-    upsertProject(home, 'teamcli', { name: 'TeamCLI', teams: [teamIdOf(root), other.id], at: NOW.toISOString() });
+    upsertTeam(home, other.id, {
+      project: 'site',
+      session: 'site',
+      root: other.root,
+      projectId: 'teamcli',
+      projects: ['teamcli'],
+      at: NOW.toISOString(),
+    });
+    upsertProject(home, 'teamcli', { name: 'TeamCLI', at: NOW.toISOString() });
     const { code, out } = check(root, home);
     expect(out).toContain('difference: the project TeamCLI has 2 lead teams: teamcli, site');
     expect(out).toContain('  repair: take "project_lead: true" off all but one of them');
@@ -226,11 +303,19 @@ describe('a project and its lead teams', () => {
     rmSync(base, { recursive: true, force: true });
   });
 
-  test('a team the registry does not know is not counted', () => {
+  test('a team record whose checkout holds no file is not counted', () => {
     const { base, root, home } = place(LEAD);
-    // The project names a team ID with no record: the check cannot find its file, and says
-    // nothing rather than guessing.
-    upsertProject(home, 'teamcli', { name: 'TeamCLI', teams: [teamIdOf(root), 'unheard-of'], at: NOW.toISOString() });
+    // The record joins the project but its root holds no team file: the check cannot read its
+    // claim, and says nothing rather than guessing.
+    upsertTeam(home, 'unheard-of', {
+      project: 'site',
+      session: 'site',
+      root: join(base, 'unheard-of'),
+      projectId: 'teamcli',
+      projects: ['teamcli'],
+      at: NOW.toISOString(),
+    });
+    upsertProject(home, 'teamcli', { name: 'TeamCLI', at: NOW.toISOString() });
     const { out } = check(root, home);
     expect(out).not.toContain('lead teams');
     rmSync(base, { recursive: true, force: true });
@@ -239,8 +324,15 @@ describe('a project and its lead teams', () => {
   test('a sibling whose file names another project is not counted', () => {
     const { base, root, home } = place(LEAD);
     const other = sibling(base, SIBLING.replace('in_project: TeamCLI', 'in_project: Other'));
-    upsertTeam(home, other.id, { project: 'site', session: 'site', root: other.root, at: NOW.toISOString() });
-    upsertProject(home, 'teamcli', { name: 'TeamCLI', teams: [teamIdOf(root), other.id], at: NOW.toISOString() });
+    upsertTeam(home, other.id, {
+      project: 'site',
+      session: 'site',
+      root: other.root,
+      projectId: 'teamcli',
+      projects: ['teamcli'],
+      at: NOW.toISOString(),
+    });
+    upsertProject(home, 'teamcli', { name: 'TeamCLI', at: NOW.toISOString() });
     const { out } = check(root, home);
     expect(out).not.toContain('lead teams');
     rmSync(base, { recursive: true, force: true });

@@ -3,15 +3,75 @@
 // nicknames. Read-only, like the rest of the configuration readers: this writes nothing, runs
 // nothing and opens no pane; the `names.unique` word has its own writer in
 // `src/config/entity-edit.ts`.
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { parseYaml, type YamlEntry, type YamlNode } from './yaml.ts';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs';
+import { dirname, join } from 'node:path';
+import { editedRecordText, getAt, withValue } from './config/team-record.ts';
+import { leadWordProblem } from './lead.ts';
+import { parseYaml, toValue, type YamlEntry, type YamlNode, type YamlValue } from './yaml.ts';
 import { livenessMap } from './settings/declared.ts';
 import type { StateThresholds } from './settings/inherit.ts';
 
 /** The owner's entities file: `<home>/.config/team/entities.yaml`, one entry per entity. */
 export function entitiesPath(home: string): string {
   return join(home, '.config', 'team', 'entities.yaml');
+}
+
+/** The lock file serializing every read-modify-write of `<home>/.config/team/entities.yaml`. */
+export function entitiesLockPath(home: string): string {
+  return `${entitiesPath(home)}.lock`;
+}
+
+const LOCK_WAIT_MS = 5000;
+const LOCK_STALE_MS = 15000;
+
+/**
+ * Single lock for `<home>/.config/team/entities.yaml` (`entities.yaml.lock`).
+ * Every read-modify-write of `entities.yaml` (`writeEntityRulesSet`, `runEntityRecordEdit`,
+ * and `writeEntityPolicyEntry`) runs inside `lockedEntities` and re-reads `entities.yaml`
+ * under the lock. Fixed lock order with `projects.yaml`: `entities.yaml.lock` before
+ * `projects.yaml.lock`.
+ */
+export function lockedEntities<T>(home: string, work: () => T): T {
+  const path = entitiesLockPath(home);
+  mkdirSync(dirname(path), { recursive: true });
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      const fd = openSync(path, 'wx');
+      writeSync(fd, `${process.pid}\n`);
+      closeSync(fd);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      try {
+        if (Date.now() - statSync(path).mtimeMs > LOCK_STALE_MS) unlinkSync(path);
+      } catch {
+        // gone already, or taken by another waiter: look again
+      }
+      if (Date.now() > deadline) throw new Error(`${path} is held by another run`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+  try {
+    return work();
+  } finally {
+    try {
+      unlinkSync(path);
+    } catch {
+      // already removed as stale
+    }
+  }
 }
 
 /**
@@ -31,7 +91,15 @@ function entityEntries(home: string): YamlEntry[] {
   } catch {
     return [];
   }
-  return root.kind === 'map' ? root.entries : [];
+  if (root.kind !== 'map') return [];
+  if (
+    root.entries.length === 1 &&
+    root.entries[0]?.key === 'entities' &&
+    root.entries[0].value.kind === 'map'
+  ) {
+    return root.entries[0].value.entries;
+  }
+  return root.entries;
 }
 
 /**
@@ -118,6 +186,30 @@ export function namesUniqueFor(home: string | undefined, entity: string | null):
   return declaredNamesUnique(home).get(entity) ?? NICKNAME_SCOPE_DEFAULT;
 }
 
+/** One entity's `lead:` word: a seat name, none, or why the entry's word does not read. */
+export type EntityLead = { ok: true; lead: string | null } | { ok: false; why: string };
+
+/**
+ * The entity's default lead, from its entry's `lead:` field: `<entity>: { lead: <seat> }`. The
+ * entity level of the lead chain: the word names a seat in every team of the entity
+ * unless the home project or the team file names another. Absent when the file or the entry is
+ * absent, or the entry declares no word — the entry is the owner's own, and only a word it
+ * actually writes is read. A word it writes that is not a seat name is refused, never read as no
+ * word, so a typo does not silently move the lead to a wider level.
+ */
+export function declaredEntityLead(home: string, entity: string | null): EntityLead {
+  if (entity === null) return { ok: true, lead: null };
+  const entry = entityEntries(home).find((candidate) => candidate.key === entity);
+  if (entry === undefined || entry.value.kind !== 'map') return { ok: true, lead: null };
+  const field = entry.value.entries.find((candidate) => candidate.key === 'lead');
+  if (field === undefined) return { ok: true, lead: null };
+  const value = field.value.kind === 'scalar' ? field.value.value : undefined;
+  if (typeof value !== 'string') return { ok: false, why: `entity "${entity}" lead must be one seat name` };
+  const problem = leadWordProblem(value);
+  if (problem !== null) return { ok: false, why: `entity "${entity}" lead ${problem}` };
+  return { ok: true, lead: value };
+}
+
 /** One entity's `clients:` word: seats by client id, or why the map does not read. */
 export type DeclaredClients = { ok: true; clients: Record<string, string[]> } | { ok: false; why: string };
 
@@ -164,3 +256,146 @@ function readClients(node: YamlNode): DeclaredClients {
   }
   return { ok: true, clients };
 }
+
+/**
+ * Each entity's declared standing rules (`<entity>.rules`), in the order the file lists them.
+ * Rules are text: non-empty string scalars under `rules:`.
+ */
+export function declaredEntityRules(home: string): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const entry of entityEntries(home)) {
+    if (entry.value.kind !== 'map') continue;
+    const rules = entry.value.entries.find((candidate) => candidate.key === 'rules');
+    if (rules === undefined || rules.value.kind !== 'seq') continue;
+    const list: string[] = [];
+    for (const item of rules.value.items) {
+      if (item.kind !== 'scalar' || typeof item.value !== 'string') continue;
+      const line = item.value.trim();
+      if (line !== '') list.push(line);
+    }
+    if (list.length > 0) out.set(entry.key, list);
+  }
+  return out;
+}
+
+/** One entity's declared rules at `home`, or an empty list when none are set. */
+export function entityRules(home: string | undefined, entity: string | null): string[] {
+  if (home === undefined || entity === null) return [];
+  return declaredEntityRules(home).get(entity) ?? [];
+}
+
+export type RulesEditPlan = {
+  path: string;
+  before: string;
+  after: string;
+  diff: string;
+  changed: boolean;
+  kept: boolean;
+};
+
+function renderLineDiff(path: string, before: string, after: string): string {
+  if (before === after) return `nothing changed in ${path}`;
+  const beforeLines = before === '' ? [] : before.replace(/\n$/, '').split('\n');
+  const afterLines = after === '' ? [] : after.replace(/\n$/, '').split('\n');
+  const out: string[] = [`--- ${path}`, `+++ ${path}`];
+  const max = Math.max(beforeLines.length, afterLines.length);
+  for (let i = 0; i < max; i += 1) {
+    const b = beforeLines[i];
+    const a = afterLines[i];
+    if (b === a && b !== undefined) continue;
+    if (b !== undefined) out.push(`- ${b}`);
+    if (a !== undefined) out.push(`+ ${a}`);
+  }
+  return out.join('\n');
+}
+
+function isRecordMap(value: YamlValue): value is { [key: string]: YamlValue } {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Plan setting `<entity>.rules` in `<home>/.config/team/entities.yaml` without writing to disk.
+ * Used for `--dry-run` and before applying an owner write.
+ */
+export function planEntityRulesSet(home: string, entity: string, rules: string[]): RulesEditPlan {
+  const path = entitiesPath(home);
+  const cleaned = rules.map((r) => r.trim()).filter((r) => r.length > 0);
+  const before = existsSync(path) ? readFileSync(path, 'utf8') : '';
+  if (before === '') {
+    const root: YamlValue = { [entity]: { rules: cleaned } };
+    const edited = editedRecordText('', [entity, 'rules'], cleaned, root);
+    return {
+      path,
+      before,
+      after: edited.text,
+      diff: renderLineDiff(path, before, edited.text),
+      changed: true,
+      kept: edited.kept,
+    };
+  }
+  const parsed = toValue(parseYaml(before));
+  if (!isRecordMap(parsed)) {
+    throw new Error(`${path}: expected a map of entities`);
+  }
+  const hasWrapper =
+    Object.keys(parsed).length === 1 &&
+    Object.hasOwn(parsed, 'entities') &&
+    isRecordMap(parsed.entities as YamlValue);
+  const recordPath = hasWrapper ? ['entities', entity, 'rules'] : [entity, 'rules'];
+  const changed = withValue(parsed, recordPath, cleaned);
+  if (!changed.ok) {
+    throw new Error(`entity "${entity}" rules: ${changed.why}`);
+  }
+  if (!changed.changed) {
+    return {
+      path,
+      before,
+      after: before,
+      diff: `nothing changed in ${path}`,
+      changed: false,
+      kept: true,
+    };
+  }
+  const edited = editedRecordText(before, recordPath, cleaned, changed.root);
+  return {
+    path,
+    before,
+    after: edited.text,
+    diff: renderLineDiff(path, before, edited.text),
+    changed: true,
+    kept: edited.kept,
+  };
+}
+
+/**
+ * Write `<entity>.rules` in `<home>/.config/team/entities.yaml` (or return the plan without writing
+ * when `opts.dryRun` is true). Acquires `entities.yaml.lock` via `lockedEntities` and re-reads
+ * `entities.yaml` under the lock before writing.
+ */
+export function writeEntityRulesSet(
+  home: string,
+  entity: string,
+  rules: string[],
+  opts: { dryRun?: boolean } = {},
+): RulesEditPlan & { written: boolean } {
+  if (opts.dryRun) {
+    const plan = planEntityRulesSet(home, entity, rules);
+    return { ...plan, written: false };
+  }
+  return lockedEntities(home, () => {
+    const plan = planEntityRulesSet(home, entity, rules);
+    if (!plan.changed) {
+      return { ...plan, written: false };
+    }
+    mkdirSync(dirname(plan.path), { recursive: true });
+    let mode = 0o600;
+    try {
+      mode = statSync(plan.path).mode & 0o777;
+    } catch {}
+    const tmp = `${plan.path}.${process.pid}.tmp`;
+    writeFileSync(tmp, plan.after, { mode });
+    renameSync(tmp, plan.path);
+    return { ...plan, written: true };
+  });
+}
+

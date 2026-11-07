@@ -15,7 +15,8 @@ import type { HerdrAgent } from '../src/herdr.ts';
 import { readHistory } from '../src/send/history.ts';
 import { triggerLine, type NativePane } from '../src/send/native.ts';
 import { readPending } from '../src/send/pending.ts';
-import { readTaken, takenDropPath, TAKEN_IDLE_GRACE_MS } from '../src/send/taken.ts';
+import { signReceiptPayload, writeReceipt } from '../src/send/record.ts';
+import { markTaken, readTaken, takenDropPath, TAKEN_IDLE_GRACE_MS } from '../src/send/taken.ts';
 import type { Live } from '../src/status/compare.ts';
 import { retryHeldDrops, type RetryScene, type RetrySources } from '../src/watch/retry.ts';
 import { confirmTakenDrops } from '../src/watch/taken.ts';
@@ -172,6 +173,23 @@ function dropDirOf(made: World): string {
   return join(made.dir, 'send-drops', 'acme', 'lead');
 }
 
+/** The receipt a lead's sweep writes for a stopped seat: a signed `read` receipt whose `read_by`
+ *  names the clearer, never the seat. */
+function clearedByHook(made: World, id: string, by = 'owner'): void {
+  mkdirSync(dropDirOf(made), { recursive: true });
+  const written = writeReceipt(dropDirOf(made), signReceiptPayload({
+    kind: 'receipt',
+    status: 'read',
+    id,
+    to: 'lead',
+    root: realpathSync(made.root),
+    session: 'acme',
+    at: NOW.toISOString(),
+    read_by: `lead-ack:${by}`,
+  }, made.home), made.home);
+  if (!written.ok) throw new Error(written.reason);
+}
+
 /** A send in a scene that used to leave a taken record: the drop is the delivery, no taken
  *  record is written, and the pane is typed nothing. */
 async function sendTaken(made: World, one: Pane): Promise<string> {
@@ -205,6 +223,35 @@ describe('a taken delivery, confirmed later', () => {
 
     expect(readTaken(dropDirOf(made))).toEqual([]);
     expect(at.said).toEqual([]);
+  });
+
+  test('a taken line a lead cleared is dropped quietly, never filed as the seat\'s read', async () => {
+    // An old build's taken marker beside a message a lead has since swept: the clearance settles
+    // it. Nothing is typed, and no history line calls the seat's address a reader.
+    const made = world();
+    const id = 'ab1c2d3e-4f50-4617-8899-aabbccddeeff';
+    markTaken(dropDirOf(made), { id, from: 'owner', to: 'lead', body: 'stale mail\n', ts: NOW.toISOString(), before: 'idle' });
+    clearedByHook(made, id);
+    const one = pane(claudeBox(''));
+    const at = scene(made, one, NOW);
+
+    confirmTakenDrops(at);
+
+    expect(readTaken(dropDirOf(made))).toEqual([]);
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(at.said).toEqual(['lead: a send from owner was cleared by owner']);
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok).toBe(true);
+    if (!history.ok) return;
+    expect(history.entries).toEqual([{
+      ts: NOW.toISOString(),
+      from: 'owner',
+      to: 'lead',
+      body: 'stale mail\n',
+      id,
+      outcome: 'cleared by owner',
+    }]);
   });
 });
 

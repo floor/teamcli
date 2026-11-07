@@ -282,6 +282,44 @@ describe('reading', () => {
     expect(agent?.launch).toContain('…');
   });
 
+  for (const field of ['team', 'seat', 'session'] as const) {
+    for (const value of ['123456789012', '12e45', '0x1f']) {
+      test(`an unquoted numeric reach.${field} ${value} refuses with a quoting repair`, () => {
+        const agent = registerAgent(home, init());
+        const path = join(agentsDir(home), `${agent.id}.yaml`);
+        const before = readFileSync(path, 'utf8').replace(new RegExp(`^  ${field}: .*`, 'm'), `  ${field}: ${value}`);
+        writeFileSync(path, before);
+        const repair = `reach.${field} must be text: quote it`;
+        expect(() => getAgent(home, agent.id)).toThrow(repair);
+        expect(() => readAgents(home)).toThrow(repair);
+        expect(readFileSync(path, 'utf8')).toBe(before);
+      });
+
+      test(`a quoted numeric reach.${field} ${value} keeps its exact spelling`, () => {
+        const agent = registerAgent(home, init({ reach: { ...init().reach, [field]: value } }));
+        expect(getAgent(home, agent.id)?.reach[field]).toBe(value);
+        expect(readAgents(home)[0]?.reach[field]).toBe(value);
+      });
+    }
+  }
+
+  for (const field of ['model', 'version'] as const) {
+    test(`an unquoted numeric signing.${field} retains display compatibility`, () => {
+      const agent = registerAgent(home, init());
+      const path = join(agentsDir(home), `${agent.id}.yaml`);
+      writeFileSync(path, readFileSync(path, 'utf8').replace(new RegExp(`^  ${field}: .*`, 'm'), `  ${field}: 5.5`));
+      expect(getAgent(home, agent.id)?.signing[field]).toBe('5.5');
+    });
+  }
+
+  test('a numeric signing role is refused rather than coerced', () => {
+    const agent = registerAgent(home, init());
+    const path = join(agentsDir(home), `${agent.id}.yaml`);
+    writeFileSync(path, readFileSync(path, 'utf8').replace('  role: "builder"', '  role: 123'));
+    expect(getAgent(home, agent.id)).toBeNull();
+    expect(readAgents(home)).toEqual([]);
+  });
+
   test('an unquoted version like 5.5 reads as text', () => {
     const dir = agentsDir(home);
     const agent = registerAgent(home, init());

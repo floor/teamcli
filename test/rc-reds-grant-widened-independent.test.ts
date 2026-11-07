@@ -218,7 +218,7 @@ describe('fix/rc-reds-grant-widened independent verification', () => {
 
   test('probe 3: option values are never read as flags (daemon --inherited, order --file/--session, down --session)', () => {
     // 3a. VALUED entries for daemon, order, and trace match contract/cli.json:
-    expect(VALUED.daemon).toEqual(['inherited', 'root', 'route', 'started-by']);
+    expect(VALUED.daemon).toEqual(['home', 'inherited', 'root', 'route', 'started-by']);
     expect(VALUED.order).toEqual(['file', 'session']);
     expect(VALUED.trace).toEqual([]);
 
@@ -276,12 +276,13 @@ describe('fix/rc-reds-grant-widened independent verification', () => {
   });
 
   test('probe 4: wildcards admit order and trace immediately and follow the unreleased-ops rule', () => {
-    // 4a. Every command in the dispatcher is in GENERAL_OPS, and no op is unshipped after 0.5.12:
+    // 4a. Every command in the dispatcher is in GENERAL_OPS. An op no release has shipped stays
+    // unreleased, so an older wildcard does not gain it. analyse, checkpoint and show have no release yet.
     for (const cmd of Object.keys(commands)) {
       expect(GENERAL_OPS as readonly string[]).toContain(cmd);
     }
     const unreleased = GENERAL_OPS.filter((op: GeneralOp) => OP_FIRST_SHIPPED[op] === null).sort();
-    expect(unreleased).toEqual([]);
+    expect(unreleased).toEqual(['analyse', 'checkpoint', 'show']);
 
     // 4b. A wildcard grant signed at v0.5.11 admits `order` and `trace` right now, and reports the
     // four ops 0.5.12 first shipped as having shipped in a later release:

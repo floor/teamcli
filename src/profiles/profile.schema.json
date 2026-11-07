@@ -181,6 +181,15 @@
       "enum": ["screen"],
       "description": "optional: the one wake a send may type into this CLI's pane; screen types one trigger line into an empty idle box seen on two reads and calls the send delivered only when the profile's working screen shows; absent, the typed leg never runs for this CLI"
     },
+    "typed_wake_settle_ms": {
+      "type": "integer",
+      "minimum": 150,
+      "description": "optional: the space in milliseconds between the typed wake's two opening reads, never below 150 (one host read on a loaded host); absent, the measured default of 150; refused unless typed_wake is declared"
+    },
+    "wake": {
+      "enum": ["agent-prompt"],
+      "description": "optional: how a declared typed wake is handed to the pane; agent-prompt asks the terminal host to prompt the agent and types nothing and presses no Enter; absent, the wake types the line and presses Enter; refused unless typed_wake is declared"
+    },
     "read_hint": {
       "type": "string", "minLength": 1, "maxLength": 60,
       "pattern": "^\\S(?:[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*\\S)?$",

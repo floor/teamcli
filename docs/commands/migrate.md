@@ -61,7 +61,7 @@ beacon: the registry already holds this team; nothing to import
 
 - `--dry-run` — say what would be imported, and write nothing. Anyone in the project may run it.
 - `--keep-file` — import and verify, and leave `.agents/team.yaml` where it is.
-- `--request` — record an owner-seat card for this exact record and stop. The card is titled **Migrate the team** and asks **<asker> wants to migrate the team. OK?**, adding the reason the request carried when it has one; the project, the seat count, the canonical-record hash and the request id are in its folded details, and `team approvals details <id>` prints them. It offers **Approve once** and **Deny**. A migration needs that one-time approval; the card does not offer **Always allow**.
+- `--request` — record an owner-seat card for this exact record and stop. The card is titled **Migrate the team** and asks **<asker> wants to migrate the team. OK?**, adding the reason the request carried when it has one; the project, the seat count, the canonical-record hash and the request id are in its folded details, and `team approvals details <id>` prints them. It offers **Approve once** and **Deny** as decisions (the page's later words are on it too, but they decide nothing). A migration needs that one-time approval; the card does not offer **Always allow**.
 - `--approval <request-id>` — run the migrate the owner seat signed, once. A denial, an expiry, or a bad signature writes nothing. No signer approves a request they asked for.
 - `--json` — one JSON document on stdout.
 

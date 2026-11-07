@@ -5,9 +5,9 @@
 // a difference in the answer can only come from the gate the map now holds.
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { Caller, SeatStanding } from '../../src/caller.ts';
 import { commands } from '../../src/cli.ts';
 import { COMMAND_GATES, type Gate } from '../../src/permissions/map.ts';
@@ -18,6 +18,20 @@ type Who = { gate: string; why: string; terminal?: { who: string; where: string 
 type Node = { name: string; hidden: boolean; who?: Who; subcommands?: Node[] };
 
 const root = join(import.meta.dir, '..', '..');
+
+/** The node_modules that holds this repo's typescript. A clone with no install of its own
+ *  walks up to the checkout that has one, so the temp copy cannot fall through to bun's cache. */
+function repoNodeModules(start: string): string {
+  let dir = start;
+  for (;;) {
+    const modules = join(dir, 'node_modules');
+    if (existsSync(join(modules, 'typescript', 'package.json'))) return modules;
+    const parent = dirname(dir);
+    if (parent === dir) throw new Error('typescript is not installed for this repo');
+    dir = parent;
+  }
+}
+
 const contract = JSON.parse(readFileSync(join(root, 'contract/cli.json'), 'utf8')) as {
   program: Node;
   commands: Node[];
@@ -249,7 +263,7 @@ test('a changed gate fails the checked-in contract, and the unchanged tree passe
     mkdirSync(join(copy, 'docs/reference'), { recursive: true });
     cpSync(join(root, 'docs/reference/cli.md'), join(copy, 'docs/reference/cli.md'));
     cpSync(join(root, 'package.json'), join(copy, 'package.json'));
-    symlinkSync(join(root, 'node_modules'), join(copy, 'node_modules'));
+    symlinkSync(repoNodeModules(root), join(copy, 'node_modules'));
 
     const run = () => spawnSync(process.execPath, [join(copy, 'scripts/contract.ts'), '--check'], { cwd: copy, encoding: 'utf8' });
 

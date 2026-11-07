@@ -31,6 +31,7 @@ import {
 import type { EventPayload } from './log.ts';
 import type { RoutingChain } from './routing.ts';
 import { readSeatResolver } from './seats.ts';
+import { statusLeadReason } from '../status/reported-reason.ts';
 
 /** The mailbox the owner's own `team messages` run reads. `owner` is the seat-equivalent name the
  *  bus already knows (Amendment 01 §4.4). */
@@ -238,9 +239,16 @@ export function isOwnerAddressed(
 
 /** The one line the owner reads for an event. A watch report already says what it saw, so its own
  *  words are the delivery; any other event is described by its kind, the seat it concerns, and its
- *  detail. Whitespace is folded: the mailbox body is one line. */
+ *  detail. Whitespace is folded: the mailbox body is one line. A status-feed reason is the seat's
+ *  own word: quoted, labelled, and not folded, so the quote stays intact. */
 export function ownerDeliveryText(event: EventPayload): string {
+  if (event.kind === 'seat.status') return statusLeadReason(event.seat ?? '', event.status_reason ?? '');
   if (event.to === 'owner' && event.reason !== undefined) return clip(event.reason);
+  // A settings change the reconcile pass found on disk: the signed record proves the value, not
+  // who wrote it, so the line names the key and says the author is unattributed.
+  if (event.kind === 'config.changed' && event.from === undefined) {
+    return clip(`${event.config_key ?? 'config'} changed on disk [unattributed author]`);
+  }
   if (event.kind === 'record.invalid' || event.kind === 'security.refused') {
     // A refusal names its rule and the object it names — the record id and where it stands, or
     // the seat a denied call was addressed to — and never a body.

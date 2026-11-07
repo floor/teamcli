@@ -57,12 +57,16 @@ rules:
 delivery: pull-on-turn
 # The typed wake, granted on the sanitized 1.0.70 welcome frame in
 # test/fixtures/grok/1.0.70/ and the shipped 1.0.52 frames: a send may type one trigger line
-# into a composer two reads showed as the empty idle prompt, presses Enter only while the box
-# still holds exactly that line, and calls itself delivered only when the `working` screen
-# shows. A working turn, a box that holds text, and the answer widget refuse before a key.
+# into a composer two reads showed as the empty idle prompt. `wake: agent-prompt` below asks
+# herdr to prompt the agent; delivery is still the `working` screen. A working turn, a box
+# that holds text, and the answer widget refuse before a key.
 # Nothing else is typed, and a wake that cannot deliver leaves the message in the bus inbox.
 # See src/send/typed-wake.ts.
 typed_wake: screen
+# Enter does not submit on Grok Build. The wake asks herdr to prompt the agent, and still waits
+# for the working screen. Nothing is typed into the pane. The read hint stays the shipped
+# `Read it with: team drops --read.`
+wake: agent-prompt
 login:
   check:
     - models
@@ -229,6 +233,10 @@ screen:
     # column only. The empty box reads `  │ ❯` + padding + the edge, whose trimmed remainder is
     # the edge alone — the placeholder.
     strip_suffix: '\s*│$'
+    # A faint row in the box is the empty box's hint. Typed text carries no faint
+    # attribute, so a draft stays text. A plain read has no styling: the equals list
+    # below is the only fallback, and an unlisted sentence on that read stays a draft.
+    placeholder_style: dim
     # The status row under the closing rule, from the same 1.0.60 run as the quota block above:
     # the footer's quota cell `Weekly limit left: 0% · `, painted under the rule in a session.
     # The grammar pins the row by its own words; the read takes the last row under the rule that

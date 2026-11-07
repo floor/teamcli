@@ -12,6 +12,7 @@ import { approveOwnerAction, OWNER_ACTION_TTL_MS, readOwnerActionRecord } from '
 import { ownerSeatMessages, readOwnerSeat, signOwnerAnswer } from '../../src/client/owner-seat.ts';
 import { actionRequestsFolder } from '../../src/client/team-create.ts';
 import { runMigrate } from '../../src/commands/migrate.ts';
+import { runtimeTrashFolder } from '../../src/file/runtime-trash.ts';
 import { canonicalTeam, readTeamConfig } from '../../src/file/team-config.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
 import type { Io } from '../../src/io.ts';
@@ -133,7 +134,7 @@ describe('team migrate through the owner seat', () => {
     const id = requestId(io.out);
     expect(existsSync(join(actionRequestsFolder(p.home), `${id}.used-team-migrate`))).toBe(true);
     expect(existsSync(p.file)).toBe(false);
-    expect(existsSync(`${p.file}.migrated`)).toBe(true);
+    expect(existsSync(join(runtimeTrashFolder(p.home, NOW), 'team.yaml'))).toBe(true);
     const held = readTeamConfig(p.root, { home: p.home, source: 'registry' });
     expect(held.ok && held.team.project).toBe('acme');
     const card = ownerSeatMessages(p.home).map((message) => message.text).join('\n');
@@ -328,7 +329,7 @@ describe('team migrate through the owner seat', () => {
     expect(io.out).toContain('read back and verified');
     expect(io.out).not.toContain('owner-seat request');
     expect(existsSync(actionRequestsFolder(p.home))).toBe(false);
-    expect(existsSync(`${p.file}.migrated`)).toBe(true);
+    expect(existsSync(join(runtimeTrashFolder(p.home, NOW), 'team.yaml'))).toBe(true);
   });
 
   test('--request and --approval together are refused', async () => {

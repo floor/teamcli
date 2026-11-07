@@ -16,7 +16,7 @@ import { loadTeamFile } from '../../src/file/load.ts';
 import { lobbyDir } from '../../src/lobby/gate.ts';
 import { readState } from '../../src/state.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
-import { CLAUDE_IDLE, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, recordRenames, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-12T21:00:00Z');
 const SESSION = 'acme-web';
@@ -107,7 +107,7 @@ function world(prefix: string): Launch {
   let session: 'absent' | 'running' = 'absent';
   let n = 0;
   let clock = NOW.getTime();
-  return {
+  const launch: Launch = {
     sessionState: () => session,
     startServer() {
       session = 'running';
@@ -140,6 +140,8 @@ function world(prefix: string): Launch {
     },
     now: () => new Date(clock),
   };
+  // The naming step reads the agent list back. A rename the list never shows leaves the seat out.
+  return recordRenames(launch);
 }
 
 function doctor(home: string): DoctorSources {

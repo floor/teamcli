@@ -4,7 +4,7 @@ import type { CrossSessionInbound } from '../../launch/declaration.ts';
 import { shippedEfforts } from '../../profiles/efforts.ts';
 import { displayEffort, profileFor } from '../../profiles/profile.ts';
 import { FRONTS, REACH_ALIAS, REACH_MAX_SEATS, REACH_ROUTE } from '../../reach/rules.ts';
-import { DELIVERY_LEGS, isLivenessSeconds, LIVENESS_KEYS, SENDER_NAME_MODES, type LivenessThresholds } from '../../settings/inherit.ts';
+import { DELIVERY_LEGS, isLivenessSeconds, LIVENESS_KEYS, MESSAGING_STORES, SENDER_NAME_MODES, type LivenessThresholds } from '../../settings/inherit.ts';
 import type { YamlEntry } from '../../yaml.ts';
 import { insideProject, insideTrust, normalize } from '../paths.ts';
 import { hasVersionToken } from '../signature.ts';
@@ -16,6 +16,7 @@ import { valueOf } from './section.ts';
 import type { Budgeted } from './budgets.ts';
 import { readDeliveryOrder } from './delivery_order.ts';
 import { readSenderName } from './sender_name.ts';
+import { readMessaging } from './messaging.ts';
 import { MODES } from './workspace.ts';
 
 /** The words a seat's `inbound` key may name: the same three the receiving CLI accepts. */
@@ -32,6 +33,12 @@ export const SEAT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
  *  so no new seat or nickname takes the name (src/send/resolve.ts). A seat already named `lead`
  *  keeps loading — the address never means it — and `team check` notes the name. */
 export const LEAD_NAME = 'lead';
+
+/** The daemon's own sender word: a reminder's record and history line read `from: daemon`, with
+ *  no registry id, so no new seat or nickname takes the name — a seat of that name would be
+ *  indistinguishable from the daemon in every record it wrote. A seat already named `daemon`
+ *  keeps loading, like a legacy `lead`. */
+export const DAEMON_NAME = 'daemon';
 
 export const seats: Section = {
   name: 'seats',
@@ -67,6 +74,7 @@ export const seats: Section = {
         version: { type: 'string', $comment: 'quoted: unquoted, YAML reads 4.10 as the number 4.1' },
         display: { type: 'string', $comment: 'defaults to "model version"; must contain the version as a token of its own' },
         launch: { type: 'string', minLength: 1 },
+        launcher: { type: 'string', minLength: 1, $comment: 'the declarative launcher whose argv this seat runs when the launch is asked to resolve one; omitted, the launch line is unchanged and the digest is unchanged' },
         cwd: { type: 'string', $comment: 'relative to the project, or a trust path' },
         label: { type: 'string', $comment: 'the workspace title when written; left out, the title is the seat name and its role, and this stored value stays the model and version in lowercase' },
         effort: { type: 'string', minLength: 1, $comment: 'optional; a lab with a vocabulary warns when the word is outside it, and check still passes; launch does not read it' },
@@ -75,11 +83,22 @@ export const seats: Section = {
           minItems: 1,
           uniqueItems: true,
           items: { enum: DELIVERY_LEGS },
-          $comment: 'the legs a send to this seat may walk, in order; it drops or reorders the order in force and may add only native, the sender\'s own frame',
+          $comment: 'the legs a send to this seat may walk, in order; it drops or reorders the order in force and may add only native, the sender\'s own frame; mcp-inbox is a retired name this schema no longer accepts for new words — a seat that still names it is read and the word is dropped from the order, never an error, and team check asks for its removal',
         },
         sender_name: {
           enum: [...SENDER_NAME_MODES],
           $comment: 'how a sender reads in this seat\'s headlines: auto, nickname, seat or seat@team; presentation only, and the registry id stays in every record',
+        },
+        messaging: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            store: {
+              enum: [...MESSAGING_STORES],
+              $comment: 'the store this seat leaves for itself: first stores the signed record before the walk wakes it, parallel starts both at once, none never stores it (the frame still carries the signed bytes); a seat may always tighten toward first, and only the entity and the project may loosen toward none',
+            },
+          },
+          $comment: 'the seat\'s own word on message storage; omitted when the file writes no word, so every file that writes none keeps its digest',
         },
         liveness: {
           type: 'object',
@@ -102,6 +121,10 @@ export const seats: Section = {
           $comment: 'the watch\'s typed retry for this seat: on exactly where its CLI profile declares typed_wake unless the seat writes off, which keeps the drop-file wake',
         },
         public_only: { type: 'boolean', $comment: 'the seat\'s briefs go to a service outside this machine: the team\'s rules are never prepended, and a send reads the body against the machine\'s private lists and falls through on a match; a hosted CLI\'s profile is public-only on its own, and a seat can only add the guard' },
+        compact_delivery: {
+          type: 'boolean',
+          $comment: 'the seat\'s socket frame carries only the sender header, the first content line, and the show/reply/ack footer; the full body stays on disk for team show <id>; omitted or false keeps full socket delivery',
+        },
         inbound: {
           enum: [...INBOUND_WORDS],
           $comment: 'the seat accepts cross-session socket frames: accept authorizes the socket leg for any launch; hold and refuse never dial it; with no word, a seat TeamCLI launched is authorized by its launch\'s crossSessionInbound accept, and any other launch still needs accept here',
@@ -159,8 +182,8 @@ function readSeats(
   const assistants: { name: string; line: number }[] = [];
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
-      'role', 'name', 'nickname', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'effort', 'mode',
-      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'watch_wake', 'public_only', 'inbound', 'webhook', 'reach', 'delivery_order', 'sender_name', 'liveness',
+      'role', 'name', 'nickname', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'launcher', 'cwd', 'label', 'effort', 'mode',
+      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'watch_wake', 'public_only', 'compact_delivery', 'inbound', 'webhook', 'reach', 'delivery_order', 'sender_name', 'messaging', 'liveness',
     ]);
     if (item.kind !== 'map') continue;
     const line = item.line;
@@ -188,6 +211,10 @@ function readSeats(
       check.fail(nicknameEntry?.value.line ?? line, `${at}: "lead" is reserved: lead@<team> addresses the team's lead, so no nickname takes it`);
       nickname = undefined;
     }
+    if (nickname === DAEMON_NAME) {
+      check.fail(nicknameEntry?.value.line ?? line, `${at}: "daemon" is reserved: the machine daemon's reminders send under that name, so no nickname takes it`);
+      nickname = undefined;
+    }
     if (!fields.get('cli')) check.fail(line, `${at}: cli is required`);
     const cli = check.oneOf(fields.get('cli'), `${at}: cli`, CLIS);
     const vendor = check.required(fields.get('vendor'), `${at}: vendor`, line);
@@ -206,6 +233,7 @@ function readSeats(
     const model = check.required(fields.get('model'), `${at}: model`, line);
     const version = readVersion(fields.get('version'), at, line, check);
     const launch = check.required(fields.get('launch'), `${at}: launch`, line);
+    const launcherName = check.text(fields.get('launcher'), `${at}: launcher`);
     const display = check.text(fields.get('display'), `${at}: display`) ?? (model && version ? `${model} ${version}` : undefined);
     if (display && version && fields.get('display') && !hasVersionToken(display, version)) {
       check.fail(fields.get('display')?.line ?? line, `${at}: display must contain the version "${version}" as a token of its own`);
@@ -249,6 +277,10 @@ function readSeats(
     // it had. A written `false` reads as absent, so a team file can only add the guard a hosted
     // CLI's profile already declares, never take it away.
     const publicOnly = check.flag(fields.get('public_only'), `${at}: public_only`);
+    // The seat receives compact socket frames (`compact_delivery: true`). A field of the built
+    // seat like `public_only`, omitted when unset or `false` — every file that marks no seat keeps
+    // the digest it had, and enabling it is part of the digest the owner approves.
+    const compactDelivery = check.flag(fields.get('compact_delivery'), `${at}: compact_delivery`);
     // The seat's own word on cross-session socket frames. A field of the built seat like
     // `human`, omitted when the file writes none — every file that writes none keeps the
     // digest it had, and a written word is part of the digest the owner approves.
@@ -276,6 +308,10 @@ function readSeats(
     // field of the built seat like `effort`, so it is part of the seat's digest and omitted when
     // the file omits the key — every file that writes none keeps the digest it had.
     const senderName = readSenderName(fields.get('sender_name'), `${at}: sender_name`, check);
+    // The seat's own word on message storage (ADR D8), when the file writes one. A field of the
+    // built seat like `effort`, so it is part of the seat's digest and omitted when the file
+    // omits the key — every file that writes none keeps the digest it had.
+    const messaging = readMessaging(fields.get('messaging'), `${at}: messaging`, check);
     // The seat's own word on the liveness defaults. A field of the built seat like `effort`, so
     // it is part of the seat's digest and omitted when the file omits the key — every file that
     // writes none keeps the digest it had.
@@ -294,6 +330,7 @@ function readSeats(
       const suffix = instance === 1 ? '' : `-${instance}`;
       seats.push({
         role, cli, vendor, model, version, display, launch, cwd, parked, stopped, line,
+        ...(launcherName !== undefined ? { launcher: launcherName } : {}),
         name: name + suffix,
         label: (label ?? defaultLabel(model, version)) + suffix,
         ...(label !== undefined ? { labelWritten: true as const } : {}),
@@ -310,6 +347,8 @@ function readSeats(
         ...(deliveryOrder ? { deliveryOrder } : {}),
         // Omitted when the file writes no sender-name word, for the same reason.
         ...(senderName ? { senderName } : {}),
+        // Omitted when the file writes no messaging word, for the same reason.
+        ...(messaging.store !== undefined ? { messaging } : {}),
         // Omitted when the file writes no liveness word, for the same reason.
         ...(liveness ? { liveness } : {}),
         // Omitted when the file marks no assistant, so every file that writes none keeps its digest.
@@ -320,6 +359,8 @@ function readSeats(
         ...(watchWake !== undefined ? { watchWake } : {}),
         // Omitted when the file marks no public-only seat, for the same reason.
         ...(publicOnly ? { publicOnly: true as const } : {}),
+        // Omitted when the file marks no compact-delivery seat, for the same reason.
+        ...(compactDelivery ? { compactDelivery: true as const } : {}),
         // Omitted when the file writes no inbound word, for the same reason.
         ...(inbound ? { inbound } : {}),
         // Omitted when the file configures no webhook adapter, for the same reason.
@@ -594,6 +635,9 @@ export function nicknameProblem(
 ): { line: number; message: string } | null {
   if (nickname === LEAD_NAME) {
     return { line: 0, message: '"lead" is reserved: lead@<team> addresses the team\'s lead, so no new name or nickname takes it' };
+  }
+  if (nickname === DAEMON_NAME) {
+    return { line: 0, message: '"daemon" is reserved: the machine daemon\'s reminders send under that name, so no new name or nickname takes it' };
   }
   for (const other of seats) {
     if (other.name === own) continue;

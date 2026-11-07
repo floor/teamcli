@@ -13,7 +13,7 @@
 //     claude-keeper: working   question | unsent | unknown
 //   caller: owner            owner | a seat's name | agent (run by a CLI outside herdr)
 //   now: 2026-10-04T09:00:00Z
-//   machine: calm            calm | tight | small-swap
+//   machine: calm            calm | tight
 //   watch: alive             alive | none | stale (a heartbeat older than two intervals)
 //   briefs: none             none | delivered | delivered-and-read (delivered: every seeded seat
 //                            holds the general brief's signed record, as a launch leaves it;
@@ -70,7 +70,7 @@ export type Spec = {
   screens: Record<string, ScreenKind>;
   caller: string;
   now: string;
-  machine: 'calm' | 'tight' | 'small-swap';
+  machine: 'calm' | 'tight';
   watch: 'alive' | 'none' | 'stale';
   briefs: 'none' | 'delivered' | 'delivered-and-read';
   panes: 'host' | 'neutral';
@@ -256,7 +256,7 @@ export function specOf(block: Block | undefined): Spec {
     screens: mapped(map.screens, SCREENS, 'screens'),
     caller: text(map.caller, DEFAULT_SPEC.caller, 'caller'),
     now: text(map.now, DEFAULT_SPEC.now, 'now'),
-    machine: oneOf(map.machine, ['calm', 'tight', 'small-swap'] as const, DEFAULT_SPEC.machine, 'machine'),
+    machine: oneOf(map.machine, ['calm', 'tight'] as const, DEFAULT_SPEC.machine, 'machine'),
     watch: oneOf(map.watch, ['alive', 'none', 'stale'] as const, DEFAULT_SPEC.watch, 'watch'),
     briefs: oneOf(map.briefs, ['none', 'delivered', 'delivered-and-read'] as const, DEFAULT_SPEC.briefs, 'briefs'),
     panes: oneOf(map.panes, ['host', 'neutral'] as const, DEFAULT_SPEC.panes, 'panes'),

@@ -4,6 +4,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../../src/approve/approval.ts';
+import { legacyApprovalRecord } from '../legacy-approval.ts';
 import { runAdd, type AddSources } from '../../src/commands/add.ts';
 import { runApprove, type ApproveSources } from '../../src/approve/command.ts';
 import { loadConfig } from '../../src/commands/check.ts';
@@ -147,7 +148,7 @@ function world(): {
   /** Every pane the world holds, with an agent in it or not. */
   paneIds(): string[];
 } {
-  const panes = new Map<string, { text: string; agent: boolean }>();
+  const panes = new Map<string, { text: string; agent: boolean; name: string | null }>();
   let n = 0;
   let clock = NOW.getTime();
   const made = {
@@ -169,7 +170,7 @@ function world(): {
     sessionUp: () => made.session === 'running',
     createWorkspace(_session, cwd, label) {
       n++;
-      panes.set(`w${n}:p1`, { text: IDLE, agent: false });
+      panes.set(`w${n}:p1`, { text: IDLE, agent: false, name: null });
       made.workspaces.push({ label, cwd });
       return { pane: `w${n}:p1`, workspace: `w${n}` };
     },
@@ -183,8 +184,12 @@ function world(): {
       made.typed.push(text);
       return true;
     },
-    renameAgent(_session, _pane, name) {
+    // A rename herdr takes is listed under the seat's name afterwards: the naming step proves
+    // that listed name before the seat can reach ready.
+    renameAgent(_session, pane, name) {
       made.renames.push(name);
+      const known = panes.get(pane);
+      if (known) known.name = name;
       return true;
     },
     closeWorkspace(_session, workspace) {
@@ -192,7 +197,14 @@ function world(): {
       return true;
     },
     agentPanes: () => [...panes].filter(([, pane]) => pane.agent).map(([id]) => id),
-    agents: () => [],
+    agents: () => [...panes].flatMap(([id, pane]) => (pane.name === null ? [] : [{
+      name: pane.name,
+      agent: 'claude-code',
+      pane: id,
+      workspace: id.replace(/:p1$/, ''),
+      status: 'idle',
+      cwd: null,
+    }])),
     paneText: (_session, pane) => panes.get(pane)?.text ?? '',
     foreground: () => ['claude', 'codex', 'agy', 'cursor-agent'],
     sleep: async (ms) => {
@@ -2209,14 +2221,17 @@ describe('the upgrade from 0.2.1', () => {
     return yaml.replace(/trust:\n(?:  - .*\n)+/, `trust:\n${entries.map((entry) => `  - ${entry}\n`).join('')}`);
   }
 
-  // The store 0.2.1 left: a format-1 approval nobody signed.
+  // The store 0.2.1 left: a format-1 approval nobody signed, and no lead. lead is a
+  // signed format-2 field. Today's approval carries it, so the fixture drops it: a
+  // format-1 record that includes lead is refused as a field that version does not know.
   function legacyApproval(text: string): void {
     writeFileSync(join(root, '.agents', 'team.yaml'), text);
     const loaded = loadTeamFile(root, { home });
     if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
     const store = storePath(loaded.team.project, loaded.root, home);
     mkdirSync(store, { recursive: true });
-    writeFileSync(join(store, 'approval.json'), JSON.stringify({ ...approvalOf(loaded.team, loaded.root), format: 1, file: text }));
+    const record = legacyApprovalRecord(loaded.team, loaded.root, text);
+    writeFileSync(join(store, 'approval.json'), JSON.stringify(record));
   }
 
   test('the block up prints takes the file past validation for every starting shape it met', async () => {

@@ -1,9 +1,12 @@
 // Bare `team check`: one answer to "is anything wrong with this team that someone should act on",
 // for the callers who may see it — the owner, a seat of the team, and a pane the team's approved
 // file names (design note §3, §4). It needs no git, it reads, and it changes nothing. The owner's
-// `--repair` is the one act: the state's leftovers (a record for a seat the file no longer
+// `--repair` is the owner's one act: the state's leftovers (a record for a seat the file no longer
 // declares, a session with no seat of the team in it), the dev-mode mark an agent's registration
-// left, and the two sidebar lines a drift moved off the file's text — and nothing else. The file is
+// left, and the two sidebar lines a drift moved off the file's text — and nothing else.
+// `--close-orphans` is the lead's or the owner's: a live agent CLI no pane holds, re-proven just
+// before it is signalled, after one question at a terminal; it is the second act and never the same
+// run as the first. The file is
 // resolved with `remember` false for every caller, nothing of the watch's pass, report, readings or
 // nudge path is called, and the one screen reading (§3.3a) is read-only.
 //
@@ -11,7 +14,7 @@
 // and a caller that does not pass as one of the three gets one fixed sentence and nothing else,
 // whatever failed underneath — a loader error, a refused standing, herdr's silence, an aimed flag
 // and every caller detail among them (the two-phase rule, §4).
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, isAbsolute, relative, resolve } from 'node:path';
 import { notInForce, sessionDefaultMoveNotes } from '../approve/approval.ts';
@@ -19,15 +22,15 @@ import { inspectRecordedCodexEndpoint, readRecordedCodexEndpoint } from '../daem
 import {
   isSocketFile,
   ownedSocketPath,
-  processStartOf,
   recordStartMatches,
   unmanagedEndpointNotes,
 } from '../launch/codex-endpoint.ts';
 import { codexCommandHasFlag, codexCommandRemoteUrl, codexEndpointConfig, managedCodexLaunch } from '../launch/plan.ts';
 import { unfinishedWebhookNotes, webhookDeliveryNotes } from '../bus/webhook-notes.ts';
+import { sandboxUnappliedNotes } from '../launch/grok-sandbox.ts';
 import { rulesOriginOf } from '../launch/rules.ts';
 import { declaredUnreadAfter, UNREAD_AFTER_WAKEABLE_SECONDS, unreadWindowSeconds, watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
-import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
+import { callerLabel, fileOwnerRefusal, isOwner, readAncestors, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import { widenedGrantNotes } from '../client/general-grant.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { blindDifferences } from '../commands/seats.ts';
@@ -53,13 +56,17 @@ import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, labelPersona, LEAD_NAME, seatNickname, workspaceLabel } from '../file/sections/seats.ts';
 import { inboxRegistration } from '../mcp/register.ts';
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
-import { agentList, foregroundArgv0, PANE_WINDOW, paneProcessesOf, paneProcessInfo, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { agentList, hasCustomHerdrRun, foregroundArgv0, PANE_WINDOW, paneProcesses, paneProcessesOf, paneProcessInfo, paneRead, reportDisplayAgent, sessionList, sessionRunning, SIDEBAR_TTL_CAP_MS, workspaceList, workspacePanes, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { sidebarPolicy } from '../settings/sidebar-policy.ts';
 import type { Io } from '../io.ts';
 import { GENERAL_BRIEF_SHA256, briefBindingOf, currentBriefClaim, generalBriefRecord } from '../launch/general-brief.ts';
+import { paneHoldsOnlyShell } from '../launch/identity.ts';
 import { seatDeliveryClass, wakeableWhileIdle } from '../launch/delivery-class.ts';
 import { seatProcessVerdict } from '../launch/identity.ts';
 import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
+import { ownStartFolderProblem, placedStartFolders } from '../worktree/place.ts';
 import { listUnread } from '../mcp/inbox.ts';
 import {
   collapseNotes,
@@ -85,16 +92,21 @@ import { overridesInForceOf } from '../profiles/overrides.ts';
 import { cliWordList, displayEffort } from '../profiles/profile.ts';
 import {
   loadAndResolvePolicyChain,
+  mailboxRouterPolicyProblems,
+  parseOwnerReplyToValue,
   readProjectPolicySource,
   readSeatPolicySource,
   readTeamPolicySource,
+  resolveOwnerReplyTo,
   type PolicyLoadRefusal,
 } from '../policy/index.ts';
 import { codexDaemonForSeat } from '../policy/codex-daemon.ts';
+import { grokCommandDenyNotes } from '../launch/grok-command-deny.ts';
+import { parseGrokCommandDeny } from '../settings/grok-command-deny.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { findAgent, updateAgent, type Agent } from '../registry/agents.ts';
 import { continuityIdsOf, continuitySessionOf, recordedSeatContinuity } from '../registry/resume.ts';
-import { byName, ofTeam, projectIdOf, ProjectsError } from '../registry/projects.ts';
+import { byName, ofTeam, projectIdOf, ProjectsError, readProjects } from '../registry/projects.ts';
 import { nicknameTakenNotes } from '../registry/names.ts';
 import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
 import { readRecord, recordHolds, receiptFile, receiptHolds, verifyRecord } from '../send/record.ts';
@@ -102,7 +114,17 @@ import { defaultSocketsDirs } from '../send/address.ts';
 import { deliveryChainOf } from '../send/delivery.ts';
 import { launchWords, socketEligible } from '../send/inbound.ts';
 import { SOCKET_SEND } from '../send/uds.ts';
-import { DELIVERY_ORDER, orderDeclarationsOf, type DeliveryLeg } from '../settings/inherit.ts';
+import { messagingStoreChainOf } from '../send/store.ts';
+import {
+  DELIVERY_ORDER,
+  liveOrderRecord,
+  liveOrderWords,
+  orderDeclarationsOf,
+  type DeliveryLeg,
+  type MessagingStore,
+  type OrderWord,
+  type SettingLevel,
+} from '../settings/inherit.ts';
 import { deliveryOrder, resolveOrderSetting } from '../settings/resolve.ts';
 import { emptySession, liveHold, pidAlive, readState, seatOfFile, updateState, type SeatState, type SessionState, type State } from '../state.ts';
 import { compare, orderAndAnnotateDifferences, paneShowsSeat, seatRecordsOf, socketLegOf, type Difference, type Live } from '../status/compare.ts';
@@ -116,12 +138,34 @@ import { listModelRuleBreaches, type RuleLookup } from '../swap/rule.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { Attention } from '../watch/check.ts';
 import { watchSitting } from '../watch/liveness.ts';
-import { busProblemNotes } from '../bus/notes.ts';
+import { processCommOf, processFoldersOf, processStartOf, processTable } from '../watch/process-adapter.ts';
+import { EVENT_LOG_TOTAL_BYTES } from '../bus/kinds.ts';
+import { retainedLogBytes } from '../bus/log.ts';
+import { busLogSizeNotes, busProblemNotes } from '../bus/notes.ts';
+import { pingpongLegDifferences } from './pingpong-legs.ts';
+import { closeOrphans, orphanReading, type OrphanCloseSources, type OrphanProcessSources, type OrphanReading } from './orphans.ts';
+import {
+  EMPTY_SIDEBAR_REPAIR,
+  readSeatPaneDisplays,
+  realSidebarCheckSources,
+  repairSidebarLayout,
+  sidebarLayoutDifferences,
+  type CheckSidebarSources,
+} from './sidebar.ts';
 import { attentionOf } from '../watch/pass.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
 
-/** The team check's own arguments: the owner's aimed/repair flags and optional `--json`. */
-export type TeamCheckArgs = { session?: string; file?: string; repair?: boolean; json?: boolean };
+export type { CheckSidebarSources };
+
+/** The team check's own arguments: the owner's aimed/repair flags, the lead's or owner's close, and
+ *  optional `--json`. */
+export type TeamCheckArgs = {
+  session?: string;
+  file?: string;
+  repair?: boolean;
+  closeOrphans?: boolean;
+  json?: boolean;
+};
 
 // What the check reads from outside the file and the state, so tests and the docs harness can
 // stand in for it: the same reads `status` makes, except that the live read is narrowed to the
@@ -139,7 +183,7 @@ export type CheckSources = {
   /** The two sidebar writes `team register` makes: the workspace label and the display line.
    *  `--repair` re-applies the file's lines through them; the real ones when absent. */
   renameWorkspace?: (session: string, workspace: string, label: string) => boolean;
-  reportDisplayAgent?: (session: string, pane: string, text: string) => boolean;
+  reportDisplayAgent?: (session: string, pane: string, text: string, ttlMs?: number) => boolean;
   /** The idle-with-work snapshot, from the watch. Read-only; absent when no producer is wired, and
    *  a test stands in for it. */
   idleWork?(input: IdleWorkInput): IdleWorkReport;
@@ -160,6 +204,22 @@ export type CheckSources = {
    *  own live app-server on its planned flags; absent in scenes that do not stand one in so no
    *  test reads this machine's process table. */
   codexEndpoint?: CodexEndpointCheckSources;
+  /** The sidebar layout, per-session reload, and pane display reads/writes; adapter defaults when absent. */
+  sidebar?: CheckSidebarSources;
+  /** The panes in a workspace (`pane list --workspace`). Wired in `realCheckSources`; a scene
+   *  stands in for it. */
+  workspacePanes?: (session: string, workspace: string) => readonly string[] | null;
+  /** A pane's process identity (`pane process-info --pane`). Wired in `realCheckSources`; a scene
+   *  stands in for it. */
+  processes?: (session: string, pane: string) => PaneProcesses | null;
+  /** The process readings the orphan scan makes — the table, many working folders at once, and
+   *  this run's own ancestry. Absent when no producer is wired: a run then reads no process table,
+   *  as a scene that does not stand one in must not touch this machine. */
+  orphans?: OrphanProcessSources;
+  /** What the close flow reads and does — liveness, the same process's identity, the pane proof,
+   *  the stop signals and the waits between them. Absent when no producer is wired: a run then
+   *  refuses `--close-orphans` rather than touching a process it cannot re-prove. */
+  closeOrphans?: OrphanCloseSources;
 };
 
 export type CodexEndpointCheckSources = {
@@ -170,10 +230,28 @@ export type CodexEndpointCheckSources = {
   runtimeRoot?: string;
 };
 
+/** What one session's panes hold: each pane's shell and the foreground pids that are not it; null
+ *  when the session's agent list or any pane's process reading did not answer. A read that does not
+ *  answer is never read as "no pane holds it". */
+function heldIn(session: string): ReadonlySet<number> | null {
+  const agents = agentList(session);
+  if (agents === null) return null;
+  const held = new Set<number>();
+  for (const agent of agents) {
+    const processes = paneProcesses(agent.pane, session);
+    if (processes === null) return null;
+    held.add(processes.shell);
+    for (const pid of processes.foreground) held.add(pid);
+  }
+  return held;
+}
+
 /**
  * The shipped sources. The live read is `status`'s own with one narrowing: `status` reads every
- * agent's pane, a stray's included, and this reads a pane only where this project's state records
- * one for a seat of this team in the session read. The rest is the same code, not a copy of it.
+ * agent's screen, a stray's included, and this reads a screen only where this project's state
+ * records the pane for a seat of this team. Every agent's process identity is read either way:
+ * the orphan reading holds a CLI herdr names at a pane even when no record of this project's
+ * names the seat there. The rest is the same code, not a copy of it.
  */
 export const realCheckSources: CheckSources = {
   live(session, team, state) {
@@ -200,9 +278,10 @@ export const realCheckSources: CheckSources = {
     const processes: Record<string, PaneProcesses | null> = {};
     const foreground: Record<string, string[] | null> = {};
     for (const agent of agents) {
-      if (!recorded.has(agent.pane)) continue;
-      const screen = paneRead(agent.pane, PANE_WINDOW, session);
-      if (screen !== null) screens[agent.pane] = screen;
+      if (recorded.has(agent.pane)) {
+        const screen = paneRead(agent.pane, PANE_WINDOW, session);
+        if (screen !== null) screens[agent.pane] = screen;
+      }
       // The pane's process identity, for the comparison with the one the state recorded: a pane
       // that no longer holds what team launched is not the seat. Null when herdr can't tell. The
       // same reading carries the foreground names the restore proof ties a restored CLI with, so
@@ -237,6 +316,53 @@ export const realCheckSources: CheckSources = {
     alive: pidAlive,
     startOf: processStartOf,
     isSocket: isSocketFile,
+  },
+  sidebar: realSidebarCheckSources,
+  workspacePanes: (session, workspace) =>
+    workspacePanes(workspace, session === 'default' ? undefined : session),
+  processes: (session, pane) =>
+    paneProcesses(pane, session === 'default' ? undefined : session),
+  // The process adapter's own readings: the table scoped to this user, one bulk folder query, and
+  // this run's ancestry so the check never names or closes itself.
+  orphans: {
+    table: processTable,
+    foldersOf: processFoldersOf,
+    ancestorsOf: (pid) => readAncestors(pid)?.map((one) => one.pid) ?? null,
+    own: () => readAncestors(process.pid)?.map((one) => one.pid) ?? [process.pid],
+  },
+  // The close flow's own readings. Every session but this one is read once per close run, and this
+  // session's panes are read again immediately before each signal: the question can stand open
+  // while a pane picks a process up. A pane list or pane reading that does not answer means no
+  // close, never a guess.
+  closeOrphans: {
+    alive: pidAlive,
+    commOf: processCommOf,
+    startOf: processStartOf,
+    ancestorsOf: (pid) => readAncestors(pid)?.map((one) => one.pid) ?? null,
+    heldElsewhere: (_pids, session) => {
+      const sessions = sessionList();
+      if (sessions === null) return null;
+      const held = new Set<number>();
+      for (const other of sessions) {
+        if (!other.running || other.name === session) continue;
+        const set = heldIn(other.name);
+        if (set === null) return null;
+        for (const pid of set) held.add(pid);
+      }
+      return held;
+    },
+    heldHere: (session) => heldIn(session),
+    signal: (pid, signal) => {
+      try {
+        process.kill(pid, signal === 'terminate' ? 'SIGTERM' : 'SIGKILL');
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    pause: (ms) => {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+    },
   },
 };
 
@@ -309,7 +435,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
         root: current.root,
         dir: current.dir,
         now: sources.now(),
-        // Ruling D5: the placed operator may repair, under the lead-gates policy.
+        // The placed operator may repair, under the lead-gates policy.
         admitsOperator: true,
       });
       if (!lift.lifted) {
@@ -322,6 +448,42 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
         return 1;
       }
       io.stderr(`${lift.warning}\n`);
+    }
+    // `--close-orphans` ends processes: the team's lead or the owner, never a plain seat. This
+    // caller still sees every row the reading names; only the close is not the seat's.
+    if (args.closeOrphans === true && !(walked.kind === 'seat' && isLeadSeat(current.team, walked.name))) {
+      const msg = "--close-orphans is the team's lead's or the owner's";
+      if (args.json) {
+        writeJsonError(io, 'check.close-orphans-lead', msg, null, 1, undefined, fallbackNotice);
+      } else {
+        io.stderr(`team check: ${msg}\n`);
+      }
+      // exit: check.close-orphans-lead
+      return 1;
+    }
+  }
+  // The close asks its one question at a terminal, before anything is read or signalled: a run
+  // with no terminal, or with no process reading wired, refuses here and changes nothing.
+  if (args.closeOrphans === true) {
+    if (sources.orphans === undefined || sources.closeOrphans === undefined) {
+      const msg = '--close-orphans has no process reading here';
+      if (args.json) {
+        writeJsonError(io, 'check.close-orphans-unavailable', msg, null, 2);
+      } else {
+        io.stderr(`team check: ${msg}\n`);
+      }
+      // exit: check.close-orphans-unavailable
+      return 2;
+    }
+    if (!io.stdinIsTTY) {
+      const msg = '--close-orphans asks before it closes anything; it needs a terminal';
+      if (args.json) {
+        writeJsonError(io, 'check.close-orphans-terminal', msg, null, 2);
+      } else {
+        io.stderr(`team check: ${msg}\n`);
+      }
+      // exit: check.close-orphans-terminal
+      return 2;
     }
   }
   const { team, root, dir } = current;
@@ -367,6 +529,8 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   // ever guessed back into it.
   let stale = staleState(team, session, whole);
   const repaired: string[] = [];
+  let sidebarRepair = EMPTY_SIDEBAR_REPAIR;
+  const repairedDisplayPanes = new Set<string>();
   if (args.repair === true) {
     // The owner's one repair, in the order the readings below depend on: the state's leftovers
     // first, then the registration an agent wrote under dev mode, then the two sidebar lines. Each
@@ -383,19 +547,77 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
       stale = staleState(team, session, whole);
     }
     named(reRecordMarked(team, root, sources.home));
+    sidebarRepair = repairSidebarLayout({
+      home: sources.home,
+      root,
+      team,
+      session,
+      now: sources.now(),
+      sidebar: sources.sidebar,
+      io,
+    });
+    if (sidebarRepair.repaired.length > 0) named(sidebarRepair.repaired);
     // The file is the truth for both sidebar lines: a drifted one is set back from it, through
     // the same two writes `team register <seat>` makes. The live session is read again after the
     // writes, so the comparison below reads the sidebar the repair left; a session herdr no
     // longer answers keeps the first read, and its rows stand.
     const after = whole.sessions[session] ?? emptySession();
-    const drifts = labelDrifts(team, after, live);
+    const prePaneDisplays = readSeatPaneDisplays(session, team, after, live, sources.sidebar);
+    const drifts = labelDrifts(team, after, live, prePaneDisplays);
     if (drifts.length > 0) {
-      named(syncLabels(drifts, session, sources, io));
+      const sidebarTtlMs =
+        sources.home === undefined
+          ? SIDEBAR_TTL_CAP_MS
+          : sidebarPolicy({ home: sources.home, root, team, now: sources.now() }).ttlMs;
+      named(syncLabels(drifts, session, sources, io, sidebarTtlMs, repairedDisplayPanes));
       live = sources.live(session, team, after) ?? live;
     }
   }
   const state = whole.sessions[session] ?? emptySession();
-  const policyChecked = policyCheck(team, root, sources.home, sources.now(), io.env, dir, callerLabel(walked));
+  const paneDisplays = readSeatPaneDisplays(session, team, state, live, sources.sidebar);
+  const sidebarChecked = sidebarLayoutDifferences({
+    home: sources.home,
+    root,
+    team,
+    session,
+    now: sources.now(),
+    sidebar: sources.sidebar,
+    repairState: sidebarRepair,
+  });
+  // Live agent CLIs no pane holds any more, read from the state's own launches and from the
+  // working folders inside this root. A scene that wires no process source reads no process
+  // table, and the reading itself asks for nothing until a seat or an agent exists.
+  const orphansOf = (): OrphanReading | null =>
+    sources.orphans === undefined
+      ? null
+      : orphanReading({
+          project: team.project,
+          root,
+          session,
+          state,
+          live,
+          now: sources.now(),
+          daemonSince: sources.daemon?.since ?? null,
+          sources: sources.orphans,
+        });
+  let orphans = orphansOf();
+  // The lead's or owner's one act per run: close the orphan candidates that carry the close's
+  // proof, after one question at the terminal. The reading is then taken again, so the rows below
+  // describe the world the close left — a closed process is gone, and one the close could not end
+  // is still a row with the reading's own repair on it.
+  const closedLines: string[] = [];
+  if (args.closeOrphans === true && orphans !== null && sources.closeOrphans !== undefined) {
+    const closing = closeOrphans({
+      candidates: orphans.candidates,
+      session,
+      sources: sources.closeOrphans,
+      confirm: (prompt) => confirmClose(io, prompt),
+    });
+    closedLines.push(...closing.lines);
+    for (const line of closing.lines) logLine(dir, 'check', callerLabel(walked), line, sources.now());
+    if (closing.closed > 0) orphans = orphansOf();
+  }
+  const policyChecked = policyCheck(team, root, sources.home, sources.now(), io.env, dir, callerLabel(walked), state, session);
   const modelRule = modelRuleCheck(team, root, sources.home);
   // The same live grant `status` reads, so the two readings offer `team answer` together or not
   // at all: the setting is one record, never a file key and never a stale approval. The pace is
@@ -481,7 +703,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...provenance.differences,
     ...liftCardDriftDifferences(sources.home, root, quiet, sources.now()),
     ...attention.differences,
-    ...labelDifferences(team, state, live),
+    ...labelDifferences(team, state, live, paneDisplays, repairedDisplayPanes),
+    ...sidebarChecked.differences,
+    ...startFolderDifferences(team, state, root, sources.home ?? homedir(), session),
     ...featureDifferences(team, state),
     ...unmanagedCodexServerDifferences(team, state, live, dir, session, continuityIds, sources),
     ...rosterDifferences(team, state, live, root, sources.home),
@@ -494,7 +718,15 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // with its outbound gate closed, is a difference — the watch is not enforcing anything.
     ...hostedWatch,
     ...policyChecked.differences,
+    // An entity with a lead and no live signed owner-reply endpoint loses owner replies
+    // after the upgrade that stopped shipping one. One difference: what is missing, and
+    // the dry-run that declares the lead's own address. A live declaration, a team that
+    // names no entity, and an unreadable value say nothing here.
+    ...ownerReplyDifferences(team, root, sources.home, sources.now()),
     ...modelRule.differences,
+    // The nightly harness's latest per-leg result: a class over its send-to-read target, a lost
+    // message, or a result older than a day. A team that has not run draws nothing.
+    ...pingpongLegDifferences(dir, sources.now()),
     ...protectedCheckouts(team, root, { branch: sources.branch }),
     // The same rows `status` prints: a legacy record or one the verification refused still says
     // what it is; a machine that never approved the file is the ordinary file now, and nothing to
@@ -502,6 +734,10 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...record.differences,
     ...rulesFileDifferences(standing, team, root, sources.home, rulesOriginOf(current.source)),
     ...staleDifferences(stale),
+    ...unrecordedWorkspaceDifferences(team, state, live, root, sources.home, session, sources),
+    // A live agent CLI no pane holds: named with its pid, age and the record it answers to, with
+    // the team's own close where a state record or the daemon's start proves it the team's.
+    ...(orphans?.differences ?? []),
     // A blind seat — unknown past the blind threshold — counts as not working, and is
     // a must-fix here exactly as it is in `team status`.
     ...blindDifferences(team, state, live, comparison, sources.now(), liveHold(whole, sources.now()) !== null, { project: team.project, root, home: sources.home, stateDir: dir, session }),
@@ -579,6 +815,14 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
       recorded: state.bus,
       autostart: team.bus?.autostart !== false,
     }),
+    // The retained event log at four fifths of its size cap: named so the team's lead sees the
+    // cap coming. A stat per retained slot, never a read of a segment.
+    ...(sources.home !== undefined
+      ? busLogSizeNotes({
+          bytes: retainedLogBytes(team.project, root, sources.home),
+          cap: EVENT_LOG_TOTAL_BYTES,
+        })
+      : []),
   ];
   // The notes print above the differences, as `team status` prints them: a note names something
   // worth acting on without counting it wrong — it is not in the total and does not change the exit.
@@ -593,11 +837,15 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...leadRoleNotes(team),
     // The default session moved to <entity>-<project>: the line the approval's own comparison
     // names, so the owner sees the old and the new session before the next launch.
-    ...sessionDefaultMoveNotes(standing, team),
+    ...sessionDefaultMoveNotes(standing, team, sources.home),
     ...lobbyNotes(team, root, sources.home, session),
-    // A delivery_order word still naming `mcp-inbox`: the inbox is the store's reader, not a leg
-    // (ADR D1), and the word is read so the walk can report it unavailable.
+    // A delivery_order word still naming `mcp-inbox`: the name is retired — the inbox is the
+    // store's reader, not a leg (ADR D1) — and the word is read as an alias that is dropped from
+    // every order, with this note asking for its removal.
     ...deliveryOrderInboxNotes(team),
+    // A seat whose chain declares `messaging.store: none`: what its sends stop keeping, named
+    // once per seat where the word is in force.
+    ...messagingStoreNotes(team, root, sources.home, sources.now()),
     ...policyChecked.notes,
     ...modelRule.notes,
     ...socketSkipped.notes,
@@ -605,6 +853,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // A Codex seat whose last launch fell back to an unmanaged line, in the same words `team
     // status` prints: the fallback is a reading worth acting on, never a silent state.
     ...unmanagedEndpointNotes(team.seats, state),
+    ...sandboxUnappliedNotes(team.seats, state),
     // Every ready Codex seat whose policy would manage an endpoint and whose record is absent,
     // unusable, or a recorded line carrying --no-daemon. One line, naming each seat and the
     // restore. A policy that is off, or a file that already names its own remote, stays off it.
@@ -617,6 +866,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...unfinishedWebhookNotes({ root, alive: (pid) => sources.alive?.(pid) ?? pidAlive(pid) }),
     ...record.notes,
     ...provenance.notes,
+    // Why the orphan reading named nothing it might otherwise have named: a pane list that read
+    // no agents, a pane herdr could not answer for, a folder or process read that did not answer.
+    ...(orphans?.notes ?? []),
     ...idleNotes,
     ...watchPaceNotes(watchPace),
   ]);
@@ -646,8 +898,10 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     io.stdout(`${KEY_ISOLATION_LINE}\n`);
     for (const warning of warnings) io.stdout(`${warning}\n`);
     for (const line of repaired) io.stdout(`repaired: ${line}\n`);
+    for (const line of closedLines) io.stdout(`${line}\n`);
     for (const line of renderNotes(notes, { home: sources.home })) io.stdout(`${line}\n`);
     for (const line of renderDifferences(differences, style, sources.home)) io.stdout(`${line}\n`);
+    if (sidebarChecked.tomlBlock !== null) io.stdout(`${sidebarChecked.tomlBlock}\n`);
     // One line, once, after the per-seat lines: this build's brief is ahead of a seat's claim,
     // and the rollout is the repair that delivers it to every live seat. The exit stays as it is.
     if (briefs.stale) io.stdout(`${ROLLOUT_HINT}\n`);
@@ -665,6 +919,29 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   }
   // exit: check.ok
   return 0;
+}
+
+/**
+ * The close's one question, asked before anything is signalled. The report is a synchronous run,
+ * so the answer is read in one go: `io.stdin` in a scene, the terminal's own input in a real run.
+ * Only a clear yes closes; an empty answer, a no, or a read that did not answer declines.
+ */
+function confirmClose(io: Io, prompt: string): boolean {
+  io.stdout(prompt);
+  let answer = '';
+  try {
+    if (io.stdin !== undefined) {
+      answer = io.stdin();
+    } else {
+      const buffer = Buffer.alloc(256);
+      const read = readSync(0, buffer, 0, buffer.length, null);
+      answer = read > 0 ? buffer.subarray(0, read).toString('utf8') : '';
+    }
+  } catch {
+    answer = '';
+  }
+  io.stdout('\n');
+  return /^\s*y(es)?\s*$/i.test(answer);
 }
 
 // The one sentence a caller that does not pass gets, whatever failed underneath it: it names no
@@ -742,6 +1019,145 @@ function staleDifferences(stale: Stale): Difference[] {
       what: `the state records the session "${name}", and no seat of the team is in it`,
       repair,
       owner: true,
+    });
+  }
+  return out;
+}
+
+function collectSessionRecords(
+  sessionState: SessionState | undefined,
+  workspaces: Set<string>,
+  panes: Set<string>,
+): void {
+  if (sessionState === undefined) return;
+  for (const held of Object.values(sessionState.seats)) {
+    if (typeof held.workspace === 'string' && held.workspace !== '') {
+      workspaces.add(held.workspace);
+    }
+    if (typeof held.pane === 'string' && held.pane !== '') {
+      panes.add(held.pane);
+    }
+  }
+  if (typeof sessionState.watch?.workspace === 'string' && sessionState.watch.workspace !== '') {
+    workspaces.add(sessionState.watch.workspace);
+  }
+  if (typeof sessionState.watch?.pane === 'string' && sessionState.watch.pane !== '') {
+    panes.add(sessionState.watch.pane);
+  }
+  if (typeof sessionState.bus?.workspace === 'string' && sessionState.bus.workspace !== '') {
+    workspaces.add(sessionState.bus.workspace);
+  }
+  if (typeof sessionState.bus?.pane === 'string' && sessionState.bus.pane !== '') {
+    panes.add(sessionState.bus.pane);
+  }
+  if (typeof sessionState.watchdog?.pane === 'string' && sessionState.watchdog.pane !== '') {
+    panes.add(sessionState.watchdog.pane);
+  }
+}
+
+function collectDelegatePanes(
+  delegates: TeamFile['delegates'],
+  session: string,
+  panes: Set<string>,
+): void {
+  for (const delegate of delegates ?? []) {
+    if (typeof delegate.pane !== 'string' || delegate.pane === '') continue;
+    const slash = delegate.pane.indexOf('/');
+    if (slash <= 0 || slash !== delegate.pane.lastIndexOf('/') || slash === delegate.pane.length - 1) continue;
+    if (/\s/.test(delegate.pane)) continue;
+    if (delegate.pane.slice(0, slash) === session) {
+      panes.add(delegate.pane.slice(slash + 1));
+    }
+  }
+}
+
+/**
+ * Workspaces in `session` that no team record names and whose panes are all bare shells, read
+ * fresh through the terminal host role (`pane list --workspace` and `pane process-info --pane`).
+ * Read-only: `team check` never closes an unrecorded workspace, because it may belong to the
+ * owner or another team. A workspace with an unreadable or empty pane list, or any pane whose
+ * process reading is unreadable or lists a foreground process other than its own shell, is left
+ * uncounted.
+ */
+function unrecordedWorkspaceDifferences(
+  team: TeamFile,
+  state: SessionState,
+  live: Live,
+  root: string,
+  home: string | undefined,
+  session: string,
+  sources: CheckSources,
+): Difference[] {
+  if (!live.running || live.workspaces.length === 0) return [];
+  if (
+    sources.workspacePanes === undefined &&
+    sources.processes === undefined &&
+    !hasCustomHerdrRun()
+  ) {
+    return [];
+  }
+
+  const recordedWorkspaces = new Set<string>();
+  const recordedPanes = new Set<string>();
+  collectSessionRecords(state, recordedWorkspaces, recordedPanes);
+  collectDelegatePanes(team.delegates, session, recordedPanes);
+  if (home !== undefined) {
+    try {
+      const teams = readTeams(home);
+      const ownRoot = resolve(root);
+      for (const record of Object.values(teams)) {
+        if (resolve(record.root) === ownRoot) continue;
+        try {
+          const otherState = readState(join(record.root, '.agents'));
+          collectSessionRecords(otherState.sessions[session], recordedWorkspaces, recordedPanes);
+        } catch {
+          // A sibling team whose state cannot be read does not fail this team's check.
+        }
+        try {
+          const otherConfig = readTeamConfig(record.root, { home, checkOnly: true });
+          if (otherConfig.ok) {
+            collectDelegatePanes(otherConfig.team.delegates, session, recordedPanes);
+          }
+        } catch {
+          // A sibling team whose config cannot be read does not fail this team's check.
+        }
+      }
+    } catch {
+      // An unreadable team registry is named once by `registryDifferences`.
+    }
+  }
+  for (const agent of live.agents) {
+    if (recordedPanes.has(agent.pane) && typeof agent.workspace === 'string' && agent.workspace !== '') {
+      recordedWorkspaces.add(agent.workspace);
+    }
+  }
+
+  const readPanes =
+    sources.workspacePanes ??
+    ((s: string, w: string) => workspacePanes(w, s === 'default' ? undefined : s));
+  const readProcesses =
+    sources.processes ??
+    ((s: string, p: string) => paneProcesses(p, s === 'default' ? undefined : s));
+
+  const out: Difference[] = [];
+  for (const workspace of live.workspaces) {
+    if (recordedWorkspaces.has(workspace.id)) continue;
+    recordedWorkspaces.add(workspace.id);
+    const panes = readPanes(session, workspace.id);
+    if (panes === null || panes.length === 0) continue;
+    if (panes.some((pane) => recordedPanes.has(pane))) continue;
+    let allBareShells = true;
+    for (const pane of panes) {
+      const process = readProcesses(session, pane);
+      if (!paneHoldsOnlyShell(process)) {
+        allBareShells = false;
+        break;
+      }
+    }
+    if (!allBareShells) continue;
+    out.push({
+      what: `unrecorded workspace ${workspace.id} (${workspace.label}) holds only shells`,
+      repair: 'look at the workspace; close it if it is yours',
     });
   }
   return out;
@@ -1192,7 +1608,7 @@ function unreadDifferences(
       ...(brief?.superseded ?? []),
     ]);
     const dropDir = join(root, '.agents', 'send-drops', session, seat.name);
-    const context = { to: seat.name, root, session };
+    const context = { to: seat.name, root, session, lead: team.orchestrator };
     const unread = listUnread(dropDir, context, home).filter((message) => {
       if (briefIds.has(message.id)) return false;
       return now.getTime() - Date.parse(message.ts) >= floorSeconds * 1000;
@@ -1436,7 +1852,7 @@ type LabelDrift = {
   seat: Seat;
   pane: string;
   workspace?: { id: string; title: string };
-  display?: { line: string };
+  display?: { kind: 'drift'; line: string } | { kind: 'missing' };
 };
 
 /**
@@ -1447,20 +1863,45 @@ type LabelDrift = {
  * and an effort word read from a screen, so a line the observation explains is left alone. One
  * pane per seat, the one this project's state records — the same read the attention report makes.
  */
-function labelDrifts(team: TeamFile, state: SessionState, live: Live): LabelDrift[] {
+function labelDrifts(
+  team: TeamFile,
+  state: SessionState,
+  live: Live,
+  paneDisplays: ReadonlyMap<string, string | undefined> | null = null,
+  repairedDisplayPanes?: ReadonlySet<string>,
+): LabelDrift[] {
   const out: LabelDrift[] = [];
   for (const seat of team.seats) {
+    if (seat.stopped) continue;
     const recorded = state.seats[seat.name]?.pane;
     if (recorded === undefined) continue;
     const agent = live.agents.find((candidate) => candidate.name === seat.name);
-    if (!agent || agent.pane !== recorded) continue;
-    const title = live.workspaces.find((workspace) => workspace.id === agent.workspace)?.label;
+    const agentOnPane = agent !== undefined && agent.pane === recorded;
+    const paneListed = paneDisplays !== null && paneDisplays.has(recorded);
+    if (!agentOnPane && !paneListed) continue;
+    const workspaceId = agentOnPane ? agent.workspace : state.seats[seat.name]?.workspace;
+    const title = workspaceId === undefined
+      ? undefined
+      : live.workspaces.find((workspace) => workspace.id === workspaceId)?.label;
     const drift: LabelDrift = { seat, pane: recorded };
-    if (title !== undefined && title !== workspaceLabel(seat)) drift.workspace = { id: agent.workspace, title };
-    const line = agent.displayAgent;
-    // A pane herdr holds no display for is not drift: many panes never had one reported, and the
-    // file does not say a pane must carry one. Only a line something else wrote is named.
-    if (line !== undefined && !displayLineMatches(seat, line, live.screens[recorded])) drift.display = { line };
+    if (workspaceId !== undefined && title !== undefined && title !== workspaceLabel(seat)) {
+      drift.workspace = { id: workspaceId, title };
+    }
+    if (paneDisplays !== null) {
+      const line = repairedDisplayPanes?.has(recorded)
+        ? displayAgent(seat)
+        : (paneListed ? paneDisplays.get(recorded) : agent?.displayAgent);
+      if (line === undefined) {
+        drift.display = { kind: 'missing' };
+      } else if (!displayLineMatches(seat, line, live.screens[recorded])) {
+        drift.display = { kind: 'drift', line };
+      }
+    } else if (agentOnPane) {
+      const line = repairedDisplayPanes?.has(recorded) ? displayAgent(seat) : agent.displayAgent;
+      if (line !== undefined && !displayLineMatches(seat, line, live.screens[recorded])) {
+        drift.display = { kind: 'drift', line };
+      }
+    }
     if (drift.workspace !== undefined || drift.display !== undefined) out.push(drift);
   }
   return out;
@@ -1697,9 +2138,15 @@ function unmanagedCodexServerDifferences(
  * The drifts as differences, one per line: the repair is `team register <seat>`, which re-applies
  * both lines from the file without a relaunch.
  */
-function labelDifferences(team: TeamFile, state: SessionState, live: Live): Difference[] {
+function labelDifferences(
+  team: TeamFile,
+  state: SessionState,
+  live: Live,
+  paneDisplays: ReadonlyMap<string, string | undefined> | null = null,
+  repairedDisplayPanes?: ReadonlySet<string>,
+): Difference[] {
   const out: Difference[] = [];
-  for (const drift of labelDrifts(team, state, live)) {
+  for (const drift of labelDrifts(team, state, live, paneDisplays, repairedDisplayPanes)) {
     const name = drift.seat.name;
     if (drift.workspace !== undefined) {
       out.push({
@@ -1707,7 +2154,13 @@ function labelDifferences(team: TeamFile, state: SessionState, live: Live): Diff
         repair: `team register ${name}`,
       });
     }
-    if (drift.display !== undefined) {
+    if (drift.display?.kind === 'missing') {
+      out.push({
+        what: `${name}: its sidebar display line is missing or expired; the file's line is "${displayAgent(drift.seat)}"`,
+        repair: `team register ${name}`,
+      });
+    }
+    if (drift.display?.kind === 'drift') {
       out.push({
         what: `${name}: its herdr display reads "${drift.display.line}", the file's line is "${displayAgent(drift.seat)}"`,
         repair: `team register ${name}`,
@@ -1723,10 +2176,19 @@ function labelDifferences(team: TeamFile, state: SessionState, live: Live): Diff
  * makes. A herdr that will not take one says so as `team register` does, and its difference stands;
  * a line the repair wrote is named in the run's `repaired:` lines and logged with them.
  */
-function syncLabels(drifts: LabelDrift[], session: string, sources: CheckSources, io: Io): string[] {
+function syncLabels(
+  drifts: LabelDrift[],
+  session: string,
+  sources: CheckSources,
+  io: Io,
+  ttlMs = SIDEBAR_TTL_CAP_MS,
+  repairedDisplayPanes?: Set<string>,
+): string[] {
   const lines: string[] = [];
   const rename = sources.renameWorkspace ?? ((s: string, workspace: string, label: string) => workspaceRename(workspace, label, s));
-  const report = sources.reportDisplayAgent ?? ((s: string, pane: string, text: string) => reportDisplayAgent(pane, text, s));
+  const report =
+    sources.reportDisplayAgent ??
+    ((s: string, pane: string, text: string, ttl = SIDEBAR_TTL_CAP_MS) => reportDisplayAgent(pane, text, s, ttl));
   for (const drift of drifts) {
     const name = drift.seat.name;
     if (drift.workspace !== undefined) {
@@ -1739,7 +2201,8 @@ function syncLabels(drifts: LabelDrift[], session: string, sources: CheckSources
     }
     if (drift.display !== undefined) {
       const text = displayAgent(drift.seat);
-      if (report(session, drift.pane, text)) {
+      if (report(session, drift.pane, text, ttlMs)) {
+        repairedDisplayPanes?.add(drift.pane);
         lines.push(`${name}: its herdr display is set back to "${text}"`);
       } else {
         io.stdout(`${plainLine(name)}: its display was not reported\n`);
@@ -1822,10 +2285,11 @@ function displayLineMatches(seat: Seat, line: string, screen: string | undefined
 
 /**
  * What the registries say about this team's place (src/registry/projects.ts, src/registry/teams.ts).
- * A team is named in one project at most: `ofTeam` owns that rule and refuses the state where two
- * name it, naming both, and the refusal is repeated here rather than re-derived. A registry that
- * does not read refuses in the same line, so a machine whose registry cannot be read is not read
- * as fine. The team registry is read for every team, a project lead's or not: the roster bridge
+ * Membership is the team records' own: `ofTeam` answers this team's home project from its record,
+ * and a team serving more than one project is the served membership a record may name, not a
+ * difference. A registry that does not read refuses in the same line, so a machine whose registry
+ * cannot be read is not read as fine. The team registry is read for every team, a project lead's
+ * or not: the roster bridge
  * (`src/permissions/who.ts`) answers from it for every seat, so a file it cannot read leaves every
  * team unserved, and the difference is named wherever the check runs. And a project is led by one
  * team: when this team declares `project_lead: true`, the
@@ -1843,7 +2307,7 @@ function registryDifferences(team: TeamFile, root: string, home: string | undefi
     // own error and reports no roster, which reads as no gap — so the unreadable registry is
     // named here, once, wherever the check runs.
     readTeams(home);
-    ofTeam(home, teamIdOf(root));
+    readProjects(home);
     if (!team.projectLead || team.inProject === null) return [];
     const project = byName(home, team.inProject);
     if (project === null) return [];
@@ -1892,12 +2356,14 @@ function leadSiblings(team: TeamFile, root: string, home: string, teamIds: strin
  * A `delivery_order` declaration in `.agents/team.yaml` (at the team or seat level) that
  * `resolveOrderSetting` sets aside because it names a leg the inherited order does not have,
  * leaving the inherited order in force (`src/settings/inherit.ts`, output contract §1.5 scene D4).
- * `native`, `socket`, `headless-resume` and `session` are legs a word may add, and `mcp-inbox` is
- * a name this build reads but never walks, so a declaration naming any of them is no difference;
- * a word naming `mcp-inbox` is named in a note instead (`deliveryOrderInboxNotes`).
+ * `native`, `socket`, `headless-resume` and `session` are legs a word may add, so a declaration
+ * naming any of them is no difference. The retired `mcp-inbox` alias is dropped before the
+ * resolver ever judges a word (`liveOrderRecord`), so a word naming it — alone or beside live
+ * legs — is never a set-aside; the word is named in a note instead
+ * (`deliveryOrderInboxNotes`).
  */
 function deliveryOrderDifferences(team: TeamFile, root: string, home: string | undefined): Difference[] {
-  let projectOrder: readonly DeliveryLeg[] | undefined;
+  let projectOrder: readonly OrderWord[] | undefined;
   let signedTeamOrder = false;
   if (home !== undefined) {
     try {
@@ -1914,13 +2380,13 @@ function deliveryOrderDifferences(team: TeamFile, root: string, home: string | u
   if (team.deliveryOrder !== null && !signedTeamOrder) {
     const res = resolveOrderSetting(
       DELIVERY_ORDER,
-      orderDeclarationsOf<DeliveryLeg>({
+      orderDeclarationsOf(liveOrderRecord({
         ...(projectOrder !== undefined ? { project: projectOrder } : {}),
         team: team.deliveryOrder,
-      }),
+      })),
     );
     if (res.refused.some((r) => r.level === 'team')) {
-      const extra = team.deliveryOrder.filter((leg) => !res.value.includes(leg)).length;
+      const extra = liveOrderWords(team.deliveryOrder).filter((leg) => !res.value.includes(leg)).length;
       out.push({
         what: `delivery_order [${team.deliveryOrder.join(', ')}] in team config is set aside; [${res.value.join(', ')}] stands`,
         repair: `drop the ${pluralCount(Math.max(1, extra), 'leg')} not in the inherited delivery_order in team config`,
@@ -1934,14 +2400,14 @@ function deliveryOrderDifferences(team: TeamFile, root: string, home: string | u
     if (seat.human === true) continue;
     const res = resolveOrderSetting(
       DELIVERY_ORDER,
-      orderDeclarationsOf<DeliveryLeg>({
+      orderDeclarationsOf(liveOrderRecord({
         ...(projectOrder !== undefined ? { project: projectOrder } : {}),
         ...(!signedTeamOrder && team.deliveryOrder ? { team: team.deliveryOrder } : {}),
         seat: seat.deliveryOrder,
-      }),
+      })),
     );
     if (res.refused.some((r) => r.level === 'seat')) {
-      const extra = seat.deliveryOrder.filter((leg) => !res.value.includes(leg)).length;
+      const extra = liveOrderWords(seat.deliveryOrder).filter((leg) => !res.value.includes(leg)).length;
       out.push({
         what: `${seat.name}: delivery_order [${seat.deliveryOrder.join(', ')}] in team config is set aside; [${res.value.join(', ')}] stands`,
         repair: `drop the ${pluralCount(Math.max(1, extra), 'leg')} not in the inherited delivery_order for ${seat.name} in team config`,
@@ -1971,25 +2437,81 @@ function wrapperLaunch(cli: string, launch: string): boolean {
 
 /**
  * A `delivery_order` word in `.agents/team.yaml` — the team's own, or a seat's — that names
- * `mcp-inbox`. The name is read rather than set aside (a word may add it, `src/policy/types.ts`),
- * and the walk registers it as unavailable instead of travelling it: the MCP inbox is the store's
- * reader, like `team drops --read`, and a push from its server is not a wake (ADR D1,
- * `src/send/walk-cascade.ts`). The note names the word so the owner can drop it when the file is
- * next edited; the word changes no leg the walk travels, so it is not a difference and the exit
- * stays as it is. A human seat's word is named too: the walk reports the name unavailable for
- * every seat, whatever the human ruling otherwise spares.
+ * `mcp-inbox`, once per team and once per seat that names it. The name is no longer a leg: the
+ * MCP inbox is the store's reader, like `team drops --read`, and a push from its server is not a
+ * wake (ADR D1, `src/send/walk-cascade.ts`). A word that still names it is read as an alias and
+ * dropped from the order — never an error, never a set-aside, and the walk never sees it
+ * (`liveOrderRecord` drops it before the resolver). The note asks for the word's removal, so
+ * the name can leave the files; the word changes no leg the walk travels, so it is not a
+ * difference and the exit stays as it is.
  */
 function deliveryOrderInboxNotes(team: TeamFile): string[] {
   const notes: string[] = [];
   if (team.deliveryOrder !== null && team.deliveryOrder.includes('mcp-inbox')) {
     notes.push(
-      `delivery_order [${team.deliveryOrder.join(', ')}] in team config names mcp-inbox, which is not a delivery leg in this build — the inbox is the store's reader, so the walk skips the word; drop it when the file is next edited`,
+      `delivery_order [${team.deliveryOrder.join(', ')}] in team config names mcp-inbox, which is no longer a leg; remove it`,
     );
   }
   for (const seat of team.seats) {
     if (seat.deliveryOrder === undefined || !seat.deliveryOrder.includes('mcp-inbox')) continue;
     notes.push(
-      `${seat.name}: delivery_order [${seat.deliveryOrder.join(', ')}] in team config names mcp-inbox, which is not a delivery leg in this build — the inbox is the store's reader, so the walk skips the word; drop it from the seat's row when the file is next edited`,
+      `${seat.name}: delivery_order [${seat.deliveryOrder.join(', ')}] in team config names mcp-inbox, which is no longer a leg; remove it`,
+    );
+  }
+  return notes;
+}
+
+/**
+ * A seat whose chain declares `messaging.store: none`: its sends keep no copy, and the note
+ * names exactly what that gives up. The word is a choice, never a fault — the walk still works
+ * through the legs that carry the body themselves, and a socket frame still carries the signed
+ * record's bytes, which a receiver verifies as it would the folder copy. What the copy would
+ * have carried is gone: the retry, the unread re-wake, the read receipt and the `queued, not
+ * woken` flag. A person's pane is reached by the stored copy alone, so a send to a human seat
+ * under `none` is refused, and the note says that instead. Notes only, never a difference. A
+ * chain that cannot be read says nothing here: the policy and registry readings name that once.
+ */
+function messagingStoreNotes(team: TeamFile, root: string, home: string | undefined, now: Date): string[] {
+  if (home === undefined) return [];
+  let agentOf: (seat: string) => Agent | null;
+  try {
+    agentOf = seatRecordsOf(home, root, team);
+  } catch {
+    return [];
+  }
+  const notes: string[] = [];
+  for (const seat of team.seats) {
+    let record: Agent | null;
+    try {
+      record = agentOf(seat.name);
+    } catch {
+      continue;
+    }
+    let store: MessagingStore;
+    let source: SettingLevel | null;
+    try {
+      const resolved = messagingStoreChainOf({
+        root,
+        seat: seat.name,
+        agentId: record?.id ?? null,
+        home,
+        file: team,
+        projectOfTeam: (id) => ofTeam(home, id),
+        now,
+      });
+      store = resolved.value;
+      source = resolved.source;
+    } catch {
+      continue;
+    }
+    if (store !== 'none') continue;
+    const by = source === null ? '' : ` by the ${source}`;
+    const overrides = resolveSeatOverrides({ home, root, seat: seat.name });
+    const human = (overrides.ok ? overrides.overrides.human : undefined) ?? (seat.human === true);
+    notes.push(
+      human
+        ? `${seat.name}: messaging.store is none${by}; a person's pane is reached by the stored copy alone, so a send to this seat is refused`
+        : `${seat.name}: messaging.store is none${by}; its sends keep no copy — the frame still carries the signed record's bytes and a receiver verifies them, but the retry, the unread re-wake, the read receipt and the "queued, not woken" flag are given up`,
     );
   }
   return notes;
@@ -2343,6 +2865,21 @@ function viewOf(attention: Attention, name: string, _status: string): Difference
   }
 }
 
+/** The same own-folder rule used by launches, read without changing a running seat. */
+function startFolderDifferences(team: TeamFile, state: SessionState, root: string, home: string, session: string): Difference[] {
+  const peers = placedStartFolders(team.seats, state);
+  const lobby = lobbyOf(home, root, { ...team, session });
+  const out: Difference[] = [];
+  for (const seat of team.seats) {
+    if (seat.human || seat.stopped || (seat.cli !== 'grok' && seat.cli !== 'cursor')) continue;
+    const cwd = peers.find(peer => peer.name === seat.name)!.cwd;
+    const problem = ownStartFolderProblem({ cli: seat.cli, seat: seat.name, cwd, root, home, lobby, peers });
+    if (problem !== null) out.push({ what: `${seat.name}: ${problem}`,
+      repair: `set seats.${seat.name}.cwd to its own worktree or clone, then run team restart ${seat.name}` });
+  }
+  return out;
+}
+
 /**
  * A note for a running seat whose CLI registers its inbox in a project file, and whose folder
  * holds no such registration: that seat's inbox leg is gone, and no other line says so. The file
@@ -2440,6 +2977,27 @@ function policyRefusalRepair(refusal: PolicyLoadRefusal, seatName?: string): str
   return `team policy unset ${refusal.level} <name>${seatFlag}`;
 }
 
+/** The dry-run an owner runs first for an entity whose owner-reply endpoint is missing or expired. */
+function ownerReplyDifferences(
+  team: TeamFile,
+  root: string,
+  home: string | undefined,
+  now: Date,
+): Difference[] {
+  if (home === undefined) return [];
+  const lead = team.orchestrator.trim();
+  if (lead === '') return [];
+  const found = resolveOwnerReplyTo(root, home, team.entity ?? null, now);
+  if (found.ok || found.reason !== 'missing' || found.entity === null) return [];
+  const target = `${lead}@${team.project}`;
+  if (parseOwnerReplyToValue(target) === null) return [];
+  return [{
+    what: found.why,
+    repair: `team policy set entity owner-reply-to ${target} --entity ${found.entity} --dry-run`,
+    owner: true,
+  }];
+}
+
 /**
  * Policy chain verification and `dev-mode` migration notice (Kernel Amendment 02, Gap 6 & Gap 7):
  * - Reads and resolves the policy chain (`entity → project → team`, plus each registered `seat`).
@@ -2459,6 +3017,8 @@ function policyCheck(
   env: Record<string, string | undefined>,
   stateDir: string,
   caller: string,
+  state: SessionState,
+  session: string,
 ): { differences: Difference[]; notes: string[] } {
   if (home === undefined) {
     const notes =
@@ -2473,7 +3033,7 @@ function policyCheck(
   const machine = readDevelopmentMode(home);
 
   let projectId: string | null = null;
-  let legacyProjectDeliveryOrder: readonly DeliveryLeg[] | undefined;
+  let legacyProjectDeliveryOrder: readonly OrderWord[] | undefined;
   try {
     const byTeam = ofTeam(home, teamIdOf(root));
     if (byTeam) {
@@ -2539,6 +3099,13 @@ function policyCheck(
       ) {
         continue;
       }
+      if (
+        (refusal.kind === 'loosening' || refusal.kind === 'invalid-policy') &&
+        refusal.policy.startsWith('router.')
+      ) {
+        // The router's own reader re-judges its words below, naming the rule each one broke.
+        continue;
+      }
       const isUnsigned =
         (refusal.kind === 'loosening' || refusal.kind === 'invalid-policy') && refusal.unsigned === true;
       differences.push({
@@ -2547,6 +3114,36 @@ function policyCheck(
         ...(isUnsigned ? {} : { owner: true }),
       });
     }
+  }
+
+  if (teamChain.ok) {
+    const commandDeny = parseGrokCommandDeny(teamChain.policies['grok-command-deny']?.value) ?? 'off';
+    const peers = placedStartFolders(team.seats, state);
+    const lobby = lobbyOf(home, root, { ...team, session });
+    // Launches keep a verified bound model. The editable state's model hint alone is no proof.
+    const denySeats = commandDeny === 'off' ? team.seats : team.seats.map(seat => {
+      const held = state.seats[seat.name];
+      if (seat.cli !== 'cursor' || seat.human || seat.stopped || held === undefined) return seat;
+      const bound = recordedSeatContinuity({ home, root, herdrSession: session, seat, state: held });
+      return bound.kind === 'bound' && bound.recorded.launch && bound.recorded.model && bound.recorded.version
+        ? { ...seat, model: bound.recorded.model } : seat;
+    });
+    notes.push(...grokCommandDenyNotes(commandDeny, denySeats, state.seats, undefined,
+      (seat, cwd) => ownStartFolderProblem({ cli: seat.cli, seat: seat.name, cwd, root, home, lobby, peers })));
+  }
+
+  // The router's three words are re-read by their own reader: their rules span words (a team may
+  // add an alias for its own seats but never retarget one the entity places, and an entity
+  // alias's fallback belongs to the entity alone), which the chain's ordering cannot name. Each
+  // problem names the level whose word broke the rule, so each difference carries its own
+  // `team policy unset` repair. A seat may not set these words at all, so the seat chains above
+  // keep refusing one found there.
+  for (const problem of mailboxRouterPolicyProblems(root, home, now, team)) {
+    differences.push({
+      what: problem.why,
+      repair: `team policy unset ${problem.level} ${problem.name}`,
+      owner: true,
+    });
   }
 
   const teamId = teamIdOf(root);
@@ -2622,6 +3219,14 @@ function policyCheck(
     } else if (teamChain.ok && teamChain.policies['dev-mode']?.value === 'off') {
       logLine(stateDir, 'check', caller, 'dev-mode: TEAMCLI_DEV_MODE=1 ignored because dev-mode policy is off', now);
     }
+  }
+
+  if (teamChain.ok) {
+    const pretrust = teamChain.policies.pretrust;
+    if (pretrust !== undefined && pretrust.level !== 'default' && (pretrust.value === 'off' || pretrust.value === 'project')) {
+      notes.push(`pretrust: ${pretrust.value}`);
+    }
+    // Admission has no CLI caller in this release; its catalogue default is not a check finding.
   }
 
   return { differences, notes };

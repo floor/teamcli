@@ -10,8 +10,9 @@
 // record spine gives a read receipt — means the drop was read, and it is not listed.
 //
 // `team drops --read` is the same folder, served to the launch's turn-start hook: the launch
-// names the seat and session, the newest waiting records are verified and receipted through the
-// inbox's own read (`readMessage`), and only then are their bodies printed. A file an earlier
+// names the seat and session, the newest waiting records are verified through the inbox's own
+// read (`readMessage`), their bodies are printed, and only then is the signed receipt written.
+// A file an earlier
 // build wrote is plain text no key can verify: it is skipped and counted, never served, and the
 // signed records around it are read as usual. A waiting message whose receipt name is uncertain
 // is named on stderr, one line per message, whether or not another body was served. The read
@@ -49,6 +50,7 @@ import { heldAt } from '../launch/rules-file.ts';
 import { logLine } from '../log.ts';
 import { currentClaimIn, listUnread, peekMessage, readMessage, type BriefRead } from '../mcp/inbox.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { attributeSenderClaim, senderReading, type SenderAttribution } from '../send/sender-claim.ts';
 import { readState } from '../state.ts';
 import {
   contextLine,
@@ -60,11 +62,11 @@ import {
   writeJsonError,
 } from '../output/index.ts';
 import { namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
-import { isRead, signedRecordOf, verifyRecord, type StatusContext } from '../send/record.ts';
+import { alreadyReadSentence, fileStatStamp, isReadOrCleared, keyPrintForCache, recordNameOk, settledReadOf, signedRecordOf, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
 
 export const USAGE = `Usage: team drops [--follow] [--json]
-       team drops --read --seat <seat> [--session <session>] [--epoch <run_id>]
+       team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>]
 
 Lists the drop files waiting in the calling seat's own drop folder,
 .agents/send-drops/<session>/<seat>: one row each, with the sender the message
@@ -79,8 +81,8 @@ Options:
   --json     one team.drops document ({format, project, session, seat, drops, counts});
              it and --follow can't be used together
   --read     hand the seat's waiting messages to a turn: each record is
-             verified with the message key, its signed <id>.read.json receipt
-             is written before its body is printed, and at most ten bodies are
+             verified with the message key, its body is printed, and its signed
+             <id>.read.json receipt is written after that hand-over. At most ten bodies are
              read a run, newest first. A plain-text file an earlier build wrote
              is not a signed record: it is skipped and counted, never served,
              and the records around it are still read. A signed record an
@@ -100,6 +102,13 @@ Options:
   --session  the launch's session, which must be the team file's own
   --epoch    the runtime epoch the launch started this reader under; when
              given, only a brief delivered under that epoch is served
+  --id       read this one id. An id a receipt already settled prints
+             \`<id>: already read at <time> (<reader>)\` and no body. The time
+             is kept only when it is an ISO instant; the reader is a known
+             word or one of this team's seats, never owner, lead or
+             orchestrator, otherwise \`unknown\`. With nothing unread,
+             the read says \`no unread drops\` and the newest such line. A
+             file whose name is not a message id is not served.
 
 Exits 0 when the folder is read, 1 when the caller may not read it (the
 listing needs a placed seat of this team; --read needs the seat itself, the
@@ -119,6 +128,10 @@ export type DropRow = {
   /** The sender's registry id when the drop is a signed record; the table resolves it to the
    *  project's readable name. A raw drop has no id, and its first line is already a headline. */
   from_id: string | null;
+  /** How the sender is known: `unverified_claim` on the shared checkout key, `launch-brief` when
+   *  the launch's own seat brief is bound to the seat's current claim, or `none` (a raw drop's
+   *  first line, or a file no key could vouch for). */
+  sender_attribution: SenderAttribution;
   received: string;
   path: string;
 };
@@ -277,6 +290,19 @@ export type DropListing = { kind: 'ok'; rows: DropRow[] } | { kind: 'unreadable'
  * earlier brief is not waiting mail. A receipt at the current claim's own id counts only when it
  * binds that claim, so a read of another delivery never hides the delivery the claim names.
  */
+const DROP_INSPECT_CACHE_LIMIT = 4096;
+const dropInspectCache = new Map<
+  string,
+  {
+    stamp: string;
+    keyPrint: string;
+    from: string | null;
+    fromId: string | null;
+    launch: { sha256: string | undefined; incarnation: string | undefined } | null;
+    payload: RecordPayload | null;
+  }
+>();
+
 export function listDrops(dropDir: string, key?: KeyObject, context?: StatusContext): DropListing {
   let names: string[];
   try {
@@ -286,11 +312,13 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
     if (code === 'ENOENT' || code === 'ENOTDIR') return { kind: 'ok', rows: [] };
     return { kind: 'unreadable', reason: error instanceof Error ? error.message : String(error) };
   }
+  const nameSet = new Set(names);
   const rows: DropRow[] = [];
   // The claim this listing serves under. Without a context there is none, and every drop is
   // listed — the same "nothing can be proven" rule the receipt read follows above.
   const claim = context === undefined ? null : currentClaimIn(context.root, context.session, context.to);
   const superseded = new Set(claim?.superseded ?? []);
+  const keyPrint = key === undefined ? 'none' : keyPrintForCache(key);
   for (const name of names) {
     if (name.includes('.')) continue;
     if (superseded.has(name)) continue;
@@ -308,29 +336,54 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
     // At the current claim's id the receipt must bind that claim too: a read of an earlier
     // delivery does not count for this one.
     const binding = claim !== null && name === claim.id ? briefBindingOf(claim) : undefined;
-    if (key !== undefined && context !== undefined && isRead(dropDir, name, context, key, binding)) continue;
+    const hasReceiptFile = nameSet.has(`${name}.read.json`) || nameSet.has(`${name}.replied.json`);
+    if (key !== undefined && context !== undefined && hasReceiptFile && isReadOrCleared(dropDir, name, context, key, binding)) continue;
+    const stamp = fileStatStamp(path);
     let from: string | null = null;
     let fromId: string | null = null;
+    let senderAttribution: SenderAttribution = 'none';
     let launch: { sha256: string | undefined; incarnation: string | undefined } | null = null;
-    try {
-      const text = readFileSync(path, 'utf8');
-      const record = signedRecordOf(parsedJson(text));
-      if (record !== null) {
-        // The record names its sender in the payload. The key that verified it is the message
-        // key; when the folder is read with no key at all, the payload is still what is shown —
-        // a record that fails the key it was checked with leaves the sender unknown.
-        if (key === undefined || verifyRecord(record, key)) {
-          from = record.payload.from;
-          fromId = record.payload.from_id;
-          if (record.payload.from === GENERAL_BRIEF_FROM && record.payload.rule === GENERAL_BRIEF_RULE) {
-            launch = { sha256: record.payload.brief_sha256, incarnation: record.payload.incarnation };
+    const cached = stamp !== null && keyPrint !== '' ? dropInspectCache.get(path) : undefined;
+    if (cached !== undefined && cached.stamp === stamp && cached.keyPrint === keyPrint) {
+      from = cached.from;
+      fromId = cached.fromId;
+      launch = cached.launch;
+      senderAttribution = key !== undefined && cached.payload !== null
+        ? attributeSenderClaim(cached.payload, { briefClaim: claim })
+        : 'none';
+    } else {
+      try {
+        const text = readFileSync(path, 'utf8');
+        const record = signedRecordOf(parsedJson(text));
+        let verifiedPayload: RecordPayload | null = null;
+        if (record !== null) {
+          // The record names its sender in the payload. The key that verified it is the message
+          // key; when the folder is read with no key at all, the payload is still what is shown —
+          // a record that fails the key it was checked with leaves the sender unknown.
+          if (key === undefined || verifyRecord(record, key)) {
+            verifiedPayload = record.payload;
+            from = record.payload.from;
+            fromId = record.payload.from_id;
+            // Only a record this key verified can be attributed, and only the seat's current
+            // general seat brief rests on more than the shared key. A read with no key can show
+            // the payload but cannot attribute it.
+            senderAttribution = key === undefined
+              ? 'none'
+              : attributeSenderClaim(record.payload, { briefClaim: claim });
+            if (record.payload.from === GENERAL_BRIEF_FROM && record.payload.rule === GENERAL_BRIEF_RULE) {
+              launch = { sha256: record.payload.brief_sha256, incarnation: record.payload.incarnation };
+            }
           }
+        } else {
+          from = senderOf(text.split('\n', 1)[0] ?? '');
         }
-      } else {
-        from = senderOf(text.split('\n', 1)[0] ?? '');
+        if (stamp !== null && keyPrint !== '') {
+          if (dropInspectCache.size >= DROP_INSPECT_CACHE_LIMIT) dropInspectCache.clear();
+          dropInspectCache.set(path, { stamp, keyPrint, from, fromId, launch, payload: verifiedPayload });
+        }
+      } catch {
+        // The file is still a drop; its sender is unknown.
       }
-    } catch {
-      // The file is still a drop; its sender is unknown.
     }
     // A launch record the current claim does not name cannot be served: it is an earlier
     // delivery, or an old build's record carrying none of the fields a claim binds.
@@ -338,7 +391,7 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
       && (claim === null || launch.sha256 !== claim.sha256 || launch.incarnation !== claim.incarnation)) {
       continue;
     }
-    rows.push({ id: name, from, from_id: fromId, received: stat.mtime.toISOString(), path });
+    rows.push({ id: name, from, from_id: fromId, sender_attribution: senderAttribution, received: stat.mtime.toISOString(), path });
   }
   return {
     kind: 'ok',
@@ -347,9 +400,12 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
 }
 
 /** The row's sender as the project's `sender_name` asks for. A record's `from` is the seat, and
- *  its registry id lets the name resolve; a raw drop's first line is already a headline. */
+ *  its registry id lets the name resolve; a raw drop's first line is already a headline. A
+ *  shared-key record reads as an unverified claim; a name no key vouches for is unattributed. */
 function readableFrom(row: DropRow, naming: SenderNaming): string | null {
-  return row.from === null ? null : senderDisplayName({ seat: row.from, id: row.from_id }, naming);
+  if (row.from === null) return null;
+  const name = senderDisplayName({ seat: row.from, id: row.from_id }, naming);
+  return `${name} ${senderReading(row.sender_attribution)}`;
 }
 
 /** `from <sender> — <path>`, the one line `--follow` prints per new drop. */
@@ -392,6 +448,26 @@ function refuse(io: Io, json: boolean, ...messages: string[]): number {
   return 1;
 }
 
+/** Receipts already in this folder, newest first. A name with a dot is a sidecar, not a message. */
+function settledFacts(dropDir: string, context: StatusContext, home: string): { id: string; at: string; readBy: string | undefined }[] {
+  const key = messageKeyState(home);
+  if (key.kind !== 'key') return [];
+  let names: string[];
+  try {
+    names = readdirSync(dropDir);
+  } catch {
+    return [];
+  }
+  const facts: { id: string; at: string; readBy: string | undefined }[] = [];
+  for (const name of names) {
+    if (name.includes('.') || !recordNameOk(name)) continue;
+    const settled = settledReadOf(dropDir, name, context, key.key);
+    if (settled === null) continue;
+    facts.push({ id: name, at: settled.at, readBy: settled.readBy });
+  }
+  return facts.sort((a, b) => (Date.parse(b.at) - Date.parse(a.at)) || a.id.localeCompare(b.id));
+}
+
 /**
  * Reads the caller's own drop folder: the caller must be a seat of this team on the pane the
  * state records for it, and the folder is the one its messages land in. `--json` prints the
@@ -399,7 +475,7 @@ function refuse(io: Io, json: boolean, ...messages: string[]): number {
  * the ones already there, so a Monitor starts quiet.
  */
 export async function runDrops(argv: string[], io: Io, sources: DropsSources = realSources): Promise<number> {
-  const args = readArgs(argv, ['seat', 'session', 'epoch'], ['follow', 'json', 'read']);
+  const args = readArgs(argv, ['seat', 'session', 'epoch', 'id'], ['follow', 'json', 'read']);
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
   // structured error document, and the parser errors before its flag set sees them.
   const json = hasJsonFlag(argv);
@@ -411,7 +487,9 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     ? 'seat'
     : !read && args.values.session !== undefined
       ? 'session'
-      : !read && args.values.epoch !== undefined ? 'epoch' : null;
+      : !read && args.values.epoch !== undefined
+        ? 'epoch'
+        : !read && args.values.id !== undefined ? 'id' : null;
   const epoch = args.values.epoch;
   const badEpoch = read && epoch !== undefined && !isBriefEpoch(epoch);
   if (args.error || args.rest.length || (follow && json) || (read && (follow || json || args.values.seat === undefined)) || stray !== null || badEpoch) {
@@ -472,7 +550,8 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       return refuse(io, json, `the team's session is ${JSON.stringify(session)}, not ${JSON.stringify(readSession)}`);
     }
     const seatName = args.values.seat as string;
-    if (!loaded.team.seats.some((one) => one.name === seatName)) {
+    const seatNames = loaded.team.seats.map((one) => one.name);
+    if (!seatNames.includes(seatName)) {
       return refuse(io, json, `the team file declares no seat ${JSON.stringify(seatName)}`);
     }
     const { caller, shown } = judgeCallerOf(io, readSession);
@@ -499,7 +578,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       return refuse(io, json, 'the drop folder is not a real folder: a link or a file stands in its path');
     }
     const dropDir = join(dir, 'send-drops', readSession, seatName);
-    const context: StatusContext = { to: seatName, root: loaded.root, session: readSession };
+    const context: StatusContext = { to: seatName, root: loaded.root, session: readSession, lead: loaded.team.orchestrator };
     // The launch's own brief is served under the claim the seat's state holds now. A reader the
     // launch started under an epoch serves only a brief delivered under that same runtime; a
     // manual read has none and binds the claim it serves.
@@ -511,8 +590,46 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       }
     };
     const brief: BriefRead = { claim: claimOf, ...(epoch === undefined ? {} : { epoch }) };
+    const asked = args.values.id;
+    if (asked !== undefined) {
+      const target = { dropDir, root: loaded.root, seat: seatName, session: readSession, lead: loaded.team.orchestrator };
+      const key = messageKeyState(sources.home);
+      const settled = key.kind === 'key' ? settledReadOf(dropDir, asked, context, key.key) : null;
+      if (peek && settled !== null) {
+        io.stdout(`${alreadyReadSentence(asked, settled.at, settled.readBy, seatNames)}\n`);
+        return readOk();
+      }
+      const got = peek
+        ? peekMessage(target, asked, sources.home, seatNames, brief)
+        : readMessage(target, asked, sources.home, brief);
+      if (!got.ok && got.served === 'already-served') {
+        io.stdout(`${settled === null ? got.reason : alreadyReadSentence(asked, settled.at, settled.readBy, seatNames)}\n`);
+        return readOk();
+      }
+      if (got.ok) {
+        io.stdout(`${got.body}\n`);
+        if (peek) logLine(dir, 'peek', logTag(shown), `${seatName}: ${asked}`);
+        return readOk();
+      }
+      if (got.refusal !== undefined) {
+        raiseRefusalEvent({
+          project: loaded.team.project,
+          root: loaded.root,
+          home: sources.home,
+          session: readSession,
+          kind: 'record.invalid',
+          rule: got.refusal.rule,
+          object: { id: got.refusal.id, seat: got.refusal.seat, path: got.refusal.path },
+        });
+      }
+      return refuse(io, json, got.reason);
+    }
+    const settled = settledFacts(dropDir, context, sources.home);
+    // Only a name the inbox lists is served. A file whose name is not a message id stays on the
+    // folder listing and is not handed over here.
     const waiting = listUnread(dropDir, context, sources.home);
     const bodies: string[] = [];
+    const seals: Array<() => boolean> = [];
     // The ids a peek showed: a peek writes no receipt, so the log line below is its only trace.
     const peeked: string[] = [];
     let superseded = 0;
@@ -530,12 +647,13 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     // an earlier build wrote is counted and skipped, and the signed records around it are read.
     for (const message of [...waiting].reverse()) {
       if (bodies.length >= DROP_READ_BATCH) break;
-      const target = { dropDir, root: loaded.root, seat: seatName, session: readSession };
+      const target = { dropDir, root: loaded.root, seat: seatName, session: readSession, lead: loaded.team.orchestrator };
       const got = peek
-        ? peekMessage(target, message.id, sources.home, brief)
-        : readMessage(target, message.id, sources.home, brief);
+        ? peekMessage(target, message.id, sources.home, seatNames, brief)
+        : readMessage(target, message.id, sources.home, brief, undefined, { receipt: 'after' });
       if (got.ok) {
         bodies.push(got.body);
+        if (got.seal !== undefined) seals.push(got.seal);
         if (peek) peeked.push(message.id);
       } else if (got.served !== undefined) {
         // Another reader won the receipt name and served this message: there is no body for this
@@ -570,6 +688,12 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       }
     }
     if (bodies.length > 0) io.stdout(`${bodies.join('\n\n')}\n`);
+    // The receipt follows the hand-over. A stdout that throws never reaches here, so the message
+    // stays unread. A seal that loses the name, or cannot be flushed, is said with the other
+    // receipt refusals; the body was already handed over.
+    for (const seal of seals) {
+      if (!seal()) receiptRefusals.push('the read receipt could not be written after the body was handed over');
+    }
     if (peeked.length > 0) {
       // The peek's one trace: who looked, whose mail, and the ids shown — names only, never a
       // body. A read needs none: its signed receipt is the record of what was served.
@@ -594,6 +718,15 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       // is done with them, and a turn that ran the hook should not look like one with mail.
       io.stderr(`team drops: ${String(superseded)} drop(s) carry an earlier general seat brief and are not served\n`);
     }
+    if (bodies.length === 0 && superseded === 0 && legacy === 0 && receiptRefusals.length === 0 && refusal === null) {
+      // Nothing for this turn. The notice stays off stdout: the turn-start hook forwards stdout
+      // into the turn, and an empty folder must not become chatter there. One newest settled
+      // read is named, never every settled id, and never a body.
+      const lines = ['no unread drops'];
+      const newest = settled[0];
+      if (newest !== undefined) lines.push(alreadyReadSentence(newest.id, newest.at, newest.readBy, seatNames));
+      io.stderr(`${lines.join('\n')}\n`);
+    }
     return readOk();
   }
   const { caller, shown } = judgeCallerOf(io, session);
@@ -611,7 +744,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
   const dropDir = join(dir, 'send-drops', session, seat);
   const keyState = messageKeyState(sources.home);
   const key = keyState.kind === 'key' ? keyState.key : undefined;
-  const context: StatusContext = { to: seat, root: loaded.root, session };
+  const context: StatusContext = { to: seat, root: loaded.root, session, lead: loaded.team.orchestrator };
   // The FROM column and `--follow`'s line carry the project's readable sender name; `--json`
   // keeps each row's own `from`.
   const naming = namingFor({ home: sources.home, root: loaded.root, viewerTeam: teamIdOf(loaded.root), seat, file: loaded.team });
@@ -654,7 +787,12 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
         project: loaded.team.project,
         session,
         seat,
-        drops: rows.map((row) => ({ from: row.from, received: row.received, path: row.path })),
+        drops: rows.map((row) => ({
+          from: row.from,
+          sender_attribution: row.sender_attribution,
+          received: row.received,
+          path: row.path,
+        })),
         counts: { drops: rows.length },
       });
     } else {

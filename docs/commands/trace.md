@@ -3,8 +3,9 @@
 Prints one message's story from the receiving team's signed event log: the steps a send, the
 bus, a seat and a watch filed for one message id, in the order they were written.
 
-Every step of a message's life is an event of its own in the receiving team's state folder
-(`~/.config/team/<project>-<hash>/events.jsonl`), signed and filed under the message id plus a
+Every step of a message's life is an event of its own in the receiving team's state folder's
+event log — the live segment and the sealed segments the retention keeps (the `events*.jsonl`
+files under `~/.config/team/<project>-<hash>/`) — signed and filed under the message id plus a
 step tail: `message.staged` as `<id>:staged`, each leg the walk tried as
 `<id>:leg.tried:<route>`, the sender's webhook post as `<id>:webhook.posted`, the bus's arrival as
 the bare `<id>`, the seat's receipts as `<id>:delivered`, `<id>:read` and `<id>:replied`, and the
@@ -38,7 +39,9 @@ unverified or self-contradicting record is skipped and counted, never repaired i
 
 Reads the team's configuration (its registry record; `.agents/team.yaml` on the legacy `file`
 source) to resolve the project name, session and checkout root, then reads the state folder's
-`events.jsonl` with `O_NOFOLLOW`, verifying each record's signature through the bus log. If a
+retained event-log segments with `O_NOFOLLOW`. A sealed segment is searched through its signed
+index, which names each record's kind and id: only the selected records' own lines are read and
+verified through the bus log, and the open segment is read whole and verified line by line. If a
 symbolic link or FIFO stands at the log or in the state folder ladder, the run refuses and does
 not follow it. Writes nothing.
 
@@ -60,7 +63,7 @@ one summary line, `<n> step` or `<n> steps`. The table's columns are:
 | OUTCOME | the step's own outcome word (`delivered`, `sent`, `failed`, `posted`, `retried`, …), or `-` |
 | MS | the cost the step measured, in whole milliseconds, or `-` |
 | DELTA | the quiet time from the step above it, as `0 ms` or `+<n> ms`; `-` on the first step |
-| NOTE | the step's reason, when it carried one, or `-` |
+| NOTE | the step's reason, when it carried one, or `admitted by: <rule>` on `message.staged`, or `-` |
 
 The order is the log's own sequence, so it is chronology, not a chosen order: a watch's retry and
 the seat's receipt appear exactly where they were written. A negative DELTA is printed, not
@@ -81,11 +84,15 @@ succeeds.
 
 With `--json` the run prints one pretty-printed `team.trace` document:
 
-    {"schema":{"name":"team.trace","version":1},"format":1,"project":"<project>","session":"<session>","id":"<id>","steps":[{"seq":<n>,"ts":"<ISO-8601>","kind":"<event kind>","record_id":"<id or id:step>","from":"<sender>","to":"<seat>","thread":"<uuid>","via":"<route>","outcome":"<word>","ms":<milliseconds>,"reason":"<text>","delta_ms":<milliseconds or null>}],"summary":"<n> step or <n> steps","unverified":<n>}
+    {"schema":{"name":"team.trace","version":1},"format":1,"project":"<project>","session":"<session>","id":"<id>","steps":[{"seq":<n>,"ts":"<ISO-8601>","kind":"<event kind>","record_id":"<id or id:step>","from":"<sender>","to":"<seat>","thread":"<uuid>","via":"<route>","outcome":"<word>","ms":<milliseconds>,"submit_ms":<milliseconds>,"working_ms":<milliseconds>,"reason":"<text>","delta_ms":<milliseconds or null>}],"summary":"<n> step or <n> steps","unverified":<n>}
 
 A step carries only the optional fields its event has, so a step that named no route has no
 `via` rather than an empty one. `delta_ms` is `null` on the first step and a whole number after
-it. The schema is published at `schema/trace.schema.json`.
+it. A typed wake's `leg.tried` step carries its two times from the moment the message was staged:
+`submit_ms` to the first read that showed the wake's line gone after Enter (the gated point) and
+`working_ms` to the profile's working screen (reported only); either is absent when no read
+showed it, and the MS column stays the step's whole cost. The schema is published at
+`schema/trace.schema.json`.
 
 ## Examples
 
@@ -140,7 +147,7 @@ and cost, and the last step's quiet time from the step above it:
 $ team trace 66666666-6666-4666-8666-666666666666 ; echo "exit $?"
 team beacon, session "beacon"
   TIME          STEP            VIA     OUTCOME      MS  DELTA  NOTE
-  09:00:00.000  message.staged  -       -            -   -      -
+  09:00:00.000  message.staged  -       -            -   -      admitted by: the owner
   09:00:00.000  leg.tried       native  unreachable  0   0 ms   no trusted runtime session is recorded for this seat (no agent record for this seat)
   09:00:00.000  leg.tried       typed   unreachable  0   0 ms   the send host binds no pane writer; nothing was typed
   09:00:00.000  leg.tried       drop    held         0   0 ms   the record is stored; no seat was woken
@@ -155,7 +162,7 @@ story:
 $ team trace 66666666-6666-4666-8666-666666666666:staged ; echo "exit $?"
 team beacon, session "beacon"
   TIME          STEP            VIA  OUTCOME  MS  DELTA  NOTE
-  09:00:00.000  message.staged  -    -        -   -      -
+  09:00:00.000  message.staged  -    -        -   -      admitted by: the owner
 1 step
 exit 0
 ```
@@ -192,6 +199,7 @@ $ team trace 66666666-6666-4666-8666-666666666666 --json ; echo "exit $?"
       "from": "owner",
       "to": "gpt-reviewer",
       "thread": "66666666-6666-4666-8666-666666666666",
+      "rule": "the owner",
       "delta_ms": null
     },
     {

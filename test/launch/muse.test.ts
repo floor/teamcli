@@ -211,13 +211,14 @@ describe('muse launch and captured screens', () => {
     expect(boxHoldsText('muse', '/goal ship the release', draft)).toBe(true);
   });
 
-  test('a faint prose hint is an empty box, the truecolor hint in the declared grey is too, and the same words plain are a draft', () => {
+  test('a faint prose hint is the empty box, and so are a faint /command hint and the declared-grey hint', () => {
     const prose = 'Ask to monitor a running build or log and get pinged on changes';
     const tasks = '/tasks shows workflows, subagents and terminals in one place';
     const dim = fixture1411('prose-hint-dim');
     const slash = fixture1411('tasks-hint-dim');
     const plain = fixture1411('prose-hint-plain');
     const color = fixture1411('prose-hint-color');
+    // An all-faint row is the empty box, prose included. A plain row of the same words stays text.
     expect(readScreen('muse', dim).kind).toBe('idle');
     expect(readBox('muse', dim)).toBeNull();
     expect(boxHoldsText('muse', prose, dim)).toBe(false);

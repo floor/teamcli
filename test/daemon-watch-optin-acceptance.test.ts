@@ -275,6 +275,11 @@ describe('the run flag reaches the real host, and only when asked', () => {
     expect(serving).not.toBeNull();
     if (serving === null) return;
     await waitUntil(() => (serving.daemon.roots[0]?.watch?.cycles ?? 0) >= 2);
+    // The cycle count moves in the host before the state file's write lands.
+    await waitUntil(() => {
+      const disk = readDaemonState(watchedWorld.home);
+      return disk.kind === 'ok' && (disk.state.roots[0]?.watch?.cycles ?? 0) >= 2;
+    });
     expect(serving.daemon.roots[0]?.watch).toMatchObject({
       // The host's own default: outbound effects stay blocked without a verified sender.
       effects: 'blocked',
@@ -509,10 +514,11 @@ describe('the install contract writes only the opt-in that was asked for', () =>
 
   test('the written unit carries --watch exactly once and presence only when asked', async () => {
     const world = scratch();
-    const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
+    const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501, accountHome: world.home });
     const install = async (argv: string[]) => {
       const io = testIo(world.root, owner);
       expect(await runDaemon(argv, io, sourcesOf(world.home, {
+        accountHome: world.home,
         service: manager,
         program: { execPath: '/runtime/bin/node', entry: programAt(world.home) },
         health: async () => ANSWERING,
@@ -532,11 +538,12 @@ describe('the install contract writes only the opt-in that was asked for', () =>
     expect(both.unit.split('--presence').length - 1).toBe(1);
     expect(both.unit.split('--watch').length - 1).toBe(1);
     expect(both.unit.indexOf('--presence')).toBeLessThan(both.unit.indexOf('--watch'));
-    // The unit still starts the one admitted no-terminal run, with the same roots.
+    // The unit still starts the one admitted no-terminal run, and it names no checkout.
     expect(both.unit).toContain('<string>daemon</string>');
     expect(both.unit).toContain('<string>--started-by</string>');
     expect(both.unit).toContain('<string>service-manager</string>');
-    expect(both.unit).toContain(`<string>${world.root}</string>`);
+    expect(both.unit).not.toContain('<string>--root</string>');
+    expect(both.unit).not.toContain(`<string>${world.root}</string>`);
   });
 
   test('--watch is refused on status and uninstall with the same usage message', async () => {

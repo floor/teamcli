@@ -16,8 +16,13 @@ export const OWNER_APPROVAL_ENV = 'TEAM_OWNER_APPROVAL';
 /** The fingerprint hex the owner authorizes for an `approve`: the digest of the live file's
  *  owner-section and seat fingerprints — the same bytes `approve --show` prints — recomputed now,
  *  so any edit after the owner's yes gives a different hex and the token no longer matches. */
-export function approveFingerprint(team: Approvable): string {
-  return createHash('sha256').update(`approve\n${canonical(fingerprints(team))}`).digest('hex');
+export function approveFingerprint(team: Approvable, launcherDigest?: string): string {
+  const body = fingerprints(team);
+  const covered = launcherDigest === undefined ? body : {
+    ...body,
+    sections: { ...body.sections, launchers: launcherDigest },
+  };
+  return createHash('sha256').update(`approve\n${canonical(covered)}`).digest('hex');
 }
 
 /** The fingerprint hex the owner authorizes for an `up`: the approved record's fingerprints and

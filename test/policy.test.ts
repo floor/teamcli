@@ -92,6 +92,23 @@ const QUIET_LIVE: Live = {
   screens: { 'w1:p1': CLAUDE_IDLE, 'w2:p1': CLAUDE_IDLE },
 };
 
+/** A live owner-reply endpoint, so a scene that asserts a clean check is not also naming the missing one. */
+function declareOwnerReply(home: string, root: string): void {
+  const loaded = validateTeamFile(readFileSync(join(root, '.agents', 'team.yaml'), 'utf8'));
+  if (!loaded.ok || loaded.team.entity === null) return;
+  const wrote = writePolicySet(
+    home,
+    {
+      level: 'entity',
+      target: loaded.team.entity,
+      name: 'owner-reply-to',
+      value: `${loaded.team.orchestrator}@${loaded.team.project}`,
+    },
+    { now: NOW },
+  );
+  if (!wrote.ok) throw new Error(wrote.why);
+}
+
 function makeFixture(
   yamlText: string = TEAM_YAML,
   // A client key's folder must sit outside the OS temp directory, so a scene that writes one
@@ -452,6 +469,73 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     if (addsUnderTyped.ok) expect(addsUnderTyped.effective.value).toEqual(['headless-resume', 'typed']);
   });
 
+  test('a duplicated retired name is invalid, as it was for every build that knew the word', () => {
+    // The duplicate is judged before the alias is dropped: [mcp-inbox, mcp-inbox] reads as
+    // nothing the catalogue can parse — invalid, not a word that declares nothing — exactly as
+    // every build that still knew the leg refused a duplicated name.
+    const spec = POLICY_CATALOGUE['delivery-order'];
+    expect(spec.parseValue(['mcp-inbox', 'mcp-inbox'])).toBeNull();
+    expect(spec.parseValue(['mcp-inbox', 'mcp-inbox', 'typed'])).toBeNull();
+    expect(spec.parseValue(['mcp-inbox', 'typed'])).toEqual(['typed']);
+    expect(spec.parseValue(['mcp-inbox'])).toEqual([]);
+  });
+
+  test('a signed level whose word holds only the retired mcp-inbox name declares nothing', () => {
+    // A word an older build signed may name the retired alias alone: it parses to no live leg
+    // and declares nothing at its level — skipped like an expired declaration, never refused
+    // and never set aside, so the outer word stands and the chain still resolves clean.
+    const aliasOnly = resolvePolicy('delivery-order', [
+      { name: 'delivery-order', value: ['socket', 'typed'], level: 'entity', setter: 'owner', date: '2026-10-19T10:00:00Z', kind: 'enforced' },
+      { name: 'delivery-order', value: ['mcp-inbox'], level: 'seat', setter: 'owner', date: '2026-10-19T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(aliasOnly.ok).toBe(true);
+    if (aliasOnly.ok) {
+      expect(aliasOnly.effective.value).toEqual(['socket', 'typed']);
+      expect(aliasOnly.effective.level).toBe('entity');
+    }
+    // A word the build knows nothing about is still set aside as invalid: the skip is the
+    // alias's alone.
+    const unknown = resolvePolicy('delivery-order', [
+      { name: 'delivery-order', value: ['socket', 'typed'], level: 'entity', setter: 'owner', date: '2026-10-19T10:00:00Z', kind: 'enforced' },
+      { name: 'delivery-order', value: ['telepathy'], level: 'seat', setter: 'owner', date: '2026-10-19T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(unknown.ok).toBe(false);
+  });
+
+  test('no level can use the retired name to widen its order', () => {
+    // The alias is dropped before a word is judged, so a word naming it resolves exactly as the
+    // same word without it: it adds no leg, and a word that loosens is refused on its live legs
+    // alone, with the retired name absent from the refusal.
+    const withAlias = resolvePolicy('delivery-order', [
+      { name: 'delivery-order', value: ['mcp-inbox', 'socket', 'typed'], level: 'team', setter: 'owner', date: '2026-10-19T10:00:00Z', kind: 'enforced' },
+    ]);
+    const withoutAlias = resolvePolicy('delivery-order', [
+      { name: 'delivery-order', value: ['socket', 'typed'], level: 'team', setter: 'owner', date: '2026-10-19T10:00:00Z', kind: 'enforced' },
+    ]);
+    expect(withAlias.ok).toBe(true);
+    expect(withoutAlias.ok).toBe(true);
+    if (withAlias.ok && withoutAlias.ok) {
+      expect(withAlias.effective.value).toEqual(withoutAlias.effective.value);
+    }
+
+    // `drop` is no addable leg, so the word without the alias loosens and is refused; the
+    // alias beside it changes nothing — the refusal names the live legs alone.
+    const loosening = resolvePolicy('delivery-order', [
+      { name: 'delivery-order', value: ['typed'], level: 'entity', setter: 'owner', date: '2026-10-19T10:00:00Z', kind: 'enforced' },
+      { name: 'delivery-order', value: ['mcp-inbox', 'drop', 'typed'], level: 'team', setter: 'owner', date: '2026-10-19T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(loosening.ok).toBe(false);
+    if (!loosening.ok) {
+      expect(loosening.refusals[0]).toMatchObject({
+        kind: 'loosening',
+        lowerLevel: 'team',
+        higherLevel: 'entity',
+        lowerValue: ['drop', 'typed'],
+      });
+      expect(loosening.refusals[0]!.message).not.toContain('mcp-inbox');
+    }
+  });
+
   test('a loosening is refused at load and names both levels', () => {
     const declarations: Policy[] = [
       { name: 'dev-mode', value: 'off', level: 'entity', setter: 'owner', date: '2026-10-17T10:00:00Z', kind: 'enforced' },
@@ -713,6 +797,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
   test('migration: before any dev-mode policy is set in the chain, team check emits one notice and TEAMCLI_DEV_MODE=1 keeps today behaviour', () => {
     const fx = makeFixture();
     try {
+      declareOwnerReply(fx.home, fx.root);
       let out = '';
       let err = '';
       const io: Io = {
@@ -754,6 +839,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
         { now: NOW },
       );
       expect(wrote.ok).toBe(true);
+      declareOwnerReply(fx.home, fx.root);
 
       let out = '';
       let err = '';
@@ -1102,7 +1188,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       const log = readFileSync(join(fx.root, '.agents', 'team.log'), 'utf8');
       expect(log).toContain('policy [lead] level entity (floor) vault-root: unset -> /synthetic/vault (setter: lead, dev mode)');
       expect(log).toContain('policy [lead] level entity (floor) vault-root: /synthetic/vault -> unset (setter: lead, dev mode)');
-      expect(log).toContain('admitted as orchestrator');
+      expect(log).toContain('admitted as lead');
     } finally {
       fx.cleanup();
     }
@@ -1265,7 +1351,9 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       const teamViewIo = testIo(fx.root, { kind: 'owner' });
       const teamViewCode = await runPolicy(['--file', '.agents/team.yaml'], teamViewIo, { home: fx.home, now: () => NOW });
       expect(teamViewCode).toBe(0);
-      expect(teamViewIo.out).toMatch(/delivery-order\s+mcp-inbox, typed\s+team\s+-\s+-\s+enforced/);
+      // The resolved view drops the retired alias: the legacy team word reads, and the value
+      // in force is its live legs.
+      expect(teamViewIo.out).toMatch(/delivery-order\s+typed\s+team\s+-\s+-\s+enforced/);
 
       const seatViewIo = testIo(fx.root, { kind: 'owner' });
       const seatViewCode = await runPolicy(['--seat', 'lead', '--file', '.agents/team.yaml'], seatViewIo, {
@@ -1273,7 +1361,9 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
         now: () => NOW,
       });
       expect(seatViewCode).toBe(0);
-      expect(seatViewIo.out).toMatch(/delivery-order\s+typed\s+seat\s+-\s+-\s+enforced/);
+      // The seat's legacy word is the team's live legs, so the seat view names no separate
+      // order: with the alias dropped, both levels hold the same word.
+      expect(seatViewIo.out).toContain('same as the team');
     } finally {
       fx.cleanup();
     }
@@ -1314,6 +1404,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
   test('expiry reading is worded "<name> at <level> expired at <t>; read as unset", logged at most once per expired entry, and leaves the signed file untouched', async () => {
     const fx = makeFixture();
     try {
+      declareOwnerReply(fx.home, fx.root);
       const expiryIso = '2026-10-17T12:00:05Z';
       const setIo = testIo(fx.root, { kind: 'owner' });
       const setCode = await runPolicy(
@@ -1501,6 +1592,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
   test('scene: unsigned legacy delivery_order that loosens a signed project policy is reported as the team’s difference, pointing the repair at .agents/team.yaml with who: the team’s lead, and a signed entry shadowing a legacy line emits a note', () => {
     const fx = makeFixture();
     try {
+      declareOwnerReply(fx.home, fx.root);
       // Signed project policy delivery-order [typed]
       const wroteProject = writePolicySet(
         fx.home,
@@ -1647,7 +1739,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       expect(await runPolicy(['--file', '.agents/team.yaml'], io1, { home: fx.home, now: () => NOW })).toBe(0);
       expect(io1.out).not.toMatch(/^\s*board\s+-\s+default/m);
       expect(io1.out).not.toMatch(/^\s*review-terms\s+-\s+default/m);
-      expect(io1.out).toContain('  not set: board, review-terms, vault-root\n');
+      expect(io1.out).toContain('  not set: board, review-terms, vault-root, router.aliases, router.fallback\n');
 
       const jsonIo1 = testIo(fx.root, { kind: 'owner' });
       expect(await runPolicy(['--file', '.agents/team.yaml', '--json'], jsonIo1, { home: fx.home, now: () => NOW })).toBe(0);
@@ -1672,7 +1764,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       const io2 = testIo(fx.root, { kind: 'owner' });
       expect(await runPolicy(['--file', '.agents/team.yaml'], io2, { home: fx.home, now: () => NOW })).toBe(0);
       expect(io2.out).toMatch(/board\s+https:\/\/board\.floor\/beacon\s+project\s+owner\s+-\s+advised/);
-      expect(io2.out).toContain('  not set: review-terms, vault-root\n');
+      expect(io2.out).toContain('  not set: review-terms, vault-root, router.aliases, router.fallback\n');
     } finally {
       fx.cleanup();
     }

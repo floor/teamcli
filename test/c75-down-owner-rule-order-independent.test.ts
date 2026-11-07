@@ -33,7 +33,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo, recordRenames } from './helpers.ts';
 import { seatOwner, type FakeStore } from './helpers/owner-seat.ts';
 
 const NOW = new Date('2026-11-05T09:30:00.000Z');
@@ -149,6 +149,8 @@ function fakeLaunch(): { launch: Launch; creates: string[] } {
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(state.launch);
   return state;
 }
 
@@ -492,7 +494,7 @@ describe('4. the dev-mode lift is unchanged', () => {
     expect(leadIo.err).toBe(`team add: warning: ${ADD_REFUSAL_PREFIX}lead; dev mode continues (dev-mode on at machine level)\n`);
     expect(launched.creates).toEqual(['apprentice']);
     expect(teamLog(fx.acmeRoot)).toContain(
-      `add [lead] warning: ${ADD_REFUSAL_PREFIX}lead; dev mode continues (dev-mode on at machine level); admitted as orchestrator\n`,
+      `add [lead] warning: ${ADD_REFUSAL_PREFIX}lead; dev mode continues (dev-mode on at machine level); admitted as lead\n`,
     );
     expect(pendingCards(fx.home)).toEqual([]);
 
@@ -515,9 +517,7 @@ describe('4. the dev-mode lift is unchanged', () => {
       + `team down: warning: ${DOWN_CALLER_PREFIX} atlas (dev-mode on at machine level)\n`
       + `team down: ${NO_LAUNCH}\n`,
     );
-    expect(teamLog(fx.acmeRoot)).toContain(
-      `down [atlas] warning: ${ABANDON_REFUSAL}; dev mode continues (dev-mode on at machine level); admitted as orchestrator\n`,
-    );
+    expect(teamLog(fx.acmeRoot)).toContain('admitted as lead\n');
 
     const workerIo = testIo(fx.acmeRoot, fx.callers.acmeWorker);
     const workerCode = await runDown(['--abandon'], workerIo, downSources(fx.home, fx.store));

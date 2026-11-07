@@ -30,7 +30,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { readState, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo, recordRenames } from './helpers.ts';
 import { seatOwner, type FakeStore } from './helpers/owner-seat.ts';
 
 const NOW = new Date('2026-11-04T09:00:00.000Z');
@@ -170,7 +170,7 @@ describe('a team record changed without a card', () => {
     expect(ran.code).toBe(0);
     expect(ran.err).toBe(`warning: ${CONFIG_LINE} lead; dev mode continues (dev-mode on at machine level)\n`);
     expect(readFileSync(at.file, 'utf8')).toContain('    model: Claude Sonnet\n');
-    expect(logOf(at)).toContain(`config [lead] warning: ${CONFIG_LINE} lead; dev mode continues (dev-mode on at machine level); admitted as orchestrator\n`);
+    expect(logOf(at)).toContain(`config [lead] warning: ${CONFIG_LINE} lead; dev mode continues (dev-mode on at machine level); admitted as lead\n`);
     // The lift writes an audit line, never a card: the owner is not asked for a seat change.
     expect(cards(at.home)).toEqual([]);
   });
@@ -191,7 +191,7 @@ describe('a team record changed without a card', () => {
 
 // --- the main orchestrator above the target --------------------------------------------------
 
-const ATLAS = { kind: 'seat' as const, name: 'atlas', pane: 'synthetic-pane-main', session: 'main' };
+const CEDAR = { kind: 'seat' as const, name: 'cedar', pane: 'synthetic-pane-main', session: 'main' };
 const MILL = { kind: 'seat' as const, name: 'mill', pane: 'synthetic-pane-target', session: 'material' };
 const OUTS = { kind: 'seat' as const, name: 'outs', pane: 'synthetic-pane-outside', session: 'outside' };
 const OTHER_LEAD = { kind: 'seat' as const, name: 'other-lead', pane: 'synthetic-pane-other', session: 'other' };
@@ -242,7 +242,7 @@ function families(): Families {
   const home = join(base, 'home');
   for (const root of [floorRoot, targetRoot, outsideRoot, otherRoot]) mkdirSync(join(root, '.agents'), { recursive: true });
   mkdirSync(home, { recursive: true });
-  writeFileSync(join(floorRoot, '.agents', 'team.yaml'), teamWith('floor', 'floor', 'main', 'atlas', floorRoot));
+  writeFileSync(join(floorRoot, '.agents', 'team.yaml'), teamWith('floor', 'floor', 'main', 'cedar', floorRoot));
   writeFileSync(join(targetRoot, '.agents', 'team.yaml'), teamWith('material', 'floor', 'material', 'mill', targetRoot));
   writeFileSync(join(outsideRoot, '.agents', 'team.yaml'), teamWith('outside', 'outside', 'outside', 'outs', outsideRoot));
   writeFileSync(join(otherRoot, '.agents', 'team.yaml'), teamWith('other', 'outside', 'other', 'other-lead', otherRoot));
@@ -254,12 +254,12 @@ function families(): Families {
       state.sessions[session] = { seats: { [name]: { stage: 'ready', pane } }, worktrees: {} };
     });
   };
-  place(floorRoot, 'main', 'atlas', ATLAS.pane);
+  place(floorRoot, 'main', 'cedar', CEDAR.pane);
   place(targetRoot, 'material', 'mill', MILL.pane);
   place(outsideRoot, 'outside', 'outs', OUTS.pane);
   place(otherRoot, 'other', 'other-lead', OTHER_LEAD.pane);
   for (const [root, project, entity, session, name] of [
-    [floorRoot, 'floor', 'floor', 'main', 'atlas'],
+    [floorRoot, 'floor', 'floor', 'main', 'cedar'],
     [targetRoot, 'material', 'floor', 'material', 'mill'],
     [outsideRoot, 'outside', 'outside', 'outside', 'outs'],
     [otherRoot, 'other', 'outside', 'other', 'other-lead'],
@@ -270,7 +270,7 @@ function families(): Families {
   return { floorRoot, targetRoot, outsideRoot, otherRoot, home };
 }
 
-async function configAt(root: string, home: string, caller: typeof ATLAS, key: string, value: string): Promise<{ code: number; err: string }> {
+async function configAt(root: string, home: string, caller: typeof CEDAR, key: string, value: string): Promise<{ code: number; err: string }> {
   const io = testIo(root, caller);
   io.env = { TEAMCLI_DEV_MODE: '1' };
   const code = await runConfig(['set', key, value], io, { home, env: io.env, now: () => NOW });
@@ -280,21 +280,21 @@ async function configAt(root: string, home: string, caller: typeof ATLAS, key: s
 describe('the main orchestrator and the teams around it', () => {
   test('it changes a team of its own entity under the main folder', async () => {
     const at = families();
-    const ran = await configAt(at.targetRoot, at.home, ATLAS, 'seats.worker.model', 'Claude Sonnet');
+    const ran = await configAt(at.targetRoot, at.home, CEDAR, 'seats.worker.model', 'Claude Sonnet');
     expect(ran.code).toBe(0);
-    expect(ran.err).toBe(`warning: ${CONFIG_LINE} atlas; dev mode continues\n`);
+    expect(ran.err).toBe(`warning: ${CONFIG_LINE} cedar; dev mode continues\n`);
     expect(readFileSync(join(at.targetRoot, '.agents', 'team.yaml'), 'utf8')).toContain('    model: Claude Sonnet\n');
     const log = readFileSync(join(at.targetRoot, '.agents', 'team.log'), 'utf8');
-    expect(log).toContain(`config [atlas] warning: ${CONFIG_LINE} atlas; dev mode continues; admitted as orchestrator\n`);
+    expect(log).toContain(`config [cedar] warning: ${CONFIG_LINE} cedar; dev mode continues; admitted as lead\n`);
   });
 
   test('a team of another entity under the same main folder is refused', async () => {
     const at = families();
     const file = join(at.outsideRoot, '.agents', 'team.yaml');
     const before = readFileSync(file, 'utf8');
-    const ran = await configAt(at.outsideRoot, at.home, ATLAS, 'seats.worker.model', 'Claude Sonnet');
+    const ran = await configAt(at.outsideRoot, at.home, CEDAR, 'seats.worker.model', 'Claude Sonnet');
     expect(ran.code).toBe(1);
-    expect(ran.err).toBe(`team config: ${CONFIG_LINE} atlas\n`);
+    expect(ran.err).toBe(`team config: ${CONFIG_LINE} cedar\n`);
     expect(readFileSync(file, 'utf8')).toBe(before);
     expect(existsSync(join(at.outsideRoot, '.agents', 'team.log'))).toBe(false);
   });
@@ -394,6 +394,8 @@ function addWorld(): { launch: Launch; creates: string[] } {
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(made.launch);
   return made;
 }
 
@@ -431,7 +433,7 @@ describe('team add under the same lift', () => {
     expect(io.err).toBe(`team add: warning: ${ADD_LINE} lead; dev mode continues (dev-mode on at machine level)\n`);
     expect(readFileSync(at.file, 'utf8')).toContain('    name: apprentice\n');
     expect(made.creates).toEqual(['apprentice']);
-    expect(logOf(at)).toContain(`add [lead] warning: ${ADD_LINE} lead; dev mode continues (dev-mode on at machine level); admitted as orchestrator\n`);
+    expect(logOf(at)).toContain(`add [lead] warning: ${ADD_LINE} lead; dev mode continues (dev-mode on at machine level); admitted as lead\n`);
     expect(cards(at.home)).toEqual([]);
   });
 

@@ -47,6 +47,8 @@ import {
 } from '../src/daemon/presence/codex-source.ts';
 import { stageCodexPresence, type CodexPresenceOutcome } from '../src/daemon/presence/codex-app-server.ts';
 import { presencePaths } from '../src/daemon/presence/spool.ts';
+import { createNativeFeed } from '../src/daemon/presence/native-feed.ts';
+import type { EventAppendInput } from '../src/bus/log.ts';
 
 const NOW = new Date('2026-10-19T04:00:00.000Z');
 const SESSION = 'teamcli';
@@ -316,6 +318,7 @@ function startSource(
   scene: Scene,
   server: ServerHandle,
   sink?: (notification: unknown) => CodexPresenceOutcome,
+  frame?: (text: string) => void,
 ): CodexPresenceSource {
   const started = codexPresenceFor({
     target: {
@@ -330,6 +333,7 @@ function startSource(
     feature: true,
     now: () => scene.clock.at,
     ...(sink === undefined ? {} : { sink }),
+    ...(frame === undefined ? {} : { frame }),
   });
   if (started.kind !== 'subscribed') throw new Error(`the source refused to start: ${started.why}`);
   return started.source;
@@ -354,6 +358,33 @@ const statusFrame = (status: Record<string, unknown>, threadId = THREAD) => ({
 });
 
 describe('the Codex presence source', () => {
+  test('original frames on the existing synthetic connection reach the refusal-only native owner', async () => {
+    const scene = makeScene();
+    const server = await startAppServer(scene.socketPath);
+    const events: EventAppendInput[] = [];
+    const feed = createNativeFeed({ stateDir: scene.dir, session: SESSION, seats: [SEAT], root: scene.root,
+      home: scene.home, project: 'example', daemonOwner: 'a'.repeat(32), append: (event) => { events.push(event); return true; } });
+    const texts: string[] = [];
+    const identity = { stateDir: scene.dir, session: SESSION, seat: SEAT, binding: BINDING };
+    const source = startSource(scene, server, undefined, (text) => { texts.push(text); feed.codexFrame(identity, text); });
+    try {
+      feed.step(); await source.step(NOW);
+      const approval = { id: 5, method: 'item/commandExecution/requestApproval', params: { threadId: THREAD, turnId: 'example-turn', itemId: 'example-item' } };
+      server.push(approval);
+      server.push({ id: 'example-response', result: {} });
+      await waitFor('original frame text', () => texts.includes(JSON.stringify(approval)) && texts.some((text) => text.includes('example-response')));
+      feed.step();
+      expect(events).toHaveLength(1); // same refusal is coalesced; raw transport role is preserved
+      for (const event of events) expect(event).toMatchObject({ kind: 'seat.status', status_source: 'codex-frame',
+        status_gate: 'unknown', status_availability: 'correlation-unproven', status_continuity: 'unproven' });
+      expect(server.requests.map((request) => request.method)).toEqual(['initialize', 'initialized', 'thread/read']);
+      const count = texts.length;
+      writeState(scene.dir, { binding: NEXT_BINDING, agentSession: THREAD });
+      server.push({ method: 'thread/closed', params: { threadId: THREAD } });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(texts).toHaveLength(count);
+    } finally { feed.close(); await source.close(); await server.close(); }
+  });
   test('qualifies on a validated baseline, filters the exact thread, and never expires a quiet stream', async () => {
     const scene = makeScene();
     const server = await startAppServer(scene.socketPath);

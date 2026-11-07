@@ -2,8 +2,8 @@
 // (a log line beside it, on every command the list names) and the run continues past it; unset,
 // every gate refuses as always. The owner gates are not caller gates: `grant`, `delegate`,
 // `revoke`, `approve`, `policy`, `check --repair`, `remove`/`down --abandon`, `broker`, `tempo`
-// and the daemon's three verbs stay the owner's, except that the owner's widening
-// (OD-20261019-49) admits one placed orchestrator while dev mode is on. The table scene at the
+// and the daemon's three verbs stay the owner's, except that the owner's dev-mode widening
+// admits one placed orchestrator while dev mode is on. The table scene at the
 // end pins every lift the widening makes — plus the installer designation the task host admits —
 // and every guard it never lifts: the client pane guard, the load guard, the swap gate and the
 // public actions. Every file, caller and pane below is synthetic.
@@ -40,7 +40,7 @@ import { installSlice } from '../src/tasks/slice-handler.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import type { Screen } from '../src/watch/screen.ts';
 import { config } from './check/fixtures.ts';
-import { claudeBox, CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
+import { claudeBox, CLAUDE_IDLE, gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const IDLE = CLAUDE_IDLE;
 const NOW = new Date('2026-10-15T12:00:00Z');
@@ -175,6 +175,8 @@ function upWorld(): { launch: Launch; runs: { pane: string; command: string }[] 
     sleep: async () => {},
     now: () => NOW,
   };
+
+  recordRenames(launch);
   return { launch, runs };
 }
 
@@ -606,7 +608,7 @@ describe('the owner-only edits: the widening admits one placed orchestrator, and
     expect(io.out).toBe('grant: updated\n');
     // The audit line names the command, the caller and the role the widening proved.
     expect(readFileSync(join(root, '.agents', 'team.log'), 'utf8'))
-      .toContain(` grant [lead] warning: ${line}; dev mode continues; admitted as orchestrator\n`);
+      .toContain(` grant [lead] warning: ${line}; dev mode continues; admitted as lead\n`);
   });
 
   test('grant refuses an unplaced caller with the mode unset and with it set', async () => {
@@ -932,7 +934,7 @@ test("up: an owner's run under a governing on owes no warning and no dev mark", 
 });
 
 // --- the widening's table ---------------------------------------------------------------------
-// One row per lift OD-20261019-49 makes, and one per guard it never lifts. The caller lifts are
+// One row per lift the dev-mode widening makes, and one per guard it never lifts. The caller lifts are
 // the one list read at the top of this file. The owner lifts are one admission,
 // `devModeOwnerLift`: reached at the cwd by `devModeOwnerLiftAtCwd`, and after the file is read
 // by `devModeOwnerLift` directly. The installer row is the task host's own admission of an
@@ -1023,7 +1025,7 @@ test('every owner lift admits the placed orchestrator, and logs the role it prov
     expect(lift).not.toBeNull();
     if (lift === null || lift.warning === null) throw new Error(`${row.command}: the lift spoke no warning`);
     expect(lift.lifted).toBe(true);
-    expect(lift.role).toBe('orchestrator');
+    expect(lift.role).toBe('lead');
     expect(lift.warning).toBe(`warning: ${row.refusal}; dev mode continues`);
     warned.push({ command: row.command, warning: lift.warning });
   }
@@ -1041,14 +1043,14 @@ test('every owner lift admits the placed orchestrator, and logs the role it prov
     });
     if (lift.warning === null) throw new Error(`${row.command}: the lift spoke no warning`);
     expect(lift.lifted).toBe(true);
-    expect(lift.role).toBe('orchestrator');
+    expect(lift.role).toBe('lead');
     expect(lift.warning).toBe(`warning: ${row.refusal}; dev mode continues`);
     warned.push({ command: row.command, warning: lift.warning });
   }
   expect(warned).toHaveLength(OWNER_AT_CWD.length + OWNER_AFTER_LOAD.length);
   const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
   for (const row of warned) {
-    expect(log).toContain(`${NOW.toISOString()} ${row.command} [lead] ${row.warning}; admitted as orchestrator\n`);
+    expect(log).toContain(`${NOW.toISOString()} ${row.command} [lead] ${row.warning}; admitted as lead\n`);
   }
 });
 

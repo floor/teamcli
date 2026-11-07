@@ -14,6 +14,7 @@
 // word is `shared`, so their work is one process's cost instead of one process each; the group's
 // limits are the tightest of its roots', and the child serves the roots round-robin, a slice per
 // turn, so one root's backlog delays another root's chores by a slice.
+import { loadavg } from 'node:os';
 import type { TeamFile } from '../../file/types.ts';
 import type { HostedWatchState } from '../../watch/hosted.ts';
 import {
@@ -41,6 +42,16 @@ import type {
   ChoresWatchSeatHealth,
 } from './protocol.ts';
 
+/** The machine-scoped chores the fleet runs beside the routes: work whose subjects span roots,
+ *  so no route's policy speaks for it. Its child is one more supervised process, started,
+ *  watched and replaced on the same beat; it serves no root, so it has no status row. */
+export type ChoresMachineInput = {
+  reminders: {
+    /** The canonical checkouts the daemon hosts, carried to the child's reader. */
+    hosted: readonly string[];
+  };
+};
+
 export type ChoresRouteInput = {
   route: HostedRoute;
   team: TeamFile;
@@ -62,7 +73,13 @@ export type ChoresFleetInput = {
   since: string;
   now: () => Date;
   routes: readonly ChoresRouteInput[];
+  /** The machine chores to isolate beside the routes. Absent, the fleet is exactly the
+   *  per-root/shared fleet it always was. */
+  machine?: ChoresMachineInput;
   log: (text: string) => void;
+  /** The machine's 1-minute load average, read when a stall is recorded so the log line can
+   *  carry it. The default reads the host's own load; a test injects a fixed reading. */
+  loadAverage?: () => number;
   /** Starts one child. The default writes a one-use token and spawns this program's own hidden
    *  verb; a test injects a fixture child to observe the protocol. */
   factory?: (input: SpawnChoresInput) => ChoresChild;
@@ -157,7 +174,7 @@ const HUNG_CEILING_MS = 600_000;
 const HUNG_CEILING_GRACE_MS = 10_000;
 
 type Group = {
-  mode: 'per-root' | 'shared';
+  mode: 'per-root' | 'shared' | 'machine';
   routes: ChoresRouteInput[];
   policy: ChoresPolicy;
   child: ChoresChild | null;
@@ -243,6 +260,7 @@ function overdueBeats(lastBeatMs: number | null, startedAtMs: number, ms: number
 }
 
 function rootList(group: Group): string {
+  if (group.mode === 'machine') return 'reminders';
   return group.routes.map((entry) => entry.route.root).join(', ');
 }
 
@@ -252,9 +270,15 @@ function exitReason(code: number | null, signal: NodeJS.Signals | null): string 
   return code === null ? 'left without an exit code' : `exited with code ${String(code)}`;
 }
 
-/** One group's supervisor: spawn, replace, report. */
-function createGroup(input: ChoresFleetInput, routes: ChoresRouteInput[], mode: 'per-root' | 'shared'): Group {
-  const policy = mode === 'shared' ? tightestPolicy(routes.map((entry) => entry.policy)) : routes[0]!.policy;
+/** One group's supervisor: spawn, replace, report. `policy` is the group's own, decided by the
+ *  caller: a root's word for a per-root child, the tightest of the group's for a shared one, and
+ *  the release defaults for the machine child, which no route's word speaks for. */
+function createGroup(
+  input: ChoresFleetInput,
+  routes: ChoresRouteInput[],
+  mode: 'per-root' | 'shared' | 'machine',
+  policy: ChoresPolicy,
+): Group {
   return {
     mode,
     routes,
@@ -341,6 +365,13 @@ function resetWatchMirror(
       why,
     });
   }
+}
+
+/** The load clause every recorded stall carries, so a stall the machine caused is told
+ *  apart from one the daemon's own work caused by the log alone. */
+function loadNote(input: ChoresFleetInput): string {
+  const load = (input.loadAverage ?? (() => loadavg()[0] ?? 0))();
+  return `machine load (1 min) ${Number.isFinite(load) ? load.toFixed(1) : 'unknown'}`;
 }
 
 function tickGroup(input: ChoresFleetInput, group: Group, at: Date, stalled: boolean): void {
@@ -545,7 +576,7 @@ function applyJudgement(
   group.killing = true;
   group.why = situation.end;
   if (wasSpared) input.log(`chores ${rootList(group)}: the child's CPU stopped advancing; ending it`);
-  input.log(`chores ${rootList(group)}: ${group.why}; ending it and starting a replacement`);
+  input.log(`chores ${rootList(group)}: ${group.why}; ending it and starting a replacement; ${loadNote(input)}`);
   child.kill(group.why, input.killGraceMs ?? DEFAULT_KILL_GRACE_MS);
 }
 
@@ -600,6 +631,12 @@ function startGroup(input: ChoresFleetInput, group: Group, at: Date): void {
       teamFile: entry.team,
       ...(entry.watch === undefined ? {} : { watch: entry.watch }),
     })),
+    ...(group.routes.length > 0 ? { seatHealth: true } : {}),
+    // Only the machine group carries the machine chores; a route's child never does, because
+    // its policy word is about that route's work and these subjects span roots.
+    ...(group.mode === 'machine' && input.machine !== undefined
+      ? { machine: { reminders: { hosted: [...input.machine.reminders.hosted] } } }
+      : {}),
   };
   let child: ChoresChild;
   try {
@@ -802,6 +839,11 @@ function onChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild,
     case 'note':
       input.log(`chores ${rootList(group)}: ${message.text}`);
       return;
+    case 'reminder-note':
+      // The line already names its subject; it is logged exactly as the daemon's own inline
+      // beat wrote it, so a reader cannot tell where the beat ran.
+      input.log(message.text);
+      return;
     case 'stopped':
       return;
   }
@@ -861,8 +903,15 @@ function onChildExit(input: ChoresFleetInput, group: Group, child: ChoresChild):
   input.log(`chores ${rootList(group)}: the child ${reason}; starting a replacement in ${String(wait)} ms`);
 }
 
-/** One row for one root of a group, at this reading's instant. */
-function groupRow(input: ChoresFleetInput, group: Group, root: string): DaemonChoresState {
+/** One row for one root of a group, at this reading's instant. `mode` is the row's own word,
+ *  handed in by the caller that proved the group serves this root: a machine group serves none,
+ *  so it has no row and its mode never reaches the record. */
+function groupRow(
+  input: ChoresFleetInput,
+  group: Group,
+  root: string,
+  mode: DaemonChoresState['mode'],
+): DaemonChoresState {
   const ms = input.now().getTime();
   // The cap is the kill threshold, so it must count what the supervisor counts: beats this
   // daemon has not heard, from its own read clock. The count starts only once the child has been
@@ -899,7 +948,7 @@ function groupRow(input: ChoresFleetInput, group: Group, root: string): DaemonCh
             ? group.why
             : null);
   return {
-    mode: group.mode,
+    mode,
     state,
     pid: group.child?.pid ?? null,
     startedAt: group.startedOnce ? new Date(group.startedAtMs).toISOString() : null,
@@ -947,7 +996,7 @@ export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
     } else if (entry.policy.mode === 'shared') {
       shared.push(entry);
     } else {
-      const group = createGroup(input, [entry], 'per-root');
+      const group = createGroup(input, [entry], 'per-root', entry.policy);
       if (entry.policy.unknown !== undefined) input.log(`chores ${entry.route.root}: ${entry.policy.unknown}; the release defaults are in force`);
       groups.push(group);
     }
@@ -956,7 +1005,13 @@ export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
     if (shared.some((entry) => entry.policy.unknown !== undefined)) {
       input.log(`chores ${shared.map((entry) => entry.route.root).join(', ')}: a policy value could not be read; the release defaults are in force`);
     }
-    groups.push(createGroup(input, shared, 'shared'));
+    groups.push(createGroup(input, shared, 'shared', tightestPolicy(shared.map((entry) => entry.policy))));
+  }
+  // The machine child is its own group: its work is machine-scoped, so a route's `inline` word
+  // says nothing about it, and the release limits bound it. It exists whenever the caller hands
+  // the fleet machine work, even when no route was hosted at all.
+  if (input.machine !== undefined) {
+    groups.push(createGroup(input, [], 'machine', tightestPolicy([])));
   }
 
   let stopRun: Promise<void> | null = null;
@@ -969,6 +1024,11 @@ export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
     tick(at: Date): void {
       const ms = at.getTime();
       const stalled = lastTickMs !== null && ms - lastTickMs > input.beatMs * 2;
+      if (stalled) {
+        // The beat itself is the stall record for the main loop: it is logged once, with the
+        // load, and no child is judged on the silence this daemon could not hear.
+        input.log(`chores: the daemon beat arrived late, ${String(ms - (lastTickMs ?? ms))} ms after the previous one on a ${String(input.beatMs)} ms cadence; ${loadNote(input)}`);
+      }
       lastTickMs = ms;
       for (const group of groups) tickGroup(input, group, at, stalled);
     },
@@ -1025,7 +1085,10 @@ export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
       const row = inline.get(root);
       if (row !== undefined) return row;
       for (const group of groups) {
-        if (group.routes.some((entry) => entry.route.root === root)) return groupRow(input, group, root);
+        // A machine group has no routes, so it has no row: its work belongs to the machine, and
+        // a row is keyed by a root. Skipping it makes the row's own mode contract provable here.
+        if (group.mode === 'machine') continue;
+        if (group.routes.some((entry) => entry.route.root === root)) return groupRow(input, group, root, group.mode);
       }
       return undefined;
     },

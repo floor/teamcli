@@ -1,6 +1,6 @@
 ---
 created: 2026-10-18
-updated: 2026-10-18
+updated: 2026-11-04
 kind: registry-draft
 status: draft
 read-at: v0.5.0 (52db9b75); integration supplement int/0.5.1 8acb470b, unreleased
@@ -71,6 +71,7 @@ The Since column records presence at a pinned revision, not an audited first-int
 | `add.model` | the --model override is not known for the seat's CLI | present at 0.5.0 | `contract/exit-codes.json` | command `add`; exit `2` |
 | `add.not-a-repo` | not inside a git repository | present at 0.5.0 | `contract/exit-codes.json` | command `add`; exit `2` |
 | `add.prepared` | the prepared edit does not validate | present at 0.5.0 | `contract/exit-codes.json` | command `add`; exit `2` |
+| `add.reserved-daemon` | a new seat may not be named daemon | unreleased | `contract/exit-codes.json` | command `add`; exit `2` |
 | `add.reserved-name` | a new seat may not be named lead | present at 0.5.0 | `contract/exit-codes.json` | command `add`; exit `2` |
 | `add.seat-name` | a seat name is required | present at 0.5.0 | `contract/exit-codes.json` | command `add`; exit `2` |
 | `add.temporary-flags` | --like, --until and --worktree need --temporary | present at 0.5.0 | `contract/exit-codes.json` | command `add`; exit `2` |
@@ -113,10 +114,13 @@ The Since column records presence at a pinned revision, not an audited first-int
 | `broker.not-a-repo` | not inside a git repository | present at 0.5.0 | `contract/exit-codes.json` | command `broker`; exit `2` |
 | `check.ok` | nothing needs acting on | present at 0.5.0 | `contract/exit-codes.json` | command `check`; exit `0` |
 | `check.repaired` | the owner's --repair dropped the state's leftovers, and nothing else needs acting on | present at 0.5.0 | `contract/exit-codes.json` | command `check`; exit `0` |
+| `check.close-orphans-lead` | --close-orphans is the team's lead's or the owner's | unreleased | `contract/exit-codes.json` | command `check`; exit `1` |
 | `check.file-owner` | --file is the owner's | present at 0.5.0 | `contract/exit-codes.json` | command `check`; exit `1` |
 | `check.findings` | something needs acting on | present at 0.5.0 | `contract/exit-codes.json` | command `check`; exit `1` |
 | `check.repair-owner` | --repair is the owner's | present at 0.5.0 | `contract/exit-codes.json` | command `check`; exit `1` |
 | `check.session-owner` | --session is the owner's | present at 0.5.0 | `contract/exit-codes.json` | command `check`; exit `1` |
+| `check.close-orphans-terminal` | --close-orphans asks before it closes anything; it needs a terminal | unreleased | `contract/exit-codes.json` | command `check`; exit `2` |
+| `check.close-orphans-unavailable` | --close-orphans has no process reading here | unreleased | `contract/exit-codes.json` | command `check`; exit `2` |
 | `check.file` | the team file can't be read | present at 0.5.0 | `contract/exit-codes.json` | command `check`; exit `2` |
 | `check.file-invalid` | the team file can't be parsed | present at 0.5.0 | `contract/exit-codes.json` | command `check`; exit `2` |
 | `check.herdr` | herdr doesn't answer | present at 0.5.0 | `contract/exit-codes.json` | command `check`; exit `2` |
@@ -623,7 +627,7 @@ All 569 contract entries are retained in source order, including success and ref
 | `reply.usage` | the invocation can't be read | 0.5.1 unreleased | `contract/exit-codes.json` at int/0.5.1 8acb470b | command `reply`; exit `2` |
 | `send.confirmed` | a native handoff was recorded to the history and its pending record cleared | 0.5.1 unreleased | `contract/exit-codes.json` at int/0.5.1 8acb470b | command `send`; exit `0` |
 | `send.native` | a native handoff was printed for the sender's own SendMessage, and nothing was delivered | 0.5.1 unreleased | `contract/exit-codes.json` at int/0.5.1 8acb470b | command `send`; exit `0` |
-| `send.sent-unconfirmed` | the record is written and left in the seat's own folder — its inbox on the mcp-inbox leg, its drop folder on the drop leg — and no signed read receipt has come back | 0.5.1 unreleased | `contract/exit-codes.json` at int/0.5.1 8acb470b | command `send`; exit `0` |
+| `send.sent-unconfirmed` | the record is written and left in the seat's own folder — its drop folder on the drop leg, its inbox on a word an older build wrote — and no signed read receipt has come back | 0.5.1 unreleased | `contract/exit-codes.json` at int/0.5.1 8acb470b | command `send`; exit `0` |
 
 The integration supplement preserves 31 additional ids; baseline rows keep the release-tag behavior even if the integration implementation changes their meaning.
 
@@ -632,3 +636,4 @@ Contributions reconciled at this draft: accounts and gates, budgets, events, gra
 ## Revision log
 
 - **Draft** (2026-10-18): read the pinned source lists and consolidated completed spec contributions; planned entries remain distinct.
+- **Orphan close** (2026-11-04): registered `check.close-orphans-lead`, `check.close-orphans-terminal` and `check.close-orphans-unavailable` as unreleased rows from `contract/exit-codes.json`; no release tag carries them yet.

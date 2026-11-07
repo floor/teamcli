@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../../src/caller.ts';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
+import { writePolicySet } from '../../src/policy/index.ts';
 import { lobbyDir } from '../../src/lobby/gate.ts';
 import { registerAgent, type Agent } from '../../src/registry/agents.ts';
 import { upsertProject } from '../../src/registry/projects.ts';
@@ -63,6 +64,7 @@ function sendWorld(teams: Record<string, { project: string; session: string; coo
     execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
     writeFileSync(join(root, '.agents', 'team.yaml'), `format: 1
 project: ${team.project}
+entity: org-alpha
 coordinator: ${team.coordinator}
 operator: ${team.coordinator}
 session: ${team.session}
@@ -78,6 +80,7 @@ delivery_order: [mcp-inbox, typed]
 `);
     roots[name] = root;
   }
+  expect(writePolicySet(home, { level: 'entity', target: 'org-alpha', name: 'seats-cross-teams', value: false }, { now: NOW }).ok).toBe(true);
   return { base, home, roots };
 }
 
@@ -116,7 +119,7 @@ function teamRecord(
 ): void {
   upsertTeam(home, id, {
     project: team.project,
-    entity: null,
+    entity: 'org-alpha',
     session: team.session,
     root: team.root,
     lobby: lobbyDir(home),
@@ -235,15 +238,17 @@ function sceneHost(world: SendWorld): { host: SendHost & { typedInto: (pane: str
 
 describe('the project level admits a pair the team rules refuse', () => {
   test("teamcli's lead reaches teamcli.io's lead by name when both teams are in project TeamCLI", async () => {
-    const { world, cliRoot, cliLead, ioLead, caller } = twoTeams();
-    // The project record: TeamCLI, its lead by agent id (the io team's lead), and both teams.
-    const project = upsertProject(world.home, 'teamcli', { name: 'TeamCLI', entity: 'teamcli', lead: ioLead.id, teams: [teamIdOf(cliRoot), ioLead.reach.team] });
+    const { world, cliId, cliRoot, cliLead, ioLead, caller } = twoTeams();
+    // The project record: TeamCLI, its lead by agent id (the io team's lead). Membership is the
+    // team records' own, so each team joins the project on its own record.
+    upsertTeam(world.home, cliId, { projectId: 'teamcli', projects: ['teamcli'] });
+    upsertTeam(world.home, ioLead.reach.team, { projectId: 'teamcli', projects: ['teamcli'] });
+    const project = upsertProject(world.home, 'teamcli', { name: 'TeamCLI', entity: 'org-alpha', lead: ioLead.id });
     expect(project.teams).toContain(teamIdOf(cliRoot));
     const { host, cliPane, ioPane } = sceneHost(world);
 
-    // The team rules alone: refused. Neither registered roster line is an orchestrator by any
-    // spelling, and no role name decides — so the admission below is the project's own.
-    const teamRules = admitSend(cliLead, ioLead, readTeams(world.home));
+    // The entity chain closes the ordinary lead pair. Only the shared project supplies reach.
+    const teamRules = admitSend(cliLead, ioLead, readTeams(world.home), undefined, { projects: {}, crossTeams: { entity: false } });
     expect(teamRules.ok).toBe(false);
 
     const code = await runSend(['lead@teamcli.io', BODY], testIo(cliRoot, caller), host);
@@ -265,13 +270,17 @@ describe('the project level admits a pair the team rules refuse', () => {
   });
 
   test('the same pair is refused when no project names both teams', async () => {
-    const { world, cliRoot, ioId, cliLead, ioLead, caller } = twoTeams();
-    // Both teams sit in projects — just never the same one, and no project names teamcli.
-    upsertProject(world.home, 'other', { name: 'Other', teams: [ioId] });
+    const { world, cliId, cliRoot, ioId, cliLead, ioLead, caller } = twoTeams();
+    // Both teams sit in projects — just never the same one: each team record joins a different
+    // project, so no project names both teams.
+    upsertProject(world.home, 'cli-only', { name: 'CliOnly', entity: 'org-alpha' });
+    upsertTeam(world.home, cliId, { projectId: 'cli-only', projects: ['cli-only'] });
+    upsertProject(world.home, 'other', { name: 'Other', entity: 'org-alpha' });
+    upsertTeam(world.home, ioId, { projectId: 'other', projects: ['other'] });
     const { host, cliPane, ioPane } = sceneHost(world);
 
     // Nothing in the records moved: the pair is judged as it was, and no rule admits it.
-    expect(admitSend(cliLead, ioLead, readTeams(world.home)).ok).toBe(false);
+    expect(admitSend(cliLead, ioLead, readTeams(world.home), undefined, { projects: {}, crossTeams: { entity: false } }).ok).toBe(false);
 
     const io = testIo(cliRoot, caller);
     const code = await runSend(['lead@teamcli.io', BODY], io, host);

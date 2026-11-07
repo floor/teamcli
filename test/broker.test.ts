@@ -74,6 +74,13 @@ const SCENE_BUDGET_MS = 180_000;
 const scene = (name: string, fn: () => void | Promise<void>, budgetMs: number = SCENE_BUDGET_MS): void => {
   test(name, fn, budgetMs);
 };
+/** The multi-round statistical burst pins run under `TEAM_NIGHTLY_STRESS=1` (the nightly
+ *  schedule, and pre-merge / push runs whose diff touches broker files). Every deterministic
+ *  single-round pin in this file runs on every suite invocation. */
+const NIGHTLY_STRESS = process.env.TEAM_NIGHTLY_STRESS === '1';
+const stressScene = (name: string, fn: () => void | Promise<void>, budgetMs: number = SCENE_BUDGET_MS): void => {
+  (NIGHTLY_STRESS ? test : test.skip)(name, fn, budgetMs);
+};
 
 /** The hook's own budget: it closes the scene's handles and removes its temp tree, which for a
  *  sized pin can hold hundreds of round folders; the runner's five-second default is not a
@@ -1680,7 +1687,7 @@ process.exit(started.kind === 'locked' && after !== undefined && after.bytes.len
     await started.handle.close();
   });
 
-  scene('starts released together onto a dead start\'s lock serialize: one serves, every other busy', async () => {
+  stressScene('starts released together onto a dead start\'s lock serialize: one serves, every other busy', async () => {
     // The crash-recovery burst, four starts to a round: a start SIGKILLed mid-section leaves
     // the lock naming its dead pid, and a broker SIGKILLed leaves its socket file (the h9
     // shape); four real starts are spawned, held at a go file, and released together. The advertised
@@ -1813,7 +1820,7 @@ process.exit(started.kind === 'locked' && after !== undefined && after.bytes.len
     expect(breaches).toEqual([]);
   }, 1_800_000);
 
-  scene('the dead-lock burst, sized: six starts released together onto a dead start\'s lock, one serves and every other busy', async () => {
+  stressScene('the dead-lock burst, sized: six starts released together onto a dead start\'s lock, one serves and every other busy', async () => {
     // The sized twin of the corpse burst above, on the dead-lock shape alone — sized from a
     // measurement, not picked: the race it guards is the takeover reading an already-gone lock
     // path (a NaN read, ENOENT), judging it like aged junk, and unlinking a rival's fresh
@@ -1944,7 +1951,7 @@ process.exit(started.kind === 'locked' && after !== undefined && after.bytes.len
     expect(breaches).toEqual([]);
   }, 3_000_000);
 
-  scene('the claim lane, sized and instrumented: six starts released together onto a dead start\'s lock never unlink a live lock or claim', async () => {
+  stressScene('the claim lane, sized and instrumented: six starts released together onto a dead start\'s lock never unlink a live lock or claim', async () => {
     // The pin for the claim path's own residual, carrying the delta-2 lab's finding instrument:
     // a wrap of `node:fs`'s `unlinkSync` that logs, one buffered line at the child's outcome,
     // every unlink of a `*.lock` / `*.lock.takeover` path whose bytes named a live pid other

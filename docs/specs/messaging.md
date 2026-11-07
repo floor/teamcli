@@ -91,7 +91,7 @@ Fields (`src/commands/messages.ts`):
 | `at` | string | yes | — | ≤0.4 | when the record was written |
 | `body` | string | yes | — | ≤0.4 | the message body |
 | `from` | string | yes | — | ≤0.4 | the sender named on the record |
-| `from_id` | string \| null | no | `null` | 0.5.0 | the sender's registry agent id (`agt_`), or null for the owner and the launch |
+| `from_id` | string \| null | no | `null` | 0.5.0 | the sender's registry agent id (`agt_`), or null for the owner, the watch, the daemon and the launch |
 | `to_id` | string \| null | no | `null` | 0.5.0 | the recipient's registry agent id (`agt_`), never the state's `seat_` handle; null when the registry holds no record for the seat |
 | `rule` | string | yes | — | ≤0.4 | the admission rule the send judged |
 | `thread` | string | yes | — | ≤0.4 | the thread's first message id; a first message is its own thread |
@@ -162,7 +162,7 @@ through the CLI is written to the history with the body marker
 `(native delivery; the text did not pass through the team CLI)`, outcome `delivered`, `via`
 `native`.
 
-### The envelope (planned; OD-20261019-14)
+### The envelope (planned; owner decision, 2026-10-19)
 
 One message model for every channel: whatever the channel, a message becomes one envelope. Nothing
 at the tag writes or reads one. Fields:
@@ -176,7 +176,7 @@ at the tag writes or reads one. Fields:
 | `at` | object | yes | — | planned | one timestamp per stage |
 | `priority` | string | yes | — | planned | the message's priority |
 
-*Source:* OD-20261019-14. *Proof:* none at the tag.
+*Source:* owner decision, 2026-10-19. *Proof:* none at the tag.
 
 ## 4. Commands and options
 
@@ -286,16 +286,16 @@ registry holds no record for is refused. Exits `route.routed` (0), `route.dry-ru
 5. The address is not an authorization: admission judges the resolved pair, and a nickname confers
    nothing.
 
-### Addressing a seat (planned; OD-20261019-19, OD-20261019-23)
+### Addressing a seat (planned; owner decision, 2026-10-19)
 
 | Rule | At v0.5.0 | Meaning |
 |---|---|---|
 | A name is unique within its team, not across the entity | yes (rule 1, and the terms) | two teams may share one name; `@<nickname>` still refuses when the entity holds several |
 | A seat is addressed `name@team` across the entity | yes: `<seat>@<team>` and `<nickname>@<team>` resolve from any folder (rule 2) | the address names one seat and resolves to its agent id |
-| The address is the seat (the normal team address); an agent may also be addressed directly | not built at v0.5.0 | a message to a seat goes to the agent on watch when it is delivered — a reattribution changes the watch, never the address; an agent may also be addressed directly under the same admission and authority rules, for example about its own watch after it was relieved (OD-20261019-23) |
+| The address is the seat (the normal team address); an agent may also be addressed directly | not built at v0.5.0 | a message to a seat goes to the agent on watch when it is delivered — a reattribution changes the watch, never the address; an agent may also be addressed directly under the same admission and authority rules, for example about its own watch after it was relieved (owner decision, 2026-10-19) |
 | The address resolves through the registry at delivery | not built at v0.5.0: it is resolved when the message is sent | delivery resolves the address again, to the seat attributed at that moment |
 
-*Source:* OD-20261019-19, OD-20261019-23. *Proof:* the resolve tests at the tag cover the forms;
+*Source:* owner decision, 2026-10-19. *Proof:* the resolve tests at the tag cover the forms;
 none at the tag covers resolution at delivery.
 
 ### The admission rules
@@ -314,7 +314,7 @@ through (`src/send/admit.ts`; proof: the admit tests at the tag):
 7. an assistant seat to its entity's coordinator;
 8. the entity's main orchestrator to any seat of the entity's teams — the lead of the team whose
    project is the entity itself, the `seats_cross_teams` declaration with its own default on
-   (OD-20261103-02), never across entities;
+   (owner decision, 2026-11-03), never across entities;
 9. a seat to its own team's orchestrator;
 10. an owner-signed grant naming `send`, which spells a team by its registry team id or a seat by
     its agent id, never a runner or process name; the record is signed with the owner's approval
@@ -336,14 +336,15 @@ it, and the header says the record is missing; it is never granted. Every other 
 
 ### The delivery order
 
-1. The catalogue's legs are `socket`, `native`, `mcp-inbox`, `typed`, `drop`, `headless-resume`,
+1. The catalogue's legs are `socket`, `native`, `typed`, `drop`, `headless-resume`,
    `session` (the cross-session socket, a Codex seat's runtime queue or the sender's own handoff,
-   the seat's MCP inbox, the drop file with its wake line, the mailbox, a headless resume, and a
+   the drop file with its wake line, the mailbox, a headless resume, and a
    CLI's own session-creating call), and `channel`, the receiving server's development-channel
    push, which is implied and never a declared word. Each belongs to one class: `socket`,
    `native`, `headless-resume`, `session` and `channel` are the channel class; `typed` is the
-   typed class; `drop` is the mailbox. `mcp-inbox` is a name this build reads and never walks —
-   the MCP inbox is the store's reader, not a wake. The sender-posted `webhook` is the second
+   typed class; `drop` is the mailbox. `mcp-inbox` is a retired name, no longer a leg — the
+   MCP inbox is the store's reader, not a wake; a word that still names it is read as an alias
+   and dropped from the order, never an error. The sender-posted `webhook` is the second
    class, between the channel legs and the typed leg; no order names it, the receiving seat's
    adapter row decides whether it exists (`src/send/walk-cascade.ts`, `src/settings/inherit.ts`
    `DELIVERY_LEGS`).
@@ -355,8 +356,8 @@ it, and the header says the record is missing; it is never granted. Every other 
    typed wake), then the mailbox. The fallback order is `typed`,
    `drop`. A level drops legs, reorders the ones it keeps, and may add `socket`, `native`,
    `headless-resume` or `session`; a word naming any other leg the order in force does not have is
-   set aside and the order in force stands, and an `mcp-inbox` word is kept and reported
-   unavailable.
+   set aside and the order in force stands. An `mcp-inbox` word is never a set-aside: it declares
+   nothing, and the legs it sits beside keep their word.
 3. The cascade is tried until one leg confirms; a leg that does not exist for this sender or
    receiver is skipped and recorded `unavailable`; a send falls through to the next leg only on a
    definite failure before the send went through (no session, refused, a timeout before the send,
@@ -366,6 +367,35 @@ it, and the header says the record is missing; it is never granted. Every other 
    as `webhook: <reason>`.
 4. The tool never attests a permission mode on a seat's behalf: a CLI process cannot truthfully say
    which mode it runs in, and attesting anyway would be a false statement to another tool's gate.
+
+### The typed wake's handoff
+
+With a send daemon running for the receiving seat's own team and the seat's profile declaring the
+typed wake, the send does not type in its own process. It stages the signed record and hands the
+daemon one request — the id, the trigger line and the staged copy's fields — and ends at
+acceptance with `handed to the daemon for a typed wake` (exit 0, `send.handed`) before any screen
+is read. The daemon writes its own durable copy of the record into its store, takes the wake
+marker beside it (`reserved`), and starts one wake child under a one-use token that names the
+request; a child that outlives its 15-second budget is killed. The child re-reads the seat live —
+one pane, not a bare shell — takes the seat lock, runs the screen walk, and writes the history
+line (`delivered (typed wake)` with `via: typed`, or `unreachable` with the walk's own reason),
+the `leg.tried:typed` trace step and the daily log line before it exits. The marker is the
+record of what was seen: `sent` after a delivered walk, given back after a walk that did not
+deliver, and still `reserved` after a child killed mid-walk. A second request for the same id
+finds the marker already there, in whatever state, and is answered at acceptance with no second
+child and nothing typed over it: the marker is the reservation. A child killed after it typed
+leaves its line in the composer, and the next wake presses Enter into exactly that line rather
+than typing it again. A compose seat, another team's record, a
+`--wait` run, a run whose daemon socket is absent, and a daemon that answers `direct: true`
+because it runs no wake child are all reached directly: the walk then runs in the send's own
+process, exactly once.
+
+The wake's trace step carries the two times the delivery bound is read from, both counted from
+the moment the message was staged: `submit_ms` ends at the first read that showed the wake's line
+gone from the input box after Enter (the gated point — the line has left the box after Enter),
+and `working_ms` ends at the first read that showed the profile's working screen with the line
+gone (reported only, never gated). Either is absent when no read showed it: a wake that pressed
+no Enter, or one whose working screen still held the line, records neither.
 
 ### What `delivered` means
 
@@ -411,13 +441,14 @@ bounded at 20 seconds (`VERIFY_TOTAL_MS`, `src/send/deliver.ts`): the three wait
 window all fall inside it. The tag's measurements — about six seconds from send to a working
 seat, one millisecond to write the record — are measured, not promised.
 
-A socket frame carries the record's id in `msg_id` and in the reader line it ends with —
-`Answer with team reply <id> "…" (this marks it read), or team ack <id> if no answer is needed.`
+A socket frame carries the record's id in `msg_id` and in the one-line reader footer it ends with —
+`↩ team reply <prefix> "…" · team ack <prefix>`
+where `<prefix>` is the shortest unique prefix of `<id>` in that mailbox (at least 8 characters).
 The id is not a secret, the line is the same for every sender, the owner included, and it
-carries no address, so the frame resolves no entity or owner-reply target (ADR
-`zeus-message-path`, D3). The line names both acts that settle the record: `team reply <id>`
+carries no address, so the frame resolves no entity or owner-reply target (the
+message-path ADR, D3). The line names both acts that settle the record: `team reply <prefix>`
 answers and writes the seat's signed read receipt beside its `replied` receipt, and
-`team ack <id>` writes the read receipt with no answer. A seat's own later `team send` to a
+`team ack <prefix>` writes the read receipt with no answer. A seat's own later `team send` to a
 sender settles the newest delivered-unread message that sender sent it before that send
 (`read_by: answered-by-send`); an older message from the same sender, a message from anyone
 else, and one delivered after the send stay unread. A socket delivery still without a receipt
@@ -447,7 +478,7 @@ signed steps the send, the bus, the seat and the watch write for it, in one log,
 
 - **delivery-legs** (registries/delivery-legs.md):
   `native` | the sender's own cross-session channel, recorded through the route record | 0.5.0 | `src/settings/inherit.ts` (`DELIVERY_LEGS`) | the only leg that is the sender's own tool
-  `mcp-inbox` | delivery into a seat session's MCP inbox | 0.5.0 (named) | `src/settings/inherit.ts` | not built at the tag; skipped and recorded `unavailable`
+  `mcp-inbox` | delivery into a seat session's MCP inbox | 0.5.0 (named), retired 0.5.13 | `src/settings/inherit.ts` | never built; read as an alias and dropped since
   `typed` | the drop file and the wake line | 0.5.0 | `src/settings/inherit.ts` | the fallback
 - **exit-codes** (registries/exit-codes.json's rows): the `send.*` (15 rows), `messages.*` (10),
   `feed.*` (4) and `route.*` (6) rows listed in §4, read at the tag.
@@ -471,7 +502,7 @@ signed steps the send, the bus, the seat and the watch write for it, in one log,
 
 - **Draft** (the writer, 2026-10-18): lifted from the Communication v2 draft; read at the tag.
 - **Fold before the round** (the writer, 2026-10-19): the envelope's fields added to §3 and the
-  address rows to §5 as planned, from OD-20261019-14, -19 and -23; the rest read at the tag.
+  address rows to §5 as planned, from owner decision, 2026-10-19; the rest read at the tag.
 - **Fold after the pre-round reviews** (the writer, 2026-10-19): §5's address row keeps the
   explicit direct-agent address beside the seat address, both under the same admission and
-  authority rules (OD-20261019-23).
+  authority rules (owner decision, 2026-10-19).

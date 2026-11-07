@@ -4,9 +4,9 @@
 // mode 0600), start lock (`.agents/bus.sock.lock`), and stale-socket recovery. Supports three
 // operations:
 // - `publish`: appends a signed event record to `events.jsonl` and fans it out to matching
-//   live subscribers with bounded per-subscriber buffers. A `message.arrived` is the one kind
-//   that names a delivery, so it is verified against its signed drop record before it is
-//   appended and fanned out; the other kinds are appended as published.
+//   live subscribers with bounded per-subscriber buffers. A `message.arrived` is verified
+//   against its signed drop record before it is appended. A seat observation is appended as
+//   published. Any other kind is refused: the bus writes those itself.
 // - `nudge`: names one record in a seat's drop folder; the bus re-reads and verifies the signed
 //   record itself, then appends its `message.arrived` and fans it out. A missing, unsigned or
 //   misaddressed record delivers nothing, and the nudge carries no authority of its own.
@@ -37,6 +37,7 @@ import { canonicalTeam } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { logLine } from '../log.ts';
+import { LockBusyError } from '../state.ts';
 import { findAgent, getAgent, isAgentId } from '../registry/agents.ts';
 import { readStoredTeamConfig } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
@@ -60,10 +61,12 @@ import {
   parseSignedEventLine,
   pruneEventLog,
   readEventsFromCursorSliced,
+  verifyEventLogSeals,
   type CursorReadResult,
   type EventAppendInput,
   type SignedEventRecord,
 } from './log.ts';
+import { eventLogSettingsFor } from './log-settings.ts';
 import { createReconcileState, reconcilePassAsync } from './reconcile.ts';
 import { readEntityOrchestrator, readSeatResolver } from './seats.ts';
 import { makeWebhookDelivery, type WebhookFacts } from './webhook.ts';
@@ -245,6 +248,21 @@ const LOCK_YOUNG_MS = 1000;
 const UNKNOWN_REQUEST = 'the request is not one this bus knows';
 /** A published arrival is refused with fixed words when the record it names does not verify. */
 const UNVERIFIED_ARRIVAL = 'the message.arrived it publishes names no signed drop record for its seat';
+
+/** Kinds a socket caller may publish. `message.arrived` is still held to its signed record.
+ *  Seat observations are what the watch publishes. Every other kind is written by the bus. */
+const SOCKET_PUBLISH_KINDS = new Set<EventKind>([
+  'message.arrived',
+  'seat.working',
+  'seat.idle',
+  'seat.idle-timeout',
+  'seat.blocked',
+  'seat.at-prompt',
+  'seat.prompt-escalated',
+  'seat.unblocked',
+  'seat.unreachable',
+  'seat.done',
+]);
 
 function alive(pid: number): boolean {
   try {
@@ -723,6 +741,16 @@ function reportReloadProblem(stderr: (text: string) => void, previous: string | 
 async function startBusWalk(input: StartBusInput, path: string): Promise<StartBusResult> {
   const home = input.home ?? homedir();
   const now = input.now ?? (() => new Date());
+  // The log's size bound and age window are the team's policy words: read once for this bus's
+  // lifetime, like the daemon's other knobs, so a publish, a read and the reconcile pass all use
+  // the same values. A caller that named one keeps it.
+  const logSettings = eventLogSettingsFor(input.root, home, now());
+  input = {
+    ...input,
+    maxLogBytes: input.maxLogBytes ?? logSettings.segmentBytes,
+    keptLogFiles: input.keptLogFiles ?? logSettings.kept,
+    retentionSeconds: input.retentionSeconds ?? logSettings.retentionSeconds,
+  };
   const registryTeamId = teamIdOf(input.root);
   // A routing word may name a seat by its registry id; resolve it against the registry on disk so
   // that `{ seat: agt_… }` reaches the seat that holds it, while plain names stand as written.
@@ -738,11 +766,36 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
   const bufferLimit = input.bufferLimit ?? DEFAULT_SUBSCRIBER_BUFFER_LIMIT;
   const reconcileIntervalMs = input.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_SECONDS * 1000;
   // Retention before the first event: a team back after an idle month drops its old segments now.
-  pruneEventLog(input.team.project, input.root, home, {
-    kept: input.keptLogFiles,
-    maxTotalBytes: input.maxTotalLogBytes,
-    retentionSeconds: input.retentionSeconds,
-  });
+  // A held key does not pause this start. The reconcile pass retries the whole prune.
+  let pruneDeferred = false;
+  try {
+    pruneEventLog(input.team.project, input.root, home, {
+      kept: input.keptLogFiles,
+      maxTotalBytes: input.maxTotalLogBytes,
+      retentionSeconds: input.retentionSeconds,
+      lockWaitMs: 0,
+    });
+  } catch (error) {
+    if (!(error instanceof LockBusyError)) throw error;
+    pruneDeferred = true;
+  }
+  // A store written before seals existed is sealed by the reconcile pass's first read, sliced, so
+  // no segment verification runs on the start path before the bus can serve.
+  // The sealed set is verified once at start, without reading a sealed segment: a sidecar that
+  // does not match its segment is reported in the team log, and the segment is read and verified
+  // in full by the ordinary path instead. A tampered sidecar never keeps the bus from serving.
+  try {
+    const seals = verifyEventLogSeals(input.team.project, input.root, home, {
+      kept: input.keptLogFiles,
+    });
+    if (seals.ok) {
+      for (const problem of seals.problems) {
+        logLine(join(input.root, '.agents'), 'bus', 'event-log', `seal ${problem}`, now());
+      }
+    }
+  } catch {
+    // Verification is a report at start; the read path verifies every byte it serves anyway.
+  }
 
   let confirmed: { dev: number; ino: number } | undefined;
   for (let walk = 0; walk < START_WALKS; walk++) {
@@ -832,7 +885,15 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
       // outside that chain — even with its unkeyed digests recomputed — is a miss: the running
       // rows stay, and the line is said once.
       const standing = approvalStanding(input.root, home);
-      const approved = standing.kind === 'verified' ? approvedRecordOf(standing.record.file) : null;
+      const pin = standing.kind === 'verified' ? standing.record.approval.lead : undefined;
+      const approved =
+        standing.kind === 'verified'
+          ? approvedRecordOf(standing.record.file, {
+              home,
+              root: input.root,
+              ...(pin !== undefined ? { lead: pin } : {}),
+            })
+          : null;
       if (approved === null || approved !== canonicalTeam(parsed.team)) {
         reloadProblem = reportReloadProblem(input.stderr, reloadProblem, 'the registry\'s record of this team is not the copy the owner approved');
         return;
@@ -886,6 +947,7 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
     // large store never blocks the bus's event loop; `reconcileNow` joins a pass already in
     // flight instead of starting a second one over the same records.
     const reconcileState = createReconcileState();
+    if (!pruneDeferred) reconcileState.pruneDone = true;
     // The first pass's own record, kept for a reader that must not be told the bus is caught up
     // while the scan still runs. The state's counters reset at the start of every later pass, so
     // the total is captured when the first pass settles; `doneAt` is the settle marker, and the
@@ -919,6 +981,7 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
         now: now(),
         maxBytes: input.maxLogBytes,
         kept: input.keptLogFiles,
+        retentionSeconds: input.retentionSeconds,
         ...(input.heldThresholdSeconds !== undefined ? { heldThresholdSeconds: input.heldThresholdSeconds } : {}),
         onEvent: fanOut,
         // A record the pass will not raise is named once: a linked file or folder, an unsigned
@@ -1129,7 +1192,12 @@ async function dispatchBusRequest(
   if (request.op === 'publish') {
     // A published arrival names a delivery, so it is held to the record that delivery carries.
     // The verified event is built from the signed record, never from the caller's fields.
+    // A kind the bus writes itself is not taken from a socket caller.
     let event = request.event;
+    if (!SOCKET_PUBLISH_KINDS.has(event.kind)) {
+      answerOnce(socket, { ok: false, at: 'caller', message: `a socket publish of ${event.kind} is not taken` });
+      return;
+    }
     if (event.kind === 'message.arrived') {
       const verified = verifiedArrival(
         { session: event.session, seat: event.to ?? '', record_id: event.record_id },

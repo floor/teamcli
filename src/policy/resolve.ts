@@ -193,6 +193,12 @@ export function resolvePolicy<V extends PolicyValue = PolicyValue>(
           });
           continue;
         }
+        // A word whose every name parsed away declares nothing at its level: skipped like an
+        // expired declaration — never refused, never set aside — so the word in force stands
+        // and a signed record an older build wrote still reads.
+        if (spec.emptyWordDeclaresNothing === true && Array.isArray(parsed) && parsed.length === 0) {
+          continue;
+        }
         if (decl.expiry !== undefined && decl.expiry !== null && !Number.isFinite(Date.parse(decl.expiry))) {
           refusals.push({
             kind: 'invalid-policy',
@@ -222,7 +228,7 @@ export function resolvePolicy<V extends PolicyValue = PolicyValue>(
             normalizedDecl.expiry ?? null,
             activeDeclaration.expiry ?? null,
           );
-          if (!within) {
+          if (!within && spec.proofAllowsLoosening?.(normalizedDecl, now) !== true) {
             refusals.push({
               kind: 'loosening',
               policy: name,

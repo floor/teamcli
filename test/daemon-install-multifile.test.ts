@@ -145,7 +145,7 @@ function programManager(home: string): { manager: ServiceManager; calls: string[
     }
     return { ...OK };
   };
-  const manager = darwinServiceManager({ runner, uid: 501, sleep: () => {} });
+  const manager = darwinServiceManager({ runner, uid: 501, accountHome: home, sleep: () => {} });
   return { manager, calls, running: () => alive };
 }
 
@@ -157,6 +157,7 @@ function sourcesOf(
 ): DaemonCommandSources {
   return {
     home,
+    accountHome: home,
     program,
     version: 'test',
     service,

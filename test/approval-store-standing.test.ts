@@ -17,7 +17,7 @@ import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { generationsFolder } from '../src/store/keys.ts';
 import { approvalStanding, readApproval, storePath, writeApproval, type Standing } from '../src/store/store.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-15T12:00:00Z');
 
@@ -126,6 +126,8 @@ function world(): { launch: Launch; runs: { pane: string; command: string }[] } 
     sleep: async () => {},
     now: () => NOW,
   };
+
+  recordRenames(launch);
   return { launch, runs };
 }
 
@@ -313,7 +315,7 @@ test('a record written before records were signed still reads as legacy', () => 
   const store = approve(root, home);
   const record = join(store, 'approval.json');
   const stored = JSON.parse(readFileSync(record, 'utf8')) as Record<string, unknown>;
-  const { generation: _generation, signature: _signature, ...plain } = stored;
+  const { generation: _generation, signature: _signature, lead: _lead, ...plain } = stored;
   writeFileSync(record, `${JSON.stringify({ ...plain, format: 1 }, null, 2)}\n`);
   expect(standingOf(root, home).kind).toBe('legacy');
   // The record itself is still what the store holds: a legacy record is displayed, never judged.

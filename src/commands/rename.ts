@@ -1,7 +1,7 @@
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, relative } from 'node:path';
-import { recordSeatRenameOf } from '../approve/approval.ts';
+import { dirname, join, relative, resolve } from 'node:path';
+import { recordSeatRenameOf, recordTeamRenameOf } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import {
   anotherPaneRefusal,
@@ -22,7 +22,7 @@ import {
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
-import { renameSeat } from '../file/lines.ts';
+import { renameSeat, renameTeamIdentity } from '../file/lines.ts';
 import { findRoot } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { nicknameProblem } from '../file/sections/seats.ts';
@@ -34,15 +34,30 @@ import type { Command, Io } from '../io.ts';
 import { deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { plainText } from '../launch/plain.ts';
 import { logLine } from '../log.ts';
+import { reissueTeamGrants } from '../permissions/grants.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
+import { getAgent, updateAgent } from '../registry/agents.ts';
 import { registerRename, type RegistryTeam } from '../registry/sync.ts';
+import { rekeyStoredTeamConfig } from '../registry/team-config-store.ts';
+import {
+  getTeam,
+  readTeams,
+  rekeyTeamRecord,
+  setTeamProjectMembership,
+  teamIdOf,
+  upsertTeam,
+  type TeamRecord,
+} from '../registry/teams.ts';
 import { formatSeatNumber, seatNumberOf } from '../seat-names.ts';
+import { reissueTeamSendGrants } from '../send/grants.ts';
 import { renameSeatHistory } from '../send/history.ts';
+import { renameTeamSessions } from '../sessions/registry.ts';
 import { seatNumberingInForce } from '../settings/seat-numbering.ts';
 import { emptySession, readState, sessionMap, updateState, withLock, writeAtomic } from '../state.ts';
 import {
   MESSAGE_DOMAIN,
+  keyState,
   messageKeyState,
   RECEIPT_DOMAIN,
   signDomain,
@@ -55,6 +70,7 @@ import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../fil
 
 export const USAGE = `Usage: team rename <seat> <new-seat> [--session <name>] [--file <path>] [--json]
        team rename --renumber [--dry-run] [--session <name>] [--file <path>] [--json]
+       team rename --team <new-name> [--from <old-name>] [--in-project <project>] [--session <name>] [--rekey] [--dry-run] [--file <path>] [--json]
 
 Renames a seat in the team record (team config) and carries over its registry record,
 grants, task leases, pending send-drops, mailbox messages, rules file, queue
@@ -62,9 +78,15 @@ and notes files, state records, and message history.
 
 With --renumber, renumbers numbered seats (e.g. builder-1 -> builder-01) to
 match the seat_numbering in force while leaving single (unnumbered) seats plain.
+
+With --team, renames the team (and optionally changes its project membership via
+--in-project), carrying its registry record, state folder, lobby, sessions,
+addresses (with a grace period for <seat>@<old-name>), pending drops, mailboxes,
+history, and team-scoped grants.
 `;
 
 const SEAT_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+const TEAM_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 export type RenameSources = {
   home?: string;
@@ -415,17 +437,42 @@ export async function runRename(argv: string[], io: Io, sources: RenameSources =
 }
 
 async function executeRename(argv: string[], io: Io, sources: RenameSources): Promise<RenameOutcome> {
-  const args = readArgs(argv, ['session', 'file'], ['renumber', 'dry-run', 'json']);
+  const args = readArgs(
+    argv,
+    ['team', 'from', 'in-project', 'session', 'file'],
+    ['renumber', 'rekey', 'dry-run', 'json'],
+  );
   const renumber = args.flags.has('renumber');
+  const rekey = args.flags.has('rekey');
   const dryRun = args.flags.has('dry-run');
   const json = args.flags.has('json');
+  const isTeamMode =
+    args.values.team !== undefined ||
+    args.values.from !== undefined ||
+    args.values['in-project'] !== undefined ||
+    rekey;
 
   if (args.error) {
     io.stderr(`team rename: ${args.error}\n${USAGE}`);
     return 'invocation';
   }
+  if (isTeamMode) {
+    if (args.values.team === undefined) {
+      io.stderr(`team rename: --from, --in-project and --rekey require --team <new-name>\n${USAGE}`);
+      return 'invocation';
+    }
+    if (renumber) {
+      io.stderr(`team rename: --team and --renumber cannot be combined\n${USAGE}`);
+      return 'invocation';
+    }
+    if (args.rest.length > 0) {
+      io.stderr(`team rename: --team takes no positional seat arguments (unexpected "${args.rest[0]}")\n${USAGE}`);
+      return 'invocation';
+    }
+    return executeTeamRename(args, io, sources);
+  }
   if (dryRun && !renumber) {
-    io.stderr(`team rename: --dry-run is only valid with --renumber\n${USAGE}`);
+    io.stderr(`team rename: --dry-run is only valid with --renumber or --team\n${USAGE}`);
     return 'invocation';
   }
   if (renumber && args.rest.length > 0) {
@@ -595,11 +642,45 @@ async function executeRename(argv: string[], io: Io, sources: RenameSources): Pr
   const standing = (sources.standing ?? ((at) => approvalStanding(at, home)))(root);
   const where = { home, command: 'rename' };
   const originalText = readTeamText(path, where);
+  // The lead the approval pinned, carried through the rename when the renamed seat is the lead.
+  // A live chain that no longer resolves to that lead is drift: the rename would re-sign the
+  // record under a lead the owner never approved and move the roster's `leads` mark to it, so it
+  // is refused here — drift is reported, never signed over.
+  const approvedPin = standing.kind === 'verified' ? standing.record.approval.lead : undefined;
+  const movedPin =
+    approvedPin === undefined
+      ? undefined
+      : renames.reduce((name, rename) => (name === rename.from ? rename.to : name), approvedPin);
+  if (approvedPin !== undefined) {
+    const pinned = validateTeamFile(originalText, { home, root, lead: approvedPin });
+    if (!pinned.ok) {
+      io.stderr(
+        `team rename: the approval pinned lead "${approvedPin}", which this file no longer resolves; approve the team again before renaming\n`,
+      );
+      return 'refused';
+    }
+    if (pinned.team.orchestrator !== approvedPin) {
+      io.stderr(
+        `team rename: the file now leads with "${pinned.team.orchestrator}", but the approval pinned "${approvedPin}"; approve the team again before renaming\n`,
+      );
+      return 'refused';
+    }
+    if (pinned.team.orchestrator !== team.orchestrator) {
+      io.stderr(
+        `team rename: the live chain leads with "${team.orchestrator}", but the approval pinned "${approvedPin}"; approve the team again before renaming\n`,
+      );
+      return 'refused';
+    }
+  }
   let nextText = originalText;
   for (const { from, to } of renames) {
     nextText = renameSeat(nextText, from, to);
   }
-  const validated = validateTeamFile(nextText, { home, root });
+  const validated = validateTeamFile(nextText, {
+    home,
+    root,
+    ...(movedPin !== undefined ? { lead: movedPin } : {}),
+  });
   if (!validated.ok) {
     const first = validated.errors[0];
     io.stderr(
@@ -609,7 +690,7 @@ async function executeRename(argv: string[], io: Io, sources: RenameSources): Pr
   }
 
   const priorState = readState(dir);
-  writeTeamText(path, nextText, where);
+  writeTeamText(path, nextText, { ...where, ...(movedPin !== undefined ? { lead: movedPin } : {}) });
   recordSeatRenameOf(standing, validated.team, root, renames, home);
 
   const stateMoved = renameSeatInState(dir, renames);
@@ -721,6 +802,464 @@ async function executeRename(argv: string[], io: Io, sources: RenameSources): Pr
     for (const res of results) {
       io.stdout(`renamed ${res.from} -> ${res.to}: moved ${res.moved.join(', ')}\n`);
     }
+  }
+  return 'ok';
+}
+
+function renameSessionInState(dir: string, fromSession: string, toSession: string): boolean {
+  if (fromSession === toSession) return false;
+  let moved = false;
+  updateState(dir, (current) => {
+    const prior = current.sessions[fromSession];
+    if (!prior) return;
+    current.sessions[toSession] = prior;
+    delete current.sessions[fromSession];
+    moved = true;
+  });
+  return moved;
+}
+
+function updateTeamMailboxMessages(
+  root: string,
+  home: string,
+  oldRoot: string,
+  oldSession: string,
+  newSession: string,
+): number {
+  const messagesDir = join(root, '.agents', 'messages');
+  let seats: string[] = [];
+  try {
+    seats = readdirSync(messagesDir).sort();
+  } catch {
+    return 0;
+  }
+  const keyState = messageKeyState(home);
+  let updated = 0;
+  for (const seat of seats) {
+    const seatDir = join(messagesDir, seat);
+    let files: string[] = [];
+    try {
+      files = readdirSync(seatDir).sort();
+    } catch {
+      continue;
+    }
+    for (const name of files) {
+      if (!name.endsWith('.json')) continue;
+      const filePath = join(seatDir, name);
+      try {
+        const raw = JSON.parse(readFileSync(filePath, 'utf8')) as {
+          payload?: Record<string, unknown>;
+          signature?: unknown;
+        };
+        if (!raw || typeof raw !== 'object' || !raw.payload || typeof raw.payload !== 'object') continue;
+        let changed = false;
+        const nextPayload: Record<string, unknown> = { ...raw.payload };
+        if (nextPayload.session === oldSession && newSession !== oldSession) {
+          nextPayload.session = newSession;
+          changed = true;
+        }
+        if (nextPayload.root === oldRoot && root !== oldRoot) {
+          nextPayload.root = root;
+          changed = true;
+        }
+        if (!changed) continue;
+        const isReceipt = name.endsWith('.read.json') && raw.payload.kind === 'receipt';
+        const domain = isReceipt ? RECEIPT_DOMAIN : MESSAGE_DOMAIN;
+        if (
+          keyState.kind === 'key' &&
+          typeof raw.signature === 'string' &&
+          verifyDomain(domain, raw.payload as Json, raw.signature, keyState.key)
+        ) {
+          const nextSig = signDomain(domain, nextPayload as Json, keyState.key);
+          writeAtomic(filePath, `${JSON.stringify({ payload: nextPayload, signature: nextSig }, null, 2)}\n`);
+        } else {
+          writeAtomic(filePath, `${JSON.stringify({ ...raw, payload: nextPayload }, null, 2)}\n`);
+        }
+        updated += 1;
+      } catch {}
+    }
+  }
+  return updated;
+}
+
+async function executeTeamRename(
+  args: ReturnType<typeof readArgs>,
+  io: Io,
+  sources: RenameSources,
+): Promise<RenameOutcome> {
+  const newTeamName = args.values.team ?? '';
+  const fromNameOpt = args.values.from;
+  const inProjectOpt = args.values['in-project'];
+  const sessionOpt = args.values.session;
+  const rekey = args.flags.has('rekey');
+  const dryRun = args.flags.has('dry-run');
+  const json = args.flags.has('json');
+
+  if (!TEAM_NAME_PATTERN.test(newTeamName)) {
+    io.stderr(
+      `team rename: "${newTeamName}" is not a valid team name (letters, digits, ".", "_" and "-", up to 128 chars)\n`,
+    );
+    return 'invalid';
+  }
+  if (inProjectOpt !== undefined && !TEAM_NAME_PATTERN.test(inProjectOpt)) {
+    io.stderr(
+      `team rename: "${inProjectOpt}" is not a valid project name (letters, digits, ".", "_" and "-", up to 128 chars)\n`,
+    );
+    return 'invalid';
+  }
+
+  const home = sources.home ?? homedir();
+  const now = sources.now();
+  const detached = detachedRefusal(walkCaller(io));
+  if (detached !== undefined) {
+    io.stderr(`team rename: ${detached}\n`);
+    return 'refused';
+  }
+
+  const flagRefusal = fileOwnerRefusal(io, args.values.file);
+  if (flagRefusal !== undefined) {
+    io.stderr(`team rename: ${flagRefusal}\n`);
+    return 'refused';
+  }
+
+  const launched = args.values.file ? undefined : launchedTeamFile(io, home);
+  const loaded = args.values.file
+    ? readTeamConfig(io.cwd, { file: args.values.file, home })
+    : launched !== undefined
+      ? readLaunchedTeam(launched, { home })
+      : readTeamConfig(io.cwd, { home });
+  if (!loaded.ok) {
+    for (const problem of loaded.errors) {
+      io.stderr(`team rename: ${problem.line ? `line ${problem.line}: ` : ''}${problem.message}\n`);
+    }
+    return 'invalid';
+  }
+  const { team, path, root } = loaded;
+  const dir = dirname(path);
+  const currentId = teamIdOf(root);
+  const oldProject = fromNameOpt ?? team.project;
+  const oldSession = team.session;
+  const newSession = sessionOpt ?? team.session;
+
+  const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
+    gateVerdict(who, team, root, home, 'rename', at, sources.now);
+  const judged = judgeCallerIn(io, dir, team, verdictOf);
+  const { caller, shown, session } = judged;
+
+  const dev = resolveDevMode('rename', io, { home, team, root, now });
+  let devWarning: string | null = null;
+  const verdict = verdictOf(caller, standingOf(dir, session, caller));
+
+  if (verdict.kind === 'no-pane') {
+    io.stderr(`team rename: ${noPaneRefusal(verdict.name)}\n`);
+    return 'refused';
+  }
+  if (verdict.kind === 'another-pane') {
+    io.stderr(`team rename: ${anotherPaneRefusal(verdict.name, verdict.recordedPane)}\n`);
+    return 'refused';
+  }
+
+  // Admission: owner, or the team's lead seat only while development mode is on.
+  if (caller.kind !== 'owner') {
+    if (verdict.kind === 'refused') {
+      const said = `only the owner or \`leads\` (in development mode) renames a team; this call is ${describeCaller(shown)}${devModeExpiryNote(dev)}`;
+      io.stderr(`team rename: ${said}\n`);
+      return 'refused';
+    }
+    if (!dev.on) {
+      const said = `only the owner (or \`leads\` in development mode) renames a team; this call is ${describeCaller(shown)}${devModeExpiryNote(dev)}`;
+      io.stderr(`team rename: ${said}\n`);
+      return 'refused';
+    }
+    const folded = devModeCallerGate(
+      dev,
+      `only the owner renames a team; this call is ${describeCaller(shown)}${devModeExpiryNote(dev)}`,
+    );
+    if (folded !== null) {
+      io.stderr(`team rename: ${folded}\n`);
+      devWarning = folded;
+    }
+  }
+
+  // Root-move detection: never recompute a team id silently.
+  const allTeams = readTeams(home);
+  const currentRecord = allTeams[currentId] ?? null;
+  let priorRecord: TeamRecord | null = null;
+  if (currentRecord === null) {
+    const movedCandidates = Object.values(allTeams).filter(
+      (rec) => rec.project === oldProject && rec.id !== currentId && rec.root !== root,
+    );
+    if (movedCandidates.length === 1) {
+      priorRecord = movedCandidates[0]!;
+    }
+  }
+  if (priorRecord !== null) {
+    const priorId = priorRecord.id ?? teamIdOf(priorRecord.root);
+    if (!rekey) {
+      io.stderr(
+        `team rename: refused: root moved from ${priorRecord.root} (id ${priorId}) to ${root} (id ${currentId}); a team id is the hash of its root, and teams.yaml, team-config/${priorId}.json, state folder ${oldProject}-${priorId}, lobbies and team grants are keyed by ${priorId}. Pass --rekey as the owner to re-key explicitly.\n`,
+      );
+      return 'refused';
+    }
+    if (caller.kind !== 'owner') {
+      io.stderr(
+        `team rename: refused: only the owner may --rekey a moved team root (re-issuing grants for ${priorId} -> ${currentId}); this call is ${describeCaller(shown)}\n`,
+      );
+      return 'refused';
+    }
+  }
+
+  // Name collision check across the entity
+  const ownIds = new Set<string>([currentId, ...(priorRecord?.id ? [priorRecord.id] : [])]);
+  for (const [id, rec] of Object.entries(allTeams)) {
+    if (ownIds.has(id)) continue;
+    if (rec.project === newTeamName && (rec.entity ?? null) === (team.entity ?? null)) {
+      io.stderr(`team rename: refused: team "${newTeamName}" already exists in this entity (${id} at ${rec.root})\n`);
+      return 'refused';
+    }
+  }
+
+  const where = { home, command: 'rename' };
+  const originalText = readTeamText(path, where);
+  const nextText = renameTeamIdentity(originalText, {
+    project: newTeamName,
+    ...(inProjectOpt !== undefined ? { inProject: inProjectOpt } : {}),
+    ...(sessionOpt !== undefined ? { session: sessionOpt, oldSession } : {}),
+  });
+  const validated = validateTeamFile(nextText, { home, root });
+  if (!validated.ok) {
+    const first = validated.errors[0];
+    io.stderr(
+      `team rename: ${first?.line ? `line ${first.line}: ` : ''}${first?.message ?? `the edited team did not validate (${teamPlace(path, where)})`}\n`,
+    );
+    return 'invalid';
+  }
+
+  // Both modes must reach these refusals before any mutation, including audit writes. A team
+  // rename carries an existing signed approval; it must never bootstrap a missing signing key
+  // or silently leave the approval, state, or another team's lobby behind.
+  const oldRoot = priorRecord !== null && rekey ? priorRecord.root : root;
+  const oldId = priorRecord?.id && rekey ? priorRecord.id : currentId;
+  const oldStore = storePath(oldProject, oldRoot, home);
+  const newStore = storePath(newTeamName, root, home);
+  let stateFolderExists = false;
+  try {
+    stateFolderExists = lstatSync(oldStore).isDirectory();
+  } catch {}
+  if (!stateFolderExists) {
+    io.stderr(`team rename: refused: state folder ${oldStore} is missing or unreadable as a directory; restore it before renaming the team\n`);
+    return 'refused';
+  }
+  const signingKey = keyState(home);
+  if (signingKey.kind !== 'key') {
+    const reason = signingKey.kind === 'unreadable' ? signingKey.why : 'it is missing';
+    io.stderr(`team rename: refused: the owner signing key must be available to preserve approval and re-sign grants (${reason}); restore it before renaming the team\n`);
+    return 'refused';
+  }
+  const standing = (sources.standing ?? ((at) => approvalStanding(at, home)))(oldRoot);
+  if (standing.kind !== 'verified') {
+    const reason = standing.kind === 'refused' ? `: ${standing.why}` : ` (${standing.kind})`;
+    io.stderr(`team rename: refused: approval must be verified before renaming the team${reason}\n`);
+    return 'refused';
+  }
+
+  const defaultOldLobby = join(home, '.config', 'team', 'lobbies', oldProject);
+  const defaultNewLobby = join(home, '.config', 'team', 'lobbies', newTeamName);
+  const priorLobby = allTeams[oldId]?.lobby;
+  if (oldProject !== newTeamName && (priorLobby === defaultOldLobby || existsSync(defaultOldLobby))) {
+    const lobbyPath = (path: string): string => {
+      try { return realpathSync(path); } catch { return resolve(path); }
+    };
+    const moving = new Set([lobbyPath(defaultOldLobby), lobbyPath(defaultNewLobby)]);
+    for (const [id, record] of Object.entries(allTeams)) {
+      if (ownIds.has(id)) continue;
+      const claimed = [record.lobby, ...Object.values(record.lobbies)].filter(Boolean);
+      if (claimed.some((path) => moving.has(lobbyPath(path)))) {
+        io.stderr(`team rename: refused: lobby is used by another team (${id}); leave that team's lobby in place\n`);
+        return 'refused';
+      }
+    }
+  }
+
+  if (dryRun) {
+    if (json) {
+      io.stdout(
+        `${JSON.stringify(
+          {
+            dryRun: true,
+            from: oldProject,
+            to: newTeamName,
+            inProject: inProjectOpt ?? validated.team.inProject ?? null,
+            session: newSession,
+            rekey: priorRecord !== null && rekey,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+    } else {
+      io.stdout(`${oldProject} -> ${newTeamName} (dry run)\n`);
+    }
+    return 'ok';
+  }
+
+  logDevModeState(dir, 'rename', describeCaller(shown), dev, now);
+  if (devWarning !== null) logDevMode(dir, 'rename', describeCaller(shown), devWarning, now);
+  const moved: string[] = ['team config'];
+
+  if (oldStore !== newStore && existsSync(oldStore)) {
+    if (moveFolder(oldStore, newStore)) {
+      moved.push(newStore);
+    }
+  }
+
+  if (rekey && oldId !== currentId) {
+    rekeyStoredTeamConfig(home, oldId, currentId, root);
+  }
+  writeTeamText(path, nextText, where);
+  recordTeamRenameOf(
+    standing,
+    validated.team,
+    root,
+    {
+      project: newTeamName,
+      ...(inProjectOpt !== undefined ? { inProject: inProjectOpt } : {}),
+      ...(sessionOpt !== undefined ? { session: sessionOpt, oldSession } : {}),
+    },
+    home,
+  );
+
+  if (newSession !== oldSession && renameSessionInState(dir, oldSession, newSession)) {
+    moved.push('.agents/team.state.json');
+  }
+
+  const sessCount = renameTeamSessions(newStore, oldProject, newTeamName, oldSession, newSession);
+  if (sessCount > 0) {
+    moved.push(`sessions.jsonl (${String(sessCount)} ${sessCount === 1 ? 'entry' : 'entries'})`);
+  }
+
+  if (newSession !== oldSession) {
+    const fromDrops = join(root, '.agents', 'send-drops', oldSession);
+    const toDrops = join(root, '.agents', 'send-drops', newSession);
+    if (moveFolder(fromDrops, toDrops)) {
+      moved.push(relative(root, toDrops));
+    }
+  }
+
+  if (newSession !== oldSession || oldRoot !== root) {
+    const mailCount = updateTeamMailboxMessages(root, home, oldRoot, oldSession, newSession);
+    if (mailCount > 0) {
+      moved.push(`.agents/messages (${String(mailCount)})`);
+    }
+  }
+
+  const existing = getTeam(home, oldId);
+  let nextLobby = existing?.lobby ?? '';
+  if (oldProject !== newTeamName && (nextLobby === defaultOldLobby || existsSync(defaultOldLobby))) {
+    moveFolder(defaultOldLobby, defaultNewLobby);
+    nextLobby = defaultNewLobby;
+    moved.push(defaultNewLobby);
+  }
+  const nextLobbies: Record<string, string> = { ...(existing?.lobbies ?? {}) };
+  if (oldSession !== newSession) {
+    delete nextLobbies[oldSession];
+  }
+  if (nextLobby) {
+    nextLobbies[newSession] = nextLobby;
+  }
+  const until = new Date(now.getTime() + 30 * 86_400_000).toISOString();
+  const previousNames = [
+    ...(existing?.previousNames ?? []).filter((p) => p.name !== oldProject && p.name !== newTeamName),
+    ...(oldProject !== newTeamName ? [{ name: oldProject, until }] : []),
+  ];
+
+  const by = callerLabel(caller);
+  const atIso = now.toISOString();
+  if (rekey && oldId !== currentId) {
+    rekeyTeamRecord(home, oldId, currentId, {
+      project: newTeamName,
+      entity: validated.team.entity,
+      session: newSession,
+      root,
+      lobby: nextLobby,
+      lobbies: nextLobbies,
+      previousNames,
+      by,
+      at: atIso,
+    });
+    moved.push(`teams.yaml (${oldId} -> ${currentId})`);
+  } else {
+    upsertTeam(home, currentId, {
+      project: newTeamName,
+      entity: validated.team.entity,
+      session: newSession,
+      root,
+      lobby: nextLobby,
+      lobbies: nextLobbies,
+      previousNames,
+      by,
+      at: atIso,
+    });
+    moved.push(`teams.yaml (${currentId})`);
+  }
+
+  if (inProjectOpt !== undefined) {
+    setTeamProjectMembership(home, currentId, inProjectOpt, {
+      entity: validated.team.entity,
+      by,
+      at: atIso,
+    });
+    moved.push(`in_project ${inProjectOpt}`);
+  }
+
+  const updatedRecord = getTeam(home, currentId);
+  for (const entry of updatedRecord?.roster ?? []) {
+    const agent = getAgent(home, entry.agent);
+    if (!agent) continue;
+    if (agent.reach.team !== currentId || agent.reach.session !== newSession) {
+      updateAgent(home, agent.id, { reach: { team: currentId, session: newSession } });
+    }
+  }
+
+  const sendGrants = reissueTeamSendGrants(home, oldProject, newTeamName, oldSession, newSession, {
+    now,
+    reSign: caller.kind === 'owner',
+  });
+  if (sendGrants.reissued.length > 0) {
+    moved.push(`send grants (${sendGrants.reissued.join(', ')})`);
+  } else if (sendGrants.reissueLines.length > 0) {
+    for (const line of sendGrants.reissueLines) {
+      io.stderr(`team rename: note: owner can re-issue send grant with: ${line}\n`);
+    }
+  }
+
+  if (rekey && caller.kind === 'owner' && oldId !== currentId) {
+    const teamGrants = reissueTeamGrants(home, oldId, currentId, oldRoot, root, { now });
+    if (teamGrants.length > 0) {
+      moved.push(`team grants (${teamGrants.join(', ')})`);
+    }
+  }
+
+  writeReachProjection(validated.team, home);
+
+  if (json) {
+    io.stdout(
+      `${JSON.stringify(
+        {
+          dryRun: false,
+          from: oldProject,
+          to: newTeamName,
+          teamId: currentId,
+          inProject: validated.team.inProject,
+          session: newSession,
+          moved,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  } else {
+    io.stdout(`renamed team ${oldProject} -> ${newTeamName}: moved ${moved.join(', ')}\n`);
   }
   return 'ok';
 }

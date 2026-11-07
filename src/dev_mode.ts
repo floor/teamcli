@@ -5,7 +5,7 @@
 // only that gate: the placement, CLI, record and scope checks stay.
 //
 // The owner's urgent widening adds a second, narrower admission: while dev mode
-// is `on`, a placed seat that is a team's orchestrator — the file's resolved lead, whether it
+// is `on`, a placed seat that is a team's lead — the seat the file resolves, whether it
 // was spelled by `coordinator:` or by `leads: true` — may run the owner-only authority edits —
 // grant, delegate, revoke, policy set/unset, the team record's `config set`/`unset`/`edit` and a
 // seat's `settings set`/`unset`, `check --repair`, `remove --abandon`, `down --abandon`,
@@ -16,7 +16,7 @@
 // team a lead stands in is found twice: the file the command runs against, in its own session;
 // and, when that file does not name the caller, the main team above it — a registered team whose
 // root strictly contains the target's, whose file names the same entity and makes the caller its
-// orchestrator, in that team's own session. The second is what admits the main orchestrator
+// lead, in that team's own session. The second is what admits the main team's lead
 // across teams: it runs a project team's command from the main team's session, where its own
 // team file and state place it. A lead outside that scope — a sibling team's, another
 // entity's — is no admission. The role alone is never the proof: the caller must be placed on
@@ -24,7 +24,7 @@
 // guards, the client pane guard, the public-action refusals and every other owner gate are
 // untouched; with dev mode `off` every one of these gates refuses exactly as before.
 //
-// The rules audit's second widening (ruling D5, owner answer A3) adds the operator place, as a
+// The rules audit's second widening adds the operator place, as a
 // caller-set policy — `lead-gates`, in the catalogue below this comment's list, set at entity,
 // project or team and never at a seat. Its default `lead` keeps every gate the lead's; while the
 // effective value reads `lead+operator` on a chain that loads, and dev mode is on, the target
@@ -273,26 +273,26 @@ export function devModeState(io: Pick<Io, 'env'>, context: DevModeContext = {}):
 /** The role that admits an owner-only command under dev mode: a team's resolved lead — the
  *  file's `orchestrator`, whether it was spelled by `coordinator:` or by `leads: true`. The
  *  target team's own file is asked first; a lead the registry places in another team (the main
- *  orchestrator, above the project teams) is admitted too, because the command it runs may
+ *  team's lead, above the project teams) is admitted too, because the command it runs may
  *  belong to any team. The file's own `operator:` place is the second role, and only under the
  *  `lead-gates` policy's `lead+operator` value, and only at the gates that pass
  *  `admitsOperator`: the role is an admission the policy grants, not one the file alone gives.
  *  Any other seat is no admission: the file names exactly one lead and one operator, and the
  *  registry silently mirrors them, so the team file — not a possibly stale derived record — is
  *  what the gate reads. */
-export type DevModeOwnerRole = 'orchestrator' | 'operator';
+export type DevModeOwnerRole = 'lead' | 'operator';
 
 /** The role `name` holds in this team, or null. A seat that is both — `operator:` spelled the
  *  same as the lead — is the lead: the wider role answers first, and no proof is downgraded. */
 export function devModeOwnerRoleOf(name: string, team: TeamFile): DevModeOwnerRole | null {
-  if (name === team.orchestrator) return 'orchestrator';
+  if (name === team.orchestrator) return 'lead';
   if (name === team.operator) return 'operator';
   return null;
 }
 
 /**
- * Whether the `lead-gates` policy admits the operator place beside the lead (ruling D5, owner
- * answer A3): the effective value on the caller's own chain must read `lead+operator`. Fail
+ * Whether the `lead-gates` policy admits the operator place beside the lead:
+ * the effective value on the caller's own chain must read `lead+operator`. Fail
  * closed in every other case — no chain to read, a chain that will not load, an unread value
  * and the `lead` default all admit no operator. The policy never has a level of its own to
  * turn dev mode on: dev mode itself is asked separately (`devModeState`), and this reading only
@@ -320,17 +320,17 @@ function roleAtTarget(
 }
 
 /**
- * The same proof for the main orchestrator, whose team sits above the target's: a team the
+ * The same proof for the main team's lead, whose team sits above the target's: a team the
  * registry holds whose root strictly contains the target root, whose file names the caller its
- * orchestrator, whose session places the caller, and whose state records the pane it stands on.
+ * lead, whose session places the caller, and whose state records the pane it stands on.
  * The two files must name the same entity, so a lead outside the target's entity is no
- * admission. This is the route the live repair needs — the main orchestrator runs from the main
+ * admission. This is the route the live repair needs — the main team's lead runs from the main
  * team's session, above the project teams whose commands it may run. Every step is a proof the
  * registry alone cannot give: the placement comes from the walk in that session, the role from
  * the team's live file, and the pane from the team's own state. A registry or a file that cannot
  * be read admits nobody, and a name alone never does. The operator place has no share in this
  * route: an operator of another team — the main team's included — is no admission anywhere, so
- * only the `orchestrator` role returns from here.
+ * only the `lead` role returns from here.
  */
 function roleElsewhere(
   io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
@@ -356,7 +356,7 @@ function roleElsewhere(
     if (!loaded.ok) continue;
     if (loaded.team.entity === null || loaded.team.entity !== options.team.entity) continue;
     const role = devModeOwnerRoleOf(placed.name, loaded.team);
-    if (role !== 'orchestrator') continue;
+    if (role !== 'lead') continue;
     const at = standingOf(dirname(loaded.path), record.session, placed);
     if (callerVerdict(placed, placed.name, at).kind !== 'ok') continue;
     return { role, caller: placed };
@@ -405,11 +405,11 @@ const NO_LIFT = (caller: Caller): DevModeOwnerLift => ({ lifted: false, warning:
 
 /**
  * Whether dev mode admits a caller to one owner-only command. The caller must be a placed seat:
- * the target team's orchestrator on the pane the target state records for it in the target
- * session, or — the main orchestrator's route — a lead of another team the registry holds, on
+ * the target team's lead on the pane the target state records for it in the target
+ * session, or — the route the main team's lead takes — a lead of another team the registry holds, on
  * the pane that team's own state records, in that team's session; and dev mode must be `on` for
- * the caller's place. The file's own `operator:` seat holds a second, narrower admission
- * (ruling D5, owner answer A3): only at a command that passes `admitsOperator` — `check
+ * the caller's place. The file's own `operator:` seat holds a second, narrower admission:
+ * only at a command that passes `admitsOperator` — `check
  * --repair`, `remove --abandon`, `down --abandon`, `policy set`/`unset`, `daemon restart` — and
  * only while the `lead-gates` policy reads `lead+operator` on the caller's chain. The owner is
  * not this path's to admit — the command's own `isOwner` answers first — and a no-terminal or

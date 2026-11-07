@@ -32,6 +32,7 @@ beforeEach(() => {
   root = join(base, 'pilot');
   home = join(base, 'home');
   mkdirSync(join(root, '.agents'), { recursive: true });
+  mkdirSync(join(base, 'plain-reviewer'));
   mkdirSync(home);
   installKey(home, JSON.parse(readFileSync(join(import.meta.dir, '../fixtures/key.json'), 'utf8')));
   writeFileSync(join(root, '.agents/team.yaml'), FIXTURE);
@@ -111,7 +112,8 @@ describe('team doctor on a file of every model shape', () => {
         'trust:',
         '  - ~/.config/team/lobby',
         `  - ${root}`,
-        `~/.config/team/lobby is the machine lobby, where every seat starts now; ${root} is the project root`,
+        `  - ${join(base, 'plain-reviewer')}`,
+        `~/.config/team/lobby is the machine lobby, where every seat starts now; ${root} is the project root; ${join(base, 'plain-reviewer')} is where seat plain-reviewer's cwd "../plain-reviewer" starts, replacing "../plain-reviewer"`,
         'team doctor: nothing missing, 6 warnings',
         'what 0.5.0 must not pretend:',
         '  The checks in 0.5.0 — including the owner check — stop mistakes by agents in herdr panes, not a process running as the same OS user that sets out to get around those checks.',

@@ -1,3 +1,4 @@
+import type { KeyObject } from 'node:crypto';
 // The seat's inbox: the drop folder `team send` already writes, read from the seat's own side.
 //
 // `team send` writes one message per file, whole and 0600, into
@@ -17,7 +18,6 @@
 // session or the seat refuses service; an id is a lowercase UUID — or the `unread-<uuid>` name a
 // build before 0.5.3 wrote for a runtime report to a lead — and nothing else, so no id can name a
 // path; a drop or receipt that is a link is refused, never followed.
-import type { KeyObject } from 'node:crypto';
 import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -28,18 +28,26 @@ import {
   isGeneralBriefRecord,
   type CurrentBriefClaim,
 } from '../launch/general-brief.ts';
-import type { BriefBinding } from '../launch/brief-id.ts';
+import { isBriefEpoch, type BriefBinding } from '../launch/brief-id.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { readNoFollow } from '../send/history.ts';
 import { dropMessage } from '../send/native.ts';
+import { attributedBody, attributeSenderClaim, type SenderAttribution } from '../send/sender-claim.ts';
 import { readState } from '../state.ts';
 import {
+  alreadyReadSentence,
+  fileStatStamp,
   isRead,
+  isReadOrCleared,
+  keyPrintForCache,
+  leadAckReceiptAt,
+  settledReadOf,
+  readRecord,
   readSealedRecord,
   receiptFile,
   recordAuthOfSealed,
   signReceiptPayload,
-  verifiedRecordAt,
+  verifyRecord,
   type ReceiptPayload,
   type RecordPayload,
   type RecordReader,
@@ -75,7 +83,7 @@ export function messageNameOk(name: string): boolean {
 /** How long a send waits for the read receipt before it reports `sent (unconfirmed)`: long
  *  enough for a seat that checks its inbox at a turn boundary, short enough not to block a
  *  sender. The native queue's receipt wait uses it, as does any record an older build wrote on
- *  the mcp-inbox leg (that name is no delivery leg in this build). Nothing waits longer than this. */
+ *  the mcp-inbox leg (that name is retired — no longer a leg). Nothing waits longer than this. */
 export const INBOX_GRACE_MS = 2_000;
 
 /** How often that wait looks for the receipt. */
@@ -115,11 +123,26 @@ export type InboxListener = {
    *  the `ack` tool. A marker without it is a serving inbox with no channel, and the send walks
    *  its next leg. */
   channel?: true;
+  /** The launch this process bound at start: the `--epoch` it was given, or the current claim's
+   *  epoch when the launch line named none. Absent when the claim holds no launch epoch, or the
+   *  server started before a claim existed. Never a replacement for the server's live guards. */
+  epoch?: string;
 };
 
-/** One waiting message, as `inbox_check` names it. `from` and the marker's `ts` are there when
- *  the send left a `.pending` record beside the drop; otherwise `ts` is the file's own time. */
-export type InboxMessage = { id: string; from?: string; ts: string; bytes: number };
+/** One waiting message, as `inbox_check` names it. `from` is the sender the message's own signed
+ *  record claims — never the unsigned `.pending` marker's word when a record is there — and the
+ *  marker's `ts` is there when the send left one beside the drop; otherwise `ts` is the record's
+ *  own signed time, or the file's for a file this key cannot vouch for. `sender_attribution` says
+ *  what the sender rests on: the shared checkout key every seat can read, the launch's general
+ *  seat brief bound to the seat's current claim, or nothing at all when the name is a marker's
+ *  word or no key could vouch for the file. */
+export type InboxMessage = {
+  id: string;
+  from?: string;
+  ts: string;
+  bytes: number;
+  sender_attribution: SenderAttribution;
+};
 
 export function listenerPath(dropDir: string): string {
   return join(dropDir, LISTENER_FILE);
@@ -201,6 +224,7 @@ export function readListener(dropDir: string): InboxListener | null {
       ...(typeof parsed.build === 'string' || parsed.build === null ? { build: parsed.build } : {}),
       ...(typeof parsed.head === 'string' ? { head: parsed.head } : {}),
       ...(parsed.channel === true ? { channel: true as const } : {}),
+      ...(isBriefEpoch(parsed.epoch) ? { epoch: parsed.epoch } : {}),
     };
   } catch {
     return null;
@@ -327,20 +351,64 @@ export function removeListener(dropDir: string, pid: number): void {
   }
 }
 
+const INBOX_STAMP_CACHE_LIMIT = 4096;
+const pendingMarkerCache = new Map<string, { stamp: string; marker: { from?: string; ts?: string } }>();
+const verifiedRecordCache = new Map<string, { stamp: string; keyPrint: string; id: string; payload: RecordPayload | null }>();
+
 /** The sender and time `team send` left beside the drop, when a marker is there and names it. */
 function markerOf(dropDir: string, id: string): { from?: string; ts?: string } {
-  const text = readNoFollow(join(dropDir, `${id}.pending`));
+  const pendingPath = join(dropDir, `${id}.pending`);
+  const stamp = fileStatStamp(pendingPath);
+  if (stamp !== null) {
+    const cached = pendingMarkerCache.get(pendingPath);
+    if (cached !== undefined && cached.stamp === stamp) return cached.marker;
+  }
+  const text = readNoFollow(pendingPath);
   if (text === null || text === '') return {};
   try {
     const parsed = JSON.parse(text) as { id?: unknown; from?: unknown; ts?: unknown };
     if (parsed.id !== id) return {};
-    return {
+    const marker = {
       ...(typeof parsed.from === 'string' ? { from: parsed.from } : {}),
       ...(typeof parsed.ts === 'string' ? { ts: parsed.ts } : {}),
     };
+    if (stamp !== null) {
+      if (pendingMarkerCache.size >= INBOX_STAMP_CACHE_LIMIT) pendingMarkerCache.clear();
+      pendingMarkerCache.set(pendingPath, { stamp, marker });
+    }
+    return marker;
   } catch {
     return {};
   }
+}
+
+function verifiedPayloadAt(path: string, id: string, key: KeyObject): RecordPayload | null {
+  const stamp = fileStatStamp(path);
+  const keyPrint = stamp !== null ? keyPrintForCache(key) : '';
+  if (stamp !== null && keyPrint !== '') {
+    const cached = verifiedRecordCache.get(path);
+    if (cached !== undefined && cached.stamp === stamp && cached.keyPrint === keyPrint && cached.id === id) {
+      return cached.payload;
+    }
+  }
+  const looked = readRecord(path, id);
+  const payload =
+    looked.ok && looked.record !== null && verifyRecord(looked.record, key) ? looked.record.payload : null;
+  if (stamp !== null && keyPrint !== '') {
+    if (verifiedRecordCache.size >= INBOX_STAMP_CACHE_LIMIT) verifiedRecordCache.clear();
+    verifiedRecordCache.set(path, { stamp, keyPrint, id, payload });
+  }
+  return payload;
+}
+
+/** The time a message's own record names when that record verifies with this checkout's key, and
+ *  null otherwise. The `.pending` marker beside a message is unsigned, and a file's mtime is the
+ *  filesystem's: neither may date a record the key signed, so a listing counts from this when it
+ *  is there and falls back only for a record this key cannot vouch for. */
+function signedTimeOfPayload(payload: RecordPayload | null): string | null {
+  if (payload === null) return null;
+  const at = payload.at;
+  return typeof at === 'string' && Number.isFinite(Date.parse(at)) ? at : null;
 }
 
 /** The current claim of one seat's general seat brief, read from the checkout's state; null when
@@ -422,10 +490,11 @@ export function listUnread(
   // is not a message, and a caller that shares one pass's reading takes its presence from here
   // rather than opening the folder again. A folder that could not be listed is never reported.
   listed?.(names);
+  const nameSet = new Set(names);
   const key = messageKeyState(home);
   const readRecordAt: RecordReader | null = key.kind !== 'key'
     ? null
-    : records ?? ((path, id) => verifiedRecordAt(path, id, key.key));
+    : records ?? ((path, id) => verifiedPayloadAt(path, id, key.key));
   const claim = currentClaimIn(context.root, context.session, context.to);
   const superseded = new Set(claim?.superseded ?? []);
   const messages: InboxMessage[] = [];
@@ -435,7 +504,9 @@ export function listUnread(
     const at = join(dropDir, name);
     if (heldAt(at).kind !== 'file') continue;
     const binding = claim !== null && name === claim.id ? briefBindingOf(claim) : undefined;
-    if (key.kind === 'key' && isRead(dropDir, name, context, key.key, binding)) continue;
+    const hasReceiptFile = nameSet.has(`${name}.read.json`) || nameSet.has(`${name}.replied.json`);
+    // A message a lead cleared is settled exactly as one the seat read: it is not waiting mail.
+    if (key.kind === 'key' && hasReceiptFile && isReadOrCleared(dropDir, name, context, key.key, binding)) continue;
     const payload = readRecordAt === null ? null : readRecordAt(at, name);
     if (payload !== null && supersededBrief(payload, name, context, claim)) continue;
     let size = 0;
@@ -448,14 +519,22 @@ export function listUnread(
     } catch {
       continue;
     }
-    const marker = markerOf(dropDir, name);
+    const marker = nameSet.has(`${name}.pending`) ? markerOf(dropDir, name) : {};
     // A record this key signed is dated by its own `at`; an unsigned marker or the file's mtime
-    // dates only a record the key cannot vouch for.
+    // dates only a record the key cannot vouch for. The sender follows the same rule: the
+    // record's own signed claim when it verifies, the marker's word only when it does not — and
+    // only the record's claim can be attributed to anything.
+    const signedAt = signedTimeOfPayload(payload);
+    const sender = payload !== null ? payload.from : marker.from;
+    const senderAttribution = payload === null
+      ? 'none' as const
+      : attributeSenderClaim(payload, { briefClaim: claim });
     messages.push({
       id: name,
-      ...(marker.from !== undefined ? { from: marker.from } : {}),
-      ts: (payload === null ? null : signedTimeIn(payload)) ?? marker.ts ?? new Date(mtime).toISOString(),
+      ...(sender !== undefined ? { from: sender } : {}),
+      ts: signedAt ?? marker.ts ?? new Date(mtime).toISOString(),
       bytes: size,
+      sender_attribution: senderAttribution,
     });
   }
   return messages.sort((a, b) => (Date.parse(a.ts) - Date.parse(b.ts)) || a.id.localeCompare(b.id));
@@ -504,7 +583,7 @@ export type InboxRefusal = {
 };
 
 export type InboxRead =
-  | { ok: true; body: string }
+  | { ok: true; body: string; seal?: () => boolean }
   // `served` marks a race the gate decided without a body: `already-served` when a verifiable
   // receipt won the name. `busy` stays in the union for callers and fixtures that predate the
   // receipt-only gate; this version never emits it.
@@ -533,7 +612,15 @@ type OpenedMessage =
 export type BriefRead = { claim: () => CurrentBriefClaim | null; epoch?: string };
 
 /** The inbox a read serves: the launch's own folder, root, seat and session. */
-export type InboxTarget = { dropDir: string; root: string; seat: string; session: string };
+export type InboxTarget = {
+  dropDir: string;
+  root: string;
+  seat: string;
+  session: string;
+  /** The team's resolved lead, when the reader loaded the team: the one seat name a clearance
+   *  receipt may carry and still settle the inbox read. */
+  lead?: string;
+};
 
 /**
  * Reads one message, verifies it, and only then writes its receipt **before** returning the body:
@@ -660,6 +747,9 @@ export function readMessage(
   home: string,
   brief?: BriefRead,
   guard?: () => string | null,
+  /** `after` writes no receipt before the body is returned. The caller seals once the body has
+   *  been handed over, and a hand-over that never returns leaves the message unread. */
+  handover?: { receipt: 'after' },
 ): InboxRead {
   if (!messageNameOk(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   const at = join(target.dropDir, id);
@@ -676,8 +766,17 @@ export function readMessage(
   // entry at the read or replied receipt name is uncertainty about an earlier exposure, so it is
   // preserved and no body is returned. Otherwise this reader races every other reader to publish
   // the signed receipt with `link`; exactly one wins, and only the winner returns the body.
-  const context: StatusContext = { to: target.seat, root: target.root, session: target.session };
+  const context: StatusContext = {
+    to: target.seat,
+    root: target.root,
+    session: target.session,
+    ...(target.lead === undefined ? {} : { lead: target.lead }),
+  };
   const receiptHeldNow = (): boolean => isRead(target.dropDir, id, context, key, binding);
+  // A lead's clearance holds the one read name without being the seat's read: the id is served
+  // and no body follows. A brief's own delivery never takes this path — only a seat reads it.
+  const clearedNow = (): boolean =>
+    binding === undefined && leadAckReceiptAt(target.dropDir, id, context, key) !== null;
   const alreadyServed = (): InboxRead => ({
     ok: false,
     reason: `message ${JSON.stringify(id)} was already served in this inbox`,
@@ -693,7 +792,7 @@ export function readMessage(
   });
   if (receiptHeldNow()) return alreadyServed();
   const atRead = heldAt(readName);
-  if (atRead.kind === 'file') return receiptHeldNow() ? alreadyServed() : occupied();
+  if (atRead.kind === 'file') return receiptHeldNow() ? alreadyServed() : clearedNow() ? alreadyServed() : occupied();
   if (atRead.kind !== 'missing') {
     return { ok: false, reason: 'the receipt path is held by something that is not a file' };
   }
@@ -745,45 +844,81 @@ export function readMessage(
   // or — for a manual read — the claim it served. It is never the key's own generation.
   const writerEpoch = brief?.epoch ?? binding?.epoch;
   const signedReceipt = signReceiptPayload(receipt, home, writerEpoch === undefined ? undefined : { epoch: writerEpoch });
-  const published = publishReadReceipt(readName, `${JSON.stringify(signedReceipt, null, 2)}\n`);
-  if (published === 'exists') {
-    // A rival won the name between the check and this link. Its receipt is the single serving of
-    // this id: verify it, and never replace it. If it does not verify, the name is uncertain and
-    // stays as evidence; either way this read returns no body.
-    return receiptHeldNow() ? alreadyServed() : occupied();
+  const body = attributedBody(payload.body, payload.from, {
+    record: payload,
+    home,
+    root: target.root,
+    rule: payload.rule,
+  });
+  // The inbox server publishes the receipt before it returns the body: a receipt that cannot be
+  // made durable shows nothing, and a seat that loses its place during the write shows nothing
+  // either. The receipt stands — that path is at-most-once. The CLI mailbox reader asks for the
+  // body first and seals only after the hand-over returns, so a hand-over that throws leaves the
+  // message unread.
+  const publish = (): InboxRead | true => {
+    const published = publishReadReceipt(readName, `${JSON.stringify(signedReceipt, null, 2)}\n`);
+    if (published === 'exists') {
+      // A rival won the name between the check and this link. Its receipt is the single serving of
+      // this id: verify it, and never replace it. If it does not verify, the name is uncertain and
+      // stays as evidence; either way this read returns no body.
+      return receiptHeldNow() ? alreadyServed() : clearedNow() ? alreadyServed() : occupied();
+    }
+    if (published === 'failed') {
+      return { ok: false, reason: 'the receipt could not be written, so the message is not returned' };
+    }
+    if (!flushReceipt(readName, target.dropDir)) {
+      return { ok: false, reason: 'the receipt could not be made durable, so the message is not returned' };
+    }
+    return true;
+  };
+  if (handover?.receipt === 'after') {
+    return {
+      ok: true,
+      body,
+      seal: () => publish() === true,
+    };
   }
-  if (published === 'failed') {
-    return { ok: false, reason: 'the receipt could not be written, so the message is not returned' };
-  }
-  // The receipt must survive a crash before any body is shown. A receipt that cannot be
-  // flushed is not proof, so the read returns nothing (and the message stays spent).
-  if (!flushReceipt(readName, target.dropDir)) {
-    return { ok: false, reason: 'the receipt could not be made durable, so the message is not returned' };
-  }
+  const wrote = publish();
+  if (wrote !== true) return wrote;
   // The declaration is looked at once more after the receipt is durable and before the body is
   // handed back: a seat that lost its place during the write shows nothing. The receipt stands —
   // this is the at-most-once side — and the caller returns this refusal instead of the body.
   const lostAfterReceipt = guard?.();
   if (lostAfterReceipt !== undefined && lostAfterReceipt !== null) return { ok: false, reason: lostAfterReceipt };
-  return { ok: true, body: payload.body };
+  return { ok: true, body };
 }
 
 /**
- * Reads one message for a peek: the same verification a read makes, and the body, with nothing
- * written. No receipt is published, so the message stays unread and the seat's own read still
- * serves it; a read or replied receipt an earlier reader left is not consulted, because a peek
- * neither consumes the message nor claims anything about it. This is how the owner and a lead
+ * Reads one message for a peek: the same verification a read makes, and the same attributed body, with nothing
+ * written. No receipt is published, so a message that is still waiting stays unread and the seat's
+ * own read still serves it. A receipt that already settled the id — the seat's read, or a lead's
+ * clearance — is consulted first, and that peek returns no body. This is how the owner and a lead
  * look at another seat's waiting mail without hiding it from its seat. `served` is never
  * returned: a peek does not race a read for anything.
  */
-export function peekMessage(target: InboxTarget, id: string, home: string, brief?: BriefRead): InboxRead {
+export function peekMessage(target: InboxTarget, id: string, home: string, seats: readonly string[], brief?: BriefRead): InboxRead {
   if (!messageNameOk(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   if (heldAt(join(target.dropDir, id)).kind !== 'file') {
     return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   }
+  const key = messageKeyState(home);
+  if (key.kind === 'key') {
+    const context: StatusContext = { to: target.seat, root: target.root, session: target.session, lead: target.lead };
+    const settled = settledReadOf(target.dropDir, id, context, key.key);
+    if (settled !== null) return { ok: false, reason: alreadyReadSentence(id, settled.at, settled.readBy, seats) };
+  }
   const opened = openInboxMessage(target, id, home, brief);
   if (!opened.ok) return opened;
-  return { ok: true, body: opened.payload.body };
+  const payload = opened.payload;
+  return {
+    ok: true,
+    body: attributedBody(payload.body, payload.from, {
+      record: payload,
+      home,
+      root: target.root,
+      rule: payload.rule,
+    }),
+  };
 }
 
 /**

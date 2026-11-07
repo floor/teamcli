@@ -122,6 +122,7 @@ describe('team ack marks one message read without printing it', () => {
     const io = testIo(root, { kind: 'owner' });
     expect(await runMessages([], io, { home, now: () => NOW })).toBe(0);
     expect(io.out).toContain('nothing is waiting');
+    expect(io.out).not.toContain('a question');
   });
 
   test('a second acknowledgement is idempotent: exit 0, the first receipt byte for byte, nothing rewritten', async () => {
@@ -280,4 +281,17 @@ describe('an acknowledged message stops ringing', () => {
     // receipt at the message's own name.
     expect(existsSync(receiptPath(recordDir(root, 'acme', 'owner'), SENT))).toBe(true);
   });
+});
+
+
+test('a client grant acknowledges an exact UUID and never a short prefix or a scoped set', async () => {
+  sentTo('owner', SENT);
+  const io = testIo(root, { kind: 'owner' });
+  io.general = { grant: 'fixture-grant', key: 'fixture-key', grantId: 'fixture-grant-id', clientId: 'fixture-client' };
+  expect(await runAck([SENT.slice(0, 8)], io, host())).toBe(1);
+  expect(io.err).toContain('a client acknowledgement needs an exact UUID');
+  expect(existsSync(receiptFile(recordDir(root, 'acme', 'owner'), SENT, 'read'))).toBe(false);
+  expect(await runAck(['--seat', 'owner', '--older-than', '1s'], io, host())).toBe(1);
+  expect(await runAck([SENT], io, host())).toBe(0);
+  expect(existsSync(receiptFile(recordDir(root, 'acme', 'owner'), SENT, 'read'))).toBe(true);
 });

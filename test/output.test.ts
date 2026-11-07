@@ -142,6 +142,7 @@ describe('src/output/ — note collapsing, differences, severity, deprecation, a
       'codex-acme: version unread',
       'deepseek-acme: version unread',
       'watch: pane w9:p1, pid 4242, last heartbeat 0s ago',
+      'daemon: version unread',
       'the herdr session "acme" is not running',
       'the herdr session "acme" is not running',
       'proc dev-server: builder-1 since 2026-10-17T10:00:00Z, pid 1234',
@@ -151,6 +152,7 @@ describe('src/output/ — note collapsing, differences, severity, deprecation, a
       'codex-acme: version unread (x2)',
       'deepseek-acme: version unread',
       'watch: pane w9:p1, pid 4242, last heartbeat 0s ago',
+      'daemon: version unread',
       'the herdr session "acme" is not running (x2)',
       'proc dev-server: builder-1 since 2026-10-17T10:00:00Z, pid 1234',
     ]);
@@ -158,6 +160,7 @@ describe('src/output/ — note collapsing, differences, severity, deprecation, a
       'hold until 2026-10-04T00:00:00.000Z: freeze deploys',
       'codex-acme, deepseek-acme: version unread (2 seats)',
       'watch: pane w9:p1, pid 4242, last heartbeat 0s ago',
+      'daemon: version unread',
       'the herdr session "acme" is not running (x2)',
       'proc dev-server: builder-1 since 2026-10-17T10:00:00Z, pid 1234',
     ]);
@@ -340,6 +343,31 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
       'team.error': [
         jsonError('policy.refused', 'refused', 'team policy unset team dev-mode', 1, 'owner-only'),
       ],
+      'team.analyse': [
+        jsonEnvelope('team.analyse', {
+          format: 1 as const,
+          at: '2026-11-05T19:15:00.000Z',
+          analyser: { principal: 'owner', authorized_by: 'owner' as const, scope: 'full' as const },
+          source: { name: 'teamcli.static', kind: 'teamcli' as const, level: 'default' as const },
+          analysis_cost: { duration_ms: 1, git_walks: 0, files_read: 0, bytes_read: 0, tokens: 0 as const, usd: 0 as const },
+          report: {
+            root: '.',
+            visibility: { value: 'private' as const, source: 'unsigned' },
+            manifests: [],
+            size: { files: 0, lines: 0, mark: 'measured' as const, source: 'walk' },
+            languages: [],
+            stack_skills: [],
+            checks: [],
+            ci: [],
+            release: { tags: false, workflows: [], source: 'none' },
+            pace: { window_days: 28, commits_per_day: 0, active_hours_per_day: 0, rhythm: 'idle' as const, source: 'git' },
+            open_work: { open: 0, blocked: 0, source: 'none' },
+            topology: { parallelizable: [], serial: [] },
+            findings: [],
+          },
+          proposal: null,
+        }),
+      ],
       'team.about': [
         jsonEnvelope('team.about', {
           format: 1 as const,
@@ -369,7 +397,17 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
         jsonEnvelope('team.status.project', {
           format: 1 as const,
           project: { id: 'beacon', name: 'beacon', entity: 'floor', lead: null },
-          teams: [{ name: 'beacon', session: 'beacon', lifecycle: 'running', seats: 2 }],
+          teams: [{
+            name: 'beacon',
+            membership: 'home',
+            session: 'beacon',
+            lifecycle: 'running',
+            seats: 2,
+            running: true,
+            active: { ready: 1, working: 1, waiting: 0, stopped: 0 },
+            roster: [{ team: 'beacon', name: 'lead', state: 'working', model: 'Claude Opus 5.5' }],
+          }],
+          active_agents: 2,
         }),
       ],
       'team.seats': [
@@ -434,6 +472,19 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           notes: [],
           differences: [],
           summary: { differences: 0, owner_differences: 0 },
+        }),
+      ],
+      'team.checkpoint': [
+        jsonEnvelope('team.checkpoint', {
+          format: 1 as const,
+          dry_run: false,
+          status: 'recorded' as const,
+          action_summary: 'team checkpoint: recorded worker -> /tmp/beacon/.agents/handovers/beacon/worker/2026-04-11T10-00-00.000Z.md (by 2026-04-11T10:05:00.000Z)',
+          seat: 'worker',
+          path: '/tmp/beacon/.agents/handovers/beacon/worker/2026-04-11T10-00-00.000Z.md',
+          at: '2026-04-11T10:00:00.000Z',
+          deadline: '2026-04-11T10:05:00.000Z',
+          by: 'lead',
         }),
       ],
       'team.client.keygen': [
@@ -842,7 +893,7 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           project: 'beacon',
           session: 'beacon',
           seat: 'worker',
-          drops: [{ from: 'the owner', received: '2026-10-17T12:00:00.000Z', path: '/work/beacon/.agents/send-drops/beacon/worker/0a5b7c1d-8e2f-4a6b-9c3d-1e2f3a4b5c6d' }],
+          drops: [{ from: 'the owner', sender_attribution: 'none', received: '2026-10-17T12:00:00.000Z', path: '/work/beacon/.agents/send-drops/beacon/worker/0a5b7c1d-8e2f-4a6b-9c3d-1e2f3a4b5c6d' }],
           counts: { drops: 1 },
         }),
       ],
@@ -1331,6 +1382,22 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           ],
         }),
       ],
+      'team.show': [
+        jsonEnvelope('team.show', {
+          format: 1 as const,
+          id: '47c25f34-ab42-47d2-a54c-5597aeb305fa',
+          prefix: '47c25f34',
+          project: 'beacon',
+          session: 'beacon',
+          seat: 'lead',
+          from: 'worker',
+          from_id: 'agt_000000000000',
+          rule: "a seat to its own team's orchestrator",
+          at: '2026-10-17T12:00:00.000Z',
+          written: true,
+          content: 'from worker (to orchestrator):\n\nReady for review.\n\n↩ team reply 47c25f34 "…" · team ack 47c25f34',
+        }),
+      ],
       'team.config-keys': [
         jsonEnvelope('team.config-keys', {
           format: 1 as const,
@@ -1350,7 +1417,7 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
               levels: ['seat'],
               type: 'order',
               allowed: 'delivery legs, tighten only',
-              default: ['mcp-inbox', 'drop', 'typed'],
+              default: ['typed', 'drop'],
               governed_by: 'delivery-order',
               applies: 'at-once',
             },

@@ -18,7 +18,7 @@
 // so is `--general` on a form that never reads a grant. No admission path can outrun the 0.5.10
 // rule that way, and everything else is the command's.
 // Never admitted here: `team client general-grant`, the one command that issues grants — a
-// grant never issues itself.
+// grant never issues itself — or a named inbox read (`drops --id`).
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import type { Io } from '../io.ts';
@@ -69,6 +69,7 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   ack: ['older-than', 'seat'],
   add: ['approval', 'client', 'effort', 'file', 'like', 'model', 'reason', 'session', 'team', 'until', 'worktree'],
   agents: [],
+  analyse: [],
   answer: ['file', 'session'],
   approvals: ['approval', 'reason'],
   archive: ['file', 'older-than', 'out', 'seat', 'session'],
@@ -78,15 +79,16 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   broker: [],
   bus: ['approval', 'inherited', 'reason'],
   check: ['file', 'pr', 'session', 'since'],
+  checkpoint: ['file', 'session'],
   client: ['approval', 'days', 'entities', 'ops', 'out', 'public-key', 'reason', 'to', 'via'],
   commits: ['file', 'since'],
   config: ['approval', 'reason'],
-  daemon: ['inherited', 'root', 'route', 'started-by'],
+  daemon: ['home', 'inherited', 'root', 'route', 'started-by'],
   delegate: ['commands'],
   'development-mode': ['approval', 'reason'],
   doctor: ['file', 'session'],
   down: ['approval', 'client', 'file', 'reason', 'session', 'team'],
-  drops: ['epoch', 'seat', 'session'],
+  drops: ['epoch', 'id', 'seat', 'session'],
   fallback: [],
   feed: ['audit', 'briefs', 'limit', 'seat'],
   forget: ['approval', 'reason'],
@@ -116,9 +118,9 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   release: ['file'],
   reload: ['client', 'file', 'team'],
   remove: ['client', 'file', 'session', 'team'],
-  rename: ['file', 'session'],
+  rename: ['file', 'from', 'in-project', 'session', 'team'],
   reply: [],
-  restart: ['client', 'file', 'session', 'team'],
+  restart: ['client', 'file', 'resume', 'session', 'team'],
   resume: ['client', 'seat', 'team'],
   revoke: ['client'],
   route: [],
@@ -128,6 +130,7 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   sessions: ['by', 'client', 'team'],
   settings: ['file'],
   setup: ['credential-id', 'grant-duration', 'public-key', 'request-expiry', 'roots', 'rule-lifetime', 'signature', 'signer', 'team'],
+  show: [],
   status: ['client', 'file', 'project', 'session', 'team'],
   swap: ['file', 'to'],
   tempo: [],
@@ -140,6 +143,10 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   workflow: ['evidence', 'script'],
   worktree: ['branch', 'file', 'kind', 'remote-session', 'seat', 'session'],
 };
+
+/** These options are parsed by their command and belong in VALUED, but a general grant never
+ *  admits them. A named inbox read uses the seat's, owner's or lead's ordinary admission. */
+const GENERAL_DENIED_OPTIONS: Readonly<Record<string, readonly string[]>> = { drops: ['id'] };
 
 /** What one command line carries once it is read the way its own parser reads it. */
 type Scan = {
@@ -319,6 +326,10 @@ export function generalDoor(name: string, rest: string[], io: Io, now: Date = ne
   const keyPath = resolve(io.cwd, key.value);
   const { command, words } = dispatchedCommand(name, key.rest);
   const scanned = scan(words, VALUED[command]);
+  const denied = GENERAL_DENIED_OPTIONS[command]?.find((option) => (scanned.counts[option] ?? 0) > 0);
+  if (denied !== undefined) {
+    return { kind: 'refused', why: `--${denied} takes no --general; read a named message as its seat, the owner, or a lead`, json };
+  }
   const op = opOf(command, scanned);
   const read = readGeneralGrant(home, grantPath, now);
   if (!read.ok) return { kind: 'refused', why: read.why, json };

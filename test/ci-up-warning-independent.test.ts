@@ -25,7 +25,7 @@ import { writePolicySet } from '../src/policy/sources.ts';
 import { readState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { watchLaunchOf, watchStopRead } from '../src/watch/pane.ts';
-import { claudeBox, gitEnv, testIo } from './helpers.ts';
+import { claudeBox, gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T09:00:00Z');
 const WARNING = 'lead is a lead seat and claude-code cannot be woken while it is idle; time-bound work is never dispatched to it';
@@ -153,13 +153,15 @@ function recordingLaunch(): { launch: Launch; created: () => number } {
     sleep: async () => {},
     now: () => NOW,
   };
+
+  recordRenames(launch);
   return { launch, created: () => made };
 }
 
 /** The launch an admitted owner run uses: a running session and the seat's panes to read. */
 function admittedLaunch(): Launch {
   const panes: string[] = [];
-  return {
+  const launch: Launch = {
     sessionState: () => 'absent',
     startServer: () => true,
     sessionUp: () => true,
@@ -177,6 +179,8 @@ function admittedLaunch(): Launch {
     sleep: async () => {},
     now: () => NOW,
   };
+  recordRenames(launch);
+  return launch;
 }
 
 describe('a refused up says only its refusal', () => {

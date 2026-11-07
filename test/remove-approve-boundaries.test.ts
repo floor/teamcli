@@ -28,7 +28,7 @@ import { getTeam, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import type { Machine } from '../src/watch/machine.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, testIo, recordRenames } from './helpers.ts';
 import { intoRegistry, storedTeam, underRegistry } from './helpers/registry-team.ts';
 
 const NOW = new Date('2026-10-15T11:30:00Z');
@@ -195,6 +195,8 @@ function world() {
     },
     now: () => new Date(clock),
   };
+
+  recordRenames(launch);
   return {
     launch, events, renames,
     get clock() { return clock; },

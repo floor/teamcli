@@ -7,6 +7,8 @@ operator: lead
 workspace:
   mode: shared
 
+trust: [../plain-reviewer]
+
 seats:
   - role: implementer
     name: script-seat           # a script sets the endpoint and the model, then runs claude
@@ -35,6 +37,7 @@ seats:
   - role: reviewer
     name: plain-reviewer        # no model flag; the screen is checked instead
     cli: cursor
+    cwd: ../plain-reviewer
     vendor: xai
     model: Grok
     version: "4.7"

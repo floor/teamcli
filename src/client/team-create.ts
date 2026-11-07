@@ -15,7 +15,7 @@ import { basename, dirname, join } from 'node:path';
 import { answerCard, cardPrompt, teamCreateCard } from './approval-card.ts';
 import { answerChoiceOf, approvalRuleExpired } from './emission.ts';
 import { presentOwnerRequest } from './owner-page-link.ts';
-import { deliverToOwnerSeat, readOwnerSeat, signOwnerAnswer, verifyOwnerAnswer, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
+import { answerDeadline, deliverToOwnerSeat, readOwnerSeat, signOwnerAnswer, verifyOwnerAnswer, type AnswerWindow, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
 import { readSecurityProfile, ruleRelaxed } from '../security/profile.ts';
 
 export const TEAM_CREATE_TTL_MS = 15 * 60 * 1000;
@@ -32,6 +32,11 @@ export type TeamCreateParams = {
   reason?: string;
 };
 export type TeamCreateRecord = { request_id: string; params: TeamCreateParams; params_sha256: string; created: string; expires_at: string };
+
+/** The binding a deferral must name and the window an extension counts from. */
+function windowOf(record: TeamCreateRecord): AnswerWindow {
+  return { params_sha256: record.params_sha256, created: record.created, expires_at: record.expires_at };
+}
 
 export function teamCreateHash(p: TeamCreateParams): string {
   // `requested_by` and `reason` are display only and stay out of the hash: the owner's answer signs
@@ -164,7 +169,8 @@ export function approveTeamCreate(
   if (choice === null) return { ok: false, why: `"${word}" is not an answer: oui/approved/yes, always, or non/deny` };
   const record = readTeamCreateRecord(home, id);
   if (typeof record === 'string') return { ok: false, why: record };
-  if (Date.parse(record.expires_at) <= now.getTime()) return { ok: false, why: `request ${id} expired at ${record.expires_at}` };
+  const deadline = answerDeadline(home, actionRequestsFolder(home), id, windowOf(record), store, now, TEAM_CREATE_TTL_MS);
+  if (deadline <= now.getTime()) return { ok: false, why: `request ${id} expired at ${record.expires_at}` };
   const seat = readOwnerSeat(home);
   if (seat === null) return { ok: false, why: 'no owner seat is registered' };
   const answer: OwnerSeatAnswer = {
@@ -243,7 +249,8 @@ export function admitTeamCreate(home: string, id: string, root: string, store: O
   const record = readTeamCreateRecord(home, id);
   if (typeof record === 'string') return { ok: false, why: record };
   if (record.params.root !== canonicalRoot(root)) return { ok: false, why: `request ${id} is for ${record.params.root}, not this repository` };
-  if (Date.parse(record.expires_at) <= now.getTime()) return { ok: false, why: `request ${id} expired at ${record.expires_at}` };
+  const deadline = answerDeadline(home, actionRequestsFolder(home), id, windowOf(record), store, now, TEAM_CREATE_TTL_MS);
+  if (deadline <= now.getTime()) return { ok: false, why: `request ${id} expired at ${record.expires_at}` };
   let via: 'owner-seat' | 'rule' | 'policy' | 'security-profile' | null = null;
   let ruleId: string | undefined;
   let signer = '';
@@ -262,7 +269,7 @@ export function admitTeamCreate(home: string, id: string, root: string, store: O
     if (!verified.ok) return verified;
     const a = verified.answer;
     if (a.kind !== 'team-create' || a.request_id !== id || a.params_sha256 !== record.params_sha256) return { ok: false, why: `the owner-seat answer is not bound to request ${id} and its parameters` };
-    if (!(Date.parse(a.at) <= Date.parse(record.expires_at))) return { ok: false, why: `the owner-seat answer to ${id} was given after the request expired` };
+    if (!(Date.parse(a.at) <= answerDeadline(home, actionRequestsFolder(home), id, windowOf(record), store, now, TEAM_CREATE_TTL_MS))) return { ok: false, why: `the owner-seat answer to ${id} was given after the request expired` };
     if (a.choice === 'deny') return { ok: false, why: `the owner seat denied request ${id}` };
     via = 'owner-seat';
     signer = verified.signer.name;

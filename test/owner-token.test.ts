@@ -112,7 +112,9 @@ describe('team approve with an out-of-band owner token', () => {
     const fp = approveFingerprint(checkedOf(p, candidate));
 
     const run = await approveRun(p, [], SEAT, { TEAM_OWNER_APPROVAL: fp }, connected(p, { ask: neverAsked, waiting: neverRead }));
-    expect(run.err).toBe('');
+    expect(run.err).toBe(
+      'team approve: warning, line 3: session "acme-web" is not the default "acme" for this entity and project: kept as written; a drifted name is how a stale session gets reused\n',
+    );
     expect(run.code).toBe(0);
     expect(run.out).toContain('Approved.');
 
@@ -230,6 +232,7 @@ describe('team up with an out-of-band owner token', () => {
 
     const withToken = await upDry(p, SEAT, { TEAM_OWNER_APPROVAL: fp }, standing);
     expect(withToken.err.replace(/^team up: the file lists no trust[^]*$/, '')).toBe('');
-    expect(withToken.out).not.toContain('deny');
+    // Check the admission refusal itself, not CLI arguments containing a checkout path.
+    expect(withToken.out).not.toMatch(/^! up would refuse: only the owner or `leads` starts the team;/m);
   });
 });

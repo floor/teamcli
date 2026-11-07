@@ -35,9 +35,13 @@ export type EventThresholdsInForce =
   | { ok: true; thresholds: EventThresholds }
   | { ok: false; refusals: PolicyLoadRefusal[] };
 
-function thresholdValue(policies: Record<string, EffectivePolicy>, field: EventThresholdField): number {
+function thresholdValue(
+  policies: Record<string, EffectivePolicy>,
+  field: EventThresholdField,
+  minimum = 1,
+): number {
   const value = policies[EVENT_THRESHOLD_POLICIES[field]]?.value;
-  if (typeof value === 'number' && Number.isInteger(value) && value > 0) return value;
+  if (typeof value === 'number' && Number.isInteger(value) && value >= minimum) return value;
   // Unreachable through `eventThresholdsInForce`: the resolver answers every catalogue name. A
   // partial map handed in by a test still reads as the release default.
   return EVENT_THRESHOLDS[field];
@@ -48,7 +52,8 @@ export function eventThresholdsOf(policies: Record<string, EffectivePolicy>): Ev
   return {
     thread_ttl_seconds: thresholdValue(policies, 'thread_ttl_seconds'),
     thread_cap: thresholdValue(policies, 'thread_cap'),
-    retention_days: thresholdValue(policies, 'retention_days'),
+    // Zero is the explicit keep-all word, not a missing value: it must survive the read.
+    retention_days: thresholdValue(policies, 'retention_days', 0),
     held_threshold_seconds: thresholdValue(policies, 'held_threshold_seconds'),
     unreachable_threshold_seconds: thresholdValue(policies, 'unreachable_threshold_seconds'),
     idle_threshold_seconds: thresholdValue(policies, 'idle_threshold_seconds'),

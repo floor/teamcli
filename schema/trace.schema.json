@@ -91,6 +91,9 @@
           "thread": {
             "type": "string"
           },
+          "rule": {
+            "type": "string"
+          },
           "via": {
             "type": "string"
           },
@@ -98,6 +101,14 @@
             "type": "string"
           },
           "ms": {
+            "type": "number",
+            "minimum": 0
+          },
+          "submit_ms": {
+            "type": "number",
+            "minimum": 0
+          },
+          "working_ms": {
             "type": "number",
             "minimum": 0
           },

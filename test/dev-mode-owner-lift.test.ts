@@ -107,7 +107,7 @@ test('the variable admits a placed orchestrator: warning, the write, and one aud
   expect(io.err).toBe(`warning: ${OWNER_LINE}; this call is lead; dev mode continues\n`);
   expect(io.out).toContain('tempo: urgent');
   expect(readFileSync(join(root, '.agents', 'team.yaml'), 'utf8')).toContain('tempo: urgent');
-  expect(logOf(root)).toContain(`tempo [lead] warning: ${OWNER_LINE}; this call is lead; dev mode continues; admitted as orchestrator\n`);
+  expect(logOf(root)).toContain(`tempo [lead] warning: ${OWNER_LINE}; this call is lead; dev mode continues; admitted as lead\n`);
 });
 
 test('unset, and any value but exactly 1, keep the refusal and write nothing', async () => {
@@ -161,7 +161,7 @@ test('placement is read from the pane, in the team session, not from a handed-in
   io.callerSources = () => herdrSources('lead', 'w1:p1');
   expect(await runTempo(['urgent'], io, { home })).toBe(0);
   expect(io.err).toContain('dev mode continues');
-  expect(logOf(root)).toContain('admitted as orchestrator');
+  expect(logOf(root)).toContain('admitted as lead');
 });
 
 test('an unplaced caller under herdr is refused with the mode on', async () => {
@@ -187,7 +187,7 @@ test('a governing dev-mode on admits with its level note, the variable unset', a
   const io = testIo(root, LEAD);
   expect(await runTempo(['relaxed'], io, { home })).toBe(0);
   expect(io.err).toBe(`warning: ${OWNER_LINE}; this call is lead; dev mode continues (dev-mode on at team level)\n`);
-  expect(logOf(root)).toContain('dev mode continues (dev-mode on at team level); admitted as orchestrator');
+  expect(logOf(root)).toContain('dev mode continues (dev-mode on at team level); admitted as lead');
 });
 
 test('a governing dev-mode off keeps the refusal and retires the variable', async () => {

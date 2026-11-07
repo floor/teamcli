@@ -7,6 +7,7 @@
 // the nudge into a free seat and its fallback line, removed here: a report for the operator is
 // never typed into a seat, so the old pass still computes both and the comparison below demands
 // equal reports alone,
+// the swap-free check, retired on both sides: free swap is no longer reported at all,
 // and the idle check's owner stage, which reports at `idle_owner` as well as the lead at
 // `idle_first` — added to both sides below —
 // and the prompt-escalation check, which the pass replaced never had at all: the one scenario
@@ -202,9 +203,6 @@ function oldPass(
   }
   if (machine.diskFree !== null && machine.diskFree < limits.diskMin) {
     once('disk', `free disk is ${gb(machine.diskFree)}, below ${gb(limits.diskMin)}`, 'owner');
-  }
-  if (machine.swapFree !== null && machine.swapFree < limits.swapFreeMin) {
-    once('swap-free', `free swap is ${gb(machine.swapFree)}, below ${gb(limits.swapFreeMin)}`, 'owner');
   }
   if (machine.swapUsed !== null) {
     const growth = recordSwap(memory.swap, machine.swapUsed, now, limits.swapGrowthWindow);

@@ -11,6 +11,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { grantsDir } from '../../src/grant.ts';
+import { runPolicy } from '../../src/commands/policy.ts';
 import {
   activeGrants,
   GRANT_CAPABILITIES,
@@ -270,6 +271,22 @@ describe('the map names every word the contract exposes, and no more', () => {
         rule: 'any-caller',
       });
     }
+  });
+
+  test('policy keys is a read-only listing for a caller with no record', async () => {
+    expect(resolvePermission(null, { id: TEAM }, 'policy:keys', [], TARGET)).toMatchObject({ effect: 'allow', rule: 'any-caller' });
+    expect(resolvePermission(null, { id: TEAM }, 'policy:set', [], TARGET).effect).toBe('deny');
+    expect(resolvePermission(null, { id: TEAM }, 'policy:unset', [], TARGET).effect).toBe('deny');
+    let stdout = '';
+    let stderr = '';
+    const options = new Proxy({}, { get() { throw new Error('the catalogue must not read account or registry sources'); } });
+    const code = await runPolicy(['keys', '--json'], {
+      cwd: '/', env: {}, stdinIsTTY: false,
+      stdout: (text) => { stdout += text; }, stderr: (text) => { stderr += text; },
+    }, options);
+    expect(code).toBe(0);
+    expect(stderr).toBe('');
+    expect(JSON.parse(stdout)).toMatchObject({ status: 'ok', keys: expect.arrayContaining(['pretrust', 'first-run-admission']) });
   });
 
   test('a row carrying a terminal requirement refuses here without the bridge\'s proof', () => {

@@ -5,7 +5,7 @@ kind: spec-draft
 status: draft
 read-at: v0.5.0 (52db9b75) for what exists today (`team add --model --effort`, the team file's seat fields, `team policy`)
 for: Runtime (seats and the registry); Kernel amendment 02 (policies, as the limits config is checked against)
-decision: OD-20261018-18 (amending OD-20261018-17 and -14)
+decision: owner decision, 2026-10-18
 public: staged for review; contains no private links
 ---
 
@@ -18,7 +18,7 @@ entity, a project, a team or a seat (a seat's model and effort, a team's workspa
 entity's vault). **Settings are values. Policies are limits.** A setting is always checked against
 the policies in force (Kernel amendment 02), and can never loosen one.
 
-Three commands, one registry of keys and one set of rules (OD-20261018-18):
+Three commands, one registry of keys and one set of rules (owner decision, 2026-10-18):
 
 - **`team config`** reads and changes the values **above a seat** — at `entity`, `project` and
   `team` level;
@@ -109,7 +109,7 @@ nothing.
 | launch | seat | an adapter launch line (escape hatch) | from the account | restart + resume |
 | account | seat | an account of the entity (Runtime commitment 50) | from the team | restart + resume |
 | nickname | seat | unique in the team, never `lead` | none | at once |
-| delivery_order | seat, team, project, entity | legs: socket, native, mcp-inbox, typed, drop, headless-resume, session (tighten only) | mcp-inbox, typed, drop | at once |
+| delivery_order | seat, team, project, entity | legs: socket, native, typed, drop, headless-resume, session (tighten only); the retired `mcp-inbox` word is read in a file and dropped, and a new write is refused | typed, drop | at once |
 | human | seat | true / false | false | at once |
 | universe | team, project, entity | a universe name: a built-in public-domain universe, or the entity's own made with `team universes add` | none (plain seat numbering) | at once; the next `team add` draws the next free name from it — a change never renames existing seats |
 | workspace | team, project, entity | headless, herdr, tmux | headless (from 0.6) | next up |
@@ -127,22 +127,22 @@ general grant that admits `config`; a grant that lists entities is refused until
 
 ## 7. Open points
 
-Storage (settled 2026-10-19, OD-20261018-08 and the orchestrator's ruling): settings sit beside policies in the registry's own signed records: entity in entities.yaml (<entity>.settings), project in projects.yaml (projects.<id>.settings), team in the registry's team record (teams.yaml teams.<id>.settings, never the team file), seat in agents/<agentId>.yaml (settings). One hierarchy, inheritance by absence, a separate config signature domain. A multi-key write is atomic per record, and a write across levels is applied lowest level first. A change whose signed generation has no config.changed event is reconciled by the bus's reconcile pass, which appends one marked reconciled.
+Storage (settled 2026-10-19, owner decision, 2026-10-18 and the orchestrator's ruling): settings sit beside policies in the registry's own signed records: entity in entities.yaml (<entity>.settings), project in projects.yaml (projects.<id>.settings), team in the registry's team record (teams.yaml teams.<id>.settings, never the team file), seat in agents/<agentId>.yaml (settings). One hierarchy, inheritance by absence, a separate config signature domain. A multi-key write is atomic per record, and a write across levels is applied lowest level first. A change whose signed generation has no config.changed event is reconciled by the bus's reconcile pass, which appends one marked reconciled.
 
 1. A setting at `project` level for a team that spans projects: does the team's project win, or does the seat's?
 2. Bulk changes across seats (`team settings set <seat> …` one at a time): a `role` level, or a selector?
 
 ## Revision log
 
-- 2026-10-18: draft 1 (the writer), from OD-20261018-14 and -17.
-- 2026-10-19: split to the three commands of OD-20261018-18 — `team config` above a seat,
+- 2026-10-18: draft 1 (the writer), from owner decision, 2026-10-18.
+- 2026-10-19: split to the three commands (owner decision, 2026-10-18) — `team config` above a seat,
   `team settings` for one seat, `team seat` for the seat as an object — all three targeting 0.5.3;
   generic examples in place of a named team, entity and seat; the first entry names the writer.
-- 2026-10-19: the `universe` key added to the proposed `config-keys` table (OD-20261019-06, -10) —
+- 2026-10-19: the `universe` key added to the proposed `config-keys` table (owner decision, 2026-10-19) —
   team, project and entity levels; a built-in public-domain universe or the entity's own, made with
   `team universes add`; none by default; a change applies at once, the next `team add` draws from it,
   and it never renames existing seats. A planned row: no key of this name is read at the tag.
-- 2026-10-19: the storage open point settled (OD-20261018-08 and the orchestrator's ruling): settings
+- 2026-10-19: the storage open point settled (owner decision, 2026-10-18 and the orchestrator's ruling): settings
   sit beside policies in the registry's own signed records — entity, project, team (never the team
   file) and seat — one hierarchy, inheritance by absence, a separate config signature domain; a
   multi-key write is atomic per record, a cross-level write lowest level first, and a signed change

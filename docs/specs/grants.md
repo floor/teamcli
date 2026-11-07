@@ -138,7 +138,7 @@ Owner-only section (`src/file/sections/grant.ts`): the orchestrator seat's stand
 
 | Field | Type | Required | Default | Since | Meaning |
 |---|---|---|---|---|---|
-| `session` | string | yes | — | 0.5.0 | The file's own session: the session key, or `<entity>-<project>` when that key is omitted and an entity is named (the project name alone when none is) |
+| `session` | string | yes | — | 0.5.0 | The file's own session: the session key, or the default derived when that key is omitted (`<entity>-<project>` for a team in a project, `<entity>-<team>` for one that is its own) |
 | `seat` | string | yes | — | 0.5.0 | The orchestrator seat's name, the one `coordinator:` or `leads: true` resolves |
 | `scope` | string[] | yes | — | 0.5.0 | Non-empty, distinct, order kept, from `up`, `down`, `approve`, `init`, `reload`, `swap` |
 
@@ -177,7 +177,7 @@ Rules the form carries (the amendment's commitment 3.4, restated for the reader 
 
 ### 3.10. Client grants and the seats they reach
 
-A client grant (`team grant --client <client-id> --entity <entity> --public-key <file> [--team <team>] [--seat <seat>]`) admits an agent running outside the session multiplexer to `team send` as its own signed principal, never as the owner (OD-20261019-37).
+A client grant (`team grant --client <client-id> --entity <entity> --public-key <file> [--team <team>] [--seat <seat>]`) admits an agent running outside the session multiplexer to `team send` as its own signed principal, never as the owner (owner decision, 2026-10-19).
 
 **Before (0.5.4 and earlier).** The first client slice admitted exactly one principal and one destination, fixed in code (`src/client/records.ts`): one client id, one entity, one seat (`orchestrator`). Issuance, the stored record's decoder and the send resolver each compared against those constants, so a client could reach only the orchestrator of that one entity; any other seat needed a relay through it.
 

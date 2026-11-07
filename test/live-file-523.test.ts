@@ -16,7 +16,7 @@ import { approvalStanding, storePath } from '../src/store/store.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { watchLabel } from '../src/watch/pane.ts';
 import { readScreen, type Screen } from '../src/watch/screen.ts';
-import { CLAUDE_IDLE, claudeBox, deliverBriefs, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, deliverBriefs, gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-16T09:00:00Z');
 const OWNER = { kind: 'owner' as const };
@@ -122,6 +122,8 @@ function world(existing: HerdrAgent[] = []) {
     sleep: async (ms) => { clock += ms; },
     now: () => new Date(clock),
   };
+
+  recordRenames(launch);
   const up: UpSources = {
     home, launch, sessionRunning: launch.sessionUp, sessionState: launch.sessionState,
     agents: launch.agents, machine: () => AMPLE, now: launch.now, sleep: launch.sleep,

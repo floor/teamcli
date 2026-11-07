@@ -17,6 +17,8 @@ export {
   POLICY_DOMAIN,
   POLICY_LEVELS,
   POLICY_NAME_ALIASES,
+  sidebarRowsOf,
+  sidebarRowsWord,
   WATCH_RHYTHM_FACTOR,
   WATCH_RHYTHM_SWEEP,
   WATCH_RHYTHMS,
@@ -56,6 +58,9 @@ export {
   EVENT_ROUTING_DEFAULTS,
   EVENT_ROUTING_LEVELS,
   EVENT_ROUTING_SETTING,
+  EVENT_SEGMENT_BYTES,
+  EVENT_SEGMENT_MB,
+  EVENT_SEGMENT_MB_MAX,
   EVENT_THRESHOLDS,
   EVENT_THRESHOLDS_SETTING,
   EVENT_THRESHOLD_POLICIES,
@@ -137,8 +142,18 @@ export {
 } from './owner-reply.ts';
 
 export {
-  OWNER_REPLY_DEFAULT,
-  OWNER_REPLY_FLOOR_ENTITY,
+  mailboxRouterPolicyProblem,
+  mailboxRouterPolicyProblems,
+  readMailboxRouterPolicy,
+  MAILBOX_ROUTER_ALIAS_DEFAULTS,
+  MAILBOX_ROUTER_FALLBACK_DEFAULTS,
+  type MailboxRouterPolicyRead,
+  type MailboxRouterPolicyValue,
+  type MailboxRouterProblem,
+  type MailboxRouterRoute,
+} from './router.ts';
+
+export {
   ownerReplyToValueProblem,
   parseOwnerReplyToValue,
 } from '../settings/owner-reply.ts';

@@ -146,7 +146,8 @@ export async function runFallback(
   // A word that cannot be read refuses the run: a dry run that listed expired episodes as "none"
   // and an apply that silently retired nothing expired would both hide a broken chain behind a
   // clean exit.
-  if (plan.retention !== null && plan.retention.seconds === null) {
+  // A null window with no refusal is the team's explicit keep-all choice, not a broken chain.
+  if (plan.retention !== null && plan.retention.refusal !== null) {
     refuse(out, json, 'fallback', {
       id: 'fallback.policy',
       message: `the event retention word (${EVENT_THRESHOLD_POLICIES.retention_days}) could not be read: ${plan.retention.refusal ?? 'no word resolved'}`,

@@ -21,7 +21,7 @@
 // beside a message. It is not a message and carries no body: it names the record, the thread and
 // the side that closed it, and `team reply` reads it before a reply is admitted.
 import { type KeyObject } from 'node:crypto';
-import { realpathSync } from 'node:fs';
+import { lstatSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { isBriefEpoch, isBriefIncarnation, type BriefBinding } from '../launch/brief-id.ts';
 import { heldAt } from '../launch/rules-file.ts';
@@ -323,9 +323,19 @@ function nonEmpty(value: unknown): value is string {
   return typeof value === 'string' && value !== '';
 }
 
-/** An id that can name one file in a folder: no separator, no traversal, no NUL. */
+/** A file name's own bound: one directory entry, not a path. */
+const RECORD_NAME_MAX = 255;
+
+/** An id that can name one file in a folder: no separator, no traversal, no control character,
+ *  and no name longer than one directory entry. */
 export function recordNameOk(id: string): boolean {
-  return id !== '' && id !== '.' && id !== '..' && !id.includes('/') && !id.includes('\\') && !id.includes('\0');
+  if (id === '' || id === '.' || id === '..' || id.includes('/') || id.includes('\\')) return false;
+  if (Buffer.byteLength(id) > RECORD_NAME_MAX) return false;
+  for (const char of id) {
+    const code = char.codePointAt(0)!;
+    if (code <= 0x1f || code === 0x7f || (code >= 0x80 && code <= 0x9f) || code === 0x2028 || code === 0x2029) return false;
+  }
+  return true;
 }
 
 export type RecordProjection = { payload: RecordPayload; unknown: string[] };
@@ -609,6 +619,51 @@ export function signRecord(payload: RecordPayload, home: string): SignedRecord {
   return withRaw({ payload, signature: signDomain(MESSAGE_DOMAIN, raw as unknown as Json, key) }, raw, []);
 }
 
+/** The exact text a staged record holds: pretty-printed JSON and one newline. This is what
+ *  `stageSendRecord` writes, and what a `messaging.store: none` frame carries in place of the
+ *  stored copy — the receiver verifies the same bytes either way. */
+export function recordTextOf(signed: SignedRecord): string {
+  return `${JSON.stringify(signed, null, 2)}\n`;
+}
+
+/**
+ * A signed record carried inside a frame instead of the receiver's folder
+ * (`messaging.store: none`). The frame is the only copy, so a reader verifies exactly what it
+ * would have read from the drop folder: the bytes under the frame's `record` field, parsed as
+ * one signed record and checked against the home's message key. A frame with no carried record,
+ * a field that is not JSON text, and a record whose bytes were changed after signing are all
+ * refusals with their own sentence — the last one is what the tampered-frame scene pins.
+ */
+export function carriedRecordOf(
+  frame: string,
+  home: string,
+): { ok: true; record: SignedRecord } | { ok: false; reason: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(frame);
+  } catch {
+    return { ok: false, reason: 'the frame is not a JSON frame' };
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, reason: 'the frame is not a JSON object' };
+  }
+  const carried = (parsed as { record?: unknown }).record;
+  if (typeof carried !== 'string' || carried === '') {
+    return { ok: false, reason: 'the frame carries no signed record' };
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(carried);
+  } catch {
+    return { ok: false, reason: 'the carried record is not JSON text' };
+  }
+  const auth = recordAuthOf(value, messageKeyOf(home));
+  if (auth.kind === 'ok') return { ok: true, record: auth.value };
+  if (auth.kind === 'tampered') return { ok: false, reason: "the carried record does not verify with this home's key" };
+  if (auth.kind === 'unsupported') return { ok: false, reason: `the carried record is not one this version reads: ${auth.reason}` };
+  return { ok: false, reason: 'the carried record is not a signed record' };
+}
+
 /**
  * The use gate for a record: true only when the signature covers the payload as parsed and
  * every signed field is one this version reads. A record carrying signed fields this version
@@ -859,7 +914,7 @@ export function readRecord(path: string, expectedId?: string): RecordRead {
   return { ok: true, record };
 }
 
-export type StatusContext = { to: string; root: string; session: string };
+export type StatusContext = { to: string; root: string; session: string; lead?: string };
 
 /** One record's verified payload by path and id, or null when the file is missing, is not a
  *  record this version writes, or does not verify with the reading key. A caller that reads the
@@ -916,6 +971,46 @@ export function readClose(path: string, expectedId?: string): CloseRead {
   return { ok: true, close };
 }
 
+const RECEIPT_STAMP_CACHE_LIMIT = 8192;
+const receiptStampCache = new Map<string, { stamp: string; scope: string }>();
+const keyPrintMemo = new WeakMap<KeyObject, string>();
+
+/** Stable fingerprint of a key's public half for in-memory stamp caches. */
+export function keyPrintForCache(key: KeyObject): string {
+  const hit = keyPrintMemo.get(key);
+  if (hit !== undefined) return hit;
+  let print = '';
+  try {
+    const jwk = key.export({ format: 'jwk' }) as { x?: string };
+    print = typeof jwk.x === 'string' ? jwk.x : '';
+  } catch {
+    print = '';
+  }
+  keyPrintMemo.set(key, print);
+  return print;
+}
+
+/** Stat stamp (`ino:size:mtimeMs:ctimeMs`) of a regular file owned by this user, or null when
+ *  missing, not a regular file, foreign-owned, or backed by a partial test stub without stat numbers. */
+export function fileStatStamp(path: string): string | null {
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile()) return null;
+    if (process.getuid !== undefined && stat.uid !== process.getuid()) return null;
+    if (
+      typeof stat.ino !== 'number' ||
+      typeof stat.size !== 'number' ||
+      typeof stat.mtimeMs !== 'number' ||
+      typeof stat.ctimeMs !== 'number'
+    ) {
+      return null;
+    }
+    return `${String(stat.ino)}:${String(stat.size)}:${String(stat.mtimeMs)}:${String(stat.ctimeMs)}`;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Whether the receipt at `path` is this message's `status` receipt: the id, seat, checkout and
  * session on it match, and the message key signed it. A receipt for another message or checkout
@@ -935,6 +1030,23 @@ export function receiptHolds(
   const held = heldAt(path);
   if (held.kind !== 'file') return false;
   if (process.getuid !== undefined && held.uid !== process.getuid()) return false;
+  const stamp = fileStatStamp(path);
+  const keyPrint = stamp !== null ? keyPrintForCache(key) : '';
+  const rootReal = (() => {
+    try {
+      return realpathSync(context.root);
+    } catch {
+      return context.root;
+    }
+  })();
+  const briefScope = brief === undefined ? '' : `${brief.incarnation}\0${brief.sha256}\0${brief.epoch}`;
+  const scope = `${keyPrint}\0${id}\0${status}\0${context.to}\0${context.session}\0${rootReal}\0${briefScope}`;
+  if (stamp !== null && keyPrint !== '') {
+    const cached = receiptStampCache.get(path);
+    if (cached !== undefined && cached.stamp === stamp && cached.scope === scope) {
+      return true;
+    }
+  }
   const text = readNoFollow(path);
   if (text === null) return false;
   let parsed: unknown;
@@ -949,10 +1061,18 @@ export function receiptHolds(
   if (payload.id !== id || payload.status !== status) return false;
   if (payload.to !== context.to || payload.session !== context.session) return false;
   if (!sameFolder(payload.root, context.root)) return false;
+  // A lead's sweep writes a `read` receipt for a stopped seat's mail, but it is not the seat's
+  // own read: the address never saw the body, and nothing may report `delivered (read)` for it.
+  // `leadAckReceiptAt` is the predicate that sees the same file as a clearance instead.
+  if (status === 'read' && isLeadAckReadBy(payload.read_by)) return false;
   if (brief !== undefined) {
     if (payload.incarnation !== brief.incarnation) return false;
     if (payload.brief_sha256 !== brief.sha256) return false;
     if (payload.brief_epoch !== brief.epoch) return false;
+  }
+  if (stamp !== null && keyPrint !== '') {
+    if (receiptStampCache.size >= RECEIPT_STAMP_CACHE_LIMIT) receiptStampCache.clear();
+    receiptStampCache.set(path, { stamp, scope });
   }
   return true;
 }
@@ -981,6 +1101,225 @@ export function statusOf(dropDir: string, id: string, context: StatusContext, ke
 export function isRead(dropDir: string, id: string, context: StatusContext, key: KeyObject, brief?: BriefBinding): boolean {
   if (receiptHolds(receiptFile(dropDir, id, 'read'), id, 'read', context, key, brief)) return true;
   return receiptHolds(receiptFile(dropDir, id, 'replied'), id, 'replied', context, key, brief);
+}
+
+/**
+ * The signed prefix on the `read_by` of the receipt `team ack --seat <seat> --older-than <dur>`
+ * writes: a lead or the owner clearing a stopped or retired seat's stale mail. The actor after the
+ * prefix is `owner` or the lead seat's name, as the caller was judged.
+ */
+export const LEAD_ACK_PREFIX = 'lead-ack:';
+
+/** Whether a receipt's `read_by` names a lead's clearance rather than a reader's own read. */
+export function isLeadAckReadBy(readBy: string | undefined): boolean {
+  return typeof readBy === 'string' && readBy.startsWith(LEAD_ACK_PREFIX) && readBy.length > LEAD_ACK_PREFIX.length;
+}
+
+/** Who cleared the message, when the receipt is a lead's: `owner` or the lead seat's name. */
+export function leadAckActorOf(readBy: string | undefined): string | null {
+  return isLeadAckReadBy(readBy) ? (readBy as string).slice(LEAD_ACK_PREFIX.length) : null;
+}
+
+/**
+ * The signed receipt at `path` when it verifies for this message, status and context, with the
+ * same checks `receiptHolds` makes — id, status, addressee, checkout and session, and the claim
+ * binding when one is given — but read for what it says rather than reduced to a yes. A lead-ack
+ * receipt is not excluded here: this is how its payload is read back.
+ */
+export function readVerifiedReceipt(
+  path: string,
+  id: string,
+  status: ReceiptStatus,
+  context: StatusContext,
+  key: KeyObject,
+  brief?: BriefBinding,
+): SignedReceipt | null {
+  if (heldAt(path).kind !== 'file') return null;
+  const text = readNoFollow(path);
+  if (text === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const auth = receiptAuthOf(parsed, key);
+  if (auth.kind !== 'ok') return null;
+  const payload = auth.value.payload;
+  if (payload.id !== id || payload.status !== status) return null;
+  if (payload.to !== context.to || payload.session !== context.session) return null;
+  if (!sameFolder(payload.root, context.root)) return null;
+  if (brief !== undefined) {
+    if (payload.incarnation !== brief.incarnation) return null;
+    if (payload.brief_sha256 !== brief.sha256) return null;
+    if (payload.brief_epoch !== brief.epoch) return null;
+  }
+  return auth.value;
+}
+
+/** The team file's seat name (`SEAT_NAME`), at most 64 characters. A longer or looser word is not shown. */
+const SHOWN_SEAT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/** Words this build writes on `read_by` that are not themselves seat names. */
+const KNOWN_READER = new Set(['answered-by-send', 'channel', 'reply']);
+
+/** Role words a receipt must not print. The shared message key can sign any of them, and none is
+ *  a claim that the owner, the lead, or the orchestrator read the message. */
+const UNNAMED_READER = new Set(['owner', 'lead', 'orchestrator']);
+
+/** How many characters of an id the sentence keeps. The rest is marked cut, as a reported reason is. */
+const SHOWN_ID_CAP = 200;
+
+/** One ISO-8601 UTC instant: a real calendar date, a clock time to the second, an optional
+ *  fraction, and `Z`. `Date.parse` reads prose and rolls February 30 forward, so a time that is
+ *  not this shape is left out of the sentence rather than printed. */
+const ISO_INSTANT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?Z$/;
+
+function isoInstantOk(text: string): boolean {
+  const match = ISO_INSTANT.exec(text);
+  if (match === null) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const ms = match[7] === undefined ? 0 : Number(match[7].padEnd(3, '0'));
+  const at = Date.UTC(year, month - 1, day, hour, minute, second, ms);
+  const back = new Date(at);
+  return back.getUTCFullYear() === year && back.getUTCMonth() === month - 1 && back.getUTCDate() === day
+    && back.getUTCHours() === hour && back.getUTCMinutes() === minute && back.getUTCSeconds() === second;
+}
+
+/** A name the sentence may print as a seat: it is on this team's list, it fits the seat-name
+ *  rule, and it is not a role word. */
+function namedSeat(name: string, seats: ReadonlySet<string>): boolean {
+  return !UNNAMED_READER.has(name) && SHOWN_SEAT.test(name) && seats.has(name);
+}
+
+/** The reader the sentence may name. A bare seat is named only when this team lists it. A known
+ *  word stays. A `lead-ack:<seat>` clearance keeps its documented form, including `lead-ack:owner`,
+ *  when the actor fits the seat-name rule: that word is the clearance, and the shared key cannot
+ *  tell a forged owner clearance from the real one. Anything else, including a bare `owner`,
+ *  `lead` or `orchestrator`, is `unknown`. */
+function shownReader(readBy: string | undefined, seats: ReadonlySet<string>): string {
+  if (readBy === undefined || readBy === '') return 'read';
+  if (KNOWN_READER.has(readBy)) return readBy;
+  if (readBy.startsWith(LEAD_ACK_PREFIX)) {
+    const actor = readBy.slice(LEAD_ACK_PREFIX.length);
+    return SHOWN_SEAT.test(actor) ? readBy : 'unknown';
+  }
+  return namedSeat(readBy, seats) ? readBy : 'unknown';
+}
+
+/** DEL, C1, the Unicode line and paragraph separators, and the bidi controls. The same set a
+ *  reported reason escapes inside its quotes. */
+function hiddenCode(code: number): boolean {
+  if (code === 0x7f) return true;
+  if (code >= 0x80 && code <= 0x9f) return true;
+  if (code === 0x2028 || code === 0x2029) return true;
+  if (code === 0x61c || code === 0x200e || code === 0x200f) return true;
+  if (code >= 0x202a && code <= 0x202e) return true;
+  if (code >= 0x2066 && code <= 0x2069) return true;
+  return false;
+}
+
+function escapeCode(code: number): string {
+  const hex = code.toString(16);
+  return code <= 0xffff ? `\\u${hex.padStart(4, '0')}` : `\\u{${hex}}`;
+}
+
+/** The id as one token: quotes and backslashes are escaped, and a control, line separator, bidi
+ *  control or format character is a `\\u` escape. A long id is cut at {@link SHOWN_ID_CAP} code
+ *  points, with ` [cut]` after the kept text. A clean message id is unchanged. */
+function shownId(id: string): string {
+  const points = Array.from(id);
+  const cut = points.length > SHOWN_ID_CAP;
+  const kept = (cut ? points.slice(0, SHOWN_ID_CAP) : points).join('');
+  let out = '';
+  for (const char of kept) {
+    const code = char.codePointAt(0)!;
+    if (char === '"' || char === '\\') {
+      out += `\\${char}`;
+      continue;
+    }
+    if (code <= 0x1f || hiddenCode(code) || /\p{Cf}/u.test(char)) {
+      out += escapeCode(code);
+      continue;
+    }
+    out += char;
+  }
+  return cut ? `${out} [cut]` : out;
+}
+
+/** The line a later read says for an id a receipt already settled. The time is printed only when
+ *  it is an ISO instant. The reader is a known word or one of `seats`; a receipt that names no
+ *  reader says `read`, and any other word says `unknown`. */
+export function alreadyReadSentence(id: string, at: string, readBy: string | undefined, seats: readonly string[]): string {
+  const when = isoInstantOk(at) ? ` at ${at}` : '';
+  return `${shownId(id)}: already read${when} (${shownReader(readBy, new Set(seats))})`;
+}
+
+/** The verifying read or replied receipt beside this id, when one settles it. A lead clearance
+ *  is included: its `read_by` is the word the sentence prints. */
+export function settledReadOf(
+  dropDir: string,
+  id: string,
+  context: StatusContext,
+  key: KeyObject,
+  brief?: BriefBinding,
+): { at: string; readBy: string | undefined } | null {
+  const read = readVerifiedReceipt(receiptFile(dropDir, id, 'read'), id, 'read', context, key, brief);
+  if (read !== null) return { at: read.payload.at, readBy: read.payload.read_by };
+  const replied = readVerifiedReceipt(receiptFile(dropDir, id, 'replied'), id, 'replied', context, key, brief);
+  if (replied !== null) return { at: replied.payload.at, readBy: replied.payload.read_by };
+  return null;
+}
+
+/**
+ * The clearance a lead's sweep left beside this message, or null: the signed `read` receipt at
+ * the message's own receipt name, verifying for this message and inbox, whose `read_by` names
+ * `lead-ack:<actor>`. This is not the seat's read — `isRead` and `statusOf` never count it — but
+ * it settles the message: the unread listings skip it and the watch stops retrying it.
+ *
+ * The signature proves the receipt came from this checkout, never which seat wrote it: the
+ * message key is per home, shared by every seat that serves the checkout. A clearance therefore
+ * settles only when its actor is the owner, or the seat this call site resolved as the team's
+ * lead (`context.lead`, the team file's `coordinator`). A context with no lead — a reader that
+ * did not load the team — settles no seat-named clearance at all, so a receipt any seat can sign
+ * cannot clear mail in the lead's name alone. The residual is the owner's name itself: a forged
+ * `lead-ack:owner` is indistinguishable under the shared key, and closing that needs per-seat
+ * keys or daemon-issued receipts.
+ */
+export function leadAckReceiptAt(
+  dropDir: string,
+  id: string,
+  context: StatusContext,
+  key: KeyObject,
+): { by: string; at: string; payload: ReceiptPayload } | null {
+  const verified = readVerifiedReceipt(receiptFile(dropDir, id, 'read'), id, 'read', context, key);
+  if (verified === null) return null;
+  const by = leadAckActorOf(verified.payload.read_by);
+  if (by === null) return null;
+  if (by !== 'owner' && (context.lead === undefined || by !== context.lead)) return null;
+  return { by, at: verified.payload.at, payload: verified.payload };
+}
+
+/**
+ * Whether this message is settled for the seat: the seat read it, or a lead cleared it. Only the
+ * ordinary unread questions ask this — what still waits, what the watch should retry. A brief's
+ * read passes `brief`, and a lead-ack never counts for one: the launch's own delivery is read
+ * only by the seat it was written for.
+ */
+export function isReadOrCleared(
+  dropDir: string,
+  id: string,
+  context: StatusContext,
+  key: KeyObject,
+  brief?: BriefBinding,
+): boolean {
+  return isRead(dropDir, id, context, key, brief)
+    || (brief === undefined && leadAckReceiptAt(dropDir, id, context, key) !== null);
 }
 
 /**

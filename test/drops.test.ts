@@ -229,11 +229,13 @@ describe('team drops', () => {
       code: 0,
       out: [
         'team acme, session "acme"',
-        '  FROM          PATH',
-        `  the owner     ${ownerPath}`,
-        `  orchestrator  ${agentPath}`,
-        `  unknown       ${headlessPath}`,
-        `  orchestrator  ${recordPath}`,
+        // The signed record rests on the shared key, so it is an unverified claim; a raw drop's
+        // first line is only the file's word, so it is unattributed.
+        '  FROM                             PATH',
+        `  the owner (unattributed)         ${ownerPath}`,
+        `  orchestrator (unattributed)      ${agentPath}`,
+        `  unknown                          ${headlessPath}`,
+        `  orchestrator (unverified claim)  ${recordPath}`,
         '',
         '4 drops',
         '',
@@ -375,7 +377,7 @@ describe('team drops', () => {
     const after = join(dropDir, D_AGENT);
     expect(result).toEqual({
       code: 0,
-      out: `from orchestrator — ${after}\n`,
+      out: `from orchestrator (unattributed) — ${after}\n`,
       err: '',
     });
     // The drop already on disk is not a new one.
@@ -465,7 +467,7 @@ describe('team drops in a folder that is not a git repository', () => {
     const result = await run();
     expect(result).toEqual({
       code: 0,
-      out: `team acme, session "acme"\n  FROM       PATH\n  the owner  ${path}\n\n1 drop\n`,
+      out: `team acme, session "acme"\n  FROM                      PATH\n  the owner (unattributed)  ${path}\n\n1 drop\n`,
       err: '',
     });
   });
@@ -488,7 +490,7 @@ describe('team drops in a folder that is not a git repository', () => {
     const result = await run(['--follow'], seatCaller('lead', 'w1:p1'), sources);
     expect(result).toEqual({
       code: 0,
-      out: `from orchestrator — ${join(dropDir, D_AGENT)}\n`,
+      out: `from orchestrator (unattributed) — ${join(dropDir, D_AGENT)}\n`,
       err: '',
     });
     expect(polls).toBe(2);
@@ -498,7 +500,7 @@ describe('team drops in a folder that is not a git repository', () => {
     plainRoot();
     plantRecord(home, root, 'acme', 'lead', D_RECORD, 'hello from the root');
     const result = await run(['--read', '--seat', 'lead', '--session', 'acme']);
-    expect(result).toEqual({ code: 0, out: 'hello from the root\n', err: '' });
+    expect(result).toEqual({ code: 0, out: 'from lead (team lead):\n\nhello from the root\n', err: '' });
     const at = receiptPath(dropDir, D_RECORD);
     const receipt = signedReceiptOf(JSON.parse(readFileSync(at, 'utf8')));
     const key = messageKeyState(home);
@@ -521,14 +523,18 @@ function expectReceipt(id: string, seat = 'lead', dir = dropDir): void {
 }
 
 describe('team drops --read', () => {
-  test('the launch read serves the seat its launch names, receipting each record before its body', async () => {
+  test('the launch read serves the seat its launch names and receipts each record after the body', async () => {
     plantRecord(home, root, 'acme', 'lead', D_RECORD, 'hello');
     const first = await run(['--read', '--seat', 'lead', '--session', 'acme']);
-    expect(first).toEqual({ code: 0, out: 'hello\n', err: '' });
+    expect(first).toEqual({ code: 0, out: 'from lead (team lead):\n\nhello\n', err: '' });
     expectReceipt(D_RECORD);
-    // The receipt is what says it was handed over: the next turn finds nothing waiting.
+    // The receipt is what says it was handed over: the next turn names that read and serves no body.
     const second = await run(['--read', '--seat', 'lead', '--session', 'acme']);
-    expect(second).toEqual({ code: 0, out: '', err: '' });
+    expect(second.code).toBe(0);
+    expect(second.out).toBe('');
+    expect(second.out).not.toContain('hello');
+    expect(second.err).toContain('no unread drops');
+    expect(second.err).toContain(`${D_RECORD}: already read at`);
   });
 
   test('a receipt that does not bind the current claim does not hide the brief’s delivery', async () => {
@@ -569,7 +575,10 @@ describe('team drops --read', () => {
     const context = { to: 'lead', root, session: 'acme' };
     expect(listUnread(dropDir, context, home)).toEqual([]);
     const result = await run(['--read', '--seat', 'lead', '--session', 'acme']);
-    expect(result).toEqual({ code: 0, out: '', err: '' });
+    expect(result.code).toBe(0);
+    expect(result.out).toBe('');
+    expect(result.err).toContain('no unread drops');
+    expect(result.err).toContain(`${record.id}: already read at`);
   });
 
   test('--read is an invocation of the launch line: --seat is required and its own flags are refused', async () => {
@@ -621,9 +630,12 @@ describe('team drops --read', () => {
     const second = await run(['--read', '--seat', 'lead']);
     expect(second.out.split('\n').filter((line) => line.startsWith('message '))).toEqual(['message 1', 'message 0']);
     expect(readdirSync(dropDir).filter((name) => name.endsWith('.read.json'))).toHaveLength(12);
-    // The receipts are what leave nothing behind: a third read has no body at all.
+    // The receipts are what leave nothing behind: a third read names the newest and serves no body.
     const third = await run(['--read', '--seat', 'lead']);
-    expect(third).toEqual({ code: 0, out: '', err: '' });
+    expect(third.code).toBe(0);
+    expect(third.out).toBe('');
+    expect(third.err).toContain('no unread drops');
+    expect(third.err).toContain(': already read at');
   });
 
   test('a plain-text drop an earlier build wrote is skipped and reported, and the signed record behind it is read', async () => {
@@ -636,7 +648,7 @@ describe('team drops --read', () => {
     const result = await run(['--read', '--seat', 'lead']);
 
     expect(result.code).toBe(0);
-    expect(result.out).toBe('a signed body\n');
+    expect(result.out).toBe('from lead (team lead):\n\na signed body\n');
     expect(result.err).toBe('team drops: 1 drop(s) are not signed records and are not served\n');
     expect(result.out).not.toContain('an old raw drop');
     expect(result.err).not.toContain('an old raw drop');
@@ -714,7 +726,7 @@ describe('team drops --read', () => {
     const result = await run(['--read', '--seat', 'lead', '--session', 'acme']);
     expect(result).toEqual({
       code: 0,
-      out: 'writer-01: a message from architect is queued, not woken - unread for 4 min\n',
+      out: "from runtime (the team's unread-message report):\n\nwriter-01: a message from architect is queued, not woken - unread for 4 min\n",
       err: '',
     });
     // Its receipt is the signed read receipt every record gets, at the name its id derives.
@@ -725,7 +737,10 @@ describe('team drops --read', () => {
     expect(listDrops(dropDir, key.key, context)).toEqual({ kind: 'ok', rows: [] });
     expect(listUnread(dropDir, context, home)).toEqual([]);
     const again = await run(['--read', '--seat', 'lead', '--session', 'acme']);
-    expect(again).toEqual({ code: 0, out: '', err: '' });
+    expect(again.code).toBe(0);
+    expect(again.out).toBe('');
+    expect(again.err).toContain('no unread drops');
+    expect(again.err).toContain(`${legacyId}: already read at`);
   });
 
   test('a file an earlier build wrote is never handed over and gets no receipt', async () => {
@@ -790,7 +805,7 @@ describe('team drops --read', () => {
     const result = await run(['--read', '--seat', 'lead']);
 
     expect(result.code).toBe(0);
-    expect(result.out).toBe('a signed body\n');
+    expect(result.out).toBe('from lead (team lead):\n\na signed body\n');
     expect(result.err).toBe('');
     // The record that verified is receipted; the one that did not never is.
     expectReceipt(D_RECORD_READ);
@@ -875,7 +890,7 @@ describe('team drops --read caller placement', () => {
     placeLead(LEAD_PANE);
     plantRecord(home, root, 'acme', 'lead', D_RECORD, 'hello from the launch');
     const result = await runPlaced(READ, hookSources());
-    expect(result).toEqual({ code: 0, out: 'hello from the launch\n', err: '' });
+    expect(result).toEqual({ code: 0, out: 'from lead (team lead):\n\nhello from the launch\n', err: '' });
     expectReceipt(D_RECORD);
   });
 
@@ -918,7 +933,7 @@ describe('team drops --read caller placement', () => {
     plantRecord(home, root, 'acme', 'worker', D_RECORD, 'mail for the worker');
     const workerDir = join(root, '.agents', 'send-drops', 'acme', 'worker');
     const result = await run(['--read', '--seat', 'worker', '--session', 'acme'], { kind: 'owner' });
-    expect(result).toEqual({ code: 0, out: 'mail for the worker\n', err: '' });
+    expect(result).toEqual({ code: 0, out: 'from lead (team lead):\n\nmail for the worker\n', err: '' });
     // A peek serves the body only: the record still waits for its seat, and no receipt stands.
     expect(existsSync(receiptPath(workerDir, D_RECORD))).toBe(false);
     expect(listUnread(workerDir, { to: 'worker', root, session: 'acme' }, home).map((message) => message.id)).toEqual([D_RECORD]);
@@ -932,7 +947,7 @@ describe('team drops --read caller placement', () => {
     placeLead(LEAD_PANE);
     const workerDir = join(root, '.agents', 'send-drops', 'acme', 'worker');
     const result = await run(['--read', '--seat', 'worker', '--session', 'acme'], seatCaller('lead', LEAD_PANE));
-    expect(result).toEqual({ code: 0, out: 'other mail for the worker\n', err: '' });
+    expect(result).toEqual({ code: 0, out: 'from lead (team lead):\n\nother mail for the worker\n', err: '' });
     expect(existsSync(receiptPath(workerDir, D_RECORD_READ))).toBe(false);
     expect(listUnread(workerDir, { to: 'worker', root, session: 'acme' }, home).map((message) => message.id)).toEqual([D_RECORD_READ]);
     expect(readFileSync(join(root, '.agents', 'team.log'), 'utf8')).toContain(`peek [lead] worker: ${D_RECORD_READ}`);

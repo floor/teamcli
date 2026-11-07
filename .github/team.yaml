@@ -16,6 +16,7 @@ identity:
     - "^[Cc][Oo]-[Aa][Uu][Tt][Hh][Oo][Rr][Ee][Dd]-[Bb][Yy]:"   # no co-authorship trailer: a commit carries its one Agent line only
     - "\\bw[0-9A-Z]+:p[0-9]+\\b"   # pane ids the session prints (w2A:p1): an internal pane is not for a public log
     - "\\bfloor-[0-9a-f]{2}\\b"   # internal session names (session-3a): the public name is floor/teamcli
+    - "\\bOD-(?:20[0-9]{6}-)?[0-9]+\\b"   # internal owner-decision ids: state the rule in plain words
 
 trust:
   - ~/.config/team/lobby

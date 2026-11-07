@@ -18,6 +18,10 @@
 //     record again from the file, re-reading the pane's live CLI — a pane whose CLI exited or
 //     was replaced is refused, never re-recorded as running — while its screen is not read
 //     again; `--dry-run` writes nothing.
+// (e) a seat's run records no pane root: it refreshes the launch's record where the live pane
+//     still holds the identity it wrote, and a first record, a record short of its identity or a
+//     replaced process is `register.launch-only`, under `--dry-run` too — while the owner's walk
+//     records one. The dev-mode fold does not lift it (`test/register-devmode.test.ts`).
 // Fake herdr throughout, a temporary home and a pinned caller: no live session is read.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
@@ -221,15 +225,19 @@ describe('a running seat', () => {
   });
 
   test('a seat registering under the caller override records itself as `by`, not the unplaceable walk', async () => {
-    // The acceptance shape: the session's state already records the seat on its pane, the registry
-    // holds no agent record of it yet, and the run is the seat's own — started inside herdr, where
-    // `walkCaller` stops at the server and places nobody. The admission is judged on the session
-    // placement; the registry's provenance must say the seat, not the walk's reading.
+    // The acceptance shape: the session's state already records the seat on its pane with the
+    // process identity the launch that put it there wrote, the registry holds no agent record of
+    // it yet, and the run is the seat's own — started inside herdr, where `walkCaller` stops at
+    // the server and places nobody. The admission is judged on the session placement; the
+    // registry's provenance must say the seat, not the walk's reading. The identity is what lets
+    // the seat's own run refresh the record: a run may repeat a live identity, never record one.
     const w = world();
     const id = mintSeatId();
     updateState(w.dir, (state) => {
       const session = (state.sessions.acme ??= emptySession());
-      session.seats.lead = { id, stage: 'ready', pane: PANE, workspace: WORKSPACE, cli: 'claude-code' };
+      session.seats.lead = {
+        id, stage: 'ready', pane: PANE, workspace: WORKSPACE, cli: 'claude-code', launched: { shell: 400, cli: [401] },
+      };
     });
     const io = testIo(w.root);
     // Dev mode on, so the record carries the override's own mark too: both provenance fields are
@@ -452,5 +460,164 @@ describe('a run outside any project', () => {
     assertJsonErrorShape(json.out, { id: 'register.file', messageContains: 'not inside a git repository: run team from a project' });
     expect(json.out).not.toContain('--file');
     expect(written(w)).toEqual(NOTHING);
+  });
+});
+
+// A seat's run may repeat a record's live process identity, never record one: the pane root is
+// the launch's own write, or the owner's walk. (The sender design's Option C, 2026-11-04:
+// registration is gated so a seat cannot point another seat's record — and its sends — at its
+// own child.)
+const OTHER_PANE = 'pane-b';
+
+/** The team file with a second declared seat: the record a seat's own run would write for it. */
+function withWorkerSeat(w: World): void {
+  const file = join(w.dir, 'team.yaml');
+  writeFileSync(file, `${readFileSync(file, 'utf8')}  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`);
+}
+
+/** Herdr's agent for the second seat, on the fresh pane this scene gives it. */
+function workerAgent(pane = OTHER_PANE): HerdrAgent {
+  return { ...agent('worker'), pane };
+}
+
+/** The calling seat, placed where the state records it: the walk stops at herdr, so the placement
+ *  is injected, exactly as the acceptance scene above stands it. */
+function seatIo(w: World, name: string): ReturnType<typeof testIo> {
+  const io = testIo(w.root);
+  io.callerSources = (asked?: string) => {
+    const placed = asked === undefined || asked === 'acme';
+    return {
+      ancestors: () => [{ pid: 700, name: 'node' }, { pid: 600, name: 'herdr' }],
+      agents: () => (placed ? [agent(name)] : []),
+      paneRootPid: (pane: string) => (placed && pane === PANE ? 700 : null),
+      env: io.env,
+      stdinIsTTY: false,
+    };
+  };
+  return io;
+}
+
+/** A ready record for a seat standing on its own pane, holding the identity its launch wrote. */
+function recordSeat(w: World): void {
+  updateState(w.dir, (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = {
+      id: mintSeatId(), stage: 'ready', pane: PANE, cli: 'claude-code', launched: { shell: 400, cli: [401] },
+    };
+  });
+}
+
+describe('a seat records no pane root', () => {
+  test("a seat's run that would record another seat's pane root is refused, and writes nothing", async () => {
+    const w = world();
+    withWorkerSeat(w);
+    recordSeat(w);
+    const before = readFileSync(join(w.dir, STATE_FILE), 'utf8');
+    const io = seatIo(w, 'lead');
+
+    const code = await runRegister(['worker'], io, sources(w, [], { agents: () => [agent('lead'), workerAgent()] }));
+
+    expect(code, io.err).toBe(1);
+    expect(io.err).toContain(
+      "worker: pane pane-b is not a process identity this record's launch wrote; only the owner records a pane root, from a terminal outside herdr",
+    );
+    // The refusal lands before the screen is read and before any write: the state is byte for
+    // byte as it stood, and no registry agent, log line or pane pointer was written.
+    expect(readFileSync(join(w.dir, STATE_FILE), 'utf8')).toBe(before);
+    expect(readAgents(w.home)).toHaveLength(0);
+    expect(existsSync(join(w.dir, LOG_FILE))).toBe(false);
+    expect(existsSync(panesDir(w))).toBe(false);
+  });
+
+  test("a seat's run that would complete its own record's missing identity is refused", async () => {
+    const w = world();
+    updateState(w.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.lead = {
+        id: mintSeatId(), stage: 'ready', pane: PANE, cli: 'claude-code',
+      };
+    });
+    const io = seatIo(w, 'lead');
+
+    const code = await runRegister(['lead'], io, sources(w));
+
+    expect(code, io.err).toBe(1);
+    expect(io.err).toContain(`pane ${PANE} is not a process identity this record's launch wrote; only the owner records a pane root`);
+    // The completion is the owner's: the record still holds no identity, and nothing was written.
+    expect(readState(w.dir).sessions.acme?.seats.lead?.launched).toBeUndefined();
+    expect(readAgents(w.home)).toHaveLength(0);
+  });
+
+  test("a seat's run on its own unchanged pane still refreshes the record", async () => {
+    const w = world();
+    recordSeat(w);
+    const io = seatIo(w, 'lead');
+
+    const code = await runRegister(['lead'], io, sources(w));
+
+    expect(code, io.err).toBe(0);
+    expect(io.out).toContain(`lead: already registered — pane ${PANE}`);
+    // The record the seat's launch wrote is repeated, not replaced: the identity stands.
+    expect(readState(w.dir).sessions.acme?.seats.lead?.launched).toEqual({ shell: 400, cli: [401] });
+    const record = findAgent(w.home, { team: teamIdOf(w.root), seat: 'lead' });
+    expect(record?.provenance.registered_by).toBe('lead');
+  });
+
+  test("a seat's run on a record whose launch identity was replaced is refused, and the record stands", async () => {
+    const w = world();
+    updateState(w.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.lead = {
+        id: mintSeatId(), stage: 'launched', pane: PANE, cli: 'claude-code', launched: { shell: 400, cli: [999] },
+      };
+    });
+    const io = seatIo(w, 'lead');
+
+    const code = await runRegister(['lead'], io, sources(w));
+
+    expect(code, io.err).toBe(1);
+    expect(io.err).toContain('only the owner records a pane root');
+    // The record keeps the identity its launch wrote; the live pane does not overwrite it.
+    expect(readState(w.dir).sessions.acme?.seats.lead?.launched).toEqual({ shell: 400, cli: [999] });
+    expect(readState(w.dir).sessions.acme?.seats.lead?.stage).toBe('launched');
+  });
+
+  test("the owner's walk records the same fresh pane: the rule is the caller's", async () => {
+    const w = world();
+    withWorkerSeat(w);
+
+    const r = await register(w, ['worker'], { agents: () => [agent('lead'), workerAgent()] });
+
+    expect(r.code, r.err).toBe(0);
+    const held = readState(w.dir).sessions.acme?.seats.worker;
+    expect(held?.stage).toBe('ready');
+    expect(held?.launched).toEqual({ shell: 400, cli: [401] });
+  });
+
+  test("a seat's dry run says what would refuse it and the owner's own command, writing nothing", async () => {
+    const w = world();
+    withWorkerSeat(w);
+    recordSeat(w);
+    const io = seatIo(w, 'lead');
+
+    const code = await runRegister(
+      ['worker', '--dry-run'],
+      io,
+      sources(w, [], { agents: () => [agent('lead'), workerAgent()] }),
+    );
+
+    expect(code, io.err).toBe(1);
+    expect(io.err).toBe('');
+    expect(io.out).toContain(
+      "! register would refuse: worker: pane pane-b is not a process identity this record's launch wrote; only the owner records a pane root, from a terminal outside herdr\n",
+    );
+    expect(io.out).toContain('! to unblock: the owner runs `team register worker` from a terminal outside herdr\n');
+    expect(io.out).not.toContain('would register');
+    expect(readAgents(w.home)).toHaveLength(0);
   });
 });

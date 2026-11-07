@@ -245,18 +245,26 @@ export async function runRestoreSweepInChild(input: SpawnRestoreInput): Promise<
       if (line.trim() === '') continue;
       const report = reportOf(line);
       if (report === null) continue;
+      // Both reported paths discard a token the child may never have claimed, like every
+      // other path out: spent already, the discard is a no-op, and the spawner never depends
+      // on the entry having consumed it first.
       if (report.ok) {
         settleResult(report.result);
+        discardRestoreInherit(input.home, nonce);
         return;
       }
       settleFailure(`the restore child reported: ${report.reason}`);
       endReported();
+      discardRestoreInherit(input.home, nonce);
       return;
     }
     if (stdoutBuffer.length > FRAME_LIMIT) {
       stdoutBuffer = '';
       settleFailure('the restore child wrote a line over the frame limit and was not understood');
+      // Like every other failure path: end the child and discard a token it may never have
+      // claimed. The spawner must not depend on the entry having consumed it first.
       endRunning();
+      discardRestoreInherit(input.home, nonce);
     }
   });
 

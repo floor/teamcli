@@ -1,0 +1,9 @@
+{
+  "method": "thread/started",
+  "params": {
+    "thread": {
+      "id": "thr_example",
+      "status": { "type": "idle" }
+    }
+  }
+}

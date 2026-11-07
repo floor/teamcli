@@ -10,9 +10,9 @@
 // socket. Everything here is a reading: nothing throws, and a pane that cannot be read answers
 // null rather than guessing.
 
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { paneProcesses, type PaneProcesses } from '../herdr.ts';
 import { getAgent, recordAgentAddress } from '../registry/agents.ts';
 
@@ -30,10 +30,20 @@ export function defaultSocketsDirAlt(): string {
 /** The folders discovery walks, in order: the temp folder's own and the fallback above — one
  *  entry when they are the same folder (`tmpdir()` is `/tmp` itself where no TMPDIR is set).
  *  One helper, so every reader and writer of an address walks the rule `send` discovered with. */
+/** Whether two paths name one folder once each parent is resolved. A missing parent stays distinct. */
+function sameFolder(a: string, b: string): boolean {
+  if (a === b) return true;
+  try {
+    return realpathSync(dirname(a)) === realpathSync(dirname(b)) && basename(a) === basename(b);
+  } catch {
+    return false;
+  }
+}
+
 export function defaultSocketsDirs(): string[] {
   const first = defaultSocketsDir();
   const alt = defaultSocketsDirAlt();
-  return first === alt ? [first] : [first, alt];
+  return sameFolder(first, alt) ? [first] : [first, alt];
 }
 
 // The folders a caller gave: its one folder, or its list.

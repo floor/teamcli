@@ -8,12 +8,15 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { charterCoversFolder } from '../charter/check.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
+import { pathInsideRoot, pretrustDecision, type PretrustMode } from '../policy/first-minute.ts';
 import { profileFor } from '../profiles/index.ts';
+import { channelLaunchEnabled } from '../mcp/channel.ts';
 import { assertNoLink, tomlString, writePrivate } from './private-file.ts';
 
 /** The fields a launch seat needs for the lobby trust decision. */
 export interface PretrustSeat {
   cli: string;
+  launch?: string;
   cwd: string;
   lobby?: boolean;
   launchProblem?: string;
@@ -34,8 +37,13 @@ export interface PretrustSeat {
 export function lobbyPretrustLine(
   seat: PretrustSeat,
   home: string,
-  opts: { write: boolean; now: Date },
+  opts: { write: boolean; now: Date; mode?: PretrustMode },
 ): string | null {
+  // `pretrust: off` writes no captured record and types no key. The seat starts, and the CLI's
+  // own dialog is handled the way it was before.
+  if (opts.mode === 'off') return null;
+  // A channel opens a child of an already-trusted lobby; no CLI-home trust read or write.
+  if (seat.cli === 'claude-code' && channelLaunchEnabled(seat.launch)) return null;
   if (!launchesIntoLobby(seat)) return null;
   const writer = WRITERS[seat.cli];
   // A shipped CLI with no captured record still starts. Inventing its file would be a guess,
@@ -81,7 +89,13 @@ function startsFresh(seat: PretrustSeat): boolean {
  *  start now, or a CLI with no captured record writes nothing. A record that cannot be written is
  *  not a refusal: the seat starts, and its dialog is handled the way it was before. True when the
  *  record is written or already held. */
-export function projectRootPretrust(seat: PretrustSeat, home: string, opts: { now: Date; root: string }): boolean {
+export function projectRootPretrust(
+  seat: PretrustSeat,
+  home: string,
+  opts: { now: Date; root: string; mode?: PretrustMode },
+): boolean {
+  if (opts.mode === 'off') return false;
+  if (pretrustDecision(seat.cli, opts.mode ?? 'project') !== 'ok') return false;
   if (seat.lobby || !isAbsolute(seat.cwd) || !startsFresh(seat)) return false;
   const writer = WRITERS[seat.cli];
   if (!writer) return false;
@@ -134,14 +148,19 @@ export interface FolderGrant {
 export function grantedFolderPretrust(
   seat: PretrustSeat,
   home: string,
-  opts: { now: Date; grant: FolderGrant },
+  opts: { now: Date; grant: FolderGrant; root?: string; mode?: PretrustMode },
 ): boolean {
+  if (opts.mode === 'off') return false;
+  if (pretrustDecision(seat.cli, opts.mode ?? 'project') !== 'ok') return false;
   if (seat.lobby || !isAbsolute(seat.cwd) || !startsFresh(seat)) return false;
   const writer = WRITERS[seat.cli];
   if (!writer) return false;
   try {
     const folder = realpathSync(seat.cwd);
-    if (!opts.grant.covers(folder) || !opts.grant.listed(folder)) return false;
+    const inside =
+      opts.mode === 'project' && opts.root !== undefined && pathInsideRoot(folder, opts.root, home);
+    const listed = opts.grant.listed(folder) || inside;
+    if (!opts.grant.covers(folder) || !listed) return false;
     writer(folder, home, opts.now);
     return true;
   } catch {

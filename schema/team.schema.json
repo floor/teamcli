@@ -29,6 +29,17 @@
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
       "$comment": "the project this team belongs to, by name; absent, the team is its own project"
     },
+    "also_in": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+      },
+      "uniqueItems": true,
+      "$comment": "additional projects this team serves; requires in_project and cannot repeat the home"
+    },
     "project_lead": {
       "type": "boolean",
       "$comment": "this team leads the project it sits in; one team per project declares it"
@@ -115,7 +126,8 @@
         },
         "swap_free_min": {
           "type": "string",
-          "pattern": "^[0-9]+(?:\\.[0-9]+)?(MB|GB|TB)$"
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?(MB|GB|TB)$",
+          "deprecated": true
         },
         "swap_growth_max": {
           "type": "string",
@@ -255,6 +267,11 @@
       },
       "$comment": "path ends with the segment {task} under a fixed folder of its own, inside a trust pattern; branch defaults to {task}, base and path are required when a seat works in worktrees — the validator checks what a pattern cannot say"
     },
+    "lead": {
+      "type": "string",
+      "minLength": 1,
+      "$comment": "the seat that leads by default when no seat carries `leads: true`; the file mark wins over it"
+    },
     "coordinator": {
       "type": "string",
       "minLength": 1,
@@ -276,7 +293,7 @@
           "prototype"
         ]
       },
-      "$comment": "the session key, or <entity>-<project> when the file names an entity and the project name alone when it does not"
+      "$comment": "the session key, or <entity>-<project> for a team in a project (<entity>-<project>-<team> when the team is not the project's namesake), <entity>-<team> for a team that is its own project"
     },
     "visibility": {
       "enum": [
@@ -477,15 +494,15 @@
               "load",
               "memory",
               "disk",
-              "swap-free",
               "swap-growth",
-              "budget"
+              "budget",
+              "swap-free"
             ]
           },
           "additionalProperties": {
             "const": "off"
           },
-          "$comment": "the six that always run (attention, missing, model-drift, model-rule, prompt-escalation, approval) are refused here too"
+          "$comment": "the six that always run (attention, missing, model-drift, model-rule, prompt-escalation, approval) are refused here too; retired names (swap-free) stay accepted and carried, deprecated"
         }
       }
     },
@@ -551,6 +568,11 @@
             "type": "string",
             "minLength": 1
           },
+          "launcher": {
+            "type": "string",
+            "minLength": 1,
+            "$comment": "the declarative launcher whose argv this seat runs when the launch is asked to resolve one; omitted, the launch line is unchanged and the digest is unchanged"
+          },
           "cwd": {
             "type": "string",
             "$comment": "relative to the project, or a trust path"
@@ -572,14 +594,13 @@
               "enum": [
                 "socket",
                 "native",
-                "mcp-inbox",
                 "typed",
                 "drop",
                 "headless-resume",
                 "session"
               ]
             },
-            "$comment": "the legs a send to this seat may walk, in order; it drops or reorders the order in force and may add only native, the sender's own frame"
+            "$comment": "the legs a send to this seat may walk, in order; it drops or reorders the order in force and may add only native, the sender's own frame; mcp-inbox is a retired name this schema no longer accepts for new words — a seat that still names it is read and the word is dropped from the order, never an error, and team check asks for its removal"
           },
           "sender_name": {
             "enum": [
@@ -589,6 +610,21 @@
               "seat@team"
             ],
             "$comment": "how a sender reads in this seat's headlines: auto, nickname, seat or seat@team; presentation only, and the registry id stays in every record"
+          },
+          "messaging": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "store": {
+                "enum": [
+                  "first",
+                  "parallel",
+                  "none"
+                ],
+                "$comment": "the store this seat leaves for itself: first stores the signed record before the walk wakes it, parallel starts both at once, none never stores it (the frame still carries the signed bytes); a seat may always tighten toward first, and only the entity and the project may loosen toward none"
+              }
+            },
+            "$comment": "the seat's own word on message storage; omitted when the file writes no word, so every file that writes none keeps its digest"
           },
           "liveness": {
             "type": "object",
@@ -646,6 +682,10 @@
           "public_only": {
             "type": "boolean",
             "$comment": "the seat's briefs go to a service outside this machine: the team's rules are never prepended, and a send reads the body against the machine's private lists and falls through on a match; a hosted CLI's profile is public-only on its own, and a seat can only add the guard"
+          },
+          "compact_delivery": {
+            "type": "boolean",
+            "$comment": "the seat's socket frame carries only the sender header, the first content line, and the show/reply/ack footer; the full body stays on disk for team show <id>; omitted or false keeps full socket delivery"
           },
           "inbound": {
             "enum": [
@@ -761,14 +801,13 @@
         "enum": [
           "socket",
           "native",
-          "mcp-inbox",
           "typed",
           "drop",
           "headless-resume",
           "session"
         ]
       },
-      "$comment": "the legs a send may walk: socket, native, typed, drop, headless-resume, session; the order in force when nothing declares one is typed, drop, and a level may drop or reorder those legs and may add socket, native, headless-resume or session; mcp-inbox is read but not walked in this build — the inbox is the store's reader"
+      "$comment": "the legs a send may walk: socket, native, typed, drop, headless-resume, session; the order in force when nothing declares one is typed, drop, and a level may drop or reorder those legs and may add socket, native, headless-resume or session; mcp-inbox is a retired name this schema no longer accepts for new words — a file that still names it is read and the word is dropped from the order, never an error, and team check asks for its removal"
     },
     "sender_name": {
       "enum": [
@@ -779,8 +818,75 @@
       ],
       "$comment": "how a sender reads in TeamCLI headlines: auto (the nickname inside its own team, seat@team from another), nickname, seat, or seat@team; the registry id stays in every record, and the default is auto"
     },
+    "messaging": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "store": {
+          "enum": [
+            "first",
+            "parallel",
+            "none"
+          ],
+          "$comment": "the store a send leaves for this team's seats: first writes the signed record into the recipient's folder before the walk wakes it, parallel starts both at once and ends the send only when both settle, none never stores the record (the frame still carries the signed bytes); durability is the safe side, so a level may always tighten toward first and only an entity or project may loosen toward none"
+        }
+      },
+      "$comment": "the team's word on message storage; a seat's own `messaging` map closes the door for itself"
+    },
     "policies": {
       "type": "object",
+      "properties": {
+        "grok-command-deny": {
+          "type": "object",
+          "required": [
+            "value",
+            "setter",
+            "date",
+            "kind",
+            "generation",
+            "signature"
+          ],
+          "properties": {
+            "value": {
+              "enum": [
+                "off",
+                "git",
+                "git-and-tests"
+              ]
+            },
+            "setter": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string"
+            },
+            "expiry": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "enum": [
+                "enforced",
+                "advised"
+              ]
+            },
+            "target": {
+              "type": "string"
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "signature": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "$comment": "team scope only; off by default; denies git or git and test runs for Grok seats"
+        }
+      },
       "additionalProperties": {
         "type": "object",
         "required": [
@@ -1050,7 +1156,7 @@
         "session": {
           "type": "string",
           "minLength": 1,
-          "$comment": "the file's own session: the session key, or <entity>-<project> when that key is omitted and an entity is named, the project name alone when it is not"
+          "$comment": "the file's own session: the session key, or the default derived when that key is omitted (<entity>-<project> for a team in a project, <entity>-<team> for one that is its own)"
         },
         "seat": {
           "type": "string",

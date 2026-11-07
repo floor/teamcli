@@ -19,7 +19,7 @@ import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { emptySession, updateState } from '../src/state.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo, recordRenames } from './helpers.ts';
 
 // The scenes' clock: the sources hand it to both commands, and the record's expiry is
 // judged against it — later than one record, earlier than the other.
@@ -164,6 +164,8 @@ function upSources(): { sources: UpSources; workspaces: { label: string; cwd: st
     sleep: async () => {},
     now: () => NOW,
   };
+
+  recordRenames(launch);
   return {
     workspaces,
     sources: {

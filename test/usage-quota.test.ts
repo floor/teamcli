@@ -16,8 +16,10 @@ import { runUsage } from '../src/commands/usage.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { saveMachineReadings } from '../src/information/machine-readings.ts';
 import {
+  accountLabel,
   adviceOf,
   marginOf,
+  marginWord,
   quotaOf,
   quotaText,
   signed,
@@ -89,6 +91,46 @@ describe('the quota model', () => {
     expect(signed(0)).toBe('0');
   });
 
+  test('the pace reads in plain words, never the jargon', () => {
+    // Item 5: "margin" is the tool's word, not the owner's. A window within the headroom band of
+    // its own clock either way is `on pace`; one a band or more ahead of its clock prints how
+    // far; one a band or more behind is the run-out, which the window and state lines normally
+    // carry in hours instead. No source printed gives the tool's own words.
+    expect(marginWord(null)).toBe('pace not known');
+    expect(marginWord(0)).toBe('on pace');
+    expect(marginWord(9.9)).toBe('on pace');
+    expect(marginWord(-9.9)).toBe('on pace');
+    expect(marginWord(10)).toBe('ahead of pace by 10%');
+    expect(marginWord(13.3)).toBe('ahead of pace by 13.3%');
+    expect(marginWord(-10)).toBe('runs out before the reset');
+  });
+
+  test('an account is labelled with its plan and its bucket, never the tool’s own word for it', () => {
+    // Item 6 (the owner's run, 2026-11-05): `google (claude-gpt)` named a bucket in the tool's
+    // private word and the subscription's plan nowhere. The bucket is spelled the way the CLI's
+    // own usage print names it — a real `agy --print /usage` run prints `Gemini Models` and
+    // `Claude and GPT models` — and the plan is the owner's own setting, because no CLI prints
+    // it; the two read together, the plan first.
+    expect(accountLabel({ account: 'google-antigravity', pool: 'gemini' })).toBe('google-antigravity (Gemini models)');
+    expect(accountLabel({ account: 'google-antigravity', pool: 'claude-gpt' })).toBe('google-antigravity (Claude and GPT models)');
+    expect(accountLabel({ account: 'google-antigravity', pool: 'claude-gpt', plan: 'Google AI Ultra' })).toBe('Google AI Ultra, Claude and GPT models');
+    // A plan that does not split into buckets is the plan alone; no plan at all is the account.
+    expect(accountLabel({ account: 'anthropic', plan: 'Claude Max 20x' })).toBe('Claude Max 20x');
+    expect(accountLabel({ account: 'anthropic' })).toBe('anthropic');
+    // One label in the block and in the advice alike: an account named by its plan is never one
+    // thing in a row and another in the sentence that recommends moving a seat off it.
+    const quota = quotaOf({
+      labs: [{ lab: 'google', accounts: [{ account: 'google-antigravity', pool: 'gemini', plan: 'Google AI Ultra', seats: ['gem'] }] }],
+      observations: [observed({ account: 'google-antigravity', pool: 'gemini', window: 'weekly', used: 89, left: 11, resetsAt: NOW + 150 * HOUR })],
+      accountsFile: '~/.config/team/accounts.yaml',
+      now: NOW,
+    });
+    const text = quotaText(quota).join('\n');
+    expect(text).toContain('    Google AI Ultra, Gemini models  near cap  seats: gem');
+    expect(text).not.toContain('(gemini)');
+    expect(quota.advice).toContain('Google AI Ultra, Gemini models weekly 89% used');
+  });
+
   const labs: QuotaLabInput[] = [
     {
       lab: 'anthropic',
@@ -123,8 +165,8 @@ describe('the quota model', () => {
               account: 'anthropic',
               state: 'ok',
               windows: [
-                { window: 'session', used: 40, left: 60, resetsAt: '2026-10-17T12:00:00.000Z', resetsIn: '3h', margin: 0, source: 'status line', seat: 'lead', age: '1m', stale: false, wall: false },
-                { window: 'weekly', used: 12, left: 88, resetsAt: '2026-10-22T14:26:00.000Z', resetsIn: '125h26m', margin: 13.3, source: 'status line', seat: 'lead', age: '1m', stale: false, wall: false },
+                { window: 'session', used: 40, left: 60, resetsAt: '2026-10-17T12:00:00.000Z', resetsIn: '3h', margin: 0, runsOutIn: null, source: 'status line', seat: 'lead', age: '1m', stale: false, wall: false, expired: false },
+                { window: 'weekly', used: 12, left: 88, resetsAt: '2026-10-22T14:26:00.000Z', resetsIn: '125h26m', margin: 13.3, runsOutIn: null, source: 'status line', seat: 'lead', age: '1m', stale: false, wall: false, expired: false },
               ],
               seats: ['lead'],
               wallResets: null,
@@ -133,28 +175,58 @@ describe('the quota model', () => {
               account: 'openai',
               state: 'walled',
               windows: [
-                { window: 'weekly', used: 95, left: 5, resetsAt: null, resetsIn: null, margin: null, source: 'machine reading', seat: null, age: '2m', stale: false, wall: false },
+                { window: 'weekly', used: 95, left: 5, resetsAt: null, resetsIn: null, margin: null, runsOutIn: null, source: 'machine reading', seat: null, age: '2m', stale: false, wall: false, expired: false },
               ],
               seats: ['scout'],
               seatsOther: 2,
               wallResets: '2h',
+              wall: { resets: '2h', age: '1m' },
             },
           ],
         },
       ],
-      advice: 'swap scout off anthropic/openai (walled) to anthropic (weekly used 12%, margin +13.3%)',
+      advice: 'swap scout off anthropic/openai (walled) to anthropic (weekly used 12%, ahead of pace by 13.3%)',
     });
 
     expect(quotaText(quota)).toEqual([
       'quota',
       '  anthropic  walled',
       '    anthropic  ok  seats: lead',
-      '      session  used 40%  left 60%  resets in 3h  margin 0%  (status line, read 1m ago)',
-      '      weekly  used 12%  left 88%  resets in 125h26m  margin +13.3%  (status line, read 1m ago)',
+      '      session  used 40%  left 60%  resets in 3h  on pace  (read from a seat’s status bar, 1m ago)',
+      '      weekly  used 12%  left 88%  resets in 125h26m  ahead of pace by 13.3%  (read from a seat’s status bar, 1m ago)',
       '    openai  walled  resets 2h  seats: scout, +2 on another team',
-      '      weekly  used 95%  left 5%  resets unknown  margin not known  (machine reading, read 2m ago)',
-      'advice: swap scout off anthropic/openai (walled) to anthropic (weekly used 12%, margin +13.3%)',
+      '      weekly  used 95%  left 5%  resets not printed  pace not known  (estimated, 2m ago)',
+      'advice: swap scout off anthropic/openai (walled) to anthropic (weekly used 12%, ahead of pace by 13.3%)',
     ]);
+  });
+
+  test('a window line says where its figure was read in plain words, with the age', () => {
+    // Item 12 (the owner's run, 2026-11-05): `status line`, `cli usage` and `machine reading` are
+    // the tool's own words for where a figure was observed. The line says what the owner can see
+    // — a seat’s status bar, the CLI itself, or an estimate — and keeps the age beside it; the
+    // model keeps its own spelling in `--json` for scripts.
+    const quota = quotaOf({
+      labs: [
+        { lab: 'anthropic', accounts: [{ account: 'anthropic', seats: [] }] },
+        { lab: 'google', accounts: [{ account: 'google-antigravity', pool: 'gemini', seats: [] }] },
+      ],
+      observations: [
+        observed({ account: 'anthropic', window: 'weekly', used: 12, left: 88, resetsAt: NOW + 125 * HOUR }),
+        observed({ account: 'anthropic', window: 'session', used: 40, left: 60, source: 'machine reading', observedAt: NOW - 2 * 60_000 }),
+        observed({ account: 'google-antigravity', pool: 'gemini', window: 'weekly', used: 11, left: 89, resetsAt: NOW + 150 * HOUR, source: 'cli usage' }),
+      ],
+      accountsFile: 'accounts.yaml',
+      now: NOW,
+    });
+    const text = quotaText(quota).join('\n');
+    expect(text).toContain("(read from a seat’s status bar, 1m ago)");
+    expect(text).toContain('(estimated, 2m ago)');
+    expect(text).toContain('(read from the CLI, 1m ago)');
+    for (const word of ['status line', 'cli usage', 'machine reading']) expect(text).not.toContain(word);
+    // The sentence changes, the data a script reads does not: `--json` keeps the model's words.
+    const sources = quota.labs.flatMap((lab) => lab.accounts.flatMap((account) => account.windows.map((one) => one.source)));
+    expect(sources).toContain('machine reading');
+    expect(sources).toContain('cli usage');
   });
 
   test('a stale reading prints marked, carries no margin, and is never grounds for advice', () => {
@@ -167,9 +239,9 @@ describe('the quota model', () => {
     expect(quota.labs[0]?.accounts[0]?.state).toBe('unknown');
     expect(quota.labs[0]?.accounts[0]?.windows[0]).toMatchObject({ stale: true, margin: null, age: '6m' });
     expect(quotaText(quota)).toContain(
-      '      weekly  used 40%  left 60%  resets in 24h  margin not known  (status line, read 6m ago)  stale',
+      '      weekly  used 40%  left 60%  resets in 24h  pace not known  (read from a seat’s status bar, 6m ago)  stale',
     );
-    expect(quota.advice).toBe(`no account has headroom yet (no fresh margin at or above ${signed(10)}%)`);
+    expect(quota.advice).toBe('no account has headroom yet (no fresh reading is ahead of pace by 10% or more)');
   });
 
   test('a wall whose reset has already passed is a window that rolled over', () => {
@@ -206,17 +278,20 @@ describe('the quota model', () => {
       now: NOW,
     });
     expect(quota.labs[0]?.accounts[0]?.state).toBe('near cap');
-    expect(quota.advice).toBe('near cap on google (weekly used 89%, margin -71.6%)');
-    // The threshold is the margin's own: a window exactly at the cap is near it, one a tenth
-    // short of it is ok — the used figure alone decides nothing below NEAR_CAP.
+    // Item 11: the advice states the figure and its clock in the owner's words, never the label
+    // `near cap on google` alone.
+    expect(quota.advice).toBe('google weekly 89% used, runs out before the reset');
+    // The threshold is the headroom band's mirror: a window a headroom band ahead of its clock
+    // is near the cap, one a tenth short of it is ok — the used figure alone decides nothing
+    // when the window's clock gives a margin.
     const state = (margin: number): string => quotaOf({
       labs: [{ lab: 'google', accounts: [{ account: 'google', seats: [] }] }],
       observations: [observed({ account: 'google', used: 89, left: 11, margin })],
       accountsFile: 'accounts.yaml',
       now: NOW,
     }).labs[0]?.accounts[0]?.state as string;
-    expect(state(-50)).toBe('near cap');
-    expect(state(-49.9)).toBe('ok');
+    expect(state(-10)).toBe('near cap');
+    expect(state(-9.9)).toBe('ok');
   });
 
   test('the advice is one line: headroom, the best target first; the walled seats; or what is missing', () => {
@@ -236,19 +311,67 @@ describe('the quota model', () => {
     expect(two(
       [{ account: 'anthropic', seats: [] }, { account: 'openai', seats: [] }],
       [fresh('anthropic', 20, 12), fresh('openai', 10, 30)],
-    )).toBe('headroom on anthropic/openai (weekly used 10%, margin +30%); anthropic (weekly used 20%, margin +12%)');
+    )).toBe('headroom on anthropic/openai (weekly used 10%, ahead of pace by 30%); anthropic (weekly used 20%, ahead of pace by 12%)');
     // Fresh figures, and none of them at the +10% headroom mark.
     expect(two([{ account: 'anthropic', seats: [] }], [fresh('anthropic', 60, 3)]))
-      .toBe('no account has headroom yet (no fresh margin at or above +10%)');
+      .toBe('no account has headroom yet (no fresh reading is ahead of pace by 10% or more)');
     // Walled seats move to the account with headroom; no headroom says so instead.
     expect(two(
       [{ account: 'anthropic', seats: ['lead', 'coda'] }, { account: 'openai', seats: [] }],
       [fresh('anthropic', 100, null), fresh('openai', 10, 30)],
-    )).toBe('swap lead, coda off anthropic (walled) to anthropic/openai (weekly used 10%, margin +30%)');
+    )).toBe('swap lead, coda off anthropic (walled) to anthropic/openai (weekly used 10%, ahead of pace by 30%)');
     expect(two(
       [{ account: 'anthropic', seats: ['lead'] }, { account: 'openai', seats: [] }],
       [fresh('anthropic', 100, null), fresh('openai', 70, 5)],
     )).toBe('swap lead off anthropic (walled): no other account has headroom');
+  });
+
+  test('a near-cap account is advice to act: its figure, its credits, and the seats to move', () => {
+    // Item 11 (the owner's run, 2026-11-05): `near cap on anthropic` named a state and nothing to
+    // do about it. The advice states the figure and its clock, answers whether the owner's credit
+    // figures cover the overage the pace is heading for, and names the seats drawing on the
+    // account together with an account that has headroom. A seat nobody is recorded on and a
+    // destination no account offers are never invented.
+    const scene = (options: {
+      seats?: string[];
+      credits?: Record<string, { available: number; currency: string; cap?: number }>;
+      target?: boolean;
+    }): string => {
+      const labs = [{ lab: 'anthropic', accounts: [{ account: 'anthropic', seats: options.seats ?? ['lead', 'coda'] }] }];
+      // Weekly at 47.1% with 150h to reset: 18h of the window gone against 47.1% spent, so the
+      // pace empties it in about 20h12m — the case item 4 says reads near cap.
+      const observations = [observed({ account: 'anthropic', used: 47.1, left: 52.9, resetsAt: NOW + 150 * HOUR })];
+      if (options.target !== false) {
+        labs.push({ lab: 'openai', accounts: [{ account: 'openai', seats: [] }] });
+        observations.push(observed({ account: 'openai', used: 10, left: 90, margin: 30, resetsAt: NOW + 9 * HOUR }));
+      }
+      return quotaOf({
+        labs,
+        observations,
+        ...(options.credits === undefined ? {} : { credits: options.credits }),
+        accountsFile: 'accounts.yaml',
+        now: NOW,
+      }).advice;
+    };
+    expect(scene({ credits: { anthropic: { available: 260.5, currency: 'EUR', cap: 300 } } })).toBe(
+      'anthropic weekly 47.1% used, runs out in about 20h12m, before the reset in 150h; credits €260.50 cover the overage until they are spent, €39.50 short of the monthly cap; or move lead, coda off anthropic to openai (weekly used 10%, ahead of pace by 30%)',
+    );
+    // No credits entry: the advice does not pretend to know the overage is covered.
+    expect(scene({})).toBe('anthropic weekly 47.1% used, runs out in about 20h12m, before the reset in 150h; or move lead, coda off anthropic to openai (weekly used 10%, ahead of pace by 30%)');
+    // No account offers headroom: the move is still named, with no invented destination.
+    expect(scene({ target: false })).toBe('anthropic weekly 47.1% used, runs out in about 20h12m, before the reset in 150h; or move lead, coda off anthropic: no other account has headroom');
+    // No seat is recorded on it: the advice names no seat, and names the headroom instead.
+    expect(scene({ seats: [] })).toBe('anthropic weekly 47.1% used, runs out in about 20h12m, before the reset in 150h; headroom on openai (weekly used 10%, ahead of pace by 30%)');
+    // With no clock printed, the used figure alone says near cap, and the line says the reset is
+    // not printed rather than inventing one.
+    const noClock = quotaOf({
+      labs: [{ lab: 'anthropic', accounts: [{ account: 'anthropic', seats: [] }] }],
+      observations: [observed({ account: 'anthropic', used: 96, left: 4 })],
+      accountsFile: 'accounts.yaml',
+      now: NOW,
+    });
+    expect(noClock.labs[0]?.accounts[0]?.state).toBe('near cap');
+    expect(noClock.advice).toBe("anthropic weekly 96% used; no reset printed on anthropic (weekly): the CLI's own status view shows it");
   });
 
   test('a lab with no account declared is spoken for once: the report line, not the block', () => {
@@ -330,6 +453,26 @@ describe('the live sources', () => {
     ]);
   });
 
+  test('a weekly limit message is a wall, and its own reset words reach the row', () => {
+    // Item 8 (the owner's run, 2026-11-05): a GLM seat printed
+    //   Weekly limit reached until 2026-11-08 16:33
+    // in its pane, and `team usage` showed the account as a bare unknown — "weekly limit
+    // reached" is not "usage limit reached", so the owner's wall phrases missed it and a known
+    // limit was thrown away. The phrase is the wall, and the reset it printed rides the row.
+    const target = { seat: 'glm-builder', account: 'zai', cli: 'claude-code' };
+    const wall = statusQuota('claude-code', 'working\n\nWeekly limit reached until 2026-11-08 16:33\n', target, NOW, []);
+    expect(wall).toHaveLength(1);
+    expect(wall[0]).toMatchObject({ wall: true, account: 'zai', resetText: 'at 2026-11-08 16:33', source: 'quota screen' });
+    const quota = quotaOf({ labs: [{ lab: 'zai', accounts: [{ account: 'zai', seats: ['glm-builder'] }] }], observations: wall, accountsFile: '~/.config/team/accounts.yaml', now: NOW });
+    expect(quota.labs[0]?.accounts[0]).toMatchObject({ state: 'walled', wallResets: 'at 2026-11-08 16:33' });
+    expect(quotaText(quota)).toEqual([
+      'quota',
+      '  zai  walled',
+      '    zai  walled  resets at 2026-11-08 16:33  seats: glm-builder',
+      'advice: swap glm-builder off zai (walled): no other account has headroom',
+    ]);
+  });
+
   test('the antigravity usage print reads as the real run wrote it', () => {
     const text = [
       'Gemini Models\tWeekly Limit Remaining\t89%\t2026-10-23T21:59:46Z',
@@ -391,7 +534,8 @@ describe('the live sources', () => {
     // The other team's pane is never read, and the two unread panes are one counted note.
     expect(reads).toEqual(['p1', 'p2']);
     expect(restricted.observations).toEqual([]);
-    expect(restricted.notes).toEqual([{ why: 'a seat pane could not be read', count: 2 }]);
+    // The note names the seats whose panes could not be read, sorted so the line is stable.
+    expect(restricted.notes).toEqual([{ why: 'a seat pane could not be read', count: 2, seats: ['coda', 'lead'] }]);
 
     reads.length = 0;
     const full = observeQuota(machine, { full: true, mine: null }, {
@@ -413,7 +557,7 @@ describe('the live sources', () => {
       source: 'status line',
     }]);
     expect(restricted.costs).toEqual([]);
-    expect(full.notes).toEqual([{ why: 'a seat pane could not be read', count: 2 }]);
+    expect(full.notes).toEqual([{ why: 'a seat pane could not be read', count: 2, seats: ['coda', 'scout'] }]);
   });
 
   test('a seat running a CLI with a usage command makes the observer ask it, once, and its silence is a note', () => {
@@ -520,11 +664,11 @@ seats:
       'quota',
       '  anthropic  ok',
       '    anthropic  ok  seats: lead',
-      '      weekly  used 12%  left 88%  resets in 125h26m  margin +13.3%  (status line, read 1m ago)',
+      '      weekly  used 12%  left 88%  resets in 125h26m  ahead of pace by 13.3%  (read from a seat’s status bar, 1m ago)',
       '  openai  unknown',
       '    openai  unknown',
       '      not known: no reading yet',
-      'advice: headroom on anthropic (weekly used 12%, margin +13.3%)',
+      'advice: headroom on anthropic (weekly used 12%, ahead of pace by 13.3%)',
     ].join('\n'));
     expect(io.out).toContain('note: 1 seat pane could not be read\n');
 
@@ -537,6 +681,18 @@ seats:
       accountsFile: '~/.config/team/accounts.yaml',
       advice: 'no readings yet: no seat status line and no CLI usage command has answered',
     });
+  });
+
+  test('a pane note names the seats whose panes could not be read, in both faces', async () => {
+    const notes = [{ why: 'a seat pane could not be read', count: 2, seats: ['coda', 'lead'] }];
+    const observe = () => ({ observations: [], costs: [], notes });
+    const io = testIo(root, SEAT);
+    expect(await runUsage([], io, { home, now: () => new Date(NOW), observe })).toBe(0);
+    expect(io.out).toContain('note: 2 seat panes could not be read: coda, lead\n');
+    const json = testIo(root, SEAT);
+    expect(await runUsage(['--json'], json, { home, now: () => new Date(NOW), observe })).toBe(0);
+    const doc = JSON.parse(json.out) as { notes: unknown[] };
+    expect(doc.notes).toContainEqual({ scope: 'usage', why: 'a seat pane could not be read', count: 2, seats: ['coda', 'lead'] });
   });
 
   test('the lab is the model the seat RUNS, never the CLI it runs it with', async () => {
@@ -728,9 +884,9 @@ seats:
     expect(seat.out).toContain([
       '  zai  ok',
       '    zai  ok',
-      '      weekly  used 12%  left 88%  resets in 125h26m  margin +13.3%  (status line, read 1m ago)',
+      '      weekly  used 12%  left 88%  resets in 125h26m  ahead of pace by 13.3%  (read from a seat’s status bar, 1m ago)',
     ].join('\n'));
-    expect(seat.out).toContain('advice: headroom on zai (weekly used 12%, margin +13.3%)\n');
+    expect(seat.out).toContain('advice: headroom on zai (weekly used 12%, ahead of pace by 13.3%)\n');
     expect(seat.out).toContain('usage on this machine, 1 team, 3 labs, 3 accounts\n');
     const json = testIo(root, SEAT);
     expect(await runUsage(['--json'], json, { home, now: () => new Date(NOW), observe: () => ({ observations: [read], costs: [], notes: [] }) })).toBe(0);
