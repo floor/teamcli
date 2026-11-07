@@ -1,6 +1,7 @@
 // Edits the team file by the line. Comments, order and every other seat stay as written.
 // Nothing here re-serialises the file.
 import { defaultLabel } from './validate.ts';
+import { stripComment } from '../yaml.ts';
 
 export type SeatBlock = {
   start: number;
@@ -16,7 +17,7 @@ function indent(line: string): number {
 }
 
 function scalar(raw: string): string {
-  const value = raw.replace(/\s+#.*$/, '').trim();
+  const value = stripComment(raw, 1).trim();
   if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
     return value.slice(1, -1);
   }

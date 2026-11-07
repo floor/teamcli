@@ -540,6 +540,27 @@ seats:
     version: "1"
     launch: claude
 `;
+test('a counted model keeps a quoted hash while removing its outside comment', () => {
+  for (const model of ['"Note #tag"', "'Note #tag'"]) {
+    const source = insertionSource + `  - role: builder
+    name: worker
+    cli: claude-code
+    vendor: test
+    model: ${model} # outside
+    version: "1"
+    launch: claude
+    count: 2
+`;
+    expect(validateTeamFile(source).ok).toBe(true);
+    const edited = rewriteCount(source, 'worker');
+    expect(edited).toContain('label: "note #tag 1-2"');
+    expect(edited).toContain(`model: ${model} # outside`);
+    const read = validateTeamFile(edited ?? '');
+    expect(read.ok, read.ok ? '' : JSON.stringify(read.errors)).toBe(true);
+    if (read.ok) expect(read.team.seats.find(seat => seat.name === 'worker-2')?.label).toBe('note #tag 1-2');
+  }
+});
+
 test('an inserted counted label keeps punctuation in the generated model title as text', () => {
   const source = insertionSource + `  - role: builder
     name: worker
