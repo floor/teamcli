@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { readStateFile, writeStateFile } from '../src/file-write.ts';
+import { appendStateFile, createStateFile, FileWriteRefusal, readStateFile, stateFileStat, writeStateFile } from '../src/file-write.ts';
 import { postArrivalWebhook } from '../src/bus/webhook.ts';
 import { deferredNotePathOf, fallbackKeyOf, noteTransportSoon, type TransportFact } from '../src/send/fallback-events.ts';
 import { historyPath } from '../src/send/history.ts';
@@ -155,4 +155,36 @@ test('unread writes report one refusal and return its visible outcome', () => {
     }
     expect(say).toHaveBeenCalledTimes(1); expect(String(say.mock.calls[0]?.[0])).toContain('unread hint'); unchanged();
   } finally { say.mockRestore(); }
+});
+
+
+test('a physical state path accepts its declared root through an ancestor alias', () => {
+  const at = fixture();
+  const alias = join(at.base, 'alias');
+  symlinkSync(at.base, alias);
+  const declared = join(alias, 'repo');
+  const path = join(at.root, 'state');
+  writeStateFile(path, 'one', { root: declared });
+  expect(readStateFile(path, 100, declared)).toBe('one');
+  appendStateFile(path, 'two', declared);
+  expect(readFileSync(path, 'utf8')).toBe('onetwo');
+  expect(stateFileStat(path, declared)?.mode! & 0o777).toBe(0o600);
+  createStateFile(join(at.root, 'created'), 'three', declared);
+  expect(readFileSync(join(at.root, 'created'), 'utf8')).toBe('three');
+  // The root entry itself and every child directory still have to be real.
+  const linkedRoot = join(at.base, 'linked-root');
+  symlinkSync(at.root, linkedRoot);
+  expect(() => writeStateFile(join(linkedRoot, 'bad'), 'bad', { root: linkedRoot })).toThrow(FileWriteRefusal);
+  const outside = join(at.base, 'outside'); mkdirSync(outside);
+  symlinkSync(outside, join(at.root, 'linked-child'));
+  expect(() => writeStateFile(join(at.root, 'linked-child', 'bad'), 'bad', { root: declared })).toThrow(FileWriteRefusal);
+  expect(existsSync(join(outside, 'bad'))).toBe(false);
+});
+
+
+test('a webhook claim uses the physical drop path under a root with an ancestor alias', async () => {
+  const at = fixture();
+  const alias = join(at.base, 'alias'); symlinkSync(at.base, alias);
+  expect((await post({ ...at, root: join(alias, 'repo') })).kind).toBe('posted');
+  expect(lstatSync(join(at.drop, 'record.posted')).isFile()).toBe(true);
 });

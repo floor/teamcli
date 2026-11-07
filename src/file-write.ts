@@ -20,9 +20,10 @@ function parents(path: string, root = dirname(path)): { path: string; check: () 
   const declared = resolve(root);
   const rootStat = lstatSync(declared);
   if (!rootStat.isDirectory()) refuse();
-  const within = relative(declared, resolve(path));
-  if (within === '' || within === '..' || within.startsWith('../') || parse(within).root !== '') refuse();
   const stop = realpathSync(declared);
+  const within = [relative(declared, resolve(path)), relative(stop, resolve(path))].find(
+    (part) => part !== '' && part !== '..' && !part.startsWith(`..${sep}`) && parse(part).root === '',
+  ) ?? refuse();
   path = join(stop, within);
   const chain: { path: string; value: Stats }[] = [];
   let folder = dirname(path);
