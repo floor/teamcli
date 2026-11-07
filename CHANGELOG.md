@@ -86,6 +86,9 @@ Read-only project analysis, checkpoint requests, named launchers, and guarded st
 
 ### Fixed
 
+- Mailbox readers explain when a message was already read or answered, so a late native inbox
+  pointer no longer leads to an empty response. Unread messages still return their bodies.
+
 - All-faint prose and dim composer hints read as an empty box; the frame edge no longer turns a hint
   into a draft. Text that is not faint remains a draft.
 

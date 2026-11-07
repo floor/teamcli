@@ -122,6 +122,7 @@ describe('team ack marks one message read without printing it', () => {
     const io = testIo(root, { kind: 'owner' });
     expect(await runMessages([], io, { home, now: () => NOW })).toBe(0);
     expect(io.out).toContain('nothing is waiting');
+    expect(io.out).not.toContain('a question');
   });
 
   test('a second acknowledgement is idempotent: exit 0, the first receipt byte for byte, nothing rewritten', async () => {

@@ -448,10 +448,14 @@ describe('a message-transport full brief sent end to end', () => {
       session: SESSION,
     });
 
-    // Write-once: the next turn finds nothing waiting, so the full body is not served twice.
+    // Write-once: the next turn names that read on stderr and serves no body.
     const againIo = testIo(w.root, { kind: 'seat', name: SEAT, pane: 'pane-reader', session: SESSION });
     const again = await runDrops(['--read', '--seat', SEAT, '--session', SESSION], againIo, { home: w.home });
     expect(again, againIo.err).toBe(0);
     expect(againIo.out).toBe('');
+    expect(againIo.out).not.toContain(text);
+    expect(againIo.out).not.toContain(HEADER);
+    expect(againIo.err).toContain('no unread drops');
+    expect(againIo.err).toContain(`${rec.id}: already read at`);
   });
 });

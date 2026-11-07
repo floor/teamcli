@@ -7,7 +7,7 @@
 import { afterAll, expect, test } from 'bun:test';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { type Door, generalDoor, VALUED } from '../src/client/general-door.ts';
 import { FLAG_OPS, GENERAL_OPS, issueOwnerGeneralGrant, SCOPED_GRANT_REFUSAL, type GrantOp, VERB_OPS } from '../src/client/general-grant.ts';
 import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
@@ -15,12 +15,16 @@ import { actionRequestsFolder } from '../src/client/team-create.ts';
 import { commands, main } from '../src/cli.ts';
 import { runConfig } from '../src/commands/config.ts';
 import { runDaemon } from '../src/commands/daemon.ts';
+import { runDrops } from '../src/commands/drops.ts';
 import { runGrant } from '../src/commands/grant.ts';
 import { runInit } from '../src/commands/init.ts';
+import { plantRecord } from '../src/commands/messages.ts';
+import { readTeamConfig } from '../src/file/team-config.ts';
 import type { ServiceManager, ServiceProgram } from '../src/daemon/service.ts';
 import type { Io } from '../src/io.ts';
 import { readStoredTeamConfig } from '../src/registry/team-config-store.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { receiptFile } from '../src/send/record.ts';
 import { installKey } from '../src/store/keys.ts';
 import { gitEnv } from './helpers.ts';
 import { seatOwner } from './helpers/owner-seat.ts';
@@ -143,6 +147,46 @@ test("the door's valued-option table is the contract's, less --general and --key
   const held = Object.entries(VALUED).map(([name, list]) => [name, [...list].sort()]);
   expect(Object.fromEntries(held)).toEqual(expected);
 });
+
+for (const [spelling, id] of [
+  ['space', 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5'],
+  ['equals', 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee6'],
+] as const) {
+  test(`a general grant cannot select another seat's drop by id (${spelling})`, async () => {
+    const root = roots.alpha;
+    const loaded = readTeamConfig(root, { home });
+    if (!loaded.ok) throw new Error('the synthetic team could not be read');
+    const seat = loaded.team.orchestrator;
+    const body = 'inbox-id-guard-4a71';
+    const record = plantRecord(home, root, loaded.team.session, seat, id, body, { at: new Date().toISOString(), from: seat });
+    const bytes = readFileSync(record);
+    const receipt = receiptFile(dirname(record), id, 'read');
+    const replied = receiptFile(dirname(record), id, 'replied');
+    const named = spelling === 'space' ? ['--id', id] : [`--id=${id}`];
+    const words = ['--read', '--seat', seat, ...named];
+    // The same named drop is available to the normal owner path, without settling it.
+    const owner = io(root);
+    owner.caller = { kind: 'owner' };
+    expect(await runDrops(words, owner, { home }), owner.err).toBe(0);
+    expect(owner.out).toContain(body);
+    expect(existsSync(receipt)).toBe(false);
+    const json = spelling === 'equals';
+    const request = spawnSync(process.execPath, ['--no-env-file', join(import.meta.dir, '..', 'src', 'cli.ts'), 'drops', ...words, ...(json ? ['--json'] : []), '--general', wildcard, '--key', client.path], {
+      cwd: root, env: { ...process.env, HOME: home, USERPROFILE: home }, encoding: 'utf8', timeout: 20_000,
+    });
+    expect(request.error).toBeUndefined();
+    expect(request.status, `${request.stdout}${request.stderr}`).toBe(1);
+    if (json) expect(JSON.parse(request.stdout).error.id).toBe('team.general-refused');
+    else {
+      expect(request.stdout).toBe('');
+      expect(request.stderr).toContain('--id takes no --general');
+    }
+    expect(`${request.stdout}${request.stderr}`).not.toContain(body);
+    expect(readFileSync(record)).toEqual(bytes);
+    expect(existsSync(receipt)).toBe(false);
+    expect(existsSync(replied)).toBe(false);
+  });
+}
 
 // The op a line reaches is the one mapping's: every op no command names is reached by a flag or a
 // verb (today that is `abandon`, through `down --abandon`), and every mapped op is a known one.

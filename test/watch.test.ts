@@ -1,19 +1,21 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { cpus, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { verifiedOf } from '../src/approve/approval.ts';
 import { loadReadings, loadSpendReadings, saveReadings, type Seen } from '../src/budgets/readings.ts';
 import { runDrops } from '../src/commands/drops.ts';
+import { runAck } from '../src/commands/ack.ts';
 import { runStatus } from '../src/commands/status.ts';
-import { listUnacked, plantMessage, plantRecord, type MessagePayload } from '../src/commands/messages.ts';
+import { listUnacked, plantMessage, plantRecord, runMessages, type MessagePayload } from '../src/commands/messages.ts';
 import { signReceiptPayload, writeReceipt } from '../src/send/record.ts';
 import { runWatch, USAGE } from '../src/commands/watch.ts';
 import { readTriggerLine } from '../src/send/native.ts';
 import { findRoot } from '../src/file/load.ts';
 import { deliverBriefForAttribution } from '../src/launch/general-brief.ts';
-import { listUnread } from '../src/mcp/inbox.ts';
+import { listUnread, peekMessage } from '../src/mcp/inbox.ts';
+import { runMcpServe } from '../src/mcp/serve.ts';
 import type { WatchSources } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
@@ -2222,6 +2224,78 @@ describe('team watch', () => {
     expect(existsSync(join(dir, '.agents', 'messages', 'deepseek-acme', 'm1.read.json'))).toBe(false);
   });
 
+  test('a lead-cleared body never returns through drops, messages, inbox_read, peek or watch', async () => {
+    const current = team();
+    const session = current.session;
+    const seat = 'deepseek-acme';
+    const lead = current.orchestrator;
+    const leadPane = 'notice-lead-pane';
+    const seatPane = 'notice-worker-pane';
+    const root = findRoot(dir);
+    if (!root) throw new Error('the watch fixture is not a git checkout');
+    const home = join(dir, 'home'); mkdirSync(home, { recursive: true });
+    const agents = join(root, '.agents');
+    const dropDir = join(agents, 'send-drops', session, seat);
+    const id = '44444444-4444-4444-8444-444444444444';
+    const body = 'gone9f38';
+    const stale = new Date(clock - 10 * 24 * 60 * 60 * 1000);
+    const path = dropWaiting(seat, body, stale.toISOString(), id);
+    for (const name of readdirSync(dropDir)) {
+      if (name === id || name.startsWith(`${id}.`)) utimesSync(join(dropDir, name), stale, stale);
+    }
+    updateState(agents, (state) => {
+      const one = state.sessions[session] ??= emptySession();
+      one.seats[lead] = { stage: 'ready', pane: leadPane };
+      one.seats[seat] = { stage: 'ready', pane: seatPane };
+    });
+    writeFileSync(file, example.replace('    name: deepseek-acme\n', '    name: deepseek-acme\n    stopped: true\n'));
+    const clear = testIo(dir, { kind: 'seat', name: lead, pane: leadPane, session });
+    expect(await runAck(['--seat', seat, '--older-than', '7d'], clear, { home, now: () => new Date(clock) }), clear.err).toBe(0);
+    expect(clear.out).toContain('1 marked read');
+    // Restore the seat so a lifecycle refusal cannot hide an exposed body.
+    writeFileSync(file, example);
+    expect(existsSync(path)).toBe(true);
+
+    const peek = peekMessage({ dropDir, root, seat, session, lead }, id, home, current.seats.map((one) => one.name));
+    const messages = testIo(dir, { kind: 'owner' });
+    expect(await runMessages(['--json'], messages, { home, now: () => new Date(clock) }), messages.err).toBe(0);
+    const reader = () => testIo(dir, { kind: 'seat', name: seat, pane: seatPane, session });
+    const drops = reader();
+    expect(await runDrops(['--read', '--seat', seat, '--session', session], drops, { home }), drops.err).toBe(0);
+    const mcp = reader();
+    const replies: string[] = [];
+    expect(await runMcpServe({ seat, session, file }, mcp, {
+      lines: (async function* () {
+        yield JSON.stringify({ jsonrpc: '2.0', id: 'cleared', method: 'tools/call', params: { name: 'inbox_read', arguments: { id } } });
+      })(),
+      write: (line) => { replies.push(line); },
+    }, { home, build: { version: '0.0.0-fixture', build: 'fixture', builtAt: 0, head: null }, restart: () => { throw new Error('unexpected install restart'); } }), mcp.err).toBe(0);
+    expect(replies).toHaveLength(1);
+    expect(JSON.parse(replies[0]!).result).toBeDefined();
+
+    // Live unread mail proves that the watch can still reach this restored seat.
+    const control = 'live9f38';
+    dropWaiting(seat, control, new Date(clock).toISOString(), '55555555-5555-4555-8555-555555555555');
+    scene = live({ 'deepseek-acme': { status: 'idle', screen: idle }, 'deepseek-acme-2': { status: 'working', screen: busy } });
+    const worker = scene.agents.find((one) => one.name === seat);
+    if (!worker) throw new Error('the synthetic live scene has no worker');
+    scene.screens[seatPane] = scene.screens[worker.pane] ?? '';
+    worker.pane = seatPane;
+    const watched = testIo(dir, { kind: 'owner' });
+    expect(await runWatch(['--file', file], watched, sources(2, { home })), watched.err).toBe(0);
+    expect({
+      drops: `${drops.out}${drops.err}`.includes(body),
+      messages: `${messages.out}${messages.err}`.includes(body),
+      inbox_read: `${replies.join('')}${mcp.out}${mcp.err}`.includes(body),
+      peek: JSON.stringify(peek).includes(body),
+      watch: `${watched.out}${watched.err}${typed.join('')}${notified.join('')}`.includes(body),
+    }).toEqual({ drops: false, messages: false, inbox_read: false, peek: false, watch: false });
+    expect(messages.out).not.toContain(id);
+    expect(drops.out).toBe('');
+    expect(drops.err).toContain(`${id}: already read at`);
+    expect(typed.join('')).toContain(control);
+  });
+
   test('a superseded brief dropped from the claim is not offered for read or rung', async () => {
     const currentTeam = team();
     const session = currentTeam.session;
@@ -2270,8 +2344,11 @@ describe('team watch', () => {
 
     const retry = testIo(dir, { kind: 'seat', name: seat, pane: 'pane-reader', session });
     expect(await runDrops(['--read', '--seat', seat, '--session', session], retry, { home })).toBe(0);
+    // The next turn names that read on stderr, so a hook that forwards stdout stays quiet, and serves no body.
     expect(retry.out).toBe('');
-    expect(retry.err).toBe('');
+    expect(retry.out).not.toContain('from the launch');
+    expect(retry.err).toContain('no unread drops');
+    expect(retry.err).toContain(`${third.id}: already read at`);
 
     const io = testIo(dir, { kind: 'owner' });
     expect(await runWatch(['--file', file], io, sources(2, { home }))).toBe(0);

@@ -400,8 +400,8 @@ async function sendWith(
   return { code, out: io.out, err: io.err, calls: queueCalls(scene.queueLog) };
 }
 
-function pointerOf(scene: Scene): string {
-  const pointer = pushPointer(MESSAGE_ID, { seat: 'owner', team: teamIdOf(scene.root) });
+function pointerOf(scene: Scene, sentAt?: string): string {
+  const pointer = pushPointer(MESSAGE_ID, { seat: 'owner', team: teamIdOf(scene.root) }, sentAt);
   if (pointer === null) throw new Error('the pointer could not be built');
   return pointer;
 }
@@ -473,7 +473,7 @@ describe('the real sender reaches the recorded endpoint, never the shared defaul
     expect(withoutSendId(sent.out)).toBe(nativeLine('; woken through its runtime queue'));
     // The queue process is handed the record's URL verbatim.
     expect(sent.calls).toEqual([
-      ['queue', '--remote', url, '--thread', THREAD_ID, '--message', pointerOf(scene)],
+      ['queue', '--remote', url, '--thread', THREAD_ID, '--message', pointerOf(scene, NOW.toISOString())],
     ]);
     // The probe read the very socket that URL names: one connection, initialize then thread/read.
     expect(recorded.connections).toBe(1);
@@ -558,7 +558,7 @@ describe('the real sender reaches the recorded endpoint, never the shared defaul
     // CODEX_HOME default — is unchanged, and the queue line below still reads that socket.
     expect(withoutSendId(sent.out)).toBe(nativeLine('; woken through its runtime queue'));
     expect(sent.calls).toEqual([
-      ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
+      ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene, NOW.toISOString())],
     ]);
     expect(server.connections).toBe(1);
     expect(server.methods).toEqual([

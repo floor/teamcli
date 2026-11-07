@@ -1377,7 +1377,7 @@ Hidden: no
 Usage:
 
     team drops [--follow] [--json]
-    team drops --read --seat <seat> [--session <session>] [--epoch <run_id>]
+    team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>]
 
 ### Who may run it
 
@@ -1391,6 +1391,7 @@ Usage:
 | `--follow` | no | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--id` | yes | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
 | `--read` | no | no | no |
