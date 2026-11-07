@@ -826,6 +826,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `show.refused` | `show` | 1 | the message can't be shown, or the call is not the record's addressee | `team show 3a3b3c4d` |
 | `show.configuration` | `show` | 2 | the team file can't be read | `team show 3a3b3c4d` |
 | `show.usage` | `show` | 2 | the invocation can't be read | `team show` |
+| `start.complete` | `start` | 0 | the setup pass has all required readiness, exchange and working-state proof | `team start` |
+| `start.bootstrap` | `start` | 1 | the account has no durable record; no setup step is written | `team start --json` |
+| `start.caller` | `start` | 1 | the caller is not the owner of an account with a durable record | `team start` |
+| `start.clis` | `start` | 1 | fewer than two supported signed-in CLIs can staff the preset | `team start --json` |
+| `start.existing-team` | `start` | 1 | the folder already holds a team without a recorded preset step; its files are left unchanged | `team start` |
+| `start.incomplete` | `start` | 1 | at least one required setup step or readiness, exchange or working-state proof is incomplete | `team start --json` |
+| `start.usage` | `start` | 2 | the invocation cannot be read | `team start --unknown` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |
 | `status.project-listed` | `status` | 0 | the project's teams are listed | `team status --project TeamCLI` |
 | `status.client-refused` | `status` | 1 | the owner-signed bundle grant, or the client read it admits, did not verify | `team status --client grant.json --key client.key` |

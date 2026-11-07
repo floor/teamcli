@@ -202,7 +202,7 @@ export async function runStart(argv: string[], io: Io, sources: StartSources = {
   const args = readArgs(argv, [], ['json']);
   if (args.error || args.rest.length > 0) {
     io.stderr(`team start: ${args.error ?? `unexpected "${args.rest[0]}"`}\n${USAGE}`);
-    return 2;
+    return 2; // exit: start.usage
   }
   const json = args.flags.has('json');
   const now = sources.now ?? Date.now;
@@ -228,24 +228,25 @@ export async function runStart(argv: string[], io: Io, sources: StartSources = {
     exchangeMs: 0,
     startedMs: 0,
   };
-  const finish = (code: number, mark: () => void): number => {
+  const finish = (code: number, mark: () => void): void => {
     mark();
     if (json) io.stdout(`${JSON.stringify(report)}\n`);
     else io.stderr(`team start: ${code === 0 ? 'started' : 'a step is not done'}\n`);
-    return code;
   };
 
   if (!durableRecordExists(home)) {
-    return finish(1, () => {
+    finish(1, () => {
       report.bootstrapMs = now() - begun;
     });
+    return 1; // exit: start.bootstrap
   }
   report.bootstrapMs = now() - begun;
   if (!isOwner(callerOf(io))) {
     io.stderr('team start: only the owner starts a team on this account\n');
-    return finish(1, () => {
+    finish(1, () => {
       report.detectMs = now() - begun;
     });
+    return 1; // exit: start.caller
   }
 
   const sandbox = sandboxRootFor({ mode: 'shared', projectRoot: root });
@@ -255,9 +256,10 @@ export async function runStart(argv: string[], io: Io, sources: StartSources = {
   if (steps.preset !== true && existsSync(teamFile)) {
     report.teamFile = true;
     io.stderr('team start: this folder already holds a team; run team up\n');
-    return finish(1, () => {
+    finish(1, () => {
       report.detectMs = now() - begun;
     });
+    return 1; // exit: start.existing-team
   }
   const loggedIn = sources.loggedIn ?? signedIn;
   let clis = steps.clis?.slice(0, 2) ?? [];
@@ -270,9 +272,10 @@ export async function runStart(argv: string[], io: Io, sources: StartSources = {
       folder: root,
     }));
     if (staffed.length < 2) {
-      return finish(1, () => {
+      finish(1, () => {
         report.detectMs = now() - begun;
       });
+      return 1; // exit: start.clis
     }
     clis = staffed.slice(0, 2);
     steps.detect = true;
@@ -375,7 +378,11 @@ export async function runStart(argv: string[], io: Io, sources: StartSources = {
   const complete = report.daemonRunning && report.roots === 1 && report.teamFile && report.checkClean
     && report.readyLead && report.readyBuilder && report.exchangeId !== null && report.exchangeArrived
     && report.exchangeRead && report.working && report.claimedTask === report.exchangeId;
-  return finish(complete ? 0 : 1, () => {});
+  finish(complete ? 0 : 1, () => {});
+  if (complete) {
+    return 0; // exit: start.complete
+  }
+  return 1; // exit: start.incomplete
 };
 
 export default command;
