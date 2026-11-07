@@ -29,7 +29,7 @@ const PANE_LINE =
   "A lead may type or choose in a seat's pane when `team send` cannot reach it or a dialog blocks it: read the pane before and after, and never type into the owner's own pane.";
 const SELF_LINE = 'A lead in dev mode may bring back a stopped seat, and build when no watcher runs.';
 const SCOPE_LINE =
-  "The owner's reserved scope: public releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams.";
+  "The owner's reserved scope: major releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams.";
 
 const cleanupDirs: string[] = [];
 afterEach(() => {

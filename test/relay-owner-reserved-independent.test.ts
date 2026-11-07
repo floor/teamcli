@@ -118,7 +118,7 @@ function seatRulesOf(w: World, seatName: 'lead' | 'worker' | 'verifier' = 'worke
 }
 
 const FLOOR_RULE_FRAGMENTS = [
-  'public releases',
+  'major releases',
   'spending',
   'credentials',
   "the owner's machine (OS and system settings, accounts and logins, keychain, hardware)",
@@ -140,7 +140,7 @@ describe('owner.reserved-scope floor across entity, project, and team', () => {
     expect(work.ownerReservedScope.value).toEqual([
       'domain names',
       'production databases',
-      'public releases',
+      'major releases',
       'spending',
       'credentials',
       "the owner's machine",
@@ -153,7 +153,7 @@ describe('owner.reserved-scope floor across entity, project, and team', () => {
     const leadRules = seatRulesOf(w, 'lead');
     for (const rules of [workerRules, leadRules]) {
       expect(rules).toContain(
-        "The owner's reserved scope: domain names, production databases, public releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.",
+        "The owner's reserved scope: domain names, production databases, major releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.",
       );
       for (const fragment of FLOOR_RULE_FRAGMENTS) {
         expect(rules).toContain(fragment);
@@ -173,7 +173,7 @@ describe('owner.reserved-scope floor across entity, project, and team', () => {
       'credentials',
       'press statements',
       'legal filings',
-      'public releases',
+      'major releases',
       'spending',
       "the owner's machine",
     ]);
@@ -185,7 +185,7 @@ describe('owner.reserved-scope floor across entity, project, and team', () => {
     const leadRules = seatRulesOf(w, 'lead');
     for (const rules of [workerRules, leadRules]) {
       expect(rules).toContain(
-        "The owner's reserved scope: credentials, press statements, legal filings, public releases, spending, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.",
+        "The owner's reserved scope: credentials, press statements, legal filings, major releases, spending, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.",
       );
       for (const fragment of FLOOR_RULE_FRAGMENTS) {
         expect(rules).toContain(fragment);
@@ -205,7 +205,7 @@ describe('owner.reserved-scope floor across entity, project, and team', () => {
       "the owner's machine",
       'cloud billing',
       'vendor contracts',
-      'public releases',
+      'major releases',
       'spending',
       'credentials',
     ]);
@@ -215,7 +215,7 @@ describe('owner.reserved-scope floor across entity, project, and team', () => {
 
     const verifierRules = seatRulesOf(w, 'verifier');
     expect(verifierRules).toContain(
-      "The owner's reserved scope: the owner's machine (OS and system settings, accounts and logins, keychain, hardware), cloud billing, vendor contracts, public releases, spending, credentials. Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.",
+      "The owner's reserved scope: the owner's machine (OS and system settings, accounts and logins, keychain, hardware), cloud billing, vendor contracts, major releases, spending, credentials. Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.",
     );
     for (const fragment of FLOOR_RULE_FRAGMENTS) {
       expect(verifierRules).toContain(fragment);
@@ -236,7 +236,7 @@ describe('owner.reserved-scope floor across entity, project, and team', () => {
       ...OWNER_RESERVED_SCOPE_DEFAULT,
     ]);
     expect(seatRulesOf(w, 'worker')).toContain(
-      "The owner's reserved scope: entity-scope-only, public releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware).",
+      "The owner's reserved scope: entity-scope-only, major releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware).",
     );
 
     // 2. Project sets a different partial/added scope
@@ -246,39 +246,39 @@ describe('owner.reserved-scope floor across entity, project, and team', () => {
     expect(work.ownerReservedScope.value).toEqual([
       'project-scope-only',
       'spending',
-      'public releases',
+      'major releases',
       'credentials',
       "the owner's machine",
     ]);
     expect(seatRulesOf(w, 'worker')).toContain(
-      "The owner's reserved scope: project-scope-only, spending, public releases, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware).",
+      "The owner's reserved scope: project-scope-only, spending, major releases, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware).",
     );
 
     // 3. Team sets a different partial/added scope
-    setPolicy(w, 'team', 'owner.reserved-scope', 'team-scope-only; public releases');
+    setPolicy(w, 'team', 'owner.reserved-scope', 'team-scope-only; major releases');
     work = workOf(w);
     expect(work.ownerReservedScope.from).toBe('team');
     expect(work.ownerReservedScope.value).toEqual([
       'team-scope-only',
-      'public releases',
+      'major releases',
       'spending',
       'credentials',
       "the owner's machine",
     ]);
     expect(seatRulesOf(w, 'worker')).toContain(
-      "The owner's reserved scope: team-scope-only, public releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware).",
+      "The owner's reserved scope: team-scope-only, major releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware).",
     );
   });
 
   test('case-insensitive floor matching avoids duplicating floor words with different casing while still restoring missing floor words', () => {
     const w = makeWorld();
-    setPolicy(w, 'entity', 'owner.reserved-scope', 'SPENDING; Public Releases; custom-audit');
+    setPolicy(w, 'entity', 'owner.reserved-scope', 'SPENDING; Major Releases; custom-audit');
 
     const work = workOf(w);
     expect(work.ownerReservedScope.from).toBe('entity');
     expect(work.ownerReservedScope.value).toEqual([
       'SPENDING',
-      'Public Releases',
+      'Major Releases',
       'custom-audit',
       'credentials',
       "the owner's machine",
@@ -293,7 +293,7 @@ describe('owner.reserved-scope floor across entity, project, and team', () => {
     };
     const lines = policyRuleLines(syntheticWork, { lead: false, entity: true }).join('\n');
     expect(lines).toContain(
-      "The owner's reserved scope: custom-only, public releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.",
+      "The owner's reserved scope: custom-only, major releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.",
     );
   });
 });
@@ -334,7 +334,7 @@ describe('relay line and reserved-scope line interaction when relay is on vs off
       expect(rules).not.toContain('relays from the owner');
       expect(rules).not.toContain('A relay never carries an owner-reserved decision');
       expect(rules).toContain(
-        "The owner's reserved scope: public releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.",
+        "The owner's reserved scope: major releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.",
       );
       expect(rules).toContain(RESERVED_NEVER_RELAYED_SENTENCE);
     }
@@ -347,7 +347,7 @@ describe('relay line and reserved-scope line interaction when relay is on vs off
     let rules = seatRulesOf(w, 'worker');
     expect(rules).not.toContain('relays from the owner');
     expect(rules).toContain(
-      "The owner's reserved scope: tax filings, public releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.",
+      "The owner's reserved scope: tax filings, major releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.",
     );
 
     // 3. Project owner.reserved-scope missing floor words with relay off
@@ -358,7 +358,7 @@ describe('relay line and reserved-scope line interaction when relay is on vs off
     rules = seatRulesOf(w, 'worker');
     expect(rules).not.toContain('relays from the owner');
     expect(rules).toContain(
-      "The owner's reserved scope: trademarks, public releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.",
+      "The owner's reserved scope: trademarks, major releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.",
     );
 
     // 4. Team owner.reserved-scope missing floor words with relay off
@@ -369,7 +369,7 @@ describe('relay line and reserved-scope line interaction when relay is on vs off
     rules = seatRulesOf(w, 'worker');
     expect(rules).not.toContain('relays from the owner');
     expect(rules).toContain(
-      "The owner's reserved scope: mergers, public releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.",
+      "The owner's reserved scope: mergers, major releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.",
     );
   });
 
@@ -381,7 +381,7 @@ describe('relay line and reserved-scope line interaction when relay is on vs off
     const rulesWithOrchestratorOff = seatRulesOf(w, 'worker');
     expect(rulesWithOrchestratorOff).not.toContain('relays from the owner');
     expect(rulesWithOrchestratorOff).toContain(
-      "The owner's reserved scope: DNS zones, public releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.",
+      "The owner's reserved scope: DNS zones, major releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.",
     );
 
     const standaloneLines = policyRuleLines(workOf(w), { lead: false, entity: false }).join('\n');

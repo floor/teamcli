@@ -1313,14 +1313,14 @@ function sidebarRefreshProblem(raw: unknown): string | null {
  * sourced directly from `src/settings/inherit.ts`.
  */
 /**
- * The owner's reserved scope, in four words: public releases, spending,
+ * The owner's reserved scope, in four words: major releases, spending,
  * credentials, and the owner's machine. The machine's gloss names what it covers, so a rule
  * that prints the list never leaves "the machine" to be read as "any act on it": it is the
  * system's own settings and accounts, logins, keychain and hardware, never a checkout, a seat
  * or the team's config.
  */
 export const OWNER_RESERVED_SCOPE_DEFAULT = [
-  'public releases',
+  'major releases',
   'spending',
   'credentials',
   "the owner's machine",
