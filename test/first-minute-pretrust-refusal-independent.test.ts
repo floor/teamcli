@@ -11,6 +11,7 @@ import { runTeamCheck } from '../src/check/team.ts';
 import type { Io } from '../src/io.ts';
 import { grantedFolderPretrust, lobbyPretrustLine, projectRootPretrust, type PretrustSeat } from '../src/launch/pretrust.ts';
 import { planGrant } from '../src/permissions/grants.ts';
+import { writePolicySet } from '../src/policy/sources.ts';
 import type { Standing } from '../src/store/store.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 
@@ -135,7 +136,7 @@ test('a seat grant cannot turn dialogs.trust on', () => {
 
 const CAPTURED = ['grok', 'cursor', 'claude-code', 'codex'] as const;
 
-test('the default project policy trusts the project folder for each captured CLI and shows in team check', () => {
+test('the default project policy trusts the project folder for each captured CLI and prints no pretrust note', () => {
   const home = homeOf();
   const project = join(home, 'acme');
   const outside = join(home, 'outside');
@@ -213,5 +214,26 @@ seats:
     home,
     sockets,
   });
-  expect(stdout).toContain('pretrust: project');
+  expect(stdout).not.toContain('pretrust:');
+  expect(stdout).not.toContain('first-run-admission:');
+
+  const written = writePolicySet(home, {
+    level: 'team',
+    target: project,
+    teamRoot: project,
+    name: 'pretrust',
+    value: 'off',
+  }, { now: NOW });
+  expect(written.ok).toBe(true);
+  stdout = '';
+  runTeamCheck({ file, json: true }, io, {
+    live: () => ({ running: false, agents: [], workspaces: [], screens: {} }),
+    branch: () => null,
+    standing: () => ({ kind: 'none' }) as Standing,
+    now: () => NOW,
+    home,
+    sockets,
+  });
+  expect(stdout).toContain('pretrust: off');
+  expect(stdout).not.toContain('first-run-admission:');
 });
