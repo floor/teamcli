@@ -1576,7 +1576,7 @@ function generalBriefDifferences(
  * `listUnread`, with the same receipt, superseded and claim rules — so the check and the unread
  * wake agree on what unread means, window included: the file's declared `watch.unread_after` when
  * it moved the section, else the seat class's own default (30 s wakeable, 60 s typed; ADR
- * zeus-message-path, D2). One difference per seat names the oldest message and counts the rest.
+ * message-path, D2). One difference per seat names the oldest message and counts the rest.
  * The general seat brief has its own read difference and is not counted twice; a person's drop is
  * read by a person and is never asked for a receipt, and without a message key no receipt can be
  * judged, so neither is named here.

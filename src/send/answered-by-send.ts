@@ -1,4 +1,4 @@
-// The read a seat's own answer writes (ADR `zeus-message-path`, D3).
+// The read a seat's own answer writes (ADR `message-path`, D3).
 //
 // A seat answers in two ways: `team reply <id>` joins the message's thread and writes the read
 // beside its `replied` receipt (`src/commands/reply.ts`), and the common case — a plain

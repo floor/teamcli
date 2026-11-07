@@ -1,4 +1,4 @@
-// The unread index one recipient folder keeps beside its records (ADR `zeus-message-path`, D3).
+// The unread index one recipient folder keeps beside its records (ADR `message-path`, D3).
 //
 // A `team send` from S to X settles X's newest delivered-unread message from S, and finding it by
 // reading every record in the session's transport tree is what made every send wait tens of

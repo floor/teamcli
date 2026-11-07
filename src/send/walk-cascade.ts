@@ -1,4 +1,4 @@
-// The message path's cascade (ADR zeus-message-path, D1): the walk a send makes is the owner's
+// The message path's cascade (ADR message-path, D1): the walk a send makes is the owner's
 // cascade, three leg classes tried in a fixed order, and it stops at the first leg taken. The
 // signed record is stored before the walk begins, so the mailbox sits under all three classes:
 // `channel` reaches the seat through its own live transport (the cross-session socket, Codex's

@@ -806,7 +806,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
           if (wrote !== 'written') return { ok: false, why: 'the record could not be written; nothing was written' };
           // The answered record moves to `replied`: a seat-side receipt beside the client's
           // opening record, as every reply's is. The `read` receipt goes first, under its own
-          // name: answering is a read (ADR `zeus-message-path`, D3), and a receipt that cannot be
+          // name: answering is a read (ADR `message-path`, D3), and a receipt that cannot be
           // written is an annotation missing, not a reply lost, so it changes no exit.
           try {
             publishRecordRead({
@@ -1061,7 +1061,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     landed = landsWhereRead(host.home, folder, replyId, toRoot, toSession, targetSeat);
     // The answered record moves to `replied` — a receipt the receiving side writes, beside the
     // message it answers. The `read` receipt goes first, under its own name: answering is a read
-    // (ADR `zeus-message-path`, D3). The reply record is the message; a receipt that cannot be
+    // (ADR `message-path`, D3). The reply record is the message; a receipt that cannot be
     // written is an annotation missing, not a reply lost, so it changes no exit.
     try {
       publishRecordRead({
