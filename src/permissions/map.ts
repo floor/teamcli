@@ -513,6 +513,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'any-caller',
       why: 'it records several owner-seat actions as one request, or runs a batch the owner seat already signed; it does not grant, change owner-signers, or change approval-mode',
     },
+    'policy:keys': {
+      kind: 'any-caller',
+      why: 'the listing reads the built-in policy names and changes nothing, so any caller reads it without an account or team record',
+    },
     'policy:set': {
       kind: 'owner-only',
       why: 'the owner alone sets the policy, from a terminal outside herdr, signed and logged',

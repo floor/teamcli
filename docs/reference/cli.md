@@ -2309,6 +2309,7 @@ Hidden: no
 Usage:
 
     team policy [--seat <name>] [--file <path>] [--json]
+    team policy keys [--json]
     team policy set <level> <name> <value> [--until <iso>] [--kind <enforced|advised>] [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]
     team policy unset <level> <name> [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]
 
@@ -2330,6 +2331,32 @@ Usage:
 | `-h` | no | no | yes |
 
 ### Positionals
+
+None.
+
+### `keys`
+
+Hidden: no
+
+Usage:
+
+    team policy keys [--json]
+
+#### Who may run it
+
+`any-caller` — the listing reads the built-in policy names and changes nothing, so any caller reads it without an account or team record
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
 
 None.
 

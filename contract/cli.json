@@ -4855,6 +4855,51 @@
           "flags": [
             {
               "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "keys",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team policy keys [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the listing reads the built-in policy names and changes nothing, so any caller reads it without an account or team record"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
               "name": "--dry-run",
               "repeatable": false,
               "takesValue": false
@@ -5043,6 +5088,7 @@
       ],
       "usage": [
         "team policy [--seat <name>] [--file <path>] [--json]",
+        "team policy keys [--json]",
         "team policy set <level> <name> <value> [--until <iso>] [--kind <enforced|advised>] [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]",
         "team policy unset <level> <name> [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]"
       ],
