@@ -310,7 +310,7 @@ describe("a project lead over another team of its project", () => {
     expect(io.err, io.out).toBe('');
     expect(code).toBe(0);
     expect(io.out).toContain('lead-b');
-    expect(io.out).not.toContain('deny');
+    expect(io.out).not.toMatch(/^! up would refuse:/m);
   });
 
   test('`team down` at the other team: refused, in the placement words', async () => {

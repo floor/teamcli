@@ -6,9 +6,10 @@
 // in its own folder beside the project, inside the trust grant.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { withLauncherCover } from '../src/launch/launcher-cover.ts';
+import { shellWordTexts } from '../src/launch/shell-words.ts';
 import { upPlan } from '../src/launch/plan.ts';
 import { loadTeamLaunchers } from '../src/launch/resolve-flag.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
@@ -29,12 +30,30 @@ const IDLE = {
   agy: readFileSync(new URL('./fixtures/antigravity/1.4.12/idle.txt', import.meta.url), 'utf8'),
 };
 
+// Read the program past leading assignments; paths and prompt words are not programs.
+function programWord(command: string): string {
+  const words = shellWordTexts(command);
+  if (words === null) throw new Error('the fixture command must have readable shell words');
+  return words.find(word => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) ?? '';
+}
+
 function idleFor(command: string): string {
-  if (command.includes('codex')) return IDLE.codex;
-  if (command.includes('grok')) return IDLE.grok;
-  if (command.includes('agy')) return IDLE.agy;
+  const program = basename(programWord(command));
+  if (program === 'codex' || program === 'codex-resolved') return IDLE.codex;
+  if (program === 'grok' || program === 'grok-resolved') return IDLE.grok;
+  if (program === 'agy' || program === 'agy-resolved') return IDLE.agy;
   return IDLE.claude;
 }
+
+
+test('fixture screens follow the program word when paths and arguments name other CLIs', () => {
+  for (const cli of ['claude', 'codex', 'grok', 'agy'] as const) {
+    const later = "--settings '/fixture/codex/grok/agy/settings.json' --rules 'codex grok agy'";
+    expect(idleFor(`FRAME='codex grok agy' AGENT_UNATTENDED=1 ${cli} ${later}`)).toBe(IDLE[cli]);
+    expect(idleFor(`AGENT_UNATTENDED=1 '/fixture/codex grok agy/${cli}-resolved' ${later}`)).toBe(IDLE[cli]);
+  }
+  expect(idleFor("node '/fixture/codex/grok/agy/watch.js'")).toBe(IDLE.claude);
+});
 
 const NOW = new Date('2026-11-06T16:00:00Z');
 const SESSION = 'scratch';

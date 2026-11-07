@@ -232,6 +232,7 @@ describe('team up with an out-of-band owner token', () => {
 
     const withToken = await upDry(p, SEAT, { TEAM_OWNER_APPROVAL: fp }, standing);
     expect(withToken.err.replace(/^team up: the file lists no trust[^]*$/, '')).toBe('');
-    expect(withToken.out).not.toContain('deny');
+    // Check the admission refusal itself, not CLI arguments containing a checkout path.
+    expect(withToken.out).not.toMatch(/^! up would refuse: only the owner or `leads` starts the team;/m);
   });
 });
