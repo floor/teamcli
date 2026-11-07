@@ -76,12 +76,25 @@ jobs:
           BODY: ${{ github.event.pull_request.body }}
         run: |
           if [ "$EVENT" = pull_request ]; then
-            printf '%s' "$BODY" | node dist/cli.js check "origin/$BASE..HEAD" --pr - --file .github/team.yaml
+            # A pull request cannot admit its own signer or weaken the base's rules.
+            policy="$RUNNER_TEMP/policy.yaml"
+            if git cat-file -e "origin/$BASE:.github/policy.yaml" 2>/dev/null; then
+              git show "origin/$BASE:.github/policy.yaml" > "$policy"
+            elif git cat-file -e "origin/$BASE:.github/team.yaml" 2>/dev/null; then
+              # The first policy-file change still has a runnable team file on its base.
+              policy="$RUNNER_TEMP/team.yaml"
+              git show "origin/$BASE:.github/team.yaml" > "$policy"
+            else
+              echo "the base branch has no checking policy" >&2
+              exit 1
+            fi
+            printf 'CHECK_POLICY=%s\n' "$policy" >> "$GITHUB_ENV"
+            printf '%s' "$BODY" | node dist/cli.js check "origin/$BASE..HEAD" --pr - --file "$policy"
           else
             case "$BEFORE" in
-              *[!0]*) node dist/cli.js check "$BEFORE..HEAD" --file .github/team.yaml ;;
+              *[!0]*) node dist/cli.js check "$BEFORE..HEAD" --file .github/policy.yaml ;;
               # A first push has no commit before it.
-              *) node dist/cli.js check HEAD --file .github/team.yaml ;;
+              *) node dist/cli.js check HEAD --file .github/policy.yaml ;;
             esac
           fi
 
@@ -92,7 +105,7 @@ jobs:
       - run: bun run contract:check
       - run: bun run coverage:check
       - run: bun run brief:check
-      - run: bun run public-names:check
+      - run: bun run public-names:check --file "$CHECK_POLICY"
       - run: bun run exit-codes:check
       - run: bun run readme:check
       # Every tracked test file belongs to exactly one full-suite shard
@@ -261,12 +274,12 @@ jobs:
           BODY: ${{ github.event.pull_request.body }}
         run: |
           if [ "$EVENT" = pull_request ]; then
-            printf '%s' "$BODY" | node dist/cli.js check "origin/$BASE..HEAD" --pr - --file .github/team.yaml
+            printf '%s' "$BODY" | node dist/cli.js check "origin/$BASE..HEAD" --pr - --file .github/policy.yaml
           else
             case "$BEFORE" in
-              *[!0]*) node dist/cli.js check "$BEFORE..HEAD" --file .github/team.yaml ;;
+              *[!0]*) node dist/cli.js check "$BEFORE..HEAD" --file .github/policy.yaml ;;
               # A first push has no commit before it.
-              *) node dist/cli.js check HEAD --file .github/team.yaml ;;
+              *) node dist/cli.js check HEAD --file .github/policy.yaml ;;
             esac
           fi
 

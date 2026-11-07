@@ -187,7 +187,6 @@ describe('every team file already in the tree loads unchanged', () => {
   // tests validate, and the v0.1.2 copies. The schema fixtures are not here — they are written
   // to fail, and the tests that use them assert the refusals.
   const files = [
-    '../.github/team.yaml',
     '../examples/team.yaml',
     './fixtures/example.yaml',
     './fixtures/doctor-models.yaml',
