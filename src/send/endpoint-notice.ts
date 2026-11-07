@@ -4,7 +4,8 @@
 // the drop readers. Channel admission does not name this principal: the signature is the shared
 // home key, and it proves only that a seat wrote the record.
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { readStateFile, writeStateFile } from '../file-write.ts';
+import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { realpathSync } from 'node:fs';
 import { dropMessage } from './native.ts';
@@ -49,8 +50,9 @@ export function writeEndpointBlockedNotice(input: {
 }): boolean {
   if (input.lead === '' || input.lead === input.seat) return false;
   const mark = blockedMark(input.root, input.session, input.seat);
-  if (existsSync(mark)) return false;
   try {
+    mkdirSync(dirname(mark), { recursive: true, mode: 0o700 });
+    if (readStateFile(mark, 4096, input.root) !== null) return false;
     const id = randomUUID();
     const leadDir = join(input.root, '.agents', 'send-drops', input.session, input.lead);
     const signed = signRecord({
@@ -68,8 +70,7 @@ export function writeEndpointBlockedNotice(input: {
       thread: id,
     }, input.home);
     dropMessage(leadDir, id, `${JSON.stringify(signed, null, 2)}\n`);
-    mkdirSync(dirname(mark), { recursive: true, mode: 0o700 });
-    writeFileSync(mark, `${input.at}\n`, { mode: 0o600 });
+    writeStateFile(mark, `${input.at}\n`, { root: input.root });
     return true;
   } catch {
     return false;
