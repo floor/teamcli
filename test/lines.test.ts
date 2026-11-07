@@ -89,7 +89,7 @@ seats:
     cli: claude-code
 `, 'deepseek');
     expect(split).toContain('name: deepseek\n    model:');
-    expect(split).toContain('name: deepseek-2\n    label: deepseek flash v4.1-2\n');
+    expect(split).toContain('name: deepseek-2\n    label: "deepseek flash v4.1-2"\n');
   });
 
   test('clearing one stopped instance leaves the other stopped', () => {
@@ -511,4 +511,100 @@ seats:
     expect(readFileSync(path, 'utf8')).toBe(original);
     rmSync(dir, { recursive: true, force: true });
   });
+});
+
+for (const id of ['123456789012', '123456e78901', '0x1f', '1e5a3f']) {
+  test(`a copied unlabelled seat keeps generated label ${id} as text`, () => {
+    const source = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8').replace(/^\s*label:.*\n/gm, '');
+    expect(validateTeamFile(source).ok).toBe(true);
+    const edited = copySeat(source, 'codex-acme', id);
+    expect(edited).not.toBe(source); expect(hasSeat(edited, id)).toBe(true);
+    const read = validateTeamFile(edited);
+    expect(read.ok, read.ok ? '' : JSON.stringify(read.errors)).toBe(true);
+    if (read.ok) expect(read.team.seats.find(seat => seat.name === id)?.label).toBe(id);
+  });
+}
+
+const insertionSource = `format: 1
+project: acme
+coordinator: lead
+operator: lead
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: lead
+    cli: claude-code
+    vendor: test
+    model: Test
+    version: "1"
+    launch: claude
+`;
+test('a counted model keeps a quoted hash while removing its outside comment', () => {
+  for (const model of ['"Note #tag"', "'Note #tag'"]) {
+    const source = insertionSource + `  - role: builder
+    name: worker
+    cli: claude-code
+    vendor: test
+    model: ${model} # outside
+    version: "1"
+    launch: claude
+    count: 2
+`;
+    expect(validateTeamFile(source).ok).toBe(true);
+    const edited = rewriteCount(source, 'worker');
+    expect(edited).toContain('label: "note #tag 1-2"');
+    expect(edited).toContain(`model: ${model} # outside`);
+    const read = validateTeamFile(edited ?? '');
+    expect(read.ok, read.ok ? '' : JSON.stringify(read.errors)).toBe(true);
+    if (read.ok) expect(read.team.seats.find(seat => seat.name === 'worker-2')?.label).toBe('note #tag 1-2');
+  }
+});
+
+test('an inserted counted label keeps punctuation in the generated model title as text', () => {
+  const source = insertionSource + `  - role: builder
+    name: worker
+    cli: claude-code
+    vendor: test
+    model: "Test: Model"
+    version: "1"
+    launch: claude
+    count: 2
+`;
+  expect(validateTeamFile(source).ok).toBe(true);
+  const edited = rewriteCount(source, 'worker'); expect(edited).not.toBeNull();
+  const read = validateTeamFile(edited!);
+  expect(read.ok, read.ok ? '' : JSON.stringify(read.errors)).toBe(true);
+  if (read.ok) expect(read.team.seats.find(seat => seat.name === 'worker-2')?.label).toBe('test: model 1-2');
+});
+test('an inserted model field keeps punctuation in its value as text', () => {
+  expect(validateTeamFile(insertionSource).ok).toBe(true);
+  const edited = rewriteSeatModel(insertionSource, 'lead', {
+    cli: 'claude-code', vendor: 'test', model: 'Test: Model', version: '1', display: 'Test: Model 1', launch: 'claude',
+  });
+  const read = validateTeamFile(edited);
+  expect(read.ok, read.ok ? '' : JSON.stringify(read.errors)).toBe(true);
+  if (read.ok) expect(read.team.seats[0]?.display).toBe('Test: Model 1');
+});
+
+
+test('rewriting a quoted label preserves only its outside comment', () => {
+  for (const quote of ['"', "'"]) {
+    const source = insertionSource + `  - role: builder
+    name: worker
+    label: ${quote}Note #tag${quote} # outside
+    cli: claude-code
+    vendor: test
+    model: Test
+    version: "1"
+    launch: claude
+`;
+    expect(validateTeamFile(source).ok).toBe(true);
+    const edited = copySeat(source, 'worker', 'copy');
+    expect(edited).toContain(`label: ${quote}copy${quote} # outside\n`);
+    expect(edited).not.toContain(`${quote}copy${quote} #tag`);
+    const read = validateTeamFile(edited);
+    expect(read.ok, read.ok ? '' : JSON.stringify(read.errors)).toBe(true);
+    if (read.ok) expect(read.team.seats.find(seat => seat.name === 'copy')?.label).toBe('copy');
+  }
 });
