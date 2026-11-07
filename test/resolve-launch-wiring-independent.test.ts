@@ -7,7 +7,7 @@
 // Synthetic home, team, and host only.
 import { afterEach, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
@@ -30,6 +30,23 @@ const IDLE = {
   grok: readFileSync(new URL('./fixtures/grok/1.0.70/idle.txt', import.meta.url), 'utf8'),
   agy: readFileSync(new URL('./fixtures/antigravity/1.4.2/idle.txt', import.meta.url), 'utf8'),
 };
+
+// The program word, past a leading `NAME=value` assignment. A later path that merely contains
+// the launch word is not that program.
+function programWord(command: string): string {
+  for (const word of command.split(/[ \t]+/)) {
+    if (word === '' || /^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) continue;
+    return word;
+  }
+  return '';
+}
+
+function launchesSeat(command: string, seat: Seat): boolean {
+  const program = programWord(command);
+  const base = basename(program);
+  return program === seat.binary || program === seat.launch
+    || base === seat.launch || base === basename(seat.binary);
+}
 
 function idleFor(command: string): string {
   if (command.includes('codex')) return IDLE.codex;
@@ -278,7 +295,7 @@ test('flag on refuses a Grok seat by name and starts nothing', async () => {
   expect(said).toContain(`${seat.name}:`);
   // This seat is the only one, so it is the lead and starts at the shared project root.
   expect(said).toContain('cannot start in or grant an ancestor of the shared project root, lobby or team config folder; set the seat cwd to its own worktree or clone, then launch it again');
-  expect(made.runs.some((run) => run.command.includes(seat.binary) || run.command.includes(seat.launch))).toBe(false);
+  expect(made.runs.some((run) => launchesSeat(run.command, seat))).toBe(false);
 });
 
 test('flag on refuses a managed Codex seat by name and starts nothing', () => {
@@ -323,7 +340,7 @@ test('a placeholder with no context refuses the launch and starts nothing', asyn
   const code = await runUp(['--resolve-launch'], io, sources(home, made));
   expect(code, io.out + io.err).not.toBe(0);
   expect(io.out + io.err).toContain(PLACEHOLDER);
-  expect(made.runs.some((run) => run.command.includes(seat.binary) || run.command.includes(seat.launch))).toBe(false);
+  expect(made.runs.some((run) => launchesSeat(run.command, seat))).toBe(false);
 });
 
 test('a blank caller session refuses the launch and starts nothing', async () => {
@@ -338,5 +355,5 @@ test('a blank caller session refuses the launch and starts nothing', async () =>
   const code = await runUp(['--resolve-launch'], io, sources(home, made));
   expect(code, io.out + io.err).not.toBe(0);
   expect(io.out + io.err).toContain(BLANK_SESSION);
-  expect(made.runs.some((run) => run.command.includes(seat.binary) || run.command.includes(seat.launch))).toBe(false);
+  expect(made.runs.some((run) => launchesSeat(run.command, seat))).toBe(false);
 });
