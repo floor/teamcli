@@ -42,7 +42,7 @@ import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.t
 import { appendHistory } from '../send/history.ts';
 import { markAnsweredBySend } from '../send/answered-by-send.ts';
 import { noteUnread } from '../send/unread-hint.ts';
-import { ensureRecord, readRecord, recordTextOf, signReceiptPayload, signRecord, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
+import { ensureRecord, isRecordSidecarName, readRecord, recordTextOf, signReceiptPayload, signRecord, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
 import { attributedBody } from '../send/sender-claim.ts';
 import { legStep, stagedStep, webhookStep, type StepFields } from '../send/steps.ts';
 import { isPublicOnly, scanPublicBody, type PrivateListPaths } from '../send/public-only.ts';
@@ -4118,10 +4118,6 @@ type ThreadReply = { reply: string; msg_id: string };
 
 const THREAD_RECORD_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 
-function isThreadSidecarName(name: string): boolean {
-  return name.endsWith('.pending') || name.endsWith('.taken') || name.endsWith('.read') || name.endsWith('.json') || name.startsWith('work-');
-}
-
 function sameCheckout(left: string, right: string): boolean {
   try {
     return realpathSync(left) === realpathSync(right);
@@ -4168,7 +4164,7 @@ function findThreadReply(
         continue;
       }
       for (const name of names) {
-        if (!THREAD_RECORD_NAME.test(name) || isThreadSidecarName(name)) continue;
+        if (!THREAD_RECORD_NAME.test(name) || isRecordSidecarName(name) || name.startsWith('work-')) continue;
         const looked = readRecord(join(seatDir, name));
         if (!looked.ok || looked.record === null) continue;
         const payload = looked.record.payload;
