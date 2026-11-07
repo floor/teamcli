@@ -25,15 +25,15 @@ import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts'
 import { installKey, keyOf, signDomain, type Json } from '../src/store/keys.ts';
 import { fixtureBase } from './helpers.ts';
 
-const NOW = new Date('2026-11-06T00:00:00Z');
+const NOW = new Date('2026-11-08T00:00:00Z');
 // A grant outlives every date this file signs at, so only the signing time decides the note.
 const EXPIRES = new Date('2027-01-01T00:00:00Z');
 // Ops whose route the dispatcher has but no release row measures yet. A release that first
 // ships one adds its row and takes the op out of this list; a route that is neither measured
 // nor named here fails the check below, so a new op cannot slip past unmeasured. The 0.5.12
-// row measures `fallback`, `order`, `trace` and `waits`, while analyse, checkpoint and show
-// remain unreleased.
-const UNRELEASED_OPS: readonly string[] = ['analyse', 'checkpoint', 'show'];
+// row measures `fallback`, `order`, `trace` and `waits`; the 0.5.16 tag measures analyse,
+// checkpoint and show, so every current route has a release row.
+const UNRELEASED_OPS: readonly string[] = [];
 
 const homes: string[] = [];
 afterAll(() => {
@@ -162,19 +162,19 @@ test('an op declared unshipped is a route at no release tag', () => {
 test('a wildcard grant signed before a release reaches the ops that release shipped', () => {
   const w = world();
   // Signed after v0.5.5 and before v0.5.6: it reaches v0.5.6's four ops, then v0.5.10's one,
-  // v0.5.11's one and v0.5.12's four.
+  // v0.5.11's one, v0.5.12's four and v0.5.16's three.
   const grant = issue(w.home, w.publicKey, ['*'], '2026-10-27T12:00:00Z');
   const widened = wildcardGrantsWidened(w.home, NOW);
   expect(widened.length).toBe(1);
   expect(widened[0]?.grant.grant_id).toBe(grant.grant_id);
   expect(widened[0]?.signed).toBe('2026-10-27T12:00:00.000Z');
   expect(widened[0]?.ops).toEqual([
-    'agents', 'approvals', 'batch', 'fallback', 'forget', 'order', 'peek', 'setup', 'trace', 'waits',
+    'agents', 'analyse', 'approvals', 'batch', 'checkpoint', 'fallback', 'forget', 'order', 'peek', 'setup', 'show', 'trace', 'waits',
   ]);
   const note = widenedGrantNote(widened[0]!);
   expect(note).toContain(grant.grant_id);
   expect(note).toContain('signed 2026-10-27');
-  expect(note).toContain('agents, approvals, batch, fallback, forget, order, peek, setup, trace, waits');
+  expect(note).toContain('agents, analyse, approvals, batch, checkpoint, fallback, forget, order, peek, setup, show, trace, waits');
   expect(note).toContain('re-sign the grant to stop this note');
   expect(widenedGrantNotes(w.home, NOW)).toEqual([note]);
 });
@@ -182,13 +182,13 @@ test('a wildcard grant signed before a release reaches the ops that release ship
 test('a grant signed on a release reaches nothing of it; signed after the last release, nothing', () => {
   const w = world();
   // The v0.5.6 release time exactly: the release's own ops are not "later", only v0.5.10's,
-  // v0.5.11's and v0.5.12's are.
+  // v0.5.11's, v0.5.12's and v0.5.16's are.
   const on = issue(w.home, w.publicKey, ['*'], '2026-10-30T23:56:10Z');
   expect(wildcardGrantsWidened(w.home, NOW)[0]?.ops).toEqual([
-    'agents', 'fallback', 'order', 'peek', 'trace', 'waits',
+    'agents', 'analyse', 'checkpoint', 'fallback', 'order', 'peek', 'show', 'trace', 'waits',
   ]);
-  // Signed at v0.5.12's own time, the last release this table knows: nothing is later.
-  const after = issue(w.home, w.publicKey, ['*'], '2026-11-05T22:50:33Z');
+  // Signed at v0.5.16's own tag time, the last release this table knows: nothing is later.
+  const after = issue(w.home, w.publicKey, ['*'], '2026-11-07T05:08:57Z');
   const ids = wildcardGrantsWidened(w.home, NOW).map((entry) => entry.grant.grant_id);
   expect(ids).toEqual([on.grant_id]);
   expect(ids).not.toContain(after.grant_id);

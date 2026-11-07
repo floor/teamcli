@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.17] - 2026-11-07
+
+Carries the v0.5.16 content. v0.5.16 was tagged but never published to npm.
+
+Read-only project analysis, checkpoint requests, named launchers, and guarded start folders for Grok and Cursor.
+
+### Fixed
+
+- The wildcard general-grant release table records `analyse`, `checkpoint` and `show` at the
+  existing v0.5.16 tag, so grants signed before it report their added reach.
+
+### Known issue
+
+Copying a seat that has no label to a name that looks like a number (for example 123456789012) is refused; pick a name that starts with a letter. Fixed in the next release.
+
 ## [0.5.16] - 2026-11-07
 
 Read-only project analysis, checkpoint requests, named launchers, and guarded start folders for Grok and Cursor.
