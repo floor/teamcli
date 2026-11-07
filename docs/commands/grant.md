@@ -58,8 +58,8 @@ In the third form `--public-key` reads the public side of a client key pair writ
 [`team client`](client.md) `keygen` — `client.pub`, or `client.key`, whose public half is derived.
 The grant binds the client id, the entity and the key's directory, and is signed with the owner's
 key into the shared grants folder; its id begins `cg_`. This slice admits only the one principal
-and destination of the local bot relay: `--client grok-bot`, `--entity sampleco`, a recipient of
-`orchestrator@sampleco`. `--expires` is an ISO timestamp inside the cap the owner's
+and destination of the local bot relay: `--client grok-bot`, `--entity floor`, a recipient of
+`orchestrator@floor`. `--expires` is an ISO timestamp inside the cap the owner's
 `client-grant-max-duration` policy sets for send grants, seven days unless the owner changed it;
 without it the grant expires after the shorter of seven days and that cap, and a grant never carries
 a past expiry. `--expires never` signs a grant with no end date, and is refused unless the policy
@@ -80,7 +80,7 @@ owner's place at a terminal, such as a bot that brings its team's folder up and 
 request. The record lists what it admits in `allowed_ops`: `["up"]`, `["down"]` or `["up", "down"]`.
 One record can carry both, so the owner answers once.
 
-    team grant --client grok-bot --entity sampleco --public-key ~/.config/team-client/grok-bot/client.pub \
+    team grant --client grok-bot --entity floor --public-key ~/.config/team-client/grok-bot/client.pub \
       --team docs --up --down --expires 2027-01-20T00:00:00Z --request
 
 `--team` is required and names the one team. The grant binds, in the owner's signature:
@@ -174,13 +174,13 @@ and defaults to, ninety days. It may carry `add` and `remove`, and so may `devel
 days at most; `pause` and `resume` stop and restart new work for the grant's team without interrupting a seat (see
 [Client grant bundles](../concepts/client-grant-bundles.md#the-developer-bundle)).
 
-    team grant --client grok-bot --entity sampleco --public-key ~/.config/team-client/grok-bot/client.pub \
+    team grant --client grok-bot --entity floor --public-key ~/.config/team-client/grok-bot/client.pub \
       --team docs --bundle operator --seat orchestrator --request
 
-    team grant --client grok-bot --entity sampleco --public-key ~/.config/team-client/grok-bot/client.pub \
+    team grant --client grok-bot --entity floor --public-key ~/.config/team-client/grok-bot/client.pub \
       --team teamcli --bundle manager --request
 
-    team grant --client grok-bot --entity sampleco --public-key ~/.config/team-client/grok-bot/client.pub \
+    team grant --client grok-bot --entity floor --public-key ~/.config/team-client/grok-bot/client.pub \
       --team teamcli --bundle developer --request
 
 The bundle is expanded at signing time into the explicit op list stored in `allowed_ops`; the

@@ -5326,7 +5326,7 @@
       "command": "send",
       "id": "send.client-sent",
       "meaning": "a client grant's signed drop was written to the entity orchestrator's drop folder",
-      "trigger": "team send --client grant.json --key client.key orchestrator@sampleco hello"
+      "trigger": "team send --client grant.json --key client.key orchestrator@floor hello"
     },
     {
       "code": 0,
@@ -5438,14 +5438,14 @@
       "command": "send",
       "id": "send.client-pane",
       "meaning": "a client invocation ran inside a team pane (a herdr seat or its child) and was refused before the grant or key was opened",
-      "trigger": "team send --client client-grant.json --key client.key orchestrator@sampleco hello"
+      "trigger": "team send --client client-grant.json --key client.key orchestrator@floor hello"
     },
     {
       "code": 1,
       "command": "send",
       "id": "send.client-refused",
       "meaning": "a client grant invocation was refused before any record was written",
-      "trigger": "team send --client missing.json --key client.key orchestrator@sampleco hello"
+      "trigger": "team send --client missing.json --key client.key orchestrator@floor hello"
     },
     {
       "code": 1,
@@ -5508,7 +5508,7 @@
       "command": "send",
       "id": "send.client-usage",
       "meaning": "the client grant invocation can't be read",
-      "trigger": "team send --client grant.json orchestrator@sampleco hello"
+      "trigger": "team send --client grant.json orchestrator@floor hello"
     },
     {
       "code": 2,

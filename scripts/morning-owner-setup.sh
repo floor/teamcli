@@ -20,7 +20,7 @@
 #        [--answer always|oui] [--test-signer] [--dev-mode] [--replace-global] [--set-policies] [--dry-run]
 #
 # --targets      comma list of <entity>/<team> the grant goes to (default floor/floor,teamcli/teamcli:
-#                orchestrator@sampleco is Reviewer, orchestrator@teamcli is Coordinator)
+#                orchestrator@floor is Reviewer, orchestrator@teamcli is Coordinator)
 # --answer       the owner seat's answer to the grant request (default always: a standing, owner-signed
 #                rule, so the weekly renewal of this same grant needs no Touch ID; oui is single-use)
 #

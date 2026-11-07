@@ -14,7 +14,7 @@ your own device when a rule is first set. Listed from fewest to more prompts:
 | Situation | How it passes with no prompt | The one-time owner act |
 | --- | --- | --- |
 | renewing the grok-bot grants every week | the `always` answer is a standing, owner-signed rule; a matching request is admitted at once (`approved by: standing rule`) | the Touch ID of each first answer (steps 2 and 3 below) |
-| creating another team under `~/Code/sampleco` | an `always` answer to one team request covers every sibling folder of its parent | the Touch ID of that first answer |
+| creating another team under `~/Code/floor` | an `always` answer to one team request covers every sibling folder of its parent | the Touch ID of that first answer |
 | creating any team, any folder | the `relaxed` security profile relaxes `team-create.owner-answer` | one Touch ID to sign the profile, renewed at most every 30 days |
 | an agent running owner-only `team init` | `relaxed` relaxes `gate.owner-terminal` | the same profile signature |
 | numeric codes | never needed on these paths: the owner seat replaces them | none |
@@ -35,12 +35,12 @@ the signed profile lists, until its expiry.
 1. **The orchestrator starts the setup** (`scripts/morning-owner-setup.sh`). It builds the owner-seat helper,
    installs this branch as `~/.local/bin/team-branch` next to the global `team` (the global one is
    left alone), registers your owner seat with a Secure Enclave key, and writes `owner-signers=mac`
-   and `grant-emission=conversational` for the entities `sampleco` (Reviewer's grant, Floor Docs) and `teamcli` (Coordinator's grant).
+   and `grant-emission=conversational` for the entities `floor` (Reviewer's grant, Floor Docs) and `teamcli` (Coordinator's grant).
    **You approve with Touch ID** once. The prompt reads:
-   *"Create the TeamCLI owner seat for sampleco and set owner-signers=mac, grant-emission=conversational for entities sampleco, teamcli"*.
-2. **The orchestrator requests the grok-bot grant to Reviewer** (send + messages to `orchestrator@sampleco`, 7 days)
+   *"Create the TeamCLI owner seat for floor and set owner-signers=mac, grant-emission=conversational for entities floor, teamcli"*.
+2. **The orchestrator requests the grok-bot grant to Reviewer** (send + messages to `orchestrator@floor`, 7 days)
    and answers it `always`. **You approve with Touch ID**. The prompt reads:
-   *"TeamCLI: always for Grant for grok-bot: send + messages to orchestrator@sampleco (entity sampleco) until …"*.
+   *"TeamCLI: always for Grant for grok-bot: send + messages to orchestrator@floor (entity floor) until …"*.
 3. **The orchestrator requests the grok-bot grant to Coordinator** (send + messages to `orchestrator@teamcli`)
    the same way. **You approve with Touch ID**:
    *"TeamCLI: always for Grant for grok-bot: send + messages to orchestrator@teamcli (entity teamcli) until …"*.
@@ -63,11 +63,11 @@ dialog *"codesign wants to sign using key … in your keychain"* and click **All
 If you cancel a prompt nothing is written; the orchestrator simply runs the script again (each step is skipped
 when already done). Before running it, the orchestrator can show you the exact prompts with `--dry-run`.
 
-## Creating "Floor Docs" (`~/Code/sampleco/docs`)
+## Creating "Floor Docs" (`~/Code/floor/docs`)
 
-1. The orchestrator runs `team init --request` in `~/Code/sampleco/docs`. The request lands in your owner-seat inbox.
+1. The orchestrator runs `team init --request` in `~/Code/floor/docs`. The request lands in your owner-seat inbox.
 2. The orchestrator runs `team init --approve-as-owner-seat <id> oui` (or `always`, to cover every sibling
-   folder of `~/Code/sampleco` from now on). **You approve with Touch ID**:
+   folder of `~/Code/floor` from now on). **You approve with Touch ID**:
    *"Create a team — <asker> wants to create a team. OK? — Team docs · creates the team file"*.
    From the phone instead: the orchestrator starts `team owner-seat serve`, opens the link on the Mac, and you
    tap **Approve once** or **Always allow** and confirm with your passkey (the browser offers the
@@ -79,7 +79,7 @@ records `via: security-profile`.
 
 ## A test team, created and started with one answer (no terminal)
 
-What the orchestrator runs, in the new repository (say `~/Code/sampleco/demo`):
+What the orchestrator runs, in the new repository (say `~/Code/floor/demo`):
 
 1. `team owner-seat serve` (if the page is not already up) and sends you its link.
 2. `team init --request --then-up` — one request for "create the team, then start the team".
