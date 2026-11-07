@@ -685,7 +685,7 @@ describe('the invocation', () => {
 });
 
 
-for (const suffix of ['reported', 'wake', 'json', 'new']) {
+for (const suffix of ['reported', 'wake', 'woken', 'json', 'new']) {
   test(`a short id ignores its ${suffix} sidecar`, async () => {
     sentTo('owner', SENT, { from: 'worker' });
     const marker = join(recordDir(root, 'acme', 'owner'), `${SENT}.${suffix}`);

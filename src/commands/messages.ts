@@ -62,6 +62,7 @@ import {
   keyPrintForCache,
   recordAuthOfSealed,
   recordFile,
+  isRecordSidecarName,
   sealedRecordOf,
   signedRecordOf,
   verifiedRecordAt,
@@ -251,18 +252,6 @@ function legacyCandidates(root: string): Candidate[] {
   return out;
 }
 
-/** The marker names left beside a record; none of them is a message. A send leaves the pending,
- *  taken, read and receipt names; the unread watch leaves `.wake` beside a message whose one wake
- *  line it typed and `.reported` beside one whose sender and lead it told. A `.new` name is the
- *  private temp `publishReadReceipt` writes in this folder before it links the receipt: it is
- *  JSON, and it matches a record's name shape, but it is not a record. Listing it would refuse
- *  a message that was never sent whenever a read and `team messages` cross. */
-function isMarkerName(name: string): boolean {
-  return name.endsWith('.pending') || name.endsWith('.taken') || name.endsWith('.read')
-    || name.endsWith('.wake') || name.endsWith('.reported') || name.endsWith('.json')
-    || name.endsWith('.new');
-}
-
 /** The prefix a work nudge's file carries: the watch writes it into the same folder, and it is a
  *  prompt for the seat, not a message record (`work-<uuid>`). */
 const WORK_PREFIX = 'work-';
@@ -280,7 +269,7 @@ function recordNames(root: string, session: string): Candidate[] {
     const seatDir = join(dir, seat);
     if (!isDir(seatDir)) continue;
     for (const name of readdirSync(seatDir).sort()) {
-      if (!NAME.test(name) || isMarkerName(name) || name.startsWith(WORK_PREFIX)) continue;
+      if (!NAME.test(name) || isRecordSidecarName(name) || name.startsWith(WORK_PREFIX)) continue;
       const path = join(seatDir, name);
       if (!isFile(path)) continue;
       out.push({ store: 'record', seat, id: name, path, session });

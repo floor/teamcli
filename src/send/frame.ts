@@ -13,7 +13,7 @@
 // owner included — because both commands address the record by id, never by the sender's name.
 
 import { readdirSync } from 'node:fs';
-import { recordNameOk } from './record.ts';
+import { isRecordSidecarName, recordNameOk } from './record.ts';
 import { attributedBody } from './sender-claim.ts';
 
 export const MIN_ID_PREFIX_LEN = 8;
@@ -37,8 +37,8 @@ export function shortIdPrefix(id: string, existingIds: Iterable<string> = []): s
 }
 
 /**
- * Every record filename currently in `dropDir`, excluding sidecar files (`.read.json`,
- * `.replied.json`, `.closed.json`, `.pending`, `.woken`, `.reported`). Returns `[]` when the
+ * Every record filename currently in `dropDir`, excluding the shared watcher, receipt and
+ * private publication sidecars. Returns `[]` when the
  * folder does not exist yet.
  */
 export function existingRecordIdsIn(dropDir: string): string[] {
@@ -46,12 +46,7 @@ export function existingRecordIdsIn(dropDir: string): string[] {
     return readdirSync(dropDir).filter(
       (name) =>
         recordNameOk(name) &&
-        !name.endsWith('.pending') &&
-        !name.endsWith('.taken') &&
-        !name.endsWith('.read') &&
-        !name.endsWith('.woken') &&
-        !name.endsWith('.reported') &&
-        !name.endsWith('.json') &&
+        !isRecordSidecarName(name) &&
         !name.startsWith('work-'),
     );
   } catch {

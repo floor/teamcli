@@ -267,3 +267,23 @@ describe('the reply is scoped by the grant; nothing widens it', () => {
     expect((await seatReply(w, 'orchestrator', first.json.record, 'reply to my reply')).code).not.toBe(0);
   });
 });
+
+
+test('client listings ignore watcher sidecars and still refuse a corrupt record', async () => {
+  const w = world(true);
+  const sent = await clientSend(w, 'reply around sidecars');
+  expect(sent.code).toBe(0);
+  const reply = await seatReply(w, 'orchestrator', sent.id, 'the signed answer');
+  expect(reply.code, reply.err).toBe(0);
+  const inbox = clientInboxFolder(w.root, 'acme', 'grok-bot');
+  for (const suffix of ['wake', 'woken', 'reported', 'new']) {
+    writeFileSync(join(inbox, `${reply.json.record}.${suffix}`), JSON.stringify({ unsigned: true }));
+  }
+  const read = await clientRead(w);
+  expect(read.code, read.out + read.err).toBe(0);
+  expect(read.json.rows.map((row: { id: string }) => row.id)).toEqual([reply.json.record]);
+  writeFileSync(join(inbox, `${reply.json.record}-corrupt`), '{}');
+  const corrupt = await clientRead(w);
+  expect(corrupt.code).toBe(1);
+  expect(corrupt.out).toContain(`${reply.json.record}-corrupt`);
+});
