@@ -21,6 +21,7 @@ import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import { lobbyDir } from '../lobby/gate.ts';
 import { runMcpServe } from '../mcp/serve.ts';
+import { CHANNEL_SETUP_RECORD, runMcpSetup, type McpSetupSources } from '../mcp/setup.ts';
 import {
   displayPath,
   hasJsonFlag,
@@ -36,16 +37,24 @@ import {
 
 export const USAGE = `Usage: team mcp status [--json]
        team mcp doctor [--json]
+       team mcp setup <seat> [--off] [--dry-run] [--json]
        team mcp serve --seat <seat> [--session <session>] [--file <path>] [--epoch <run_id>]
-Read-only: reports the MCP bridge's state and diagnoses what is missing.
+status and doctor report the MCP bridge's state and diagnose what is missing.
 \`status\` prints one table per leg and the state they add up to; \`doctor\`
 turns the same surface into findings, each missing one with a one-line fix.
-Owner-gated fixes are marked [owner]. The mutating setup commands (enable,
-disable, key generation) are not in this build yet. --json prints one
+Owner-gated fixes are marked [owner]. Bridge enable, disable and key
+generation are not in this build yet. --json prints one
 document instead of the lines: {format, lobby_dir, helper, bridges, guards,
 front, state} for status, {format, lobby_dir, findings, missing, warnings}
 for doctor. A run that exits 2 writes the structured error document instead
 — {error: {id, message, repair}} — and stderr stays empty.
+
+\`setup\` prepares this folder for a hand-started Claude seat: the scoped
+project server and named approval, its launch flag through the config gate,
+and its calling pane through register. The owner or that seat may run it;
+the existing config and register gates still apply. --dry-run prints the
+three changes without writing; --off restores only what setup added.
+It exits 0 on success, 1 on refusal, and 2 for an invalid invocation.
 
 \`serve\` is the seat's inbox, for the CLI that started it: a stdio MCP
 server with \`inbox_check\` and \`inbox_read\` over one seat's drop folder.
@@ -153,6 +162,8 @@ export interface PathStat {
 }
 
 export interface McpSources {
+  /** Setup uses only these injected config/registration seams, never status probes. */
+  setup?: McpSetupSources;
   home(): string;
   helperRoot(): string;
   now(): Date;
@@ -893,7 +904,7 @@ function renderSections(sections: Array<{ title: string; detail: string; rows: M
   return lines.join('\n');
 }
 
-const NO_SETUP = 'no bridge configuration found (the setup command is not in this build yet)';
+const NO_SETUP = 'no bridge configuration found (bridge setup is not in this build yet)';
 
 export async function runMcpStatus(io: Io, json: boolean, sources: McpSources): Promise<number> {
   const home = sources.home();
@@ -983,6 +994,13 @@ export async function runMcpDoctor(io: Io, json: boolean, sources: McpSources): 
   const guards = dirs.filter((dir) => sources.stat(join(dir, 'guard.json')) !== null).map((dir) => guardReport(sources, dir));
 
   const findings: McpFinding[] = [];
+  const setupRecord = join(io.cwd, CHANNEL_SETUP_RECORD);
+  const setupStat = sources.stat(setupRecord);
+  if (setupStat !== null) findings.push({
+    level: setupStat.kind === 'file' ? 'note' : 'warn',
+    text: `${setupRecord}: channel setup restoration record${setupStat.kind === 'file' ? '' : ' path is not a regular file'}`,
+    fix: 'keep the owned record until removal; run team mcp setup <seat> --off from this folder to restore its scoped changes',
+  });
   const firstView = bridges.find((bridge) => bridge.view !== null)?.view ?? null;
   const socketPath = firstView?.signerSocket ?? join(helperRoot, 'sock', 'signer.sock');
   const socketCheckRow = socketCheck(sources, socketPath, sources.stat(socketPath) === null ? 'missing' : await sources.probeSocket(socketPath));
@@ -991,7 +1009,7 @@ export async function runMcpDoctor(io: Io, json: boolean, sources: McpSources): 
   if (bridges.length === 0) {
     findings.push({
       level: 'miss', text: `no bridge configuration in ${lobby}`,
-      fix: '[owner] the automated setup is not in this build yet; the MCP bring-up runbook\'s G4/G5 blocks wire the helper and the bridge',
+      fix: '[owner] automated bridge setup is not in this build yet; the MCP bring-up runbook\'s G4/G5 blocks wire the helper and the bridge',
     });
   }
 
@@ -1091,11 +1109,12 @@ export async function runMcpDoctor(io: Io, json: boolean, sources: McpSources): 
 }
 
 export async function runMcp(argv: string[], io: Io, sources: McpSources = realSources): Promise<number> {
-  const args = readArgs(argv, ['seat', 'session', 'file', 'epoch'], ['json']);
+  const args = readArgs(argv, ['seat', 'session', 'file', 'epoch'], ['json', 'off', 'dry-run']);
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
   // structured error document, and the parser errors before its flag set sees them.
   const json = hasJsonFlag(argv);
   const sub = args.rest[0];
+  if (sub === 'setup') return runMcpSetup({ ...args, rest: args.rest.slice(1) }, json, io, sources.home(), sources.setup);
   const fail = (message: string): number => {
     if (json) {
       writeJsonError(io, 'mcp.invocation', message, null);
@@ -1106,6 +1125,7 @@ export async function runMcp(argv: string[], io: Io, sources: McpSources = realS
     return 2;
   };
   if (args.error) return fail(args.error);
+  if (args.flags.has('off') || args.flags.has('dry-run')) return fail(`unknown option --${args.flags.has('off') ? 'off' : 'dry-run'}`);
   if (sub === 'serve') {
     if (args.flags.has('json')) return fail('unknown option --json');
     if (args.values.seat === undefined) return fail('--seat <seat> is required');
@@ -1125,7 +1145,7 @@ export async function runMcp(argv: string[], io: Io, sources: McpSources = realS
           : null;
   if (stray !== null) return fail(`unknown option --${stray}`);
   if (sub !== 'status' && sub !== 'doctor') {
-    return fail(sub === undefined ? 'a subcommand is required: status, doctor or serve' : `unknown subcommand ${JSON.stringify(sub)}`);
+    return fail(sub === undefined ? 'a subcommand is required: status, doctor, setup or serve' : `unknown subcommand ${JSON.stringify(sub)}`);
   }
   if (args.rest.length > 1) return fail(`unexpected ${JSON.stringify(args.rest[1] as string)}`);
   if (sub === 'status') return runMcpStatus(io, json, sources);

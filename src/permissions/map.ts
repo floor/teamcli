@@ -316,7 +316,7 @@ function buildGates(): Record<string, Gate> {
     },
     mcp: {
       kind: 'any-caller',
-      why: 'status and doctor write nothing and ask for no caller; serve is the launch line\'s own invocation for a declared seat, and its own row says who it admits',
+      why: 'status and doctor write nothing and ask for no caller; setup and serve state their own gates in their subcommand rows',
     },
     pause: {
       kind: 'team-pause',
@@ -474,6 +474,10 @@ function buildGates(): Record<string, Gate> {
     'mcp:serve': {
       kind: 'seat-only',
       why: 'the launch line starts it for its own seat: the process it starts must place as the seat --seat names, on the pane the state records for it in the team\'s own session, and never the owner; the seat\'s current claim, when there is one, must be the --epoch the server carries',
+    },
+    'mcp:setup': {
+      kind: 'owner-only',
+      why: 'the owner or the named seat itself may request setup; the existing config editor must admit its launch change, and register must admit its calling pane before the scoped project pair is published',
     },
     'mcp:status': {
       kind: 'any-caller',

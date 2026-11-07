@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- `team mcp setup <seat>` prepares a hand-started Claude seat’s scoped inbox channel, launch flag and calling-pane record, with a zero-write dry run and scoped removal.
+
 ## [0.5.19] - 2026-11-07
 
 ### Fixed

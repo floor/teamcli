@@ -1846,11 +1846,12 @@ Usage:
 
     team mcp status [--json]
     team mcp doctor [--json]
+    team mcp setup <seat> [--off] [--dry-run] [--json]
     team mcp serve --seat <seat> [--session <session>] [--file <path>] [--epoch <run_id>]
 
 ### Who may run it
 
-`any-caller` — status and doctor write nothing and ask for no caller; serve is the launch line's own invocation for a declared seat, and its own row says who it admits
+`any-caller` — status and doctor write nothing and ask for no caller; setup and serve state their own gates in their subcommand rows
 
 ### Flags
 
@@ -1919,6 +1920,36 @@ Usage:
 #### Positionals
 
 None.
+
+### `setup`
+
+Hidden: no
+
+Usage:
+
+    team mcp setup <seat> [--off] [--dry-run] [--json]
+
+#### Who may run it
+
+`owner-only` — the owner or the named seat itself may request setup; the existing config editor must admit its launch change, and register must admit its calling pane before the scoped project pair is published
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `--off` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
 
 ### `status`
 

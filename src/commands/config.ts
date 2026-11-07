@@ -74,6 +74,8 @@ export default config;
 /** What a test hands in: the home whose registry holds the team, the editor, the clock. */
 export type ConfigSources = {
   home?: string;
+  /** Internal orchestration preflight: keep every admission/validation, publish nothing. */
+  planOnly?: boolean;
   /** The credential store a charter signature is confirmed against. Absent: the system one. */
   ownerSeatStore?: OwnerSeatKeyStore;
   /** Present an owner-seat request to Touch ID at once (see OwnerSeatSources.present). */

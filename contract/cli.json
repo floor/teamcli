@@ -4005,6 +4005,69 @@
           "flags": [
             {
               "hidden": false,
+              "name": "--dry-run",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--off",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "setup",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team mcp setup <seat> [--off] [--dry-run] [--json]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "the owner or the named seat itself may request setup; the existing config editor must admit its launch change, and register must admit its calling pane before the scoped project pair is published"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
               "name": "--general",
               "repeatable": false,
               "takesValue": true
@@ -4050,11 +4113,12 @@
       "usage": [
         "team mcp status [--json]",
         "team mcp doctor [--json]",
+        "team mcp setup <seat> [--off] [--dry-run] [--json]",
         "team mcp serve --seat <seat> [--session <session>] [--file <path>] [--epoch <run_id>]"
       ],
       "who": {
         "gate": "any-caller",
-        "why": "status and doctor write nothing and ask for no caller; serve is the launch line's own invocation for a declared seat, and its own row says who it admits"
+        "why": "status and doctor write nothing and ask for no caller; setup and serve state their own gates in their subcommand rows"
       }
     },
     {

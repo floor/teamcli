@@ -800,7 +800,7 @@ describe('team mcp invocation around serve', () => {
       }
       const usage = testIo(at.root);
       expect(await runMcp([], usage)).toBe(2);
-      expect(usage.err).toContain('status, doctor or serve');
+      expect(usage.err).toContain('status, doctor, setup or serve');
     } finally {
       at.cleanup();
     }
