@@ -287,7 +287,7 @@ CLI. \`team route <seat>\` answers the address such a delivery uses.
 
 --client sends as an external client principal named by an owner-signed grant, never
 as the owner or a seat: the request is signed with the client's own key and one
-signed drop is written to the entity's orchestrator — \`orchestrator@floor\` is the only
+signed drop is written to the entity's orchestrator — \`orchestrator@sampleco\` is the only
 address this build admits. The same signed record is then carried through that
 seat's resolved delivery order — its own inbox channel, the cross-session socket
 when the seat's launch declares \`crossSessionInbound: accept\`, and the typed

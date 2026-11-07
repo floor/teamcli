@@ -74,7 +74,7 @@ export type ClientSendDelivery = (sent: {
 }) => Promise<void>;
 
 /**
- * Resolves `orchestrator@floor` to the entity coordinator the grant signs. The address is
+ * Resolves `orchestrator@sampleco` to the entity coordinator the grant signs. The address is
  * compared to the one admitted form, never parsed into a broader destination; the registry read
  * must still return the same coordinator team and registered agent id that the signed grant
  * names. Anything else is refused here.
