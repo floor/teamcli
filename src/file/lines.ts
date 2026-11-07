@@ -147,7 +147,7 @@ export function rewriteCount(text: string, declared: string): string | null {
         const renamed = [setValue(line, `${declared}${suffix}`)];
         if (implied === null) return renamed;
         const pad = /^(\s*)/.exec(line)?.[1] ?? '';
-        return [...renamed, `${pad}label: ${implied}${suffix}`];
+        return [...renamed, `${pad}label: ${yamlWord(`${implied}${suffix}`)}`];
       }
       if (label !== null && /^\s*label:/.test(line)) return [setValue(line, `${label}${suffix}`)];
       return [line];
@@ -234,7 +234,7 @@ export function copySeat(text: string, fromName: string, toName: string): string
     const nested = copied.find((line) => /^\s+[A-Za-z0-9_-]+:/.test(line));
     const pad = ' '.repeat(nested ? indent(nested) : indent(copied[0] ?? '') + 2);
     const at = copied.findIndex((line) => /^\s*(?:-\s+)?name:/.test(line));
-    copied.splice(at + 1, 0, `${pad}label: ${toName}`);
+    copied.splice(at + 1, 0, `${pad}label: ${yamlWord(toName)}`);
   }
   const insertAt = ready.block.start + end;
   return replaceLines(ready.text, insertAt, insertAt, copied);
@@ -299,7 +299,7 @@ export function rewriteSeatModel(text: string, name: string, fields: SeatModelFi
       const named = lines.findIndex((line) => /^\s*(?:-\s+)?name:/.test(line));
       insertAt = named >= 0 ? named : 0;
     }
-    lines.splice(insertAt + 1, 0, `${pad}${key}: ${value}`);
+    lines.splice(insertAt + 1, 0, `${pad}${key}: ${yamlWord(value)}`);
   }
   return replaceLines(ready.text, ready.block.start, ready.block.end, lines);
 }

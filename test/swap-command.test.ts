@@ -691,7 +691,7 @@ describe('team swap to another vendor of the same CLI', () => {
     expect(lead).toContain('vendor: zai');
     expect(lead).toContain('model: GLM');
     expect(lead).toContain('version: "5.3"');
-    expect(lead).toContain('display: GLM 5.3');
+    expect(lead).toContain('display: "GLM 5.3"');
     expect(lead).toContain(`launch: ${JSON.stringify(ZAI_LINE)}`);
     // The line the pane ran is the vendor line the seat row now holds.
     expect(world.did.runs.join('\n')).toContain('find-generic-password -s glm-api-key');
@@ -1052,7 +1052,7 @@ describe('team swap now and --run', () => {
     expect(lead).toContain('vendor: deepseek');
     expect(lead).toContain('model: "DeepSeek Flash"');
     expect(lead).toContain('version: "4.0"');
-    expect(lead).toContain('display: DeepSeek Flash 4.0');
+    expect(lead).toContain('display: "DeepSeek Flash 4.0"');
     expect(lead).toContain('launch: "claude --model deepseek-flash"');
     const helper = yaml.slice(yaml.indexOf('name: helper'));
     expect(helper).toContain('vendor: openai');
