@@ -161,28 +161,38 @@ describe('the diff check command', () => {
   });
 
   test('internal seat-id tokens in commit bodies are refused without printing them', () => {
+    const base = repo({ 'keep.txt': 'clean\n' }, 'base');
+    let before = base.sha;
     for (const token of [
       ['builder', '7'].join('-'),
       ['operator', '2'].join('-'),
       ['tester', '3'].join('-'),
       ['reviewer', 'sample'].join('-'),
       ['REVIEWER', 'SAMPLE', 'LAB'].join('-'),
+      ['tester', '3', 'independent'].join('-'),
+      ['builder', '1', 'owned'].join('-'),
+      `briefs/${['tester', '3', 'notes.md'].join('-')}`,
+      ['co', 'operator', '1'].join('-'),
+      ['pre', 'reviewer', 'sample'].join('-'),
+      ['reviewer', 'requested', '2'].join('-'),
+      ['operator', '12'].join('-'),
     ]) {
-      const base = repo({ 'keep.txt': 'clean\n' }, 'base');
       const head = commit(base.dir, `test: a neutral subject\n\nThe reviewer-requested proof was checked by ${token}'s scene.`);
-      const result = run(base.dir, ['--base', base.sha]);
+      const result = run(base.dir, ['--base', before]);
       expect(result.status).toBe(1);
       expect(result.stderr).toContain(`commit:${head}:3`);
       expect(result.stderr).toContain('commit message names an internal seat');
       expect(result.stdout + result.stderr).not.toContain(token);
+      before = head;
     }
-  });
+  }, 30_000);
 
   test('review-role prose from release messages and ordinary continuations is allowed', () => {
     const bodies = [
       'Add the reviewer-requested three lines only under Unreleased: checked state publication, owner-only modes for the three changed file families, and declared-link-root refusal with ancestor-alias handling. Historical release sections remain byte-identical. No package version or release timestamp changes.',
       'The reviewer-approved wording remains unchanged.',
       'Keep the reviewer-side notes separate.',
+      'The Reviewer-Side and Reviewer-Requested wording stays.',
     ];
     for (const body of bodies) {
       const base = repo({ 'keep.txt': 'clean\n' }, 'base');
@@ -196,7 +206,7 @@ describe('the diff check command', () => {
     const base = repo({ 'keep.txt': 'clean\n' }, 'base');
     const embedded = ['preoperator', '2'].join('-');
     const longer = ['operator', '2word'].join('-');
-    commit(base.dir, `test: ordinary role prose\n\nAn operator-only check helps the builder and reviewer. ${embedded} and ${longer} are unrelated words.`);
+    commit(base.dir, `test: ordinary role prose\n\nAn operator-only check helps the builder and reviewer. ${embedded}, ${longer}, ${['x_operator', '1'].join('-')}, and operator 2 are unrelated words.`);
     const result = run(base.dir, ['--base', base.sha]);
     expect(result.status).toBe(0);
   });
