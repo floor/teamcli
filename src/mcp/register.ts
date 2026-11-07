@@ -19,7 +19,8 @@
 // than registered against whatever folder it started in.
 import { spawnSync } from 'node:child_process';
 import { syncChildTimeout } from '../child.ts';
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { readStateFile, writeStateFile } from '../file-write.ts';
+import { existsSync, lstatSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -324,12 +325,13 @@ function isIgnored(folder: string, target: string): boolean {
 function excludeTarget(folder: string, target: string): boolean {
   const common = runGit(folder, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
   if (common === null || common.code !== 0) return false;
-  const path = join(common.stdout.trim(), 'info', 'exclude');
+  const root = common.stdout.trim();
+  const path = join(root, 'info', 'exclude');
   try {
     mkdirSync(dirname(path), { recursive: true });
-    const current = existsSync(path) ? readFileSync(path, 'utf8') : '';
+    const current = readStateFile(path, undefined, root) ?? '';
     if (current.split('\n').some((line) => line.trim() === target)) return true;
-    writeFileSync(path, `${current}${current !== '' && !current.endsWith('\n') ? '\n' : ''}${target}\n`);
+    writeStateFile(path, `${current}${current !== '' && !current.endsWith('\n') ? '\n' : ''}${target}\n`, { root });
     return true;
   } catch {
     return false;
@@ -364,12 +366,12 @@ function writeConfigFile(folder: string, file: string, place: InboxPlace): Inbox
     } catch {
       return { ok: false, reason: `${file} could not be read` };
     }
-    if (!stat.isFile() || stat.isSymbolicLink()) {
+    if (!stat.isFile() || stat.nlink !== 1) {
       return { ok: false, reason: `${file} is not a regular file` };
     }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(readFileSync(path, 'utf8'));
+      parsed = JSON.parse(readStateFile(path, undefined, folder) ?? '');
     } catch {
       return { ok: false, reason: `${file} is not JSON, so it was left as it is` };
     }
@@ -393,17 +395,10 @@ function writeConfigFile(folder: string, file: string, place: InboxPlace): Inbox
     },
   };
   const text = `${JSON.stringify(next, null, 2)}\n`;
-  const temp = `${path}.team-tmp`;
   try {
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(temp, text, { mode: 0o600 });
-    renameSync(temp, path);
+    writeStateFile(path, text, { root: folder });
   } catch {
-    try {
-      unlinkSync(temp);
-    } catch {
-      // The temp never existed, or is already gone: the refusal is the same either way.
-    }
     return { ok: false, reason: `${file} could not be written` };
   }
   return { ok: true };
