@@ -15,6 +15,27 @@ Read-only project analysis, checkpoint requests, named launchers, and guarded st
 
 - Cursor seats need Bun or Node `--experimental-ffi` when `grok-command-deny` is on.
 
+- `grok-command-deny: git` adds git deny rules for Grok and Cursor seats; `git-and-tests` also
+  adds `bun test` deny rules. The team policy is off by default. These rules are guardrails alongside
+  the narrowed sandbox; they do not prove that every shell wrapper is blocked.
+
+- A synthetic first-minute scene records startup, ready-seat, message-exchange and working-state
+  proof with per-step time limits. A missing step is a miss; it does not claim a successful setup.
+
+- The machine daemon discovers running teams from the registry instead of a fixed list of project
+  folders. A root notice prompts a registry recheck and cannot add an unregistered team.
+
+- Launcher helpers distinguish documented first-run skips from dialogs that still need attention.
+  Sandbox-root helpers select the project folder for shared mode and the worktree for worktree mode.
+
+- The policy catalogue adds `pretrust` (`off` or `project`) and `first-run-admission` (`off` or
+  `empty-account`), with supporting helpers. These declarations do not yet connect empty-account
+  admission to a CLI setup flow.
+
+- `also_in` declares additional projects a team serves, alongside its `in_project` home. Only
+  the home supplies settings, policies and rules. An owner launch or registration records existing
+  same-entity served projects; editing the declaration alone grants no new reach.
+
 - `team analyse [<path>] [--json]` prints a read-only project report after verifying the caller as a
   named analyser for that session. It creates no team, writes no files, and runs no discovered
   checks.
@@ -87,6 +108,13 @@ Read-only project analysis, checkpoint requests, named launchers, and guarded st
   therefore both print a message. The inbox server remains receipt-first.
 
 ### Fixed
+
+- An unreserved or uncertain channel notification keeps its stored drop and starts no later
+  delivery route. Send history names the drop with `queued, not woken` or `sent (unconfirmed)`,
+  without claiming that the channel notification completed.
+
+- Channel setup refuses a leftover `.team-channel.lock`, leaves it in place, and names the
+  manual cleanup before another launch.
 
 - Cleanup can reclaim orphan receipt staging names once their inode change time is over five
   minutes old, including when their modification time is set in the future.
