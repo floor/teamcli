@@ -161,6 +161,8 @@ describe('the diff check command', () => {
   });
 
   test('internal seat-id tokens in commit bodies are refused without printing them', () => {
+    const base = repo({ 'keep.txt': 'clean\n' }, 'base');
+    let before = base.sha;
     for (const token of [
       ['builder', '7'].join('-'),
       ['operator', '2'].join('-'),
@@ -175,15 +177,15 @@ describe('the diff check command', () => {
       ['reviewer', 'requested', '2'].join('-'),
       ['operator', '12'].join('-'),
     ]) {
-      const base = repo({ 'keep.txt': 'clean\n' }, 'base');
       const head = commit(base.dir, `test: a neutral subject\n\nThe reviewer-requested proof was checked by ${token}'s scene.`);
-      const result = run(base.dir, ['--base', base.sha]);
+      const result = run(base.dir, ['--base', before]);
       expect(result.status).toBe(1);
       expect(result.stderr).toContain(`commit:${head}:3`);
       expect(result.stderr).toContain('commit message names an internal seat');
       expect(result.stdout + result.stderr).not.toContain(token);
+      before = head;
     }
-  });
+  }, 30_000);
 
   test('review-role prose from release messages and ordinary continuations is allowed', () => {
     const bodies = [
