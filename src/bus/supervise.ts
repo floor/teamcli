@@ -7,7 +7,8 @@
 
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { writeStateFile } from '../file-write.ts';
+import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { busListening, startBus, type BusHandle, type StartBusInput, type StartBusResult } from './server.ts';
@@ -80,7 +81,7 @@ export async function spawnInheritedBus(root: string, home?: string): Promise<'l
   const nonce = randomBytes(16).toString('hex');
   const dir = join(root, '.agents');
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeFileSync(join(dir, 'bus.inherit'), `${nonce}\n`, { mode: 0o600 });
+  writeStateFile(join(dir, 'bus.inherit'), `${nonce}\n`, { root });
   const here = fileURLToPath(import.meta.url);
   const entry = join(dirname(here), '..', here.endsWith('.ts') ? 'cli.ts' : 'cli.js');
   const child = spawn(process.execPath, [entry, 'bus', '--inherited', nonce], {

@@ -2,7 +2,7 @@
 // temporary, flush its descriptor, then publish one complete file.
 import { randomBytes } from 'node:crypto';
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readSync, renameSync, unlinkSync, writeSync, type Stats } from 'node:fs';
-import { basename, dirname, join, parse, resolve } from 'node:path';
+import { basename, dirname, join, parse, relative, resolve } from 'node:path';
 
 export class FileWriteRefusal extends Error {}
 const refuse = (): never => { throw new FileWriteRefusal('state file refused: a parent or file is unsafe or changed'); };
@@ -16,14 +16,18 @@ function unchanged(a: Stats | null, b: Stats | null): boolean {
   return a === null ? b === null : b !== null && regular(b) && same(a, b)
     && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
 }
-function parents(path: string): () => void {
+function parents(path: string, root?: string): () => void {
+  const stop = resolve(root ?? parse(resolve(path)).root);
+  const within = relative(stop, resolve(path));
+  if (within === '' || within === '..' || within.startsWith('../') || parse(within).root !== '') refuse();
   const chain: { path: string; value: Stats }[] = [];
   let folder = dirname(resolve(path));
   while (true) {
     const value = lstatSync(folder);
     if (!value.isDirectory()) refuse();
     chain.push({ path: folder, value });
-    if (folder === parse(folder).root) break;
+    if (folder === stop) break;
+    if (folder === parse(folder).root) refuse();
     folder = dirname(folder);
   }
   return () => { for (const row of chain) {
@@ -47,8 +51,8 @@ function write(fd: number, text: string): void {
 }
 
 /** Missing is null; an unsafe, changed, or oversized file throws rather than reading a link. */
-export function readStateFile(path: string, limit = 4 * 1024 * 1024): string | null {
-  flags(); const check = parents(path); const before = leaf(path);
+export function readStateFile(path: string, limit = 4 * 1024 * 1024, root?: string): string | null {
+  flags(); const check = parents(path, root); const before = leaf(path);
   if (before === null) return null;
   if (before.size > limit) refuse();
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -68,8 +72,8 @@ export function readStateFile(path: string, limit = 4 * 1024 * 1024): string | n
 }
 
 /** Existing leaves must be regular single-link files; parent creation belongs to the caller. */
-export function writeStateFile(path: string, text: string): void {
-  flags(); const check = parents(path); const before = leaf(path);
+export function writeStateFile(path: string, text: string, options: { root?: string; validateTemporary?: (path: string) => void } = {}): void {
+  flags(); const check = parents(path, options.root); const before = leaf(path);
   const temporary = join(dirname(path), `.${basename(path)}.${randomBytes(16).toString('hex')}.tmp`);
   let fd: number | undefined; let owned: Stats | undefined; let published = false;
   try {
@@ -78,6 +82,7 @@ export function writeStateFile(path: string, text: string): void {
     check(); if (!regular(owned)) refuse();
     write(fd, text); fsyncSync(fd);
     closeSync(fd); fd = undefined;
+    options.validateTemporary?.(temporary);
     check();
     if (!unchanged(before, leaf(path))) refuse();
     const staged = leaf(temporary);

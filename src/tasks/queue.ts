@@ -4,7 +4,7 @@
 // declared file identically. A team that declares a file source is written at its own path; a
 // team that declares a broker source has no local queue at all, and this module is never asked
 // to write one.
-import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { readStateFile, writeStateFile } from '../file-write.ts';
 import { join, relative, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { taskPathStaysInside } from '../file/sections/tasks.ts';
@@ -84,25 +84,23 @@ export function addToQueue(root: string, source: FileSource, record: TaskRecord)
       return { kind: 'duplicate', record: existing, path: source.path };
     }
     const full = resolve(root, source.path);
-    const text = candidateText(full, record);
-    const temporary = `${full}.${process.pid}.tmp`;
+    let message = 'the queue file could not be written';
     try {
-      writeFileSync(temporary, text);
-      const checked = fileAdapter.read({ root, path: relative(root, temporary) });
-      const found = checked.kind === 'records' ? checked.records.find((item) => item.id === record.id) : undefined;
-      if (checked.kind !== 'records' || found === undefined) {
-        return { kind: 'unreadable', message: 'the added record did not read back as a task' };
-      }
-      renameSync(temporary, full);
-      return { kind: 'added', record: found, path: source.path, records: checked.records, refusals: checked.refusals };
+      const text = candidateText(full, record, root);
+      const validated: { result?: Extract<QueueAddResult, { kind: 'added' }> } = {};
+      writeStateFile(full, text, { root, validateTemporary: (temporary) => {
+        const checked = fileAdapter.read({ root, path: relative(root, temporary) });
+        const found = checked.kind === 'records' ? checked.records.find((item) => item.id === record.id) : undefined;
+        if (checked.kind !== 'records' || found === undefined) {
+          message = 'the added record did not read back as a task';
+          throw new Error(message);
+        }
+        validated.result = { kind: 'added', record: found, path: source.path, records: checked.records, refusals: checked.refusals };
+      } });
+      if (validated.result === undefined) throw new Error(message);
+      return validated.result;
     } catch {
-      return { kind: 'unreadable', message: 'the queue file could not be written' };
-    } finally {
-      try {
-        unlinkSync(temporary);
-      } catch {
-        // The rename took the temporary file; there is nothing to remove.
-      }
+      return { kind: 'unreadable', message };
     }
   });
 }
@@ -110,13 +108,8 @@ export function addToQueue(root: string, source: FileSource, record: TaskRecord)
 /** The whole file after the add: the current text with one block item appended, and the empty
  *  flow list `[]` — the one flow spelling the adapter reads — replaced by the block form. Any
  *  other flow list is `not-a-list` on the read before this is called. */
-function candidateText(full: string, record: TaskRecord): string {
-  let current: string;
-  try {
-    current = readFileSync(full, 'utf8');
-  } catch {
-    current = '';
-  }
+function candidateText(full: string, record: TaskRecord, root: string): string {
+  const current = readStateFile(full, undefined, root) ?? '';
   const trimmed = current.trim();
   const block = blockText(record);
   if (trimmed === '' || trimmed === '[]') return block;
