@@ -305,6 +305,39 @@ describe('team send --wait on the thread across delivery legs', () => {
 });
 
 describe('team send --wait to a human: true seat (P3)', () => {
+  test('ignores signed thread records at reserved sidecar names while keeping the actual reply', async () => {
+    const w = makeWorld('    human: true\n');
+    const markers = new Map<string, string>();
+    for (const suffix of ['wake', 'woken', 'reported', 'new']) {
+      const id = `reserved.${suffix}`;
+      plantRecord(w.home, w.root, 'acme', 'owner', id, `sidecar ${suffix} is not an answer`, {
+        from: 'lead',
+        at: new Date(NOW.getTime() - 1000).toISOString(),
+        thread: SENT_ID,
+        in_reply_to: SENT_ID,
+      });
+      const path = join(dropDir(w.root, 'owner'), id);
+      markers.set(path, readFileSync(path, 'utf8'));
+    }
+    plantRecord(w.home, w.root, 'acme', 'owner', REPLY_ID, 'the actual answer', {
+      from: 'lead',
+      at: NOW.toISOString(),
+      thread: SENT_ID,
+      in_reply_to: SENT_ID,
+    });
+    const host = makeHost(w);
+    const io = testIo(w.root, { kind: 'owner' });
+
+    expect(await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host)).toBe(0);
+    expect(io.err).toBe('');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: answered\nthe actual answer\n');
+    for (const [path, bytes] of markers) expect(readFileSync(path, 'utf8')).toBe(bytes);
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+    expect(host.frames).toEqual([]);
+    expect(host.dials()).toBe(0);
+  });
+
   test('is allowed, writes on the drop leg, types nothing, and returns answered when a reply record arrives on the thread', async () => {
     const w = makeWorld('    human: true\n    delivery_order: [native, mcp-inbox, typed]\n');
     plantRecord(w.home, w.root, 'acme', 'owner', REPLY_ID, 'human says go ahead', {
