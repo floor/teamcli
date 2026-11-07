@@ -924,7 +924,7 @@ export function doctorLoginFindings(team: TeamFile, sources: DoctorSources): Fin
       const argv = cli === 'codex' ? codexOwnServerArgv('unix://seat.sock') : [];
       for (const verdict of firstRunVerdicts(cli, seen, argv)) {
         findings.push({
-          level: verdict.state === 'skipped' ? 'ok' : 'miss',
+          level: verdict.state === 'skipped' ? 'ok' : 'note',
           text: plainLine(firstRunLine(cli, verdict)),
         });
       }

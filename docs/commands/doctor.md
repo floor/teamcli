@@ -16,7 +16,7 @@ them are done; the last line counts those.
 | --- | --- | --- |
 | `--session` | `<name>` | the herdr session to report on, instead of `team.session` |
 | `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record |
-| `--login` | — | the seats' CLIs' logins alone, one line per CLI, instead of the whole report; herdr, the session and the machine are not read |
+| `--login` | — | the seats' CLI logins, once per CLI, with first-run notes instead of the whole report; the terminal host, session and machine are not read |
 | `--jules` | — | the Jules CLI's own steps alone — installed, logged in with GitHub linked, and this project's repository connected to it — instead of the whole report; herdr, the session, the machine and the seats' CLIs are not read |
 | `--json` | — | the report as one JSON document on stdout |
 | `--help`, `-h` | — | the usage, and exit 0 |
@@ -128,12 +128,18 @@ what 0.5.0 must not pretend:
 exit 0
 ```
 
-`--login` reads the logins alone — one line per CLI the file's seats use, said once — and no herdr,
-session or machine:
+`--login` reads each CLI login once, without reading the terminal host, session or machine. When a
+CLI version is known, it also reports survey, telemetry, tips and feature-settings checks. A
+waiting first-run class is a `note`, and a documented skip is `ok`; neither changes the exit code.
+Only a reported absent login adds a `MISS` in this report:
 
 ```console
 $ team doctor --login ; echo "exit $?"
 ok    claude-code: logged in
+note  claude-code: waiting, first-run survey; this version documents no skip, and no key is sent
+note  claude-code: waiting, first-run telemetry; this version documents no skip, and no key is sent
+note  claude-code: waiting, first-run tips; this version documents no skip, and no key is sent
+note  claude-code: waiting, first-run feature-settings; this version documents no skip, and no key is sent
 team doctor: nothing missing, 0 warnings
 exit 0
 ```
