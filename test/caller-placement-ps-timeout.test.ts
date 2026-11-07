@@ -90,3 +90,33 @@ describe('placement-time process reads', () => {
     });
   });
 });
+
+
+test('a fresh table after a hole places the caller and keeps the first diagnostic', () => {
+  withPs(`if [ -f "$0.once" ]; then
+  printf '%s 1 herdr\\n' "$PPID"
+else
+  : > "$0.once"
+  printf '%s 999999 fixture\\n' "$PPID"
+fi`, undefined, () => {
+    const causes: string[] = [];
+    const placed = place(() => readAncestors(process.pid, readWithPs, cause => causes.push(cause)));
+    expect(placed).toEqual({ kind: 'seat', name: 'keeper', pane: PANE, session: 'home-session' });
+    expect(causes).toEqual(['missing pid 999999']);
+  });
+});
+
+test('two holed tables and two reader timeouts keep placement closed', () => {
+  withPs("printf '%s 999999 fixture\\n' \"$PPID\"", undefined, () => {
+    const causes: string[] = [];
+    const placed = place(() => readAncestors(process.pid, readWithPs, cause => causes.push(cause)));
+    expect(placed.kind).toBe('unplaced');
+    expect(causes).toEqual(['missing pid 999999', 'missing pid 999999']);
+  });
+  withPs('sleep 0.35', '60', () => {
+    const causes: string[] = [];
+    const placed = place(() => readAncestors(process.pid, readWithPs, cause => causes.push(cause)));
+    expect(placed.kind).toBe('unplaced');
+    expect(causes).toEqual(['snapshot unread (timeout)', 'snapshot unread (timeout)']);
+  });
+});

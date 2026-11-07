@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Caller placement retries one incomplete process walk, keeps refusing incomplete chains, and names the failure cause without logging command arguments or environment values.
+
 ## [0.5.17] - 2026-11-07
 
 Carries the v0.5.16 content. v0.5.16 was tagged but never published to npm.

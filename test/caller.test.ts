@@ -388,6 +388,35 @@ describe('reading the process table', () => {
     expect(readAncestors(210, (pid) => table[pid] ?? null)?.map((one) => one.name)).toEqual(['zsh', 'claude', 'herdr']);
   });
 
+  test('one fresh walk can repair a first snapshot hole and place the caller', () => {
+    let snapshots = 0;
+    const causes: string[] = [];
+    const read = (pid: number) => {
+      if (pid === 210) snapshots++;
+      return snapshots === 1 && pid === 200 ? null : table[pid] ?? null;
+    };
+    const ancestors = readAncestors(210, read, cause => causes.push(cause));
+    expect(ancestors).toEqual([{ pid: 210, name: 'zsh' }, { pid: 200, name: 'claude' }, { pid: 10, name: 'herdr' }]);
+    expect(snapshots).toBe(2);
+    expect(causes).toEqual(['missing pid 200']);
+    const placed = placeCaller({ ancestors: () => ancestors, agents: () => [{ name: 'keeper', agent: 'claude', pane: 'fixture-pane', workspace: 'fixture', status: 'idle', cwd: null }], paneRootPid: () => 210, env: { HERDR_PANE_ID: 'fixture-pane' }, stdinIsTTY: false }, 'fixture-session');
+    expect(placed).toEqual({ kind: 'seat', name: 'keeper', pane: 'fixture-pane', session: 'fixture-session' });
+  });
+
+  test('two holed walks refuse instead of trusting the parents below the missing pid', () => {
+    let snapshots = 0;
+    const causes: string[] = [];
+    const ancestors = readAncestors(210, (pid) => {
+      if (pid === 210) snapshots++;
+      return pid === 10 ? null : table[pid] ?? null;
+    }, cause => causes.push(cause));
+    expect(ancestors).toBeNull();
+    expect(snapshots).toBe(2);
+    expect(causes).toEqual(['missing pid 10', 'missing pid 10']);
+    const placed = placeCaller({ ancestors: () => ancestors, agents: () => [], paneRootPid: () => null, env: {}, stdinIsTTY: true });
+    expect(placed).toEqual({ kind: 'unplaced', reason: "its parent processes can't be read to the top" });
+  });
+
   test('a process that can\'t be read makes the walk incomplete, not shorter', () => {
     // Cut below the herdr server: a shorter list would look like a plain terminal.
     expect(readAncestors(210, (pid) => (pid === 10 ? null : table[pid] ?? null))).toBeNull();
@@ -861,4 +890,26 @@ seats:
     expect(thirdSendCode).toBe(1);
     expect(io.err).toMatch(/pane without an agent/);
   });
+});
+
+
+test('failed walks report only causes and pid numbers, including a failed retry', () => {
+  for (const code of ['ETIMEDOUT', 'EACCES']) {
+    const causes: string[] = [];
+    let reads = 0;
+    expect(readAncestors(210, () => { reads++; throw Object.assign(new Error('fixture args and env must never be logged'), { code }); }, cause => causes.push(cause))).toBeNull();
+    const cause = code === 'ETIMEDOUT' ? 'snapshot unread (timeout)' : 'snapshot unread (reader failed)';
+    expect(causes).toEqual([cause, cause]);
+    expect(reads).toBe(2);
+  }
+  const causes: string[] = [];
+  let reads = 0;
+  expect(readAncestors(210, () => { reads++; return { ppid: 210, name: 'loop' }; }, cause => causes.push(cause))).toBeNull();
+  expect(reads).toBe(128);
+  expect(causes).toEqual(['chain longer than 64', 'chain longer than 64']);
+  for (const pid of [0, 1]) {
+    const start: string[] = [];
+    expect(readAncestors(pid, () => { throw new Error('a start at the top reads no table'); }, cause => start.push(cause))).toEqual([]);
+    expect(start).toEqual([`start pid ${pid}`]);
+  }
 });
