@@ -519,9 +519,11 @@ function messageAfterHeaders(object: string): string | null {
 }
 
 /**
- * Builds the pre-push corpus: every added line of the diff against `base`, then every line of
+ * Builds the pre-push corpus: every added line of the committed diff `base..HEAD`, then every line of
  * every commit message on `base..HEAD`. Removed lines supply only one-to-one exact-byte move
- * candidates; they are never scanned as new text. A line that stays unchanged is not added.
+ * candidates; they are never scanned as new text. Only origin/main or a v* tag whose commit
+ * is an ancestor of refs/remotes/origin/main may supply the public base. A line that stays
+ * unchanged is not added.
  * No matched text is retained beyond the corpus itself, which lives in a scratch
  * folder owned by the caller.
  *
@@ -532,10 +534,38 @@ function messageAfterHeaders(object: string): string | null {
  * `--text` gives a binary-looking file the same hunks as a text one: a NUL byte must not keep the
  * lines it carries out of the corpus.
  */
-export function privateDiffCorpus(root: string, base: string): { corpus: PrivateCorpus } | { problem: string } {
+export function privateDiffCorpus(root: string, base: string): { corpus: PrivateCorpus; base: string } | { problem: string } {
+  // Resolve only the named public ref, never an ambiguous shorthand branch or an arbitrary
+  // commit expression. Pin the commit so the file and message scans use the same base.
+  let ref: string;
+  if (base === 'origin/main' || base === 'refs/remotes/origin/main') ref = 'refs/remotes/origin/main';
+  else if (base.startsWith('refs/tags/v') && base.length > 'refs/tags/v'.length) ref = base;
+  else if (base.startsWith('v') && base.length > 1) ref = `refs/tags/${base}`;
+  else return { problem: 'private diff base must be origin/main or an existing public release tag (v*)' };
+  const present = spawnSync('git', ['-C', root, 'show-ref', '--verify', '--quiet', ref], {
+    stdio: ['ignore', 'pipe', 'pipe'], timeout: syncChildTimeout(10_000),
+  });
+  if (present.error !== undefined || present.status !== 0) {
+    return { problem: 'cannot resolve private diff public base: origin/main or a public release tag (v*) is required' };
+  }
+  const resolved = spawnSync('git', ['-C', root, 'rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: syncChildTimeout(10_000),
+  });
+  if (resolved.error !== undefined || resolved.status !== 0) return { problem: 'cannot resolve private diff public base to a commit' };
+  const baseCommit = resolved.stdout.trim();
+  if (ref.startsWith('refs/tags/')) {
+    // A local tag name alone proves no public history. Require the tagged commit to be
+    // reachable from the fetched public main ref before trusting any removed line from it.
+    const publicHistory = spawnSync('git', ['-C', root, 'merge-base', '--is-ancestor', baseCommit, 'refs/remotes/origin/main'], {
+      stdio: ['ignore', 'pipe', 'pipe'], timeout: syncChildTimeout(10_000),
+    });
+    if (publicHistory.error !== undefined || publicHistory.status !== 0) {
+      return { problem: 'private diff tag base must be an ancestor of refs/remotes/origin/main; a local-only tag cannot supply removed move twins' };
+    }
+  }
   const diff = spawnSync(
     'git',
-    ['-C', root, 'diff', '--unified=0', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '--text', base, '--'],
+    ['-C', root, 'diff', '--unified=0', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '--text', `${baseCommit}..HEAD`, '--'],
     {
       stdio: ['ignore', 'pipe', 'pipe'],
       maxBuffer: 256 * 1024 * 1024,
@@ -634,7 +664,7 @@ export function privateDiffCorpus(root: string, base: string): { corpus: Private
     moves.push(line.index!);
   }
 
-  const commits = spawnSync('git', ['-C', root, 'log', '--format=%H', `${base}..HEAD`], {
+  const commits = spawnSync('git', ['-C', root, 'log', '--format=%H', `${baseCommit}..HEAD`], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     maxBuffer: 16 * 1024 * 1024,
@@ -658,7 +688,7 @@ export function privateDiffCorpus(root: string, base: string): { corpus: Private
       where.push(`commit:${sha}:${String(index + 1)}`);
     }
   }
-  return { corpus: { lines, where, moves } };
+  return { corpus: { lines, where, moves }, base: baseCommit };
 }
 
 /**

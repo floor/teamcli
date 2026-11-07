@@ -14,7 +14,9 @@
 //   bun scripts/check-private-diff.ts (--base <rev> | --release) [--root <dir>] [--file <policy file>]
 //                                     [--private-names <file>] [--private-phrases <file>]
 //
-// `--release` scans `origin/main..HEAD` (the range CI checks), while lane gates pass `--base <rev>`.
+// `--release` scans `origin/main..HEAD` (the range CI checks). `--base` accepts origin/main
+// or a v* tag whose commit is an ancestor of refs/remotes/origin/main. A dirty tree is refused;
+// only committed content is read.
 // Exit 0 clean (or both default lists absent, a visible skip), 1 hits, 2 cannot run.
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -201,6 +203,26 @@ if (import.meta.main) {
   const resolvedBase = release ? 'origin/main' : base;
   if (resolvedBase === undefined) exit('--base needs a value (or pass --release)');
 
+  const resolvedRoot = resolve(root);
+  const status = spawnSync('git', ['--no-optional-locks', '-C', resolvedRoot, 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none'], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024,
+  });
+  if (status.error !== undefined || status.status !== 0) exit('cannot check whether the working tree is clean');
+  if (status.stdout !== '') {
+    // NUL records keep spaces and line breaks in paths unambiguous. A rename has two path
+    // records; print both as escaped paths only, never file contents or the raw status record.
+    const records = status.stdout.split('\0');
+    for (let index = 0; index < records.length; index += 1) {
+      const record = records[index]!;
+      if (record === '') continue;
+      console.error(`private-diff:check: dirty ${JSON.stringify(record.slice(3))}`);
+      if (/[RC]/.test(record.slice(0, 2)) && records[index + 1] !== undefined) {
+        console.error(`private-diff:check: dirty ${JSON.stringify(records[++index])}`);
+      }
+    }
+    exit('working tree is dirty; commit or discard staged, unstaged and untracked changes before scanning base..HEAD');
+  }
+
   const defaultFile = existsSync(resolve(process.cwd(), '.github/policy.yaml'))
     ? '.github/policy.yaml'
     : fileURLToPath(new URL('../.github/policy.yaml', import.meta.url));
@@ -225,10 +247,9 @@ if (import.meta.main) {
     sources.push(read.source);
   }
 
-  const resolvedRoot = resolve(root);
   const built = privateDiffCorpus(resolvedRoot, resolvedBase);
   if ('problem' in built) exit(built.problem);
-  const commitsCheck = checkCommitMessages(resolvedRoot, resolvedBase, config);
+  const commitsCheck = checkCommitMessages(resolvedRoot, built.base, config);
   if ('problem' in commitsCheck) exit(commitsCheck.problem);
 
   let failed = false;
