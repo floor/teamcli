@@ -586,3 +586,25 @@ test('an inserted model field keeps punctuation in its value as text', () => {
   expect(read.ok, read.ok ? '' : JSON.stringify(read.errors)).toBe(true);
   if (read.ok) expect(read.team.seats[0]?.display).toBe('Test: Model 1');
 });
+
+
+test('rewriting a quoted label preserves only its outside comment', () => {
+  for (const quote of ['"', "'"]) {
+    const source = insertionSource + `  - role: builder
+    name: worker
+    label: ${quote}Note #tag${quote} # outside
+    cli: claude-code
+    vendor: test
+    model: Test
+    version: "1"
+    launch: claude
+`;
+    expect(validateTeamFile(source).ok).toBe(true);
+    const edited = copySeat(source, 'worker', 'copy');
+    expect(edited).toContain(`label: ${quote}copy${quote} # outside\n`);
+    expect(edited).not.toContain(`${quote}copy${quote} #tag`);
+    const read = validateTeamFile(edited);
+    expect(read.ok, read.ok ? '' : JSON.stringify(read.errors)).toBe(true);
+    if (read.ok) expect(read.team.seats.find(seat => seat.name === 'copy')?.label).toBe('copy');
+  }
+});

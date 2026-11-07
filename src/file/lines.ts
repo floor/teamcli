@@ -113,7 +113,7 @@ function setValue(line: string, value: string): string {
   const match = /^(\s*(?:-\s+)?[A-Za-z0-9_-]+:\s*)(.*)$/.exec(line);
   if (!match) return line;
   const rest = match[2] ?? '';
-  const comment = /\s+#.*$/.exec(rest)?.[0] ?? '';
+  const comment = rest.slice(stripComment(rest, 1).trimEnd().length);
   const raw = rest.slice(0, rest.length - comment.length).trim();
   // The value keeps the line's own quoting style, so the quote characters inside it have to be
   // escaped for that style: a shell word may carry `"$USER"` or a quoted argument, and writing
