@@ -521,8 +521,9 @@ function messageAfterHeaders(object: string): string | null {
 /**
  * Builds the pre-push corpus: every added line of the committed diff `base..HEAD`, then every line of
  * every commit message on `base..HEAD`. Removed lines supply only one-to-one exact-byte move
- * candidates; they are never scanned as new text. Only origin/main or an existing v* tag may
- * supply the public base. A line that stays unchanged is not added.
+ * candidates; they are never scanned as new text. Only origin/main or a v* tag whose commit
+ * is an ancestor of refs/remotes/origin/main may supply the public base. A line that stays
+ * unchanged is not added.
  * No matched text is retained beyond the corpus itself, which lives in a scratch
  * folder owned by the caller.
  *
@@ -552,6 +553,16 @@ export function privateDiffCorpus(root: string, base: string): { corpus: Private
   });
   if (resolved.error !== undefined || resolved.status !== 0) return { problem: 'cannot resolve private diff public base to a commit' };
   const baseCommit = resolved.stdout.trim();
+  if (ref.startsWith('refs/tags/')) {
+    // A local tag name alone proves no public history. Require the tagged commit to be
+    // reachable from the fetched public main ref before trusting any removed line from it.
+    const publicHistory = spawnSync('git', ['-C', root, 'merge-base', '--is-ancestor', baseCommit, 'refs/remotes/origin/main'], {
+      stdio: ['ignore', 'pipe', 'pipe'], timeout: syncChildTimeout(10_000),
+    });
+    if (publicHistory.error !== undefined || publicHistory.status !== 0) {
+      return { problem: 'private diff tag base must be an ancestor of refs/remotes/origin/main; a local-only tag cannot supply removed move twins' };
+    }
+  }
   const diff = spawnSync(
     'git',
     ['-C', root, 'diff', '--unified=0', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '--text', `${baseCommit}..HEAD`, '--'],

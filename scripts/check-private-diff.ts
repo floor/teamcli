@@ -15,7 +15,8 @@
 //                                     [--private-names <file>] [--private-phrases <file>]
 //
 // `--release` scans `origin/main..HEAD` (the range CI checks). `--base` accepts origin/main
-// or an existing public release tag (v*). A dirty tree is refused; only committed content is read.
+// or a v* tag whose commit is an ancestor of refs/remotes/origin/main. A dirty tree is refused;
+// only committed content is read.
 // Exit 0 clean (or both default lists absent, a visible skip), 1 hits, 2 cannot run.
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';

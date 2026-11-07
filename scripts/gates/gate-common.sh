@@ -447,7 +447,8 @@ gate_exit_ids_env() {
 # strict POSIX ERE subset, the scope headers, the non-comment prepush-only marker and the
 # cross-source dedupe all live in the repository's shared modules, not here. This wrapper calls
 # `scripts/check-private-diff.ts`, which refuses dirty trees and requires GATE_BASE to be
-# origin/main or a public release tag (v*). It reads every added line of GATE_BASE..HEAD
+# origin/main or a v* tag whose commit is an ancestor of refs/remotes/origin/main.
+# It reads every added line of GATE_BASE..HEAD
 # and every line of every commit message on GATE_BASE..HEAD through `git grep -E` with the
 # pattern list on standard input. Byte-identical removed twins are consumed one-to-one;
 # the shared check prints the move count and locations. Commit messages are never moves.

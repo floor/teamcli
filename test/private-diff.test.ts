@@ -64,6 +64,7 @@ function repo(files: Record<string, string>, message: string): { dir: string; sh
   const sha = git(dir, ['rev-parse', 'HEAD']).trim();
   const ref = 'v0.0.0-fixture';
   git(dir, ['tag', ref, sha]);
+  git(dir, ['update-ref', 'refs/remotes/origin/main', sha]);
   return { dir, sha, ref };
 }
 
@@ -147,6 +148,7 @@ describe('byte-identical moves in the diff check', () => {
     writeFileSync(join(base.dir, 'old.txt'), before);
     const sha = commit(base.dir, 'store synthetic base');
     git(base.dir, ['update-ref', `refs/tags/${base.ref}`, sha]);
+    git(base.dir, ['update-ref', 'refs/remotes/origin/main', sha]);
     git(base.dir, ['rm', '--quiet', '--', 'old.txt']);
     writeFileSync(join(base.dir, 'new.txt'), after);
     return { ...base, sha };
@@ -335,6 +337,35 @@ describe('committed ranges and public bases', () => {
     }
   }, 30_000);
 
+  test('a tag on a local-only commit cannot authorize a removed twin', () => {
+    const base = repo({ 'old.txt': 'clean\n' }, 'base');
+    write(base.dir, { 'old.txt': `${SECRET}\n` });
+    commit(base.dir, 'store synthetic line locally');
+    git(base.dir, ['tag', 'v0.9.9-local']);
+    git(base.dir, ['rm', '--quiet', '--', 'old.txt']);
+    write(base.dir, { 'new.txt': `${SECRET}\n` });
+    commit(base.dir, 'move synthetic line');
+    const names = listFile(`${SECRET}\n`);
+    const local = run(base.dir, ['--base', 'v0.9.9-local', '--private-names', names]);
+    expect(local.status).toBe(2);
+    expect(local.stderr).toContain('tag base must be an ancestor of refs/remotes/origin/main');
+    expect(local.stdout).not.toContain('treated 1 line(s) as moves');
+    expect(local.stdout + local.stderr).not.toContain(SECRET);
+    for (const ref of ['origin/main', base.ref]) {
+      const publicRange = run(base.dir, ['--base', ref, '--private-names', names]);
+      expect(publicRange.status).toBe(1);
+      expect(publicRange.stderr).toContain('new.txt:1');
+    }
+  }, 30_000);
+
+  test('a tag without origin/main cannot establish a public base', () => {
+    const base = repo({ 'keep.txt': 'clean\n' }, 'base');
+    git(base.dir, ['update-ref', '-d', 'refs/remotes/origin/main']);
+    const result = run(base.dir, ['--base', base.ref]);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('tag base must be an ancestor of refs/remotes/origin/main');
+  });
+
   test('public refs resolve explicitly even when a same-named branch points elsewhere', () => {
     const base = repo({ 'keep.txt': 'clean\n' }, 'base');
     git(base.dir, ['update-ref', 'refs/remotes/origin/main', base.sha]);
@@ -393,6 +424,7 @@ describe('the diff check command', () => {
     ]) {
       const head = commit(base.dir, `test: a neutral subject\n\nThe reviewer-requested proof was checked by ${token}'s scene.`);
       git(base.dir, ['update-ref', `refs/tags/${base.ref}`, before]);
+      git(base.dir, ['update-ref', 'refs/remotes/origin/main', before]);
       const result = run(base.dir, ['--base', base.ref]);
       expect(result.status).toBe(1);
       expect(result.stderr).toContain(`commit:${head}:3`);

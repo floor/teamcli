@@ -172,7 +172,10 @@ fi
 # Private name and phrase scan: a hit warns here (push-gate refuses the push), and a list that
 # is present but unusable also warns. The matched text is never printed, only the location and
 # the source, class and ordinal.
-private_out=$(gate_private_scan); private_rc=$?
+# Test selection may start at an integration merge-base, but removed private-line twins must
+# come from public history. Scan the complete public range, including earlier integration work.
+print "light-check: private scan vs origin/main..HEAD (test selection vs $GATE_BASE)"
+private_out=$(GATE_BASE=origin/main gate_private_scan); private_rc=$?
 if (( private_rc == 1 )); then
   print "light-check: warning: private name or phrase hit(s) — push-gate will refuse this branch:"
   print -r -- "$private_out"

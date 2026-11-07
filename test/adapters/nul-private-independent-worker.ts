@@ -41,6 +41,7 @@ if (samples[scene] !== undefined) {
   const parent = git(['rev-parse', 'HEAD']).toString().trim();
   const publicBase = 'v0.0.0-fixture';
   git(['tag', publicBase, parent]);
+  git(['update-ref', 'refs/remotes/origin/main', parent]);
   if (scene === 'range') writeFileSync(join(repo, 'notes.txt'), `safe\n${needle}\npadding\0tail\n`);
   if (scene === 'range-split') writeFileSync(join(repo, 'notes.txt'), `safe\n${split}\n`);
   git(['add', 'notes.txt']);
