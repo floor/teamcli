@@ -66,7 +66,7 @@ import { seatProcessVerdict } from '../launch/identity.ts';
 import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
-import { ownStartFolderProblem, placedStartFolders } from '../worktree/place.ts';
+import { ownStartFolderProblem, placedStartFolders, seatCwdRefusal } from '../worktree/place.ts';
 import { listUnread } from '../mcp/inbox.ts';
 import {
   collapseNotes,
@@ -706,6 +706,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...labelDifferences(team, state, live, paneDisplays, repairedDisplayPanes),
     ...sidebarChecked.differences,
     ...startFolderDifferences(team, state, root, sources.home ?? homedir(), session),
+    ...seatCwdDifferences(team, state, root),
     ...featureDifferences(team, state),
     ...unmanagedCodexServerDifferences(team, state, live, dir, session, continuityIds, sources),
     ...rosterDifferences(team, state, live, root, sources.home),
@@ -2865,6 +2866,21 @@ function viewOf(attention: Attention, name: string, _status: string): Difference
     default:
       return null;
   }
+}
+
+/** A seat whose cwd is outside the project and no trust path, and is not the worktree recorded
+ *  for that seat. The file still loads; this names the seat and leaves the others to be read. */
+function seatCwdDifferences(team: TeamFile, state: SessionState, root: string): Difference[] {
+  const out: Difference[] = [];
+  for (const seat of team.seats) {
+    const why = seatCwdRefusal(seat, state.worktrees, root);
+    if (why === null) continue;
+    out.push({
+      what: why,
+      repair: `set ${seat.name}'s cwd to the worktree recorded for it, or to a folder inside the project`,
+    });
+  }
+  return out;
 }
 
 /** The same own-folder rule used by launches, read without changing a running seat. */

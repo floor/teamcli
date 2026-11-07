@@ -48,7 +48,7 @@ export const seats: Section = {
     const trust = valueOf<string[]>(ctx, 'trust');
     const accounts = valueOf<Budgeted>(ctx, 'budgets').declared;
     const marks: LeadMark[] = [];
-    const seats = readSeats(entry, ctx.check, trust, ctx.root.line, ctx.broken, accounts, marks);
+    const seats = readSeats(entry, ctx.check, trust, ctx.root.line, ctx.broken, accounts, marks, ctx.rootDir);
     ctx.leads = marks;
     return seats;
   },
@@ -168,7 +168,7 @@ export const seats: Section = {
 // that names an `account:` must name one of these, or it would silently spend nothing budgeted.
 function readSeats(
   entry: YamlEntry | undefined, check: Check, trust: string[], topLine: number, broken: Set<string>, accounts: ReadonlySet<string>,
-  marks: LeadMark[],
+  marks: LeadMark[], root?: string,
 ): DraftSeat[] {
   if (!entry) {
     check.fail(topLine, 'seats is required: at least the orchestrator\'s and the operator\'s seat');
@@ -238,7 +238,8 @@ function readSeats(
     if (display && version && fields.get('display') && !hasVersionToken(display, version)) {
       check.fail(fields.get('display')?.line ?? line, `${at}: display must contain the version "${version}" as a token of its own`);
     }
-    const cwd = readCwd(fields.get('cwd'), at, trust, check);
+    const place = readCwd(fields.get('cwd'), at, trust, check, root);
+    const cwd = place.cwd;
     const mode = check.oneOf(fields.get('mode'), `${at}: mode`, MODES);
     const parked = check.flag(fields.get('parked'), `${at}: parked`);
     const stopped = check.flag(fields.get('stopped'), `${at}: stopped`);
@@ -367,6 +368,8 @@ function readSeats(
         ...(webhook ? { webhook } : {}),
         ...(modelFrom ? { modelFrom } : {}),
         ...(mode ? { mode } : {}),
+        // Omitted when the cwd is inside the project or a trust path, so the digest is unchanged.
+        ...(place.outside ? { cwdOutside: true as const } : {}),
         ...(reach ? { reach } : {}),
       });
     }
@@ -569,22 +572,22 @@ function readVersion(entry: YamlEntry | undefined, at: string, line: number, che
   return undefined;
 }
 
-function readCwd(entry: YamlEntry | undefined, at: string, trust: string[], check: Check): string {
+function readCwd(entry: YamlEntry | undefined, at: string, trust: string[], check: Check, root?: string): { cwd: string; outside: boolean } {
   const cwd = check.text(entry, `${at}: cwd`);
-  if (cwd === undefined || !entry) return '.';
+  if (cwd === undefined || !entry) return { cwd: '.', outside: false };
   if (/[\x00-\x1f\x7f`]/.test(cwd)) {
     check.fail(entry.value.line, `${at}: cwd must not contain control characters or backticks`);
-    return '.';
+    return { cwd: '.', outside: false };
   }
   if (cwd.startsWith('/') || cwd.startsWith('~') || /^[A-Za-z]:[\\/]/.test(cwd)) {
     check.fail(entry.value.line, `${at}: cwd must be relative to the project, never absolute and never "~"`);
-    return '.';
+    return { cwd: '.', outside: false };
   }
   const path = normalize(cwd);
-  if (!insideProject(path) && !insideTrust(path, trust)) {
-    check.fail(entry.value.line, `${at}: cwd "${cwd}" is outside the project and matches no trust path`);
-  }
-  return path;
+  // An outside path no longer fails the file. The seat keeps it, marked, and up, add and check
+  // refuse that seat unless the path is the worktree recorded for it. Trust is matched from the
+  // team's own root, so a reader standing in another team's folder still sees this team's paths.
+  return { cwd: path, outside: !insideProject(path) && !insideTrust(path, trust, root) };
 }
 
 function reportCollisions(seats: DraftSeat[], field: 'name', check: Check): void {

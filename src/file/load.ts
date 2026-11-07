@@ -449,7 +449,11 @@ export function placedProblems(
         if ('error' in landed) return false;
         return seatLanding === landed.landing || seatLanding.startsWith(landed.landing.endsWith(sep) ? landed.landing : landed.landing + sep);
       });
-      if (!trusted) {
+      // A relative cwd outside the project and outside every trust path is kept
+      // (`cwdOutside`) and judged per seat. A worktree recorded for that seat is
+      // accepted there; anything else refuses only that seat at up, add, and check.
+      // Failing the file here rejected the recorded worktree and every other seat.
+      if (!trusted && seat.cwdOutside !== true) {
         problems.push({ line: seat.line, message: `seat ${seat.name}: cwd "${seat.cwd}" is outside trust` });
       }
     }
