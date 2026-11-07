@@ -616,7 +616,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     for (const line of closing.lines) logLine(dir, 'check', callerLabel(walked), line, sources.now());
     if (closing.closed > 0) orphans = orphansOf();
   }
-  const policyChecked = policyCheck(team, root, sources.home, sources.now(), io.env, dir, callerLabel(walked), state);
+  const policyChecked = policyCheck(team, root, sources.home, sources.now(), io.env, dir, callerLabel(walked), state, session);
   const modelRule = modelRuleCheck(team, root, sources.home);
   // The same live grant `status` reads, so the two readings offer `team answer` together or not
   // at all: the setting is one record, never a file key and never a stale approval. The pace is
@@ -3016,6 +3016,7 @@ function policyCheck(
   stateDir: string,
   caller: string,
   state: SessionState,
+  session: string,
 ): { differences: Difference[]; notes: string[] } {
   if (home === undefined) {
     const notes =
@@ -3115,7 +3116,18 @@ function policyCheck(
 
   if (teamChain.ok) {
     const commandDeny = parseGrokCommandDeny(teamChain.policies['grok-command-deny']?.value) ?? 'off';
-    notes.push(...grokCommandDenyNotes(commandDeny, team.seats, state.seats));
+    const peers = placedStartFolders(team.seats, state);
+    const lobby = lobbyOf(home, root, { ...team, session });
+    // Launches keep a verified bound model. The editable state's model hint alone is no proof.
+    const denySeats = commandDeny === 'off' ? team.seats : team.seats.map(seat => {
+      const held = state.seats[seat.name];
+      if (seat.cli !== 'cursor' || seat.human || seat.stopped || held === undefined) return seat;
+      const bound = recordedSeatContinuity({ home, root, herdrSession: session, seat, state: held });
+      return bound.kind === 'bound' && bound.recorded.launch && bound.recorded.model && bound.recorded.version
+        ? { ...seat, model: bound.recorded.model } : seat;
+    });
+    notes.push(...grokCommandDenyNotes(commandDeny, denySeats, state.seats, undefined,
+      (seat, cwd) => ownStartFolderProblem({ cli: seat.cli, seat: seat.name, cwd, root, home, lobby, peers })));
   }
 
   // The router's three words are re-read by their own reader: their rules span words (a team may

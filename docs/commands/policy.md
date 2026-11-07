@@ -40,17 +40,20 @@ that counts), and an `api` call that adds
 allowed, including a path that ends in `/graphql`. A graphql query that contains `mutation` is refused.
 
 `grok-command-deny` is a team-only word: `off` (the default), `git`, or `git-and-tests`.
-It requests command-deny settings for native Grok seats and Cursor seats whose declared model
-is Grok. The tests word adds the `bun test` command and its argument forms. Other models keep
+It requests command-deny settings for native Grok seats and Cursor seats launching Grok, from
+the declaration or a verified bound registry recipe. The tests word adds the `bun test` command
+and its argument forms. Other models keep
 their settings. An expired declaration is unset. The owner can declare it with:
 
     team policy set team grok-command-deny git --file .agents/team.yaml
     team policy set team grok-command-deny git-and-tests --file .agents/team.yaml
     team policy unset team grok-command-deny --file .agents/team.yaml
 
-This stage generates adapter settings and makes `team check` name missing rules. It does not
-install either output yet: per-seat file placement and launch integration wait for the seat's
-own-folder placement. See [Grok command deny settings](../team-file.md#grok-command-deny-settings).
+Every launch and restart merges and verifies Cursor's file in the seat's own guarded start
+folder, or places native Grok's deny arguments on its launch. A placement or verification failure
+leaves the seat out. `team check` names missing rules. A Cursor seat can loosen its writable
+file until the next launch regenerates it; changing that file cannot remove native Grok's argv
+rules. See [Grok command deny settings](../team-file.md#grok-command-deny-settings).
 
 `client-grant-max-duration` is how long a new client grant may last: `7d`, `30d`, `90d` or `none` (no
 end date) for every kind of grant, or per kind, `send=30d;up=90d;bundle=none`. Unset it is

@@ -553,6 +553,7 @@
     "test/grant.test.ts": 1,
     "test/green-slices.test.ts": 3,
     "test/grok-command-deny-check.test.ts": 4,
+    "test/grok-command-deny-placement.test.ts": 3,
     "test/grok-command-deny.test.ts": 3,
     "test/grok-sandbox-independent.test.ts": 1,
     "test/grok-sandbox-replace-independent.test.ts": 4,

@@ -979,21 +979,35 @@ The signed team policy `grok-command-deny` accepts `off`, `git`, and `git-and-te
 unless declared at team scope. `team policy set team` writes the signed declaration under
 `policies:`. Entity, project, and seat declarations are refused.
 
-For Cursor seats whose declared model is Grok, the generator adds `Shell(git)` to
-`permissions.deny` in the supplied `.cursor/cli.json` object. `git-and-tests` also adds
+For Cursor seats launching Grok, each launch and restart adds `Shell(git)` to
+`permissions.deny` in `.cursor/cli.json` in the seat's own guarded start folder. `git-and-tests` also adds
 `Shell(bun test)`. Existing allow rules, deny rules, and unrelated settings stay in place;
 generation refuses malformed settings, and repeating it adds no duplicate. Turning the policy
-off contributes no rule and removes none of the rules already in a config.
+off contributes no rule and strips no existing deny settings or launch arguments.
 
-For native Grok, the generator returns repeatable launch arguments: `--deny 'Bash(git)'` and
+For native Grok, the launch receives repeatable arguments: `--deny 'Bash(git)'` and
 `--deny 'Bash(git *)'`, plus `--deny 'Bash(bun test)'` and `--deny 'Bash(bun test *)'` for
-`git-and-tests`. These are adapter inputs tested with synthetic settings. The vendor formats
+`git-and-tests`. Arguments are placed before a prompt delimiter and retained on the recorded
+recipe. An unsupported or unreadable native launch is refused rather than guessing where an
+option value ends. These adapter inputs are tested with synthetic settings. The vendor formats
 are described in [Cursor permissions](https://docs.cursor.com/cli/reference/permissions) and
 [Grok permissions](https://docs.x.ai/build/features/permissions).
 
-This stage does not write a CLI file or attach the generated launch arguments. The placement
-adapter must supply the seat's own folder before installation is wired. `team check` reads
-Cursor's file only in a recorded launch folder and checks native Grok's recorded launch
-arguments. It names the seat and missing rules, or the absence of a recorded folder; it never
-guesses a shared folder or repairs a config. Missing, malformed, linked, or oversized Cursor
-files report a gap. Other models and human or stopped seats are left alone.
+Cursor placement requires the same own-folder proof as the launch. It merges through held
+directories, refuses links and malformed or oversized files, publishes the whole file, then
+verifies it before starting the command. A failure leaves the seat out. The relative-file
+adapter must be available: Bun supplies it; Node needs its FFI capability enabled (for example,
+`node --experimental-ffi dist/cli.js up`). The published CLI runs on Node: on a normal install,
+turning this policy on prevents affected Cursor seats from launching because guarded placement
+is unavailable. The default `off` writes nothing. Native Grok's argv placement needs no file
+adapter.
+
+The Cursor file remains writable by the seat. It can remove a deny mid-session and loosen its
+settings until its next launch or restart regenerates and verifies the file. Native Grok's
+required denies are launch arguments; editing a project config cannot remove those arguments.
+
+`team check` reads Cursor's file only in its recorded, guarded launch folder and checks native
+Grok's recorded launch arguments. Like launch, it uses a verified registry binding's model when
+one governs the seat, and the declared model otherwise. It names the seat and missing rules, or the absence of a safe
+recorded folder; it repairs no config. Missing, malformed, linked, or oversized Cursor files
+report a gap. Other models and human or stopped seats are left alone.

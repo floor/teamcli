@@ -1,6 +1,6 @@
 // Generated settings and recorded launch words only. No agent CLI is started.
 import { afterEach, expect, test } from 'bun:test';
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { buildSchema } from '../scripts/schema.ts';
 import { grokCommandDenyNotes } from '../src/launch/grok-command-deny.ts';
@@ -131,5 +131,9 @@ test('the config reader stays read-only and refuses missing, malformed or linked
   const linkedFolder = join(base, 'linked-folder'); mkdirSync(linkedFolder);
   symlinkSync(cursor, join(linkedFolder, '.cursor'));
   expect(grokCommandDenyNotes('git', [CURSOR], { worker: { start_cwd: linkedFolder } }).join('\n')).toContain('worker');
+  expect(readFileSync(target, 'utf8')).toBe(bytes);
+  const hard = join(base, 'hard-linked'); mkdirSync(join(hard, '.cursor'), { recursive: true });
+  linkSync(target, join(hard, '.cursor', 'cli.json'));
+  expect(grokCommandDenyNotes('git', [CURSOR], { worker: { start_cwd: hard } }).join('\n')).toContain('worker');
   expect(readFileSync(target, 'utf8')).toBe(bytes);
 });

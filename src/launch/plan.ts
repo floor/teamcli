@@ -17,6 +17,8 @@ import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
 import { shellScriptWordOf } from './cli-scope.ts';
 import { grokSandboxOf, grokStartFolderProblem, type GrokSandbox } from './grok-sandbox.ts';
+import { grokCommandDenyLine, grokCommandDenyPolicy } from './grok-command-deny.ts';
+import type { GrokCommandDeny } from '../settings/grok-command-deny.ts';
 import { launchedCliBinary } from './line.ts';
 import type { WaitingRecord } from '../state.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -114,6 +116,8 @@ export type Op =
        * refuses the seat; the line is not launched without the profile.
        */
       grokSandbox?: GrokSandbox;
+      /** Verified team policy, regenerated and checked before each Cursor/Grok launch. */
+      cursorCommandDeny?: Exclude<GrokCommandDeny, 'off'>;
       /**
        * The command is the declarative launcher's argv and is run as given. The launch does
        * not mint a session, attach an endpoint, or rewrite a sandbox flag onto it.
@@ -1245,6 +1249,17 @@ export function upPlan(input: UpInput): Step[] {
     // The same condition as the launch step below. A seat already running keeps
     // its idle wait, rename and rules, and hears the reading as a notice.
     const wouldLaunch = launchWillRun(seat);
+    const grokModel = seat.model ?? input.team?.seats.find(one => one.name === seat.name)?.model ?? '';
+    const denySeat = profile.cli === 'grok' || (profile.cli === 'cursor' && /^grok(?:\b|[-_])/i.test(grokModel));
+    const denyPolicy = wouldLaunch && denySeat && input.home !== undefined && input.team !== undefined
+      ? grokCommandDenyPolicy(input.home, input.root, input.team)
+      : { ok: true as const, value: 'off' as const };
+    if (!denyPolicy.ok) {
+      steps.push({ kind: 'skip', text: `${seat.name}: would refuse: ${denyPolicy.why}`,
+        do: { do: 'refuse', seat: seat.name, why: denyPolicy.why } });
+      continue;
+    }
+    const commandDeny = denyPolicy.value;
     const inPlace = reuse !== undefined || ownLine !== undefined || (!fresh && seat.pane !== undefined);
     if (inPlace && (profile.cli === 'grok' || profile.cli === 'cursor') && seat.cwd === '.' && seat.worktree !== undefined) {
       cwd = resolve(input.root, seat.worktree);
@@ -1416,6 +1431,18 @@ export function upPlan(input: UpInput): Step[] {
       baseLine = decided.command;
       fromResolver = true;
     }
+    let denyRecordLine: string | undefined;
+    if (profile.cli === 'grok' && commandDeny !== 'off') {
+      const actual = grokCommandDenyLine(commandDeny, baseLine);
+      const recorded = fromResolver ? actual : grokCommandDenyLine(commandDeny, pinnedRecordLine(profile.cli, seat.launch, profile.features));
+      if (!actual.ok || !recorded.ok) {
+        const why = !actual.ok ? actual.why : !recorded.ok ? recorded.why : 'native deny placement failed';
+        steps.push({ kind: 'skip', text: `${seat.name}: would refuse: ${why}`, do: { do: 'refuse', seat: seat.name, why } });
+        continue;
+      }
+      baseLine = actual.line;
+      if (!fromResolver) denyRecordLine = recorded.line;
+    }
     const launcher = launchCommandOrRefusal(profile, baseLine, seat.rules, input.cliHooks?.[seat.name], {
       seat: seat.name,
       session,
@@ -1537,7 +1564,7 @@ export function upPlan(input: UpInput): Step[] {
     // launch records the line the plan built, so check and restart compare that command.
     // Every other launch keeps the base recipe, with the profile's pins placed where the
     // launch puts them, never the expanded command.
-    const recordLine = fromResolver ? command : pinnedRecordLine(profile.cli, seat.launch, profile.features);
+    const recordLine = fromResolver ? command : denyRecordLine ?? pinnedRecordLine(profile.cli, seat.launch, profile.features);
     // A managed Codex seat's endpoint, decided from the same signed policy that shaped the line:
     // the launch must be the Codex binary itself (a wrapper's own endpoint is not ours to bind),
     // and a `--remote` or `--no-daemon` the file already names is a collision, refused rather
@@ -1583,7 +1610,7 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
         note: launchNote,
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: reuse?.pane ?? seat.pane, ...(reuse === undefined ? {} : { reuse: reuse.launched, workspace: reuse.workspace }), ...(reuse === undefined && seat.workspace !== undefined ? { workspace: seat.workspace } : {}), cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, recordLine, ...(channel === undefined ? {} : { channel }), ...(fromResolver ? { resolved: true as const } : {}), ...(fromResolver || !(managedCodex && input.stateDir !== undefined) ? {} : { codexEndpoint: { dir: input.stateDir } }), ...(fromResolver || plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }), ...(ownStartFolder === undefined ? {} : { ownStartFolder }) },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: reuse?.pane ?? seat.pane, ...(reuse === undefined ? {} : { reuse: reuse.launched, workspace: reuse.workspace }), ...(reuse === undefined && seat.workspace !== undefined ? { workspace: seat.workspace } : {}), cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, recordLine, ...(channel === undefined ? {} : { channel }), ...(fromResolver ? { resolved: true as const } : {}), ...(fromResolver || !(managedCodex && input.stateDir !== undefined) ? {} : { codexEndpoint: { dir: input.stateDir } }), ...(fromResolver || plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }), ...(ownStartFolder === undefined ? {} : { ownStartFolder }), ...(profile.cli === 'cursor' && commandDeny !== 'off' ? { cursorCommandDeny: commandDeny } : {}) },
       });
     }
     const rules = profile.rulesMode;

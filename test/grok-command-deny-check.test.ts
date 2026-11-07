@@ -10,6 +10,7 @@ import { setHerdrRun } from '../src/herdr.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { writePolicySet } from '../src/policy/index.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
+import { registerAgent } from '../src/registry/agents.ts';
 import { cursorCommandDenyConfig, type GrokCommandDeny } from '../src/settings/grok-command-deny.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
@@ -31,7 +32,7 @@ afterEach(() => {
   discardFixtures(held, { roots: held.map((base) => dirname(base)) });
 });
 
-function world(mode: GrokCommandDeny) {
+function world(mode: GrokCommandDeny, model = 'Grok') {
   const base = fixtureBase('grok-command-check-'); made.push(base);
   const home = join(base, 'home'); const root = join(base, 'project'); const folder = join(base, 'worker');
   mkdirSync(home); mkdirSync(join(root, '.agents'), { recursive: true }); mkdirSync(folder);
@@ -61,7 +62,7 @@ seats:
     name: worker
     cli: cursor
     vendor: test
-    model: Grok
+    model: ${model}
     version: "4.7"
     launch: cursor-agent
 `;
@@ -101,6 +102,31 @@ test('team check names the Grok seat with missing rules and clears that note whe
   expect(check(w)).not.toContain('worker: grok-command-deny');
   expect(readFileSync(file, 'utf8')).toBe(bytes);
 });
+
+test('team check refuses to treat a shared recorded folder as the seat deny file', () => {
+  const w = world('git');
+  mkdirSync(join(w.root, '.cursor'));
+  writeFileSync(join(w.root, '.cursor', 'cli.json'), JSON.stringify(cursorCommandDenyConfig('git')));
+  updateState(join(w.root, '.agents'), (state) => {
+    state.sessions.morning!.seats.worker!.start_cwd = w.root;
+  });
+  expect(check(w)).toContain('worker: grok-command-deny git: its recorded launch folder cannot be checked');
+});
+
+for (const [declared, bound, needsRules] of [['Example', 'Grok', true], ['Grok', 'Example', false]] as const) {
+  test(`team check follows the verified launch binding from ${declared} to ${bound}`, () => {
+    const w = world('git', declared);
+    const handle = 'seat_0123456789ab', conversation = '12345678-1234-4234-8234-123456789abc';
+    registerAgent(w.home, { name: 'worker', signing: { role: 'implementer', model: bound, version: '4.7' },
+      lab: 'fixture', cli: 'cursor', launcher: null, launch: `cursor-agent --model ${bound}`,
+      reach: { team: teamIdOf(w.root), seat: 'worker', session: 'morning', pane: 'fixture-worker', address: null, agent_session: conversation },
+      seat_handle: handle, mcp: [], skills: [], lifecycle: 'running', by: 'scene' });
+    updateState(join(w.root, '.agents'), (state) => {
+      Object.assign(state.sessions.morning!.seats.worker!, { id: handle, agent_session: conversation });
+    });
+    expect(check(w).includes('worker: grok-command-deny git:')).toBe(needsRules);
+  });
+}
 
 test('off adds no config note, and a tampered signed word is refused rather than trusted', () => {
   const off = world('off');
