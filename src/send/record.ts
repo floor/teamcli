@@ -326,6 +326,13 @@ function nonEmpty(value: unknown): value is string {
 /** A file name's own bound: one directory entry, not a path. */
 const RECORD_NAME_MAX = 255;
 
+const RECORD_SIDECAR_SUFFIXES = ['.pending', '.taken', '.read', '.wake', '.woken', '.reported', '.json', '.new'];
+
+/** Watcher, receipt and private publication sidecars are never message candidates. */
+export function isRecordSidecarName(name: string): boolean {
+  return RECORD_SIDECAR_SUFFIXES.some((suffix) => name.endsWith(suffix));
+}
+
 /** An id that can name one file in a folder: no separator, no traversal, no control character,
  *  and no name longer than one directory entry. */
 export function recordNameOk(id: string): boolean {

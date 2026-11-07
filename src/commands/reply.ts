@@ -67,6 +67,7 @@ import {
   readRecord,
   recordAuthOfSealed,
   recordNameOk,
+  isRecordSidecarName,
   sealedOfRecord,
   signClose,
   signReceiptPayload,
@@ -178,11 +179,6 @@ export function landsWhereRead(home: string, folder: string, id: string, root: s
   return verifyRecord(read.record, key);
 }
 
-/** The marker names a send leaves beside a record; none of them is a message record. */
-function isMarkerName(name: string): boolean {
-  return name.endsWith('.pending') || name.endsWith('.taken') || name.endsWith('.read') || name.endsWith('.json');
-}
-
 /**
  * Every file in the session's transport tree that could be a record, in folder and name order:
  * `<root>/.agents/send-drops/<session>/<seat>/<id>`. The sidecars — a receipt's `<id>.<status>.json`
@@ -215,7 +211,7 @@ function candidatesOf(root: string, session: string, seats?: readonly string[]):
       continue;
     }
     for (const name of entries) {
-      if (!NAME.test(name) || isMarkerName(name) || name.startsWith('work-')) continue;
+      if (!NAME.test(name) || isRecordSidecarName(name) || name.startsWith('work-')) continue;
       const path = join(seatDir, name);
       if (isFile(path)) out.push({ seat, path });
     }
@@ -255,7 +251,7 @@ function seatNamesOf(root: string, session: string): string[] {
  *  `stat` per seat folder — the session's folder lists its seats, not its records — so an id
  *  costs a couple of dozen file tests whatever the tree holds, never a walk of it. */
 export function recordHits(root: string, session: string, id: string): { seat: string; path: string }[] {
-  if (!NAME.test(id) || isMarkerName(id) || id.startsWith('work-')) return [];
+  if (!NAME.test(id) || isRecordSidecarName(id) || id.startsWith('work-')) return [];
   const hits: { seat: string; path: string }[] = [];
   for (const seat of seatNamesOf(root, session)) {
     const path = join(root, '.agents', 'send-drops', session, seat, id);

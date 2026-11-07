@@ -683,3 +683,25 @@ describe('the invocation', () => {
     expect(doc.error.message).toContain(`no record named ${SENT}`);
   });
 });
+
+
+for (const suffix of ['reported', 'wake', 'woken', 'json', 'new']) {
+  test(`a short id ignores its ${suffix} sidecar`, async () => {
+    sentTo('owner', SENT, { from: 'worker' });
+    const marker = join(recordDir(root, 'acme', 'owner'), `${SENT}.${suffix}`);
+    const bytes = JSON.stringify({ id: SENT, state: 'reported', unsigned: true });
+    writeFileSync(marker, bytes);
+    const result = await run([SENT.slice(0, 8), 'the answer'], { kind: 'owner' }, { newId: () => REPLY });
+    expect(result.code, result.err).toBe(0);
+    expect(recordAt(join(recordDir(root, 'acme', 'worker'), REPLY)).payload.in_reply_to).toBe(SENT);
+    expect(readFileSync(marker, 'utf8')).toBe(bytes);
+  });
+}
+
+test('a short id still refuses a corrupt record sharing its prefix', async () => {
+  sentTo('owner', SENT, { from: 'worker' });
+  writeFileSync(join(recordDir(root, 'acme', 'owner'), SENT + '-corrupt'), '{}');
+  const result = await run([SENT.slice(0, 8), 'the answer'], { kind: 'owner' }, { newId: () => REPLY });
+  expect(result.code).toBe(1);
+  expect(result.err).toContain('cannot be read');
+});

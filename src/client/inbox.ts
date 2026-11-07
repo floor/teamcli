@@ -44,6 +44,7 @@ import {
   readRecord,
   recordFile,
   recordNameOk,
+  isRecordSidecarName,
   signReceiptPayload,
   verifyRecord,
   type RecordPayload,
@@ -254,11 +255,6 @@ export type InboxScan = { shown: ShownReply[]; refused: RefusedReply[] };
 
 type ScanContext = { home: string; root: string; session: string; clientId: string; key: KeyObject };
 
-/** The marker names a seat's reply leaves beside a record; none of them is a reply. */
-function isMarkerName(name: string): boolean {
-  return name.endsWith('.json') || name.endsWith('.pending') || name.endsWith('.taken') || name.endsWith('.read') || name.startsWith('work-');
-}
-
 /** A difference's `who`: the owner checks a damaged inbox row. */
 function refusedRow(id: string, payload: RecordPayload | null, why: string): RefusedReply {
   return {
@@ -398,7 +394,7 @@ export function scanClientInbox(context: ScanContext): { ok: true; scan: InboxSc
   }
   const scan: InboxScan = { shown: [], refused: [] };
   for (const name of names) {
-    if (!inboxNameOk(name) || isMarkerName(name)) continue;
+    if (!inboxNameOk(name) || isRecordSidecarName(name) || name.startsWith('work-')) continue;
     const path = join(dir, name);
     const read = readRecord(path, name);
     if (!read.ok) {
