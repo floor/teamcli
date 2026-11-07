@@ -86,6 +86,9 @@ Read-only project analysis, checkpoint requests, named launchers, and guarded st
 
 ### Fixed
 
+- Cleanup can reclaim orphan receipt staging names once their inode change time is over five
+  minutes old, including when their modification time is set in the future.
+
 - Mailbox readers explain when a message was already read or answered, so a late native inbox
   pointer no longer leads to an empty response. Unread messages still return their bodies.
 

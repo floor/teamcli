@@ -1,6 +1,6 @@
 // A fake rejected stream past the cap. No signal is installed and no live seat is touched.
 import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, lutimesSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { capRejected, STATUS_REJECTED_CAP, sweepNonId } from '../src/daemon/presence/native-feed.ts';
@@ -117,6 +117,86 @@ test('persistent directories do not starve junk behind the per-pass budget', () 
     for (let pass = 0; pass < Math.ceil((persistent.size + 1) / 1_024); pass += 1) removed = sweepNonId(root, spool);
     expect(removed).toBe(junk.length + 1);
     expect(existsSync(join(spool, '000-wrap-junk'))).toBe(false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('staging cleanup uses ctime age and preserves receipts and link targets', () => {
+  const root = mkdtempSync(join(tmpdir(), 'status-staging-age-'));
+  try {
+    const spool = join(root, 'spool');
+    mkdirSync(spool, { mode: 0o700 });
+    // Every inode is new: backdated or future mtime does not change its retention age.
+    const now = Date.now();
+    const old = new Date(now - 6 * 60_000);
+    const recent = new Date(now - 4 * 60_000);
+    const future = new Date(now + 60 * 60_000);
+    const receipt = '2026-11-06T19:00:00.000Z-00000000.json';
+    const stage = (nonce: number) => join(spool,
+      `2026-11-06T19:00:00.000Z-${nonce.toString(16).padStart(8, '0')}.json.new.0123456789abcdef`);
+    writeFileSync(join(spool, receipt), 'old receipt\n');
+    utimesSync(join(spool, receipt), old, old);
+    writeFileSync(stage(1), 'expired staging\n');
+    utimesSync(stage(1), old, old);
+    writeFileSync(stage(2), 'recent staging\n');
+    utimesSync(stage(2), old, recent);
+    writeFileSync(stage(3), 'future staging\n');
+    utimesSync(stage(3), future, future);
+    mkdirSync(stage(4));
+    utimesSync(stage(4), old, old);
+    mkdirSync(stage(5));
+    writeFileSync(join(stage(5), 'inside'), 'keep nested\n');
+    utimesSync(stage(5), old, old);
+    const target = join(root, 'outside-spool');
+    writeFileSync(target, 'keep target\n');
+    utimesSync(target, old, old);
+    symlinkSync(target, stage(6));
+    lutimesSync(stage(6), recent, recent);
+    symlinkSync(target, stage(7));
+    lutimesSync(stage(7), old, old);
+    const malformed = stage(8).slice(0, -1);
+    writeFileSync(malformed, 'not an exact staging name\n');
+
+    expect(sweepNonId(root, spool, now)).toBe(1);
+    expect(existsSync(stage(1))).toBe(true);
+    expect(readFileSync(stage(2), 'utf8')).toBe('recent staging\n');
+    expect(readFileSync(stage(3), 'utf8')).toBe('future staging\n');
+    expect(existsSync(stage(4))).toBe(true);
+    expect(readFileSync(join(stage(5), 'inside'), 'utf8')).toBe('keep nested\n');
+    expect(existsSync(stage(6))).toBe(true);
+    expect(existsSync(stage(7))).toBe(true);
+    expect(readFileSync(target, 'utf8')).toBe('keep target\n');
+    expect(readFileSync(join(spool, receipt), 'utf8')).toBe('old receipt\n');
+    expect(existsSync(malformed)).toBe(false);
+    expect(sweepNonId(root, spool, now + 6 * 60_000)).toBe(7);
+    for (const nonce of [1, 2, 3, 4, 6, 7]) expect(existsSync(stage(nonce))).toBe(false);
+    expect(readFileSync(join(stage(5), 'inside'), 'utf8')).toBe('keep nested\n');
+    expect(readFileSync(target, 'utf8')).toBe('keep target\n');
+    expect(readFileSync(join(spool, receipt), 'utf8')).toBe('old receipt\n');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('a future mtime cannot extend staging retention past its ctime cutoff', () => {
+  const root = mkdtempSync(join(tmpdir(), 'status-staging-ctime-'));
+  try {
+    const spool = join(root, 'spool');
+    mkdirSync(spool, { mode: 0o700 });
+    const path = join(spool, '2026-11-06T19:00:00.000Z-00000001.json.new.0123456789abcdef');
+    writeFileSync(path, 'staging with future mtime\n');
+    const future = new Date(Date.now() + 60 * 60_000);
+    utimesSync(path, future, future);
+    const held = lstatSync(path);
+    const expires = held.ctimeMs + 5 * 60_000;
+    expect(held.mtimeMs).toBeGreaterThan(expires + 1);
+    expect(sweepNonId(root, spool, expires)).toBe(0);
+    expect(existsSync(path)).toBe(true);
+    expect(sweepNonId(root, spool, expires + 1)).toBe(1);
+    expect(existsSync(path)).toBe(false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
