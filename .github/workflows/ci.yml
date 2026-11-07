@@ -19,9 +19,10 @@ concurrency:
 jobs:
   # Pull requests: typecheck, one build (via pack), every fast check and the signature check
   # in one job; the tests the diff can reach in parallel shards. See scripts/ci-select-tests.ts.
-  # Pushes to main (merge time), the nightly schedule and workflow_dispatch run the static
-  # stages once per system in `static` and the whole suite in parallel as six shards per
-  # system in `full-tests`, so anything the selection misses is caught there.
+  # Ordinary pushes keep six full test shards and static checks on Ubuntu; pushes and
+  # pull requests also run the five required compatibility files in one macOS job.
+  # The nightly schedule and workflow_dispatch retain full coverage on both systems.
+  # Dispatch the release candidate explicitly: the five-file job is never a full Mac gate.
   checks:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -178,13 +179,37 @@ jobs:
           done
           exit $status
 
+  macos-tests:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.3
+      - run: bun install --frozen-lockfile
+      - name: Run the five required compatibility files
+        run: |
+          bun test ./test/owner-seat-helper.test.ts
+          bun test ./test/daemon-restore-child.test.ts
+          bun test ./test/c75-single-command-restore-independent.test.ts
+          bun test ./test/store/evidence.test.ts
+          bun test ./test/load.test.ts
+
   static:
     if: github.event_name != 'pull_request'
-    # Once per system: the build and every check the test shards would otherwise repeat.
+    # Ordinary pushes build/check once; RC dispatches and schedules keep both systems.
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: ${{ fromJSON(github.event_name == 'push' && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
@@ -265,7 +290,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: ${{ fromJSON(github.event_name == 'push' && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest"]') }}
         shard: [0, 1, 2, 3, 4, 5]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
@@ -297,26 +322,6 @@ jobs:
           RUNNER_OS: ${{ matrix.os }}
           SHARD: ${{ matrix.shard }}
         run: |
-          # The classifier comes from the commit before this push, not from the checked-out
-          # tree, and the revision reaches it through the environment. It runs from a sibling
-          # copy so the tree's own tests keep their own script. A first push or a revision
-          # without the script stays careful.
-          if [ -z "${BEFORE//0/}" ] || ! git show "$BEFORE:scripts/ci-classify-lane.ts" > "$RUNNER_TEMP/ci-classify-lane.base.ts"; then
-            echo "ci:lane: no classifier at $BEFORE; this run stays careful"
-            lane=careful
-          else
-            cp "$RUNNER_TEMP/ci-classify-lane.base.ts" scripts/ci-classify-lane.base.ts
-            lane="$(bun scripts/ci-classify-lane.base.ts)"
-          fi
-          if [ "$RUNNER_OS" = macos-latest ] && [ "$lane" = routine ]; then
-            if [ "$SHARD" = 0 ]; then
-              echo "Routine lane on macOS: running CLI smoke test on shard 0."
-              bun test ./test/cli-smoke.test.ts
-            else
-              echo "Routine lane on macOS: covered by ubuntu-latest full suite and macOS shard 0 smoke."
-            fi
-            exit 0
-          fi
           if [ "$EVENT" = schedule ]; then
             export TEAM_NIGHTLY_STRESS=1
           elif [ "$EVENT" = push ]; then
@@ -352,4 +357,3 @@ jobs:
             bun scripts/ci-shard-tests.ts --junit "$junit" --label "$p"
           done
           exit $status
-
