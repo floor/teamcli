@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.16] - Unreleased
+## [0.5.16] - 2026-11-07
 
 Read-only project analysis, checkpoint requests, named launchers, and guarded start folders for Grok and Cursor.
 
