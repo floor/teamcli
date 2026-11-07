@@ -41,7 +41,15 @@ const TRAILER_LINE = /^[A-Za-z0-9-]+\s*:\s*\S/;
 // This commit-message-only rule catches numbered role IDs and named review-role IDs.
 // It does not replace the private-names prepush scan, which still covers personal and
 // persona names. Ordinary role words and hyphenated descriptions remain valid.
-const INTERNAL_SEAT_TOKEN = /(^|[^A-Za-z0-9_-])(?:(?:builder|operator|tester)-[0-9]+|reviewer-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)(?=$|[^A-Za-z0-9_-])/i;
+const NUMBERED_ROLE_TOKEN = /(^|[^A-Za-z0-9_-])(?:builder|operator|tester)-[0-9]+(?=$|[^A-Za-z0-9_-])/i;
+const NAMED_REVIEW_TOKEN = /(^|[^A-Za-z0-9_-])reviewer-([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)(?=$|[^A-Za-z0-9_-])/gi;
+const REVIEW_PROSE_SUFFIXES = new Set(['requested', 'approved', 'side']);
+
+function namesInternalSeat(line: string): boolean {
+  if (NUMBERED_ROLE_TOKEN.test(line)) return true;
+  return [...line.matchAll(NAMED_REVIEW_TOKEN)]
+    .some((match) => !REVIEW_PROSE_SUFFIXES.has(match[2]!.toLowerCase()));
+}
 
 function exit(message: string): never {
   console.error(`private-diff:check: ${message}`);
@@ -133,7 +141,7 @@ function checkCommitMessages(
     const trailers = message.includes('\0') ? trailersFromLines(lines) : rawTrailers;
 
     for (const [index, line] of lines.entries()) {
-      if (INTERNAL_SEAT_TOKEN.test(line)) {
+      if (namesInternalSeat(line)) {
         hits.push(`commit:${hash}:${String(index + 1)}: commit message names an internal seat`);
       }
     }

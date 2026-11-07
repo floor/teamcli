@@ -169,12 +169,26 @@ describe('the diff check command', () => {
       ['REVIEWER', 'SAMPLE', 'LAB'].join('-'),
     ]) {
       const base = repo({ 'keep.txt': 'clean\n' }, 'base');
-      const head = commit(base.dir, `test: a neutral subject\n\nChecked by ${token}'s scene.`);
+      const head = commit(base.dir, `test: a neutral subject\n\nThe reviewer-requested proof was checked by ${token}'s scene.`);
       const result = run(base.dir, ['--base', base.sha]);
       expect(result.status).toBe(1);
       expect(result.stderr).toContain(`commit:${head}:3`);
       expect(result.stderr).toContain('commit message names an internal seat');
       expect(result.stdout + result.stderr).not.toContain(token);
+    }
+  });
+
+  test('review-role prose from release messages and ordinary continuations is allowed', () => {
+    const bodies = [
+      'Add the reviewer-requested three lines only under Unreleased: checked state publication, owner-only modes for the three changed file families, and declared-link-root refusal with ancestor-alias handling. Historical release sections remain byte-identical. No package version or release timestamp changes.',
+      'The reviewer-approved wording remains unchanged.',
+      'Keep the reviewer-side notes separate.',
+    ];
+    for (const body of bodies) {
+      const base = repo({ 'keep.txt': 'clean\n' }, 'base');
+      commit(base.dir, `docs(release): record guarded state writes and permission changes\n\n${body}`);
+      const result = run(base.dir, ['--base', base.sha]);
+      expect(result.status).toBe(0);
     }
   });
 
