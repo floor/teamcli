@@ -237,7 +237,7 @@ A read is a signed request, and the command verifies it before it scans anything
 
 1. the grant file is read and its signature and shape verify;
 2. the grant's client id and entity must be the one principal and entity this build admits —
-   `grok-bot` and `floor` — and its recipient must resolve to `orchestrator@floor`;
+   `grok-bot` and `sampleco` — and its recipient must resolve to `orchestrator@sampleco`;
 3. the signed v2 request is verified against the grant's public key: the domain, the operation
    `messages`, the grant id, client id, key id, entity, `since`, `ack`, `limit`, `request id` and
    `issued_at` are all inside the signature, and the grant must be canonical, unexpired and

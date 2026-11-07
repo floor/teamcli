@@ -538,7 +538,7 @@ same folder the standing create-grants live in), naming the pair it admits and w
 
 ```json
 {
-  "send": { "from": "builder-1@labs", "to": "orchestrator@floor" },
+  "send": { "from": "builder-1@labs", "to": "orchestrator@sampleco" },
   "expires": "2026-10-17T00:00:00Z",
   "signature": "9f2c…"
 }
@@ -565,7 +565,7 @@ and, when a signed record admits the pair, names it in the preview line.
 
 `team send --client` is the one send a client grant admits. The grant is the owner's, the request
 is signed with the client's own key, and the destination is the entity's orchestrator —
-`orchestrator@floor` is the only address this build admits. The request id is used once, and the
+`orchestrator@sampleco` is the only address this build admits. The request id is used once, and the
 drop is written under the grant lock after the grant, the key, the registry binding and the
 request's target are read again. The record keeps the client's own principal: `from` is
 `client:grok-bot`, `from_id` is null, and `from_client` carries the client id and the grant id.
@@ -870,7 +870,7 @@ and it types only into a box it read twice as the empty idle prompt: a box holdi
 gets no line and no Enter, and nothing is copied off, cleared or pasted into. The two reads are
 spaced by the wake's own measured settle — one host read on a loaded host plus room for the CLI to
 draw, 150 ms as the shipped default — which a profile may widen (`typed_wake_settle_ms`) and may
-not narrow below that floor; the native delivery's one-second settle was never measured for this
+not narrow below that sampleco; the native delivery's one-second settle was never measured for this
 path and no longer applies to it. The message waits in the record, and the seat reads it on its
 own turn.
 
