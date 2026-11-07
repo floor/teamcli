@@ -304,7 +304,7 @@ describe('a nickname is one seat\'s human name', () => {
   });
 
   test('the name rule is the name\'s own', () => {
-    expect(errors(named(marked, 'zeus@acme'))).toEqual(['14: seat "lead": the nickname takes letters, digits, ".", "_" and "-"']);
+    expect(errors(named(marked, 'helper@acme'))).toEqual(['14: seat "lead": the nickname takes letters, digits, ".", "_" and "-"']);
   });
 });
 
