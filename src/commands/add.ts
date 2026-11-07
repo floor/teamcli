@@ -268,9 +268,11 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     ? (refuse(io, json, 'add', { id: 'add.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
     : args.flags.has('request') && args.values.approval !== undefined
       ? (refuse(io, json, 'add', { id: 'add.approval-refused', message: '--request asks the owner seat and --approval runs an answered request: pass one', repair: null }), { kind: 'refused' as const })
-      : ownerSeatStep('add', 'team-add', argv, { request: false, approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, { ...sources, root: seatRoot });
+      : ownerSeatStep('add', 'team-add', argv, { request: false, approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, { ...sources, root: seatRoot }, [seatRoot]);
   if (seatStep.kind === 'refused') return approvalRefused();
-  const seatApproved = seatStep.kind === 'admitted';
+  // `--request` files a card later. A charter that covers this folder does not run the add in
+  // this same invocation when the caller asked for the card.
+  const seatApproved = seatStep.kind === 'admitted' && !args.flags.has('request');
   const requesting = args.flags.has('request') && !seatApproved;
   // No create-grant admits a run with no terminal: the record matches the caller's own registry
   // record, and a caller outside herdr has none. This sentence is answered before any file is
@@ -1057,7 +1059,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (line) return refusePretrust(io, json, built.name, line, dry);
   }
   if (requesting) {
-    const askedStep = ownerSeatStep('add', 'team-add', argv, { request: true, approval: undefined, dry, json, reason: args.values.reason }, io, { ...sources, root });
+    const askedStep = ownerSeatStep('add', 'team-add', argv, { request: true, approval: undefined, dry, json, reason: args.values.reason }, io, { ...sources, root }, [root]);
     if (askedStep.kind === 'requested') {
       // exit: add.approval-requested
       return 0;

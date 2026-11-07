@@ -38,7 +38,7 @@ import { expiresArgument, expiresField } from './client/duration-policy.ts';
 import { acceptOwnerSigner, addOwnerSigner, deliverToOwnerSeat, readOwnerSeat, ownerSeatMessages, registerOwnerSeat, ownerSeatHelperPath, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from './client/owner-seat.ts';
 import { charterGate } from './charter/check.ts';
 import { createRequestLink } from './client/request-link.ts';
-import { approveAsOwnerSeat, GRANT_CHOICES, type PendingUpBinding, answerPendingGrant, approvalRuleFolders, confirmationLine, autoApprovePendingGrant, createPendingGrant, denyPendingGrant, executePendingGrant, grantEmissionOf, grantPrompt, issueGrantUnderCharter, listApprovalRules, matchingApprovalRule, oneTimeCodeAdapter, pendingGrantFolders, pendingSummary, presentToOwnerSeat, revokeApprovalRule, type OwnerNotifier, type PendingGrantParams } from './client/emission.ts';
+import { approveAsOwnerSeat, GRANT_CHOICES, type PendingUpBinding, answerPendingGrant, approvalRuleFolders, confirmationLine, autoApprovePendingGrant, createPendingGrant, denyPendingGrant, executePendingGrant, grantEmissionOf, grantPrompt, listApprovalRules, matchingApprovalRule, oneTimeCodeAdapter, pendingGrantFolders, pendingSummary, presentToOwnerSeat, revokeApprovalRule, type OwnerNotifier, type PendingGrantParams } from './client/emission.ts';
 import { ownerAdmitsRecord, type OwnerRecordAdmission, type OwnerSeatSources } from './client/owner-action-step.ts';
 import type { Io } from './io.ts';
 import { plainText } from './launch/plain.ts';
@@ -527,22 +527,11 @@ export function runPendingGrantMode(rawIo: Io, io: Io, args: Args, json: boolean
   };
   const now = approval.now ?? new Date();
   const summary = pendingSummary(params, now, home);
+  // A charter may still refuse a grant whose team root sits outside it. It never issues one:
+  // `--request` records the card and returns.
   const gate = charterGate(home, { operation: 'grant', cwd: io.cwd, path: up?.root ?? io.cwd }, approval.ownerSeatStore);
-  if (gate.kind === 'block') return refuse(gate.message);
-  if (gate.kind === 'admit') {
-    if (params.allow_grant) return refuse('a grant cannot carry the right to grant');
-    const issued = issueGrantUnderCharter(home, params, now);
-    if (!issued.ok) return refuse(issued.why);
-    if (json) {
-      writeJson(io, 'team.grant', {
-        format: 1 as const, dry_run: false, status: 'updated' as const, action_summary: 'grant: updated',
-        project: null, session: null, target: issued.grant.grantId, approved_by: 'charter', summary,
-      });
-    } else {
-      io.stdout(`grant: updated\nclient grant: ${issued.grant.grantId}\napproved by: owner charter\nsummary: ${summary.text}\ngrant file: ${issued.path}\naudit record: ${issued.audit}\n${KEY_ISOLATION_LINE}\n`);
-    }
-    return 'ok';
-  }
+  if (gate.kind === 'block' && !isOwner(walkCaller(io))) return refuse(gate.message);
+  if (params.allow_grant && gate.kind === 'admit') return refuse('a grant cannot carry the right to grant');
   // A standing rule the owner approved ('always') covers a request fully inside it: no new ask.
   if (grantEmissionOf(home, params.entity, now).mode === 'conversational') {
     const rule = matchingApprovalRule(home, params, now);

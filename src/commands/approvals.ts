@@ -99,17 +99,21 @@ export async function runApprovals(argv: string[], io: Io, sources: ApprovalsSou
   const repeated = ids.find((id, index) => ids.indexOf(id) !== index);
   if (repeated !== undefined) return refused(io, json, `"${repeated}" is repeated; nothing was revoked`);
   const seatSources = { home, now: () => now, ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) };
+  // The charter judges each rule's own folder. An id that does not resolve names no folder, so
+  // the charter does not admit the run.
+  const placed = recordFolders(home, store, now, ids);
+  const targets = placed.ok ? placed.folders : [];
   let seatApproved = false;
   let seatRefused = false;
   if (!args.flags.has('request') && args.values.approval === undefined) {
-    const covered = ownerSeatStep('approvals', 'team-revoke-approval', argv, { request: false, approval: undefined, dry: false, json }, io, seatSources);
+    const covered = ownerSeatStep('approvals', 'team-revoke-approval', argv, { request: false, approval: undefined, dry: false, json }, io, seatSources, targets);
     if (covered.kind === 'refused') seatRefused = true;
     else if (covered.kind === 'admitted') seatApproved = true;
   }
   if (!seatRefused && (args.flags.has('request') || args.values.approval !== undefined)) {
     // Check every id before the approval is claimed. A dry look admits nothing.
     if (args.values.approval !== undefined) {
-      const preview = ownerSeatStep('approvals', 'team-revoke-approval', argv, { request: false, approval: args.values.approval, dry: true, json }, io, seatSources);
+      const preview = ownerSeatStep('approvals', 'team-revoke-approval', argv, { request: false, approval: args.values.approval, dry: true, json }, io, seatSources, targets);
       if (preview.kind === 'refused') seatRefused = true;
       else {
         const ready = rulesReady(home, ids);
@@ -117,7 +121,7 @@ export async function runApprovals(argv: string[], io: Io, sources: ApprovalsSou
       }
     }
     if (!seatRefused) {
-      const seat = ownerSeatStep('approvals', 'team-revoke-approval', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json, reason: args.values.reason }, io, seatSources);
+      const seat = ownerSeatStep('approvals', 'team-revoke-approval', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json, reason: args.values.reason }, io, seatSources, targets);
       if (seat.kind === 'requested') {
         // exit: approvals.approval-requested
         return 0;
@@ -155,6 +159,24 @@ function auditNames(home: string, id: string): string[] {
   } catch {
     return [];
   }
+}
+
+/** The folder of every named rule, or the first id that is not a verified rule. */
+function recordFolders(
+  home: string,
+  store: OwnerSeatKeyStore,
+  now: Date,
+  ids: readonly string[],
+): { ok: true; folders: string[] } | { ok: false } {
+  const created = listTeamCreateRules(home, store, now).rules;
+  const actions = listOwnerActionRules(home, store, now).rules;
+  const folders: string[] = [];
+  for (const id of ids) {
+    const scope = created.find((rule) => rule.rule_id === id)?.scope ?? actions.find((rule) => rule.rule_id === id)?.scope;
+    if (scope === undefined) return { ok: false };
+    folders.push(canonicalScope(scope));
+  }
+  return { ok: true, folders };
 }
 
 /** The shared check for changing approval records (src/client/owner-action-step.ts): the owner's

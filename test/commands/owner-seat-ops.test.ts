@@ -268,13 +268,20 @@ describe('send, down and bus through the owner seat', () => {
 });
 
 describe('config set through the owner seat', () => {
-  test('with Touch ID presented, one touch signs the request and the change applies in the same run', async () => {
+  test('--request records the card and writes nothing, even when Touch ID could sign', async () => {
     const p = place();
     const env = { ...process.env, TEAM_CONFIG_SOURCE: 'file' };
     const file = join(p.root, '.agents', 'team.yaml');
+    const before = readFileSync(file, 'utf8');
     const ran = ioOf(p.root, detached);
     expect(await runConfig(['set', 'project', 'touched', '--request'], ran, { home: p.home, env, now: () => NOW, ownerSeatStore: p.store, present: true }), ran.err + ran.out).toBe(0);
-    expect(ran.err).toContain('owner notified via touch-id: approved with a verified owner-seat signature');
+    expect(ran.out).toContain('recorded');
+    expect(ran.err).not.toContain('applying request');
+    expect(readFileSync(file, 'utf8')).toBe(before);
+    const id = requestId(ran.out);
+    expect(approveOwnerAction(p.home, id, 'oui', p.store, NOW)).toMatchObject({ ok: true });
+    const applied = ioOf(p.root, detached);
+    expect(await runConfig(['set', 'project', 'touched', '--approval', id], applied, { home: p.home, env, now: () => NOW, ownerSeatStore: p.store }), applied.err + applied.out).toBe(0);
     expect(readFileSync(file, 'utf8')).toContain('project: touched');
   });
 
@@ -455,18 +462,10 @@ describe('several actions, one owner-seat request', () => {
 
     upsertTeam(p.home, a, { project: 'alpha', session: 'alpha', root: p.root, by: 'test' });
     const badAsk = ioOf(p.root, detached);
-    expect(await runForget([a, 'missing-team', '--request'], badAsk, sources)).toBe(0);
-    const badId = requestId(badAsk.out);
-    expect(approveOwnerAction(p.home, badId, 'oui', p.store, NOW)).toMatchObject({ ok: true });
-    const blocked = ioOf(p.root, detached);
-    expect(await runForget([a, 'missing-team', '--approval', badId], blocked, sources)).toBe(1);
-    expect(blocked.err).toContain('no team record');
+    expect(await runForget([a, 'missing-team', '--request'], badAsk, sources)).toBe(1);
+    expect(badAsk.err).toContain('no team record');
+    expect(badAsk.out).not.toContain('recorded');
     expect(getTeam(p.home, a)).not.toBeNull();
-    upsertTeam(p.home, 'missing-team', { project: 'gone', session: 'gone', root: other, by: 'test' });
-    const retry = ioOf(p.root, detached);
-    expect(await runForget([a, 'missing-team', '--approval', badId], retry, sources), retry.err + retry.out).toBe(0);
-    expect(getTeam(p.home, a)).toBeNull();
-    expect(getTeam(p.home, 'missing-team')).toBeNull();
 
     upsertTeam(p.home, a, { project: 'alpha', session: 'alpha', root: p.root, by: 'test' });
     const dup = ioOf(p.root, owner);

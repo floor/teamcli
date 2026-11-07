@@ -12,4 +12,4 @@ team setup --edit --signer touch-id
 
 The charter names the project roots (the project directories under the home, or `~/Code`, unless `--roots` says otherwise), every vendor, and the routine operations. It does not expire unless a lifetime is set (`--request-expiry`, `--rule-lifetime`, `--grant-duration`, each a duration or `never`). It never carries the right to grant.
 
-A later command inside the charter runs with no prompt. A command outside it is refused and names `team setup --edit`. While a charter is on disk, TeamCLI does not raise a prompt of its own.
+A later command runs with no prompt when every folder it changes sits inside the charter. The caller's own folder is not that test. A caller who is not the owner is refused outside it, and the refusal names `team setup --edit`. The owner at a terminal is never refused by the charter. `--request` records a card and does not run the command in that same invocation. A grant is not admitted by the charter. While a charter is on disk, TeamCLI does not raise a prompt of its own.

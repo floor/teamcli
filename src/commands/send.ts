@@ -11,7 +11,7 @@ import { postArrivalWebhook, type SenderPostOutcome } from '../bus/webhook.ts';
 import { runClientSend, type ClientSendDelivery, type ResolvedClientTarget } from '../client/send.ts';
 import { CLIENT_SLICE_DISPLAY_NAME, KEY_ISOLATION_LINE } from '../client/records.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, isOwner, judgeCallerIn, logTag, noPaneRefusal, standingOf, walkCaller, type Caller, type CallerSources, type SeatStanding } from '../caller.ts';
-import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
+import { charterTargetOf, ownerSeatRuleAdmits, ownerSeatRuleCovers, ownerSeatStep } from '../client/owner-action-step.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { resolveSeatOverrides, seatOverridesOf, seatSettingsOf, type SeatOverrides } from '../config/apply.ts';
 import { NOT_A_REPO } from '../file/load.ts';
@@ -32,7 +32,7 @@ import { profileFor, type TypedWake } from '../profiles/index.ts';
 import { PENDING_ID, clearPending, dropTaken, markPending, nativeNonceOf, readPending, restoreTaken, takePending, writePending, type PendingNative, type PendingNativeFallbackLeg } from '../send/pending.ts';
 import { getAgent, readAgents, type Agent } from '../registry/agents.ts';
 import * as projectRegistry from '../registry/projects.ts';
-import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
+import { findTeams, readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { crossTeamsFor } from '../send/cross-teams.ts';
 import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
 import { socketAddressOf, type SocketAddress } from '../send/address.ts';
@@ -1250,6 +1250,24 @@ export async function runSend(argv: string[], rawIo: Io, rawHost: SendHost): Pro
   }
 }
 
+/** The folder the charter judges for this send: the recipient team's root, or this checkout for a
+ *  read that names no recipient. A spec that names a team the registry cannot place is no
+ *  admission. */
+function sendCharterTargets(home: string, seatName: string | undefined, args: { flags: { has(name: string): boolean }; values: { confirm?: string; record?: string } }, io: Io, host: SendHost): string[] {
+  if (seatName === undefined || args.flags.has('list') || args.values.confirm !== undefined || args.values.record !== undefined) {
+    return [charterTargetOf(io.cwd)];
+  }
+  const resolved = resolveTarget(home, seatName, io, (session) => host.agents(session));
+  if (!('error' in resolved)) return [resolved.team.root];
+  const parsed = parseSpec(seatName);
+  if (!('error' in parsed) && parsed.kind === 'at') {
+    const teams = findTeams(home, parsed.scope);
+    if (teams.length === 1) return [teams[0]!.root];
+  }
+  if (!('error' in parsed) && (parsed.kind === 'seat' || parsed.kind === 'nickname')) return [charterTargetOf(io.cwd)];
+  return [];
+}
+
 async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Promise<number> {
   const args = readArgs(argv, ['file', 'brief', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id', 'subject', 'approval', 'reason'], ['wait', 'json', 'list', 'dry-run', 'request']);
   const seatName = args.rest[0];
@@ -1283,9 +1301,10 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   // principals are established by their internal entries with their own proof, so neither asks
   // the owner seat and neither can be handed an owner answer.
   const seatSources = { home: host.home, now: () => host.now(), ...(host.ownerSeatStore ? { ownerSeatStore: host.ownerSeatStore } : {}) };
+  const sendTargets = sendCharterTargets(host.home, seatName, args, io, host);
   let seatApproved = false;
   if (internalCallerOf(host) === null) {
-    const step = ownerSeatStep('send', 'team-send', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, seatSources);
+    const step = ownerSeatStep('send', 'team-send', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, seatSources, sendTargets);
     if (step.kind === 'requested') {
       // exit: send.approval-requested
       return 0;
@@ -1301,7 +1320,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
     internalCallerOf(host) === null && !seatApproved && preCaller !== undefined && !isOwner(preCaller)
     && !args.flags.has('list') && args.values.confirm === undefined && args.values.record === undefined
   ) {
-    seatApproved = ownerSeatRuleAdmits('team-send', io.cwd, args.flags.has('dry-run'), io, seatSources);
+    seatApproved = ownerSeatRuleCovers(io.cwd, sendTargets) && ownerSeatRuleAdmits('team-send', io.cwd, args.flags.has('dry-run'), io, seatSources);
   }
   // The no-terminal refusal judges the ordinary caller. A direct-work or reminder run's caller is
   // the principal its internal entry established and verified, which may run with no terminal; it
