@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Copying a seat with no label to a number-like name now keeps its name and label as text.
+- Labels with `#` inside quotes are no longer cut short, and rewriting them preserves only the outside comment.
+
 ## [0.5.17] - 2026-11-07
 
 Carries the v0.5.16 content. v0.5.16 was tagged but never published to npm.
