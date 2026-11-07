@@ -18,6 +18,7 @@ import { daemonSocketPath as sendSocketPath, startSendDaemon } from '../src/send
 import { darwinServiceManager } from '../src/daemon/service-darwin.ts';
 import type { ServiceManager, ServiceProgram, ServiceRunResult } from '../src/daemon/service.ts';
 import { DAEMON_PROTOCOL_VERSION, type DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
+import { noteTeam } from '../src/registry/teams.ts';
 import { testIo, thisProcessJobRecord, thisProcessUnitRecord } from './helpers.ts';
 
 const TEAM = `format: 1
@@ -897,7 +898,9 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
     expect(unit).toContain('run');
     expect(unit).toContain('--started-by');
     expect(unit).toContain('service-manager');
-    expect(unit).toContain('/repo');
+    // The unit names no checkout. A service start reads the registry, so yesterday's root is not frozen in.
+    expect(unit).not.toContain('--root');
+    expect(unit).not.toContain('/repo');
     expect(unit).toContain('RunAtLoad');
     expect(unit).toContain('KeepAlive');
     expect(calls[0]?.[0]).toBe('launchctl');
@@ -1645,8 +1648,10 @@ describe('team daemon status, install, uninstall and run', () => {
     expect(unit.ok).toBe(true);
     if (!unit.ok) return;
     const argv = unitArguments(unit.unitPath);
-    expect(argv.slice(-2)).toEqual(['--root', root]);
+    expect(argv).not.toContain('--root');
+    expect(argv).not.toContain(root);
     expect(argv).toContain('--started-by');
+    expect(noteTeam(home, root, { project: 'acme', entity: null, session: 'acme', lobby: null }, 'running', 'owner')).toBeNull();
 
     // The login start, end to end: the unit's own argv through the command surface and the real
     // machine daemon. A synthetic manager keeps this process's own record, so the replay of the
@@ -1663,6 +1668,7 @@ describe('team daemon status, install, uninstall and run', () => {
     }));
     await waitFor(() => io.out.includes('team daemon: running'));
     expect(io.out).toContain('roots 1 (send 1, bus 1)');
+    expect(io.out).toContain(`${root} from the registry`);
     expect(io.out).toContain('broker not hosted');
     expect(existsSync(daemonSocketPath(home))).toBe(true);
     expect(existsSync(sendSocketPath('acme', root, home))).toBe(true);
@@ -1671,7 +1677,7 @@ describe('team daemon status, install, uninstall and run', () => {
     expect(health.state).toBe('running');
     expect(health.startedBy).toBe('service-manager');
     expect(health.roots).toHaveLength(1);
-    expect(health.roots[0]).toMatchObject({ root, team: 'acme', send: 'serving', bus: 'serving', why: null });
+    expect(health.roots[0]).toMatchObject({ root, team: 'acme', send: 'serving', bus: 'serving', why: null, source: 'registry' });
     expect(health.roots[0]?.firstPass).toBeDefined();
     // The row carries the chores report beside the hosting facts; its mode is the release default.
     expect(health.roots[0]?.chores?.mode).toBe('per-root');

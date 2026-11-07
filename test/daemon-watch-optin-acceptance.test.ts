@@ -538,11 +538,12 @@ describe('the install contract writes only the opt-in that was asked for', () =>
     expect(both.unit.split('--presence').length - 1).toBe(1);
     expect(both.unit.split('--watch').length - 1).toBe(1);
     expect(both.unit.indexOf('--presence')).toBeLessThan(both.unit.indexOf('--watch'));
-    // The unit still starts the one admitted no-terminal run, with the same roots.
+    // The unit still starts the one admitted no-terminal run, and it names no checkout.
     expect(both.unit).toContain('<string>daemon</string>');
     expect(both.unit).toContain('<string>--started-by</string>');
     expect(both.unit).toContain('<string>service-manager</string>');
-    expect(both.unit).toContain(`<string>${world.root}</string>`);
+    expect(both.unit).not.toContain('<string>--root</string>');
+    expect(both.unit).not.toContain(`<string>${world.root}</string>`);
   });
 
   test('--watch is refused on status and uninstall with the same usage message', async () => {

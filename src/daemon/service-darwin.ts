@@ -115,8 +115,10 @@ function plistStrings(text: string, key: string): string[] | null {
 }
 
 function programOf(program: ServiceProgram): string[] {
+  // The unit names no checkout. A service start hosts every registry team whose lifecycle is
+  // running; `root.added` asks it to read that list now, and the heartbeat reads it again so a
+  // missed notice still lands. A reinstall must not freeze yesterday's roots into the arguments.
   const args = [program.execPath, program.entry, 'daemon', 'run', '--started-by', 'service-manager'];
-  for (const root of program.roots) args.push('--root', root);
   // The unit records the same opt-ins a foreground run takes: each flag is written only when the
   // install program asked for it, so a plain unit hosts neither presence nor a watch.
   if (program.presence === true) args.push('--presence');

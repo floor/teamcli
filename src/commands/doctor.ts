@@ -919,10 +919,21 @@ export function doctorLoginFindings(team: TeamFile, sources: DoctorSources): Fin
     } else {
       findings.push({ level: 'ok', text: plainLine(`${cli}: logged in`) });
     }
+    const seen = sources.version(profile.binary);
+    if (seen !== null) {
+      const argv = cli === 'codex' ? codexOwnServerArgv('unix://seat.sock') : [];
+      for (const verdict of firstRunVerdicts(cli, seen, argv)) {
+        findings.push({
+          level: verdict.state === 'skipped' ? 'ok' : 'miss',
+          text: plainLine(firstRunLine(cli, verdict)),
+        });
+      }
+    }
   }
   return findings;
 }
 
+import { firstRunLine, firstRunVerdicts, codexOwnServerArgv } from '../launchers/first-run.ts';
 import { contextLine, hasJsonFlag, pluralCount, renderFinding, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
 import { NOT_PRETENDED, NOT_PRETENDED_ENTRIES } from '../permissions/must-not-pretend.ts';
 

@@ -90,6 +90,8 @@ export type DaemonRootFirstPass =
  *  daemon from a running daemon that silently hosts nothing for a checkout. */
 export type DaemonRootState = {
   root: string;
+  /** Set when this checkout was taken from the team registry rather than a unit argument. */
+  source?: 'registry';
   team: string | null;
   /** `starting` is written while the daemon is still bringing this root's endpoint up, so a
    *  reader can see the root registered before its first attempt finishes. */
@@ -343,6 +345,7 @@ function rootsOf(raw: unknown): DaemonRootState[] | null {
     const chores = choresOf(entry.chores);
     roots.push({
       root: entry.root,
+      ...(entry.source === 'registry' ? { source: 'registry' as const } : {}),
       team: entry.team as string | null,
       send: entry.send as DaemonRootState['send'],
       bus: entry.bus as DaemonRootState['bus'],

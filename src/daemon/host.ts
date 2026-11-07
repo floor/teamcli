@@ -21,7 +21,7 @@ import {
 } from 'node:fs';
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { busSocket, startBus, type BusHandle, type StartBusInput, type StartBusResult } from '../bus/server.ts';
 import { freshBusWatch, nextBackoffMs, reviveBus, type BusWatch } from '../bus/supervise.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
@@ -140,6 +140,10 @@ export type StartMachineDaemonInput = {
   home?: string;
   /** The checkouts whose send and bus endpoints this one process hosts. */
   roots: string[];
+  /** The checkouts were read from registry teams whose lifecycle is running, not from --root. */
+  rootsFromRegistry?: boolean;
+  /** Re-read on each heartbeat and on root.added. A root it names is hosted when it is not already. */
+  runningRoots?: () => readonly string[];
   startedBy?: string;
   version: string;
   /** The packaged commit this build was installed from; null or absent in a source checkout. */
@@ -970,6 +974,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // The accept, frame and close mechanics live in the relay package's framing host; this process
   // keeps the protocol: the same line parser and refusal bytes, the same health answer and
   // in-flight tracking, and the same socket file, permission and stale-path ownership below.
+  let adoptNotifiedRoot: ((root: string) => Promise<void>) | null = null;
+  const pendingRootAdds: string[] = [];
   const host = createHostServer({
     socketPath,
     frameLimit: DAEMON_FRAME_LIMIT,
@@ -1001,6 +1007,22 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         // Only a v2 frame can reach the next boundary; a v1 `next` keeps the default refusal.
         if (request.op === 'next' && request.v === 2) {
           return formatDaemonResponse(await answerNext(request));
+        }
+        // A hosting notice, not a send. It hosts a checkout the registry already marks running.
+        // It does not admit a caller and it does not change who may send.
+        if (request.op === 'root.added') {
+          const named = request.scope?.root;
+          if (named === undefined || named === '') {
+            return formatDaemonResponse({
+              v: request.v,
+              id: request.id,
+              ok: false,
+              error: { code: 'daemon.bad-frame', message: 'root.added names the checkout in scope.root' },
+            });
+          }
+          if (adoptNotifiedRoot === null) pendingRootAdds.push(named);
+          else await adoptNotifiedRoot(named);
+          return formatDaemonResponse(answerDaemonRequest({ ...request, op: 'health' }, health({ roots: true })));
         }
         // Only the health answer returns roots. Every other op, including send, skips the
         // per-seat state read.
@@ -1071,9 +1093,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // one process hosts each checkout's existing send and bus listeners beside it. N checkouts
   // therefore mean 2N+1 endpoints in one process until the machine endpoint serves route
   // delivery and a shared per-seat queue behind the relay package boundary.
-  for (const rootArg of input.roots) {
+  const hosting = new Set<string>();
+  const hostCheckout = async (rootArg: string): Promise<void> => {
+    const key = resolve(rootArg);
+    if (hosting.has(key)) return;
+    hosting.add(key);
     const status: MachineRootStatus = {
       root: rootArg, team: null, send: 'starting', bus: 'starting', why: null, sendWhy: null, busWhy: null,
+      ...(input.rootsFromRegistry === true ? { source: 'registry' as const } : {}),
     };
     // A root with no hosted endpoint keeps both sockets null and the refresh skips it.
     const watch: EndpointWatch = {
@@ -1109,7 +1136,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       status.bus = 'failed';
       await register();
       logLine(`root ${rootArg}: ${status.why}`);
-      continue;
+      return;
     }
     // Routed by what the loader actually opened, never by the spelling of the argument: two
     // spellings of one checkout are one route, or every scope naming it would be ambiguous.
@@ -1120,7 +1147,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       status.bus = 'failed';
       await register();
       logLine(`root ${rootArg}: ${status.why}`);
-      continue;
+      return;
     }
     if (duplicateRoute(routes, canonical) !== null) {
       status.root = canonical;
@@ -1129,7 +1156,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       status.bus = 'failed';
       await register();
       logLine(`root ${rootArg}: ${status.why}`);
-      continue;
+      return;
     }
     status.root = canonical;
     status.team = loaded.team.project;
@@ -1316,7 +1343,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       status.why = `the send server could not start: ${error instanceof Error ? error.message : 'unknown error'}`;
       await register();
       logLine(`root ${rootArg}: ${status.why}`);
-      continue;
+      return;
     }
     watch.sendStarted = true;
     if (send.kind === 'serving') {
@@ -1349,7 +1376,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       status.busWhy ??= thresholds.refusals.map((refusal) => refusal.message).join('; ');
       await register();
       logLine(`root ${rootArg}: bus not hosted: ${status.busWhy}`);
-      continue;
+      return;
     }
     let bus: Awaited<ReturnType<typeof startBus>>;
     try {
@@ -1373,7 +1400,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       status.busWhy ??= `the bus server could not start: ${error instanceof Error ? error.message : 'unknown error'}`;
       await register();
       logLine(`root ${rootArg}: ${status.busWhy}`);
-      continue;
+      return;
     }
     watch.busStarted = true;
     if (bus.kind === 'serving') {
@@ -1403,7 +1430,24 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
     await register();
     logLine(`root ${rootArg}: send ${status.send}, bus ${status.bus}`);
-  }
+  };
+  adoptNotifiedRoot = async (named: string): Promise<void> => {
+    let running: readonly string[] = [];
+    try {
+      running = input.runningRoots?.() ?? [];
+    } catch (error) {
+      logLine(`registry roots: ${messageOf(error)}`);
+      return;
+    }
+    const wanted = resolve(named);
+    if (!running.some((root) => root === named || resolve(root) === wanted)) {
+      logLine(`root.added ${named}: not a running registry team; the heartbeat will rescan`);
+      return;
+    }
+    await hostCheckout(named);
+  };
+  for (const named of pendingRootAdds.splice(0)) void adoptNotifiedRoot(named);
+  for (const rootArg of input.roots) await hostCheckout(rootArg);
 
   // The chores fleet: one supervised child per group of roots, for a daemon started with the
   // isolation seam. Each accepted route reads its own policy chain to the team level; a chain
@@ -2320,6 +2364,17 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     });
   };
   beat = () => {
+    if (input.runningRoots !== undefined && !closed) {
+      try {
+        for (const root of input.runningRoots()) {
+          void hostCheckout(root).catch((error: unknown) => {
+            logLine(`registry roots: ${messageOf(error)}`);
+          });
+        }
+      } catch (error) {
+        logLine(`registry roots: ${messageOf(error)}`);
+      }
+    }
     try {
       faultInbox.consume(faultTargets);
     } catch (error) {
