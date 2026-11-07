@@ -1107,6 +1107,7 @@
     "test/src-runtime-paths.test.ts": 3,
     "test/stale-session-guard-acceptance.test.ts": 0,
     "test/start-folder-own-independent.test.ts": 2,
+    "test/start-state-no-follow-independent.test.ts": 3,
     "test/state-departed-seats.test.ts": 0,
     "test/state-session-own-keys.test.ts": 1,
     "test/state.test.ts": 0,
