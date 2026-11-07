@@ -13,6 +13,8 @@ Read-only project analysis, checkpoint requests, named launchers, and guarded st
 
 ### Added
 
+- Cursor seats need Bun or Node `--experimental-ffi` when `grok-command-deny` is on.
+
 - `team analyse [<path>] [--json]` prints a read-only project report after verifying the caller as a
   named analyser for that session. It creates no team, writes no files, and runs no discovered
   checks.
