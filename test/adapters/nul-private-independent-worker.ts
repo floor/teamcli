@@ -39,6 +39,8 @@ if (samples[scene] !== undefined) {
   git(['add', '.gitattributes', 'notes.txt']);
   git(['-c', 'user.name=Synthetic', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '-m', 'test: seed synthetic corpus\n\nAgent: GPT Sol 6.1 · tester']);
   const parent = git(['rev-parse', 'HEAD']).toString().trim();
+  const publicBase = 'v0.0.0-fixture';
+  git(['tag', publicBase, parent]);
   if (scene === 'range') writeFileSync(join(repo, 'notes.txt'), `safe\n${needle}\npadding\0tail\n`);
   if (scene === 'range-split') writeFileSync(join(repo, 'notes.txt'), `safe\n${split}\n`);
   git(['add', 'notes.txt']);
@@ -47,13 +49,13 @@ if (samples[scene] !== undefined) {
   const raw = Buffer.from(`tree ${tree}\nparent ${parent}\nauthor Synthetic <fixture@example.invalid> 1793520000 +0000\ncommitter Synthetic <fixture@example.invalid> 1793520000 +0000\n\n${body}\nAgent: GPT Sol 6.1 · tester\n`);
   const commit = git(['hash-object', '--literally', '-t', 'commit', '-w', '--stdin'], raw).toString().trim();
   git(['update-ref', 'refs/heads/main', commit, parent]);
-  const built = privateDiffCorpus(repo, parent);
+  const built = privateDiffCorpus(repo, publicBase);
   if ('problem' in built) throw new Error(built.problem);
   const scan = scanPrivateLines(built.corpus.lines, sources);
   if ('problem' in scan) throw new Error(scan.problem);
   const locations = scan.hits.map((hit) => built.corpus.where[hit.line - 1]);
   const script = fileURLToPath(new URL('../../scripts/check-private-diff.ts', import.meta.url));
-  const cli = spawnSync(process.execPath, [script, '--root', repo, '--base', parent, '--private-names', names, '--private-phrases', phrases], { cwd: repo, env, encoding: 'utf8', timeout: 15_000 });
+  const cli = spawnSync(process.execPath, [script, '--root', repo, '--base', publicBase, '--private-names', names, '--private-phrases', phrases], { cwd: repo, env, encoding: 'utf8', timeout: 15_000 });
   const rawAgain = git(['cat-file', 'commit', commit]);
   console.log(JSON.stringify({ home, locations, commit, corpusHasNul: built.corpus.lines.some((line) => line.includes('\0')), rawHasNul: rawAgain.includes(0), rawHasNeedle: rawAgain.includes(Buffer.from(needle)), code: cli.status, out: cli.stdout, err: cli.stderr, leaks: (cli.stdout + cli.stderr).includes(needle) }));
 }

@@ -345,10 +345,10 @@ describe('synchronous child calls bound their wait and close stdin', () => {
       if ('problem' in publicScan) {
         expect(publicScan.problem).toMatch(/cannot list the tracked files.*ETIMEDOUT/);
       }
-      const privateDiff = privateDiffCorpus(project, 'HEAD');
+      const privateDiff = privateDiffCorpus(project, 'origin/main');
       expect('problem' in privateDiff).toBe(true);
       if ('problem' in privateDiff) {
-        expect(privateDiff.problem).toContain('cannot read the diff against HEAD');
+        expect(privateDiff.problem).toContain('cannot resolve private diff public base');
       }
 
       expect(commitTrace(project)).toBeNull();
