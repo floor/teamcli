@@ -38,8 +38,9 @@ const GIT_CONFIG = ['log.showSignature=false', 'i18n.logOutputEncoding=UTF-8', '
 
 const TRAILER_LINE = /^[A-Za-z0-9-]+\s*:\s*\S/;
 
-// Internal seat addresses are not public attribution. Ordinary role words and hyphenated
-// descriptions remain valid; private persona names stay in the external private lists.
+// This commit-message-only rule catches numbered role IDs and named review-role IDs.
+// It does not replace the private-names prepush scan, which still covers personal and
+// persona names. Ordinary role words and hyphenated descriptions remain valid.
 const INTERNAL_SEAT_TOKEN = /(^|[^A-Za-z0-9_-])(?:(?:builder|operator|tester)-[0-9]+|reviewer-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)(?=$|[^A-Za-z0-9_-])/i;
 
 function exit(message: string): never {
