@@ -831,6 +831,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `start.caller` | `start` | 1 | the caller is not the owner of an account with a durable record | `team start` |
 | `start.clis` | `start` | 1 | fewer than two supported signed-in CLIs can staff the preset | `team start --json` |
 | `start.existing-team` | `start` | 1 | the folder already holds a team without a recorded preset step; its files are left unchanged | `team start` |
+| `start.files` | `start` | 1 | the setup files cannot be read or written safely; unsafe paths are refused | `team start` |
 | `start.incomplete` | `start` | 1 | at least one required setup step or readiness, exchange or working-state proof is incomplete | `team start --json` |
 | `start.usage` | `start` | 2 | the invocation cannot be read | `team start --unknown` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |

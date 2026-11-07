@@ -8406,6 +8406,17 @@ function analyze(...args: Parameters<typeof analyzeSource>): ReturnType<typeof a
     expect(existsSync(join(place.root, '.agents', 'start.json'))).toBe(false);
     return result;
   }, false);
+  scene('start.files', async (place) => {
+    durableStartAccount(place);
+    const outside = join(place.home, 'outside.txt');
+    writeFileSync(outside, 'kept\n');
+    symlinkSync(outside, join(place.root, '.agents', 'start.json'));
+    const result = await started(place);
+    expect(readFileSync(outside, 'utf8')).toBe('kept\n');
+    expect(existsSync(place.file)).toBe(false);
+    expect(readFileSync(join(place.home, '.config', 'team', 'teams.yaml'), 'utf8')).toBe('teams: {}\n');
+    return show(result, 'setup files refused');
+  }, false);
   scene('start.incomplete', async (place) => {
     durableStartAccount(place);
     const result = await started(place, ['--json'], { ready: () => ({ lead: false, builder: true }) });

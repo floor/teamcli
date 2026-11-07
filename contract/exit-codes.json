@@ -5779,6 +5779,13 @@
     {
       "code": 1,
       "command": "start",
+      "id": "start.files",
+      "meaning": "the setup files cannot be read or written safely; unsafe paths are refused",
+      "trigger": "team start"
+    },
+    {
+      "code": 1,
+      "command": "start",
       "id": "start.incomplete",
       "meaning": "at least one required setup step or readiness, exchange or working-state proof is incomplete",
       "trigger": "team start --json"
