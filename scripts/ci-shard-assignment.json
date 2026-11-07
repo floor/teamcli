@@ -1089,6 +1089,7 @@
     "test/status-rejected-sweep-independent.test.ts": 2,
     "test/status-reporter-compatibility.test.ts": 0,
     "test/status-source-arbitration.test.ts": 3,
+    "test/status-spool-staging-ctime-independent.test.ts": 2,
     "test/status-spool-sweep-fairness-independent.test.ts": 5,
     "test/status-wake.test.ts": 3,
     "test/status.test.ts": 1,
