@@ -90,6 +90,10 @@ Read-only project analysis, checkpoint requests, named launchers, and guarded st
 
 ### Changed
 
+- New or refreshed daemon service units omit pinned checkout arguments and discover running
+  teams from the registry. Install still validates its named checkouts; those names no longer pin
+  the service's hosted set. A manual run with explicit `--root` keeps its named roots.
+
 - An idle Antigravity or Grok wake submits through the agent prompt after two idle readings, without
   typing. A line still held in the composer is not prompted again.
 
@@ -187,6 +191,12 @@ Read-only project analysis, checkpoint requests, named launchers, and guarded st
   input cannot match a permission prompt or hold the hook waiting for more input.
 
 ### Upgrade notes
+
+- A daemon that adds a running team's root keeps hosting it until the daemon restarts; stopping
+  or archiving the team does not remove its hosted endpoints from the current process.
+
+- An installed 0.5.15 daemon keeps its retained program and pinned roots when the package is
+  upgraded. Refresh it with `team daemon install` to write the new registry-based service unit.
 
 - Existing Grok or Cursor seats with `cwd: .` and no recorded worktree are refused on their next
   placement or relaunch until `cwd` names their own folder.
