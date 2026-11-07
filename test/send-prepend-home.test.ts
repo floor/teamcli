@@ -102,6 +102,10 @@ describe('team send: a prepend seat composes the receiving home’s rules', () =
         '    entity: ent-a',
         '    rules:',
         `      - ${JSON.stringify(PROJECT_RULE)}`,
+        '    provenance:',
+        '      registered_by: test',
+        '      registered_at: "2026-11-06T00:00:00.000Z"',
+        '      updated_at: "2026-11-06T00:00:00.000Z"',
         '',
       ].join('\n'),
     );
