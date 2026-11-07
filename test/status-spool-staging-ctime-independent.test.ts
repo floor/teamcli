@@ -1,7 +1,9 @@
 // An exact staging name is reclaimed from its own ctime. The sweep clock is the third argument,
 // so the five-minute window moves without waiting. mtime, an hour either way, does not. A fresh
 // name is kept and, once renamed onto the receipt, stays published. A symlink is aged by its own
-// inode and is not followed. An lstat failure leaves that name in place.
+// inode and is not followed. The sweep calls lstat directly and takes no fs seam, so a failure
+// is a real ENAMETOOLONG: the staging path is grown past the platform limit, and a shorter
+// sibling stays under it.
 import { expect, test } from 'bun:test';
 import {
   lstatSync, lutimesSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync,
@@ -139,7 +141,8 @@ test('a dangling staging symlink is aged by its own ctime and never followed', (
 test('an lstat failure keeps the staging name', () => {
   const base = fixtureBase('spool-ctime-lstat');
   const root = join(base, 'presence');
-  const parts = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p'];
+  // Enough name-max segments to pass both the 1024-byte and 4096-byte path limits.
+  const parts = Array.from({ length: 24 }, (_, index) => `p${String(index).padStart(2, '0')}`);
   const staging = receiptName('00000007').staging;
   const spoolAt = (names: readonly string[]) => join(base, ...names, 'spool');
   try {
@@ -149,26 +152,34 @@ test('an lstat failure keeps the staging name', () => {
     writeFileSync(join(spoolAt(parts), 'zz-note'), 'junk\n', { mode: 0o600 });
     let spins = 0;
     for (;;) {
-      if (++spins > 400) throw new Error('staging path stayed statable');
+      if (++spins > 800) throw new Error('staging path stayed statable');
       const spool = spoolAt(parts);
       let stagingCode: string | undefined;
       try { lstatSync(join(spool, staging)); }
       catch (error) { stagingCode = (error as NodeJS.ErrnoException).code; }
-      let junkOk = true;
+      let junkCode: string | undefined;
       try { lstatSync(join(spool, 'zz-note')); }
-      catch { junkOk = false; }
-      if (stagingCode === 'ENAMETOOLONG' && junkOk) break;
+      catch (error) { junkCode = (error as NodeJS.ErrnoException).code; }
+      if (stagingCode === 'ENAMETOOLONG' && junkCode === undefined) break;
       if (stagingCode !== undefined) throw new Error(`staging lstat ${stagingCode}`);
-      if (!junkOk) throw new Error('junk path became unstatable before the staging name');
-      const index = parts.findIndex((part) => part.length < 240);
+      if (junkCode !== undefined) throw new Error(`junk lstat ${junkCode}`);
+      const index = parts.findIndex((part) => part.length < 255);
       if (index < 0) throw new Error('staging path stayed statable');
       const from = join(base, ...parts.slice(0, index + 1));
       const previous = parts[index]!;
-      // The staging name is 51 bytes longer than zz-note, so a short step crosses the
-      // platform path limit for the staging name while the junk name still stats.
-      const extra = Math.min(240 - previous.length, 32);
+      // 51 bytes separate the staging name from zz-note, so a short step crosses the
+      // limit for one and not the other. Outer segments grow first, so the rename stays
+      // under the limit until the leaf path is already too long to lstat.
+      const extra = Math.min(255 - previous.length, 32);
       parts[index] = `${previous}${'n'.repeat(extra)}`;
-      renameSync(from, join(base, ...parts.slice(0, index + 1)));
+      try {
+        renameSync(from, join(base, ...parts.slice(0, index + 1)));
+      } catch (error) {
+        parts[index] = previous;
+        if ((error as NodeJS.ErrnoException).code !== 'ENAMETOOLONG' || extra === 1) throw error;
+        parts[index] = `${previous}n`;
+        renameSync(from, join(base, ...parts.slice(0, index + 1)));
+      }
     }
     const spool = spoolAt(parts);
     expect(readdirSync(spool)).toContain(staging);
