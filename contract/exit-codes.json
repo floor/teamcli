@@ -4414,6 +4414,20 @@
     {
       "code": 1,
       "command": "reload",
+      "id": "reload.inbox-start-same",
+      "meaning": "the same seat's start folder no longer verifies after its brief delivery; the inbox is not refreshed",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.inbox-start-unrecorded",
+      "meaning": "the unrecorded-model seat's start folder no longer verifies after its brief delivery; the inbox is not refreshed",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
       "id": "reload.launch",
       "meaning": "the close happened and the new launch did not reach ready",
       "trigger": "team reload worker"
@@ -4445,6 +4459,27 @@
       "id": "reload.self",
       "meaning": "a reload does not close the caller's seat",
       "trigger": "team reload lead"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.start",
+      "meaning": "the planned relaunch folder is not the seat's own; its workspace is left open",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.start-same",
+      "meaning": "the seat matches the file, but its recorded start folder is missing or is not its own; nothing refreshed",
+      "trigger": "team reload worker"
+    },
+    {
+      "code": 1,
+      "command": "reload",
+      "id": "reload.start-unrecorded",
+      "meaning": "the launch record has no model and its start folder cannot be verified as its own; nothing refreshed",
+      "trigger": "team reload worker"
     },
     {
       "code": 1,

@@ -636,11 +636,16 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `reload.grant-omitted` | `reload` | 1 | the file grants nothing | `team reload worker` |
 | `reload.grant-scope` | `reload` | 1 | the grant does not list reload | `team reload worker` |
 | `reload.human` | `reload` | 1 | the seat is a human's pane; nothing is closed, typed into or launched over it | `team reload worker` |
+| `reload.inbox-start-same` | `reload` | 1 | the same seat's start folder no longer verifies after its brief delivery; the inbox is not refreshed | `team reload worker` |
+| `reload.inbox-start-unrecorded` | `reload` | 1 | the unrecorded-model seat's start folder no longer verifies after its brief delivery; the inbox is not refreshed | `team reload worker` |
 | `reload.launch` | `reload` | 1 | the close happened and the new launch did not reach ready | `team reload worker` |
 | `reload.not-idle` | `reload` | 1 | the seat is not at an idle prompt; nothing closed | `team reload worker` |
 | `reload.not-running` | `reload` | 1 | the seat has no ready pane to close | `team reload worker` |
 | `reload.run-lock` | `reload` | 1 | another session-mutating run is holding the session | `team reload worker` |
 | `reload.self` | `reload` | 1 | a reload does not close the caller's seat | `team reload lead` |
+| `reload.start` | `reload` | 1 | the planned relaunch folder is not the seat's own; its workspace is left open | `team reload worker` |
+| `reload.start-same` | `reload` | 1 | the seat matches the file, but its recorded start folder is missing or is not its own; nothing refreshed | `team reload worker` |
+| `reload.start-unrecorded` | `reload` | 1 | the launch record has no model and its start folder cannot be verified as its own; nothing refreshed | `team reload worker` |
 | `reload.unsent` | `reload` | 1 | the seat holds unsent text; nothing closed | `team reload worker` |
 | `reload.untested` | `reload` | 1 | the installed CLI is outside its profile's tested range, so the relaunch's ready screen may not be recognised; nothing closed | `team reload worker` |
 | `reload.working` | `reload` | 1 | the seat is working; nothing closed | `team reload worker` |
