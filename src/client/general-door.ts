@@ -18,11 +18,12 @@
 // so is `--general` on a form that never reads a grant. No admission path can outrun the 0.5.10
 // rule that way, and everything else is the command's.
 // Never admitted here: `team client general-grant`, the one command that issues grants — a
-// grant never issues itself — or a named inbox read (`drops --id`).
+// grant never issues itself — a named inbox read (`drops --id`), or an explicitly refused
+// command in GENERAL_REFUSED_COMMANDS. Those commands never become an owner through a grant.
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import type { Io } from '../io.ts';
-import { FLAG_OPS, grantCoversOp, grantIsWildcard, grantKeyMatches, readGeneralGrant, VERB_OPS, type GeneralGrant, type GeneralOp } from './general-grant.ts';
+import { FLAG_OPS, GENERAL_REFUSED_COMMANDS, grantCoversOp, grantIsWildcard, grantKeyMatches, readGeneralGrant, VERB_OPS, type GeneralGrant, type GeneralOp } from './general-grant.ts';
 
 /** Commands that parse `--general` themselves. */
 export const OWN_GENERAL = new Set(['up', 'init', 'config']);
@@ -317,6 +318,7 @@ export function generalDoor(name: string, rest: string[], io: Io, now: Date = ne
   const general = take(rest, 'general');
   if (!general.present) return { kind: 'pass', argv: rest, io };
   const json = rest.includes('--json') || rest.some((word) => word.startsWith('--json='));
+  if (GENERAL_REFUSED_COMMANDS.has(name)) return { kind: 'refused', why: `only the owner runs team ${name}, from a terminal outside a team session; a general grant never admits it`, json };
   if (issuesGrants(name, rest)) return { kind: 'usage', why: 'team client general-grant issues grants and takes no --general (a holder issues with --via <grant.json> --key <client.key>)', json };
   if (general.value === undefined) return { kind: 'usage', why: '--general takes <grant.json>', json };
   const key = take(general.rest, 'key');

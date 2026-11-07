@@ -10,6 +10,8 @@ import { keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/k
 import { CLIENT_PUBLIC_KEY_PATTERN, publicKeyObject, readClientPrivateKey } from './records.ts';
 
 export const GENERAL_GRANT_DOMAIN = 'team-general-grant-v1';
+/** Dispatcher commands explicitly refused by the general door, outside its op vocabulary. */
+export const GENERAL_REFUSED_COMMANDS: ReadonlySet<string> = new Set(['start']);
 // Every command's op: the first nine since 0.5.6, then (0.5.8) every other command the dispatcher's
 // general door admits, so a listed grant may name any of them. `abandon` is `down --abandon`'s.
 // A command added later is covered by the wildcard at once, and by name once it is listed here

@@ -138,6 +138,7 @@ export const CAREFUL_RULES: readonly LaneRule[] = [
       'src/send',
       'src/settings',
       'src/signing',
+      'src/start',
       'src/status',
       'src/store',
       'src/watch',

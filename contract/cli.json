@@ -7755,12 +7755,6 @@
       "flags": [
         {
           "hidden": false,
-          "name": "--general",
-          "repeatable": false,
-          "takesValue": true
-        },
-        {
-          "hidden": false,
           "name": "--help",
           "repeatable": false,
           "takesValue": false
@@ -7770,12 +7764,6 @@
           "name": "--json",
           "repeatable": false,
           "takesValue": false
-        },
-        {
-          "hidden": false,
-          "name": "--key",
-          "repeatable": false,
-          "takesValue": true
         },
         {
           "hidden": true,
@@ -7793,7 +7781,7 @@
       ],
       "who": {
         "gate": "owner-only",
-        "why": "an empty account is not admitted; once a durable record exists, only the owner runs the pass, and the lead send stays on the ordinary map"
+        "why": "an empty account is not admitted; once a durable record exists, only the owner runs the pass from a terminal outside a team session; a general grant never admits it, and the lead send stays on the ordinary map"
       }
     },
     {

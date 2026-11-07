@@ -83,7 +83,7 @@ function buildGates(): Record<string, Gate> {
     },
     start: {
       kind: 'owner-only',
-      why: 'an empty account is not admitted; once a durable record exists, only the owner runs the pass, and the lead send stays on the ordinary map',
+      why: 'an empty account is not admitted; once a durable record exists, only the owner runs the pass from a terminal outside a team session; a general grant never admits it, and the lead send stays on the ordinary map',
     },
     up: {
       kind: 'owner-or-leads',

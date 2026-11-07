@@ -3688,16 +3688,14 @@ Usage:
 
 ### Who may run it
 
-`owner-only` — an empty account is not admitted; once a durable record exists, only the owner runs the pass, and the lead send stays on the ordinary map
+`owner-only` — an empty account is not admitted; once a durable record exists, only the owner runs the pass from a terminal outside a team session; a general grant never admits it, and the lead send stays on the ordinary map
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
-| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
-| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals

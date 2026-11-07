@@ -11,6 +11,7 @@ import { commands } from '../src/cli.ts';
 import {
   GENERAL_GRANT_DOMAIN,
   GENERAL_OPS,
+  GENERAL_REFUSED_COMMANDS,
   OP_FIRST_SHIPPED,
   OP_RELEASE_GROUPS,
   generalGrantPath,
@@ -83,7 +84,7 @@ test('no dispatcher route is unmeasured: each has a release row or is declared u
   // A route added without a measured release would otherwise pass the check above: an op with
   // no row is consistent with the table. This is the check that fails instead. The routes are
   // the dispatcher's own table, and every one of them is an op of the general door.
-  const routes = Object.keys(commands);
+  const routes = Object.keys(commands).filter((name) => !GENERAL_REFUSED_COMMANDS.has(name));
   for (const name of routes) expect(GENERAL_OPS as readonly string[]).toContain(name);
   const unmeasured = routes.filter(
     (name) => OP_FIRST_SHIPPED[name as GeneralOp] === null && !UNRELEASED_OPS.includes(name),
