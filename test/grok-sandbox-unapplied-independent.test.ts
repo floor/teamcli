@@ -3,6 +3,7 @@
 // byte for byte as it was. The same words are what team status and team check show. A frame
 // after a ready prompt has ended the launch wait is left alone. The pane host is the outer edge.
 import { afterEach, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
@@ -15,7 +16,7 @@ import { lobbyDir } from '../src/lobby/gate.ts';
 import { readState } from '../src/state.ts';
 import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
-import { fixtureBase, recordRenames, testIo } from './helpers.ts';
+import { fixtureBase, gitEnv, recordRenames, testIo } from './helpers.ts';
 
 const GROK_IDLE = readFileSync(new URL('./fixtures/grok/1.0.70/idle.txt', import.meta.url), 'utf8');
 const NOW = new Date('2026-11-06T21:30:00Z');
@@ -54,10 +55,15 @@ function scene(when: When): {
   scratch = fixtureBase('grok-sandbox-unapplied');
   const home = join(scratch, 'home');
   const root = join(scratch, 'repo');
+  const own = join(scratch, 'own-scout');
   const grok = join(home, '.grok');
   mkdirSync(lobbyDir(home), { recursive: true, mode: 0o700 });
   mkdirSync(grok, { recursive: true, mode: 0o700 });
   mkdirSync(root, { recursive: true });
+  mkdirSync(own, { recursive: true, mode: 0o700 });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'init', '-q'], {
+    cwd: own, env: gitEnv(),
+  });
   process.env.GROK_HOME = grok;
   const text = `format: 1
 project: acme
@@ -68,8 +74,8 @@ workspace:
   mode: shared
   base: main
 trust:
-  - ${lobbyDir(home)}
-  - ${root}
+  - .
+  - ../own-scout
 seats:
   - role: coordinator
     name: captain
@@ -88,6 +94,7 @@ seats:
     model: "Grok"
     version: "4.7"
     launch: grok
+    cwd: ../own-scout
 `;
   const file = join(root, '.agents', 'team.yaml');
   mkdirSync(dirname(file), { recursive: true });
@@ -258,6 +265,9 @@ test('a launch with no such line is not stopped and nothing is typed', async () 
   const said = reports(made.root, made.home, made.file);
   expect(said.status).not.toContain(SHOWN);
   expect(said.check).not.toContain(SHOWN);
+  expect(made.frames()).toBeGreaterThan(0);
+  expect(seatRecord(made.root)).not.toBe('null');
+  expect(seatRecord(made.root)).toContain('fixture-pane-one');
 });
 
 test('the line drawn at the launch wait bound stops the seat', async () => {
@@ -289,4 +299,7 @@ test('the line drawn after the launch wait ended is not acted on and nothing is 
   const said = reports(made.root, made.home, made.file);
   expect(said.status).not.toContain('sandbox could not be applied');
   expect(said.check).not.toContain('sandbox could not be applied');
+  expect(seen).toBeGreaterThan(0);
+  expect(seatRecord(made.root)).not.toBe('null');
+  expect(seatRecord(made.root)).toContain('fixture-pane-one');
 });
