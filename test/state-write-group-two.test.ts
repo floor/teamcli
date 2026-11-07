@@ -87,3 +87,12 @@ for (const dangling of [false, true]) {
     unchanged();
   });
 }
+
+test('A12 queue validates its staged candidate through an alias above the established root', () => {
+  const at = fixture(); const physical = join(at.base, 'physical'); const root = join(physical, 'project');
+  mkdirSync(join(root, '.agents'), { recursive: true });
+  const alias = join(at.base, 'alias-above'); symlinkSync(physical, alias);
+  const result = addToQueue(join(alias, 'project'), { path: '.agents/queue.yaml', local: true }, { id: 'item', title: 'Synthetic item' });
+  expect(result.kind).toBe('added');
+  expect(readFileSync(join(root, '.agents', 'queue.yaml'), 'utf8')).toContain('Synthetic item');
+});

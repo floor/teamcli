@@ -4,6 +4,7 @@
 // declared file identically. A team that declares a file source is written at its own path; a
 // team that declares a broker source has no local queue at all, and this module is never asked
 // to write one.
+import { realpathSync } from 'node:fs';
 import { readStateFile, writeStateFile } from '../file-write.ts';
 import { join, relative, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -87,9 +88,10 @@ export function addToQueue(root: string, source: FileSource, record: TaskRecord)
     let message = 'the queue file could not be written';
     try {
       const text = candidateText(full, record, root);
+      const validationRoot = realpathSync(root);
       const validated: { result?: Extract<QueueAddResult, { kind: 'added' }> } = {};
       writeStateFile(full, text, { root, validateTemporary: (temporary) => {
-        const checked = fileAdapter.read({ root, path: relative(root, temporary) });
+        const checked = fileAdapter.read({ root: validationRoot, path: relative(validationRoot, temporary) });
         const found = checked.kind === 'records' ? checked.records.find((item) => item.id === record.id) : undefined;
         if (checked.kind !== 'records' || found === undefined) {
           message = 'the added record did not read back as a task';
