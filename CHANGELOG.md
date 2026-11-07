@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- State files, delivery markers, logs, queues and first-run admission now refuse unsafe links and publish through checked private files.
+- New team logs and replaced task queues and repository exclude files now use owner-only 0600 permissions.
+- State writes accept a physical child path under a root spelled through an ancestor alias. A declared root that is itself a symbolic link is refused; use its real folder path.
+
 ## [0.5.17] - 2026-11-07
 
 Carries the v0.5.16 content. v0.5.16 was tagged but never published to npm.
