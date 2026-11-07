@@ -289,6 +289,9 @@ export const OP_RELEASE_GROUPS: readonly { tag: string; at: string; ops: readonl
   // v0.5.11 and that commit the dispatcher gained exactly four routes, `fallback`, `order`, `trace`
   // and `waits`, and lost none.
   { tag: 'v0.5.12', at: '2026-11-05T23:50:33+01:00', ops: ['fallback', 'order', 'trace', 'waits'] },
+  // The existing v0.5.16 tag contains these routes, even though that version was not
+  // published to npm. The tag remains their first measured dispatcher.
+  { tag: 'v0.5.16', at: '2026-11-07T06:08:57+01:00', ops: ['analyse', 'checkpoint', 'show'] },
 ];
 /** The first release that shipped each op, or null while no release ships it. */
 export const OP_FIRST_SHIPPED: Readonly<Record<GeneralOp, OpRelease | null>> = (() => {
