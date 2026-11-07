@@ -292,7 +292,7 @@ describe('team checkpoint', () => {
       const release = OP_FIRST_SHIPPED[op];
       return release !== null && Date.parse(release.at) > Date.parse(SIGNED);
     });
-    expect(shipped).not.toContain('checkpoint');
+    expect(shipped).toContain('checkpoint');
 
     const caller = ioFor(world.root, { kind: 'seat', session: 'alpha', name: 'worker', pane: 'pane-work' }, world.home);
     caller.io.stdinIsTTY = true;
@@ -370,7 +370,7 @@ seats:
     expect(note).toBe(
       `note: wildcard general grant ${issued.grant.grant_id} signed 2026-10-27 now reaches ${shipped.join(', ')}, which shipped in later releases; re-sign the grant to stop this note`,
     );
-    expect(note).not.toContain('checkpoint');
+    expect(note).toContain('checkpoint');
   });
 });
 

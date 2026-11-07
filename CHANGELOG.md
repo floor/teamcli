@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Carries the v0.5.16 content. v0.5.16 was tagged but never published to npm.
 
+Read-only project analysis, checkpoint requests, named launchers, and guarded start folders for Grok and Cursor.
+
 ### Fixed
 
 - The wildcard general-grant release table records `analyse`, `checkpoint` and `show` at the

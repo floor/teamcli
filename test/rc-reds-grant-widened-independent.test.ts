@@ -276,16 +276,16 @@ describe('fix/rc-reds-grant-widened independent verification', () => {
   });
 
   test('probe 4: wildcards admit order and trace immediately and follow the unreleased-ops rule', () => {
-    // 4a. Every command in the dispatcher is in GENERAL_OPS. An op no release has shipped stays
-    // unreleased, so an older wildcard does not gain it. analyse, checkpoint and show have no release yet.
+    // 4a. Every command in the dispatcher is in GENERAL_OPS and has a measured release.
+    // The v0.5.16 tag measures analyse, checkpoint and show.
     for (const cmd of Object.keys(commands)) {
       expect(GENERAL_OPS as readonly string[]).toContain(cmd);
     }
     const unreleased = GENERAL_OPS.filter((op: GeneralOp) => OP_FIRST_SHIPPED[op] === null).sort();
-    expect(unreleased).toEqual(['analyse', 'checkpoint', 'show']);
+    expect(unreleased).toEqual([]);
 
     // 4b. A wildcard grant signed at v0.5.11 admits `order` and `trace` right now, and reports the
-    // four ops 0.5.12 first shipped as having shipped in a later release:
+    // four ops 0.5.12 first shipped and the three from v0.5.16 as later releases:
     const wildcardAt0511 = issueGrant(['*'], { issuedAt: new Date('2026-11-02T12:21:36+01:00') });
     expect(runDoor('order', ['--session', 'alpha'], wildcardAt0511).kind).toBe('admitted');
     expect(runDoor('trace', ['msg-1'], wildcardAt0511).kind).toBe('admitted');
@@ -294,13 +294,13 @@ describe('fix/rc-reds-grant-widened independent verification', () => {
     const at0511 = widened.find(
       (w) => w.grant.grant_id === wildcardAt0511.split('/').pop()?.replace('.json', ''),
     );
-    expect(at0511?.ops).toEqual(['fallback', 'order', 'trace', 'waits']);
+    expect(at0511?.ops).toEqual(['analyse', 'checkpoint', 'fallback', 'order', 'show', 'trace', 'waits']);
 
-    // A wildcard grant signed at v0.5.12's own time has no later release to reach.
+    // A wildcard grant signed at v0.5.12's own time reports v0.5.16's three ops.
     const wildcardAt0512 = issueGrant(['*'], { issuedAt: new Date('2026-11-05T22:50:33Z') });
     const later = wildcardGrantsWidened(home, new Date('2026-11-06T00:00:00Z'));
     expect(
-      later.find((w) => w.grant.grant_id === wildcardAt0512.split('/').pop()?.replace('.json', '')),
-    ).toBeUndefined();
+      later.find((w) => w.grant.grant_id === wildcardAt0512.split('/').pop()?.replace('.json', ''))?.ops,
+    ).toEqual(['analyse', 'checkpoint', 'show']);
   });
 });
