@@ -52,8 +52,9 @@ their settings. An expired declaration is unset. The owner can declare it with:
 Every launch and restart merges and verifies Cursor's file in the seat's own guarded start
 folder, or places native Grok's deny arguments on its launch. A placement or verification failure
 leaves the seat out. Cursor seats need Bun or Node `--experimental-ffi` when `grok-command-deny`
-is on. `team check` names missing rules. A Cursor seat can loosen its writable
-file until the next launch regenerates it; changing that file cannot remove native Grok's argv
+is on. A runtime without that capability refuses the seat in the plan, before creating its
+workspace or registering its inbox. `team check` names missing rules. A Cursor seat can loosen its
+writable file until the next launch regenerates it; changing that file cannot remove native Grok's argv
 rules. See [Grok command deny settings](../team-file.md#grok-command-deny-settings).
 
 `client-grant-max-duration` is how long a new client grant may last: `7d`, `30d`, `90d` or `none` (no

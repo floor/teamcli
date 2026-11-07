@@ -236,15 +236,15 @@ const input={root,home,team:loaded.team,session:'morning',sessionRunning:true,wa
 const plan=upPlan(input);
 const launch=plan.find(step=>step.do?.do==='launch')?.do;
 const baseline=upPlan({...input,team:undefined}).find(step=>step.do?.do==='launch')?.do;
-const commands=[],said=[];
-const host={startServer:()=>true,sessionUp:()=>true,createWorkspace:()=>({pane:'plain-node-pane',workspace:'plain-node-space'}),paneRun:(_session,_pane,command)=>{commands.push(command);return true;},typeLine:()=>false,deliverRules:async()=>true,renameAgent:()=>true,closeWorkspace:()=>true,stopSession:()=>true,kill:()=>true,agentPanes:()=>[],foreground:()=>['cursor-agent'],classify:()=>'idle',sleep:async()=>{},now:()=>0,allow:()=>null,record:()=>{},running:()=>{},drop:()=>{},say:line=>said.push(line),log:()=>{}};
+const commands=[],said=[]; let workspaceCreates=0,inboxRegisters=0;
+const host={startServer:()=>true,sessionUp:()=>true,createWorkspace:()=>{workspaceCreates++;return {pane:'plain-node-pane',workspace:'plain-node-space'};},registerInbox:()=>{inboxRegisters++;return null;},paneRun:(_session,_pane,command)=>{commands.push(command);return true;},typeLine:()=>false,deliverRules:async()=>true,renameAgent:()=>true,closeWorkspace:()=>true,stopSession:()=>true,kill:()=>true,agentPanes:()=>[],foreground:()=>['cursor-agent'],classify:()=>'idle',sleep:async()=>{},now:()=>0,allow:()=>null,record:()=>{},running:()=>{},drop:()=>{},say:line=>said.push(line),log:()=>{}};
 const executed=await executePlan(plan,'morning',host);
-console.log(JSON.stringify({runtime:process.release.name,execArgv:process.execArgv,relativeAvailable:getRelativeDirOps()!==null,commands,said,dropped:executed.dropped,marker:launch?.cursorCommandDeny??null,command:launch?.command,baseline:baseline?.command,recordLine:launch?.recordLine,baselineRecord:baseline?.recordLine}));
+console.log(JSON.stringify({runtime:process.release.name,execArgv:process.execArgv,relativeAvailable:getRelativeDirOps()!==null,commands,said,workspaceCreates,inboxRegisters,dryRun:plan.map(step=>step.text).join('\\n'),ops:plan.filter(step=>step.do?.seat==='worker').map(step=>step.do.do),dropped:executed.dropped,marker:launch?.cursorCommandDeny??null,command:launch?.command,baseline:baseline?.command,recordLine:launch?.recordLine,baselineRecord:baseline?.recordLine}));
 `);
   const output = execFileSync('node', [script, JSON.stringify({ root: w.root, home: w.home, cwd: w.cwd })], {
     cwd: w.root, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: w.home, USERPROFILE: w.home, TMPDIR: process.env.TMPDIR, NODE_ENV: 'test', LC_ALL: 'C', LANG: 'C', TZ: 'UTC' },
   });
-  return { result: JSON.parse(output) as { runtime: string; execArgv: string[]; relativeAvailable: boolean; commands: string[]; said: string[]; dropped: string[]; marker: string | null; command: string; baseline: string; recordLine: string; baselineRecord: string }, bytes, after: readFileSync(w.config, 'utf8') };
+  return { result: JSON.parse(output) as { runtime: string; execArgv: string[]; relativeAvailable: boolean; workspaceCreates: number; inboxRegisters: number; dryRun: string; ops: string[]; commands: string[]; said: string[]; dropped: string[]; marker: string | null; command: string; baseline: string; recordLine: string; baselineRecord: string }, bytes, after: readFileSync(w.config, 'utf8') };
 }
 
 for (const mode of ['unset', 'off'] as const) {
@@ -257,6 +257,8 @@ for (const mode of ['unset', 'off'] as const) {
     expect(result.command).toBe(result.baseline);
     expect(result.recordLine).toBe(result.baselineRecord);
     expect(result.commands).toEqual([result.baseline]);
+    expect(result.workspaceCreates).toBe(1);
+    expect(result.inboxRegisters).toBe(1);
     expect(result.dropped, JSON.stringify(result)).toEqual([]);
     expect(after).toBe(bytes);
   });
@@ -267,11 +269,25 @@ test('plain Node refuses enabled Cursor placement with the reason and runtime re
   expect(result.runtime).toBe('node');
   expect(result.execArgv).toEqual([]);
   expect(result.relativeAvailable).toBe(false);
-  expect(result.marker).toBe('git');
+  expect(result.marker).toBeNull();
   expect(result.commands).toEqual([]);
-  expect(result.dropped).toContain('worker');
+  expect(result.ops).toContain('refuse');
   expect(after).toBe(bytes);
-  const refusal = result.said.find(line => line.includes('relative file operations are unavailable'));
+  const refusal = result.said.find(line => line.includes('command-deny') && line.includes('relative file operations'));
   expect(refusal).toContain('run team on Bun or Node with --experimental-ffi');
   expect(refusal?.trimEnd()).not.toContain('\n');
+});
+
+test('plain Node plans the enabled-policy refusal before creating a workspace or registering an inbox', () => {
+  const { result, bytes, after } = plainNodeLaunch('git');
+  expect(result.workspaceCreates).toBe(0);
+  expect(result.inboxRegisters).toBe(0);
+  expect(result.ops).toContain('refuse');
+  expect(result.ops).not.toContain('create');
+  expect(result.ops).not.toContain('launch');
+  expect(result.dryRun).toContain('would refuse');
+  expect(result.dryRun).toContain('run team on Bun or Node with --experimental-ffi');
+  expect(result.dryRun).toContain('grok-command-deny off');
+  expect(result.commands).toEqual([]);
+  expect(after).toBe(bytes);
 });

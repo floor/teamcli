@@ -18,6 +18,7 @@ import { cliWatcher, type CliWatcher } from './cli-hook.ts';
 import { shellScriptWordOf } from './cli-scope.ts';
 import { grokSandboxOf, grokStartFolderProblem, type GrokSandbox } from './grok-sandbox.ts';
 import { grokCommandDenyLine, grokCommandDenyPolicy } from './grok-command-deny.ts';
+import { getRelativeDirOps } from '../send/drop-retention.ts';
 import type { GrokCommandDeny } from '../settings/grok-command-deny.ts';
 import { launchedCliBinary } from './line.ts';
 import type { WaitingRecord } from '../state.ts';
@@ -1260,6 +1261,12 @@ export function upPlan(input: UpInput): Step[] {
       continue;
     }
     const commandDeny = denyPolicy.value;
+    if (profile.cli === 'cursor' && commandDeny !== 'off' && getRelativeDirOps() === null) {
+      const why = 'its command-deny policy needs relative file operations, which this runtime lacks; run team on Bun or Node with --experimental-ffi, or set grok-command-deny off';
+      steps.push({ kind: 'skip', text: `${seat.name}: would refuse: ${why}`,
+        do: { do: 'refuse', seat: seat.name, why } });
+      continue;
+    }
     const inPlace = reuse !== undefined || ownLine !== undefined || (!fresh && seat.pane !== undefined);
     if (inPlace && (profile.cli === 'grok' || profile.cli === 'cursor') && seat.cwd === '.' && seat.worktree !== undefined) {
       cwd = resolve(input.root, seat.worktree);
