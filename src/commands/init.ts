@@ -263,10 +263,10 @@ export async function runInit(
   let actionOutcome: 'done' | 'refused' | null = null;
   const signing = approving || args.flags.has('approvals') || args.values['approval-mode'] !== undefined || args.flags.has('approval-modes') || args.values['revoke-approval'] !== undefined;
   const charter = signing ? { kind: 'absent' as const } : charterGate(actionHome, { operation: 'init', cwd: io.cwd }, store);
-  if (charter.kind === 'block') {
+  if (charter.kind === 'block' && !isOwner(callerOf(io))) {
     actionRefusal(charter.message);
     actionOutcome = 'refused';
-  } else if (args.flags.has('request') && charter.kind !== 'admit') {
+  } else if (args.flags.has('request')) {
     const root = findRoot(io.cwd);
     if (root === null) actionRefusal('not inside a git repository');
     else if (existsSync(join(root, TEAM_FILE))) actionRefusal(`${TEAM_FILE} exists already`);

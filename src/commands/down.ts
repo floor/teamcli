@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { notInForce } from '../approve/approval.ts';
 import { dirname, join, resolve } from 'node:path';
 import { readArgs, type Args } from '../args.ts';
-import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
+import { charterTargetOf, ownerSeatRuleAdmits, ownerSeatRuleCovers, ownerSeatStep } from '../client/owner-action-step.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { KEY_ISOLATION_LINE, activeClientUpGrant, withClientGrantLock, type ClientUpGrantRecord } from '../client/records.ts';
 import { verifyClientUp } from '../client/up-grant.ts';
@@ -722,7 +722,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   const seatSources = { ...(sources.home !== undefined ? { home: sources.home } : {}), now: sources.now, ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) };
   let seatApproved = false;
   if (clientDown === null) {
-    const seat = ownerSeatStep('down', 'team-down', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason }, io, seatSources);
+    const seat = ownerSeatStep('down', 'team-down', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason }, io, seatSources, [charterTargetOf(io.cwd, args.values.file)]);
     if (seat.kind === 'requested') {
       // exit: down.approval-requested
       return 0;
@@ -739,7 +739,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // reader to the owner. An owner-seat answer has already admitted this run.
   const detached = clientDown !== null || seatApproved ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) {
-    seatApproved = ownerSeatRuleAdmits('team-down', io.cwd, dry, io, seatSources);
+    seatApproved = ownerSeatRuleCovers(io.cwd, [charterTargetOf(io.cwd, args.values.file)]) && ownerSeatRuleAdmits('team-down', io.cwd, dry, io, seatSources);
     if (!seatApproved) {
       refuse(io, json, 'down', { id: 'down.detached', message: detached, repair: null });
       // exit: down.detached

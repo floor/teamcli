@@ -160,7 +160,7 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   // binds these words. Nothing is written on a request, and an approval for other words refuses.
   let seatApproved = false;
   if (args.flags.has('request') || args.values.approval !== undefined) {
-    const step = ownerSeatStep('config', 'team-config', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json, reason: args.values.reason }, io, { home, root, ...(sources.now ? { now: sources.now } : {}), ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}), ...(sources.present !== undefined ? { present: sources.present } : {}) });
+    const step = ownerSeatStep('config', 'team-config', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json, reason: args.values.reason }, io, { home, root, ...(sources.now ? { now: sources.now } : {}), ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}), ...(sources.present !== undefined ? { present: sources.present } : {}) }, [root]);
     if (step.kind === 'requested') {
       // exit: config.approval-requested
       return 0;
@@ -188,8 +188,8 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     if (!json) io.stderr(`team config: admitted by general grant ${admitted.grant.grant_id} (${admitted.grant.client_id})\n`);
     seatApproved = true;
   }
-  const gate = charterGate(home, { operation: 'config', cwd: io.cwd }, sources.ownerSeatStore);
-  if (gate.kind === 'block' && !seatApproved) {
+  const gate = charterGate(home, { operation: 'config', cwd: io.cwd, path: root }, sources.ownerSeatStore);
+  if (gate.kind === 'block' && !seatApproved && !isOwner(callerOf(rawIo))) {
     refuse(io, json, 'config', { id: 'config.charter', message: gate.message, repair: 'team setup --edit' });
     // exit: config.charter
     return 1;

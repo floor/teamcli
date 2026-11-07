@@ -13,6 +13,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { approveOwnerAction } from '../src/client/owner-action.ts';
 import { runConfig } from '../src/commands/config.ts';
 import { getAt, parsePath, withValue } from '../src/config/team-record.ts';
 import { parseYaml, toValue } from '../src/yaml.ts';
@@ -91,6 +92,20 @@ function place(): Place {
   return { base, home, root, store: seatOwner(home) };
 }
 
+/** `--request` records and writes nothing. The signed `--approval` is what writes. */
+async function requestedConfig(at: Place, argv: string[], sources: Parameters<typeof runConfig>[2]): Promise<void> {
+  const before = storedTeam(at.root, at.home)!.text;
+  const ask = testIo(at.root, { kind: 'owner' });
+  expect(await runConfig([...argv, '--request'], ask, sources), ask.err + ask.out).toBe(0);
+  expect(ask.out).toContain('recorded');
+  expect(storedTeam(at.root, at.home)!.text).toBe(before);
+  const id = /owner-seat request (oa_[0-9a-f]{24})/.exec(ask.out)?.[1];
+  expect(id).toBeTruthy();
+  expect(approveOwnerAction(at.home, id!, 'oui', at.store, NOW).ok).toBe(true);
+  const ran = testIo(at.root, { kind: 'owner' });
+  expect(await runConfig([...argv, '--approval', id!], ran, sources), ran.err + ran.out).toBe(0);
+}
+
 describe('the path grammar', () => {
   test('keeps an inherited name as a segment', () => {
     // Where the segment is a key is decided against the record, not by the spelling: under a
@@ -115,11 +130,9 @@ describe('a list item named after an inherited property', () => {
     const at = place();
     await underRegistry(async () => {
       const sources = { home: at.home, env: { ...process.env, TEAM_CONFIG_SOURCE: 'registry' }, now: () => NOW, ownerSeatStore: at.store, present: true };
-      const byName = testIo(at.root, { kind: 'owner' });
-      expect(await runConfig(['set', 'seats.constructor.model', 'Claude Sonnet', '--request'], byName, sources), byName.err).toBe(0);
+      await requestedConfig(at, ['set', 'seats.constructor.model', 'Claude Sonnet'], sources);
       expect(storedTeam(at.root, at.home)!.text).toContain('model: Claude Sonnet');
-      const byIndex = testIo(at.root, { kind: 'owner' });
-      expect(await runConfig(['set', 'seats.2.model', 'Claude Haiku', '--request'], byIndex, sources), byIndex.err).toBe(0);
+      await requestedConfig(at, ['set', 'seats.2.model', 'Claude Haiku'], sources);
       const text = storedTeam(at.root, at.home)!.text;
       expect(text).toContain('model: Claude Haiku');
       expect(text).not.toContain('model: Claude Sonnet');
@@ -137,10 +150,8 @@ describe('an owned map key named after an inherited property', () => {
       const get = testIo(at.root, { kind: 'owner' });
       expect(await runConfig(['get', 'budgets.accounts.constructor.reserve'], get, sources), get.err).toBe(0);
       expect(get.out.trim()).toBe('20%');
-      const set = testIo(at.root, { kind: 'owner' });
-      expect(await runConfig(['set', 'budgets.accounts.constructor.reserve', '10%', '--request'], set, sources), set.err).toBe(0);
-      const unset = testIo(at.root, { kind: 'owner' });
-      expect(await runConfig(['unset', 'budgets.accounts.prototype.sources', '--request'], unset, sources), unset.err).toBe(0);
+      await requestedConfig(at, ['set', 'budgets.accounts.constructor.reserve', '10%'], sources);
+      await requestedConfig(at, ['unset', 'budgets.accounts.prototype.sources'], sources);
       const record = toValue(parseYaml(storedTeam(at.root, at.home)!.text));
       expect(getAt(record, ['budgets', 'accounts', 'constructor', 'reserve'])).toEqual({ found: true, value: '10%' });
       expect(getAt(record, ['budgets', 'accounts', 'prototype', 'sources'])).toEqual({ found: false });
@@ -239,8 +250,7 @@ describe('team config through an inherited name', () => {
     const at = place();
     await underRegistry(async () => {
       const sources = { home: at.home, env: { ...process.env, TEAM_CONFIG_SOURCE: 'registry' }, now: () => NOW, ownerSeatStore: at.store, present: true };
-      const io = testIo(at.root, { kind: 'owner' });
-      expect(await runConfig(['set', 'project', 'other', '--request'], io, sources), io.err).toBe(0);
+      await requestedConfig(at, ['set', 'project', 'other'], sources);
       expect(storedTeam(at.root, at.home)!.text).toContain('\nproject: other\n');
       expect(at.store.prompts.length).toBe(1);
     });

@@ -17,11 +17,12 @@ Each word is a team id, a project name, or a session name.
 
 ## Who may run it
 
-The owner, from a terminal outside herdr. `--request` records every id as one request (`--reason
-<text>` is the short reason the card shows) and removes nothing; the owner answers on the owner
-page. `--approval` runs that answer once. A
-signed always rule for `team-forget` covering this folder admits the run with no request. A run
-with no terminal and no such answer is refused:
+The owner, from a terminal outside herdr. A charter never refuses that run. It admits anyone else
+only when it covers every team being forgotten, not the caller's folder. `--request` records every id as one request (`--reason
+<text>` is the short reason the card shows) and removes nothing, including when that charter
+covers the teams; the owner answers on the owner page. `--approval` runs that answer once. A
+signed always rule for `team-forget` admits the run only when it covers every team being forgotten.
+A run with no terminal and no such answer is refused:
 `team forget: only the owner runs this, from a terminal outside herdr`.
 
 Owners who relied on a wildcard general grant for `forget` now need a grant naming `forget` explicitly or a per-use `--request`/`--approval`.
@@ -50,10 +51,12 @@ a project name, or a session name; a word that names more than one team is refus
 repeated team. Each team's place in any project record is dropped with it. Panes are not stopped
 and the team file is not deleted. A bad word removes nothing.
 
-The owner runs it from a terminal outside herdr. --request records every id as one request
-(--reason <text> is the short reason the card shows) and removes nothing; --approval <request-id> runs it once the owner has answered on the owner page.
-One card and one Touch ID cover the whole list. A signed always rule for team-forget covering
-this folder admits the run with no request.
+The owner runs it from a terminal outside herdr, and a charter never refuses that run. A charter
+admits anyone else only when it covers every team being forgotten, not the caller's folder. --request records every id as one request
+(--reason <text> is the short reason the card shows) and removes nothing, including when that
+charter covers the teams; --approval <request-id> runs it once the owner has answered on the owner page.
+One card and one Touch ID cover the whole list. A signed always rule for team-forget admits the
+run only when it covers every team being forgotten.
 
 Exits 0 when the records are removed or a request is recorded, 1 when it is refused or a record
 is not there, 2 when the invocation can't be read.

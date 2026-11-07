@@ -7,7 +7,7 @@ import { KEY_ISOLATION_LINE, activeClientUpGrant, withClientGrantLock, type Clie
 import { verifyClientUp } from '../client/up-grant.ts';
 import { admitGeneral } from '../client/general-grant.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
-import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
+import { charterTargetOf, ownerSeatRuleAdmits, ownerSeatRuleCovers, ownerSeatStep } from '../client/owner-action-step.ts';
 import { spawnInheritedBus } from '../bus/supervise.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { readArgs, type Args } from '../args.ts';
@@ -1926,7 +1926,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     ? { kind: 'admitted' as const }
     : clientUp !== null && (args.flags.has('request') || args.values.approval !== undefined)
     ? (refuse(io, json, 'up', { id: 'up.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
-    : ownerSeatStep('up', 'team-up', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason }, io, sources);
+    : ownerSeatStep('up', 'team-up', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason }, io, sources, [charterTargetOf(io.cwd, args.values.file)]);
   if (badInvocation || allCode === 2) {
     if (badInvocation) {
       refuse(io, json, 'up', {
@@ -1985,7 +1985,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // `--session`, continues below.
   const otherFile = args.values.file !== undefined && resolve(io.cwd, args.values.file) !== resolve(io.cwd, TEAM_FILE);
   const aimed = otherFile || args.values.session !== undefined;
-  if (detached !== undefined && aimed) {
+  if (detached !== undefined && aimed && !(ownerSeatRuleCovers(io.cwd, [charterTargetOf(io.cwd, args.values.file)]) && ownerSeatRuleAdmits('team-up', io.cwd, dry, io, sources))) {
     refuse(io, json, 'up', { id: 'up.detached', message: detached, repair: null });
     // exit: up.detached
     return 1;
@@ -2207,7 +2207,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // other door refused.
   const ownerSeat = seatApproved || (
     detached === undefined && clientUp === null && !ordinaryAdmitted && !ownerToken && verdict === null && grantedSeat === null &&
-    ownerSeatRuleAdmits('team-up', io.cwd, dry, io, sources));
+    ownerSeatRuleCovers(io.cwd, [root]) && ownerSeatRuleAdmits('team-up', io.cwd, dry, io, sources));
 
   const createGranted = entityGrantAdmits(root, io, { home: sources.home, now: sources.now?.(), cwd: io.cwd });
   // The map's admission, the trusted owner token, the granted seat, a passed delegation, a pane

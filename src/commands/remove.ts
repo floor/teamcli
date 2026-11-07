@@ -216,7 +216,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // `test/owner-no-tty-boundaries.test.ts` throws at every read past a refusal and pins that
   // order.
   const charter = clientRun !== null ? { kind: 'absent' as const } : charterGate(sources.home ?? homedir(), { operation: 'remove', cwd: io.cwd }, sources.ownerSeatStore);
-  if (charter.kind === 'block') {
+  if (charter.kind === 'block' && !isOwner(walkCaller(io))) {
     refuse(io, json, 'remove', { id: 'remove.charter', message: charter.message, repair: null });
     // exit: remove.charter
     return 1;
