@@ -519,9 +519,9 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     return true;
   };
   if (detail === null && rulesProblem === null && source === null) {
-    if (refuseRefreshStart()) return 1;
+    if (refuseRefreshStart()) return 1; // exit: reload.start-same
     await deliverBrief(false);
-    if (!registerSeatInbox()) return 1;
+    if (!registerSeatInbox()) return 1; // exit: reload.inbox-start-same
     refreshHookFile();
     const summary = `team reload: ${seat.name} is already running what the file declares`;
     if (json) {
@@ -558,7 +558,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   }
   try {
     if (detail === null && rulesProblem === null) {
-      if (refuseRefreshStart()) return 1;
+      if (refuseRefreshStart()) return 1; // exit: reload.start-unrecorded
       updateState(dir, (file) => {
         const held = file.sessions[session]?.seats[seat.name];
         if (!held) return;
@@ -569,7 +569,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       });
       const summary = `team reload: ${seat.name}: its launch record held no model; recorded ${mentioned(shown, compared, recorded)}; it is already running what the file declares`;
       await deliverBrief(false);
-      if (!registerSeatInbox()) return 1;
+      if (!registerSeatInbox()) return 1; // exit: reload.inbox-start-unrecorded
       refreshHookFile();
       if (json) {
         writeJson(io, 'team.reload', {
@@ -677,7 +677,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       : { cwd: seat.cwd };
     if ('problem' in start) {
       refuse(io, json, 'reload', { id: 'reload.start', message: start.problem, repair: null });
-      return 1;
+      return 1; // exit: reload.start
     }
     const startFolders = placedStartFolders(team.seats, placement);
     const planned = {

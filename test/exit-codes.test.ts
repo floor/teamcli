@@ -6917,6 +6917,37 @@ scene('reload.same', async (place) => {
   recordReload(place, 'lead');
   return show(await reloaded(place, ['lead']), 'already running what the file declares');
 });
+function grokReloadRefusal(place: Place, recorded: boolean, drift = false): void {
+  const text = TEAM.replace('    cli: claude-code', '    cli: grok')
+    .replace('    model: Claude Opus', '    model: Grok')
+    .replace('    version: "5.5"', '    version: "4.7"')
+    .replace('    launch: claude --model claude-opus-5-5', '    launch: grok');
+  write(place, `${text}trust: [.]\n`);
+  recordReload(place, 'lead', recorded);
+  updateState(join(place.root, '.agents'), (state) => {
+    const held = state.sessions.acme?.seats.lead;
+    if (!held) throw new Error('the reload scene has no recorded seat');
+    held.cli = 'grok';
+    held.start_cwd = place.root;
+    if (recorded) {
+      held.model = drift ? 'Other' : 'Grok';
+      held.version = '4.7';
+      held.launch_line = 'grok';
+    }
+  });
+}
+scene('reload.start-same', async (place) => {
+  grokReloadRefusal(place, true);
+  return show(await reloaded(place, ['lead']), 'cannot start in or grant an ancestor');
+});
+scene('reload.start-unrecorded', async (place) => {
+  grokReloadRefusal(place, false);
+  return show(await reloaded(place, ['lead']), 'cannot start in or grant an ancestor');
+});
+scene('reload.start', async (place) => {
+  grokReloadRefusal(place, true, true);
+  return show(await reloaded(place, ['lead']), 'cannot start in or grant an ancestor');
+});
 scene('reload.absent', async (place) => {
   write(place, TEAM);
   return show(await reloaded(place, ['missing']), 'no seat of that name');
@@ -8322,7 +8353,10 @@ const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepa
   'send.handed',
   // The chores child's normal exit is reached only by the child itself, after its host ended its
   // input; a scene in this process cannot end its own standard input.
-  'daemon.chores-ended']);
+  'daemon.chores-ended',
+  // Re-checks after asynchronous brief delivery defend against a concurrently changed start
+  // folder. The synchronous start refusals have direct scenes above.
+  'reload.inbox-start-same', 'reload.inbox-start-unrecorded']);
 
 const contract = loadContract();
 contract.rows.forEach((row, index) => scenePosition.set(row.id, index));
