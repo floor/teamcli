@@ -142,7 +142,7 @@ export type StartMachineDaemonInput = {
   home?: string;
   /** The checkouts whose send and bus endpoints this one process hosts. */
   roots: string[];
-  /** The checkouts were read from registry teams whose lifecycle is running, not from --root. */
+  /** The checkouts were read from non-archived registry teams, not from --root. */
   rootsFromRegistry?: boolean;
   /** Re-read on each heartbeat and on root.added. A root it names is hosted when it is not already. */
   runningRoots?: () => readonly string[];
@@ -1112,7 +1112,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         // row's recorded lobby without changing the configuration or its admission checks.
         try {
           const recorded = new Set(Object.values(readTeams(home)).filter((record) =>
-            record.lifecycle === 'running' && record.project === loaded.team.project
+            record.lifecycle !== 'archived' && record.project === loaded.team.project
               && record.session === loaded.team.session && record.entity === loaded.team.entity
               && canonicalRoot(record.root || record.lobby) === loadedRoot,
           ).map((record) => record.lobby).filter(Boolean).map((folder) => canonicalRoot(folder) ?? resolve(folder)));

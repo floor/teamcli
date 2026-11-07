@@ -1,7 +1,8 @@
 // Which team folders the machine daemon hosts when its unit names none. The registry is the list:
-// a team whose lifecycle is `running`, and no other. `team start` writes that record and then
-// sends `root.added`; the heartbeat reads this same set, so a notice that never arrives still
-// lands on the next beat. A defined, stopped or archived team is not hosted from here.
+// every registered team except archived ones. Hosting keeps the team's endpoints available;
+// discovery does not change its lifecycle. Missing folders are left out before
+// endpoint admission, so a stale registry path cannot create a failed endpoint every beat.
+// `root.added` and the heartbeat read the same set, including defined and stopped teams.
 
 import { readTeamConfig } from '../file/team-config.ts';
 import { readStoredTeamConfig } from '../registry/team-config-store.ts';
@@ -28,11 +29,11 @@ function sameRun(a: RegistryTeam, b: RegistryTeam): boolean {
  * registry root; otherwise the lobby itself can be the team's plain-folder root. Failures stay
  * named rather than silently disappearing from the hosted set. */
 export function registryHosting(teams: Readonly<Record<string, RegistryTeam>>, home?: string): RegistryHosting {
-  const running = Object.entries(teams).filter(([, team]) => team.lifecycle === 'running');
-  const rooted = running.filter(([, team]) => team.root !== '');
+  const registered = Object.entries(teams).filter(([, team]) => team.lifecycle !== 'archived');
+  const rooted = registered.filter(([, team]) => team.root !== '' && canonicalRoot(team.root) !== null);
   const roots = new Set(rooted.map(([, team]) => folderKey(team.root)));
   const skipped: SkippedRegistryTeam[] = [];
-  for (const [id, team] of running) {
+  for (const [id, team] of registered) {
     if (team.root !== '') continue;
     if (rooted.some(([, other]) => {
       if (!sameRun(team, other)) return false;
@@ -57,9 +58,9 @@ export function registryHosting(teams: Readonly<Record<string, RegistryTeam>>, h
       }
     }
     // A lobby can be shared by unrelated teams. Another row for this same recorded run
-    // can retain its checkout even when only the lobby-only row is marked running. Use
-    // that recorded location, then validate its identity through the ordinary reader.
-    for (const other of Object.values(teams)) {
+    // can retain its checkout. Use that recorded location, then validate its identity
+    // through the ordinary reader. An archived row cannot supply a hosting location.
+    for (const [, other] of registered) {
       if (other.root !== '' && sameRun(team, other)) candidates.add(other.root);
     }
     if (team.lobby) candidates.add(team.lobby);
@@ -70,7 +71,11 @@ export function registryHosting(teams: Readonly<Record<string, RegistryTeam>>, h
     let root: string | undefined;
     let why = 'the recorded folder has no readable team configuration';
     for (const candidate of candidates) {
-      if (home === undefined) { root = folderKey(candidate); break; }
+      if (home === undefined) {
+        const canonical = canonicalRoot(candidate);
+        if (canonical !== null) { root = canonical; break; }
+        continue;
+      }
       let loaded: ReturnType<typeof readTeamConfig>;
       try { loaded = readTeamConfig(candidate, { home }); }
       catch {
@@ -100,15 +105,15 @@ export function registryHosting(teams: Readonly<Record<string, RegistryTeam>>, h
   return { roots: [...roots].sort().map((root) => ({ root, source: 'registry' as const })), skipped };
 }
 
-/** Every checkout a running registry team names, once each, in path order. */
+/** Every existing checkout a non-archived registry team names, once each, in path order. */
 export function runningRegistryRoots(teams: Readonly<Record<string, RegistryTeam>>, home?: string): RegistryRoot[] {
   return registryHosting(teams, home).roots;
 }
 
 /**
  * The set a `root.added` notice asks the daemon to host. Null when the line is not that notice.
- * A checkout the registry does not mark `running` is left out: the notice does not host a team
- * the record does not, and the next heartbeat reads the record again.
+ * The notice and heartbeat share the same registered set: defined and stopped teams are
+ * included, while archived rows and missing checkout folders are left out.
  */
 export function rootsFromAddedNotice(
   teams: Readonly<Record<string, RegistryTeam>>,

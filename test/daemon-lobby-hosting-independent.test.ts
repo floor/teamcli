@@ -188,7 +188,7 @@ test('a lobby that resolves to a different team is not hosted and status names t
   expect(JSON.parse(json.out).skippedTeams).toEqual(found.skipped);
 });
 
-test('a stopped or archived lobby-only row is not hosted', () => {
+test('a stopped lobby-only row is hosted while an archived row is not', () => {
   const { base, home } = ground();
   const stopped = folder(base, 'stopped');
   const archived = folder(base, 'archived');
@@ -197,7 +197,7 @@ test('a stopped or archived lobby-only row is not hosted', () => {
   row(home, 'c33ce0000003', 'box', stopped, 'stopped', '');
   row(home, 'd44ce0000004', 'box', archived, 'archived', '');
   const found = registryHosting(readTeams(home), home);
-  expect(found.roots).toEqual([]);
+  expect(found.roots).toEqual([{ root: hostedRoot(stopped), source: 'registry' }]);
   expect(found.skipped).toEqual([]);
 });
 

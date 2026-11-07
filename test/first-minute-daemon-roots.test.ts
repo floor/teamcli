@@ -59,9 +59,9 @@ describe('lobby-only daemon discovery', () => {
     expect(readFileSync(teamsFile(home), 'utf8')).toBe(before);
   });
 
-  test.each(['stopped', 'archived'] as const)('a %s lobby-only team stays unhosted', (lifecycle) => {
-    const { home } = lobbyTeam(lifecycle);
-    expect(runningRegistryRoots(readTeams(home), home)).toEqual([]);
+  test.each(['stopped', 'archived'] as const)('a %s lobby-only team is hosted unless archived', (lifecycle) => {
+    const { home, lobby } = lobbyTeam(lifecycle);
+    expect(runningRegistryRoots(readTeams(home), home)).toEqual(lifecycle === 'archived' ? [] : [{ root: lobby, source: 'registry' }]);
   });
 
   test('the matching checkout row supersedes the lobby-only row', () => {
@@ -130,7 +130,7 @@ describe('lobby-only daemon discovery', () => {
     const { home, root, lobby, id } = lobbyTeam();
     // The definition is keyed by the original root, whose registry row lost that field.
     const key = teamIdOf(root);
-    upsertTeam(home, id, { lifecycle: 'stopped' });
+    upsertTeam(home, id, { lifecycle: 'archived' });
     upsertTeam(home, key, { root, lobby, project: 'acme', session: 'acme', entity: null, lifecycle: 'running' });
     upsertTeam(home, key, { root: '' });
     writeStoredTeamConfig(home, { format: 1, id: key, root, text: LOBBY_TEAM,
@@ -251,43 +251,86 @@ function temp(): { home: string; root: string } {
 }
 
 describe('dynamic daemon roots', () => {
-  test('a running registry team is hosted and any other lifecycle is not', () => {
+  test('existing running, defined and stopped registry roots are hosted; archived roots are not', () => {
+    const { home } = temp();
+    const roots = ['a', 'b', 'c', 'd', 'e'].map((name) => join(home, name));
+    for (const root of roots) mkdirSync(root);
     expect(runningRegistryRoots({
-      a: { root: '/repo/a', lifecycle: 'running' },
-      b: { root: '/repo/b', lifecycle: 'defined' },
-      c: { root: '/repo/c', lifecycle: 'running' },
-      d: { root: '/repo/d', lifecycle: 'stopped' },
-      e: { root: '/repo/e', lifecycle: 'archived' },
-    })).toEqual([
-      { root: '/repo/a', source: 'registry' },
-      { root: '/repo/c', source: 'registry' },
-    ]);
+      a: { root: roots[0]!, lifecycle: 'running' },
+      b: { root: roots[1]!, lifecycle: 'defined' },
+      c: { root: roots[2]!, lifecycle: 'running' },
+      d: { root: roots[3]!, lifecycle: 'stopped' },
+      e: { root: roots[4]!, lifecycle: 'archived' },
+    })).toEqual(roots.slice(0, 4).map((root) => ({ root, source: 'registry' })));
   });
 
-  test('root.added hosts only what the registry already marks running', () => {
+  test('root.added hosts existing registered roots even when they are not marked running', () => {
+    const { home } = temp();
+    const a = join(home, 'a');
+    const b = join(home, 'b');
+    mkdirSync(a); mkdirSync(b);
     const teams = {
-      a: { root: '/repo/a', lifecycle: 'running' },
-      b: { root: '/repo/b', lifecycle: 'defined' },
+      a: { root: a, lifecycle: 'running' },
+      b: { root: b, lifecycle: 'defined' },
     };
     expect(rootsFromAddedNotice(teams, { op: 'health' })).toBeNull();
-    expect(rootsFromAddedNotice(teams, { op: 'root.added', root: '/repo/b' })).toEqual([
-      { root: '/repo/a', source: 'registry' },
+    expect(rootsFromAddedNotice(teams, { op: 'root.added', root: b })).toEqual([
+      { root: a, source: 'registry' }, { root: b, source: 'registry' },
     ]);
-    teams.b = { root: '/repo/b', lifecycle: 'running' };
-    expect(rootsFromAddedNotice(teams, { op: 'root.added', root: '/repo/b' })).toEqual([
-      { root: '/repo/a', source: 'registry' },
-      { root: '/repo/b', source: 'registry' },
+    teams.b = { root: b, lifecycle: 'stopped' };
+    expect(rootsFromAddedNotice(teams, { op: 'root.added', root: b })).toEqual([
+      { root: a, source: 'registry' }, { root: b, source: 'registry' },
     ]);
   });
 
-  test('a rescan lands a running team a missed notice never named', () => {
+  test('a rescan lands a registered team a missed notice never named', () => {
+    const { home } = temp();
+    const a = join(home, 'a'); const late = join(home, 'late'); const parked = join(home, 'parked');
+    for (const root of [a, late, parked]) mkdirSync(root);
     const scanned = runningRegistryRoots({
-      a: { root: '/repo/a', lifecycle: 'running' },
-      late: { root: '/repo/late', lifecycle: 'running' },
-      parked: { root: '/repo/parked', lifecycle: 'defined' },
+      a: { root: a, lifecycle: 'running' },
+      late: { root: late, lifecycle: 'running' },
+      parked: { root: parked, lifecycle: 'defined' },
     });
-    expect(scanned.map((one) => one.root)).toEqual(['/repo/a', '/repo/late']);
+    expect(scanned.map((one) => one.root)).toEqual([a, late, parked]);
     expect(scanned.every((one) => one.source === 'registry')).toBe(true);
+  });
+
+  test('a stopped row with an existing root is hosted without changing its lifecycle', async () => {
+    const { home, lobby, id } = lobbyTeam('stopped');
+    upsertTeam(home, id, { root: lobby });
+    const before = readFileSync(teamsFile(home), 'utf8');
+    const started = await startMachineDaemon({ home, roots: runningRegistryRoots(readTeams(home), home).map((one) => one.root),
+      rootsFromRegistry: true, version: 'test', restoreSweep: false, heartbeatMs: 10_000, sendHost: lobbyHost(home) });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      expect(started.daemon.routes).toEqual([expect.objectContaining({ root: lobby, team: 'acme', session: 'acme' })]);
+      expect(started.daemon.roots).toEqual([expect.objectContaining({ root: lobby, send: 'serving', bus: 'serving' })]);
+      expect(readFileSync(teamsFile(home), 'utf8')).toBe(before);
+    } finally { await started.daemon.close(); }
+  });
+
+  test('missing registry folders never create failed endpoints on repeated heartbeats', async () => {
+    const { home, root } = temp();
+    const gone = join(home, 'gone');
+    const file = join(home, 'file'); writeFileSync(file, 'not a folder');
+    const teams = { gone: { root: gone, lifecycle: 'stopped' }, file: { root: file, lifecycle: 'running' } };
+    expect(runningRegistryRoots(teams, home)).toEqual([]);
+    let scans = 0; let starts = 0;
+    const started = await startMachineDaemon({ home, roots: [], rootsFromRegistry: true, version: 'test', restoreSweep: false,
+      heartbeatMs: 20, sendHost: lobbyHost(home), sendStart: async () => { starts++; return { kind: 'bind-failed', reason: 'unexpected' }; },
+      runningRoots: () => { scans++; return runningRegistryRoots(teams, home).map((one) => one.root); } });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      const deadline = Date.now() + 2500;
+      while (scans < 3 && Date.now() < deadline) await new Promise((done) => setTimeout(done, 5));
+      expect(scans).toBeGreaterThanOrEqual(3);
+      expect(starts).toBe(0);
+      expect(started.daemon.roots).toEqual([]);
+      expect(started.daemon.routes).toEqual([]);
+    } finally { await started.daemon.close(); }
   });
 
   test('the unit argument list carries no --root', () => {
@@ -314,7 +357,7 @@ describe('dynamic daemon roots', () => {
     expect(text).toContain('service-manager');
   });
 
-  test('a service start with no --root hosts the running registry teams', async () => {
+  test('a service start with no --root hosts registered teams across active lifecycles', async () => {
     const { home, root } = temp();
     const other = join(root, '..', 'other');
     mkdirSync(other, { recursive: true });
@@ -331,9 +374,9 @@ describe('dynamic daemon roots', () => {
       },
     });
     expect(code).toBe(0);
-    expect(seen[0]?.roots).toEqual([root]);
+    expect(seen[0]?.roots).toEqual([root, other].sort());
     expect(seen[0]?.rootsFromRegistry).toBe(true);
-    expect(seen[0]?.runningRoots?.()).toEqual([root]);
+    expect(seen[0]?.runningRoots?.()).toEqual([root, other].sort());
     expect(io.out).toContain('already running');
   });
 });
