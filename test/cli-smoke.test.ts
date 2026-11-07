@@ -65,6 +65,7 @@ export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
   broker: 'starts a long-running local credential broker server on .agents/broker.sock and reads macOS Keychain',
   bus: 'starts a long-running local event bus server on .agents/bus.sock',
   daemon: 'starts the one machine daemon, and installs or removes its user service unit through the system service manager',
+  start: 'writes the preset team file, registers the running root, and runs init, up, and the lead send through the ordinary map',
   hold: 'mutates .agents/state.json to place or clear a team hold',
   pause: 'writes pause state for one or more teams',
   peek: "reads a live pane's screen through the terminal host, which the cold smoke run has no pane to produce, and prints no --json schema",

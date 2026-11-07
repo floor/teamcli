@@ -14,6 +14,7 @@ import { generalDoor, VALUED, type Door } from '../src/client/general-door.ts';
 import {
   admitGeneral,
   GENERAL_OPS,
+  GENERAL_REFUSED_COMMANDS,
   issueHeldGeneralGrant,
   issueOwnerGeneralGrant,
   OP_FIRST_SHIPPED,
@@ -279,7 +280,7 @@ describe('fix/rc-reds-grant-widened independent verification', () => {
     // 4a. Every command in the dispatcher is in GENERAL_OPS and has a measured release.
     // The v0.5.16 tag measures analyse, checkpoint and show.
     for (const cmd of Object.keys(commands)) {
-      expect(GENERAL_OPS as readonly string[]).toContain(cmd);
+      expect([...(GENERAL_OPS as readonly string[]), ...GENERAL_REFUSED_COMMANDS]).toContain(cmd);
     }
     const unreleased = GENERAL_OPS.filter((op: GeneralOp) => OP_FIRST_SHIPPED[op] === null).sort();
     expect(unreleased).toEqual([]);

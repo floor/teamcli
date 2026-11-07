@@ -35,7 +35,7 @@ import { readMessage } from '../src/mcp/inbox.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { requestDaemon, startSendDaemon, type DaemonHost } from '../src/send/daemon.ts';
-import { readerLine } from '../src/send/frame.ts';
+import { existingRecordIdsIn, readerLine } from '../src/send/frame.ts';
 import { readRecord, signRecord, writeRecord, type RecordPayload } from '../src/send/record.ts';
 import { attributedBody } from '../src/send/sender-claim.ts';
 import { updateState } from '../src/state.ts';
@@ -821,4 +821,15 @@ describe('3. compact header folding and sender kind opening words across render 
     );
     expect(parsed.message.content).not.toContain('Message from');
   });
+});
+
+
+test('frame record listings ignore every watcher and receipt sidecar', () => {
+  const dir = fixtureBase('.frame-sidecars-'); cleanupDirs.push(dir);
+  const id = '11111111-1111-4111-8111-111111111111';
+  writeFileSync(join(dir, id), '{}');
+  for (const suffix of ['pending', 'taken', 'read', 'wake', 'woken', 'reported', 'json', 'new']) {
+    writeFileSync(join(dir, `${id}.${suffix}`), '{}');
+  }
+  expect(existingRecordIdsIn(dir)).toEqual([id]);
 });

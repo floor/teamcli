@@ -5743,6 +5743,62 @@
     },
     {
       "code": 0,
+      "command": "start",
+      "id": "start.complete",
+      "meaning": "the setup pass has all required readiness, exchange and working-state proof",
+      "trigger": "team start"
+    },
+    {
+      "code": 1,
+      "command": "start",
+      "id": "start.bootstrap",
+      "meaning": "the account has no durable record; no setup step is written",
+      "trigger": "team start --json"
+    },
+    {
+      "code": 1,
+      "command": "start",
+      "id": "start.caller",
+      "meaning": "the caller is not the owner of an account with a durable record",
+      "trigger": "team start"
+    },
+    {
+      "code": 1,
+      "command": "start",
+      "id": "start.clis",
+      "meaning": "fewer than two supported signed-in CLIs can staff the preset",
+      "trigger": "team start --json"
+    },
+    {
+      "code": 1,
+      "command": "start",
+      "id": "start.existing-team",
+      "meaning": "the folder already holds a team without a recorded preset step; its files are left unchanged",
+      "trigger": "team start"
+    },
+    {
+      "code": 1,
+      "command": "start",
+      "id": "start.files",
+      "meaning": "the setup files cannot be read or written safely; unsafe paths are refused",
+      "trigger": "team start"
+    },
+    {
+      "code": 1,
+      "command": "start",
+      "id": "start.incomplete",
+      "meaning": "at least one required setup step or readiness, exchange or working-state proof is incomplete",
+      "trigger": "team start --json"
+    },
+    {
+      "code": 2,
+      "command": "start",
+      "id": "start.usage",
+      "meaning": "the invocation cannot be read",
+      "trigger": "team start --unknown"
+    },
+    {
+      "code": 0,
       "command": "status",
       "id": "status.agrees",
       "meaning": "the file, the state and the session agree",

@@ -5,7 +5,30 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.18] - 2026-11-07
+
+### Fixed
+
+- Prepared releases check operation rows against the dated release heading before tagging; development can keep operations declared unshipped. New release rows use the release day’s end in UTC as a conservative widening boundary.
+
+- Caller placement retries one incomplete process walk, keeps refusing incomplete chains or a parent change during the read, and names the failure cause without logging command arguments or environment values.
+
+- State files, delivery markers, logs, queues and first-run admission now refuse unsafe links and publish through checked private files.
+- New team logs and replaced task queues and repository exclude files now use owner-only 0600 permissions.
+- State writes accept a physical child path under a root spelled through an ancestor alias. A declared root that is itself a symbolic link is refused; use its real folder path.
+
+- Copying a seat with no label to a number-like name now keeps its name and label as text.
+- Labels with `#` inside quotes are no longer cut short, and rewriting them preserves only the outside comment.
+
+### Changed
+
+- `team start` is owner-only: a general grant never admits it.
+
+- Owners who relied on a wildcard grant for `forget` now need an explicit grant or a per-use approval.
+
+### Known issue
+
+A reply that `team send --wait` shows is not proof of who wrote it: a seat on the same machine can write a record that looks like another seat’s reply. Check the sender another way before acting on it.
 
 ## [0.5.17] - 2026-11-07
 

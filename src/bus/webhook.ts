@@ -30,6 +30,7 @@
 // A poster that knows the request never left (a refused connection, a non-2xx) removes the claim,
 // so the bus and the seat's pull keep the fallback they always had.
 import { spawn } from 'node:child_process';
+import { writeStateFile } from '../file-write.ts';
 import { existsSync, lstatSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -228,11 +229,9 @@ function postedMarkAt(root: string | undefined, session: string, to: string, id:
  *  already ignore, and the rename makes the mark either wholly there or not there. Best effort —
  *  the routine has already answered 2xx, and a mark that cannot be written only means the bus may
  *  post the same record once more. */
-function writePostedMark(dropDir: string, id: string, now: () => Date): void {
+function writePostedMark(dropDir: string, id: string, now: () => Date, root?: string): void {
   try {
-    const temp = join(dropDir, `.${id}${POSTED_SUFFIX}.tmp`);
-    writeFileSync(temp, `${now().toISOString()}\n`, { mode: 0o600 });
-    renameSync(temp, join(dropDir, `${id}${POSTED_SUFFIX}`));
+    writeStateFile(join(dropDir, `${id}${POSTED_SUFFIX}`), `${now().toISOString()}\n`, { root });
   } catch {
     // The delivery itself is unaffected.
   }
@@ -265,11 +264,9 @@ function takeClaim(dropDir: string, id: string): boolean {
 /** Rewrites the claim to `sent`, atomically, at the last moment before the request is handed to
  *  the transport. Failure is reported to the caller, which then posts nothing: a claim left in
  *  `claimed` would let the fallback post a request that may have left. */
-function markClaimSent(dropDir: string, id: string): boolean {
+function markClaimSent(dropDir: string, id: string, root?: string): boolean {
   try {
-    const temp = join(dropDir, `.${id}${CLAIM_SUFFIX}.tmp`);
-    writeFileSync(temp, claimText('sent'), { mode: 0o600 });
-    renameSync(temp, claimPath(dropDir, id));
+    writeStateFile(claimPath(dropDir, id), claimText('sent'), { root });
     return true;
   } catch {
     return false;
@@ -278,11 +275,11 @@ function markClaimSent(dropDir: string, id: string): boolean {
 
 /** Ends a delivered claim: the `posted` mark is the same file renamed, so no reader ever sees
  *  both or neither — and if the rename fails, the mark is written on its own. */
-function finishClaim(dropDir: string, id: string, now: () => Date): void {
+function finishClaim(dropDir: string, id: string, now: () => Date, root?: string): void {
   try {
     renameSync(claimPath(dropDir, id), join(dropDir, `${id}${POSTED_SUFFIX}`));
   } catch {
-    writePostedMark(dropDir, id, now);
+    writePostedMark(dropDir, id, now, root);
   }
 }
 
@@ -634,7 +631,7 @@ export async function deliverWebhook(input: WebhookDeliveryInput): Promise<Webho
       releaseClaim(claimDir, claimId);
       return done({ outcome: 'skipped', attempts: 0, reason: 'the send already posted this arrival' });
     }
-    if (!markClaimSent(claimDir, claimId)) {
+    if (!markClaimSent(claimDir, claimId, input.root)) {
       releaseClaim(claimDir, claimId);
       say(input.report, `webhook: ${input.seat}: not posted: the claim beside the record could not be marked sent; the drop file stays in place`);
       return done({ outcome: 'failed', attempts: 0, reason: 'the claim beside the record could not be marked sent' });
@@ -647,7 +644,7 @@ export async function deliverWebhook(input: WebhookDeliveryInput): Promise<Webho
       // row that names neither new field builds exactly the request object it always did.
       const response = await fetchFn(request.url, { ...prepared, redirect: 'error', signal: AbortSignal.timeout(policy.timeoutMs) });
       if (response.status >= 200 && response.status < 300) {
-        if (claimDir !== null) finishClaim(claimDir, claimId, () => new Date());
+        if (claimDir !== null) finishClaim(claimDir, claimId, () => new Date(), input.root);
         return done({ outcome: 'delivered', attempts: attempt, reason: `HTTP ${response.status}` });
       }
       // The routine answered and refused: it was reached, so it is not asked a second time. The
@@ -849,7 +846,7 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
     }
     // From here on the claim says `sent`, whether or not the transport has taken the bytes: a
     // poster that dies after this rewrite is reported, never asked twice.
-    if (!markClaimSent(input.dropDir, input.id)) {
+    if (!markClaimSent(input.dropDir, input.id, input.root)) {
       giveUp();
       return { kind: 'failed', reason: 'the claim beside the record could not be marked sent' };
     }
@@ -883,7 +880,7 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
     if (raced.kind === 'response') {
       const response = raced.response;
       if (response.status >= 200 && response.status < 300) {
-        finishClaim(input.dropDir, input.id, input.now);
+        finishClaim(input.dropDir, input.id, input.now, input.root);
         held = 'none';
         return { kind: 'posted', ms: Math.max(0, input.now().getTime() - started) };
       }
@@ -909,7 +906,7 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
       const response = result.response;
       const ms = Math.max(0, input.now().getTime() - started);
       if (response.status >= 200 && response.status < 300) {
-        finishClaim(input.dropDir, input.id, input.now);
+        finishClaim(input.dropDir, input.id, input.now, input.root);
         held = 'none';
         return { kind: 'posted', ms };
       }
@@ -1032,7 +1029,7 @@ function lateFields(job: LateJob, ts: string): StepFields {
 function settleDetached(job: LateJob, line: LateLine | null, ms: number): void {
   const now = (): Date => new Date();
   if (line !== null && 'status' in line && line.status >= 200 && line.status < 300) {
-    finishClaim(job.dropDir, job.id, now);
+    finishClaim(job.dropDir, job.id, now, job.root);
     if (job.project === '') return;
     const fields = lateFields(job, now().toISOString());
     webhookStep(fields, { kind: 'posted', ms }, 'late');
@@ -1098,7 +1095,7 @@ async function detachedArrival(
   }
   if ('unknown' in line) return { kind: 'unknown', reason: line.unknown };
   if (line.status >= 200 && line.status < 300) {
-    finishClaim(input.dropDir, input.id, input.now);
+    finishClaim(input.dropDir, input.id, input.now, input.root);
     return { kind: 'posted', ms: line.ms };
   }
   releaseClaim(input.dropDir, input.id);

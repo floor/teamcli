@@ -32,6 +32,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as ts from 'typescript';
 import { COMMAND_GATES } from '../src/permissions/map.ts';
+import { GENERAL_REFUSED_COMMANDS } from '../src/client/general-grant.ts';
 
 const JSON_REL = 'contract/cli.json';
 const MARKDOWN_REL = 'docs/reference/cli.md';
@@ -755,9 +756,9 @@ export function extract(root: string = rootOf(), overrides?: ReadonlyMap<string,
   commands.sort((a, b) => cmp(a.name, b.name));
   // The general door (src/client/general-door.ts): the dispatcher admits `--general <grant.json>
   // --key <client.key>` on every command and subcommand, so each carries the two options — all
-  // but `client general-grant`, the grant-issuing command, which the door refuses.
+  // but explicitly refused commands and `client general-grant`, which the door refuses.
   for (const command of commands) {
-    if (command.hidden) continue;
+    if (command.hidden || GENERAL_REFUSED_COMMANDS.has(command.name)) continue;
     withGeneral(command, programUsage);
     for (const sub of command.subcommands) {
       if (command.name === 'client' && sub.name === 'general-grant') continue;

@@ -9,7 +9,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { type Door, generalDoor, VALUED } from '../src/client/general-door.ts';
-import { FLAG_OPS, GENERAL_OPS, issueOwnerGeneralGrant, SCOPED_GRANT_REFUSAL, type GrantOp, VERB_OPS } from '../src/client/general-grant.ts';
+import { FLAG_OPS, GENERAL_OPS, GENERAL_REFUSED_COMMANDS, issueOwnerGeneralGrant, SCOPED_GRANT_REFUSAL, type GrantOp, VERB_OPS } from '../src/client/general-grant.ts';
 import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
 import { actionRequestsFolder } from '../src/client/team-create.ts';
 import { commands, main } from '../src/cli.ts';
@@ -135,7 +135,7 @@ test("the door's valued-option table is the contract's, less --general and --key
   const valuedOf = (flags: Flag[]): string[] => flags.filter((flag) => flag.takesValue).map((flag) => flag.name.replace(/^--/, ''));
   const expected = Object.fromEntries(
     contract.commands
-      .filter((command) => !command.hidden)
+      .filter((command) => !command.hidden && !GENERAL_REFUSED_COMMANDS.has(command.name))
       .map((command) => [
         command.name,
         [...valuedOf(command.flags), ...command.subcommands.flatMap((sub) => valuedOf(sub.flags))]

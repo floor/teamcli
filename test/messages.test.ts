@@ -343,7 +343,7 @@ difference: lead/m1 does not verify: the record is not a message
     // `<id>.reported` beside one whose sender and lead it told. Both are its own JSON markers,
     // not records: the scan must leave them alone rather than offer to remove them.
     const id = '11111111-1111-4111-8111-111111111111';
-    for (const suffix of ['.wake', '.reported']) {
+    for (const suffix of ['.wake', '.woken', '.reported', '.new']) {
       writeFileSync(
         join(dropDir, `${id}${suffix}`),
         `${JSON.stringify({ id, at: NOW.toISOString(), state: 'reserved' })}\n`,
@@ -355,7 +355,7 @@ difference: lead/m1 does not verify: the record is not a message
       out: 'team acme, session "acme"\n  ID  FROM  TO  SENT  STATUS\n\nnote: nothing is waiting\n\n0 messages\n',
       err: '',
     });
-    for (const suffix of ['.wake', '.reported']) expect(existsSync(join(dropDir, `${id}${suffix}`))).toBe(true);
+    for (const suffix of ['.wake', '.woken', '.reported', '.new']) expect(existsSync(join(dropDir, `${id}${suffix}`))).toBe(true);
   });
 
   test('seats print in seat order: builder-2, builder-9, builder-10, builder-100, and only the caller\'s record is served', async () => {

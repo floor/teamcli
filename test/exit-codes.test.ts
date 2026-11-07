@@ -98,6 +98,7 @@ import { runSetup } from '../src/commands/setup.ts';
 import { runSettings, type SettingsCommandOptions } from '../src/commands/settings.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
+import { runStart, type StartSources } from '../src/commands/start.ts';
 import { runSwap } from '../src/commands/swap.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { runUsage } from '../src/commands/usage.ts';
@@ -8342,6 +8343,95 @@ function analyze(...args: Parameters<typeof analyzeSource>): ReturnType<typeof a
   if (args.length > 0) return analyzeSource(...args);
   analyzed ??= analyzeSource();
   return analyzed;
+}
+
+{
+  const START_MESSAGE_ID = '3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
+  function durableStartAccount(place: Place): void {
+    mkdirSync(join(place.home, '.config', 'team'), { recursive: true });
+    writeFileSync(join(place.home, '.config', 'team', 'teams.yaml'), 'teams: {}\n');
+  }
+  async function started(place: Place, argv: string[] = [], overrides: Partial<StartSources> = {}, caller: Caller = owner): Promise<Ran> {
+    const io = testIo(place.root, caller);
+    const code = await runStart(argv, io, {
+      home: place.home,
+      now: () => NOW.getTime(),
+      loggedIn: (cli) => cli === 'claude-code' || cli === 'codex',
+      notifyRoot: () => {},
+      daemonRunning: () => true,
+      init: async () => 0,
+      up: async () => 0,
+      check: () => true,
+      ready: () => ({ lead: true, builder: true }),
+      send: async () => ({ ok: true, id: START_MESSAGE_ID, arrived: true, read: true, working: true, claimedTask: START_MESSAGE_ID }),
+      ...overrides,
+    });
+    return { code, out: io.out, err: io.err };
+  }
+  scene('start.usage', async (place) => {
+    const result = await started(place, ['--unknown']);
+    expect(existsSync(join(place.root, '.agents', 'start.json'))).toBe(false);
+    return show(result, 'unknown option');
+  }, false);
+  scene('start.bootstrap', async (place) => {
+    const result = await started(place, ['--json']);
+    expect(JSON.parse(result.out)).toMatchObject({ roots: 0, teamFile: false, readyLead: false });
+    expect(readdirSync(place.home)).toEqual([]);
+    expect(existsSync(place.file)).toBe(false);
+    expect(existsSync(join(place.root, '.agents', 'start.json'))).toBe(false);
+    return result;
+  }, false);
+  scene('start.caller', async (place) => {
+    durableStartAccount(place);
+    const result = await started(place, [], {}, { kind: 'owner-no-tty' });
+    expect(existsSync(place.file)).toBe(false);
+    expect(existsSync(join(place.root, '.agents', 'start.json'))).toBe(false);
+    return show(result, 'only the owner starts a team');
+  }, false);
+  scene('start.existing-team', async (place) => {
+    durableStartAccount(place);
+    const held = 'format: 1\nproject: kept\n';
+    writeFileSync(place.file, held);
+    const result = await started(place);
+    expect(readFileSync(place.file, 'utf8')).toBe(held);
+    expect(readFileSync(join(place.home, '.config', 'team', 'teams.yaml'), 'utf8')).toBe('teams: {}\n');
+    expect(existsSync(join(place.root, '.agents', 'start.json'))).toBe(false);
+    return show(result, 'this folder already holds a team; run team up');
+  }, false);
+  scene('start.clis', async (place) => {
+    durableStartAccount(place);
+    const result = await started(place, ['--json'], { loggedIn: () => false });
+    expect(JSON.parse(result.out)).toMatchObject({ roots: 0, teamFile: false, readyLead: false });
+    expect(existsSync(place.file)).toBe(false);
+    expect(existsSync(join(place.root, '.agents', 'start.json'))).toBe(false);
+    return result;
+  }, false);
+  scene('start.files', async (place) => {
+    durableStartAccount(place);
+    const outside = join(place.home, 'outside.txt');
+    writeFileSync(outside, 'kept\n');
+    symlinkSync(outside, join(place.root, '.agents', 'start.json'));
+    const result = await started(place);
+    expect(readFileSync(outside, 'utf8')).toBe('kept\n');
+    expect(existsSync(place.file)).toBe(false);
+    expect(readFileSync(join(place.home, '.config', 'team', 'teams.yaml'), 'utf8')).toBe('teams: {}\n');
+    return show(result, 'setup files refused');
+  }, false);
+  scene('start.incomplete', async (place) => {
+    durableStartAccount(place);
+    const result = await started(place, ['--json'], { ready: () => ({ lead: false, builder: true }) });
+    expect(JSON.parse(result.out)).toMatchObject({ readyLead: false, readyBuilder: true, working: true });
+    return result;
+  }, false);
+  scene('start.complete', async (place) => {
+    durableStartAccount(place);
+    const result = await started(place, ['--json']);
+    expect(JSON.parse(result.out)).toMatchObject({
+      roots: 1, readyLead: true, readyBuilder: true, exchangeId: START_MESSAGE_ID,
+      exchangeArrived: true, exchangeRead: true, working: true, claimedTask: START_MESSAGE_ID,
+    });
+    return result;
+  }, false);
 }
 
 const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write', 'team.mcp-serve-handed-over', 'team.mcp-serve-replacement-ended', 'team.mcp-serve-restart-failed',

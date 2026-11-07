@@ -2,8 +2,9 @@
 // trust record this build has already captured. `first-run-admission` opens once, only when
 // every durable record is absent, and writes one create-grant for the lead. Neither path types
 // a key, answers a folder dialog, or edits a record with `team config`.
-import { existsSync, lstatSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { lstatSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { createStateFile, ensureStateDirectory, stateFileStat } from '../file-write.ts';
 import { charterPath } from '../charter/body.ts';
 import type { TeamFile } from '../file/types.ts';
 import { grantsDir } from '../grant.ts';
@@ -100,11 +101,18 @@ export function admissionModeOf(input: {
 }
 
 type AccountState = 'empty' | 'owner' | 'record';
+function entryPresent(path: string): boolean {
+  try { lstatSync(path); return true; }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
 
 /** `owner` once this door has written the owner record. `record` when any other durable
  *  record is already there: the registries, the charter, a key, a signer, or a grant. */
 function accountState(home: string): AccountState {
-  if (existsSync(ownerRecordPath(home))) return 'owner';
+  if (entryPresent(ownerRecordPath(home))) return 'owner';
   const present = [
     join(home, '.config', 'team', 'teams.yaml'),
     join(home, '.config', 'team', 'projects.yaml'),
@@ -115,7 +123,7 @@ function accountState(home: string): AccountState {
     join(home, '.config', 'team-key', 'messages.json'),
     grantsDir(home),
   ];
-  return present.some((path) => existsSync(path)) ? 'record' : 'empty';
+  return present.some((path) => entryPresent(path)) ? 'record' : 'empty';
 }
 
 export type AdmissionResult =
@@ -142,19 +150,16 @@ export function firstRunAdmission(input: {
   }
   const expires = new Date(input.now.getTime() + DAY_MS).toISOString();
   const ownerDir = join(input.home, '.config', 'team');
-  mkdirSync(ownerDir, { recursive: true, mode: 0o700 });
-  writeFileSync(
-    ownerRecordPath(input.home),
-    `${JSON.stringify({ assurance: 'none', at: input.now.toISOString() }, null, 2)}\n`,
-    { mode: 0o600 },
-  );
-  keyOf(input.home);
+  const owner = ownerRecordPath(input.home);
   const folder = grantsDir(input.home);
-  mkdirSync(folder, { recursive: true, mode: 0o700 });
-  writeFileSync(
-    join(folder, 'lead.json'),
-    `${JSON.stringify({ team: input.teamId, paths: [input.root], expires }, null, 2)}\n`,
-    { mode: 0o600 },
-  );
+  const grant = join(folder, 'lead.json');
+  ensureStateDirectory(ownerDir, input.home);
+  ensureStateDirectory(folder, input.home);
+  // Check both destinations before minting any owner record or key.
+  if (stateFileStat(owner, input.home) !== null) return { ok: false, reason: 'second-pass' };
+  if (stateFileStat(grant, input.home) !== null) return { ok: false, reason: 'non-empty' };
+  createStateFile(owner, `${JSON.stringify({ assurance: 'none', at: input.now.toISOString() }, null, 2)}\n`, input.home);
+  keyOf(input.home);
+  createStateFile(grant, `${JSON.stringify({ team: input.teamId, paths: [input.root], expires }, null, 2)}\n`, input.home);
   return { ok: true, expires };
 }

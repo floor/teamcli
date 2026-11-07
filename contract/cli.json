@@ -7755,6 +7755,39 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "start",
+      "positionals": [],
+      "subcommands": [],
+      "usage": [
+        "team start [--json]"
+      ],
+      "who": {
+        "gate": "owner-only",
+        "why": "an empty account is not admitted; once a durable record exists, only the owner runs the pass from a terminal outside a team session; a general grant never admits it, and the lead send stays on the ordinary map"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--all",
           "repeatable": false,
           "takesValue": false

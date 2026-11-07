@@ -10,6 +10,8 @@ import { keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/k
 import { CLIENT_PUBLIC_KEY_PATTERN, publicKeyObject, readClientPrivateKey } from './records.ts';
 
 export const GENERAL_GRANT_DOMAIN = 'team-general-grant-v1';
+/** Dispatcher commands explicitly refused by the general door, outside its op vocabulary. */
+export const GENERAL_REFUSED_COMMANDS: ReadonlySet<string> = new Set(['start']);
 // Every command's op: the first nine since 0.5.6, then (0.5.8) every other command the dispatcher's
 // general door admits, so a listed grant may name any of them. `abandon` is `down --abandon`'s.
 // A command added later is covered by the wildcard at once, and by name once it is listed here
@@ -25,12 +27,14 @@ export const GENERAL_OPS = [
   'sessions', 'settings', 'setup', 'show', 'status', 'swap', 'tempo', 'trace', 'unlock', 'usage', 'waits', 'watch', 'workflow', 'worktree',
 ] as const;
 export type GeneralOp = (typeof GENERAL_OPS)[number];
-/** Every op, now and later: signed as the literal `*`, so one owner signature covers ops added after it. */
+/** Delegable ops, now and later, except those requiring an explicit name. Signed as literal `*`. */
 export const ALL_OPS = '*' as const;
 export type GrantOp = GeneralOp | typeof ALL_OPS;
+/** A wildcard never includes these ops, including when its holder issues a child grant. */
+export const EXPLICIT_GENERAL_OPS: ReadonlySet<GeneralOp> = new Set(['forget']);
 /** Whether a signed op list covers `op`. */
 export function opsCover(ops: readonly string[], op: GeneralOp): boolean {
-  return ops.includes(ALL_OPS) || ops.includes(op);
+  return ops.includes(op) || (ops.includes(ALL_OPS) && !EXPLICIT_GENERAL_OPS.has(op));
 }
 
 /**
@@ -104,9 +108,9 @@ export function withinScope(child: Pick<GeneralGrant, 'entities' | 'ops' | 'expi
     if (child.entities.includes('*')) return 'the child names every entity; the parent does not cover every entity';
     for (const e of child.entities) if (!parent.entities.includes(e)) return `entity "${e}" is outside the parent grant`;
   }
-  if (!parent.ops.includes(ALL_OPS)) {
-    if (child.ops.includes(ALL_OPS)) return 'the child names every op; the parent does not cover every op';
-    for (const o of child.ops) if (!parent.ops.includes(o)) return `op "${o}" is outside the parent grant`;
+  if (child.ops.includes(ALL_OPS) && !parent.ops.includes(ALL_OPS)) return 'the child names every op; the parent does not cover every op';
+  for (const op of child.ops) {
+    if (op !== ALL_OPS && (GENERAL_REFUSED_COMMANDS.has(op) || !(GENERAL_OPS as readonly string[]).includes(op) || !opsCover(parent.ops, op))) return `op "${op}" is outside the parent grant`;
   }
   if (Date.parse(child.expires) > Date.parse(parent.expires)) return 'the child would outlive the parent grant';
   if (child.may_issue && !parent.may_issue) return 'the parent grant may not issue grants that issue';
@@ -128,6 +132,11 @@ function publish(home: string, g: GeneralGrant, signature: string): R<{ path: st
 export type IssueInput = { clientId: string; publicKey: string; entities: string[]; ops: GrantOp[]; mayIssue: boolean; expires: Date };
 
 function fresh(input: IssueInput, parent: string | null, now: Date): GeneralGrant | string {
+  for (const op of input.ops) {
+    if (op !== ALL_OPS && (GENERAL_REFUSED_COMMANDS.has(op) || !(GENERAL_OPS as readonly string[]).includes(op))) {
+      return `op "${op}" is not an issuable general-grant op`;
+    }
+  }
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(input.clientId)) return `"${input.clientId}" is not a client id`;
   if (!CLIENT_PUBLIC_KEY_PATTERN.test(input.publicKey)) return 'the public key is not a raw Ed25519 key';
   if (!(input.expires.getTime() > now.getTime())) return 'the expiry is not in the future';
@@ -234,6 +243,9 @@ export function grantIsWildcard(grant: GeneralGrant): GrantVerdict {
 
 /** The grant covers the op the line reaches. */
 export function grantCoversOp(grant: GeneralGrant, op: GeneralOp): GrantVerdict {
+  if (EXPLICIT_GENERAL_OPS.has(op) && !grant.ops.includes(op)) {
+    return { ok: false, why: `${op} needs an explicit grant naming ${op}, or a per-use approval from the owner (--request/--approval); a wildcard grant does not cover it` };
+  }
   if (!opsCover(grant.ops, op)) return { ok: false, why: `general grant ${grant.grant_id} does not cover ${op}` };
   return { ok: true };
 }
@@ -260,9 +272,11 @@ export function admitGeneral(home: string, grantPath: string, keyPath: string, o
  * route in the dispatcher table (`src/cli.ts`) at each tag, by tag date, with `abandon` read from
  * `down --abandon` at v0.1.0. A release candidate is not a release, so `-rc.` tags are skipped.
  * `tag` is the provenance of `at`. The newest entry may name the release being cut, whose tag is
- * created only after its release commit: that row's `at` is the release commit's own time, recorded
- * from the commit so the op is measured as shipped rather than read as unshipped. An op no release
- * ships yet has no entry.
+ * created only after its release commit. During preparation, the package version has a real dated
+ * CHANGELOG heading and no tag yet; rows first shipped by that version use its heading date at
+ * T23:59:59Z in `at`, a conservative boundary that can over-note grants signed on release day.
+ * Between releases a route may remain declared unshipped with no row. Existing historical rows
+ * keep their measured tag times; no landing-time or provisional tag instant is guessed.
  */
 type OpRelease = { tag: string; at: string };
 export const OP_RELEASE_GROUPS: readonly { tag: string; at: string; ops: readonly GeneralOp[] }[] = [
@@ -336,7 +350,7 @@ export function wildcardGrantsWidened(home: string, now: Date = new Date()): Wid
     }
     const ops = GENERAL_OPS.filter((op) => {
       const release = OP_FIRST_SHIPPED[op];
-      return release !== null && Date.parse(release.at) > at;
+      return !EXPLICIT_GENERAL_OPS.has(op) && release !== null && Date.parse(release.at) > at;
     });
     if (ops.length > 0) out.push({ grant, signed: grant.issued, ops });
   }

@@ -2,15 +2,18 @@
 // without a new owner approval. `team check` and `team doctor` name each such grant once, as
 // information: never a difference, never a failure. What counts as "after" is measured from the
 // release tags in this repository (each op's route in the dispatcher table at each tag, by tag
-// date), not remembered; the table below is that measurement.
+// date), not remembered; the table below is that measurement. A dated, untagged package
+// release also counts as shipped while its real release row is prepared before tagging.
 import { afterAll, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { commands } from '../src/cli.ts';
+import { releaseHeadingOf } from '../scripts/check-release-date.ts';
 import {
   GENERAL_GRANT_DOMAIN,
   GENERAL_OPS,
+  GENERAL_REFUSED_COMMANDS,
   OP_FIRST_SHIPPED,
   OP_RELEASE_GROUPS,
   generalGrantPath,
@@ -83,7 +86,7 @@ test('no dispatcher route is unmeasured: each has a release row or is declared u
   // A route added without a measured release would otherwise pass the check above: an op with
   // no row is consistent with the table. This is the check that fails instead. The routes are
   // the dispatcher's own table, and every one of them is an op of the general door.
-  const routes = Object.keys(commands);
+  const routes = Object.keys(commands).filter((name) => !GENERAL_REFUSED_COMMANDS.has(name));
   for (const name of routes) expect(GENERAL_OPS as readonly string[]).toContain(name);
   const unmeasured = routes.filter(
     (name) => OP_FIRST_SHIPPED[name as GeneralOp] === null && !UNRELEASED_OPS.includes(name),
@@ -130,33 +133,135 @@ test('a tag set the release walk cannot use fails loudly, never passes empty', (
   expect(tagSetProblem(tableTags.slice(1))).toBe(`${NEEDS_RELEASE_TAGS}; it reads no v0.1.0`);
 });
 
-test('an op declared unshipped is a route at no release tag', () => {
-  // The declaration can rot in the one way the equality above cannot see: the op ships in a
-  // release while its row and this list are both left untouched, so the null entry and the
-  // declaration still agree. Measure the declaration against the releases themselves: an op
-  // declared unshipped is a route at no release tag. Once a tag carries it, this fails until
-  // the row is added, which also takes the op out of the declaration. Each tag's dispatcher
-  // table is read the way the table above was measured (every non-rc tag yields one, 11 at
-  // v0.1.0 through 68 at v0.5.10), so a tag this reader cannot parse fails here too.
-  const repo = join(import.meta.dir, '..');
-  let listed = '';
+/** Read the same dispatcher spelling at a release tag and in the candidate tree. */
+function dispatcherRoutes(source: string, release: string): string[] {
+  const routes = [...source.matchAll(/^  '?([a-z][a-z0-9-]*)'?: \(\) => import\('\.\/commands\/[^']+'\)/gm)].map(
+    (match) => match[1]!,
+  );
+  if (routes.length === 0) throw new Error(`${release} does not read a dispatcher`);
+  return routes;
+}
+
+function readReleaseTags(repo: string): string[] | null {
   try {
-    listed = execFileSync('git', ['tag', '--list', '--sort=v:refname', 'v*'], { cwd: repo, encoding: 'utf8' });
+    return execFileSync('git', ['tag', '--list', '--sort=v:refname', 'v*'], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+      .split('\n').filter((tag) => tag !== '' && !tag.includes('-rc.'));
   } catch {
-    // No git, or no repository here: the guard below names what the walk needs.
+    return null;
   }
-  const tags = listed
-    .split('\n')
-    .filter((tag) => tag !== '' && !tag.includes('-rc.'));
-  expect(tagSetProblem(tags)).toBeNull();
+}
+
+function releaseOpProblems(
+  repo: string,
+  unshipped: readonly string[],
+  firstShipped: Readonly<Record<string, { tag: string; at: string } | null | undefined>>,
+  refused: ReadonlySet<string> = GENERAL_REFUSED_COMMANDS,
+): string[] {
+  const tags = readReleaseTags(repo);
+  if (tags === null || tags.length === 0) return [NEEDS_RELEASE_TAGS];
+  const problems: string[] = [];
+  const { version } = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')) as { version?: unknown };
+  if (typeof version !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
+    throw new Error('the package release needs a readable version');
+  }
+  const release = `v${version}`;
+  const date = releaseHeadingOf(readFileSync(join(repo, 'CHANGELOG.md'), 'utf8'), version)?.date ?? null;
+  // Only a dated, untagged candidate is being prepared for release. An already tagged package
+  // version can remain in the tree while later routes are still declared unshipped.
+  if (date !== null && !tags.includes(release)) {
+    const candidate = `${release} (package.json)`;
+    const routes = dispatcherRoutes(readFileSync(join(repo, 'src', 'cli.ts'), 'utf8'), candidate);
+    for (const op of routes) {
+      if (refused.has(op)) continue;
+      const row = firstShipped[op];
+      if (row == null) problems.push(`${candidate} ships unmeasured op ${op}`);
+      else if (row.tag === release && Date.parse(row.at) !== Date.parse(`${date}T23:59:59Z`)) {
+        problems.push(`${candidate} first-shipped row for ${op} must use release boundary ${date}T23:59:59Z`);
+      }
+    }
+  }
   for (const tag of tags) {
     const source = execFileSync('git', ['show', `${tag}:src/cli.ts`], { cwd: repo, encoding: 'utf8' });
-    const routes = [...source.matchAll(/^  '?([a-z][a-z0-9-]*)'?: \(\) => import\('\.\/commands\/[^']+'\)/gm)].map(
-      (match) => match[1]!,
-    );
-    expect(routes.length, `${tag} reads its dispatcher`).toBeGreaterThan(0);
-    expect(UNRELEASED_OPS.filter((op) => routes.includes(op)), `${tag} ships no declared-unshipped op`).toEqual([]);
+    const routes = dispatcherRoutes(source, tag);
+    for (const op of unshipped.filter((op) => routes.includes(op))) problems.push(`${tag} ships declared-unshipped op ${op}`);
   }
+  return problems;
+}
+
+/** A prior release has only config; the working tree adds pending without shipping it yet. */
+function candidateRepo(withTag = true): { repo: string; rows: { config: { tag: string; at: string }; pending: null } } {
+  const repo = fixtureBase('.op-release-');
+  homes.push(repo);
+  execFileSync('git', ['init', '-q'], { cwd: repo });
+  mkdirSync(join(repo, 'src'));
+  writeFileSync(join(repo, 'package.json'), JSON.stringify({ version: '1.0.0' }));
+  writeFileSync(join(repo, 'src', 'cli.ts'), `const commands = {
+  config: () => import('./commands/config.ts'),
+};\n`);
+  execFileSync('git', ['add', '.'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'prior fixture release'], { cwd: repo });
+  if (withTag) execFileSync('git', ['tag', 'v1.0.0'], { cwd: repo });
+  writeFileSync(join(repo, 'package.json'), JSON.stringify({ version: '9.8.7' }));
+  writeFileSync(join(repo, 'src', 'cli.ts'), `const commands = {
+  config: () => import('./commands/config.ts'),
+  pending: () => import('./commands/pending.ts'),
+};\n`);
+  return { repo, rows: { config: { tag: 'v1.0.0', at: '2026-11-01T12:00:00Z' }, pending: null } };
+}
+
+test('a prepared untagged package release needs a row with its real heading date', () => {
+  const { repo, rows } = candidateRepo();
+  writeFileSync(join(repo, 'CHANGELOG.md'), '# Changelog\n\n## [9.8.7] - 2026-11-07\n');
+  expect(execFileSync('git', ['tag', '--list', 'v9.8.7'], { cwd: repo, encoding: 'utf8' })).toBe('');
+  expect(releaseOpProblems(repo, ['pending'], rows)).toEqual(['v9.8.7 (package.json) ships unmeasured op pending']);
+  expect(releaseOpProblems(repo, [], { config: rows.config })).toEqual(['v9.8.7 (package.json) ships unmeasured op pending']);
+  const row = { tag: 'v9.8.7', at: '2026-11-07T23:59:59Z' };
+  expect(releaseOpProblems(repo, [], { ...rows, pending: row })).toEqual([]);
+  expect(releaseOpProblems(repo, [], { ...rows, pending: { ...row, at: '2026-11-06T09:00:00+01:00' } })).toEqual([
+    'v9.8.7 (package.json) first-shipped row for pending must use release boundary 2026-11-07T23:59:59Z',
+  ]);
+  expect(releaseOpProblems(repo, [], { config: rows.config }, new Set(['pending']))).toEqual([]);
+});
+
+test('a prepared row uses the conservative end-of-day instant', () => {
+  const { repo, rows } = candidateRepo();
+  writeFileSync(join(repo, 'CHANGELOG.md'), '## [9.8.7] - 2026-11-07\n');
+  const row = { tag: 'v9.8.7', at: '2026-11-07T06:00:00Z' };
+  expect(releaseOpProblems(repo, [], { ...rows, pending: row })).toEqual([
+    'v9.8.7 (package.json) first-shipped row for pending must use release boundary 2026-11-07T23:59:59Z',
+  ]);
+  expect(releaseOpProblems(repo, [], { ...rows, pending: { ...row, at: '2026-11-07T23:59:59Z' } })).toEqual([]);
+});
+
+test('an unprepared package may keep its new route declared unshipped', () => {
+  const { repo, rows } = candidateRepo();
+  for (const changelog of ['## [Unreleased]\n', '## [9.8.7] - YYYY-MM-DD\n', '## [9.8.7] - 2026-02-30\n']) {
+    writeFileSync(join(repo, 'CHANGELOG.md'), changelog);
+    expect(releaseOpProblems(repo, ['pending'], rows)).toEqual([]);
+  }
+});
+
+test('a previously tagged package version permits a later unshipped head route', () => {
+  const { repo, rows } = candidateRepo();
+  writeFileSync(join(repo, 'package.json'), JSON.stringify({ version: '1.0.0' }));
+  writeFileSync(join(repo, 'CHANGELOG.md'), '## [1.0.0] - 2026-11-01\n');
+  expect(releaseOpProblems(repo, ['pending'], rows)).toEqual([]);
+});
+
+test('an empty or unreadable release-tag set refuses a dated candidate', () => {
+  const { repo, rows } = candidateRepo(false);
+  writeFileSync(join(repo, 'CHANGELOG.md'), '## [9.8.7] - 2026-11-07\n');
+  const complete = { ...rows, pending: { tag: 'v9.8.7', at: '2026-11-07T09:00:00Z' } };
+  expect(releaseOpProblems(repo, [], complete)).toEqual([NEEDS_RELEASE_TAGS]);
+  const notRepo = fixtureBase('.op-release-no-git-'); homes.push(notRepo);
+  expect(releaseOpProblems(notRepo, [], complete)).toEqual([NEEDS_RELEASE_TAGS]);
+});
+
+test('release tags and the package release ship no unmeasured op', () => {
+  const repo = join(import.meta.dir, '..');
+  const tags = readReleaseTags(repo) ?? [];
+  expect(tagSetProblem(tags)).toBeNull();
+  expect(releaseOpProblems(repo, UNRELEASED_OPS, OP_FIRST_SHIPPED)).toEqual([]);
 });
 
 test('a wildcard grant signed before a release reaches the ops that release shipped', () => {
@@ -169,12 +274,12 @@ test('a wildcard grant signed before a release reaches the ops that release ship
   expect(widened[0]?.grant.grant_id).toBe(grant.grant_id);
   expect(widened[0]?.signed).toBe('2026-10-27T12:00:00.000Z');
   expect(widened[0]?.ops).toEqual([
-    'agents', 'analyse', 'approvals', 'batch', 'checkpoint', 'fallback', 'forget', 'order', 'peek', 'setup', 'show', 'trace', 'waits',
+    'agents', 'analyse', 'approvals', 'batch', 'checkpoint', 'fallback', 'order', 'peek', 'setup', 'show', 'trace', 'waits',
   ]);
   const note = widenedGrantNote(widened[0]!);
   expect(note).toContain(grant.grant_id);
   expect(note).toContain('signed 2026-10-27');
-  expect(note).toContain('agents, analyse, approvals, batch, checkpoint, fallback, forget, order, peek, setup, show, trace, waits');
+  expect(note).toContain('agents, analyse, approvals, batch, checkpoint, fallback, order, peek, setup, show, trace, waits');
   expect(note).toContain('re-sign the grant to stop this note');
   expect(widenedGrantNotes(w.home, NOW)).toEqual([note]);
 });

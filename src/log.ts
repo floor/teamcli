@@ -1,10 +1,12 @@
-import { appendFileSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
+import { appendStateFile, stateFileStat } from './file-write.ts';
+import { dirname, join } from 'node:path';
 import { plainLine } from './launch/plain.ts';
 import { LOG_FILE } from './state.ts';
 
 const MAX_BYTES = 1_000_000;
 const KEPT = 3;
+const reported = new Set<string>();
 
 // One line per change: when, which command, called by whom, what changed. Classifications only,
 // never the text of a screen.
@@ -22,21 +24,27 @@ const KEPT = 3;
 // The log rotates at 1 MB and keeps three files.
 //
 // The log is evidence, never a decision: a write that fails — a full disk, a path that is not a
-// file, a permission the owner kept — is caught and dropped here, at the one sink every command
-// logs through, so no command's exit status and no watch pass depends on the log being writable.
+// file, a permission the owner kept — is refused and reported once per path here. Commands
+// keep their own result; the diagnostic makes missing evidence visible.
 export function logLine(dir: string, command: string, caller: string, what: string, now: Date = new Date()): void {
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const path = join(dir, LOG_FILE);
-    if (existsSync(path) && statSync(path).size >= MAX_BYTES) rotate(path);
+    const root = dirname(dir);
+    if ((stateFileStat(path, root)?.size ?? 0) >= MAX_BYTES) rotate(path, root);
     const line = plainLine(`${command} [${caller}] ${what}`).replace(/\s+/g, ' ');
-    appendFileSync(path, `${now.toISOString()} ${line}\n`);
+    appendStateFile(path, `${now.toISOString()} ${line}\n`, root);
   } catch {
-    // Dropped on purpose: the command's own work, its printed lines and its exit are unaffected.
+    const path = join(dir, LOG_FILE);
+    if (!reported.has(path)) {
+      reported.add(path);
+      process.stderr.write('team log: write refused; check the state folder and log file\n');
+    }
   }
 }
 
-function rotate(path: string): void {
+function rotate(path: string, root: string): void {
+  for (let n = 0; n < KEPT; n++) stateFileStat(n === 0 ? path : `${path}.${n}`, root);
   const oldest = `${path}.${KEPT - 1}`;
   if (existsSync(oldest)) unlinkSync(oldest);
   for (let n = KEPT - 2; n >= 1; n--) {

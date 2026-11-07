@@ -5,11 +5,12 @@ import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { commands, main } from '../src/cli.ts';
-import { GENERAL_OPS, issueOwnerGeneralGrant, SCOPED_GRANT_REFUSAL, type GrantOp } from '../src/client/general-grant.ts';
+import { GENERAL_OPS, GENERAL_REFUSED_COMMANDS, issueOwnerGeneralGrant, SCOPED_GRANT_REFUSAL, type GrantOp } from '../src/client/general-grant.ts';
 import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
 import type { Io } from '../src/io.ts';
 import { installKey } from '../src/store/keys.ts';
 import { fixtureBase } from './helpers.ts';
+import { upsertTeam, readTeams } from '../src/registry/teams.ts';
 
 const base = fixtureBase('.gg-test-door-');
 const home = join(base, 'home');
@@ -160,15 +161,54 @@ test('the grant-issuing command takes no --general', async () => {
   expect(ran.err).toContain('issues grants');
 });
 
-test('every command of the table is a general-grant op', () => {
-  for (const name of Object.keys(commands)) expect(GENERAL_OPS as readonly string[]).toContain(name);
+test('forget keeps a wildcard out and still runs with an explicit grant', async () => {
+  const id = 'forget-explicit-control';
+  upsertTeam(home, id, { project: id, session: id, root: cwd, lifecycle: 'stopped' });
+  const refused = await run(['forget', id, '--general', all, '--key', a.path]);
+  expect(refused.code).toBe(1);
+  expect(refused.err).toContain('explicit');
+  expect(refused.err).toContain('--request');
+  expect(refused.err).toContain('--approval');
+  expect(readTeams(home)[id]).toBeDefined();
+  const { generalDoor } = await import('../src/client/general-door.ts');
+  const { runForget } = await import('../src/commands/forget.ts');
+  let err = '';
+  const io: Io = { stdout: () => {}, stderr: (text) => { err += text; }, cwd, env: { HOME: home }, stdinIsTTY: false, caller: inPane };
+  const door = generalDoor('forget', [id, '--general', grant(['forget']), '--key', a.path], io);
+  expect(door.kind).toBe('admitted');
+  if (door.kind !== 'admitted') throw new Error('explicit grant was refused');
+  expect(await runForget(door.argv, door.io, { home }), err).toBe(0);
+  expect(readTeams(home)[id]).toBeUndefined();
+  upsertTeam(home, id, { project: id, session: id, root: cwd, lifecycle: 'stopped' });
+  expect(await runForget([id], { ...io, caller: { kind: 'owner' }, stdinIsTTY: true }, { home }), err).toBe(0);
+  expect(readTeams(home)[id]).toBeUndefined();
+});
+
+test('a wildcard grant never admits start as the owner', async () => {
+  const ran = await run(['start', '--general', all, '--key', a.path]);
+  expect(ran.code).toBe(1);
+  expect(ran.err).toContain('only the owner');
+  expect(ran.err).not.toContain('admitted by general grant');
+  const json = await run(['start', '--json', '--general', all, '--key', a.path]);
+  expect(json.code).toBe(1);
+  expect(JSON.parse(json.out).error).toMatchObject({ id: 'team.general-refused' });
+  expect(JSON.parse(json.out).error.message).toContain('only the owner');
+  expect(readFileSync(all, 'utf8')).toContain('"*"');
+});
+
+test('every command is a general-grant op or explicitly refused, never both', () => {
+  for (const name of Object.keys(commands)) {
+    expect(Number((GENERAL_OPS as readonly string[]).includes(name)) + Number(GENERAL_REFUSED_COMMANDS.has(name))).toBe(1);
+  }
+  expect([...GENERAL_REFUSED_COMMANDS]).toEqual(['start']);
+  expect(GENERAL_OPS as readonly string[]).not.toContain('start');
 });
 
 test('every command in the contract declares --general and --key, but the grant-issuing one', () => {
   const contract = JSON.parse(readFileSync(join(import.meta.dir, '..', 'contract', 'cli.json'), 'utf8')) as { commands: { name: string; hidden: boolean; flags: { name: string; takesValue: boolean }[]; subcommands: { name: string; flags: { name: string; takesValue: boolean }[] }[] }[] };
   const missing: string[] = [];
   for (const command of contract.commands) {
-    if (command.hidden) continue;
+    if (command.hidden || GENERAL_REFUSED_COMMANDS.has(command.name)) continue;
     const nodes = [{ name: command.name, flags: command.flags }, ...command.subcommands.map((s) => ({ name: `${command.name} ${s.name}`, flags: s.flags }))];
     for (const node of nodes) {
       if (node.name === 'client general-grant') {

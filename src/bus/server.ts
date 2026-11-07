@@ -1,3 +1,4 @@
+import { readStateFile, writeStateFile } from '../file-write.ts';
 // The event bus service over `.agents/bus.sock` (RFC 002 Amendment 01 §4.2, §4.4).
 //
 // A dedicated process beside the broker with its own Unix domain socket (`.agents/bus.sock`,
@@ -83,7 +84,7 @@ export type BusMarker = { pid: number; started: string };
 
 function writeBusMarker(root: string, at: Date): void {
   try {
-    writeFileSync(busMarkerPath(root), `${JSON.stringify({ pid: process.pid, started: at.toISOString() })}\n`, { mode: 0o600 });
+    writeStateFile(busMarkerPath(root), `${JSON.stringify({ pid: process.pid, started: at.toISOString() })}\n`, { root });
   } catch {
     // A marker that cannot be written leaves status unable to name the bus; the bus still serves.
   }
@@ -100,7 +101,7 @@ function clearBusMarker(root: string): void {
 
 export function readBusMarker(root: string): BusMarker | null {
   try {
-    const parsed = JSON.parse(readFileSync(busMarkerPath(root), 'utf8')) as Partial<BusMarker>;
+    const parsed = JSON.parse(readStateFile(busMarkerPath(root), 4096, root) ?? '') as Partial<BusMarker>;
     if (typeof parsed.pid !== 'number' || !Number.isInteger(parsed.pid) || typeof parsed.started !== 'string') return null;
     return { pid: parsed.pid, started: parsed.started };
   } catch {
