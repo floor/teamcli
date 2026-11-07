@@ -22,7 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `team start` is owner-only: a general grant never admits it.
+
 - Owners who relied on a wildcard grant for `forget` now need an explicit grant or a per-use approval.
+
+### Known issue
+
+A reply that `team send --wait` shows is not proof of who wrote it: a seat on the same machine can write a record that looks like another seat’s reply. Check the sender another way before acting on it.
 
 ## [0.5.17] - 2026-11-07
 
