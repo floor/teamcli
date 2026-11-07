@@ -300,7 +300,13 @@ describe('check, approve and up on a file from before the change', () => {
 
   test('the plan\'s workspace create carries the derived label, and the seat keeps its name for the pane', async () => {
     const { base, root, home } = place();
-    const text = trusted(mixed, root);
+    mkdirSync(join(base, 'own-researcher'));
+    const text = mixed
+      .replace(
+        '    launch: grok --model grok-4.7\n',
+        '    launch: grok --model grok-4.7\n    cwd: ../own-researcher\n',
+      )
+      .replace('workspace:', 'trust:\n  - .\n  - ../own-researcher\nworkspace:');
     writeFileSync(join(root, '.agents/team.yaml'), text);
     const team = valid(text);
     writeApproval(storePath(team.project, root, home), { approval: approvalOf(team, root, NOW), file: text }, team.seats, home);
