@@ -617,17 +617,13 @@ export function parsePsSnapshot(text: string): ReadonlyMap<number, { ppid: numbe
   return table;
 }
 
-function readPsSnapshot(): ReadonlyMap<number, { ppid: number; name: string }> | null {
-  try {
-    const out = execFileSync('ps', ['-ax', '-o', 'pid=,ppid=,comm='], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: syncChildTimeout(2_000),
-    });
-    return parsePsSnapshot(out);
-  } catch {
-    return null;
-  }
+function readPsSnapshot(): ReadonlyMap<number, { ppid: number; name: string }> {
+  const out = execFileSync('ps', ['-ax', '-o', 'pid=,ppid=,comm='], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: syncChildTimeout(2_000),
+  });
+  return parsePsSnapshot(out);
 }
 
 // "10 (herdr) S 1 10 …", one line of /proc/<pid>/stat: the name in parentheses — it can hold
@@ -661,42 +657,87 @@ export function processReader(platform: string = process.platform): ReadProcess 
 let cachedAncestorsSnapshotId: number | null = null;
 let cachedDefaultAncestors: Process[] | null | undefined;
 
-function walkAncestors(pid: number, read: ReadProcess): Process[] | null {
-  if (pid <= 1) return [];
-  const step: ReadProcess = read === readWithPs
-    ? (() => {
-        const snapshot = readPsSnapshot();
-        return snapshot ? (at: number) => snapshot.get(at) ?? null : () => null;
-      })()
-    : read;
-  const out: Process[] = [];
-  let at = pid;
-  for (let depth = 0; depth < 64; depth++) {
-    if (at <= 1) return out;
-    const found = step(at);
-    if (!found) return null;
-    out.push({ pid: at, name: found.name });
-    at = found.ppid;
-  }
-  return null;
+function ancestorReadFailure(error: unknown): string {
+  return (error as NodeJS.ErrnoException | null)?.code === 'ETIMEDOUT'
+    ? 'snapshot unread (timeout)' : 'snapshot unread (reader failed)';
 }
 
-// The parent processes of `pid`, nearest first, up to the system's first process. Null when a
-// process on the way can't be read, or the chain is longer than any real one: a partial list
-// could hide the herdr server above it.
-export function readAncestors(pid: number = process.ppid, read: ReadProcess = processReader()): Process[] | null {
+function noteAncestorFailure(cause: string): void {
+  console.error(`team caller: ${cause}`);
+}
+
+// The public single-entry reader keeps its null result. The walk retains errors other than a
+// vanished entry so its diagnostic can distinguish a missing pid from a failed reader.
+function readProcForWalk(pid: number): ReturnType<ReadProcess> {
+  try { return parseStat(readFileSync(`/proc/${pid}/stat`, 'utf8')); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT' || (error as NodeJS.ErrnoException).code === 'ESRCH') return null;
+    throw error;
+  }
+}
+
+function walkAncestors(pid: number, read: ReadProcess, note: (cause: string) => void): Process[] | null {
+  if (pid <= 1) { note(`start pid ${pid}`); return []; }
+  try {
+    const step: ReadProcess = read === readWithPs
+      ? (() => {
+          const snapshot = readPsSnapshot();
+          return (at: number) => snapshot.get(at) ?? null;
+        })()
+      : read === readWithProc ? readProcForWalk : read;
+    const out: Process[] = [];
+    let at = pid;
+    for (let depth = 0; depth < 64; depth++) {
+      if (at <= 1) return out;
+      const found = step(at);
+      if (!found) { note(`missing pid ${at}`); return null; }
+      out.push({ pid: at, name: found.name });
+      at = found.ppid;
+    }
+    note('chain longer than 64');
+    return null;
+  } catch (error) {
+    note(ancestorReadFailure(error));
+    return null;
+  }
+}
+
+// A partial chain may hide the terminal host. Retry a null walk once from the original pid
+// and a fresh table; neither attempt skips a missing entry or accepts the partial parents.
+export function readAncestors(
+  pid: number | undefined = undefined,
+  read: ReadProcess = processReader(),
+  note: (cause: string) => void = noteAncestorFailure,
+): Process[] | null {
+  const followsParent = pid === undefined;
+  const startPid = pid ?? process.ppid;
+  const parentMatches = (chain: Process[] | null): Process[] | null => {
+    if (followsParent && chain !== null && chain.length > 0) {
+      const liveParent = process.ppid;
+      const walkedParent = chain[0]!.pid;
+      if (liveParent !== walkedParent) {
+        note(`parent pid changed ${walkedParent} to ${liveParent}`);
+        return null;
+      }
+    }
+    return chain;
+  };
+  const fresh = (): Process[] | null => {
+    const first = walkAncestors(startPid, read, note);
+    return first === null ? walkAncestors(startPid, read, note) : first;
+  };
   const snapId = activeHerdrSnapshotId();
   if (snapId !== cachedAncestorsSnapshotId) {
     cachedAncestorsSnapshotId = snapId;
     cachedDefaultAncestors = undefined;
   }
-  if (snapId !== null && pid === process.ppid && read === processReader()) {
-    if (cachedDefaultAncestors === undefined) {
-      cachedDefaultAncestors = walkAncestors(pid, read);
-    }
-    return cachedDefaultAncestors;
+  if (snapId !== null && startPid === process.ppid && read === processReader()) {
+    if (cachedDefaultAncestors === undefined) cachedDefaultAncestors = fresh();
+    const checked = parentMatches(cachedDefaultAncestors);
+    if (checked === null) cachedDefaultAncestors = null;
+    return checked;
   }
-  return walkAncestors(pid, read);
+  return parentMatches(fresh());
 }
 
 let cachedCallerSnapshotId: number | null = null;

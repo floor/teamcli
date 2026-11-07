@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Prepared releases check operation rows against the dated release heading before tagging; development can keep operations declared unshipped. New release rows use the release day’s end in UTC as a conservative widening boundary.
 
+- Caller placement retries one incomplete process walk, keeps refusing incomplete chains or a parent change during the read, and names the failure cause without logging command arguments or environment values.
+
 ## [0.5.17] - 2026-11-07
 
 Carries the v0.5.16 content. v0.5.16 was tagged but never published to npm.
