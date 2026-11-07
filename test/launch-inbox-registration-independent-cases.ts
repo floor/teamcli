@@ -36,15 +36,23 @@ function temp(): string { const base = realpathSync(mkdtempSync(join(tmpdir(), '
 afterEach(() => { for (const base of made.splice(0)) discardFixtures([base]); });
 test('the suite starts with its own empty synthetic HOME', assertIndependentHome);
 
-function text(session: string, cli = 'cursor', root = '', lobby = ''): string {
+function text(session: string, cli = 'cursor', root = '', lobby = '', own = ''): string {
   const spec = cli === 'claude-code' ? ['anthropic', 'Claude Opus', '5.5', 'claude --model claude-opus-5-5'] : ['xai', 'Grok', '4.7', cli === 'cursor' ? 'cursor-agent' : cli];
-  return `format: 1\nproject: inbox-fixture\ncoordinator: lead\noperator: lead\nsession: ${session}\nworkspace:\n  mode: shared\n${root ? `trust:\n  - ${root}\n  - ${lobby}\n  - ${join(process.env.HOME!, ".config", "team", "lobby")}\n` : ''}seats:\n  - name: lead\n    role: coordinator\n    human: true\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5\n  - name: worker\n    role: worker\n    cli: ${cli}\n    vendor: ${spec[0]}\n    model: ${spec[1]}\n    version: "${spec[2]}"\n    launch: ${spec[3]}\n`;
+  const ownCwd = own ? '\n    cwd: ../own-worker' : '';
+  const trust = own
+    ? `trust:\n  - .\n  - ../own-worker\n`
+    : root ? `trust:\n  - ${root}\n  - ${lobby}\n  - ${join(process.env.HOME!, ".config", "team", "lobby")}\n` : '';
+  return `format: 1\nproject: inbox-fixture\ncoordinator: lead\noperator: lead\nsession: ${session}\nworkspace:\n  mode: shared\n${trust}seats:\n  - name: lead\n    role: coordinator\n    human: true\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5\n  - name: worker\n    role: worker\n    cli: ${cli}\n    vendor: ${spec[0]}\n    model: ${spec[1]}\n    version: "${spec[2]}"\n    launch: ${spec[3]}${ownCwd}\n`;
 }
-function world(cli = 'cursor', registry = true, session = 'north', sharedHome?: string) {
+function world(cli = 'cursor', registry = true, session = 'north', sharedHome?: string, forceOwn = false) {
   const base = temp(), home = sharedHome ?? join(base, 'home'), root = join(base, 'checkout'), dir = join(root, '.agents'), lobby = join(home, '.config', 'team', 'lobby');
+  const useOwn = forceOwn || cli === 'grok' || cli === 'cursor';
+  const ownDir = join(base, 'own-worker');
   folder(dir); folder(lobby); folder(join(process.env.HOME!, ".config", "team", "lobby"));
+  if (useOwn) folder(ownDir);
+  const own = useOwn ? realpathSync(ownDir) : '';
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root, env: gitEnv() });
-  const path = join(dir, 'team.yaml'), yaml = text(session, cli, root, lobby);
+  const path = join(dir, 'team.yaml'), yaml = text(session, cli, root, lobby, own);
   writeFileSync(path, yaml);
   // The state `team up` leaves: the server proves its caller stands on its seat's recorded pane.
   const seats = Object.fromEntries(['lead', 'worker'].map((name) => [name, { stage: 'ready', pane: `pane-${name}` }]));
@@ -57,7 +65,7 @@ function world(cli = 'cursor', registry = true, session = 'north', sharedHome?: 
     discardFixtures([path]);
     upsertTeam(home, teamIdOf(root), { project: loaded.team.project, session, root, roster: [{ agent: 'agt_111111111111', seat: 'worker', role: 'worker' }] });
   }
-  return { base, home, root, dir, lobby, path, yaml, team: loaded.team, session };
+  return { base, home, root, dir, lobby, path, yaml, team: loaded.team, session, own };
 }
 type World = ReturnType<typeof world>;
 function messageId(label: string): string { const h = createHash('sha256').update(label).digest('hex'); return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20,32)}`; }
@@ -91,7 +99,7 @@ function registrar(w: World, cli: Route) {
     writeFileSync(target, cli === 'grok' ? '[mcp_servers.team-inbox]\n' : JSON.stringify({ mcpServers: { 'team-inbox': { command: selfRunner().command, args: argv } } }) + '\n');
     return { code: 0 };
   };
-  const register = (options: { seat?: string; session?: string; file?: string } = {}) => registerInbox({ cli, seat: options.seat ?? 'worker', cwd: w.lobby, ...{ home: w.home, session: options.session ?? w.session }, ...(options.file === undefined ? {} : { file: options.file }), run });
+  const register = (options: { seat?: string; session?: string; file?: string; cwd?: string } = {}) => registerInbox({ cli, seat: options.seat ?? 'worker', cwd: options.cwd ?? w.lobby, ...{ home: w.home, session: options.session ?? w.session }, ...(options.file === undefined ? {} : { file: options.file }), run });
   const args = () => cli === 'cursor' ? JSON.parse(readFileSync(join(w.lobby, ...route[cli]), 'utf8')).mcpServers['team-inbox'].args as string[] : calls.at(-1)!.args.slice(calls.at(-1)!.args.indexOf('--') + 1);
   return { calls, register, args };
 }
@@ -168,9 +176,13 @@ test('the named-file Codex launch retains the exact old argument bytes', () => {
 
 function remember(w: World, cli = 'cursor'): void {
   const seat = w.team.seats.find(s => s.name === 'worker')!;
-  updateState(w.dir, state => { const session = state.sessions[w.session] ??= emptySession(); session.seats.worker = { stage: 'ready', pane: 'old-pane', workspace: 'old-workspace', cli, start_cwd: w.lobby, launched: { shell: 501, cli: [502] }, model: seat.model, version: seat.version, launch_line: seat.launch }; });
+  const start_cwd = cli === 'grok' ? w.own : w.lobby;
+  updateState(w.dir, state => { const session = state.sessions[w.session] ??= emptySession(); session.seats.worker = { stage: 'ready', pane: 'old-pane', workspace: 'old-workspace', cli, start_cwd, launched: { shell: 501, cli: [502] }, model: seat.model, version: seat.version, launch_line: seat.launch }; });
 }
-function live(w: World) { return [{ name: 'worker', agent: w.team.seats.find(s => s.name === 'worker')!.cli, pane: 'old-pane', workspace: 'old-workspace', status: 'idle', cwd: w.lobby }]; }
+function live(w: World) {
+  const cli = w.team.seats.find(s => s.name === 'worker')!.cli;
+  return [{ name: 'worker', agent: cli, pane: 'old-pane', workspace: 'old-workspace', status: 'idle', cwd: cli === 'grok' ? w.own : w.lobby }];
+}
 function launchFixture(w: World) {
   const registrations: unknown[][] = [], runs: string[] = [], closes: string[] = [];
   const launch: Launch = { sessionState: () => 'running', startServer: () => true, sessionUp: () => true, createWorkspace: () => ({ pane: 'new-pane', workspace: 'new-workspace' }), paneRun: (_s, _p, line) => { runs.push(line); return true; }, registerInbox: (...args) => { registrations.push(args); return { ok: true }; }, renameAgent: () => true, closeWorkspace: (_s, workspace) => { closes.push(workspace); return true; }, agentPanes: () => ['old-pane'], agents: () => live(w), paneText: () => CLAUDE_IDLE, foreground: () => ['claude'], processInfo: () => ({ shell: 501, foreground: [502] }), sleep: async () => {}, now: () => NOW };
@@ -180,10 +192,10 @@ for (const registry of [true, false]) test(`${registry ? 'registry' : 'file'} re
   const w = world('grok', registry); remember(w, 'grok'); const f = launchFixture(w), io = testIo(w.root, { kind: 'owner' });
   f.launch.foreground = () => ['grok']; f.launch.paneText = () => GROK_IDLE;
   const reg = registrar(w, 'grok');
-  f.launch.registerInbox = (cli, seat, cwd, fourth?: string, fifth?: string) => { f.registrations.push([cli, seat, cwd, fourth, fifth]); return reg.register({ ...(fifth === undefined ? {} : { file: fifth }), session: fourth }); };
+  f.launch.registerInbox = (cli, seat, cwd, fourth?: string, fifth?: string) => { f.registrations.push([cli, seat, cwd, fourth, fifth]); return reg.register({ cwd, ...(fifth === undefined ? {} : { file: fifth }), session: fourth }); };
   const code = await runReload(['worker'], io, { launch: f.launch, home: w.home, now: () => NOW });
   expect(code, io.err + io.out).toBe(0); expect(io.out).toContain('already running');
-  expect(f.registrations).toEqual([['grok', 'worker', w.lobby, w.session, registry ? undefined : w.path]]); expect(existsSync(join(w.lobby, ...route.grok))).toBe(true); expect(f.runs).toEqual([]); expect(f.closes).toEqual([]);
+  expect(f.registrations).toEqual([['grok', 'worker', w.own, w.session, registry ? undefined : w.path]]); expect(existsSync(join(w.own, ...route.grok))).toBe(true); expect(f.runs).toEqual([]); expect(f.closes).toEqual([]);
 }));
 
 test('check names a running seat whose project registration is missing, and clears after registration', async () => underRegistry(async () => {
@@ -201,7 +213,7 @@ function doctor(w: World) { return { home: w.home, version: (binary: string) => 
 
 test('real registry up passes no invented team-file path to its registration', async () => underRegistry(async () => {
   const w = world('grok'), reg = registrar(w, 'grok'), f = launchFixture(w); let started = false, clock = NOW.getTime();
-  f.launch.agents = () => started ? [{ name: 'worker', agent: 'grok', pane: 'new-pane', workspace: 'new-workspace', status: 'idle', cwd: w.lobby }] : [];
+  f.launch.agents = () => started ? [{ name: 'worker', agent: 'grok', pane: 'new-pane', workspace: 'new-workspace', status: 'idle', cwd: w.own }] : [];
   f.launch.agentPanes = () => started ? ['new-pane'] : [];
   f.launch.createWorkspace = (_s, _cwd, label) => label.toLowerCase().includes('watch') ? { pane: 'watch-pane', workspace: 'watch-workspace' } : { pane: 'new-pane', workspace: 'new-workspace' };
   f.launch.paneRun = (_s, pane, line) => { if (pane === 'new-pane') { f.runs.push(line); started = true; } return true; };
@@ -210,14 +222,14 @@ test('real registry up passes no invented team-file path to its registration', a
   f.launch.registerInbox = (cli, seat, cwd, fourth?: string, fifth?: string) => { f.registrations.push([cli, seat, cwd, fourth, fifth]); return registerInbox({ cli, seat, cwd, ...{ home: w.home, session: fourth }, ...(fifth === undefined ? {} : { file: fifth }), run: (command, args, at) => { reg.calls.push({ command, args: [...args], cwd: at }); const target = join(at, ...route.grok); folder(dirname(target)); writeFileSync(target, '[mcp_servers.team-inbox]\n'); return { code: 0 }; } }); };
   const sources: UpSources = { home: w.home, sessionRunning: () => true, sessionState: () => 'running', agents: () => f.launch.agents(w.session), doctor: doctor(w), machine, alive: () => false, now: () => new Date(clock), sleep: async ms => { clock += ms; }, launch: f.launch };
   const io = testIo(w.root, { kind: 'owner' }); const code = await runUp([], io, sources);
-  expect(code, io.err + io.out).toBe(0); expect(f.registrations).toEqual([['grok', 'worker', w.lobby, w.session, undefined]]); expect(f.runs).toHaveLength(1); expect(readState(w.dir).sessions[w.session]?.seats.worker?.stage).toBe('ready');
+  expect(code, io.err + io.out).toBe(0); expect(f.registrations).toEqual([['grok', 'worker', w.own, w.session, undefined]]); expect(f.runs).toHaveLength(1); expect(readState(w.dir).sessions[w.session]?.seats.worker?.stage).toBe('ready');
   signedDrop(w, 'up-message'); const add = reg.calls[0]!.args; expect(await unread(w, add.slice(add.indexOf('--') + 1))).toContain(messageId('up-message'));
 }));
 
 test('a file-team queued swap passes the same named file through the shared restart sequence', async () => {
-  const w = world('claude-code', false); remember(w, 'claude-code'); const f = launchFixture(w);
+  const w = world('claude-code', false, 'north', undefined, true); remember(w, 'claude-code'); const f = launchFixture(w);
   let old = true, started = false, named = false, shell = false, boxed = CLAUDE_IDLE, clock = NOW.getTime();
-  const agents = () => [...(old ? live(w) : []), ...(started ? [{ name: named ? 'worker' : null, agent: 'grok', pane: 'new-pane', workspace: 'new-workspace', status: 'idle', cwd: w.lobby }] : [])];
+  const agents = () => [...(old ? live(w) : []), ...(started ? [{ name: named ? 'worker' : null, agent: 'grok', pane: 'new-pane', workspace: 'new-workspace', status: 'idle', cwd: w.own }] : [])];
   const sleep = async (ms: number) => { clock += ms; };
   f.launch.agents = agents; f.launch.agentPanes = () => agents().map(a => a.pane);
   f.launch.paneRun = (_s, _p, line) => { f.runs.push(line); started = true; return true; };

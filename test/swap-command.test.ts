@@ -989,6 +989,12 @@ describe('team swap now and --run', () => {
 
   test('a recorded Grok session on an unchanged CLI resumes with -r <id>', async () => {
     place();
+    const own = join(dirname(root), 'own-grok');
+    mkdirSync(own, { recursive: true });
+    const file = join(root, '.agents', 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8')
+      .replace(/trust:\n(?:  - .*\n)+/, 'trust:\n  - .\n  - ../own-grok\n')
+      .replace('    launch: grok\n', '    launch: grok\n    cwd: ../own-grok\n'));
     setRule('*=!anthropic');
     plantSession('grok', GROK_SESSION);
     await swap(['queue', 'grok', '--to', 'grok:grok fast']);

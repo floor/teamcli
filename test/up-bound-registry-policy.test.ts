@@ -11,7 +11,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
@@ -564,6 +564,7 @@ test('a pull-on-turn reviewer is warned about, not only a CLI whose profile has 
   // grok's profile declares pull-on-turn: its MCP inbox serves it at its turns, but no adapter
   // wakes it while it is idle. Its declared class is not `none`, so the declared-word warning
   // never saw it.
+  mkdirSync(join(dirname(root), 'own-checker'), { recursive: true });
   const reviewer = `  - role: reviewer
     name: checker
     label: checker
@@ -572,8 +573,9 @@ test('a pull-on-turn reviewer is warned about, not only a CLI whose profile has 
     model: Grok 4
     version: "4"
     launch: grok
+    cwd: ../own-checker
 `;
-  writeTeam(`${teamText()}${reviewer}`);
+  writeTeam(`${teamText()}${reviewer}`.replace(/trust:\n(?:  - .*\n)+/, 'trust:\n  - .\n  - ../own-checker\n'));
   recordValid();
   const made = makeWorld({ screen: IDLE_A });
   const dry = testIo(root, { kind: 'owner' });
