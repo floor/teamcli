@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Prepared releases check operation rows against the dated release heading before tagging; development can keep operations declared unshipped.
+
 ## [0.5.17] - 2026-11-07
 
 Carries the v0.5.16 content. v0.5.16 was tagged but never published to npm.

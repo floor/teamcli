@@ -27,28 +27,29 @@ function isRealDate(date: string): boolean {
   );
 }
 
-const version = process.argv[2];
-if (!version) {
-  exit('usage: bun scripts/check-release-date.ts <version>', 2);
+/** The section heading and its real date, shared by release preparation checks. */
+export function releaseHeadingOf(changelog: string, version: string): { heading: string; date: string | null } | null {
+  const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const found = new RegExp(`^## \\[${escaped}\\](.*)$`, 'm').exec(changelog);
+  if (found === null) return null;
+  const tail = found[1] ?? '';
+  const date = /^ - (\d{4}-\d{2}-\d{2})$/.exec(tail)?.[1];
+  return { heading: `## [${version}]${tail}`, date: date !== undefined && isRealDate(date) ? date : null };
 }
 
-let changelog: string;
-try {
-  changelog = readFileSync('CHANGELOG.md', 'utf8');
-} catch (error) {
-  exit(`check-release-date: cannot read CHANGELOG.md: ${(error as Error).message}`, 2);
+if (import.meta.main) {
+  const version = process.argv[2];
+  if (!version) exit('usage: bun scripts/check-release-date.ts <version>', 2);
+  let changelog: string;
+  try {
+    changelog = readFileSync('CHANGELOG.md', 'utf8');
+  } catch (error) {
+    exit(`check-release-date: cannot read CHANGELOG.md: ${(error as Error).message}`, 2);
+  }
+  const section = releaseHeadingOf(changelog, version);
+  if (section === null) exit(`check-release-date: CHANGELOG.md has no section for ${version}`, 1);
+  if (section.date === null) {
+    exit(`check-release-date: the heading for ${version} carries no real date: "${section.heading}"`, 1);
+  }
+  console.log(`check-release-date: ${version} is dated ${section.date}`);
 }
-
-const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const heading = new RegExp(`^## \\[${escaped}\\](.*)$`, 'm').exec(changelog);
-if (heading === null) {
-  exit(`check-release-date: CHANGELOG.md has no section for ${version}`, 1);
-}
-
-const tail = heading[1] ?? '';
-const date = /^ - (\d{4}-\d{2}-\d{2})$/.exec(tail)?.[1];
-if (date === undefined || !isRealDate(date)) {
-  exit(`check-release-date: the heading for ${version} carries no real date: "## [${version}]${tail}"`, 1);
-}
-
-console.log(`check-release-date: ${version} is dated ${date}`);
