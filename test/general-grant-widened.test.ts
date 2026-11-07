@@ -142,20 +142,23 @@ function dispatcherRoutes(source: string, release: string): string[] {
   return routes;
 }
 
+function readReleaseTags(repo: string): string[] | null {
+  try {
+    return execFileSync('git', ['tag', '--list', '--sort=v:refname', 'v*'], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+      .split('\n').filter((tag) => tag !== '' && !tag.includes('-rc.'));
+  } catch {
+    return null;
+  }
+}
+
 function releaseOpProblems(
   repo: string,
   unshipped: readonly string[],
   firstShipped: Readonly<Record<string, { tag: string; at: string } | null | undefined>>,
   refused: ReadonlySet<string> = GENERAL_REFUSED_COMMANDS,
 ): string[] {
-  let tags: string[];
-  try {
-    tags = execFileSync('git', ['tag', '--list', '--sort=v:refname', 'v*'], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
-      .split('\n').filter((tag) => tag !== '' && !tag.includes('-rc.'));
-  } catch {
-    return [NEEDS_RELEASE_TAGS];
-  }
-  if (tags.length === 0) return [NEEDS_RELEASE_TAGS];
+  const tags = readReleaseTags(repo);
+  if (tags === null || tags.length === 0) return [NEEDS_RELEASE_TAGS];
   const problems: string[] = [];
   const { version } = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')) as { version?: unknown };
   if (typeof version !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
@@ -256,8 +259,7 @@ test('an empty or unreadable release-tag set refuses a dated candidate', () => {
 
 test('release tags and the package release ship no unmeasured op', () => {
   const repo = join(import.meta.dir, '..');
-  const tags = execFileSync('git', ['tag', '--list', '--sort=v:refname', 'v*'], { cwd: repo, encoding: 'utf8' })
-    .split('\n').filter((tag) => tag !== '' && !tag.includes('-rc.'));
+  const tags = readReleaseTags(repo) ?? [];
   expect(tagSetProblem(tags)).toBeNull();
   expect(releaseOpProblems(repo, UNRELEASED_OPS, OP_FIRST_SHIPPED)).toEqual([]);
 });
