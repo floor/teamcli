@@ -44,7 +44,7 @@ for (const team of teams) {
     writeFileSync(join(folder, `${id}.yaml`), [
       `id: ${id}`, `name: ${name}`, 'signing:', '  model: Test', '  version: "1"', `  role: ${name === 'architect' ? 'architect' : 'worker'}`,
       'lab: independent', 'cli: codex', 'launcher: null', 'launch: codex',
-      'reach:', `  team: ${registryId}`, `  session: ${team.name}`, `  seat: ${name}`, `  pane: ${pane}`, '  address: null',
+      'reach:', `  team: ${JSON.stringify(registryId)}`, `  session: ${JSON.stringify(team.name)}`, `  seat: ${JSON.stringify(name)}`, `  pane: ${pane}`, '  address: null',
       'mcp: []', 'skills: []', 'lifecycle: running', 'provenance:', '  registered_by: team up',
       `  registered_at: "${now.toISOString()}"`, `  updated_at: "${now.toISOString()}"`, '',
     ].join('\n'));
