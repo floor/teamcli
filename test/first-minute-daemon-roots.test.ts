@@ -191,6 +191,35 @@ describe('lobby-only daemon discovery', () => {
     expect(JSON.parse(io.out).skippedTeams[0]).toMatchObject({ team: 'different', why: 'the recorded folder belongs to a different team or session' });
   });
 
+  test('two running teams sharing a lobby recover the lobby-only team from its own recorded checkout', () => {
+    const { home, root, lobby, id } = lobbyTeam();
+    // The shared lobby belongs to the rooted team. The other team has a separate checkout
+    // recorded by an older row, while its current running row carries only the common lobby.
+    writeFileSync(join(lobby, '.agents/team.yaml'), LOBBY_TEAM.replaceAll('acme', 'shared'));
+    upsertTeam(home, teamIdOf(lobby), { root: lobby, lobby, project: 'shared', session: 'shared', entity: null, lifecycle: 'running' });
+    mkdirSync(join(root, '.agents'));
+    writeFileSync(join(root, '.agents/team.yaml'), LOBBY_TEAM);
+    upsertTeam(home, teamIdOf(root), { root, lobby, project: 'acme', session: 'acme', entity: null, lifecycle: 'defined' });
+    const before = readFileSync(teamsFile(home), 'utf8');
+    expect(runningRegistryRoots(readTeams(home), home)).toEqual([root, lobby].sort().map((root) => ({ root, source: 'registry' })));
+    expect(readFileSync(teamsFile(home), 'utf8')).toBe(before);
+    expect(readTeams(home)[id]?.lifecycle).toBe('running');
+  });
+
+  test('two running teams sharing a lobby name the lobby-only row when its own root is unavailable', async () => {
+    const { home, root, lobby, id } = lobbyTeam();
+    writeFileSync(join(lobby, '.agents/team.yaml'), LOBBY_TEAM.replaceAll('acme', 'shared'));
+    upsertTeam(home, teamIdOf(lobby), { root: lobby, lobby, project: 'shared', session: 'shared', entity: null, lifecycle: 'running' });
+    expect(runningRegistryRoots(readTeams(home), home)).toEqual([{ root: lobby, source: 'registry' }]);
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runDaemon(['status', '--json'], io, { home, reminders: () => ({ specs: [] }) })).toBe(0);
+    expect(JSON.parse(io.out).skippedTeams).toEqual([{ id, team: 'acme', session: 'acme', lobby,
+      why: 'the recorded folder belongs to a different team or session' }]);
+    const text = testIo(root, { kind: 'owner' });
+    expect(await runDaemon(['status'], text, { home })).toBe(0);
+    expect(text.out).toContain('skipped team acme (acme): the recorded folder belongs to a different team or session');
+  });
+
   test('an unreadable stored definition is named rather than bypassed through the lobby file', async () => {
     const { home, root, id } = lobbyTeam();
     const record = teamConfigRecordPath(home, id);
