@@ -11,7 +11,7 @@
 // corpus location is printed as `path:line` for an added line and `commit:<sha>:<line>` for a
 // commit-message line; the matched text is never printed.
 //
-//   bun scripts/check-private-diff.ts (--base <rev> | --release) [--root <dir>] [--file <team file>]
+//   bun scripts/check-private-diff.ts (--base <rev> | --release) [--root <dir>] [--file <policy file>]
 //                                     [--private-names <file>] [--private-phrases <file>]
 //
 // `--release` scans `origin/main..HEAD` (the range CI checks), while lane gates pass `--base <rev>`.
@@ -20,7 +20,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { forbiddenPatterns, fromTeamFile, type CheckConfig } from '../src/check/config.ts';
+import { forbiddenPatterns, type CheckConfig } from '../src/check/config.ts';
 import { checkSignature, findForbidden, splitLines } from '../src/check/message.ts';
 import {
   defaultPrivateListPaths,
@@ -30,7 +30,7 @@ import {
   type PrivateSource,
 } from '../src/check/private-names.ts';
 import { INTERNAL_TRACKER } from '../src/check/public-names.ts';
-import { loadTeamFile } from '../src/file/load.ts';
+import { loadConfig } from '../src/check/load.ts';
 
 const GIT_CONFIG = ['log.showSignature=false', 'i18n.logOutputEncoding=UTF-8', 'trailer.separators=:'].flatMap(
   (setting) => ['-c', setting],
@@ -201,12 +201,12 @@ if (import.meta.main) {
   const resolvedBase = release ? 'origin/main' : base;
   if (resolvedBase === undefined) exit('--base needs a value (or pass --release)');
 
-  const defaultFile = existsSync(resolve(process.cwd(), '.github/team.yaml'))
-    ? '.github/team.yaml'
-    : fileURLToPath(new URL('../.github/team.yaml', import.meta.url));
-  const loaded = loadTeamFile(process.cwd(), { file: file ?? defaultFile, checkOnly: true });
+  const defaultFile = existsSync(resolve(process.cwd(), '.github/policy.yaml'))
+    ? '.github/policy.yaml'
+    : fileURLToPath(new URL('../.github/policy.yaml', import.meta.url));
+  const loaded = loadConfig(process.cwd(), file ?? defaultFile, undefined, { ledger: false });
   if (!loaded.ok) exit(loaded.errors.map((problem) => problem.message).join('; '));
-  const config = fromTeamFile(loaded.team);
+  const config = loaded.config;
 
   const defaults = defaultPrivateListPaths();
   const sources: PrivateSource[] = [];

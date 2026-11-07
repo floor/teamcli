@@ -64,14 +64,10 @@ function seat(name: string, label: string): UpSeat {
 }
 
 describe('a shared label', () => {
-  test("the repository's own team file validates", () => {
-    const text = readFileSync(new URL('../.github/team.yaml', import.meta.url), 'utf8');
-    const result = validateTeamFile(text);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.team.seats.map((item) => item.name)).toContain('claude-coordinator');
-    expect(result.team.seats.map((item) => item.name)).toContain('claude-implementer');
-    expect(result.team.seats.filter((item) => item.label === 'claude opus 5.5').length).toBeGreaterThan(1);
+  test('the shared-label fixture validates', () => {
+    const result = valid(SHARED);
+    expect(result.seats.map((item) => item.name)).toEqual(['coordinator', 'implementer']);
+    expect(result.seats.filter((item) => item.label === 'claude opus 5.5')).toHaveLength(2);
   });
 
   test('two seats may share a label, and each is found by its name', () => {

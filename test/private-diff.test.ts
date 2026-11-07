@@ -292,7 +292,7 @@ describe('the diff check command', () => {
     expect(result.stdout + result.stderr).not.toContain(FLO_ID);
 
     const customTeam = join(temp(), 'team.yaml');
-    const baseYaml = readFileSync(join(ROOT, '.github', 'team.yaml'), 'utf8');
+    const baseYaml = readFileSync(join(ROOT, '.github', 'policy.yaml'), 'utf8');
     writeFileSync(
       customTeam,
       baseYaml.replace(
@@ -313,7 +313,7 @@ describe('the diff check command', () => {
 
   test('a commit without the Agent signature trailer is a hit unless it is a merge or human-authored', () => {
     const humanTeam = join(temp(), 'team.yaml');
-    const teamYaml = readFileSync(join(ROOT, '.github', 'team.yaml'), 'utf8');
+    const teamYaml = readFileSync(join(ROOT, '.github', 'policy.yaml'), 'utf8');
     const syntheticHumans = teamYaml.replace(/(  humans:\n)(?:    - [^\n]*\n)+/, `$1    - ${HUMAN_EMAIL}\n`);
     if (syntheticHumans === teamYaml) throw new Error('synthetic human allowlist was not installed');
     writeFileSync(humanTeam, syntheticHumans);

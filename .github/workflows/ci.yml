@@ -76,12 +76,12 @@ jobs:
           BODY: ${{ github.event.pull_request.body }}
         run: |
           if [ "$EVENT" = pull_request ]; then
-            printf '%s' "$BODY" | node dist/cli.js check "origin/$BASE..HEAD" --pr - --file .github/team.yaml
+            printf '%s' "$BODY" | node dist/cli.js check "origin/$BASE..HEAD" --pr - --file .github/policy.yaml
           else
             case "$BEFORE" in
-              *[!0]*) node dist/cli.js check "$BEFORE..HEAD" --file .github/team.yaml ;;
+              *[!0]*) node dist/cli.js check "$BEFORE..HEAD" --file .github/policy.yaml ;;
               # A first push has no commit before it.
-              *) node dist/cli.js check HEAD --file .github/team.yaml ;;
+              *) node dist/cli.js check HEAD --file .github/policy.yaml ;;
             esac
           fi
 
@@ -261,12 +261,12 @@ jobs:
           BODY: ${{ github.event.pull_request.body }}
         run: |
           if [ "$EVENT" = pull_request ]; then
-            printf '%s' "$BODY" | node dist/cli.js check "origin/$BASE..HEAD" --pr - --file .github/team.yaml
+            printf '%s' "$BODY" | node dist/cli.js check "origin/$BASE..HEAD" --pr - --file .github/policy.yaml
           else
             case "$BEFORE" in
-              *[!0]*) node dist/cli.js check "$BEFORE..HEAD" --file .github/team.yaml ;;
+              *[!0]*) node dist/cli.js check "$BEFORE..HEAD" --file .github/policy.yaml ;;
               # A first push has no commit before it.
-              *) node dist/cli.js check HEAD --file .github/team.yaml ;;
+              *) node dist/cli.js check HEAD --file .github/policy.yaml ;;
             esac
           fi
 

@@ -9,7 +9,7 @@ import { pr } from '../../src/commands/pr.ts';
 import { createRepository, type Repository } from './repository.ts';
 
 /** This repository's own team file, the one CI checks with. */
-const TEAM_FILE = fileURLToPath(new URL('../../.github/team.yaml', import.meta.url));
+const TEAM_FILE = fileURLToPath(new URL('../../.github/policy.yaml', import.meta.url));
 
 /** The rules as `check` prints them: each pattern's source, byte for byte. */
 const PANE = 'forbidden pattern \\bw[0-9A-Z]+:p[0-9]+\\b';

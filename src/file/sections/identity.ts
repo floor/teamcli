@@ -57,7 +57,7 @@ export const identity: Section = {
   },
 };
 
-function readIdentity(entry: YamlEntry | undefined, check: Check): TeamFile['identity'] {
+export function readIdentity(entry: YamlEntry | undefined, check: Check): TeamFile['identity'] {
   const identity = check.fields(entry?.value, 'identity', ['signature', 'humans', 'since', 'forbidden', 'forbidden_public']);
   const signature = check.fields(identity.get('signature')?.value, 'identity.signature', ['template', 'commits', 'pull_requests']);
   const commits = check.fields(signature.get('commits')?.value, 'identity.signature.commits', ['template', 'position', 'exempt']);
