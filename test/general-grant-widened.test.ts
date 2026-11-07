@@ -2,10 +2,11 @@
 // without a new owner approval. `team check` and `team doctor` name each such grant once, as
 // information: never a difference, never a failure. What counts as "after" is measured from the
 // release tags in this repository (each op's route in the dispatcher table at each tag, by tag
-// date), not remembered; the table below is that measurement.
+// date), not remembered; the table below is that measurement. The package version also counts
+// as shipped during the release check, before its tag exists.
 import { afterAll, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { commands } from '../src/cli.ts';
 import {
@@ -131,33 +132,67 @@ test('a tag set the release walk cannot use fails loudly, never passes empty', (
   expect(tagSetProblem(tableTags.slice(1))).toBe(`${NEEDS_RELEASE_TAGS}; it reads no v0.1.0`);
 });
 
-test('an op declared unshipped is a route at no release tag', () => {
-  // The declaration can rot in the one way the equality above cannot see: the op ships in a
-  // release while its row and this list are both left untouched, so the null entry and the
-  // declaration still agree. Measure the declaration against the releases themselves: an op
-  // declared unshipped is a route at no release tag. Once a tag carries it, this fails until
-  // the row is added, which also takes the op out of the declaration. Each tag's dispatcher
-  // table is read the way the table above was measured (every non-rc tag yields one, 11 at
-  // v0.1.0 through 68 at v0.5.10), so a tag this reader cannot parse fails here too.
-  const repo = join(import.meta.dir, '..');
-  let listed = '';
-  try {
-    listed = execFileSync('git', ['tag', '--list', '--sort=v:refname', 'v*'], { cwd: repo, encoding: 'utf8' });
-  } catch {
-    // No git, or no repository here: the guard below names what the walk needs.
+/** Read the same dispatcher spelling at a release tag and in the candidate tree. */
+function dispatcherRoutes(source: string, release: string): string[] {
+  const routes = [...source.matchAll(/^  '?([a-z][a-z0-9-]*)'?: \(\) => import\('\.\/commands\/[^']+'\)/gm)].map(
+    (match) => match[1]!,
+  );
+  if (routes.length === 0) throw new Error(`${release} does not read a dispatcher`);
+  return routes;
+}
+
+function releaseOpProblems(
+  repo: string,
+  unshipped: readonly string[],
+  firstShipped: Readonly<Record<string, unknown>>,
+  refused: ReadonlySet<string> = GENERAL_REFUSED_COMMANDS,
+): string[] {
+  const problems: string[] = [];
+  const { version } = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')) as { version?: unknown };
+  if (typeof version !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
+    throw new Error('the package release needs a readable version');
   }
-  const tags = listed
-    .split('\n')
-    .filter((tag) => tag !== '' && !tag.includes('-rc.'));
-  expect(tagSetProblem(tags)).toBeNull();
+  const candidate = `v${version} (package.json)`;
+  const routes = dispatcherRoutes(readFileSync(join(repo, 'src', 'cli.ts'), 'utf8'), candidate);
+  for (const op of routes) {
+    if (!refused.has(op) && firstShipped[op] == null) problems.push(`${candidate} ships unmeasured op ${op}`);
+  }
+  const tags = execFileSync('git', ['tag', '--list', '--sort=v:refname', 'v*'], { cwd: repo, encoding: 'utf8' })
+    .split('\n').filter((tag) => tag !== '' && !tag.includes('-rc.'));
   for (const tag of tags) {
     const source = execFileSync('git', ['show', `${tag}:src/cli.ts`], { cwd: repo, encoding: 'utf8' });
-    const routes = [...source.matchAll(/^  '?([a-z][a-z0-9-]*)'?: \(\) => import\('\.\/commands\/[^']+'\)/gm)].map(
-      (match) => match[1]!,
-    );
-    expect(routes.length, `${tag} reads its dispatcher`).toBeGreaterThan(0);
-    expect(UNRELEASED_OPS.filter((op) => routes.includes(op)), `${tag} ships no declared-unshipped op`).toEqual([]);
+    const routes = dispatcherRoutes(source, tag);
+    for (const op of unshipped.filter((op) => routes.includes(op))) problems.push(`${tag} ships declared-unshipped op ${op}`);
   }
+  return problems;
+}
+
+test('the package release refuses an unlisted op before any tag exists', () => {
+  const repo = fixtureBase('.op-release-');
+  homes.push(repo);
+  execFileSync('git', ['init', '-q'], { cwd: repo });
+  mkdirSync(join(repo, 'src'));
+  writeFileSync(join(repo, 'package.json'), JSON.stringify({ version: '9.8.7' }));
+  writeFileSync(join(repo, 'src', 'cli.ts'), `const commands = {
+  config: () => import('./commands/config.ts'),
+  pending: () => import('./commands/pending.ts'),
+};\n`);
+  expect(execFileSync('git', ['tag', '--list'], { cwd: repo, encoding: 'utf8' })).toBe('');
+  const rows = { config: { tag: 'v1.0.0' }, pending: null };
+  expect(releaseOpProblems(repo, ['pending'], rows)).toEqual(['v9.8.7 (package.json) ships unmeasured op pending']);
+  // Forgetting both the row and the unshipped declaration must fail for the same reason.
+  expect(releaseOpProblems(repo, [], { config: rows.config })).toEqual(['v9.8.7 (package.json) ships unmeasured op pending']);
+  expect(releaseOpProblems(repo, [], { ...rows, pending: { tag: 'v9.8.7' } })).toEqual([]);
+  // Only an explicit general-door refusal excludes a dispatcher command from its release rows.
+  expect(releaseOpProblems(repo, [], { config: rows.config }, new Set(['pending']))).toEqual([]);
+});
+
+test('release tags and the package release ship no unmeasured op', () => {
+  const repo = join(import.meta.dir, '..');
+  const tags = execFileSync('git', ['tag', '--list', '--sort=v:refname', 'v*'], { cwd: repo, encoding: 'utf8' })
+    .split('\n').filter((tag) => tag !== '' && !tag.includes('-rc.'));
+  expect(tagSetProblem(tags)).toBeNull();
+  expect(releaseOpProblems(repo, UNRELEASED_OPS, OP_FIRST_SHIPPED)).toEqual([]);
 });
 
 test('a wildcard grant signed before a release reaches the ops that release shipped', () => {
