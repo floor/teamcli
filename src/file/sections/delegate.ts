@@ -94,13 +94,13 @@ function readEntry(item: YamlNode, check: Check, session: string): Delegate | nu
   return { pane, commands };
 }
 
-// The pane is herdr's `pane_id`, not an agent name or a workspace label, because the ID is what
-// survives a restart. On herdr 0.7.1, in a scratch session made and deleted for the check:
-// workspaces w1, w2 and w3 held panes w1:p1, w2:p1 and w3:p1; closing w2 left the next workspace
-// w4, not w2; after `herdr session stop` and a new server the same w1, w3 and w4 came back under
-// those IDs, the next workspace was w5, and w1:p1's shell PID had changed (83767 to 84315). The
-// ID therefore names the same place holding a fresh process — a closed pane made again has a new
-// ID, so delegation is off until the owner approves that new ID.
+// The pane is the terminal host's pane_id, not an agent name or a workspace label, because that
+// identity survives a restart. A prior measurement in a scratch session recorded three workspaces
+// with distinct panes. Closing the middle workspace advanced the next workspace identity.
+// Restarting the session restored the existing workspaces and pane identities, while the next
+// workspace identity advanced again and the original pane held a fresh process. A closed pane
+// recreated later has a new identity, so delegation stays off until the owner approves it.
+// The measurement's workspace, pane and process values are omitted.
 
 /** `<herdr session>/<pane id>`: one `/`, two non-empty components, no whitespace, case kept. */
 function readPane(entry: YamlEntry | undefined, check: Check, line: number, session: string): string | undefined {

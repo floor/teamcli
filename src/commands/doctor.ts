@@ -9,7 +9,7 @@ import { callerOf, isOwner, type Caller } from '../caller.ts';
 import { checkCommands, type ApprovedCheck } from '../budgets/checks.ts';
 import { parseOutput, runCommand, type CheckReading } from '../budgets/run.ts';
 import { shownTeamFile } from '../check/team.ts';
-import { widenedGrantNotes } from '../client/general-grant.ts';
+import { generalGrantChainNotes, widenedGrantNotes } from '../client/general-grant.ts';
 import { canonicalLanding as showLanding } from '../file/landing.ts';
 import { isParseError } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -1018,6 +1018,8 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
           launchLineFindings(team, root, { onPath: (binary) => sources.onPath(binary), home: sources.home, state: readState(dirname(loaded.path)).sessions[session] }),
           rulesOriginOf(loaded.source),
         ),
+        // Each verified general grant's chain, one note, in neither count, blocking nothing.
+        ...generalGrantChainNotes(sources.home, sources.now()).map((text): Finding => ({ level: 'note', text })),
         // A wildcard general grant signed before the release that first shipped an op reaches that
         // op without a new approval: one `note` finding per grant, in neither count, blocking nothing.
         ...widenedGrantNotes(sources.home, sources.now()).map((text): Finding => ({ level: 'note', text })),

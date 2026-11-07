@@ -801,7 +801,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
 
   // A row whose oldest drop has waited past its seat's unread window — the window the watch's
   // unread pass uses for that seat: the file's declared word, or the class's own default (ADR
-  // zeus-message-path, D2). The cell's `!` marks a class nothing wakes while idle, and this line
+  // message-path, D2). The cell's `!` marks a class nothing wakes while idle, and this line
   // says what the class means in the class's own words (`deliveryWords`), so the table and a
   // send's console line cannot promise different things. The line leads with the send's own
   // outcome words — `queued, not woken` — so a lead scanning status finds the stall by the same

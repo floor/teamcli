@@ -1463,7 +1463,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           await yieldBeat();
           // A delivery is a deposit until the seat's signed receipt follows: a message still
           // unread its seat's window after it landed gets the next leg down the cascade — the
-          // webhook adapter before the typed line (ADR zeus-message-path, D2) — and one still
+          // webhook adapter before the typed line (ADR message-path, D2) — and one still
           // unread at twice that window is reported to its sender and the team's lead. The
           // window is the file's declared word when it moved the section, else the seat class's
           // own default: 30 s for a seat a message can wake while idle, 60 s for a typed one.

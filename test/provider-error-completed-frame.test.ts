@@ -12,7 +12,7 @@ import { dialogKind } from '../src/send/deliver.ts';
 import { classifyComposer, readScreen, screenWord } from '../src/watch/screen.ts';
 
 const FRAME = readFileSync(
-  new URL('./fixtures/claude-code/completed-error-empty-box-atlas.txt', import.meta.url),
+  new URL('./fixtures/claude-code/completed-error-empty-box-capture.txt', import.meta.url),
   'utf8',
 );
 const LOST = 'API Error: Connection lost mid-response. The response above may be incomplete.';

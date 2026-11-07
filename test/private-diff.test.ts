@@ -17,7 +17,7 @@ const FLO_ID = ['FL', 'O-', '11', '90'].join('');
 const OD_ID = ['O', 'D-', '20261105-1'].join('');
 const CUSTOM_ID = ['AC', 'ME-', '42'].join('');
 const SIGNATURE = 'Agent: Claude Opus 5.5 · implementer';
-const HUMAN_EMAIL = 'drjones@floor.io';
+const HUMAN_EMAIL = 'synthetic-owner@example.test';
 
 const dirs: string[] = [];
 const emptyHome = mkdtempSync(join(tmpdir(), 'private-diff-home-'));
@@ -160,6 +160,57 @@ describe('the diff check command', () => {
     expect(result.stderr).not.toContain(SECRET);
   });
 
+  test('internal seat-id tokens in commit bodies are refused without printing them', () => {
+    const base = repo({ 'keep.txt': 'clean\n' }, 'base');
+    let before = base.sha;
+    for (const token of [
+      ['builder', '7'].join('-'),
+      ['operator', '2'].join('-'),
+      ['tester', '3'].join('-'),
+      ['reviewer', 'sample'].join('-'),
+      ['REVIEWER', 'SAMPLE', 'LAB'].join('-'),
+      ['tester', '3', 'independent'].join('-'),
+      ['builder', '1', 'owned'].join('-'),
+      `briefs/${['tester', '3', 'notes.md'].join('-')}`,
+      ['co', 'operator', '1'].join('-'),
+      ['pre', 'reviewer', 'sample'].join('-'),
+      ['reviewer', 'requested', '2'].join('-'),
+      ['operator', '12'].join('-'),
+    ]) {
+      const head = commit(base.dir, `test: a neutral subject\n\nThe reviewer-requested proof was checked by ${token}'s scene.`);
+      const result = run(base.dir, ['--base', before]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`commit:${head}:3`);
+      expect(result.stderr).toContain('commit message names an internal seat');
+      expect(result.stdout + result.stderr).not.toContain(token);
+      before = head;
+    }
+  }, 30_000);
+
+  test('review-role prose from release messages and ordinary continuations is allowed', () => {
+    const bodies = [
+      'Add the reviewer-requested three lines only under Unreleased: checked state publication, owner-only modes for the three changed file families, and declared-link-root refusal with ancestor-alias handling. Historical release sections remain byte-identical. No package version or release timestamp changes.',
+      'The reviewer-approved wording remains unchanged.',
+      'Keep the reviewer-side notes separate.',
+      'The Reviewer-Side and Reviewer-Requested wording stays.',
+    ];
+    for (const body of bodies) {
+      const base = repo({ 'keep.txt': 'clean\n' }, 'base');
+      commit(base.dir, `docs(release): record guarded state writes and permission changes\n\n${body}`);
+      const result = run(base.dir, ['--base', base.sha]);
+      expect(result.status).toBe(0);
+    }
+  });
+
+  test('ordinary role prose and tokens containing a longer word are allowed in commit bodies', () => {
+    const base = repo({ 'keep.txt': 'clean\n' }, 'base');
+    const embedded = ['preoperator', '2'].join('-');
+    const longer = ['operator', '2word'].join('-');
+    commit(base.dir, `test: ordinary role prose\n\nAn operator-only check helps the builder and reviewer. ${embedded}, ${longer}, ${['x_operator', '1'].join('-')}, and operator 2 are unrelated words.`);
+    const result = run(base.dir, ['--base', base.sha]);
+    expect(result.status).toBe(0);
+  });
+
   test('a NUL in a raw commit message does not hide the line after it', () => {
     const base = repo({ 'keep.txt': 'clean\n' }, 'base');
     const head = literalCommit(base.dir, base.sha, `subject\n\u0000tail ${SECRET}`);
@@ -261,9 +312,14 @@ describe('the diff check command', () => {
   });
 
   test('a commit without the Agent signature trailer is a hit unless it is a merge or human-authored', () => {
+    const humanTeam = join(temp(), 'team.yaml');
+    const teamYaml = readFileSync(join(ROOT, '.github', 'team.yaml'), 'utf8');
+    const syntheticHumans = teamYaml.replace(/(  humans:\n)(?:    - [^\n]*\n)+/, `$1    - ${HUMAN_EMAIL}\n`);
+    if (syntheticHumans === teamYaml) throw new Error('synthetic human allowlist was not installed');
+    writeFileSync(humanTeam, syntheticHumans);
     const base = repo({ 'keep.txt': 'clean\n' }, 'base');
     const unsigned = commit(base.dir, 'fix(init): check the folder an approval change targets', { signed: false });
-    const missing = run(base.dir, ['--base', base.sha]);
+    const missing = run(base.dir, ['--base', base.sha, '--file', humanTeam]);
     expect(missing.status).toBe(1);
     expect(missing.stderr).toContain(`commit:${unsigned}`);
     expect(missing.stderr).toContain('no signature');
@@ -276,12 +332,12 @@ describe('the diff check command', () => {
     commit(base.dir, 'feat: side branch');
     git(base.dir, ['switch', '--quiet', 'main']);
     git(base.dir, ['merge', '--quiet', '--no-ff', '--no-gpg-sign', '-m', 'Merge branch side', 'side']);
-    const exemptClean = run(base.dir, ['--base', base.sha]);
+    const exemptClean = run(base.dir, ['--base', base.sha, '--file', humanTeam]);
     expect(exemptClean.status).toBe(0);
 
     // A human-authored or merge commit that carries a tracker id is still refused.
     const humanTracker = commit(base.dir, `docs: ${FLO_ID} note`, { signed: false, authorEmail: HUMAN_EMAIL });
-    const refusedHuman = run(base.dir, ['--base', base.sha]);
+    const refusedHuman = run(base.dir, ['--base', base.sha, '--file', humanTeam]);
     expect(refusedHuman.status).toBe(1);
     expect(refusedHuman.stderr).toContain(`commit:${humanTracker}:1`);
     expect(refusedHuman.stdout + refusedHuman.stderr).not.toContain(FLO_ID);

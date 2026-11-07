@@ -1,7 +1,7 @@
 // A wildcard general grant reaches ops that ship after it was signed without a new owner
-// approval. `team check` and `team doctor` name each such grant once, in plain words, as
-// information: the note is never a difference, never a finding that counts, and never changes an
-// exit. The release each op first shipped in is measured from the repository's tags.
+// approval. `team check` and `team doctor` print one widened note and one chain note per
+// grant as information: neither is a difference or a finding that counts, and neither changes
+// an exit. The release each op first shipped in is measured from the repository's tags.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -69,9 +69,14 @@ function grant(home: string, signed: string): { id: string } {
   return { id: issued.grant.grant_id };
 }
 
-/** The note one grant draws, spelled the way both surfaces print it (without their prefix). */
-function note(id: string, day: string, ops: string): string {
+/** The widened note, distinct from the chain note (without the surface prefix). */
+function widenedNote(id: string, day: string, ops: string): string {
   return `wildcard general grant ${id} signed ${day} now reaches ${ops}, which shipped in later releases; re-sign the grant to stop this note`;
+}
+
+/** An owner-signed root's chain shape: no parent, wildcard ops, no issuing right, and expiry. */
+function chainNote(id: string): string {
+  return `${id}; wildcard; may not issue; expires ${EXPIRES.toISOString()}`;
 }
 
 // ---- `team check` -------------------------------------------------------------------------
@@ -143,7 +148,7 @@ function check(root: string, home: string, json = false): { code: number; out: s
 const SHIPPED = 'agents, analyse, approvals, batch, checkpoint, fallback, order, peek, setup, show, trace, waits';
 
 describe('team check names a wildcard grant that reaches newer ops', () => {
-  test('one note per grant, not a difference, exit unchanged', () => {
+  test('one widened note and one chain note per grant, neither a difference, exit unchanged', () => {
     const { root, home } = place();
     const before = check(root, home);
     expect(before.out).not.toContain('wildcard general grant');
@@ -151,22 +156,29 @@ describe('team check names a wildcard grant that reaches newer ops', () => {
 
     const signed = grant(home, '2026-10-27T12:00:00Z');
     const after = check(root, home);
-    expect(after.out).toContain(`note: ${note(signed.id, '2026-10-27', SHIPPED)}`);
-    // Exactly one more note than the same world draws without the grant.
-    expect(notesOtherThanSocket(after.out).length).toBe(notesOtherThanSocket(before.out).length + 1);
+    const notes = notesOtherThanSocket(after.out);
+    const widened = `note: ${widenedNote(signed.id, '2026-10-27', SHIPPED)}`;
+    const chain = `note: ${chainNote(signed.id)}`;
+    expect(notes.filter((line) => line.startsWith(`note: wildcard general grant ${signed.id} signed `))).toEqual([widened]);
+    expect(notes.filter((line) => line.startsWith(`note: ${signed.id};`))).toEqual([chain]);
+    // Both informational shapes appear once; no unrelated note is added or removed.
+    expect([...notes].sort()).toEqual([...notesOtherThanSocket(before.out), chain, widened].sort());
     // A note is not a difference: the file works as it stands, and the exit stays 0.
     expect(after.out).not.toContain('difference:');
     expect(after.out).toContain('no differences');
     expect(after.code).toBe(0);
   });
 
-  test('the note carries in the --json report and adds no difference', () => {
+  test('both note shapes appear once in the --json report and add no difference', () => {
     const { root, home } = place();
+    const before = JSON.parse(check(root, home, true).stdout) as { notes: string[] };
     const signed = grant(home, '2026-10-27T12:00:00Z');
     const { code, stdout } = check(root, home, true);
     expect(code).toBe(0);
     const doc = JSON.parse(stdout) as { notes: string[]; differences: unknown[] };
-    expect(doc.notes).toContain(note(signed.id, '2026-10-27', SHIPPED));
+    expect(doc.notes.filter((line) => line.startsWith(`wildcard general grant ${signed.id} signed `))).toEqual([widenedNote(signed.id, '2026-10-27', SHIPPED)]);
+    expect(doc.notes.filter((line) => line.startsWith(`${signed.id};`))).toEqual([chainNote(signed.id)]);
+    expect([...doc.notes].sort()).toEqual([...before.notes, chainNote(signed.id), widenedNote(signed.id, '2026-10-27', SHIPPED)].sort());
     expect(doc.differences).toEqual([]);
   });
 });
@@ -221,22 +233,37 @@ describe('team doctor names a wildcard grant that reaches newer ops', () => {
     return `${io.out}${io.err}`;
   }
 
-  test('the grant is one note finding; the counts and the exit are the same with and without it', async () => {
+  test('each grant note shape appears once; counts and exit stay the same with and without it', async () => {
     const before = await doctorJson();
     const signed = grant(home, '2026-10-27T12:00:00Z');
     const after = await doctorJson();
-    const text = note(signed.id, '2026-10-27', SHIPPED);
-    expect(after.doc.findings.filter((finding) => finding.text === text)).toEqual([{ level: 'note', text, blocks_launch: false }]);
+    const text = widenedNote(signed.id, '2026-10-27', SHIPPED);
+    expect(after.doc.findings.filter((finding) => finding.text.startsWith(`wildcard general grant ${signed.id} signed `))).toEqual([{ level: 'note', text, blocks_launch: false }]);
+    expect(after.doc.findings.filter((finding) => finding.text.startsWith(`${signed.id};`))).toEqual([{ level: 'note', text: chainNote(signed.id), blocks_launch: false }]);
     expect(before.doc.findings.some((finding) => finding.text.includes('wildcard general grant'))).toBe(false);
+    expect([...after.doc.findings].sort((a, b) => a.text.localeCompare(b.text))).toEqual([
+      ...before.doc.findings,
+      { level: 'note', text: chainNote(signed.id), blocks_launch: false },
+      { level: 'note', text, blocks_launch: false },
+    ].sort((a, b) => a.text.localeCompare(b.text)));
     // Information, not failure: neither count moves, and the exit is the same.
     expect(after.doc.summary).toEqual(before.doc.summary);
     expect(after.code).toBe(before.code);
   });
 
-  test('the text report prints the note line, and a focused report does not carry it', async () => {
+  test('the text report prints both shapes once, and a focused report carries neither', async () => {
+    const before = (await doctorText()).split('\n').filter((line) => line.startsWith('note  '));
     const signed = grant(home, '2026-10-27T12:00:00Z');
-    expect(await doctorText()).toContain(note(signed.id, '2026-10-27', SHIPPED));
+    const lines = (await doctorText()).split('\n');
+    expect(lines.filter((line) => line.includes(widenedNote(signed.id, '2026-10-27', SHIPPED)))).toHaveLength(1);
+    expect(lines.filter((line) => line.includes(chainNote(signed.id)))).toHaveLength(1);
+    expect(lines.filter((line) => line.startsWith('note  ')).sort()).toEqual([
+      ...before,
+      `note  ${chainNote(signed.id)}`,
+      `note  ${widenedNote(signed.id, '2026-10-27', SHIPPED)}`,
+    ].sort());
     const focused = await doctorJson('--login');
     expect(focused.doc.findings.some((finding) => finding.text.includes('wildcard general grant'))).toBe(false);
+    expect(focused.doc.findings.some((finding) => finding.text.startsWith(`${signed.id};`))).toBe(false);
   });
 });

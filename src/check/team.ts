@@ -31,7 +31,7 @@ import { sandboxUnappliedNotes } from '../launch/grok-sandbox.ts';
 import { rulesOriginOf } from '../launch/rules.ts';
 import { declaredUnreadAfter, UNREAD_AFTER_WAKEABLE_SECONDS, unreadWindowSeconds, watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
 import { callerLabel, fileOwnerRefusal, isOwner, readAncestors, sessionOwnerRefusal, walkCaller } from '../caller.ts';
-import { widenedGrantNotes } from '../client/general-grant.ts';
+import { generalGrantChainNotes, widenedGrantNotes } from '../client/general-grant.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { blindDifferences } from '../commands/seats.ts';
 import { resolveSeatOverrides } from '../config/apply.ts';
@@ -828,6 +828,8 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   // worth acting on without counting it wrong — it is not in the total and does not change the exit.
   const notes = collapseNotes([
     ...delegateNotes(team),
+    // Each verified general grant's chain, one line: information only, never counted as a difference.
+    ...(sources.home !== undefined ? generalGrantChainNotes(sources.home, sources.now()) : []),
     // A wildcard general grant signed before the release that first shipped an op reaches that op
     // without a new approval: named once per grant, information only, never counted as a difference.
     ...(sources.home !== undefined ? widenedGrantNotes(sources.home, sources.now()) : []),
@@ -1576,7 +1578,7 @@ function generalBriefDifferences(
  * `listUnread`, with the same receipt, superseded and claim rules — so the check and the unread
  * wake agree on what unread means, window included: the file's declared `watch.unread_after` when
  * it moved the section, else the seat class's own default (30 s wakeable, 60 s typed; ADR
- * zeus-message-path, D2). One difference per seat names the oldest message and counts the rest.
+ * message-path, D2). One difference per seat names the oldest message and counts the rest.
  * The general seat brief has its own read difference and is not counted twice; a person's drop is
  * read by a person and is never asked for a receipt, and without a message key no receipt can be
  * judged, so neither is named here.

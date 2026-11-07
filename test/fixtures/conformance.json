@@ -302,7 +302,7 @@
       "provenance": "capture"
     },
     {
-      "file": "claude-code/completed-error-empty-box-atlas.txt",
+      "file": "claude-code/completed-error-empty-box-capture.txt",
       "cli": "claude-code",
       "classify": "idle",
       "composer": "idle",

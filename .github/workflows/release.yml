@@ -5,10 +5,10 @@
 # version (x.y.z-next.N) goes under the `next` dist-tag, anything else under
 # `latest`.
 #
-# Two jobs, so the OIDC token exists in as few steps as possible: `verify` runs
-# the tag checks, the gate and the stamped pack, and uploads the tarball; `publish`
-# alone holds `id-token: write` and downloads the tarball, re-checks its version
-# and publishes it — no checkout, no install, no build.
+# Verification jobs run without OIDC. Each full-suite job exposes its pack hash;
+# fresh tag, date and release-op jobs are required separately. `publish` alone
+# holds `id-token: write`, checks every result and both hashes against the
+# downloaded tarball, then checks its version and publishes without a checkout.
 # The tag's commit must be on main, the version must be package.json's, and the
 # version's CHANGELOG heading must carry a real date (the placeholder is
 # legitimate between releases, so only this workflow checks it); a tag ruleset
@@ -18,9 +18,8 @@
 # Never push this repository's version tags to another repository with a
 # publish workflow (floor/material's Release runs on any v* tag): a pushed tag
 # starts a publish there.
-# A workflow_dispatch runs verify on both matrix systems through the pack. The
-# publish job and the GitHub release job require a push of a v* tag, so that
-# run does not publish.
+# A workflow_dispatch must select a version tag to pass the release checks.
+# It runs both full suites and packs, but publication still requires a tag push.
 name: Release
 
 on:
@@ -33,14 +32,62 @@ permissions:
   contents: read
 
 jobs:
-  # Everything that runs this repository's code, with no OIDC token around to
-  # leak: the tag checks, the gate, and the pack.
-  verify:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  # These checks execute afresh for every release attempt. They cannot be
+  # replaced by a full-suite result or skipped for a dispatch.
+  release-ancestry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.23.3
+      - name: Refresh main and the release tags
+        run: git fetch --force --tags origin '+refs/heads/main:refs/remotes/origin/main'
+      - name: The tag must be the package version
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/v*) ;;
+            *) echo "release checks require a version tag" >&2; exit 1 ;;
+          esac
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(node -p "require('./package.json').version")"
+          test "$tag" = "$version" || { echo "tag and package version differ" >&2; exit 1; }
+      - name: The tagged commit must be on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+  release-date:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - name: The version's CHANGELOG heading carries a real date
+        run: bun scripts/check-release-date.ts "${GITHUB_REF_NAME#v}"
+
+  release-ops:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - name: Refresh the release tags for the tag walk
+        run: git fetch --force --tags origin
+      - run: bun install --frozen-lockfile
+      - name: Walk release tags and check first-shipped op rows
+        run: bun test ./test/general-grant-widened.test.ts
+
+  verify-ubuntu:
+    runs-on: ubuntu-latest
+    outputs:
+      sha256: ${{ steps.pack.outputs.sha256 }}
     steps:
       # The actions are pinned by commit; the version comment says which release it is.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -55,32 +102,6 @@ jobs:
         with:
           node-version: 22.23.3
 
-      # A dispatch has no tag. These three checks stay on a tag push, and the
-      # install, the gate and the pack still run.
-      - name: The tag must be the package version
-        if: ${{ success() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
-        run: |
-          tag="${GITHUB_REF_NAME#v}"
-          version="$(node -p "require('./package.json').version")"
-          if [ "$tag" != "$version" ]; then
-            echo "tag v$tag does not match package.json version $version" >&2
-            exit 1
-          fi
-
-      # Only a commit on main is releaseable: a tag on an unmerged branch must not publish.
-      - name: The tagged commit must be on main
-        if: ${{ success() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
-        run: |
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "the tag is not on main" >&2; exit 1; }
-
-      # The version's CHANGELOG heading must carry a real date: the release
-      # notes are the section's body, so a tag on a commit that still says
-      # YYYY-MM-DD would publish and release without a complaint. Only this
-      # workflow runs the check — between releases the placeholder is legitimate.
-      - name: The version's CHANGELOG heading carries a real date
-        if: ${{ success() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
-        run: bun scripts/check-release-date.ts "${GITHUB_REF_NAME#v}"
-
       - run: bun install --frozen-lockfile
 
       - run: bun run ci
@@ -90,8 +111,8 @@ jobs:
       # stamped pack's own report, never a glob over whatever tarballs happen to
       # be around. scripts/pack.ts refuses a dirty tree, an uncommitted version
       # or an unpinned compressor, and writes the full HEAD SHA into the
-      # tarball's manifest. Each matrix system prints the SHA256: the same
-      # commit must print the same value on both.
+      # tarball's manifest. Each job exports its SHA256; publication requires the
+      # downloaded bytes to match both values.
       - name: Pack the tarball
         id: pack
         run: |
@@ -119,7 +140,6 @@ jobs:
         run: bun scripts/check-pack.ts "$TARBALL" "$GITHUB_SHA"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: matrix.os == 'ubuntu-latest'
         with:
           name: package
           path: |
@@ -127,9 +147,64 @@ jobs:
             team-*.tgz.stamp.json
           if-no-files-found: error
 
+  verify-macos:
+    runs-on: macos-latest
+    outputs:
+      sha256: ${{ steps.pack.outputs.sha256 }}
+    steps:
+      # The actions are pinned by commit; the version comment says which release it is.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0   # the tagged commit is checked against origin/main
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.23.3
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun run ci
+
+      # Packed once, here, with the pinned Node and its npm; this exact file is
+      # what publish uploads and npm gets. The filename and SHA256 come from the
+      # stamped pack's own report, never a glob over whatever tarballs happen to
+      # be around. scripts/pack.ts refuses a dirty tree, an uncommitted version
+      # or an unpinned compressor, and writes the full HEAD SHA into the
+      # tarball's manifest. Each job exports its SHA256; publication requires the
+      # downloaded bytes to match both values.
+      - name: Pack the tarball
+        id: pack
+        run: |
+          report="$(bun scripts/pack.ts --pack-destination .)"
+          printf '%s\n' "$report"
+          filename="$(printf '%s' "$report" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).tarball')"
+          sha256="$(printf '%s' "$report" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).sha256')"
+          test -f "$filename" || { echo "pack reported '$filename', which is not a file" >&2; exit 1; }
+          echo "tarball=$filename" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+          {
+            echo "Reproducible tarball SHA256: $sha256"
+            echo "Compressor: Node $(node --version), zlib $(node -p 'process.versions.zlib')"
+            echo "Tar builder: npm $(npm --version)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # A tarball is public the moment it is published, so nothing in it may
+      # carry an internal ticket reference. The same script also checks the
+      # source stamp against the commit this run packed. It reads every member
+      # and names the file, never the reference, so a failure does not leak one;
+      # an extraction or read error fails the step too (exit 2).
+      - name: The tarball carries its source stamp and no internal ticket reference
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: bun scripts/check-pack.ts "$TARBALL" "$GITHUB_SHA"
+
   # Only the token, a Node with the pinned npm, and the tarball verify built.
   publish:
-    needs: verify
+    needs: [release-ancestry, release-date, release-ops, verify-ubuntu, verify-macos]
     if: "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"
     runs-on: ubuntu-latest
     permissions:
@@ -148,8 +223,32 @@ jobs:
       - run: npm install -g npm@11.21.0
 
       - name: Publish the tarball
+        env:
+          REQUIRED_RESULTS: ${{ toJSON(needs) }}
+          PACK_SHA256_UBUNTU: ${{ needs.verify-ubuntu.outputs.sha256 }}
+          PACK_SHA256_MACOS: ${{ needs.verify-macos.outputs.sha256 }}
+        shell: bash
         run: |
           tgz="$(ls team-*.tgz)"
+          export TARBALL="$tgz"
+          node --input-type=commonjs <<'NODE'
+          const { createHash } = require('node:crypto');
+          const { readFileSync } = require('node:fs');
+          const required = ['release-ancestry', 'release-date', 'release-ops', 'verify-ubuntu', 'verify-macos'];
+          const results = JSON.parse(process.env.REQUIRED_RESULTS);
+          for (const job of required) {
+            if (results?.[job]?.result !== 'success') {
+              throw new Error(`required release job ${job} did not succeed`);
+            }
+          }
+          const actual = createHash('sha256').update(readFileSync(process.env.TARBALL)).digest('hex');
+          for (const key of ['PACK_SHA256_UBUNTU', 'PACK_SHA256_MACOS']) {
+            const expected = process.env[key] ?? '';
+            if (!/^[a-f0-9]{64}$/.test(expected) || actual !== expected) {
+              throw new Error(`downloaded tarball does not match ${key}`);
+            }
+          }
+          NODE
           tag="${GITHUB_REF_NAME#v}"
           version="$(tar -xzOf "$tgz" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')"
           if [ "$tag" != "$version" ]; then
