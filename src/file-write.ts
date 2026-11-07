@@ -1,8 +1,8 @@
 // Plain-runtime state-file publication: check parents and leaves, use a private exclusive
 // temporary, flush its descriptor, then publish one complete file.
 import { randomBytes } from 'node:crypto';
-import { closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readSync, realpathSync, renameSync, unlinkSync, writeSync, type Stats } from 'node:fs';
-import { basename, dirname, join, parse, relative, resolve } from 'node:path';
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, unlinkSync, writeSync, type Stats } from 'node:fs';
+import { basename, dirname, join, parse, relative, resolve, sep } from 'node:path';
 
 export class FileWriteRefusal extends Error {}
 const refuse = (): never => { throw new FileWriteRefusal('state file refused: a parent or file is unsafe or changed'); };
@@ -126,6 +126,49 @@ export function appendStateFile(path: string, text: string, root?: string): void
     if (current === null || !same(opened, current)) refuse();
     write(fd, text); fsyncSync(fd);
     check(); const after = leaf(path);
+    if (!regular(fstatSync(fd)) || after === null || !same(opened, after)) refuse();
+  } finally { closeSync(fd); }
+}
+
+/** Create a checked directory ladder from an already established real root. */
+export function ensureStateDirectory(path: string, root: string): void {
+  const declared = resolve(root); const rootStat = lstatSync(declared);
+  if (!rootStat.isDirectory()) refuse();
+  const within = relative(declared, resolve(path));
+  if (within === '..' || within.startsWith(`..${sep}`) || parse(within).root !== '') refuse();
+  let current = realpathSync(declared);
+  const chain = [{ path: current, value: rootStat }];
+  const check = (): void => {
+    const found = stat(declared);
+    if (found === null || !found.isDirectory() || !same(rootStat, found)) refuse();
+    for (const row of chain) {
+      const value = stat(row.path);
+      if (value === null || !value.isDirectory() || !same(row.value, value)) refuse();
+    }
+  };
+  check();
+  for (const part of within === '' ? [] : within.split(sep)) {
+    current = join(current, part); check();
+    let value = stat(current);
+    if (value === null) {
+      try { mkdirSync(current, { mode: 0o700 }); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+      check(); value = stat(current);
+    }
+    if (value === null || !value.isDirectory()) return refuse();
+    chain.push({ path: current, value }); check();
+  }
+}
+
+/** Create exactly one new file; a concurrent creator wins without its record being replaced. */
+export function createStateFile(path: string, text: string, root?: string): void {
+  flags(); const guard = parents(path, root); path = guard.path;
+  if (leaf(path) !== null) refuse();
+  const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  try {
+    const opened = fstatSync(fd); guard.check(); const current = leaf(path);
+    if (!regular(opened) || current === null || !same(opened, current)) refuse();
+    write(fd, text); fsyncSync(fd); guard.check(); const after = leaf(path);
     if (!regular(fstatSync(fd)) || after === null || !same(opened, after)) refuse();
   } finally { closeSync(fd); }
 }
