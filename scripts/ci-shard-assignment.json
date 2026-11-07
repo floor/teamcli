@@ -501,6 +501,7 @@
     "test/file/team-config-registry.test.ts": 0,
     "test/file/team-config-writers.test.ts": 3,
     "test/first-minute-daemon-roots.test.ts": 4,
+    "test/first-minute-first-run-independent.test.ts": 0,
     "test/first-minute-first-run.test.ts": 4,
     "test/first-minute-sandbox-root.test.ts": 5,
     "test/fixture-root-independent.test.ts": 0,
