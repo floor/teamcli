@@ -166,7 +166,7 @@ describe('inherited entity-wide and project-wide rules', () => {
         '  beacon:',
         '    name: Beacon',
         '    entity: acme-corp',
-        `    teams: [${id}]`,
+        `    teams: [${JSON.stringify(id)}]`,
         '    rules:',
         '      - "Write red tests before implementation."',
         '',
@@ -175,7 +175,7 @@ describe('inherited entity-wide and project-wide rules', () => {
     writeTeamsYaml(
       [
         'teams:',
-        `  ${id}:`,
+        `  ${JSON.stringify(id)}:`,
         '    name: alpha',
         `    path: ${teamRoot}`,
         '    project_id: beacon',
@@ -274,7 +274,7 @@ describe('inherited entity-wide and project-wide rules', () => {
     writeTeamsYaml(
       [
         'teams:',
-        `  ${id}:`,
+        `  ${JSON.stringify(id)}:`,
         '    name: alpha',
         `    path: ${teamRoot}`,
         '    project_id: null',
@@ -318,13 +318,13 @@ describe('inherited entity-wide and project-wide rules', () => {
         '  home-proj:',
         '    name: HomeProj',
         '    entity: acme-corp',
-        `    teams: [${id}]`,
+        `    teams: [${JSON.stringify(id)}]`,
         '    rules:',
         '      - "Home project rule applies."',
         '  served-proj:',
         '    name: ServedProj',
         '    entity: acme-corp',
-        `    teams: [${id}]`,
+        `    teams: [${JSON.stringify(id)}]`,
         '    rules:',
         '      - "Served project rule MUST NOT apply."',
         '',
@@ -333,7 +333,7 @@ describe('inherited entity-wide and project-wide rules', () => {
     writeTeamsYaml(
       [
         'teams:',
-        `  ${id}:`,
+        `  ${JSON.stringify(id)}:`,
         '    name: alpha',
         `    path: ${teamRoot}`,
         '    project_id: home-proj',
@@ -361,7 +361,7 @@ describe('inherited entity-wide and project-wide rules', () => {
     writeTeamsYaml(
       [
         'teams:',
-        `  ${id}:`,
+        `  ${JSON.stringify(id)}:`,
         '    name: alpha',
         `    path: ${teamRoot}`,
         '    project_id: null',
@@ -409,7 +409,7 @@ describe('inherited entity-wide and project-wide rules', () => {
         '  beacon:',
         '    name: Beacon',
         '    entity: acme-corp',
-        `    teams: [${id}]`,
+        `    teams: [${JSON.stringify(id)}]`,
         '    rules:',
         '      - "Initial project rule."',
         '',
@@ -418,7 +418,7 @@ describe('inherited entity-wide and project-wide rules', () => {
     writeTeamsYaml(
       [
         'teams:',
-        `  ${id}:`,
+        `  ${JSON.stringify(id)}:`,
         '    name: alpha',
         `    path: ${teamRoot}`,
         '    project_id: beacon',
@@ -618,7 +618,7 @@ describe('inherited entity-wide and project-wide rules', () => {
         '  beacon:',
         '    name: Beacon',
         '    entity: acme-corp',
-        `    teams: [${id}]`,
+        `    teams: [${JSON.stringify(id)}]`,
         '    rules:',
         '      - "Write red tests before implementation."',
         '',
@@ -627,7 +627,7 @@ describe('inherited entity-wide and project-wide rules', () => {
     writeTeamsYaml(
       [
         'teams:',
-        `  ${id}:`,
+        `  ${JSON.stringify(id)}:`,
         '    name: alpha',
         `    path: ${teamRoot}`,
         '    project_id: beacon',
