@@ -755,11 +755,12 @@ export function reportDisplayAgent(pane: string, text: string, session?: string,
 
 // ── The sidebar layout keys team owns in the host's config ──────────────────────────────────
 //
-// Two keys, one edit: the sidebar table `ui.sidebar.agents.rows` — a block team owns whole once
-// marked — and the `[ui]` key `status_indicators`, owned at the assignment line because `[ui]`
-// is a table the owner fills with other keys. Ownership is marked by the same trailing comment
-// in both places. Everything else in the owner's file is preserved byte-for-byte, and the write
-// is validated through the host and rolled back from bytes held in memory before the rename.
+// Two keys, one edit: the sidebar table's `rows` assignment — and `row_gap` only when
+// `workspace.sidebar.row_gap` is set — and the `[ui]` key `status_indicators`, owned at its
+// assignment line because `[ui]` is a table the owner fills with other keys. The marker sits on
+// the sidebar table's header and on the indicators line. Every other line in the sidebar table,
+// marked or not, stays byte-for-byte, and the write is validated through the host and rolled
+// back from bytes held in memory before the rename.
 
 /** The closed token vocabulary the sidebar layout accepts (probed 2026-11-04, herdr 0.9.5). */
 export const SIDEBAR_TOKENS = ['state_icon', 'machine', 'workspace', 'tab', 'state_text', 'agent'] as const;
@@ -886,22 +887,55 @@ function appendLines(lines: string[], added: readonly string[]): void {
   else lines.push(...added, '');
 }
 
-/** The pure splice: the marked sidebar table and the marked `[ui]` key, one pass. A table or
- *  key whose marker is present is replaced whole; one without it is adopted — the value is
- *  spliced in place and the marker is added — never clobbered. Anchors match uncommented lines
- *  only, and everything outside the spliced span is preserved byte-for-byte; a splice that
+/** The pure splice: the sidebar table's `rows` assignment and the marked `[ui]` key, one pass.
+ *  A table without the marker is adopted — the header gains the marker and `rows` is spliced in
+ *  place. A table that already carries the marker keeps that header byte-for-byte and the same
+ *  splice replaces only `rows`. `rowGap`, when given, is written the same way, after `rows`;
+ *  when omitted, an existing `row_gap` line is left untouched. Anchors match uncommented lines
+ *  only, and every line that is not the spliced assignment stays byte-for-byte; a splice that
  *  changes nothing reads back equal (`changed: false`). */
 export type SidebarSplice =
   | { ok: true; text: string; changed: boolean }
   | { ok: false; reason: string };
 
+/** Replaces `key`'s assignment inside the table at `tableAt`, or inserts `valueLine`. `rows`
+ *  lands just under the header; `row_gap` lands just after the rows value. A value whose
+ *  brackets never close, or that opens an inline table, is refused and nothing is kept. */
+function placeAssignment(lines: string[], tableAt: number, key: string, valueLine: string, after: 'header' | 'rows'): string | null {
+  const span = tableSpan(lines, tableAt);
+  const at = assignmentAt(lines, span.start + 1, span.end + 1, key);
+  if (at >= 0) {
+    const spanned = valueSpan(lines, at, span.end + 1);
+    if (spanned === null) return `the ${key} value cannot be bounded; edit it by hand`;
+    lines.splice(spanned.start, spanned.end - spanned.start + 1, valueLine);
+    return null;
+  }
+  let insertAt = tableAt + 1;
+  if (after === 'rows') {
+    const rowsAt = assignmentAt(lines, span.start + 1, span.end + 1, 'rows');
+    if (rowsAt >= 0) {
+      const rowsSpan = valueSpan(lines, rowsAt, span.end + 1);
+      insertAt = (rowsSpan === null ? rowsAt : rowsSpan.end) + 1;
+    }
+  }
+  lines.splice(insertAt, 0, valueLine);
+  return null;
+}
+
 export function spliceSidebarRows(
   text: string,
   rows: readonly (readonly string[])[],
   indicators: string,
+  rowGap?: number,
 ): SidebarSplice {
   const rowsValue = `[${rows.map((row) => `[${row.map(tomlString).join(', ')}]`).join(', ')}]`;
-  const markedTable = [`[${SIDEBAR_TABLE}] ${SIDEBAR_BLOCK_MARKER}`, `rows = ${rowsValue}`];
+  const rowsLine = `rows = ${rowsValue}`;
+  const gapLine = rowGap === undefined ? null : `row_gap = ${String(rowGap)}`;
+  const tableLines = (): string[] => {
+    const block = [`[${SIDEBAR_TABLE}] ${SIDEBAR_BLOCK_MARKER}`, rowsLine];
+    if (gapLine !== null) block.push(gapLine);
+    return block;
+  };
   const uiLine = `status_indicators = ${tomlString(indicators)} ${SIDEBAR_BLOCK_MARKER}`;
   const lines = text === '' ? [] : text.split('\n');
 
@@ -922,31 +956,26 @@ export function spliceSidebarRows(
     }
   }
 
+  const placeRows = (tableAtNow: number): string | null => {
+    const rowsReason = placeAssignment(lines, tableAtNow, 'rows', rowsLine, 'header');
+    if (rowsReason !== null) return rowsReason;
+    if (gapLine === null) return null;
+    return placeAssignment(lines, tableAtNow, 'row_gap', gapLine, 'rows');
+  };
+
   if (tableAt < 0 && uiAt < 0) {
     // Both keys are appended in one pass, one blank line between the two tables.
-    appendLines(lines, [...markedTable, '', `[${UI_TABLE}]`, uiLine]);
+    appendLines(lines, [...tableLines(), '', `[${UI_TABLE}]`, uiLine]);
   } else {
-    // The sidebar table.
+    // The sidebar table. A marked header stays as it was written; an unmarked one gains the marker.
     if (tableAt < 0) {
-      appendLines(lines, markedTable);
+      appendLines(lines, tableLines());
     } else {
       const header = headerOf(lines[tableAt] ?? '') as HeaderLine;
-      const span = tableSpan(lines, tableAt);
-      if (header.comment !== null && header.comment.includes(SIDEBAR_BLOCK_MARKER)) {
-        lines.splice(span.start, span.end - span.start + 1, ...markedTable);
-      } else {
-        lines[tableAt] = `[${SIDEBAR_TABLE}] ${SIDEBAR_BLOCK_MARKER}`;
-        const at = assignmentAt(lines, span.start + 1, span.end + 1, 'rows');
-        if (at >= 0) {
-          const spanned = valueSpan(lines, at, span.end + 1);
-          if (spanned === null) {
-            return { ok: false, reason: 'the rows value cannot be bounded; edit it by hand' };
-          }
-          lines.splice(spanned.start, spanned.end - spanned.start + 1, `rows = ${rowsValue}`);
-        } else {
-          lines.splice(tableAt + 1, 0, `rows = ${rowsValue}`);
-        }
-      }
+      const marked = header.comment !== null && header.comment.includes(SIDEBAR_BLOCK_MARKER);
+      if (!marked) lines[tableAt] = `[${SIDEBAR_TABLE}] ${SIDEBAR_BLOCK_MARKER}`;
+      const placed = placeRows(tableAt);
+      if (placed !== null) return { ok: false, reason: placed };
     }
 
     // The status indicators, in the shared [ui] table — its anchor is found again here,
@@ -974,11 +1003,13 @@ export function spliceSidebarRows(
 export function renderSidebarTomlBlock(
   rows: readonly (readonly string[])[],
   indicators: string,
+  rowGap?: number,
 ): string {
   const rowsValue = `[${rows.map((row) => `[${row.map(tomlString).join(', ')}]`).join(', ')}]`;
+  const table = [`[${SIDEBAR_TABLE}] ${SIDEBAR_BLOCK_MARKER}`, `rows = ${rowsValue}`];
+  if (rowGap !== undefined) table.push(`row_gap = ${String(rowGap)}`);
   return [
-    `[${SIDEBAR_TABLE}] ${SIDEBAR_BLOCK_MARKER}`,
-    `rows = ${rowsValue}`,
+    ...table,
     '',
     `[${UI_TABLE}]`,
     `status_indicators = ${tomlString(indicators)} ${SIDEBAR_BLOCK_MARKER}`,
@@ -1099,6 +1130,8 @@ function parseSidebarRowsLiteral(raw: string): string[][] | null {
 export type SidebarConfigReading = {
   rows: string[][] | null;
   indicators: string | null;
+  /** The table's `row_gap` when it is a whole number from 0 up; null when the line is absent or not that. */
+  rowGap: number | null;
   /** True when `rows` has at least one row containing the `'agent'` token. */
   hasAgentToken: boolean;
 };
@@ -1149,8 +1182,19 @@ export function readSidebarConfig(text: string): SidebarConfigReading {
     }
   }
 
+  let rowGap: number | null = null;
+  if (tableAt >= 0) {
+    const gapAt = assignmentAt(lines, tableAt + 1, rowsUntil, 'row_gap');
+    if (gapAt >= 0) {
+      const stripped = stripTomlComment(lines[gapAt] ?? '');
+      const eq = stripped.indexOf('=');
+      const raw = eq >= 0 ? stripped.slice(eq + 1).trim() : '';
+      if (/^(0|[1-9][0-9]*)$/.test(raw)) rowGap = Number(raw);
+    }
+  }
+
   const hasAgentToken = rows !== null && rows.some((row) => row.includes('agent'));
-  return { rows, indicators, hasAgentToken };
+  return { rows, indicators, rowGap, hasAgentToken };
 }
 
 /** `herdr config check` (probed 2026-11-04): exit 0 with `config: ok` on a file the host
@@ -1258,6 +1302,7 @@ export function applySidebarLayout(
   indicators: string,
   sessions: readonly string[],
   deps: SidebarApplyDeps,
+  rowGap?: number,
 ): SidebarApply {
   const file = hostConfigPath(home);
   const reloads = (): { reloaded: string[]; failed: { session: string; text: string }[] } => {
@@ -1286,7 +1331,7 @@ export function applySidebarLayout(
     return { kind: 'refused', reason: error instanceof Error ? error.message : String(error), restored: 'untouched' };
   }
 
-  const spliced = spliceSidebarRows(priorText ?? '', rows, indicators);
+  const spliced = spliceSidebarRows(priorText ?? '', rows, indicators, rowGap);
   if (!spliced.ok) return { kind: 'refused', reason: spliced.reason, restored: 'untouched' };
   if (!spliced.changed) {
     const { reloaded, failed } = reloads();

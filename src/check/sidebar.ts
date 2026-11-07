@@ -210,9 +210,11 @@ type EvaluatedSidebar = {
   resolvedRows: string;
   resolvedIndicators: string;
   rowsMatrix: readonly (readonly string[])[];
+  resolvedRowGap?: number;
   tomlBlock: string;
   rowsDiff: string | null;
   indicatorsDiff: string | null;
+  rowGapDiff: string | null;
   runningSessions: string[];
   sessionDiffs: { session: string; what: string }[];
 };
@@ -229,16 +231,20 @@ function evaluateSidebar(
   const policy = sidebarPolicy({ home, root, team, now });
   const resolvedRows = sidebarRowsWord(policy.rows);
   const resolvedIndicators = policy.indicators;
-  const tomlBlock = renderSidebarTomlBlock(policy.rows, resolvedIndicators);
+  const tomlBlock = renderSidebarTomlBlock(policy.rows, resolvedIndicators, policy.rowGap);
 
   const readText = sidebar?.configText ?? sidebarConfigText;
   const text = repairState.configApplied ? tomlBlock : readText(home);
 
   let rowsDiff: string | null = null;
   let indicatorsDiff: string | null = null;
+  let rowGapDiff: string | null = null;
   if (text === null) {
     rowsDiff = `the terminal host's config cannot be read (line 2 has nowhere to live); the resolved layout template is "${resolvedRows}"`;
     indicatorsDiff = `the terminal host's config cannot be read; the resolved status_indicators value is "${resolvedIndicators}"`;
+    if (policy.rowGap !== undefined) {
+      rowGapDiff = `the terminal host's config cannot be read; the resolved row_gap value is ${String(policy.rowGap)}`;
+    }
   } else {
     const parsed = readSidebarConfig(text);
     if (!parsed.hasAgentToken) {
@@ -253,6 +259,10 @@ function evaluateSidebar(
     if (parsed.indicators !== resolvedIndicators) {
       const current = parsed.indicators === null ? 'unset' : `"${parsed.indicators}"`;
       indicatorsDiff = `the terminal host's config status_indicators is ${current}; the resolved value is "${resolvedIndicators}"`;
+    }
+    if (policy.rowGap !== undefined && parsed.rowGap !== policy.rowGap) {
+      const current = parsed.rowGap === null ? 'unset' : String(parsed.rowGap);
+      rowGapDiff = `the terminal host's config row_gap is ${current}; the resolved value is ${String(policy.rowGap)}`;
     }
   }
 
@@ -284,9 +294,11 @@ function evaluateSidebar(
     resolvedRows,
     resolvedIndicators,
     rowsMatrix: policy.rows,
+    ...(policy.rowGap === undefined ? {} : { resolvedRowGap: policy.rowGap }),
     tomlBlock,
     rowsDiff,
     indicatorsDiff,
+    rowGapDiff,
     runningSessions,
     sessionDiffs,
   };
@@ -312,7 +324,7 @@ export function repairSidebarLayout(input: {
   }
 
   const evaluated = evaluateSidebar(home, root, team, session, now, sidebar, EMPTY_SIDEBAR_REPAIR);
-  const configNeedsWrite = evaluated.rowsDiff !== null || evaluated.indicatorsDiff !== null;
+  const configNeedsWrite = evaluated.rowsDiff !== null || evaluated.indicatorsDiff !== null || evaluated.rowGapDiff !== null;
   const sessionsToReload = configNeedsWrite
     ? evaluated.runningSessions
     : evaluated.sessionDiffs.map((item) => item.session);
@@ -335,7 +347,7 @@ export function repairSidebarLayout(input: {
     const applyLayout =
       sidebar?.applyLayout ??
       ((targetHome, rows, indicators, sessions) =>
-        applySidebarLayout(targetHome, rows, indicators, sessions, { checkConfig, reload }));
+        applySidebarLayout(targetHome, rows, indicators, sessions, { checkConfig, reload }, evaluated.resolvedRowGap));
     outcome = applyLayout(home, evaluated.rowsMatrix, evaluated.resolvedIndicators, sessionsToReload);
   } else {
     const reloaded: string[] = [];
@@ -356,7 +368,7 @@ export function repairSidebarLayout(input: {
   const repaired: string[] = [];
   if (configNeedsWrite) {
     repaired.push(
-      `the terminal host's sidebar config is set to rows "${evaluated.resolvedRows}" and status_indicators "${evaluated.resolvedIndicators}"`,
+      `the terminal host's sidebar config is set to rows "${evaluated.resolvedRows}" and status_indicators "${evaluated.resolvedIndicators}"${evaluated.resolvedRowGap === undefined ? '' : ` and row_gap ${String(evaluated.resolvedRowGap)}`}`,
     );
   }
   if (outcome.reloaded.length > 0) {
@@ -428,6 +440,13 @@ export function sidebarLayoutDifferences(input: {
       owner: true,
     });
   }
+  if (evaluated.rowGapDiff !== null) {
+    differences.push({
+      what: evaluated.rowGapDiff,
+      repair: configRepair,
+      owner: true,
+    });
+  }
   for (const item of evaluated.sessionDiffs) {
     differences.push({
       what: item.what,
@@ -437,7 +456,7 @@ export function sidebarLayoutDifferences(input: {
   }
 
   const tomlBlock =
-    !evaluated.manage && (evaluated.rowsDiff !== null || evaluated.indicatorsDiff !== null)
+    !evaluated.manage && (evaluated.rowsDiff !== null || evaluated.indicatorsDiff !== null || evaluated.rowGapDiff !== null)
       ? evaluated.tomlBlock
       : null;
 

@@ -55,7 +55,7 @@ export type Op =
    *  of both keys, validate through the host's own `config check`, roll back on refusal. A
    *  refusal aborts the plan — nothing was started yet — with the reason the splice or the check
    *  gave. Reloads are their own steps (`sidebar-reload`), so one session's refusal is one line. */
-  | { do: 'sidebar'; rows: readonly (readonly string[])[]; indicators: SidebarIndicator }
+  | { do: 'sidebar'; rows: readonly (readonly string[])[]; indicators: SidebarIndicator; rowGap?: number }
   /** Reloads one already-running session's server onto the layout the `sidebar` write left, and
    *  records it. A refusal names the session and fails nothing else: the file holds the layout,
    *  and check names any session without a record. */
@@ -716,6 +716,8 @@ export interface UpInput {
   sidebar?: {
     rows: readonly (readonly string[])[];
     indicators: SidebarIndicator;
+    /** Written into the marked table when set. Absent: an existing `row_gap` line is not touched. */
+    rowGap?: number;
     /** The running sessions of the entity's teams the layout reloads into, minus the session
      *  this run starts, which reads the config when it starts. */
     sessions: readonly string[];
@@ -978,7 +980,7 @@ export function upPlan(input: UpInput): Step[] {
   // config as it comes up, and the sessions already running are reloaded onto it. A refusal of
   // the write stops the plan here, with no seat left half-started behind it.
   if (input.sidebar !== undefined) {
-    const { rows, indicators, sessions, skip } = input.sidebar;
+    const { rows, indicators, sessions, skip, rowGap } = input.sidebar;
     if (skip !== undefined) {
       steps.push({ kind: 'skip', text: `sidebar: ${skip}` });
     } else {
@@ -986,7 +988,7 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'run',
         argv: ['herdr', 'config', 'check'],
         note: `after writing the marked sidebar block — rows ${sidebarRowsWord(rows)}; indicators ${indicators}`,
-        do: { do: 'sidebar', rows, indicators },
+        do: { do: 'sidebar', rows, indicators, ...(rowGap === undefined ? {} : { rowGap }) },
       });
       for (const one of sessions) {
         steps.push({

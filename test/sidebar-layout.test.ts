@@ -68,26 +68,32 @@ describe('spliceSidebarRows', () => {
     );
   });
 
-  test('a marked table is replaced whole, stray lines inside it included', () => {
+  test('a marked table keeps row_gap, an unknown key and a comment, and changes only the rows line', () => {
     const prior = [
       '# the owner keeps notes above',
       '[ui.sidebar.agents] # managed by team',
       'rows = [["agent"]]',
-      'stale = true',
+      'row_gap = 1',
+      'theme = "x"',
+      '# owner note',
       '',
       '[ui]',
-      'status_indicators = "dots" # managed by team',
+      'status_indicators = "symbols" # managed by team',
       'font_size = 14',
       '',
     ].join('\n');
     const out = spliceSidebarRows(prior, ROWS, 'symbols');
     expect(out.ok).toBe(true);
     if (!out.ok) return;
+    expect(out.changed).toBe(true);
     expect(out.text).toBe(
       [
         '# the owner keeps notes above',
-        MARKED_TABLE,
+        '[ui.sidebar.agents] # managed by team',
         'rows = [["state_icon", "machine", "workspace", "tab"], ["state_text", "agent"]]',
+        'row_gap = 1',
+        'theme = "x"',
+        '# owner note',
         '',
         '[ui]',
         MARKED_UI,
@@ -95,6 +101,8 @@ describe('spliceSidebarRows', () => {
         '',
       ].join('\n'),
     );
+    const twice = spliceSidebarRows(out.text, ROWS, 'symbols');
+    expect(twice).toEqual({ ok: true, text: out.text, changed: false });
   });
 
   test('an unmarked table is adopted: rows spliced, marker added, other keys kept', () => {
@@ -223,6 +231,99 @@ describe('spliceSidebarRows', () => {
     if (out.ok) return;
     expect(out.reason).toContain('dotted');
     expect(out.reason).toContain('line 3');
+  });
+
+  test('a marked multi-line rows value is replaced whole and the lines after it stay', () => {
+    const prior = [
+      '[ui.sidebar.agents] # managed by team',
+      'rows = [',
+      '  ["agent"],',
+      ']',
+      'theme = "x"',
+      '# owner note',
+      '',
+      '[ui]',
+      'status_indicators = "symbols" # managed by team',
+      '',
+    ].join('\n');
+    const out = spliceSidebarRows(prior, ROWS, 'symbols');
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.text).toBe(
+      [
+        '[ui.sidebar.agents] # managed by team',
+        'rows = [["state_icon", "machine", "workspace", "tab"], ["state_text", "agent"]]',
+        'theme = "x"',
+        '# owner note',
+        '',
+        '[ui]',
+        MARKED_UI,
+        '',
+      ].join('\n'),
+    );
+  });
+
+  test('a marked status_indicators line is replaced alone and the keys beside it stay', () => {
+    const prior = [
+      '[ui.sidebar.agents] # managed by team',
+      'rows = [["state_icon", "machine", "workspace", "tab"], ["state_text", "agent"]]',
+      '',
+      '[ui]',
+      'font_size = 14',
+      '# owner note',
+      'status_indicators = "dots" # managed by team',
+      'bold = true',
+      '',
+    ].join('\n');
+    const out = spliceSidebarRows(prior, ROWS, 'symbols');
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.text).toBe(
+      [
+        '[ui.sidebar.agents] # managed by team',
+        'rows = [["state_icon", "machine", "workspace", "tab"], ["state_text", "agent"]]',
+        '',
+        '[ui]',
+        'font_size = 14',
+        '# owner note',
+        MARKED_UI,
+        'bold = true',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  test('a set row_gap is written after rows, a change rewrites only that line, and unset leaves it', () => {
+    const marked = [
+      '[ui.sidebar.agents] # managed by team',
+      'rows = [["state_icon", "machine", "workspace", "tab"], ["state_text", "agent"]]',
+      'theme = "x"',
+      '',
+      '[ui]',
+      MARKED_UI,
+      '',
+    ].join('\n');
+    const written = spliceSidebarRows(marked, ROWS, 'symbols', 1);
+    expect(written.ok).toBe(true);
+    if (!written.ok) return;
+    expect(written.text).toBe(
+      [
+        '[ui.sidebar.agents] # managed by team',
+        'rows = [["state_icon", "machine", "workspace", "tab"], ["state_text", "agent"]]',
+        'row_gap = 1',
+        'theme = "x"',
+        '',
+        '[ui]',
+        MARKED_UI,
+        '',
+      ].join('\n'),
+    );
+    const changed = spliceSidebarRows(written.text, ROWS, 'symbols', 2);
+    expect(changed.ok).toBe(true);
+    if (!changed.ok) return;
+    expect(changed.text).toBe(written.text.replace('row_gap = 1', 'row_gap = 2'));
+    const kept = spliceSidebarRows(written.text, ROWS, 'symbols');
+    expect(kept).toEqual({ ok: true, text: written.text, changed: false });
   });
 
   test('a splice onto the target shape reads back equal', () => {
