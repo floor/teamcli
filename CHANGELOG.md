@@ -9,10 +9,164 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.5.16] - Unreleased
 
+Read-only project analysis, checkpoint requests, named launchers, and guarded start folders for Grok and Cursor.
+
+### Added
+
+- `team analyse [<path>] [--json]` prints a read-only project report after verifying the caller as a
+  named analyser for that session. It creates no team, writes no files, and runs no discovered
+  checks.
+
+- `team show <id>` reads one full message from the caller’s own mailbox and signs the same read
+  receipt as `team messages`. A unique prefix of at least eight characters selects the message.
+
+- `team checkpoint <seat>` records a checkpoint request and its handover path, with a 30-minute
+  deadline. It sends no message, and the seat need not be running.
+
+- With `team up --resolve-launch`, a named launcher supplies the base command while the launch
+  profile still places its required arguments. Launcher settings resolve from seat, team, project,
+  entity, then machine; secret values remain references. Without the flag, the existing launch line
+  is used.
+
+- The default lead resolves from the team’s `lead:`, then the home project’s `lead_seat`, the
+  entity’s `lead`, and the universe default. The most specific declaration wins.
+
+- The mailbox router runs under the machine daemon. A team may add aliases for its own seats;
+  aliases and fallbacks placed by an entity stay under that entity’s control.
+
+- The reminder chore sends due reminders as the machine daemon. Its first run is recorded without
+  sending, and a missed scheduled instant is recorded and skipped.
+
+- The seat-health watchdog may start one `team restart` when its proof shows that a seat is gone.
+
+- Read messages past the retention window move into a dated archive with a signed manifest; unread
+  messages stay. A link in the archive tree refuses the pass before anything moves. A failed archive
+  cannot overwrite a message recreated at its original path.
+
+- When the system trash cannot be reached, a retired path is parked in a dated runtime folder for
+  the owner. A link standing in that folder does not receive the file.
+
+- `team check` names a live agent process that has left its pane. `team check --close-orphans`
+  closes only a process it can still prove.
+
+- The `messaging` map accepts `store: first`, `parallel`, or `none`.
+
+- After `team add` or `team restart`, the sidebar returns to roster order when its tail is idle.
+  Turning sidebar management off starts no order pass.
+
+- Closed event-log segments receive a signed seal and an index. A segment that cannot be sealed is
+  still read in full, and a busy signing key defers sealing for a later pass.
+
+- Message JSON includes `sender_attribution`: `unverified_claim` when only the shared checkout key
+  vouches for the record, `launch-brief` when the launch brief binds it to the current seat claim,
+  or `none`.
+
+- The daemon’s existing `--presence` flag also enables a body-free native status feed. It is off by
+  default. This initial feed reports unproven correlation and unknown status; it does not establish
+  that a seat is idle or answer permission requests.
+
+### Changed
+
+- An idle Antigravity or Grok wake submits through the agent prompt after two idle readings, without
+  typing. A line still held in the composer is not prompted again.
+
+- Owner and lead peeks show the sender on the body and write no read receipt.
+
+- `team check` names a missing or expired owner-reply endpoint and points to the owner’s declaration
+  as the repair.
+
+- Send admission derives membership from team records. A seat from another project stays refused,
+  and re-keying removes the old id from that membership.
+
+- A verified lead pin survives a team rename. Approval reports a swapped, unverified pin as a lead
+  change.
+
+- `team drops --read` writes the read receipt after handing over the body. Two racing readers can
+  therefore both print a message. The inbox server remains receipt-first.
+
+### Fixed
+
+- All-faint prose and dim composer hints read as an empty box; the frame edge no longer turns a hint
+  into a draft. Text that is not faint remains a draft.
+
+- A Cursor composer on the first row reads as idle when empty and as a draft when it holds unsent
+  text. A working screen stays working. A status reading above a workspace row must come from a
+  closed status row, so transcript text is not mistaken for the composer.
+
+- An idle prompt with a shortcuts row or a spinner left in the transcript stays idle for a typed
+  wake. Busy boxes and unsent drafts still receive no typed wake.
+
+- `team add` records the request when the session host cannot be read and starts nothing. Approval
+  still reads the session before adding the seat.
+
+- A policy address naming an unregistered team is refused; a dry run leaves the record untouched.
+
+- Bus rotation declares each slot it removes, including when its range cannot be read or its append
+  cannot be signed.
+
+- An unavailable Codex endpoint writes one signed notice to the lead. Further sends while it stays
+  down do not repeat the notice; another notice waits until the endpoint has listened again.
+
+- A typed wake that sent a key but could not read the acknowledgement keeps its reservation,
+  preventing a second typing of the same message id. The reservation is released when nothing was
+  typed or a read-back shows the line still unsent.
+
+- A seat restarted on another CLI receives its inbox tools after placement is verified. Inbox
+  serving also works when a recorded launch line has no epoch.
+
+- The startup health test waits until the health route exists before probing. Cross-project
+  serve-placement tests use a controlled clock, avoiding failures caused by test scheduling.
+
 ### Security
 
-- Grok's workspace preset also grants the folder a Grok seat starts in; a Grok seat started in a shared lobby can write that lobby. Until the next release, start Grok seats in their own worktree.
-- Grok and Cursor seats now require their own start folder, using a recorded worktree when one is available. Shared root, lobby, overlapping seat folders and Grok starts outside its sandbox grants refuse before launch with the own-worktree repair. Cursor seats keep separate project MCP configurations. Existing Grok or Cursor seats with `cwd: .` and no recorded worktree are refused on their next `team up` placement or relaunch until their cwd names an own folder.
+- Grok’s workspace preset grants its start folder. Grok and Cursor seats now require their own start
+  folder, using a recorded worktree when available. A shared project root, lobby, overlapping seat
+  folder, or Grok start outside its sandbox grants is refused before launch. Cursor seats keep
+  separate project MCP configurations. Reload refuses a missing or unsafe recorded start folder
+  before refreshing those files.
+
+- If Grok cannot apply its sandbox for a reason outside the narrowed grants, it may still run
+  unsandboxed. If a Grok seat’s pane shows "sandbox could not be applied", stop that seat.
+
+- Set-aside status records are kept to the newest 64; older records are removed and counted. The
+  count is informational, and a valid record for the current binding can still be published.
+
+- Status-spool names that are not receipts are removed a bounded number at a time, with a continuing
+  sweep so persistent entries cannot starve later names. Links are not followed, directories are not
+  entered, and receipts still being written are left in place.
+
+- The daemon state file is opened without following a link and checked on that same open file.
+  Records over 64 KiB are refused before reading; pipes and other special files are refused without
+  waiting.
+
+- Status-feed and lead-delivery refusal reasons are labelled as the seat’s reported words and
+  quoted. Quotes, backslashes, control characters, hidden format characters, and characters that
+  could reorder the line are escaped. Reasons are limited to 200 characters, with a cut marker
+  outside the quotes; an invalid seat name is not used as the speaker.
+
+- Channel pushes are admitted against the live team file and membership derived from team records. A
+  forwarded admission line grants no authority.
+
+- The legacy Notification hook caps stdin at 65,537 bytes even when `--presence` is off. Oversized
+  input cannot match a permission prompt or hold the hook waiting for more input.
+
+### Upgrade notes
+
+- Existing Grok or Cursor seats with `cwd: .` and no recorded worktree are refused on their next
+  placement or relaunch until `cwd` names their own folder.
+
+- A declarative launcher refuses an empty caller session (`E_RESUME_SESSION`) or a consumed
+  `{session}` or `{inbox}` placeholder without a value (`E_PLACEHOLDER_CONTEXT`). A whitespace-only
+  session remains an opaque string.
+
+- `compact_delivery: true` shortens a cross-session message to its sender header, first line, and
+  footer. Use `team show <id>` to read the rest and sign its receipt.
+
+- `model_from: launcher` still means that the launch line chooses the model. A declarative launcher
+  is a separate named file.
+
+- Generated ids that look like numbers are quoted in team files and the registry. An existing bare
+  numeric project or session id is refused with a request to quote it.
 
 ## [0.5.15] - 2026-11-06
 
