@@ -3221,6 +3221,13 @@ function policyCheck(
     }
   }
 
+  if (teamChain.ok) {
+    const pretrust = teamChain.policies.pretrust?.value;
+    if (pretrust === 'off' || pretrust === 'project') notes.push(`pretrust: ${pretrust}`);
+    const admission = teamChain.policies['first-run-admission']?.value;
+    if (admission === 'off' || admission === 'empty-account') notes.push(`first-run-admission: ${admission}`);
+  }
+
   return { differences, notes };
 }
 
