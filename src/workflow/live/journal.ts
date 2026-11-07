@@ -2,8 +2,9 @@
 // case-safe file naming and the quarantine rename. No locking lives here; the store serializes
 // callers and owns the commit order.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { appendStateFile, writeStateFile } from '../../file-write.ts';
 import { canonicalJson } from '../canonical.ts';
 import type { RunId } from '../types.ts';
 import type { LiveRecord } from './records.ts';
@@ -109,7 +110,7 @@ function ensureDirectory(path: string): void {
 /** Append one complete record line; creates the runs directory on first use. */
 export function appendJournal(path: string, record: LiveRecord): void {
   ensureDirectory(dirname(path));
-  appendFileSync(path, `${canonicalJson(record)}\n`, { mode: 0o600 });
+  appendStateFile(path, `${canonicalJson(record)}\n`, dirname(dirname(path)));
 }
 
 /** Create a journal with its first record; refuses to touch an existing file. */
@@ -135,7 +136,5 @@ export function quarantineJournal(path: string): string {
 
 /** Atomic file replacement for the index: temp file, then rename. */
 export function writeAtomicMode(path: string, text: string): void {
-  const temporary = `${path}.${process.pid}.tmp`;
-  writeFileSync(temporary, text, { mode: 0o600 });
-  renameSync(temporary, path);
+  writeStateFile(path, text, { root: dirname(path) });
 }

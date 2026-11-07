@@ -98,3 +98,24 @@ export function writeStateFile(path: string, text: string, options: { root?: str
     }
   }
 }
+
+/** Checks a file without opening it; used before a size-based rotation decision. */
+export function stateFileStat(path: string, root?: string): Stats | null {
+  const check = parents(path, root); const value = leaf(path); check(); return value;
+}
+
+/** Append through a checked descriptor; a missing leaf is created exclusively. */
+export function appendStateFile(path: string, text: string, root?: string): void {
+  flags(); const check = parents(path, root); const before = leaf(path);
+  const fd = openSync(path, constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW | constants.O_NONBLOCK
+    | (before === null ? constants.O_CREAT | constants.O_EXCL : 0), 0o600);
+  try {
+    const opened = fstatSync(fd);
+    if (!regular(opened) || (before !== null && !same(before, opened))) refuse();
+    check(); const current = leaf(path);
+    if (current === null || !same(opened, current)) refuse();
+    write(fd, text); fsyncSync(fd);
+    check(); const after = leaf(path);
+    if (!regular(fstatSync(fd)) || after === null || !same(opened, after)) refuse();
+  } finally { closeSync(fd); }
+}
