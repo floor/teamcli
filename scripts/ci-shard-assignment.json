@@ -542,6 +542,7 @@
     "test/general-door-narrow-independent.test.ts": 1,
     "test/general-door-narrow.test.ts": 2,
     "test/general-door.test.ts": 5,
+    "test/general-grant-chain-independent.test.ts": 2,
     "test/general-grant-chain.test.ts": 4,
     "test/general-grant-widened.test.ts": 0,
     "test/general-grant.test.ts": 3,
