@@ -59,15 +59,19 @@ function world(inLobby = false): World {
   const base = fixtureBase('mcp-setup-independent-');
   const home = join(base, 'home');
   const root = join(base, 'project');
-  const lobby = join(home, 'lobby');
-  const cwd = inLobby ? join(lobby, SEAT) : join(base, 'start');
+  const lobby = join(root, 'lobby');
+  const cwd = inLobby ? join(lobby, SEAT) : root;
   mkdirSync(home, { mode: 0o700 });
-  mkdirSync(join(root, '.agents'), { recursive: true });
-  if (inLobby) mkdirSync(lobby, { mode: 0o700 });
-  mkdirSync(cwd, { mode: 0o700 });
-  execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'init', '-q'], {
-    cwd: root, env: gitEnv(), stdio: 'ignore',
-  });
+  mkdirSync(root, { mode: 0o700 });
+  mkdirSync(join(root, '.agents'), { mode: 0o700 });
+  if (inLobby) {
+    mkdirSync(lobby, { mode: 0o700 });
+    mkdirSync(cwd, { mode: 0o700 });
+  } else {
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'init', '-q'], {
+      cwd: root, env: gitEnv(), stdio: 'ignore',
+    });
+  }
   const file = join(root, '.agents', 'team.yaml');
   const trust = inLobby ? `lobby: ${lobby}\ntrust:\n  - ${root}\n  - ${lobby}\n` : '';
   writeFileSync(file, `format: 1
@@ -294,6 +298,76 @@ test('another seat is refused and the named seat does not gain a new admission',
     const other = await setup(scene, ['--json'], { kind: 'seat', name: 'scout', pane: PANE, session: SESSION });
     expect(other.code).toBe(1);
     expect(JSON.parse(other.out).error.id).toBe('mcp.setup-caller');
+    expect(snapshot(scene.base)).toEqual(before);
+  } finally {
+    discard(scene.base);
+  }
+});
+
+test('the starting folder selects one team when several teams share a seat name', async () => {
+  const base = fixtureBase('mcp-setup-independent-');
+  try {
+    const home = join(base, 'home');
+    mkdirSync(home, { mode: 0o700 });
+    installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures/key.json'), 'utf8')));
+    setHerdrRun(() => { throw new Error('a synthetic test must not reach a live terminal host'); });
+    const seat = 'orchestrator';
+    const teams = ['a', 'b', 'c'].map((mark, index) => {
+      const root = join(base, `team-${mark}`);
+      const session = `hour-${mark}`;
+      mkdirSync(root, { mode: 0o700 });
+      mkdirSync(join(root, '.agents'), { mode: 0o700 });
+      execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'init', '-q'], {
+        cwd: root, env: gitEnv(), stdio: 'ignore',
+      });
+      const file = join(root, '.agents', 'team.yaml');
+      writeFileSync(file, `format: 1
+project: harbor-${mark}
+session: ${session}
+coordinator: ${seat}
+operator: ${seat}
+workspace:
+  mode: shared
+seats:
+  - name: ${seat}
+    role: guide
+    cli: claude-code
+    vendor: test
+    model: Test
+    version: "1"
+    launch: claude --model fixture
+`);
+      upsertTeam(home, teamIdOf(root), {
+        root, project: `harbor-${mark}`, session, roster: [{ agent: `agt_${String(index + 1).padStart(12, '0')}`, seat, role: 'guide' }],
+      });
+      return { root, file };
+    });
+    const [first, second, third] = teams;
+    if (!first || !second || !third) throw new Error('three teams');
+    const beforeFirst = snapshot(first.root);
+    const beforeThird = snapshot(third.root);
+    const scene: World = { base, home, root: second.root, cwd: second.root, file: second.file, sources: sourcesOf(home) };
+    expect((await setup(scene, ['--json'], { kind: 'owner' }, seat)).code).toBe(0);
+    expect(readFileSync(second.file, 'utf8')).toContain(FLAG);
+    expect(existsSync(join(second.root, '.mcp.json'))).toBe(true);
+    expect(existsSync(join(second.root, '.claude', 'settings.local.json'))).toBe(true);
+    expect(snapshot(first.root)).toEqual(beforeFirst);
+    expect(snapshot(third.root)).toEqual(beforeThird);
+  } finally {
+    discard(base);
+  }
+});
+
+test('a folder outside every registered team is refused and the base stays byte-identical', async () => {
+  const scene = world();
+  try {
+    const outside = join(scene.base, 'outside');
+    mkdirSync(outside, { mode: 0o700 });
+    scene.cwd = outside;
+    const before = snapshot(scene.base);
+    const ran = await setup(scene, ['--json']);
+    expect(ran.code).toBe(1);
+    expect(JSON.parse(ran.out).error.id).toBe('mcp.setup-team');
     expect(snapshot(scene.base)).toEqual(before);
   } finally {
     discard(scene.base);
