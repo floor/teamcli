@@ -29,11 +29,13 @@ named checkout when it writes the unit: a root whose team file cannot be read is
 silently dropped, because a unit that hosts nothing must not be written in its place.
 
 A service start discovers every registry team marked `running`. A team with no recorded root
-uses the root in its stored definition, or its recorded lobby when that folder contains the
-team's configuration. The ordinary configuration checks still apply. A matching lobby-only row
-and checkout row are hosted once, including when the second row is discovered later; stopped
-and archived teams are left out. If a stored root is unavailable, the lobby is tried too. A running team whose
-folder cannot be resolved is named as `skipped team <name> (<session>): <reason>` by `status`,
+uses the root in its stored definition, a checkout recorded for the same team, session and
+lobby, or its recorded lobby when that folder contains the team's configuration. Sharing a
+lobby with another team never makes their configurations interchangeable. The ordinary
+configuration checks still apply. A matching lobby-only row and checkout row are hosted once,
+including when the second row is discovered later; stopped and archived teams are left out.
+If a stored root is unavailable, the lobby is tried too. A running team whose folder cannot
+be resolved is named as `skipped team <name> (<session>): <reason>` by `status`,
 with the same details in `skippedTeams` in JSON. An unreadable registry is reported explicitly.
 
 ## The subcommands

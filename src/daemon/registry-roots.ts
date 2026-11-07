@@ -56,6 +56,12 @@ export function registryHosting(teams: Readonly<Record<string, RegistryTeam>>, h
         continue;
       }
     }
+    // A lobby can be shared by unrelated teams. Another row for this same recorded run
+    // can retain its checkout even when only the lobby-only row is marked running. Use
+    // that recorded location, then validate its identity through the ordinary reader.
+    for (const other of Object.values(teams)) {
+      if (other.root !== '' && sameRun(team, other)) candidates.add(other.root);
+    }
     if (team.lobby) candidates.add(team.lobby);
     if (candidates.size === 0) {
       skip('no root or lobby is recorded');
