@@ -429,7 +429,7 @@ function deferNote(ctx: FallbackContext, fact: TransportFact): DeferredNote {
   const factId = createHash('sha256').update(text).digest('hex').slice(0, 16);
   const path = deferredNotePathOf(fact.recipient, fact.messageId, factId);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  writeStateFile(path, `${text}\n`);
+  writeStateFile(path, `${text}\n`, { root: fact.recipient.root });
   return { ok: true, state: 'deferred', notePath: path };
 }
 

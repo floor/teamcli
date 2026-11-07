@@ -16,8 +16,8 @@ function unchanged(a: Stats | null, b: Stats | null): boolean {
   return a === null ? b === null : b !== null && regular(b) && same(a, b)
     && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
 }
-function parents(path: string, root?: string): () => void {
-  const stop = resolve(root ?? parse(resolve(path)).root);
+function parents(path: string, root = dirname(path)): () => void {
+  const stop = resolve(root);
   const within = relative(stop, resolve(path));
   if (within === '' || within === '..' || within.startsWith('../') || parse(within).root !== '') refuse();
   const chain: { path: string; value: Stats }[] = [];
@@ -71,7 +71,8 @@ export function readStateFile(path: string, limit = 4 * 1024 * 1024, root?: stri
   } finally { closeSync(fd); }
 }
 
-/** Existing leaves must be regular single-link files; parent creation belongs to the caller. */
+/** The established root (default: containing folder) and every child must be real directories.
+ * Existing leaves must be regular single-link files; parent creation belongs to the caller. */
 export function writeStateFile(path: string, text: string, options: { root?: string; validateTemporary?: (path: string) => void } = {}): void {
   flags(); const check = parents(path, options.root); const before = leaf(path);
   const temporary = join(dirname(path), `.${basename(path)}.${randomBytes(16).toString('hex')}.tmp`);

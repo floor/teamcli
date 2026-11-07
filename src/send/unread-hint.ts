@@ -59,7 +59,7 @@ function dropFolder(dropDir: string): { dir: string; session: string; seat: stri
 function readMap(dropDir: string): HintMap {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readStateFile(unreadHintPath(dropDir)) ?? '');
+    parsed = JSON.parse(readStateFile(unreadHintPath(dropDir), undefined, dropFolder(dropDir)?.dir) ?? '');
   } catch {
     return { v: 1, unread: {} };
   }
@@ -103,7 +103,7 @@ export function readUnreadHint(dropDir: string, peer: string): UnreadHintEntry[]
 /** Writes the map atomically: a temp name no reader meets as a record, then a rename over the
  *  hint's name. A crash leaves either the old map or the new one, never a torn file. */
 function writeMap(dropDir: string, map: HintMap): void {
-  writeStateFile(unreadHintPath(dropDir), `${JSON.stringify(map, null, 2)}\n`);
+  writeStateFile(unreadHintPath(dropDir), `${JSON.stringify(map, null, 2)}\n`, { root: dropFolder(dropDir)?.dir });
 }
 
 /**
