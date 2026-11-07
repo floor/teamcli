@@ -1,5 +1,22 @@
 import { toValue } from '../../yaml.ts';
 import type { Section } from './section.ts';
+import { GROK_COMMAND_DENY_VALUES } from '../../settings/grok-command-deny.ts';
+
+const declaration = {
+  type: 'object',
+  required: ['value', 'setter', 'date', 'kind', 'generation', 'signature'],
+  properties: {
+    value: {},
+    setter: { type: 'string' },
+    date: { type: 'string' },
+    expiry: { type: ['string', 'null'] },
+    kind: { enum: ['enforced', 'advised'] },
+    target: { type: 'string' },
+    generation: { type: 'integer', minimum: 1 },
+    signature: { type: 'string' },
+  },
+  additionalProperties: false,
+};
 
 /**
  * The team-level owner `policies:` section (Kernel amendment 02 §2.12).
@@ -18,21 +35,17 @@ export const policies: Section = {
   },
   schema: {
     type: 'object',
-    additionalProperties: {
-      type: 'object',
-      required: ['value', 'setter', 'date', 'kind', 'generation', 'signature'],
-      properties: {
-        value: {},
-        setter: { type: 'string' },
-        date: { type: 'string' },
-        expiry: { type: ['string', 'null'] },
-        kind: { enum: ['enforced', 'advised'] },
-        target: { type: 'string' },
-        generation: { type: 'integer', minimum: 1 },
-        signature: { type: 'string' },
+    properties: {
+      'grok-command-deny': {
+        ...declaration,
+        properties: {
+          ...declaration.properties,
+          value: { enum: GROK_COMMAND_DENY_VALUES },
+        },
+        $comment: 'team scope only; off by default; denies git or git and test runs for Grok seats',
       },
-      additionalProperties: false,
     },
+    additionalProperties: declaration,
     $comment: 'owner-signed team-level policy declarations (Kernel amendment 02 §2.12)',
   },
 };

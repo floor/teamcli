@@ -17,6 +17,7 @@ import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeT
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
 import { ownStartFolderProblem } from '../worktree/place.ts';
 import { GROK_SANDBOX_UNAPPLIED, grokSandboxUnapplied, grokStartFolderProblem, settleGrokSandbox, writeGrokSandbox } from './grok-sandbox.ts';
+import { writeCursorCommandDeny } from './grok-command-deny.ts';
 import { launchedIdentity, paneHoldsOnlyShell, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
 import { restoreProof } from './restore-proof.ts';
 import type { CliWatcher } from './cli-hook.ts';
@@ -1535,6 +1536,18 @@ export async function executePlan(
         // leaves the seat out. It does not append --no-daemon and continue. A line the plan
         // did not mark stays unmanaged and still launches on the line it had.
         if (!guardStart(op)) break;
+        if (op.cursorCommandDeny !== undefined) {
+          if (op.ownStartFolder === undefined) {
+            leftOut(op.seat, 'its command-deny policy has no guarded own start folder; nothing was launched');
+            break;
+          }
+          const written = writeCursorCommandDeny(op.cursorCommandDeny, op.ownStartFolder);
+          if (!written.ok) {
+            leftOut(op.seat, `its command-deny file was not written and verified: ${written.why}; nothing was launched`);
+            break;
+          }
+          if (!guardStart(op)) break;
+        }
         let command = op.command;
         let startedEndpoint = false;
         let attachedEndpoint = false;
