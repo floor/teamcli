@@ -74,7 +74,7 @@ function projectLead(at: World, word: string): void {
     '    name: Fixture',
     '    entity: fixture',
     '    lead: null',
-    `    teams: [${teamIdOf(at.root)}]`,
+    `    teams: [${JSON.stringify(teamIdOf(at.root))}]`,
     `    lead_seat: ${word}`,
     `    provenance: ${prov}`,
     '',

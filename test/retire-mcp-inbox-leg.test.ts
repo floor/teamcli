@@ -677,7 +677,7 @@ seats:
     name: acme
     entity: corp
     lead: ${sb.agentId}
-    teams: [${sb.teamId}]
+    teams: [${JSON.stringify(sb.teamId)}]
     delivery_order: [mcp-inbox]
     provenance: { registered_by: owner, registered_at: "${ISO}", updated_at: "${ISO}" }
   acme-mixed:
