@@ -368,6 +368,7 @@
     "test/daemon-install-slow-start.test.ts": 3,
     "test/daemon-launchctl-excerpt.test.ts": 1,
     "test/daemon-ll1-yielding-steps.test.ts": 0,
+    "test/daemon-lobby-hosting-independent.test.ts": 2,
     "test/daemon-loop-holds-independent.test.ts": 3,
     "test/daemon-loop-independent.test.ts": 5,
     "test/daemon-loop-send-probe.test.ts": 3,

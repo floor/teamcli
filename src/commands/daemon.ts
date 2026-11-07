@@ -50,7 +50,8 @@ import {
 import { loadTeamFile } from '../file/load.ts';
 import { projectionOf } from '../reach/projection.ts';
 import { currentCodexEndpoint } from '../daemon/presence/endpoint-state.ts';
-import { runningRegistryRoots } from '../daemon/registry-roots.ts';
+import { registryHosting, runningRegistryRoots, type SkippedRegistryTeam } from '../daemon/registry-roots.ts';
+import { plainLine } from '../launch/plain.ts';
 import { canonicalRoot, routeId, routeOf } from '../daemon/routes.ts';
 import {
   systemServiceManager,
@@ -302,7 +303,7 @@ function rootsOf(
   // explicit --root above is the manual path and is not rewritten into this list.
   if (verb === 'run' && parsed.startedBy === 'service-manager') {
     try {
-      return { roots: runningRegistryRoots(readTeams(home)).map((one) => one.root), fromRegistry: true };
+      return { roots: runningRegistryRoots(readTeams(home), home).map((one) => one.root), fromRegistry: true };
     } catch (error) {
       return {
         problem: error instanceof Error ? error.message : 'the team registry could not be read',
@@ -1253,6 +1254,10 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     const health = await daemonHealth(home, {
       ...(sources.now !== undefined ? { now: sources.now } : {}),
     });
+    let skippedTeams: SkippedRegistryTeam[] = [];
+    let registryError: string | undefined;
+    try { skippedTeams = registryHosting(readTeams(home), home).skipped; }
+    catch { registryError = 'the team registry cannot be read; skipped teams are unknown'; }
     if (parsed.json) {
       const reminders = remindersForStatus(sources.reminders ?? configuredReminders(home), home, sources.now);
       writeJson(io, 'team.daemon-status', {
@@ -1260,9 +1265,12 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
         daemon: health,
         reminders: reminders.reminders,
         ...(reminders.error === null ? {} : { remindersError: reminders.error }),
+        ...(skippedTeams.length === 0 ? {} : { skippedTeams }),
+        ...(registryError === undefined ? {} : { registryError }),
       });
     } else {
-      io.stdout(`${statusLine(health)}\n`);
+      const skipped = skippedTeams.map((team) => `skipped team ${plainLine(team.team)} (${plainLine(team.session)}): ${plainLine(team.why)}`);
+      io.stdout(`${[statusLine(health), ...skipped, ...(registryError === undefined ? [] : [registryError])].join('; ')}\n`);
     }
     // exit: daemon.status
     return 0;
@@ -1310,7 +1318,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       roots,
       ...(fromRegistry ? {
         rootsFromRegistry: true,
-        runningRoots: () => runningRegistryRoots(readTeams(home)).map((one) => one.root),
+        runningRoots: () => runningRegistryRoots(readTeams(home), home).map((one) => one.root),
       } : {}),
       startedBy,
       reminders: reminderReader,

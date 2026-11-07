@@ -27,6 +27,8 @@ import { freshBusWatch, nextBackoffMs, reviveBus, type BusWatch } from '../bus/s
 import { projectIdOfTeam } from '../dev_mode.ts';
 import { launchTeamFile } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
+import { readTeams } from '../registry/teams.ts';
 import type { TeamFile } from '../file/types.ts';
 import { paneProcessesAsync, type PaneProcesses } from '../herdr.ts';
 import { eventThresholdsInForce, DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
@@ -1094,10 +1096,39 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // therefore mean 2N+1 endpoints in one process until the machine endpoint serves route
   // delivery and a shared per-seat queue behind the relay package boundary.
   const hosting = new Set<string>();
+  // Reserve a registry run before the first awaited state write. A later checkout row (or
+  // simultaneous notice) must not start beside the lobby route this process already admitted.
+  const registryRuns = new Map<string, string>();
   const hostCheckout = async (rootArg: string): Promise<void> => {
     const key = resolve(rootArg);
     if (hosting.has(key)) return;
     hosting.add(key);
+    const loaded = readTeamConfig(rootArg, { home });
+    const loadedRoot = loaded.ok ? canonicalRoot(loaded.root) : null;
+    if (loaded.ok && input.rootsFromRegistry === true && loadedRoot !== null) {
+      let lobby = lobbyOf(home, loaded.root, loaded.team);
+      if (!loaded.team.lobby) {
+        // A lobby-only row need not be keyed by the lobby folder's digest. Recover that
+        // row's recorded lobby without changing the configuration or its admission checks.
+        try {
+          const recorded = new Set(Object.values(readTeams(home)).filter((record) =>
+            record.lifecycle === 'running' && record.project === loaded.team.project
+              && record.session === loaded.team.session && record.entity === loaded.team.entity
+              && canonicalRoot(record.root || record.lobby) === loadedRoot,
+          ).map((record) => record.lobby).filter(Boolean).map((folder) => canonicalRoot(folder) ?? resolve(folder)));
+          if (recorded.size === 1) lobby = [...recorded][0]!;
+        } catch {
+          // Keep the ordinary lobby reader's answer; the registry rescan names read failures.
+        }
+      }
+      const run = JSON.stringify([loaded.team.project, loaded.team.session, loaded.team.entity, canonicalRoot(lobby) ?? resolve(lobby)]);
+      const earlier = registryRuns.get(run);
+      if (earlier !== undefined) {
+        logLine(`root ${rootArg}: this registry team is already hosted at ${earlier}`);
+        return;
+      }
+      registryRuns.set(run, loaded.root);
+    }
     const status: MachineRootStatus = {
       root: rootArg, team: null, send: 'starting', bus: 'starting', why: null, sendWhy: null, busWhy: null,
       ...(input.rootsFromRegistry === true ? { source: 'registry' as const } : {}),
@@ -1129,7 +1160,6 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // checkout being brought up, never an empty startup record beside a live socket.
       return writeState();
     };
-    const loaded = readTeamConfig(rootArg, { home });
     if (!loaded.ok) {
       status.why = loaded.errors[0]?.message ?? 'the team file cannot be read';
       status.send = 'failed';
