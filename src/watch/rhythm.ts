@@ -76,7 +76,7 @@ export function watchInForceWithPace(standing: Standing, team: TeamFile, pace: W
 /** The unread window a seat gets when no level of its chain moves the setting: a seat a message
  *  can wake while it is idle (a channel or webhook seat) is woken at the shorter window, and a
  *  typed or pull-only seat waits for the longer one. The owner's cascade (ADR
- *  zeus-message-path, D2) names these defaults; the team file's own `watch.unread_after` is the
+ *  message-path, D2) names these defaults; the team file's own `watch.unread_after` is the
  *  declared word that replaces them for every seat of the team. */
 export const UNREAD_AFTER_WAKEABLE_SECONDS = 30;
 export const UNREAD_AFTER_PULL_SECONDS = 60;

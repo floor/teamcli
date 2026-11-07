@@ -2000,7 +2000,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       installNote(null);
       return;
     }
-    // ADR `zeus-message-path`, D3: the seat's own answer is a read. A send from this seat to its
+    // ADR `message-path`, D3: the seat's own answer is a read. A send from this seat to its
     // recipient settles the newest message that recipient delivered it before this send's own
     // instant — the seat's signed act, never the original sender's — and only the newest, so one
     // answer never swallows the older unread work. A sweep that cannot read or write is a missing

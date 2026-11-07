@@ -20,7 +20,7 @@ import { readScreen, type Screen } from '../../src/watch/screen.ts';
 import { claudeBox } from '../helpers.ts';
 
 const FIXTURE = readFileSync(
-  new URL('../fixtures/claude-code/completed-error-empty-box-atlas.txt', import.meta.url),
+  new URL('../fixtures/claude-code/completed-error-empty-box-capture.txt', import.meta.url),
   'utf8',
 );
 const PERMISSION = readFileSync(

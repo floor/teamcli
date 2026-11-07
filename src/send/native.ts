@@ -149,7 +149,7 @@ export function readTriggerLine(seat: string, session: string, sender?: TriggerS
 }
 
 /**
- * The hint a socket delivery's one re-wake carries (ADR `zeus-message-path`, D3): the seat
+ * The hint a socket delivery's one re-wake carries (ADR `message-path`, D3): the seat
  * answers the message the frame named with `team reply <id>`, or marks it read with
  * `team ack <id>` when no answer is needed. Both write the seat's signed receipt; the id fits the
  * hint, which the wake line keeps whole.
