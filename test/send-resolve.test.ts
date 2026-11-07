@@ -328,7 +328,7 @@ describe('resolveTarget by the team\'s lead address and by nickname', () => {
     ]);
     signNickname(w.home, builder.id, 'wren');
     const path = join(agentsDir(w.home), `${builder.id}.yaml`);
-    writeFileSync(path, readFileSync(path, 'utf8').replace('value: "wren"', 'value: "crow"'));
+    writeFileSync(path, readFileSync(path, 'utf8').replace('"value": "wren"', '"value": "crow"'));
 
     // Falling back to the roster's projection would resolve an address the store disowns; the
     // send refuses and names the record instead.

@@ -270,11 +270,11 @@ describe('signed seat records', () => {
   }
 
   /** Rewrites the record's signed value in place. The fixture's `launch` line carries the same
-   *  model name, so the tamper targets the settings entry's own `value:` line rather than the
+   *  model name, so the tamper targets the settings entry's own `"value":` line rather than the
    *  first match, which would land on `launch` and leave the record verifying. */
   function tamper(path: string): void {
     const text = readFileSync(path, 'utf8');
-    const tampered = text.replace('value: "claude-opus-5-5"', 'value: "claude-haiku-5-5"');
+    const tampered = text.replace('"value": "claude-opus-5-5"', '"value": "claude-haiku-5-5"');
     expect(tampered).not.toBe(text);
     writeFileSync(path, tampered);
   }
@@ -375,14 +375,14 @@ describe('the write verbs', () => {
       name: 'Worker One',
       reach: { team: teamIdOf(root), seat: 'worker', session: 'acme', pane: 'w3:p2', address: null },
     }).id;
-    const plan = planConfigSet(home, { level: 'seat', target: worker, settings: [{ key: 'nickname', value: 'Hera' }] });
+    const plan = planConfigSet(home, { level: 'seat', target: worker, settings: [{ key: 'nickname', value: 'pebble' }] });
     if (!plan.ok) throw new Error(plan.why);
     const written = writeConfigSet(home, plan, { now: new Date('2026-10-19T10:00:00Z') });
     if (!written.ok) throw new Error(written.why);
     const path = join(agentsDir(home), `${worker}.yaml`);
-    writeFileSync(path, readFileSync(path, 'utf8').replace('value: "Hera"', 'value: "Crow"'));
+    writeFileSync(path, readFileSync(path, 'utf8').replace('"value": "pebble"', '"value": "cobble"'));
 
-    const set = await run(['set', 'lead', 'nickname=Hera']);
+    const set = await run(['set', 'lead', 'nickname=pebble']);
 
     // The effective word the damaged record held is unknown; checking the new word against the
     // declaration alone could hand two seats one address, so the write is refused and names the

@@ -229,12 +229,15 @@ function reSignEntry(fx: Fixture, level: 'team' | 'seat', canonical: string, val
     generation: fields.generation,
   });
   const signature = signDomain(POLICY_DOMAIN, payload, keyOf(fx.home));
-  const valueLine = `    value: ${String(fields.value)}`;
-  const signatureLine = `    signature: "${fields.signature}"`;
+  // A seat record's nested keys are quoted. A team record's stay bare words.
+  const valueKey = level === 'seat' ? '"value"' : 'value';
+  const signatureKey = level === 'seat' ? '"signature"' : 'signature';
+  const valueLine = `    ${valueKey}: ${String(fields.value)}`;
+  const signatureLine = `    ${signatureKey}: "${fields.signature}"`;
   if (text.split(valueLine).length !== 2 || text.split(signatureLine).length !== 2) {
     throw new Error(`${path}: the entry is not written the way this fixture edits it`);
   }
-  writeFileSync(path, text.replace(valueLine, `    value: ${String(value)}`).replace(signatureLine, `    signature: ${signature}`));
+  writeFileSync(path, text.replace(valueLine, `    ${valueKey}: ${String(value)}`).replace(signatureLine, `    ${signatureKey}: ${signature}`));
 }
 
 function readPolicies(fx: Fixture): Record<string, Record<string, YamlValue>> {
