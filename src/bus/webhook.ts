@@ -30,6 +30,7 @@
 // A poster that knows the request never left (a refused connection, a non-2xx) removes the claim,
 // so the bus and the seat's pull keep the fallback they always had.
 import { spawn } from 'node:child_process';
+import { writeStateFile } from '../file-write.ts';
 import { existsSync, lstatSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -230,9 +231,7 @@ function postedMarkAt(root: string | undefined, session: string, to: string, id:
  *  post the same record once more. */
 function writePostedMark(dropDir: string, id: string, now: () => Date): void {
   try {
-    const temp = join(dropDir, `.${id}${POSTED_SUFFIX}.tmp`);
-    writeFileSync(temp, `${now().toISOString()}\n`, { mode: 0o600 });
-    renameSync(temp, join(dropDir, `${id}${POSTED_SUFFIX}`));
+    writeStateFile(join(dropDir, `${id}${POSTED_SUFFIX}`), `${now().toISOString()}\n`);
   } catch {
     // The delivery itself is unaffected.
   }
@@ -267,9 +266,7 @@ function takeClaim(dropDir: string, id: string): boolean {
  *  `claimed` would let the fallback post a request that may have left. */
 function markClaimSent(dropDir: string, id: string): boolean {
   try {
-    const temp = join(dropDir, `.${id}${CLAIM_SUFFIX}.tmp`);
-    writeFileSync(temp, claimText('sent'), { mode: 0o600 });
-    renameSync(temp, claimPath(dropDir, id));
+    writeStateFile(claimPath(dropDir, id), claimText('sent'));
     return true;
   } catch {
     return false;

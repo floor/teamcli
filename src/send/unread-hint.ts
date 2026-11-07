@@ -15,7 +15,7 @@
 // rule counts — a typed wake, a webhook post, one delivered after the send — never blocks an older
 // delivered one. A hint another writer loses by racing costs one auto-mark, never a wrong one, and
 // the next drop from that sender rewrites the entry.
-import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { readStateFile, writeStateFile } from '../file-write.ts';
 import { basename, dirname, join } from 'node:path';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 
@@ -59,7 +59,7 @@ function dropFolder(dropDir: string): { dir: string; session: string; seat: stri
 function readMap(dropDir: string): HintMap {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(unreadHintPath(dropDir), 'utf8'));
+    parsed = JSON.parse(readStateFile(unreadHintPath(dropDir)) ?? '');
   } catch {
     return { v: 1, unread: {} };
   }
@@ -103,18 +103,7 @@ export function readUnreadHint(dropDir: string, peer: string): UnreadHintEntry[]
 /** Writes the map atomically: a temp name no reader meets as a record, then a rename over the
  *  hint's name. A crash leaves either the old map or the new one, never a torn file. */
 function writeMap(dropDir: string, map: HintMap): void {
-  const tmp = join(dropDir, `${HINT_FILE}.${String(process.pid)}.tmp`);
-  writeFileSync(tmp, `${JSON.stringify(map, null, 2)}\n`, { mode: 0o600 });
-  try {
-    renameSync(tmp, unreadHintPath(dropDir));
-  } catch (error) {
-    try {
-      unlinkSync(tmp);
-    } catch {
-      // The temp is a dot name no reader takes for a record; a leftover costs nothing.
-    }
-    throw error;
-  }
+  writeStateFile(unreadHintPath(dropDir), `${JSON.stringify(map, null, 2)}\n`);
 }
 
 /**

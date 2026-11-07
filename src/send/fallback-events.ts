@@ -71,7 +71,8 @@
 // episodes. Routing and delay are TeamCLI's, resolved from the signed chain; the transport
 // receives neither.
 import { createHash } from 'node:crypto';
-import { type Dir, existsSync, lstatSync, mkdirSync, opendirSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { writeStateFile } from '../file-write.ts';
+import { type Dir, existsSync, lstatSync, mkdirSync, opendirSync, readdirSync, renameSync, rmdirSync, unlinkSync } from 'node:fs';
 import { basename, dirname, join, sep } from 'node:path';
 import { logTag, type Caller } from '../caller.ts';
 import { appendEvent, verifySignedEvent, type EventAppendInput, type SignedEventRecord } from '../bus/log.ts';
@@ -428,9 +429,7 @@ function deferNote(ctx: FallbackContext, fact: TransportFact): DeferredNote {
   const factId = createHash('sha256').update(text).digest('hex').slice(0, 16);
   const path = deferredNotePathOf(fact.recipient, fact.messageId, factId);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const tmp = `${path}.${String(process.pid)}.tmp`;
-  writeFileSync(tmp, `${text}\n`, { mode: 0o600 });
-  renameSync(tmp, path);
+  writeStateFile(path, `${text}\n`);
   return { ok: true, state: 'deferred', notePath: path };
 }
 
