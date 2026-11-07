@@ -1109,6 +1109,7 @@
     "test/state-session-own-keys.test.ts": 1,
     "test/state-write-first-admission-independent.test.ts": 2,
     "test/state-write-first-admission.test.ts": 3,
+    "test/state-write-group-four-independent.test.ts": 3,
     "test/state-write-group-four.test.ts": 2,
     "test/state-write-group-one-independent.test.ts": 5,
     "test/state-write-group-one.test.ts": 3,
