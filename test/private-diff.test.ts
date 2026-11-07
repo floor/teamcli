@@ -160,6 +160,33 @@ describe('the diff check command', () => {
     expect(result.stderr).not.toContain(SECRET);
   });
 
+  test('internal seat-id tokens in commit bodies are refused without printing them', () => {
+    for (const token of [
+      ['builder', '7'].join('-'),
+      ['operator', '2'].join('-'),
+      ['tester', '3'].join('-'),
+      ['reviewer', 'sample'].join('-'),
+      ['REVIEWER', 'SAMPLE', 'LAB'].join('-'),
+    ]) {
+      const base = repo({ 'keep.txt': 'clean\n' }, 'base');
+      const head = commit(base.dir, `test: a neutral subject\n\nChecked by ${token}'s scene.`);
+      const result = run(base.dir, ['--base', base.sha]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`commit:${head}:3`);
+      expect(result.stderr).toContain('commit message names an internal seat');
+      expect(result.stdout + result.stderr).not.toContain(token);
+    }
+  });
+
+  test('ordinary role prose and tokens containing a longer word are allowed in commit bodies', () => {
+    const base = repo({ 'keep.txt': 'clean\n' }, 'base');
+    const embedded = ['preoperator', '2'].join('-');
+    const longer = ['operator', '2word'].join('-');
+    commit(base.dir, `test: ordinary role prose\n\nAn operator-only check helps the builder and reviewer. ${embedded} and ${longer} are unrelated words.`);
+    const result = run(base.dir, ['--base', base.sha]);
+    expect(result.status).toBe(0);
+  });
+
   test('a NUL in a raw commit message does not hide the line after it', () => {
     const base = repo({ 'keep.txt': 'clean\n' }, 'base');
     const head = literalCommit(base.dir, base.sha, `subject\n\u0000tail ${SECRET}`);

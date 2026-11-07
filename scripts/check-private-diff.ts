@@ -38,6 +38,10 @@ const GIT_CONFIG = ['log.showSignature=false', 'i18n.logOutputEncoding=UTF-8', '
 
 const TRAILER_LINE = /^[A-Za-z0-9-]+\s*:\s*\S/;
 
+// Internal seat addresses are not public attribution. Ordinary role words and hyphenated
+// descriptions remain valid; private persona names stay in the external private lists.
+const INTERNAL_SEAT_TOKEN = /(^|[^A-Za-z0-9_-])(?:(?:builder|operator|tester)-[0-9]+|reviewer-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)(?=$|[^A-Za-z0-9_-])/i;
+
 function exit(message: string): never {
   console.error(`private-diff:check: ${message}`);
   process.exit(2);
@@ -126,6 +130,12 @@ function checkCommitMessages(
 
     const lines = splitLines(message.replace(/\0/g, ''));
     const trailers = message.includes('\0') ? trailersFromLines(lines) : rawTrailers;
+
+    for (const [index, line] of lines.entries()) {
+      if (INTERNAL_SEAT_TOKEN.test(line)) {
+        hits.push(`commit:${hash}:${String(index + 1)}: commit message names an internal seat`);
+      }
+    }
 
     for (const finding of findForbidden(lines, patterns)) {
       const pattern = finding.message.replace(/^forbidden pattern /, '');
