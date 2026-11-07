@@ -13,6 +13,7 @@ import { placementAtStart } from '../src/mcp/serve.ts';
 import type { Io } from '../src/io.ts';
 import { readTeamConfig } from '../src/file/team-config.ts';
 import { selfRunner } from '../src/mcp/register.ts';
+import { channelLaunchEnabled } from '../src/mcp/channel.ts';
 import { cliWordListOf } from '../src/launch/cli-scope.ts';
 import { MCP_SETUP_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { currentBriefClaim } from '../src/launch/general-brief.ts';
@@ -241,11 +242,12 @@ for (const args of [[], ['missing'], ['alpha', '--seat', 'alpha'], ['alpha', '--
     expect(code).toBe(args[0] === 'missing' ? 1 : 2); expect(snapshot(w.base)).toEqual(before);
   });
 }
-for (const launch of ['claude --model fixture -- prompt', "sh -c 'claude --model fixture -- prompt'", 'claude --dangerously-load-development-channels=server:other', `claude ${FLAG}`]) {
+for (const launch of ["sh -c 'claude --model fixture'", "sh -c 'claude --dangerously-load-development-channels server:other'", 'claude --model fixture -- prompt', "sh -c 'claude --model fixture -- prompt'", 'claude --dangerously-load-development-channels=server:other', `claude ${FLAG}`]) {
   test(`setup places its flag within the CLI option scope: ${launch}`, async () => {
     const w = world(); writeFileSync(w.file, readFileSync(w.file, 'utf8').replace('claude --model fixture', launch));
     expect(await setup(w)).toMatchObject({ code: 0 });
     const loaded = readTeamConfig(w.root, { home: w.home }); if (!loaded.ok) throw new Error('fixture team did not load');
+    expect(channelLaunchEnabled(loaded.team.seats[0]!.launch)).toBe(true);
     const words = cliWordListOf('claude', loaded.team.seats[0]!.launch)!;
     const delimiter = words.indexOf('--'); const options = delimiter < 0 ? words : words.slice(0, delimiter);
     expect(options.join(' ')).toContain('server:team-inbox');

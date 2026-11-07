@@ -47,10 +47,15 @@ function enable(launch: string): string {
     if (names.includes(`server:${CHANNEL_SERVER}`) && channelLaunchEnabled(launch)) return launch;
     if (!names.includes(`server:${CHANNEL_SERVER}`)) names.push(`server:${CHANNEL_SERVER}`);
     const end = flag.text === CHANNEL_FLAG ? next!.end : flag.end;
-    return launch.slice(0, body.start + flag.start) + `${CHANNEL_FLAG} ${names.join(',')}` + launch.slice(body.start + end);
+    // Keep a wrapped command's closing quote off the canonical server-list token: the
+    // existing channel declaration reader must recognize the flag we just wrote as well.
+    const separator = body.end < launch.length && end === body.text.length ? ' ' : '';
+    const changed = launch.slice(0, body.start + flag.start) + `${CHANNEL_FLAG} ${names.join(',')}${separator}` + launch.slice(body.start + end);
+    if (!channelLaunchEnabled(changed)) throw new Error('the channel declaration cannot read the prepared launch flag');
+    return changed;
   }
-  const added = placedOnLaunchLine(launch, `${CHANNEL_FLAG} server:${CHANNEL_SERVER}`, 'claude');
-  if (added === null) throw new Error('the launch flag cannot be placed safely on this launch line');
+  const added = placedOnLaunchLine(launch, `${CHANNEL_FLAG} server:${CHANNEL_SERVER}${body.end < launch.length ? ' ' : ''}`, 'claude');
+  if (added === null || !channelLaunchEnabled(added)) throw new Error('the launch flag cannot be placed safely on this launch line');
   return added;
 }
 function readJournal(doc: ReturnType<typeof channelDocument>, scope: Pick<Journal, 'root' | 'cwd' | 'seat' | 'session'>): Journal | null {
