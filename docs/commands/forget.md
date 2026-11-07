@@ -24,6 +24,8 @@ signed always rule for `team-forget` covering this folder admits the run with no
 with no terminal and no such answer is refused:
 `team forget: only the owner runs this, from a terminal outside herdr`.
 
+Owners who relied on a wildcard general grant for `forget` now need a grant naming `forget` explicitly or a per-use `--request`/`--approval`.
+
 ## Output and exit codes
 
 | Outcome | What is printed | Exit |

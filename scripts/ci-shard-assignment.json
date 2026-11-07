@@ -536,6 +536,7 @@
     "test/fixture-root-independent.test.ts": 0,
     "test/foreground.test.ts": 5,
     "test/forge-path-independent.test.ts": 0,
+    "test/forget-wildcard-independent.test.ts": 1,
     "test/gate-pane-root-registration-independent.test.ts": 2,
     "test/general-brief.test.ts": 0,
     "test/general-door-narrow-independent.test.ts": 1,
