@@ -996,6 +996,7 @@
     "test/scripts/pack.test.ts": 5,
     "test/scripts/reproducible-gzip.test.ts": 4,
     "test/seat-account.test.ts": 5,
+    "test/seat-cwd-worktree.test.ts": 0,
     "test/seat-effort.test.ts": 5,
     "test/seat-health-chores.test.ts": 5,
     "test/seat-health-dialog-answer.test.ts": 0,

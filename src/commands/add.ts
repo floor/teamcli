@@ -73,7 +73,7 @@ import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
-import { placedStartFolders, seatStart, type SeatStart } from '../worktree/place.ts';
+import { placedStartFolders, seatCwdRefusal, seatStart, type SeatStart } from '../worktree/place.ts';
 import { registerInbox } from '../mcp/register.ts';
 import { channelLobbyFolder } from '../mcp/launch-config.ts';
 import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
@@ -820,6 +820,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     runTeam.trust = derived.trust;
     if (json) jsonNotes.push(`team add: ${derived.warning}`);
     else out.stderr(`team add: ${plainText(derived.warning)}\n`);
+  }
+  const cwdRefusal = seatCwdRefusal(built.seat, recorded.worktrees, root);
+  if (cwdRefusal !== null) {
+    refuse(io, json, 'add', { id: 'add.start', message: cwdRefusal, repair: null });
+    // exit: add.start
+    return 1;
   }
   const recordedTree = worktreeOf(recorded, built.name);
   // Where the seat waits: the lobby the gate verified, or a refusal — before the file is edited.

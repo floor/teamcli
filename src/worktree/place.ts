@@ -145,6 +145,48 @@ export function ownStartFolderProblem(input: OwnStartFolderInput): string | null
 /** Where a seat starts: the folder it waits in, or why it can't start. */
 export type SeatStart = { cwd: string; lobby?: true } | { problem: string; once?: true };
 
+/** The sentence a cwd outside the project and outside trust used to fail the whole file with.
+ *  The file now loads; up, add and check refuse this seat with it, unless a session worktree
+ *  record names this seat, carries a branch, and its path is the cwd. */
+export function seatCwdRefusal(
+  seat: Pick<Seat, 'name' | 'cwd' | 'cwdOutside'>,
+  worktrees: SessionState['worktrees'] | undefined,
+  root: string,
+): string | null {
+  if (seat.cwdOutside !== true) return null;
+  if (recordedForSeat(worktrees, seat.name, seat.cwd, root)) return null;
+  return `seat "${seat.name}": cwd "${seat.cwd}" is outside the project and matches no trust path`;
+}
+
+/** A `team worktree new` record admits the cwd only when path, branch and seat are all present
+ *  and the seat is the one asking. The task key is not the seat. */
+function recordedForSeat(
+  worktrees: SessionState['worktrees'] | undefined,
+  seat: string,
+  cwd: string,
+  root: string,
+): boolean {
+  if (worktrees === undefined) return false;
+  for (const record of Object.values(worktrees)) {
+    if (record.seat !== seat || typeof record.branch !== 'string' || record.branch === '') continue;
+    if (!sameRecordedPlace(root, cwd, record.path)) continue;
+    return true;
+  }
+  return false;
+}
+
+/** Whether `cwd` and the recorded worktree path are the same folder once both are resolved
+ *  from the project root. A path that only looks like a worktree is not this. */
+function sameRecordedPlace(root: string, cwd: string, recorded: string): boolean {
+  const left = resolve(root, cwd);
+  const right = resolve(root, recorded);
+  try {
+    return realpathSync(left) === realpathSync(right);
+  } catch {
+    return left === right;
+  }
+}
+
 // Where a seat starts. In a migrated file, the orchestrator and the operator start in the
 // project root, and every other seat (shared and worktree-mode alike) starts in the resolved
 // lobby. In a legacy file, a shared seat starts in its cwd, and a worktree seat starts in the
@@ -176,7 +218,10 @@ export function seatStart(
     const problem = ownStartFolderProblem({ cli: seat.cli, seat: seat.name, cwd, root, home, lobby, peers: placedStartFolders(team.seats, recorded) });
     if (problem !== null) return { problem: `seat ${seat.name}: ${problem}` };
     const start = realLanding(root, cwd);
-    const hit = protectedLanding(root, relative(root, start.logical), team.workspace.protected);
+    // A worktree this seat recorded is its own checkout, even when it sits inside a protected one.
+    const hit = recordedForSeat(recorded?.worktrees, seat.name, cwd, root)
+      ? null
+      : protectedLanding(root, relative(root, start.logical), team.workspace.protected);
     if (hit) return { problem: `seat ${seat.name} would start inside the protected checkout ${hit}; set its cwd to its own worktree or clone, then launch it again` };
     return { cwd };
   }
@@ -184,7 +229,9 @@ export function seatStart(
   if (isLegacyTrust(team.trust)) {
     if (seat.mode === 'shared') return { cwd: seat.cwd };
     if (seat.cwd !== '.') {
-      const hit = protectedLanding(root, seat.cwd, team.workspace.protected);
+      const hit = recordedForSeat(recorded?.worktrees, seat.name, seat.cwd, root)
+        ? null
+        : protectedLanding(root, seat.cwd, team.workspace.protected);
       if (hit) {
         return {
           problem:
@@ -222,7 +269,9 @@ export function seatStart(
 
   if (isMigratedTrust(team.trust)) {
     if (seat.cwd !== '.') {
-      const hit = protectedLanding(root, seat.cwd, team.workspace.protected);
+      const hit = recordedForSeat(recorded?.worktrees, seat.name, seat.cwd, root)
+        ? null
+        : protectedLanding(root, seat.cwd, team.workspace.protected);
       if (hit) {
         return {
           problem:

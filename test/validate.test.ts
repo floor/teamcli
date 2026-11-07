@@ -362,7 +362,6 @@ const refusals: [string, string, RegExp][] = [
   ['a display without the version token', `${minimal}    display: Claude Opus 15.5\n`, /display must contain the version "5\.5" as a token/],
   ['an absolute cwd', `${minimal}    cwd: /srv/acme\n`, /cwd must be relative/],
   ['a home cwd', `${minimal}    cwd: ~/Code/acme\n`, /cwd must be relative/],
-  ['a cwd outside the project and trust', `${minimal}    cwd: ../other\n`, /outside the project and matches no trust path/],
   ['a parked flag that is not a boolean', `${minimal}    parked: "yes"\n`, /parked must be true or false/],
   ['a count below 1', `${minimal}    count: 0\n`, /count must be a whole number, 1 or more/],
   ['an unknown mode', change(minimal, 'mode: shared', 'mode: both'), /workspace.mode must be one of: worktree, shared/],
@@ -405,6 +404,12 @@ describe('every refusal of § 2 names its line', () => {
       for (const line of found) expect(line).toMatch(/^\d+: /);
     });
   }
+});
+
+test('a cwd outside the project and trust loads and marks only that seat', () => {
+  const loaded = valid(`${minimal}    cwd: ../other\n`);
+  expect(loaded.team.seats).toHaveLength(1);
+  expect(loaded.team.seats[0]).toMatchObject({ name: 'lead', cwd: '../other', cwdOutside: true });
 });
 
 describe('a relative entry in an otherwise migrated file', () => {

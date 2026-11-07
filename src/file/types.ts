@@ -137,6 +137,12 @@ export type Seat = {
   launcher?: string;
   cwd: string;
   /**
+   * Set when `cwd` is outside the project and matches no trust path. Not a file word and not
+   * hashed: `up`, `add` and `check` refuse this seat unless the path is the worktree recorded
+   * for it. Omitted otherwise, so every file that loaded before keeps the digest it had.
+   */
+  cwdOutside?: true;
+  /**
    * The file's label: written, or `<model> <version>` in lowercase. Hashed with the seat.
    * A written one is the workspace title; `workspaceLabel` uses the name and role when it was omitted.
    */

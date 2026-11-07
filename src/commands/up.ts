@@ -129,7 +129,7 @@ import { watchSitting } from '../watch/liveness.ts';
 import { busLabel, watchIdentity, watchLabel } from '../watch/pane.ts';
 import { busAnswers } from '../bus/follow.ts';
 import { readScreen } from '../watch/screen.ts';
-import { placedStartFolders, seatStart } from '../worktree/place.ts';
+import { placedStartFolders, seatCwdRefusal, seatStart } from '../worktree/place.ts';
 import { registerInbox, type InboxRegistration } from '../mcp/register.ts';
 import { expiryPhrase } from '../client/duration-policy.ts';
 
@@ -2607,6 +2607,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       continue;
     }
     const tree = worktreeOf(recorded, seat.name);
+    const cwdRefusal = seatCwdRefusal(seat, recorded?.worktrees, root);
+    if (cwdRefusal !== null) {
+      seats.push({
+        ...planned,
+        launchProblem: cwdRefusal,
+        ...(tree === undefined ? {} : { worktree: tree.path }),
+        ...(resumeCwd === undefined ? {} : { startCwd: resumeCwd }),
+      });
+      continue;
+    }
     const start = seatStart({ ...team, session }, seat, root, sources.home, undefined, tree?.path, recorded);
     if ('problem' in start) {
       if (!start.once || !refused.has(start.problem)) {

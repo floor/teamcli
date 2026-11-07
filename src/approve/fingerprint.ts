@@ -27,14 +27,15 @@ function sectionOf(team: Approvable, name: string): unknown {
  * Seat fields that change without a new approval: where the seat sits in the
  * file, how its entry is written (`count: 3` becoming `count: 2`, or
  * explicit seats, when one is taken out), and `labelWritten`, which only records
- * that the file wrote `label:`. `parked` and `stopped` stay in the
+ * that the file wrote `label:`, and `cwdOutside`, which only records that the cwd
+ * was outside the project and matched no trust path. `parked` and `stopped` stay in the
  * digest: a seat that can edit the file must not silence itself. `remove --keep`
  * and `add` record the new digest with the edit.
  */
-const SEAT_FREE_FIELDS = new Set(['line', 'declared', 'count', 'instance', 'labelWritten']);
+const SEAT_FREE_FIELDS = new Set(['line', 'declared', 'count', 'instance', 'labelWritten', 'cwdOutside']);
 
 /** The free set from before `parked` and `stopped` joined the digest. */
-const LEGACY_SEAT_FREE_FIELDS = new Set(['parked', 'stopped', 'line', 'declared', 'count', 'instance', 'labelWritten']);
+const LEGACY_SEAT_FREE_FIELDS = new Set(['parked', 'stopped', 'line', 'declared', 'count', 'instance', 'labelWritten', 'cwdOutside']);
 
 /** A validated team file, as far as an approval reads it. */
 export type Approvable = Record<string, unknown> & {
