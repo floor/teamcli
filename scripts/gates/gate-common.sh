@@ -448,8 +448,9 @@ gate_exit_ids_env() {
 # cross-source dedupe all live in the repository's shared modules, not here. This wrapper calls
 # `scripts/check-private-diff.ts`, which reads every added line of the diff against GATE_BASE
 # and every line of every commit message on GATE_BASE..HEAD through `git grep -E` with the
-# pattern list on standard input. A hit prints its location, source, class and ordinal, never
-# the matched text.
+# pattern list on standard input. Byte-identical removed twins are consumed one-to-one;
+# the shared check prints the move count and locations. Commit messages are never moves.
+# A new hit prints its location, source, class and ordinal, never the matched text.
 #
 # Returns 0 clean or default lists absent (a visible skip is printed), 1 hits, 2 the scan could
 # not run (an explicitly named list is missing, or a list is unreadable, group-readable, empty

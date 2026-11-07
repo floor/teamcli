@@ -245,7 +245,17 @@ if (import.meta.main) {
   const scan = scanPrivateLines(built.corpus.lines, sources);
   if ('problem' in scan) exit(scan.problem);
 
+  const moveCandidates = new Set(built.corpus.moves);
+  const moved = new Map<number, number>();
   for (const hit of scan.hits) {
+    if (moveCandidates.has(hit.line)) moved.set(hit.line, (moved.get(hit.line) ?? 0) + 1);
+  }
+  console.log(`private diff: treated ${String(moved.size)} line(s) as moves (identical line removed in this diff)`);
+  for (const [line, hits] of [...moved].sort(([a], [b]) => a - b)) {
+    console.log(`private diff: moved ${built.corpus.where[line - 1]} (${String(hits)} rule hit(s))`);
+  }
+  for (const hit of scan.hits) {
+    if (moved.has(hit.line)) continue;
     const where = built.corpus.where[hit.line - 1] ?? `line ${String(hit.line)}`;
     const className = hit.className === undefined ? '' : ` class ${hit.className}`;
     console.error(`private-diff:check: ${where}: it matches private ${hit.origin}${className} entry ${String(hit.ordinal)}`);

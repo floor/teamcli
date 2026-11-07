@@ -138,6 +138,111 @@ describe('privateDiffCorpus', () => {
   });
 });
 
+describe('byte-identical moves in the diff check', () => {
+  function moved(before: string | Buffer = `${SECRET}\n`, after: string | Buffer = before) {
+    const base = repo({ 'old.txt': 'placeholder\n' }, 'base');
+    writeFileSync(join(base.dir, 'old.txt'), before);
+    const sha = commit(base.dir, 'store synthetic base');
+    git(base.dir, ['rm', '--quiet', '--', 'old.txt']);
+    writeFileSync(join(base.dir, 'new.txt'), after);
+    return { ...base, sha };
+  }
+  const notice = (count: number) => `private diff: treated ${count} line(s) as moves (identical line removed in this diff)`;
+
+  test('a moved private line passes and prints its count and location without its value', () => {
+    const base = moved();
+    commit(base.dir, 'move synthetic line');
+    const result = run(base.dir, ['--base', base.sha, '--private-names', listFile(`${SECRET}\n`)]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(notice(1));
+    expect(result.stdout).toContain('private diff: moved new.txt:1 (1 rule hit(s))');
+    expect(result.stdout + result.stderr).not.toContain(SECRET);
+  }, 30_000);
+
+  test('an added hit without a removed twin remains a refusal', () => {
+    const base = repo({ 'keep.txt': 'clean\n' }, 'base');
+    write(base.dir, { 'new.txt': `${SECRET}\n` });
+    commit(base.dir, 'add synthetic line');
+    const result = run(base.dir, ['--base', base.sha, '--private-names', listFile(`${SECRET}\n`)]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(notice(0));
+    expect(result.stderr).toContain('new.txt:1');
+  }, 30_000);
+
+  test('an unchanged tracked twin does not count as a removed line', () => {
+    const base = repo({ 'keep.txt': `${SECRET}\n` }, 'base');
+    write(base.dir, { 'new.txt': `${SECRET}\n` });
+    commit(base.dir, 'copy synthetic line');
+    const result = run(base.dir, ['--base', base.sha, '--private-names', listFile(`${SECRET}\n`)]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(notice(0));
+  }, 30_000);
+
+  for (const twin of ['untracked', 'ignored', 'outside'] as const) {
+    test(`a twin only in an ${twin} file cannot hide an added hit`, () => {
+      const base = repo({ 'keep.txt': 'clean\n', '.gitignore': 'ignored/\n' }, 'base');
+      const path = twin === 'outside' ? join(temp(), 'twin.txt') : join(base.dir, twin === 'ignored' ? 'ignored/twin.txt' : 'untracked.txt');
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, `${SECRET}\n`);
+      write(base.dir, { 'new.txt': `${SECRET}\n` });
+      // Stage only the tested addition. The twin never becomes a tracked diff source.
+      git(base.dir, ['add', '--', 'new.txt']);
+      const result = run(base.dir, ['--base', base.sha, '--private-names', listFile(`${SECRET}\n`)]);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain(notice(0));
+      expect(result.stderr).toContain('new.txt:1');
+    }, 30_000);
+  }
+
+  for (const [name, before, after] of [
+    ['one added byte', `${SECRET}\n`, `${SECRET}!\n`],
+    ['different indentation', ` ${SECRET}\n`, `${SECRET}\n`],
+    ['different line endings', `${SECRET}\r\n`, `${SECRET}\n`],
+    ['different final newline', `${SECRET}\n`, SECRET],
+    ['different invalid bytes', Buffer.concat([Buffer.from(SECRET), Buffer.from([0xff, 10])]), Buffer.concat([Buffer.from(SECRET), Buffer.from([0xfe, 10])])],
+    ['an added NUL byte', `${SECRET}\n`, `${SECRET}\0\n`],
+  ] as const) {
+    test(`${name} is not a byte-identical move`, () => {
+      const base = moved(before, after);
+      commit(base.dir, 'change synthetic bytes');
+      const result = run(base.dir, ['--base', base.sha, '--private-names', listFile(`${SECRET}\n`)]);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain(notice(0));
+      expect(result.stderr).toContain('new.txt:1');
+    }, 30_000);
+  }
+
+  test('two added copies consume one removed twin only once', () => {
+    const base = moved();
+    write(base.dir, { 'second.txt': `${SECRET}\n` });
+    commit(base.dir, 'move and duplicate synthetic line');
+    const result = run(base.dir, ['--base', base.sha, '--private-names', listFile(`${SECRET}\n`)]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(notice(1));
+    expect(result.stdout).toContain('moved new.txt:1');
+    expect(result.stderr).toContain('second.txt:1');
+  }, 30_000);
+
+  test('one moved line matching two private rules consumes one twin and reports both hits', () => {
+    const base = moved(`${SECRET} ${WORD}\n`);
+    commit(base.dir, 'move synthetic pair');
+    const result = run(base.dir, ['--base', base.sha, '--private-names', listFile(`${SECRET}\n${WORD}\n`)]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(notice(1));
+    expect(result.stdout).toContain('new.txt:1 (2 rule hit(s))');
+  }, 30_000);
+
+  test('a matching commit-message line is refused even while its file twin moves', () => {
+    const base = moved();
+    const head = commit(base.dir, `move synthetic line\n\n${SECRET}`);
+    const result = run(base.dir, ['--base', base.sha, '--private-names', listFile(`${SECRET}\n`)]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(notice(1));
+    expect(result.stderr).toContain(`commit:${head}:3`);
+    expect(result.stderr).not.toContain('new.txt:1');
+  }, 30_000);
+});
+
 describe('the diff check command', () => {
   test('an added line fails with the location, source, class and ordinal, never the value', () => {
     const base = repo({ 'keep.txt': 'clean\n' }, 'base');

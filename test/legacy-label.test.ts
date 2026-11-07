@@ -176,9 +176,9 @@ describe('an approval written by v0.1.2', () => {
 
   // The suite no longer depends on the live files: not one of their paths may appear in this
   // file's source. Built from parts so the assertion cannot match its own text.
-  test('this file reads no live team file', () => {
+  test('this file reads no live team or checking policy file', () => {
     const source = readFileSync(import.meta.path, 'utf8');
-    for (const path of [['.github', '/', 'team.yaml'].join(''), ['examples', '/', 'team.yaml'].join(''), ['fixtures', '/', 'example.yaml'].join('')]) {
+    for (const path of [['.github', '/', 'team.yaml'].join(''), ['.github', '/', 'policy.yaml'].join(''), ['examples', '/', 'team.yaml'].join(''), ['fixtures', '/', 'example.yaml'].join('')]) {
       expect(source.includes(path)).toBe(false);
     }
   });
