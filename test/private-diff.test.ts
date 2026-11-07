@@ -17,7 +17,7 @@ const FLO_ID = ['FL', 'O-', '11', '90'].join('');
 const OD_ID = ['O', 'D-', '20261105-1'].join('');
 const CUSTOM_ID = ['AC', 'ME-', '42'].join('');
 const SIGNATURE = 'Agent: Claude Opus 5.5 · implementer';
-const HUMAN_EMAIL = 'drjones@floor.io';
+const HUMAN_EMAIL = 'synthetic-owner@example.test';
 
 const dirs: string[] = [];
 const emptyHome = mkdtempSync(join(tmpdir(), 'private-diff-home-'));
@@ -312,9 +312,14 @@ describe('the diff check command', () => {
   });
 
   test('a commit without the Agent signature trailer is a hit unless it is a merge or human-authored', () => {
+    const humanTeam = join(temp(), 'team.yaml');
+    const teamYaml = readFileSync(join(ROOT, '.github', 'team.yaml'), 'utf8');
+    const syntheticHumans = teamYaml.replace(/(  humans:\n)(?:    - [^\n]*\n)+/, `$1    - ${HUMAN_EMAIL}\n`);
+    if (syntheticHumans === teamYaml) throw new Error('synthetic human allowlist was not installed');
+    writeFileSync(humanTeam, syntheticHumans);
     const base = repo({ 'keep.txt': 'clean\n' }, 'base');
     const unsigned = commit(base.dir, 'fix(init): check the folder an approval change targets', { signed: false });
-    const missing = run(base.dir, ['--base', base.sha]);
+    const missing = run(base.dir, ['--base', base.sha, '--file', humanTeam]);
     expect(missing.status).toBe(1);
     expect(missing.stderr).toContain(`commit:${unsigned}`);
     expect(missing.stderr).toContain('no signature');
@@ -327,12 +332,12 @@ describe('the diff check command', () => {
     commit(base.dir, 'feat: side branch');
     git(base.dir, ['switch', '--quiet', 'main']);
     git(base.dir, ['merge', '--quiet', '--no-ff', '--no-gpg-sign', '-m', 'Merge branch side', 'side']);
-    const exemptClean = run(base.dir, ['--base', base.sha]);
+    const exemptClean = run(base.dir, ['--base', base.sha, '--file', humanTeam]);
     expect(exemptClean.status).toBe(0);
 
     // A human-authored or merge commit that carries a tracker id is still refused.
     const humanTracker = commit(base.dir, `docs: ${FLO_ID} note`, { signed: false, authorEmail: HUMAN_EMAIL });
-    const refusedHuman = run(base.dir, ['--base', base.sha]);
+    const refusedHuman = run(base.dir, ['--base', base.sha, '--file', humanTeam]);
     expect(refusedHuman.status).toBe(1);
     expect(refusedHuman.stderr).toContain(`commit:${humanTracker}:1`);
     expect(refusedHuman.stdout + refusedHuman.stderr).not.toContain(FLO_ID);
