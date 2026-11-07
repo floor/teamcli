@@ -2943,9 +2943,9 @@ function tamperedSeatSetting(place: Place): void {
   const path = join(agentsDir(place.home), `${agentId}.yaml`);
   const text = readFileSync(path, 'utf8');
   // The fixture's launch line carries the same model name, so the tamper targets the settings
-  // entry's own `value:` line; the first match would land on `launch` and leave the record
+  // entry's own `"value":` line; the first match would land on `launch` and leave the record
   // verifying.
-  const tampered = text.replace('value: "claude-opus-5-5"', 'value: "claude-haiku-5-5"');
+  const tampered = text.replace('"value": "claude-opus-5-5"', '"value": "claude-haiku-5-5"');
   if (tampered === text) throw new Error('the record has no value to tamper');
   writeFileSync(path, tampered);
 }

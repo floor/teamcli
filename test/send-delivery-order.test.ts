@@ -1474,7 +1474,7 @@ describe('a signed seat setting is what the next send walks', () => {
     const agentId = registeredLead(w);
     signSeat(w, agentId, [{ key: 'human', value: true }]);
     const path = join(agentsDir(w.home), `${agentId}.yaml`);
-    writeFileSync(path, readFileSync(path, 'utf8').replace('value: true', 'value: false'));
+    writeFileSync(path, readFileSync(path, 'utf8').replace('"value": true', '"value": false'));
     const host = walker(w);
     const io = owner(w.root);
 

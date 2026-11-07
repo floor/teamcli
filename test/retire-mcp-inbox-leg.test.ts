@@ -272,9 +272,12 @@ function writeOldBuildPolicyToDisk(
     keyOf(sandbox.home),
   );
   const quoted = `[${value.map((w) => `"${w}"`).join(', ')}]`;
+  // A seat record's nested keys are quoted. The other levels stay bare words.
+  const valueKey = level === 'seat' ? '"value"' : 'value';
+  const signatureKey = level === 'seat' ? '"signature"' : 'signature';
   const replaced = text
-    .replace('value: ["typed"]', `value: ${quoted}`)
-    .replace(`signature: "${seeded.policy.signature}"`, `signature: "${signature}"`);
+    .replace(`${valueKey}: ["typed"]`, `${valueKey}: ${quoted}`)
+    .replace(`${signatureKey}: "${seeded.policy.signature}"`, `${signatureKey}: "${signature}"`);
   if (replaced === text) throw new Error(`failed to re-sign ${file}`);
   writeFileSync(file, replaced);
 }
