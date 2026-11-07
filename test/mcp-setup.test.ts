@@ -17,7 +17,7 @@ import { channelLaunchEnabled } from '../src/mcp/channel.ts';
 import { cliWordListOf } from '../src/launch/cli-scope.ts';
 import { MCP_SETUP_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { currentBriefClaim } from '../src/launch/general-brief.ts';
-import { upsertTeam, teamIdOf } from '../src/registry/teams.ts';
+import { forgetTeam, getTeam, upsertTeam, teamIdOf } from '../src/registry/teams.ts';
 import { readState } from '../src/state.ts';
 import { installKey } from '../src/store/keys.ts';
 import { CLAUDE_IDLE, fixtureBase, testIo } from './helpers.ts';
@@ -30,9 +30,9 @@ const made: string[] = [];
 afterEach(() => { setHerdrRun(null); for (const base of made.splice(0)) rmSync(base, { recursive: true, force: true }); });
 function world(inLobby = false) {
   const base = fixtureBase('mcp-setup-'); made.push(base);
-  const home = join(base, 'home'); const root = join(base, 'project'); const lobby = join(home, 'lobby'); const cwd = inLobby ? join(lobby, 'alpha') : join(base, 'start');
+  const home = join(base, 'home'); const root = join(base, 'project'); const lobby = join(root, 'lobby'); const cwd = inLobby ? join(lobby, 'alpha') : join(root, 'start');
   mkdirSync(home, { mode: 0o700 }); mkdirSync(join(root, '.agents'), { recursive: true }); if (inLobby) mkdirSync(lobby, { mode: 0o700 }); mkdirSync(cwd, { mode: 0o700 });
-  execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
+  if (!inLobby) execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
   const file = join(root, '.agents/team.yaml');
   writeFileSync(file, `format: 1
 project: sample
@@ -109,8 +109,8 @@ test('setup and the launch writer produce the exact same pair for the same resul
   for (const path of files(w)) unlinkSync(path);
   const epoch = currentBriefClaim(readState(join(w.root, '.agents')).sessions[SESSION]?.briefs?.alpha)?.epoch;
   const launch = prepareChannelConfig({ root: w.root, home: w.home, seat: 'alpha', session: SESSION, cwd: w.cwd, epoch });
-  expect(launch.ok).toBe(true);
   if (!launch.ok) throw new Error(launch.reason);
+  expect(launch.ok).toBe(true);
   launch.lease.check(); launch.lease.release();
   expect(files(w).map((p) => readFileSync(p, 'utf8'))).toEqual(after);
 });
@@ -170,6 +170,7 @@ for (const [label, change] of [
   ['explicit rejection', (w: ReturnType<typeof world>) => writePair(w, '{}', '{"disabledMcpServers":["team-inbox"]}')],
   ['hard-linked config', (w: ReturnType<typeof world>) => { writePair(w, '{}', '{}'); linkSync(files(w)[0]!, join(w.base, 'other-link')); }],
   ['linked config', (w: ReturnType<typeof world>) => { writeFileSync(join(w.base, 'other'), '{}'); symlinkSync(join(w.base, 'other'), files(w)[0]!); }],
+  ['linked local team directory', (w: ReturnType<typeof world>) => symlinkSync(join(w.root, '.agents'), join(w.cwd, '.agents'))],
   ['linked cwd', (w: ReturnType<typeof world>) => { const link = join(w.base, 'alias'); symlinkSync(w.cwd, link); w.cwd = link; }],
   ['stopped seat', (w: ReturnType<typeof world>) => writeFileSync(w.file, readFileSync(w.file, 'utf8').replace('    cli:', '    stopped: true\n    cli:'))],
   ['another CLI', (w: ReturnType<typeof world>) => writeFileSync(w.file, readFileSync(w.file, 'utf8').replace('cli: claude-code', 'cli: codex'))],
@@ -267,4 +268,35 @@ test('registration refusal and unsafe launch placement are zero-write refusals',
   const before = snapshot(w.base); expect(await setup(w)).toMatchObject({ code: 1 }); expect(snapshot(w.base)).toEqual(before);
   writeFileSync(w.file, readFileSync(w.file, 'utf8').replace('claude --model fixture', 'claude --model fixture > output'));
   const after = snapshot(w.base); expect(await setup(w)).toMatchObject({ code: 1 }); expect(snapshot(w.base)).toEqual(after);
+});
+
+test('setup binds the containing team when another registered team has the same seat name', async () => {
+  const w = world(); const first = join(w.base, 'first-project'); const firstFile = join(first, '.agents/team.yaml');
+  mkdirSync(join(first, '.agents'), { recursive: true }); execFileSync('git', ['init', '-q'], { cwd: first, stdio: 'ignore' });
+  writeFileSync(firstFile, readFileSync(w.file, 'utf8').replace('project: sample', 'project: first').replace(`session: ${SESSION}`, 'session: first-scene'));
+  upsertTeam(w.home, teamIdOf(first), { root: first, project: 'first', session: 'first-scene', roster: [{ agent: 'agt_000000000002', seat: 'alpha', role: 'coordinator' }] });
+  const beforeFirst = snapshot(first); const firstRecord = getTeam(w.home, teamIdOf(first));
+  const result = await setup(w, ['--json']); expect(result).toMatchObject({ code: 0 });
+  const doc = JSON.parse(result.out); expect(doc.session).toBe(SESSION);
+  const entry = JSON.parse(readFileSync(files(w)[0]!, 'utf8')).mcpServers['team-inbox'];
+  expect(entry.args[6]).toBe(SESSION); expect(JSON.parse(entry.env.TEAMCLI_CHANNEL_SCOPE).team).toBe(teamIdOf(w.root));
+  expect(readState(join(w.root, '.agents')).sessions[SESSION]?.seats.alpha?.pane).toBe(PANE);
+  expect(snapshot(first)).toEqual(beforeFirst); expect(getTeam(w.home, teamIdOf(first))).toEqual(firstRecord);
+});
+test('setup outside every team refuses without writes even when only one team holds the seat', async () => {
+  const w = world(); w.cwd = `${w.root}-outside`; mkdirSync(w.cwd, { mode: 0o700 });
+  const before = snapshot(w.base); const result = await setup(w, ['--json']);
+  expect(result.code).toBe(1); expect(JSON.parse(result.out).error.id).toBe('mcp.setup-team'); expect(snapshot(w.base)).toEqual(before);
+});
+test('setup resolves a containing registered plain-folder team from its child folder', async () => {
+  const w = world(); rmSync(join(w.root, '.git'), { recursive: true });
+  expect(await setup(w, ['--json'])).toMatchObject({ code: 0 });
+  expect(JSON.parse(readFileSync(files(w)[0]!, 'utf8')).mcpServers['team-inbox'].args[6]).toBe(SESSION);
+});
+
+test('setup can select the local plain-folder team file without a pre-existing roster entry', async () => {
+  const w = world(true); forgetTeam(w.home, teamIdOf(w.root)); w.cwd = w.root;
+  const result = await setup(w, ['--json']); expect(result).toMatchObject({ code: 0 });
+  expect(JSON.parse(result.out).session).toBe(SESSION);
+  expect(JSON.parse(readFileSync(files(w)[0]!, 'utf8')).mcpServers['team-inbox'].args[6]).toBe(SESSION);
 });

@@ -26,7 +26,11 @@ that changes between that last look and the body or notification it guards.
 
 ## Setup for a hand-started Claude seat
 
-Run `team mcp setup <seat>` from the folder that Claude starts in. It prepares three changes:
+Run `team mcp setup <seat>` from the folder that Claude starts in, within the intended team.
+A local `.agents/team.yaml` selects that folder’s team; otherwise the closest containing
+registered team root selects it. Seat names may repeat across teams. A folder in no team is
+refused even if only one registered team has that seat name. Setup takes no `--session`.
+It prepares three changes:
 
 1. The same scoped `.mcp.json` server entry and `.claude/settings.local.json` named approval that a launch prepares. The entry uses this install’s runner, the seat, the registered session and the current claim’s epoch when present. Unrelated JSON values retain their original source bytes.
 2. The seat’s launch line gains `--dangerously-load-development-channels server:team-inbox` through the existing config editor. Another declared channel stays enabled, and repeating setup adds the flag and approval name once.

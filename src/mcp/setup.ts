@@ -1,6 +1,6 @@
 // A hand-started seat uses the same bounded project pair, config gate and register writer.
 import { lstatSync, rmdirSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { readArgs } from '../args.ts';
 import { walkCaller } from '../caller.ts';
 import { runConfig, type ConfigSources } from '../commands/config.ts';
@@ -13,7 +13,7 @@ import { cliBodyOn, cliWordListOf, plainBodyOf, placedOnLaunchLine } from '../la
 import { shellWords } from '../launch/shell-words.ts';
 import { plainLine } from '../launch/plain.ts';
 import { refuse, writeJson } from '../output/index.ts';
-import { registeredRootOf, teamIdOf } from '../registry/teams.ts';
+import { readTeams, teamIdOf } from '../registry/teams.ts';
 import { readState } from '../state.ts';
 import { CHANNEL_FLAG, CHANNEL_SERVER, channelLaunchEnabled } from './channel.ts';
 import { jsonValueText, removeJsonName, setJsonValue } from './json-text.ts';
@@ -29,6 +29,28 @@ type Journal = {
 export const CHANNEL_SETUP_RECORD = '.team-channel-setup.json';
 function object(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === 'object' && !Array.isArray(value); }
 function errorText(value: unknown): string { return value instanceof SyntaxError ? 'the setup record contains invalid JSON' : value instanceof Error ? value.message : 'the setup could not be safely read or written'; }
+function contains(root: string, cwd: string): boolean {
+  return cwd === root || cwd.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
+}
+/** Setup changes its starting folder, so the folder selects the team, never the seat name.
+ * A local definition wins; otherwise the closest containing registered root owns the folder.
+ * The ordinary config reader still decides the source and validates the chosen root. */
+function setupRoot(home: string, cwd: string): string | null {
+  let teams: ReturnType<typeof readTeams>;
+  try { teams = readTeams(home); }
+  catch { throw new ConfigRefusal('the team registry cannot be read for this starting folder'); }
+  try {
+    const agents = lstatSync(join(cwd, '.agents'));
+    if (agents.isSymbolicLink()) throw new ConfigRefusal('the starting folder has a linked team directory');
+    if (agents.isDirectory()) {
+      const file = lstatSync(join(cwd, '.agents/team.yaml'));
+      if (file.isSymbolicLink() || !file.isFile()) throw new ConfigRefusal('the starting folder has no real team file');
+      return cwd;
+    }
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  return Object.values(teams).map((team) => resolve(team.root))
+    .filter((root) => contains(root, cwd)).sort((a, b) => b.length - a.length || a.localeCompare(b))[0] ?? null;
+}
 function enable(launch: string): string {
   const decoded = cliWordListOf('claude', launch);
   const body = cliBodyOn('claude', launch) ?? plainBodyOf(launch);
@@ -111,14 +133,15 @@ export async function runMcpSetup(args: ReturnType<typeof readArgs>, json: boole
   }
   const name = args.rest[0]!; const dry = args.flags.has('dry-run'); const off = args.flags.has('off');
   try {
-    const found = registeredRootOf(home, name);
-    if (!found.ok) {
-      fail('mcp.setup-team', 'the seat must belong to one readable registered team');
+    const cwd = resolve(io.cwd); channelDirectory(cwd, false);
+    const selectedRoot = setupRoot(home, cwd);
+    if (selectedRoot === null) {
+      fail('mcp.setup-team', 'run setup from a team folder: this folder has no local team file or containing registered team');
       return 1; // exit: mcp.setup-team-root
     }
-    const loaded = readTeamConfig(found.root, { home, ...(sources.config?.env === undefined ? {} : { env: sources.config.env }) });
-    if (!loaded.ok) {
-      fail('mcp.setup-team', 'the registered team cannot be read');
+    const loaded = readTeamConfig(selectedRoot, { home, ...(sources.config?.env === undefined ? {} : { env: sources.config.env }) });
+    if (!loaded.ok || resolve(loaded.root) !== selectedRoot || !contains(selectedRoot, cwd)) {
+      fail('mcp.setup-team', 'the team selected by this starting folder cannot be read at its own root');
       return 1; // exit: mcp.setup-team-read
     }
     const { team, root } = loaded; const seat = team.seats.find((one) => one.name === name);
@@ -131,7 +154,6 @@ export async function runMcpSetup(args: ReturnType<typeof readArgs>, json: boole
       fail('mcp.setup-caller', 'only the owner or this seat itself sets up its channel');
       return 1; // exit: mcp.setup-caller
     }
-    const cwd = resolve(io.cwd); channelDirectory(cwd, false);
     const scope = { root, cwd, seat: name, session: team.session };
     const record = channelDocument(join(cwd, CHANNEL_SETUP_RECORD)); const journal = readJournal(record, scope);
     if (journal !== null && seat.launch !== journal.launchAfter && seat.launch !== journal.launchBefore) {
@@ -218,6 +240,7 @@ export async function runMcpSetup(args: ReturnType<typeof readArgs>, json: boole
       : { ...journal, launchAfter: launch,
           files: plan.documents.map(({ text }, index) => ({ before: restored![index]!.text ?? null, after: text! })) as [SavedFile, SavedFile] };
     const guard = () => {
+      if (setupRoot(home, cwd) !== root) throw new ConfigRefusal('the starting folder no longer resolves to this team');
       const current = readTeamConfig(root, { home, ...(config.env === undefined ? {} : { env: config.env }) });
       const declared = current.ok ? current.team.seats.find((one) => one.name === name) : undefined;
       if (!current.ok) throw new ConfigRefusal('the registered team became unreadable during setup');

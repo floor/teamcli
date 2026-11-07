@@ -3190,14 +3190,14 @@
       "code": 1,
       "command": "mcp",
       "id": "mcp.setup-team-read",
-      "meaning": "the registered team configuration cannot be read",
+      "meaning": "the team selected by the starting folder cannot be read at its own root",
       "trigger": "team mcp setup worker"
     },
     {
       "code": 1,
       "command": "mcp",
       "id": "mcp.setup-team-root",
-      "meaning": "the seat has no unique readable registered team",
+      "meaning": "the starting folder has no local team file or containing registered team root",
       "trigger": "team mcp setup worker"
     },
     {

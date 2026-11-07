@@ -461,8 +461,8 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `mcp.setup-placement-preflight` | `mcp` | 1 | the existing register preflight refuses the calling pane before any setup write | `team mcp setup worker` |
 | `mcp.setup-placement-write` | `mcp` | 1 | registration refuses after preflight; the launch change remains and no project pair was published | `team mcp setup worker` |
 | `mcp.setup-seat` | `mcp` | 1 | the seat is not a declared live nonhuman Claude seat | `team mcp setup worker` |
-| `mcp.setup-team-read` | `mcp` | 1 | the registered team configuration cannot be read | `team mcp setup worker` |
-| `mcp.setup-team-root` | `mcp` | 1 | the seat has no unique readable registered team | `team mcp setup worker` |
+| `mcp.setup-team-read` | `mcp` | 1 | the team selected by the starting folder cannot be read at its own root | `team mcp setup worker` |
+| `mcp.setup-team-root` | `mcp` | 1 | the starting folder has no local team file or containing registered team root | `team mcp setup worker` |
 | `mcp.setup-unsafe` | `mcp` | 1 | a setup ownership, content or lifetime check refused the operation | `team mcp setup worker` |
 | `mcp.setup-write` | `mcp` | 1 | the scoped project publication refused; a bounded partial pair and restoration record may remain | `team mcp setup worker` |
 | `mcp.invocation` | `mcp` | 2 | the invocation can't be read | `team mcp` |

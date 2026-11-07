@@ -49,9 +49,11 @@ front, state} for status, {format, lobby_dir, findings, missing, warnings}
 for doctor. A run that exits 2 writes the structured error document instead
 — {error: {id, message, repair}} — and stderr stays empty.
 
-\`setup\` prepares this folder for a hand-started Claude seat: the scoped
-project server and named approval, its launch flag through the config gate,
-and its calling pane through register. The owner or that seat may run it;
+\`setup\` prepares this folder within its team for a hand-started Claude seat:
+the folder selects the team, so shared seat names are unambiguous. It prepares
+the scoped project server and named approval, changes the launch flag through
+the config gate, and records the calling pane through register. The owner or
+that seat may run it;
 the existing config and register gates still apply. --dry-run prints the
 three changes without writing; --off restores only what setup added.
 It exits 0 on success, 1 on refusal, and 2 for an invalid invocation.
