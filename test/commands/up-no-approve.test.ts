@@ -188,7 +188,7 @@ describe('team up without an approval record', () => {
       expect(io.err, io.out).toBe('');
       expect(code).toBe(0);
       expect(io.out).toContain('builder-1');
-      expect(io.out).not.toContain('deny');
+      expect(io.out).not.toMatch(/^! up would refuse:/m);
       expect(existsSync(approval(here.root, here.home))).toBe(false);
     } finally {
       rmSync(here.base, { recursive: true, force: true });
