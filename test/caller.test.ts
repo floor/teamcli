@@ -913,3 +913,37 @@ test('failed walks report only causes and pid numbers, including a failed retry'
     expect(start).toEqual([`start pid ${pid}`]);
   }
 });
+
+
+test('a default walk refuses a parent change after either successful snapshot', () => {
+  const descriptor = Object.getOwnPropertyDescriptor(process, 'ppid')!;
+  const parent = process.ppid;
+  for (const firstHole of [false, true]) {
+    let roots = 0;
+    const causes: string[] = [];
+    try {
+      const chain = readAncestors(undefined, (pid) => {
+        if (pid !== parent) return null;
+        roots++;
+        if (firstHole && roots === 1) return { ppid: parent + 1000000, name: 'fixture' };
+        Object.defineProperty(process, 'ppid', { configurable: true, value: parent + 2000000 });
+        return { ppid: 1, name: 'fixture' };
+      }, cause => causes.push(cause));
+      expect(chain).toBeNull();
+      expect(roots).toBe(firstHole ? 2 : 1);
+      expect(causes.at(-1)).toBe(`parent pid changed ${parent} to ${parent + 2000000}`);
+      const placed = placeCaller({ ancestors: () => chain, agents: () => [], paneRootPid: () => null, env: {}, stdinIsTTY: true });
+      expect(placed).toEqual({ kind: 'unplaced', reason: "its parent processes can't be read to the top" });
+    } finally {
+      Object.defineProperty(process, 'ppid', descriptor);
+    }
+  }
+});
+
+
+test('a default walk with the same live parent keeps its complete proof', () => {
+  const parent = process.ppid;
+  const causes: string[] = [];
+  expect(readAncestors(undefined, () => ({ ppid: 1, name: 'fixture' }), cause => causes.push(cause))).toEqual([{ pid: parent, name: 'fixture' }]);
+  expect(causes).toEqual([]);
+});

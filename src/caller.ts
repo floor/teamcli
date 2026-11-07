@@ -705,24 +705,39 @@ function walkAncestors(pid: number, read: ReadProcess, note: (cause: string) => 
 // A partial chain may hide the terminal host. Retry a null walk once from the original pid
 // and a fresh table; neither attempt skips a missing entry or accepts the partial parents.
 export function readAncestors(
-  pid: number = process.ppid,
+  pid: number | undefined = undefined,
   read: ReadProcess = processReader(),
   note: (cause: string) => void = noteAncestorFailure,
 ): Process[] | null {
+  const followsParent = pid === undefined;
+  const startPid = pid ?? process.ppid;
+  const parentMatches = (chain: Process[] | null): Process[] | null => {
+    if (followsParent && chain !== null && chain.length > 0) {
+      const liveParent = process.ppid;
+      const walkedParent = chain[0]!.pid;
+      if (liveParent !== walkedParent) {
+        note(`parent pid changed ${walkedParent} to ${liveParent}`);
+        return null;
+      }
+    }
+    return chain;
+  };
   const fresh = (): Process[] | null => {
-    const first = walkAncestors(pid, read, note);
-    return first === null ? walkAncestors(pid, read, note) : first;
+    const first = walkAncestors(startPid, read, note);
+    return first === null ? walkAncestors(startPid, read, note) : first;
   };
   const snapId = activeHerdrSnapshotId();
   if (snapId !== cachedAncestorsSnapshotId) {
     cachedAncestorsSnapshotId = snapId;
     cachedDefaultAncestors = undefined;
   }
-  if (snapId !== null && pid === process.ppid && read === processReader()) {
+  if (snapId !== null && startPid === process.ppid && read === processReader()) {
     if (cachedDefaultAncestors === undefined) cachedDefaultAncestors = fresh();
-    return cachedDefaultAncestors;
+    const checked = parentMatches(cachedDefaultAncestors);
+    if (checked === null) cachedDefaultAncestors = null;
+    return checked;
   }
-  return fresh();
+  return parentMatches(fresh());
 }
 
 let cachedCallerSnapshotId: number | null = null;
