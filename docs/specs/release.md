@@ -182,6 +182,14 @@ bun scripts/check-release-date.ts <version>
 
 Reads `CHANGELOG.md` from the repository root (`process.cwd()`). Invoked in `.github/workflows/release.yml` (`bun scripts/check-release-date.ts "${GITHUB_REF_NAME#v}"`) before publishing to verify that `CHANGELOG.md` has a bracketed `## [<version>] - YYYY-MM-DD` section with a real calendar date (not the `YYYY-MM-DD` placeholder). Exits `0` when the bracketed section exists with a valid calendar date, `1` when the section is missing or its date is a placeholder or invalid calendar date, and `2` when `<version>` (`process.argv[2]`) is missing or `CHANGELOG.md` cannot be read.
 
+### 4.4 Manual release workflow verification
+
+A manual `workflow_dispatch` of `.github/workflows/release.yml` must select an
+existing version tag whose version matches `package.json` and whose commit is on
+`main`. On any other ref, `release-ancestry` and `release-date` fail by design.
+The manual run executes both full verification suites and packs; it cannot publish
+to npm or create a GitHub Release. Publication requires a version-tag push.
+
 ## 5. Rules
 
 1. **Configuration validation and pair completeness (`src/file/sections/releases.ts`, `src/release/grammar.ts`).**
