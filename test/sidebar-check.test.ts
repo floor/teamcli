@@ -264,6 +264,48 @@ describe('sidebar check and --repair (Test 9)', () => {
     expect(configuredCheck.out).toContain('status_indicators is "symbols"; the resolved value is "dots"');
   });
 
+  test('an unset row_gap is not a difference, and a set one that differs is written on repair', () => {
+    const { root, home } = setupWorld({ writeValidConfig: false });
+    const cfgPath = hostConfigPath(home);
+    mkdirSync(join(cfgPath, '..'), { recursive: true });
+    const prior = [
+      '[ui.sidebar.agents] # managed by team',
+      'rows = [["state_icon", "machine", "workspace", "tab"], ["state_text", "agent"]]',
+      'row_gap = 1',
+      'theme = "x"',
+      '',
+      '[ui]',
+      'status_indicators = "symbols" # managed by team',
+      '',
+    ].join('\n');
+    writeFileSync(cfgPath, prior, { mode: 0o600 });
+
+    const unset = runCheck(root, home);
+    expect(unset.out).not.toContain('row_gap');
+
+    const written = writePolicySet(
+      home,
+      { level: 'entity', target: 'acme', name: 'workspace.sidebar.row_gap', value: 2 },
+      { now: NOW },
+    );
+    if (!written.ok) throw new Error(written.why);
+    const set = runCheck(root, home);
+    expect(set.out).toContain('row_gap is 1; the resolved value is 2');
+
+    const repaired = runCheck(root, home, {
+      repair: true,
+      sidebar: {
+        checkConfig: () => ({ ok: true, text: 'config: ok' }),
+        reloadSession: () => ({ applied: true, text: 'applied' }),
+      },
+    });
+    expect(repaired.out).toContain('row_gap 2');
+    const after = readFileSync(cfgPath, 'utf8');
+    expect(after).toContain('row_gap = 2');
+    expect(after).toContain('theme = "x"');
+    expect(after).not.toContain('row_gap = 1');
+  });
+
   test('per running session: names missing or older reload records (including hand-reloaded), skips current, stopped, and another entity\'s sessions', () => {
     const { root, home } = setupWorld({ recordCurrentReload: false });
 

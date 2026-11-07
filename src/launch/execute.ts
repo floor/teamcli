@@ -128,7 +128,7 @@ export type Host = {
    *  keys, validate through the host, roll back from the bytes held in memory. The sessions to
    *  reload are their own steps, so the apply takes none here. Absent on a host that writes no
    *  config: the step then does nothing, and nothing is reloaded either. */
-  applySidebar?(rows: readonly (readonly string[])[], indicators: string): SidebarApply;
+  applySidebar?(rows: readonly (readonly string[])[], indicators: string, rowGap?: number): SidebarApply;
   /** Reloads one running session's server onto the config the `sidebar` write left
    *  (`sidebar-reload` op). Absent on a host that reloads nothing. */
   reloadSidebar?(session: string): ConfigReload;
@@ -1244,7 +1244,7 @@ export async function executePlan(
     switch (op.do) {
       case 'sidebar': {
         if (!host.applySidebar) break;
-        const applied = host.applySidebar(op.rows, op.indicators);
+        const applied = host.applySidebar(op.rows, op.indicators, op.rowGap);
         if (applied.kind === 'refused') {
           held = true;
           abort = true;

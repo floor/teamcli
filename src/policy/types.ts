@@ -149,6 +149,7 @@ export const ENFORCED_POLICY_NAMES = [
   'workspace.sidebar.rows',
   'workspace.sidebar.manage',
   'workspace.sidebar.status_indicators',
+  'workspace.sidebar.row_gap',
   'daemon.sidebar-ttl-ms',
   'daemon.sidebar-refresh-ms',
   'watch-rhythm',
@@ -264,6 +265,10 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   'workspace-sidebar-status-indicators': 'workspace.sidebar.status_indicators',
   sidebar_status_indicators: 'workspace.sidebar.status_indicators',
   'sidebar-status-indicators': 'workspace.sidebar.status_indicators',
+  workspace_sidebar_row_gap: 'workspace.sidebar.row_gap',
+  'workspace-sidebar-row-gap': 'workspace.sidebar.row_gap',
+  sidebar_row_gap: 'workspace.sidebar.row_gap',
+  'sidebar-row-gap': 'workspace.sidebar.row_gap',
   daemon_sidebar_ttl_ms: 'daemon.sidebar-ttl-ms',
   'daemon-sidebar-ttl-ms': 'daemon.sidebar-ttl-ms',
   sidebar_ttl_ms: 'daemon.sidebar-ttl-ms',
@@ -1261,6 +1266,19 @@ function sidebarIndicatorsProblem(raw: unknown): string | null {
   return `policy "workspace.sidebar.status_indicators" needs one of ${STATUS_INDICATOR_VALUES.join(' or ')}, such as symbols`;
 }
 
+/** A whole number from 0 up. The catalogue default is 0 and means unset: the reader ignores a
+ *  value that arrived at level `default` and leaves the host's own `row_gap` line alone. */
+function parseSidebarRowGap(raw: unknown): number | null {
+  const token = typeof raw === 'string' ? raw.trim() : raw;
+  const n = typeof token === 'string' && /^(0|[1-9][0-9]*)$/.test(token) ? Number(token) : token;
+  return typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : null;
+}
+
+function sidebarRowGapProblem(raw: unknown): string | null {
+  if (parseSidebarRowGap(raw) !== null) return null;
+  return 'policy "workspace.sidebar.row_gap" needs a whole number from 0 up, such as 1';
+}
+
 /** Whole milliseconds from 1000 up (`daemon.sidebar-ttl-ms`): no ceiling is enforced here — the
  *  host caps what it is sent at its own 86400000, and the reader clamps to that cap rather than
  *  refusing a stored word a future host might accept. */
@@ -2000,6 +2018,20 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: parseSidebarIndicators,
     valueProblem: sidebarIndicatorsProblem,
+    isWithin: () => true,
+  },
+  // Blank lines between sidebar rows, written as `row_gap` in the marked sidebar table. The
+  // release default is 0 at level `default`, which the sidebar reader treats as unset: nothing
+  // is written and an existing line stays. A declared whole number from 0 up is written, and
+  // the nearest level chooses.
+  'workspace.sidebar.row_gap': {
+    name: 'workspace.sidebar.row_gap',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 0,
+    gateLifting: false,
+    parseValue: parseSidebarRowGap,
+    valueProblem: sidebarRowGapProblem,
     isWithin: () => true,
   },
   // How long a pane's reported sidebar metadata lives before it lapses: whole milliseconds,

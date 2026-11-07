@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Rewriting a marked sidebar table changes only the rows line, and the row gap only when `workspace.sidebar.row_gap` is set. Every other key in that table stays.
+
 ## [0.5.19] - 2026-11-07
 
 ### Fixed

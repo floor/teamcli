@@ -213,7 +213,7 @@ export type Launch = {
   /** Writes the sidebar layout (`rows` and `indicators`) to the terminal host's config, validates
    *  it through the host, and rolls back on failure. Absent: runs `applySidebarLayout` on
    *  `sources.home` with `checkSidebarConfig`. */
-  applySidebar?(rows: readonly (readonly string[])[], indicators: string): SidebarApply;
+  applySidebar?(rows: readonly (readonly string[])[], indicators: string, rowGap?: number): SidebarApply;
   /** The host's `config check` answer for the default `applySidebar` path. */
   checkSidebarConfig?(): { ok: boolean; text: string };
   /** Reloads one running session's server onto the sidebar config (`server reload-config`). */
@@ -3403,11 +3403,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         ? {
             applySidebar:
               launch.applySidebar ??
-              ((rows, indicators) =>
+              ((rows, indicators, rowGap) =>
                 applySidebarLayout(sources.home, rows, indicators, [], {
                   checkConfig: () => launch.checkSidebarConfig?.() ?? { ok: true, text: 'config: ok' },
                   reload: () => ({ applied: true, text: 'applied' }),
-                })),
+                }, rowGap)),
             reloadSidebar: (targetSession: string) =>
               launch.reloadSidebar?.(targetSession) ?? { applied: true, text: 'applied' },
             recordSidebarReload:

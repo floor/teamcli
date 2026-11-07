@@ -381,6 +381,41 @@ describe('sidebar step planning and dry-run', () => {
       "  skip sidebar: the terminal host's sidebar already reads this layout and every running session of this entity's teams holds a record at it; nothing to do\n",
     );
   });
+
+  test('is skipped when the rows and indicators match and the marked table also holds a row_gap', () => {
+    writeEntityFile();
+    registerSampleTeams();
+    const team = readCurrentTeam();
+    const spliced = spliceSidebarRows('', DEFAULT_SIDEBAR_ROWS, 'symbols');
+    expect(spliced.ok).toBe(true);
+    if (!spliced.ok) return;
+    const withGap = spliced.text.replace(
+      'rows = [["state_icon", "machine", "workspace", "tab"], ["state_text", "agent"]]\n',
+      'rows = [["state_icon", "machine", "workspace", "tab"], ["state_text", "agent"]]\nrow_gap = 1\n',
+    );
+    recordSidebarReloads(home, [
+      {
+        session: 'acme-api',
+        record: {
+          rows: sidebarRowsWord(DEFAULT_SIDEBAR_ROWS),
+          indicators: 'symbols',
+          at: NOW.toISOString(),
+        },
+      },
+    ]);
+    const skipped = sidebarStepOf({
+      home,
+      root,
+      session: 'acme-web',
+      team,
+      now: NOW,
+      hostSessions: () => [{ name: 'acme-api', running: true }],
+      configText: () => withGap,
+    });
+    expect(skipped?.skip).toBe(
+      "the terminal host's sidebar already reads this layout and every running session of this entity's teams holds a record at it; nothing to do",
+    );
+  });
 });
 
 describe('sidebar step execution', () => {
