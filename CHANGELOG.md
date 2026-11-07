@@ -113,6 +113,12 @@ Read-only project analysis, checkpoint requests, named launchers, and guarded st
 
 ### Fixed
 
+- `team doctor --login` reports waiting first-run dialogs as notes, so a logged-in CLI is not
+  counted as a missing login.
+
+- `team check` reports `pretrust` only when explicitly set; use `team policy` to inspect the
+  declaration. The dormant `first-run-admission` policy adds no check note.
+
 - An unreserved or uncertain channel notification keeps its stored drop and starts no later
   delivery route. Send history names the drop with `queued, not woken` or `sent (unconfirmed)`,
   without claiming that the channel notification completed.
