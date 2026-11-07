@@ -233,6 +233,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `config.entity.unchanged` | `config` | 0 | the entity already writes that value; nothing was written | `team config set <entity>.names.unique off` |
 | `config.entity.value` | `config` | 0 | the entity's value is printed | `team config get <entity>.names.unique` |
 | `config.entity.written` | `config` | 0 | the entity's value was written | `team config set <entity>.names.unique off` |
+| `config.planned` | `config` | 0 | internal config preflight passed admission and validation without publishing the change | `team mcp setup worker --dry-run` |
 | `config.project.rules-unchanged` | `config` | 0 | the project already writes those rules; nothing was written | `team config set project.<name>.rules [ ]` |
 | `config.project.rules-written` | `config` | 0 | the project's rules were written | `team config set project.<name>.rules [ ]` |
 | `config.shown` | `config` | 0 | the settings registry is printed | `team config keys` |
@@ -256,6 +257,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `config.no-value` | `config` | 1 | the path holds nothing in the record | `team config get watch.missing` |
 | `config.not-owner` | `config` | 1 | an edit was run by a caller that is not the owner | `team config set watch.unread_after 5m` |
 | `config.path` | `config` | 1 | the path cannot be set (a value on the way, or no such list item); nothing was written | `team config set seats.ghost.cli claude` |
+| `config.plan-invalid` | `config` | 1 | internal config preflight found an invalid proposed configuration and wrote nothing | `team mcp setup worker --dry-run` |
 | `config.editor` | `config` | 2 | the editor exited non-zero; nothing was written | `team config edit` |
 | `config.entity.unreadable` | `config` | 2 | the entities file cannot be read | `team config set <entity>.names.unique off` |
 | `config.entity.usage` | `config` | 2 | an entity-form invocation is not one of its forms | `team config set <entity>.names.unique` |
@@ -444,12 +446,28 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `lock.project` | `lock` | 2 | the caller's project can't be read | `team lock heavy-run` |
 | `mcp.clear` | `mcp` | 0 | the bridge is clear: doctor found nothing missing | `team mcp doctor` |
 | `mcp.serve-ended` | `mcp` | 0 | the inbox server's stdin closed and it stopped cleanly | `team mcp serve` |
+| `mcp.setup-planned` | `mcp` | 0 | the three planned changes passed preflight and nothing was written | `team mcp setup worker --dry-run` |
+| `mcp.setup-unchanged` | `mcp` | 0 | off found no setup record and changed nothing | `team mcp setup worker` |
+| `mcp.setup-written` | `mcp` | 0 | setup prepared or restored the project pair and launch line; setup recorded the calling pane | `team mcp setup worker` |
 | `mcp.up` | `mcp` | 0 | every observed bridge leg is up | `team mcp status` |
 | `mcp.down` | `mcp` | 1 | at least one leg is down or unknown | `team mcp status` |
 | `mcp.missing` | `mcp` | 1 | doctor found something missing | `team mcp doctor` |
 | `mcp.not-set-up` | `mcp` | 1 | no bridge configuration exists in the lobby folder | `team mcp status` |
+| `mcp.setup-caller` | `mcp` | 1 | the caller is neither the owner nor the named seat itself | `team mcp setup worker` |
+| `mcp.setup-changed` | `mcp` | 1 | the setup-owned launch line changed after setup | `team mcp setup worker` |
+| `mcp.setup-config-preflight` | `mcp` | 1 | the existing config gate or validation refuses the launch change before any setup write | `team mcp setup worker` |
+| `mcp.setup-config-write` | `mcp` | 1 | the config editor refuses the actual launch write before project or placement writes | `team mcp setup worker` |
+| `mcp.setup-pane-required` | `mcp` | 1 | setup has no calling pane to register | `team mcp setup worker` |
+| `mcp.setup-placement-preflight` | `mcp` | 1 | the existing register preflight refuses the calling pane before any setup write | `team mcp setup worker` |
+| `mcp.setup-placement-write` | `mcp` | 1 | registration refuses after preflight; the launch change remains and no project pair was published | `team mcp setup worker` |
+| `mcp.setup-seat` | `mcp` | 1 | the seat is not a declared live nonhuman Claude seat | `team mcp setup worker` |
+| `mcp.setup-team-read` | `mcp` | 1 | the team selected by the starting folder cannot be read at its own root | `team mcp setup worker` |
+| `mcp.setup-team-root` | `mcp` | 1 | the starting folder has no local team file or containing registered team root | `team mcp setup worker` |
+| `mcp.setup-unsafe` | `mcp` | 1 | a setup ownership, content or lifetime check refused the operation | `team mcp setup worker` |
+| `mcp.setup-write` | `mcp` | 1 | the scoped project publication refused; a bounded partial pair and restoration record may remain | `team mcp setup worker` |
 | `mcp.invocation` | `mcp` | 2 | the invocation can't be read | `team mcp` |
 | `mcp.serve-refused` | `mcp` | 2 | the inbox server can't start: the invocation, the team placement or its inbox folder can't be read | `team mcp serve` |
+| `mcp.setup-invocation` | `mcp` | 2 | the setup arguments are invalid | `team mcp setup worker` |
 | `messages.client-none` | `messages` | 0 | no client reply is waiting | `team messages --client client-grant.json --key client.key` |
 | `messages.client-shown` | `messages` | 0 | a client reading completed, and an acknowledged reply's receipt was written when it was asked for | `team messages --client client-grant.json --key client.key --ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
 | `messages.none` | `messages` | 0 | nothing is waiting | `team messages` |

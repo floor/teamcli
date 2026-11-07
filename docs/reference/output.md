@@ -10,7 +10,7 @@ The CLI contract covers **51 command names** in `src/cli.ts` order: top-level `t
 
 Every command falls into one of four surface shapes:
 
-- **Reading commands** (`status`, `seats`, `list`, `check`, `doctor`, `commits`, `pr`, `release`, `usage`, `feed`, `messages`, `issues`, `plan`, `ask-show`, `drops`, `policy`, `sessions`, `mcp`, `projects`, `worktree list`, `proc list`, `send --list`): inspect state and print a context line (when team- or project-scoped), a headered table or structured findings list, optional collapsed notes, optional `difference:` / `repair:` / `who:` blocks, and one closing summary line.
+- **Reading commands** (`status`, `seats`, `list`, `check`, `doctor`, `commits`, `pr`, `release`, `usage`, `feed`, `messages`, `issues`, `plan`, `ask-show`, `drops`, `policy`, `sessions`, `mcp status`, `mcp doctor`, `projects`, `worktree list`, `proc list`, `send --list`): inspect state and print a context line (when team- or project-scoped), a headered table or structured findings list, optional collapsed notes, optional `difference:` / `repair:` / `who:` blocks, and one closing summary line.
 - **Action commands** (`up`, `down`, `add`, `remove`, `restart`, `reload`, `register`, `answer`, `init`, `grant`, `delegate`, `revoke`, `worktree new|pull|remove`, `send`, `reply`, `raise`, `route`, `next`, `lock`, `unlock`, `tempo`, `hold`, `pause`, `resume`, `policy set|unset`, `rename`, `proc add|clear`): mutate state or preview a mutation under `--dry-run`, printing a context or plan header, step lines (`+`, `!`, `  skip`) on `--dry-run`, and one closing action summary line (`dry run: nothing was run` on `--dry-run`).
 - **Top-level CLI** (`team`): prints `--help`, `--version`, or `--about` (which prints the version, licence, docs link, and the `what 0.5.0 must not pretend` block).
 - **Daemon / protocol surfaces** (`watch`, `broker`, `bus`, `conformance-adapter`): long-running foreground loops or wire-protocol adapters; human-readable startup/refusal lines follow the error contract on stderr, and `--json` is not used on the daemon loop itself.
@@ -129,6 +129,12 @@ Every tabular block prints an **uppercase column header row** above its data row
   - Missing or inapplicable cells render as `-`.
   - Column widths are computed on `plainLine`-cleaned text *before* any ANSI styling is applied.
   - `spec.indent` defaults to `'  '` (two spaces, for tables nested under a context line or section heading such as `team status`). Top-level tables with no context line (such as `team seats`, `team list`, `team projects`) pass `indent: ''` so the table starts at column 0.
+
+`team mcp setup --json` prints `team.mcp-setup` (`schema/mcp-setup.schema.json`):
+`{format, seat, session, cwd, dry_run, status, changes}`. Each change names its kind and action;
+project config lists the two paths, launch names its record path, and placement names the pane.
+An unchanged `--off` has an empty list. Refusals print `team.error` and exit 1; invalid invocations
+exit 2. The zero-write plan and successful setup or removal exit 0.
 
 ### 1.4 Severity Vocabulary (`team doctor`, `team mcp doctor`)
 

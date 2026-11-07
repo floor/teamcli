@@ -2409,6 +2409,33 @@ export const ANSWER_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   },
 });
 
+/** The three scoped changes a hand-started Claude seat setup reports. */
+export const MCP_SETUP_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.mcp-setup', fileName: 'mcp-setup.schema.json', title: 'team mcp setup --json output',
+  required: ['format', 'seat', 'session', 'cwd', 'dry_run', 'status', 'changes'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    seat: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    cwd: { type: 'string', minLength: 1 },
+    dry_run: { type: 'boolean' },
+    status: { type: 'string', enum: ['setup', 'off', 'unchanged'] },
+    changes: {
+      type: 'array', maxItems: 3,
+      items: {
+        type: 'object', additionalProperties: false, required: ['kind', 'action'],
+        properties: {
+          kind: { type: 'string', enum: ['project-config', 'launch', 'placement'] },
+          action: { type: 'string', enum: ['prepare', 'restore', 'enable', 'keep', 'record'] },
+          paths: { type: 'array', items: { type: 'string' } },
+          path: { type: 'string' },
+          pane: { type: ['string', 'null'] },
+        },
+      },
+    },
+  },
+};
+
 /** Published `--json` output schema for `team mcp` (`schema/mcp.schema.json`): the status
  *  report (the helper rows, each bridge, each guard, the front and the state they add up to)
  *  and the doctor report (the findings and their counts). A run whose invocation cannot be
@@ -3550,6 +3577,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   SHOW_OUTPUT_SCHEMA,
   ANSWER_OUTPUT_SCHEMA,
   MCP_OUTPUT_SCHEMA,
+  MCP_SETUP_OUTPUT_SCHEMA,
   TEMPO_OUTPUT_SCHEMA,
   PROC_OUTPUT_SCHEMA,
   WORKTREE_OUTPUT_SCHEMA,

@@ -305,6 +305,15 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
       return 1;
     }
   }
+  // A setup plan must pass this same owner/charter door before another surface writes.
+  // Validation above is the write's preflight; the actual writer still validates again.
+  if (sources.planOnly) {
+    if (!namesAfter.ok) {
+      refuse(io, json, 'config', { id: 'config.invalid', message: `the change does not validate, and nothing was written: ${namesAfter.errors.map((p) => (p.line ? `line ${p.line}: ` : '') + p.message).join('; ')}`, repair: null });
+      return 1; // exit: config.plan-invalid
+    }
+    return 0; // exit: config.planned
+  }
   const now = sources.now;
   const wrote = writeTeamText(file, next, { home, env, command: `config ${verb}`, ...(now !== undefined ? { now } : {}) });
   if (!wrote.ok) {

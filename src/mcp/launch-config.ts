@@ -13,6 +13,7 @@ import { getTeam, registeredRootOf, teamIdOf } from '../registry/teams.ts';
 import { readState } from '../state.ts';
 import { CHANNEL_SERVER, channelLaunchEnabled } from './channel.ts';
 import { inboxServeArgs, selfRunner } from './register.ts';
+import { addJsonName, setJsonValue } from './json-text.ts';
 
 export function claudeChannelSeat(seat: { cli: string; launch: string }): boolean {
   return seat.cli === 'claude-code' && channelLaunchEnabled(seat.launch);
@@ -25,9 +26,9 @@ export function channelLobbyFolder(lobby: string, seat: { name: string; cli: str
 
 export type ChannelLaunchScope = { root: string; home?: string; epoch?: string };
 export type ChannelConfigLease = { check(): void; release(): void };
-type ObjectMap = Record<string, unknown>;
+export type ObjectMap = Record<string, unknown>;
 type Seen = Stats;
-class ConfigRefusal extends Error {}
+export class ConfigRefusal extends Error {}
 
 function object(value: unknown): value is ObjectMap {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -38,7 +39,7 @@ function absent(error: unknown): boolean { return (error as NodeJS.ErrnoExceptio
 function present(path: string): Seen | null {
   try { return lstatSync(path); } catch (error) { if (absent(error)) return null; throw error; }
 }
-function directory(path: string, privateMode = true): Seen {
+export function channelDirectory(path: string, privateMode = true): Seen {
   const stat = lstatSync(path);
   const mode = stat.mode & 0o7777;
   if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid?.()
@@ -51,7 +52,7 @@ function directory(path: string, privateMode = true): Seen {
 
 /** A snapshot of one owned project JSON file. Both snapshots are validated before publishing
  *  either member of the pair; their exact bytes and identities are then bound to the lease. */
-function configDocument(path: string) {
+export function channelDocument(path: string) {
   const previous = present(path);
   const bytes = (expected: Seen): string => {
     const now = lstatSync(path);
@@ -65,7 +66,9 @@ function configDocument(path: string) {
     } finally { closeSync(fd); }
   };
   const before = previous === null ? undefined : bytes(previous);
-  const parsed: unknown = before === undefined ? {} : JSON.parse(before);
+  let parsed: unknown;
+  try { parsed = before === undefined ? {} : JSON.parse(before); }
+  catch { throw new ConfigRefusal('the channel configuration must hold valid JSON'); }
   if (!object(parsed)) throw new ConfigRefusal('the channel configuration must hold a JSON object');
   return { path, before, value: parsed,
     unchanged: (): boolean => previous === null ? present(path) === null : bytes(previous) === before,
@@ -101,142 +104,152 @@ const OWNER_ENV = 'TEAMCLI_CHANNEL_SCOPE';
 
 /** Ownership lives inside the generated server entry, in its standard MCP env map. Other
  *  entries and top-level keys are never claimed. An edited or unmarked entry is a conflict. */
-function ownedEntry(value: unknown, owner: string, seat: string, session: string): boolean {
+export function ownedEntry(value: unknown, owner: string, seat: string, session: string): boolean {
   if (!object(value) || Object.keys(value).sort().join(',') !== 'args,command,env'
     || typeof value.command !== 'string' || !isAbsolute(value.command) || !object(value.env)
     || Object.keys(value.env).join(',') !== OWNER_ENV || value.env[OWNER_ENV] !== owner
     || !Array.isArray(value.args) || value.args.some((word) => typeof word !== 'string')) return false;
   const args = value.args as string[];
-  return args.length === 9 && isAbsolute(args[0]!) && args[1] === 'mcp' && args[2] === 'serve'
+  return (args.length === 7 || args.length === 9) && isAbsolute(args[0]!) && args[1] === 'mcp' && args[2] === 'serve'
     && args[3] === '--seat' && args[4] === seat && args[5] === '--session' && args[6] === session
-    && args[7] === '--epoch' && isBriefEpoch(args[8]);
+    && (args.length === 7 || (args[7] === '--epoch' && isBriefEpoch(args[8])));
 }
 
-/** Called after the launch claim exists and before create/spawn, under the existing launch
- *  ownership. A second, non-reclaiming per-seat claim serializes config writers. The lease is
- *  held until the pane-run attempt returns. Failed launches keep their bounded config: later
- *  launches replace only this owned entry, and mcp serve rejects its stale epoch. */
-export function prepareChannelConfig(input: ChannelLaunchScope & { seat: string; session: string; cwd: string }):
+export type ChannelDocument = ReturnType<typeof channelDocument>;
+export type ChannelWrite = { doc: ChannelDocument; text: string | undefined };
+export type ChannelPairPlan = {
+  cwd: string;
+  privateFolder: boolean;
+  folder: Seen;
+  approvalFolder: Seen | null;
+  documents: ChannelWrite[];
+};
+export type ChannelPairScope = { root: string; seat: string; session: string; cwd: string; epoch?: string };
+
+/** Shared, read-only preflight for launch and setup. Admission and placement belong to callers. */
+export function planChannelPair(input: ChannelPairScope, privateFolder = true): ChannelPairPlan {
+  const folder = channelDirectory(input.cwd, privateFolder);
+  const approvalDir = join(input.cwd, '.claude');
+  const approvalFolder = present(approvalDir);
+  if (approvalFolder !== null) channelDirectory(approvalDir, false);
+  if (present(join(input.cwd, '.team-channel.lock')) !== null) {
+    throw new ConfigRefusal('a leftover channel lock is in the seat folder; remove .team-channel.lock by hand and launch again');
+  }
+  const mcp = channelDocument(join(input.cwd, '.mcp.json'));
+  const servers = mcp.value.mcpServers === undefined ? {} : mcp.value.mcpServers;
+  if (!object(servers)) throw new ConfigRefusal('the channel project config has invalid mcpServers');
+  const owner = JSON.stringify({ v: 1, team: teamIdOf(input.root), seat: input.seat, session: input.session });
+  if (Object.hasOwn(servers, CHANNEL_SERVER) && !ownedEntry(servers[CHANNEL_SERVER], owner, input.seat, input.session)) {
+    throw new ConfigRefusal('the channel server name is already owned by another configuration');
+  }
+  const runner = selfRunner();
+  const entry = { command: runner.command,
+    args: [runner.entry, ...inboxServeArgs(input.seat, input.session, undefined, input.epoch)],
+    env: { [OWNER_ENV]: owner } };
+  const approval = channelDocument(join(approvalDir, 'settings.local.json'));
+  approveChannel(approval.value); // Validate rejection switches and both approval lists first.
+  return { cwd: input.cwd, privateFolder, folder, approvalFolder, documents: [
+    { doc: mcp, text: setJsonValue(mcp.before ?? '{}\n', ['mcpServers', CHANNEL_SERVER], JSON.stringify(entry)) },
+    { doc: approval, text: addJsonName(approval.before ?? '{}\n', 'enabledMcpjsonServers', CHANNEL_SERVER) },
+  ] };
+}
+
+/** The same inode-bound, exclusive pair publication for both entry points. */
+export function publishChannelPair(plan: ChannelPairPlan, validate: () => void, extra: ChannelWrite[] = [], releaseGuard: () => void = () => {}, extraLast = false):
   { ok: true; lease: ChannelConfigLease } | { ok: false; reason: string } {
   let release: (() => void) | undefined;
   let cleanTemp: (() => void) | undefined;
   try {
-    if (input.home === undefined || !isBriefEpoch(input.epoch) || !SEAT_NAME.test(input.seat)) {
-      throw new ConfigRefusal('channel launch requires its home and explicit claimed epoch');
+    const { cwd: folder, privateFolder } = plan;
+    const folderSeen = plan.folder;
+    const approvalDir = join(folder, '.claude');
+    let approvalSeen = plan.approvalFolder;
+    const documents = extraLast ? [...plan.documents, ...extra] : [...extra, ...plan.documents];
+    const matches: Array<() => boolean> = [];
+    const folderMatches = () => {
+      if (!same(channelDirectory(folder, privateFolder), folderSeen)) throw new ConfigRefusal('the channel folder changed');
+      validate();
+    };
+    folderMatches();
+    if (documents.some(({ doc }) => !doc.unchanged())) throw new ConfigRefusal('the channel configuration pair changed during preparation');
+    const lock = join(folder, '.team-channel.lock');
+    if (present(lock) !== null) throw new ConfigRefusal('a leftover channel lock is in the seat folder; remove .team-channel.lock by hand and launch again');
+    mkdirSync(lock, { mode: 0o700 }); const lockSeen = channelDirectory(lock); let held = true;
+    const check = () => {
+      folderMatches();
+      if (!held || !same(channelDirectory(lock), lockSeen)) throw new ConfigRefusal('the channel config claim changed');
+      if (approvalSeen !== null && !same(channelDirectory(approvalDir, false), approvalSeen)) throw new ConfigRefusal('the channel approval folder changed before launch');
+      if (matches.some((match) => !match())) throw new ConfigRefusal('the prepared channel config changed before launch');
+    };
+    release = () => {
+      if (!held) return; held = false;
+      try { releaseGuard(); if (same(channelDirectory(folder, privateFolder), folderSeen) && same(channelDirectory(lock), lockSeen)) rmdirSync(lock); } catch { /* retain an unproven lock */ }
+    };
+    if (approvalSeen === null && plan.documents.some(({ doc, text }) => dirname(doc.path) === approvalDir && text !== undefined)) {
+      check();
+      mkdirSync(approvalDir, { mode: 0o700 }); approvalSeen = channelDirectory(approvalDir, false);
     }
-    const home = input.home;
-    const epoch = input.epoch;
+    for (let index = 0; index < documents.length; index++) {
+      const { doc, text } = documents[index]!;
+      const unchanged = () => documents.slice(index).every(({ doc: pending }) => pending.unchanged());
+      check(); if (!unchanged()) throw new ConfigRefusal('the channel configuration pair changed during preparation');
+      if (doc.before === text) {
+        matches.push(text === undefined ? () => present(doc.path) === null : doc.bind(text)); continue;
+      }
+      if (text === undefined) {
+        unlinkSync(doc.path); matches.push(() => present(doc.path) === null); continue;
+      }
+      const parent = dirname(doc.path); const parentSeen = parent === folder ? folderSeen : approvalSeen!;
+      const temp = join(parent, `.team-channel.${randomBytes(12).toString('hex')}.tmp`);
+      const fd = openSync(temp, 'wx', 0o600); const tempSeen = fstatSync(fd);
+      cleanTemp = () => {
+        const current = present(temp);
+        if (held && current !== null && same(current, tempSeen)
+          && same(channelDirectory(folder, privateFolder), folderSeen) && same(channelDirectory(lock), lockSeen)
+          && same(channelDirectory(parent, parent === folder ? privateFolder : false), parentSeen)) unlinkSync(temp);
+      };
+      try { writeFileSync(fd, text); fsyncSync(fd); } finally { closeSync(fd); }
+      check(); if (!unchanged()) throw new ConfigRefusal('the channel configuration pair changed during preparation');
+      renameSync(temp, doc.path); cleanTemp = undefined; matches.push(doc.bind(text));
+    }
+    check(); return { ok: true, lease: { check, release } };
+  } catch (error) {
+    try { cleanTemp?.(); } catch { /* leave anything whose ownership cannot be proven */ }
+    release?.();
+    return { ok: false, reason: error instanceof ConfigRefusal ? error.message : 'the channel config could not be safely read or written' };
+  }
+}
+
+/** Launch admission stays stricter than setup: a trusted registered lobby and current claim. */
+export function prepareChannelConfig(input: ChannelLaunchScope & { seat: string; session: string; cwd: string }):
+  { ok: true; lease: ChannelConfigLease } | { ok: false; reason: string } {
+  try {
+    if (input.home === undefined || !isBriefEpoch(input.epoch) || !SEAT_NAME.test(input.seat)) throw new ConfigRefusal('channel launch requires its home and explicit claimed epoch');
+    const home = input.home; const epoch = input.epoch;
     const found = registeredRootOf(home, input.seat, input.session);
     if (!found.ok || realpathSync(found.root) !== realpathSync(input.root)) throw new ConfigRefusal('the channel seat has no unique registered team root');
     const record = getTeam(home, teamIdOf(found.root));
     const loaded = readTeamConfig(found.root, { home });
     if (!loaded.ok || loaded.team.session !== input.session || record === null) throw new ConfigRefusal('the registered channel team cannot be read for this session');
     const declared = loaded.team.seats.find((seat) => seat.name === input.seat);
-    if (declared === undefined || declared.stopped || declared.human || !claudeChannelSeat(declared)) {
-      throw new ConfigRefusal('the registered seat does not declare a Claude channel launch');
-    }
+    if (declared === undefined || declared.stopped || declared.human || !claudeChannelSeat(declared)) throw new ConfigRefusal('the registered seat does not declare a Claude channel launch');
     const lobby = lobbyOf(home, loaded.root, loaded.team);
-    if (record.lobbies[input.session] !== lobby || !loaded.team.trust?.some((path) => resolve(path.replace(/^~(?=$|\/)/, home)) === resolve(lobby))) {
-      throw new ConfigRefusal('the channel lobby must already be registered and trusted by the team');
-    }
+    if (record.lobbies[input.session] !== lobby || !loaded.team.trust?.some((path) => resolve(path.replace(/^~(?=$|\/)/, home)) === resolve(lobby))) throw new ConfigRefusal('the channel lobby must already be registered and trusted by the team');
     if (resolve(input.cwd) !== join(lobby, input.seat)) throw new ConfigRefusal('the channel must start in its own folder inside the team lobby');
     const gate = verifyLobby(home, { lobby, create: false });
     if (!gate.ok || !('path' in gate)) throw new ConfigRefusal('the registered channel lobby is unsafe or missing');
-    const lobbySeen = directory(lobby);
-    const folder = join(lobby, input.seat);
-    const stateDir = dirname(loaded.path);
-    const claimMatches = (): void => {
-      const current = currentBriefClaim(readState(stateDir).sessions[input.session]?.briefs?.[input.seat]);
+    const lobbySeen = channelDirectory(lobby);
+    const claimMatches = () => {
+      if (!same(channelDirectory(lobby), lobbySeen)) throw new ConfigRefusal('the channel lobby changed');
+      const current = currentBriefClaim(readState(dirname(loaded.path)).sessions[input.session]?.briefs?.[input.seat]);
       if (current === null || current.epoch !== epoch) throw new ConfigRefusal('the channel launch epoch is no longer its current claim');
     };
     claimMatches();
-    try { mkdirSync(folder, { mode: 0o700 }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
-    const folderSeen = directory(folder);
-    const lock = join(folder, '.team-channel.lock');
-    // A lock left by a launch that did not release is not taken and not removed. The hand
-    // cleanup is to remove that .team-channel.lock directory from the seat folder, then launch again.
-    if (present(lock) !== null) {
-      throw new ConfigRefusal('a leftover channel lock is in the seat folder; remove .team-channel.lock by hand and launch again');
-    }
-    mkdirSync(lock, { mode: 0o700 });
-    const lockSeen = directory(lock);
-    let held = true;
-    const configMatches: Array<() => boolean> = [];
-    let settingsFolder: { path: string; seen: Seen } | undefined;
-    const check = (): void => {
-      if (!held || !same(directory(lobby), lobbySeen) || !same(directory(folder), folderSeen)
-        || !same(directory(lock), lockSeen)) throw new ConfigRefusal('the channel config claim or folder changed');
-      claimMatches();
-      if (settingsFolder !== undefined && !same(directory(settingsFolder.path, false), settingsFolder.seen)) {
-        throw new ConfigRefusal('the channel approval folder changed before launch');
-      }
-      if (configMatches.some((matches) => !matches())) throw new ConfigRefusal('the prepared channel config changed before launch');
-    };
-    release = (): void => {
-      if (!held) return;
-      held = false;
-      // Do not follow a replaced folder or remove another writer's claim. A release failure
-      // stays fail-closed for the next launch instead of reclaiming something unproven.
-      try {
-        if (same(directory(lobby), lobbySeen) && same(directory(folder), folderSeen)
-          && same(directory(lock), lockSeen)) rmdirSync(lock);
-      } catch { /* retain an unproven lock */ }
-    };
-    check();
-    const mcp = configDocument(join(folder, '.mcp.json'));
-    const existing = mcp.value;
-    const servers = existing.mcpServers === undefined ? {} : existing.mcpServers;
-    if (!object(servers)) throw new ConfigRefusal('the channel project config has invalid mcpServers');
-    const owner = JSON.stringify({ v: 1, team: teamIdOf(loaded.root), seat: input.seat, session: input.session });
-    if (Object.hasOwn(servers, CHANNEL_SERVER) && !ownedEntry(servers[CHANNEL_SERVER], owner, input.seat, input.session)) {
-      throw new ConfigRefusal('the channel server name is already owned by another configuration');
-    }
-    const runner = selfRunner();
-    const entry = { command: runner.command,
-      args: [runner.entry, ...inboxServeArgs(input.seat, input.session, undefined, epoch)],
-      env: { [OWNER_ENV]: owner } };
-    const text = `${JSON.stringify({ ...existing, mcpServers: { ...servers, [CHANNEL_SERVER]: entry } }, null, 2)}\n`;
-    const approvalDir = join(folder, '.claude');
-    check();
-    try { mkdirSync(approvalDir, { mode: 0o700 }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
-    settingsFolder = { path: approvalDir, seen: directory(approvalDir, false) };
-    const approval = configDocument(join(approvalDir, 'settings.local.json'));
-    const approved = approveChannel(approval.value);
-    const approvalText = approved === approval.value ? approval.before! : `${JSON.stringify(approved, null, 2)}\n`;
-    const documents = [{ doc: mcp, text }, { doc: approval, text: approvalText }];
-    for (let index = 0; index < documents.length; index += 1) {
-      const next = documents[index]!;
-      const pendingUnchanged = (): boolean => documents.slice(index).every(({ doc }) => doc.unchanged());
-      check();
-      if (!pendingUnchanged()) throw new ConfigRefusal('the channel configuration pair changed during preparation');
-      if (next.doc.before === next.text) {
-        configMatches.push(next.doc.bind(next.text));
-        continue;
-      }
-      const parent = dirname(next.doc.path);
-      const parentSeen = parent === folder ? folderSeen : settingsFolder.seen;
-      const temp = join(parent, `.team-channel.${randomBytes(12).toString('hex')}.tmp`);
-      const fd = openSync(temp, 'wx', 0o600);
-      const tempSeen = fstatSync(fd);
-      cleanTemp = () => {
-        const now = present(temp);
-        if (held && now !== null && same(now, tempSeen) && same(directory(lobby), lobbySeen)
-          && same(directory(folder), folderSeen) && same(directory(lock), lockSeen)
-          && same(directory(parent, parent === folder), parentSeen)) unlinkSync(temp);
-      };
-      try { writeFileSync(fd, next.text); fsyncSync(fd); } finally { closeSync(fd); }
-      check();
-      if (!pendingUnchanged()) throw new ConfigRefusal('the channel configuration pair changed during preparation');
-      renameSync(temp, next.doc.path);
-      cleanTemp = undefined;
-      configMatches.push(next.doc.bind(next.text));
-    }
-    check();
-    return { ok: true, lease: { check, release } };
+    try { mkdirSync(input.cwd, { mode: 0o700 }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+    return publishChannelPair(planChannelPair({ ...input, epoch }), claimMatches, [], () => {
+      if (!same(channelDirectory(lobby), lobbySeen)) throw new ConfigRefusal('the channel lobby changed');
+    });
   } catch (error) {
-    // Only our exclusive random temporary is cleanup data. Existing config/seat folders stay.
-    try { cleanTemp?.(); } catch { /* leave anything whose ownership cannot be proven */ }
-    release?.();
     return { ok: false, reason: error instanceof ConfigRefusal ? error.message : 'the channel config could not be safely read or written' };
   }
 }

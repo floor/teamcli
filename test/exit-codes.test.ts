@@ -1,5 +1,6 @@
 // One run per row of contract/exit-codes.json. Each trigger is a temporary directory and the
 // injectable stand-ins the other command tests use: no herdr session, no user-level store.
+import * as setupFs from 'node:fs';
 import { fakeOwnerStore, seatOwner } from './helpers/owner-seat.ts';
 import { approveOwnerAction } from '../src/client/owner-action.ts';
 import { execFileSync } from 'node:child_process';
@@ -8,7 +9,7 @@ import { createConnection, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, test, describe } from 'bun:test';
+import { expect, test, describe, spyOn } from 'bun:test';
 import { approvalOf } from '../src/approve/approval.ts';
 import { startBroker } from '../src/broker/server.ts';
 import { saveReadings, type Seen } from '../src/budgets/readings.ts';
@@ -116,7 +117,7 @@ import { markChannelNotified } from '../src/mcp/channel.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
 import { grantGate, type GrantSources } from '../src/grant.ts';
 import { defaultFs, lobbyDir } from '../src/lobby/gate.ts';
-import type { HerdrAgent } from '../src/herdr.ts';
+import { setHerdrRun, type HerdrAgent } from '../src/herdr.ts';
 import { GENERAL_BRIEF_FROM, generalBriefBody, generalBriefId } from '../src/launch/general-brief.ts';
 import { acquireRunLock } from '../src/launch/run-lock.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
@@ -2791,6 +2792,22 @@ scene('seats.not-yours', async (place) => {
   scene('config.invalid', async (place) => {
     write(place, TEAM);
     return show(await recordRun(place, ['set', 'format', '9']), 'does not validate');
+  });
+  scene('config.planned', async (place) => {
+    write(place, TEAM);
+    const io = testIo(place.root, owner);
+    const code = await runConfig(['set', 'project', 'other'], io, { home: place.home, env: { TEAM_CONFIG_SOURCE: 'file' }, planOnly: true });
+    expect(readFileSync(place.file, 'utf8')).toBe(TEAM);
+    expect(io.out).toBe(''); expect(io.err).toBe('');
+    return { code, out: io.out, err: io.err };
+  });
+  scene('config.plan-invalid', async (place) => {
+    write(place, TEAM);
+    const io = testIo(place.root, owner);
+    const code = await runConfig(['set', 'format', '9', '--json'], io, { home: place.home, env: { TEAM_CONFIG_SOURCE: 'file' }, planOnly: true });
+    expect(readFileSync(place.file, 'utf8')).toBe(TEAM);
+    expect(JSON.parse(io.out).error.id).toBe('config.invalid');
+    return show({ code, out: io.out, err: io.err }, 'does not validate');
   });
   scene('config.written', async (place) => {
     write(place, TEAM);
@@ -6787,6 +6804,178 @@ scene('mcp.not-set-up', async (place) => show(await mcpRan(place, ['status'], { 
 scene('mcp.clear', async (place) => show(await mcpRan(place, ['doctor']), 'nothing missing'));
 scene('mcp.missing', async (place) => show(await mcpRan(place, ['doctor'], { listDir: () => [] }), 'no bridge configuration'));
 scene('mcp.invocation', async (place) => show(await mcpRan(place, []), 'a subcommand is required'));
+// Setup's project pair and placement need an owned synthetic home outside the OS temporary
+// tree, just like the dedicated setup tests. Every host read/write is injected; no CLI runs.
+const SETUP_SESSION = 'setup-exit';
+const SETUP_PANE = 'fixture-setup-pane';
+function setupSnapshot(base: string): Record<string, string> {
+  const entries: Record<string, string> = {};
+  const visit = (dir: string) => {
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name); const stat = setupFs.lstatSync(path);
+      entries[path.slice(base.length)] = stat.isDirectory() ? 'directory'
+        : stat.isSymbolicLink() ? `link:${setupFs.readlinkSync(path)}` : readFileSync(path).toString('base64');
+      if (stat.isDirectory()) visit(path);
+    }
+  };
+  visit(base); return entries;
+}
+async function setupScene(body: (w: {
+  base: string; root: string; home: string; file: string; cwd: string;
+  sources: McpSources; register: RegisterSources;
+  run: (argv?: string[], caller?: Caller, pane?: string | null) => Promise<Ran>;
+}) => Promise<Ran>): Promise<Ran> {
+  const base = fixtureBase('exit-mcp-setup-');
+  const home = join(base, 'home'); const root = join(base, 'team'); const file = join(root, '.agents/team.yaml');
+  mkdirSync(home, { mode: 0o700 }); mkdirSync(root, { mode: 0o700 }); mkdirSync(join(root, '.agents'), { mode: 0o700 });
+  writeFileSync(file, `format: 1
+project: setup-synthetic
+session: ${SETUP_SESSION}
+coordinator: alpha
+operator: alpha
+workspace:
+  mode: shared
+seats:
+  - name: alpha
+    role: coordinator
+    cli: claude-code
+    vendor: synthetic
+    model: Test
+    version: "1"
+    launch: claude --model fixture
+`);
+  installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures/key.json'), 'utf8')));
+  upsertTeam(home, teamIdOf(root), { root, project: 'setup-synthetic', session: SETUP_SESSION,
+    roster: [{ agent: 'agt_000000000001', seat: 'alpha', role: 'coordinator' }] });
+  const register: RegisterSources = {
+    home, sessionState: () => 'running', agents: () => [],
+    processInfo: () => ({ shell: 7001, foreground: [7002] }), foreground: () => ['claude'],
+    paneText: () => CLAUDE_IDLE, now: () => NOW, renameAgent: () => true,
+    renameWorkspace: () => true, reportDisplayAgent: () => true, refreshAddress: () => ({ address: null }),
+  };
+  const sources: McpSources = { ...realSources, home: () => home, setup: { register, config: { home, env: {}, now: () => NOW } } };
+  const w = { base, root, home, file, cwd: root, register, sources,
+    run: async (argv = ['setup', 'alpha', '--json'], caller: Caller = owner, pane: string | null = SETUP_PANE): Promise<Ran> => {
+      const io = testIo(w.cwd, caller); if (pane !== null) io.env.HERDR_PANE_ID = pane;
+      const code = await runMcp(argv, io, sources); return { code, out: io.out, err: io.err };
+    },
+  };
+  setHerdrRun(() => { throw new Error('setup exit scenes must not reach a live terminal host'); });
+  try { return await body(w); }
+  finally { setHerdrRun(null); rmSync(base, { recursive: true, force: true }); }
+}
+function setupError(ran: Ran, id: string, needle: string): Ran {
+  expect(ran.err).toBe(''); expect(JSON.parse(ran.out).error.id).toBe(id);
+  return show(ran, needle);
+}
+scene('mcp.setup-invocation', async () => setupScene(async (w) => {
+  const before = setupSnapshot(w.base); const ran = await w.run(['setup', '--json']);
+  expect(setupSnapshot(w.base)).toEqual(before);
+  return setupError(ran, 'mcp.setup-invocation', 'one declared seat name');
+}), false);
+scene('mcp.setup-team-root', async () => setupScene(async (w) => {
+  w.cwd = join(w.base, 'outside'); mkdirSync(w.cwd, { mode: 0o700 });
+  const before = setupSnapshot(w.base); const ran = await w.run();
+  expect(setupSnapshot(w.base)).toEqual(before);
+  return setupError(ran, 'mcp.setup-team', 'no local team file or containing registered team');
+}), false);
+scene('mcp.setup-team-read', async () => setupScene(async (w) => {
+  writeFileSync(w.file, 'format: [\n'); const before = setupSnapshot(w.base); const ran = await w.run();
+  expect(setupSnapshot(w.base)).toEqual(before);
+  return setupError(ran, 'mcp.setup-team', 'cannot be read at its own root');
+}), false);
+scene('mcp.setup-seat', async () => setupScene(async (w) => {
+  const before = setupSnapshot(w.base); const ran = await w.run(['setup', 'missing', '--json']);
+  expect(setupSnapshot(w.base)).toEqual(before);
+  return setupError(ran, 'mcp.setup-seat', 'requires a declared, running Claude seat');
+}), false);
+scene('mcp.setup-caller', async () => setupScene(async (w) => {
+  const before = setupSnapshot(w.base);
+  const ran = await w.run(undefined, { kind: 'seat', name: 'other', pane: SETUP_PANE, session: SETUP_SESSION });
+  expect(setupSnapshot(w.base)).toEqual(before);
+  return setupError(ran, 'mcp.setup-caller', 'only the owner or this seat itself');
+}), false);
+scene('mcp.setup-config-preflight', async () => setupScene(async (w) => {
+  const before = setupSnapshot(w.base);
+  const ran = await w.run(undefined, { kind: 'seat', name: 'alpha', pane: SETUP_PANE, session: SETUP_SESSION });
+  expect(setupSnapshot(w.base)).toEqual(before);
+  return setupError(ran, 'mcp.setup-config', 'the existing config editor refused');
+}), false);
+scene('mcp.setup-config-write', async () => setupScene(async (w) => {
+  let changed = false;
+  w.register.processInfo = () => {
+    if (!changed) { changed = true; writeFileSync(w.file, 'format: [\n'); }
+    return { shell: 7001, foreground: [7002] };
+  };
+  const ran = await w.run(); expect(changed).toBe(true);
+  expect(existsSync(join(w.root, '.mcp.json'))).toBe(false);
+  expect(existsSync(join(w.root, '.agents/team.state.json'))).toBe(false);
+  return setupError(ran, 'mcp.setup-config', 'the config editor refused');
+}), false);
+scene('mcp.setup-pane-required', async () => setupScene(async (w) => {
+  const before = setupSnapshot(w.base); const ran = await w.run(undefined, owner, null);
+  expect(setupSnapshot(w.base)).toEqual(before);
+  return setupError(ran, 'mcp.setup-placement', 'run setup from the pane');
+}), false);
+scene('mcp.setup-placement-preflight', async () => setupScene(async (w) => {
+  w.register.processInfo = () => null;
+  const before = setupSnapshot(w.base); const ran = await w.run();
+  expect(setupSnapshot(w.base)).toEqual(before);
+  return setupError(ran, 'mcp.setup-placement', 'registration writer refused');
+}), false);
+scene('mcp.setup-placement-write', async () => setupScene(async (w) => {
+  let reads = 0;
+  w.register.processInfo = () => ++reads === 1 ? { shell: 7001, foreground: [7002] } : null;
+  const ran = await w.run(); expect(reads).toBe(2);
+  expect(readFileSync(w.file, 'utf8')).toContain('server:team-inbox');
+  expect(existsSync(join(w.root, '.mcp.json'))).toBe(false);
+  return setupError(ran, 'mcp.setup-placement', 'registration refused after preflight');
+}), false);
+scene('mcp.setup-unchanged', async () => setupScene(async (w) => {
+  const before = setupSnapshot(w.base); const ran = await w.run(['setup', 'alpha', '--off', '--json']);
+  expect(setupSnapshot(w.base)).toEqual(before);
+  expect(JSON.parse(ran.out)).toMatchObject({ status: 'unchanged', changes: [] }); return ran;
+}), false);
+scene('mcp.setup-planned', async () => setupScene(async (w) => {
+  const before = setupSnapshot(w.base); const ran = await w.run(['setup', 'alpha', '--dry-run', '--json']);
+  expect(setupSnapshot(w.base)).toEqual(before);
+  expect(JSON.parse(ran.out)).toMatchObject({ status: 'setup', dry_run: true });
+  expect(JSON.parse(ran.out).changes).toHaveLength(3); return ran;
+}), false);
+scene('mcp.setup-written', async () => setupScene(async (w) => {
+  const ran = await w.run(); expect(JSON.parse(ran.out).status).toBe('setup');
+  expect(existsSync(join(w.root, '.mcp.json'))).toBe(true);
+  expect(existsSync(join(w.root, '.claude/settings.local.json'))).toBe(true);
+  expect(readState(join(w.root, '.agents')).sessions[SETUP_SESSION]?.seats.alpha?.pane).toBe(SETUP_PANE);
+  return ran;
+}), false);
+scene('mcp.setup-changed', async () => setupScene(async (w) => {
+  expect((await w.run()).code).toBe(0);
+  writeFileSync(w.file, readFileSync(w.file, 'utf8').replace('claude --model fixture', 'claude --model changed'));
+  const before = setupSnapshot(w.base); const ran = await w.run(['setup', 'alpha', '--off', '--json']);
+  expect(setupSnapshot(w.base)).toEqual(before);
+  return setupError(ran, 'mcp.setup-changed', 'launch line changed');
+}), false);
+scene('mcp.setup-write', async () => setupScene(async (w) => {
+  const rename = setupFs.renameSync; let hit = false;
+  const mock = spyOn(setupFs, 'renameSync').mockImplementation((from, to) => {
+    if (String(to) === join(w.root, '.team-channel-setup.json')) { hit = true; throw new Error('synthetic publication failure'); }
+    rename(from, to);
+  });
+  try {
+    const ran = await w.run(); expect(hit).toBe(true);
+    expect(existsSync(join(w.root, '.team-channel.lock'))).toBe(false);
+    expect(existsSync(join(w.root, '.mcp.json'))).toBe(false);
+    return setupError(ran, 'mcp.setup-write', 'could not be safely read or written');
+  } finally { mock.mockRestore(); }
+}), false);
+scene('mcp.setup-unsafe', async () => setupScene(async (w) => {
+  writeFileSync(join(w.root, '.mcp.json'), '{');
+  const before = setupSnapshot(w.base); const ran = await w.run();
+  expect(setupSnapshot(w.base)).toEqual(before);
+  return setupError(ran, 'mcp.setup-unsafe', 'valid JSON');
+}), false);
+
 // The server ends cleanly when its client closes stdin: no lines in, no lines out, exit 0. It
 // starts in a lobby, which is no checkout's work tree, so the registry record that holds the seat
 // is the team it serves.

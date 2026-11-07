@@ -5,10 +5,10 @@ lobby, the seat guards beside them, and the public front the connector dials —
 without touching it. `team mcp status` prints one table per leg and the state they add up to;
 `team mcp doctor` turns the same surface into findings, each missing one with a one-line fix. Both
 are read-only: nothing is written, no secret value is ever printed (a secret is named, never
-shown), and no privileged command is run. The mutating side — `setup`, `enable`, `disable`, key
-generation, certificate minting — is not in this build yet.
+shown), and no privileged command is run. Bridge enable, disable, key generation and certificate minting are not in this build yet.
+`setup` prepares one hand-started Claude seat’s local inbox channel, as described below.
 
-The third subcommand, `team mcp serve`, is the other direction: one seat's inbox, spoken to the
+`team mcp serve` is the other direction: one seat's inbox, spoken to the
 CLI that started it as a Model Context Protocol server over stdin and stdout. Its stdout carries
 JSON-RPC lines only. It reads only that seat's own drop folder, writes one listener marker while
 it runs, and writes one receipt per message it returns — the signed status receipt `team
@@ -23,6 +23,41 @@ one, is carried by the server's `--epoch`. Both proofs run again on every tool c
 channel push, so a seat stopped, moved or relaunched while an old process lives is served nothing
 by it: no list, no body and no receipt, and no push marker. One window remains: a declaration
 that changes between that last look and the body or notification it guards.
+
+## Setup for a hand-started Claude seat
+
+Run `team mcp setup <seat>` from the folder that Claude starts in, within the intended team.
+A local `.agents/team.yaml` selects that folder’s team; otherwise the closest containing
+registered team root selects it. Seat names may repeat across teams. A folder in no team is
+refused even if only one registered team has that seat name. Setup takes no `--session`.
+It prepares three changes:
+
+1. The same scoped `.mcp.json` server entry and `.claude/settings.local.json` named approval that a launch prepares. The entry uses this install’s runner, the seat, the registered session and the current claim’s epoch when present. Unrelated JSON values retain their original source bytes.
+2. The seat’s launch line gains `--dangerously-load-development-channels server:team-inbox` through the existing config editor. Another declared channel stays enabled, and repeating setup adds the flag and approval name once.
+3. The existing registration flow records the calling pane and its process identity. Registration may establish a new brief claim; the project pair is bound to that resulting epoch before publication, so serve can prove placement and lifetime.
+
+The owner or the named seat itself may request setup. The config editor’s existing admission
+still applies; being that seat does not grant permission to edit its launch line. A refused
+config gate writes no project files or placement. The existing registration gate must also
+admit the calling pane. Setup refuses an unknown, stopped, human or non-Claude seat, an unsafe
+or linked folder, an unowned server entry, malformed JSON and explicit local server rejection.
+It adds only the `team-inbox` approval name and changes no trust store.
+
+`--dry-run` prints the three planned changes and writes nothing. `--json` prints a
+`team.mcp-setup` document with `format`, `seat`, `session`, `cwd`, `dry_run`, `status` and
+`changes`. Refusals use the `team.error` envelope. Setup exits 0 on success or an unchanged
+`--off`, 1 on refusal and 2 for an invalid invocation.
+
+`--off` restores the launch line and the two project files from the private
+`.team-channel-setup.json` record in this folder. With no intervening edits, both files return
+byte for byte to their previous contents or absence. Unrelated edits made afterward are kept;
+a changed setup-owned entry or launch line is refused. An approval that existed before setup
+stays. Placement remains recorded. The record is removed only after both project files are
+restored; an empty settings directory created by setup is removed too. Keep this record until
+setup is turned off. `team mcp doctor` names it when run from the same folder, without
+reading or printing its stored configuration. The three changes are separate writes: a later failure can leave the
+launch or placement recorded, or a bounded partial project pair. Fix the stated refusal and
+repeat setup; no failed preparation starts a CLI.
 
 For a channel-enabled Claude launch, TeamCLI generates a seat-scoped project `.mcp.json` in
 `<lobby>/<seat>/` after the actual claim and before starting Claude. The `team-inbox` entry uses
@@ -89,13 +124,16 @@ carries the reason.
 
     team mcp status [--json]
     team mcp doctor [--json]
+    team mcp setup <seat> [--off] [--dry-run] [--json]
     team mcp serve --seat <seat> [--session <session>] [--file <path>] [--epoch <run_id>]
 
 ## Flags
 
 | Flag | Value | Effect |
 | --- | --- | --- |
-| `--json` | — | the report as one `team.mcp` document (`format: 1`) instead of the lines; a run whose invocation can't be read writes the structured error document; `serve` takes no `--json` |
+| `--json` | — | the report as one `team.mcp` document (`format: 1`) instead of the lines (`team.mcp-setup` for setup); a run whose invocation can't be read writes the structured error document; `serve` takes no `--json` |
+| `--off` | — | `setup` only: restore only the changes this folder’s setup record owns |
+| `--dry-run` | — | `setup` only: check the existing gates and print the three changes without writing |
 | `--seat` | a seat the team file declares | `serve` only, required: the seat whose inbox is served. The server is started by that seat's launch line, and this argument must name the seat it was started for |
 | `--session` | the team's session | `serve` only: stamped on the listener and on every receipt; must be the team file's own session |
 | `--file` | a team file | `serve` only: the team file the seat's launch read. A seat that starts in a lobby has no team file in its folder, so its registration names the launch's file and the server reads that instead. Without `--file` the server reads the registry record that holds the seat (`--session` picks between teams that share a seat name), never a team file from the folder it starts in |
@@ -107,6 +145,7 @@ carries the reason.
 | Caller | May |
 | --- | --- |
 | anyone, in any terminal | run `status` or `doctor`: both write nothing at all |
+| the owner or the named seat itself | request `setup` for a live Claude seat, subject to the existing config and registration gates |
 | a seat's own launch line | start `serve` for that seat, from the process the launch starts: the server proves that process places as that seat, on the pane the state records for it, and re-proves it on every tool call and channel push; it writes only that seat's listener marker, one receipt per verified read in the seat's own drop folder, and — when it declares the channel — one push marker per record it notifies |
 
 ## Output and exit codes
@@ -117,6 +156,9 @@ carries the reason.
 | `status`: a leg is down, or the lobby holds no bridge config at all | the same lines, with the `MISS` rows, closing with `state: down` or `state: not-set-up` | 1 |
 | `doctor`: nothing missing | the context line, then one finding per line — the level, then the sentence — with a `fix:` line under each finding that has one, then `team mcp doctor: nothing missing, <n> warnings` (`0 warnings` when there are none) | 0 |
 | `doctor`: at least one `MISS` | the same findings, and the closing count | 1 |
+| `setup`: prepared, restored, planned, or already off | the three scoped changes, or `team.mcp-setup` with `--json` | 0 |
+| `setup`: admission, placement or safe publication refused | the reason, or `team.error` with `--json` | 1 |
+| `setup`: invalid invocation | the reason, or `team.error` with `--json` | 2 |
 | `serve`: the client closed stdin | nothing on stderr; on stdout only the JSON-RPC replies the client's requests asked for — `initialize`, `ping`, `tools/list`, each tool call's result — and, when the server declares the channel, one `notifications/claude/channel` per record that arrived while it ran — then the process ends | 0 |
 | `serve`: the invocation, the team placement, the caller's placement, the launch or the inbox folder can't be read | `team mcp serve: <reason>` on stderr, nothing on stdout; the server never starts | 2 |
 | the invocation can't be read: no subcommand, an unknown one, an option this build does not know | `team mcp: <reason>`, with the usage | 2 |

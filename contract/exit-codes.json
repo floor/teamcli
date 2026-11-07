@@ -1593,6 +1593,13 @@
     {
       "code": 0,
       "command": "config",
+      "id": "config.planned",
+      "meaning": "internal config preflight passed admission and validation without publishing the change",
+      "trigger": "team mcp setup worker --dry-run"
+    },
+    {
+      "code": 0,
+      "command": "config",
       "id": "config.project.rules-unchanged",
       "meaning": "the project already writes those rules; nothing was written",
       "trigger": "team config set project.<name>.rules [ ]"
@@ -1750,6 +1757,13 @@
       "id": "config.path",
       "meaning": "the path cannot be set (a value on the way, or no such list item); nothing was written",
       "trigger": "team config set seats.ghost.cli claude"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.plan-invalid",
+      "meaning": "internal config preflight found an invalid proposed configuration and wrote nothing",
+      "trigger": "team mcp setup worker --dry-run"
     },
     {
       "code": 2,
@@ -3070,6 +3084,27 @@
     {
       "code": 0,
       "command": "mcp",
+      "id": "mcp.setup-planned",
+      "meaning": "the three planned changes passed preflight and nothing was written",
+      "trigger": "team mcp setup worker --dry-run"
+    },
+    {
+      "code": 0,
+      "command": "mcp",
+      "id": "mcp.setup-unchanged",
+      "meaning": "off found no setup record and changed nothing",
+      "trigger": "team mcp setup worker"
+    },
+    {
+      "code": 0,
+      "command": "mcp",
+      "id": "mcp.setup-written",
+      "meaning": "setup prepared or restored the project pair and launch line; setup recorded the calling pane",
+      "trigger": "team mcp setup worker"
+    },
+    {
+      "code": 0,
+      "command": "mcp",
       "id": "mcp.up",
       "meaning": "every observed bridge leg is up",
       "trigger": "team mcp status"
@@ -3096,6 +3131,90 @@
       "trigger": "team mcp status"
     },
     {
+      "code": 1,
+      "command": "mcp",
+      "id": "mcp.setup-caller",
+      "meaning": "the caller is neither the owner nor the named seat itself",
+      "trigger": "team mcp setup worker"
+    },
+    {
+      "code": 1,
+      "command": "mcp",
+      "id": "mcp.setup-changed",
+      "meaning": "the setup-owned launch line changed after setup",
+      "trigger": "team mcp setup worker"
+    },
+    {
+      "code": 1,
+      "command": "mcp",
+      "id": "mcp.setup-config-preflight",
+      "meaning": "the existing config gate or validation refuses the launch change before any setup write",
+      "trigger": "team mcp setup worker"
+    },
+    {
+      "code": 1,
+      "command": "mcp",
+      "id": "mcp.setup-config-write",
+      "meaning": "the config editor refuses the actual launch write before project or placement writes",
+      "trigger": "team mcp setup worker"
+    },
+    {
+      "code": 1,
+      "command": "mcp",
+      "id": "mcp.setup-pane-required",
+      "meaning": "setup has no calling pane to register",
+      "trigger": "team mcp setup worker"
+    },
+    {
+      "code": 1,
+      "command": "mcp",
+      "id": "mcp.setup-placement-preflight",
+      "meaning": "the existing register preflight refuses the calling pane before any setup write",
+      "trigger": "team mcp setup worker"
+    },
+    {
+      "code": 1,
+      "command": "mcp",
+      "id": "mcp.setup-placement-write",
+      "meaning": "registration refuses after preflight; the launch change remains and no project pair was published",
+      "trigger": "team mcp setup worker"
+    },
+    {
+      "code": 1,
+      "command": "mcp",
+      "id": "mcp.setup-seat",
+      "meaning": "the seat is not a declared live nonhuman Claude seat",
+      "trigger": "team mcp setup worker"
+    },
+    {
+      "code": 1,
+      "command": "mcp",
+      "id": "mcp.setup-team-read",
+      "meaning": "the team selected by the starting folder cannot be read at its own root",
+      "trigger": "team mcp setup worker"
+    },
+    {
+      "code": 1,
+      "command": "mcp",
+      "id": "mcp.setup-team-root",
+      "meaning": "the starting folder has no local team file or containing registered team root",
+      "trigger": "team mcp setup worker"
+    },
+    {
+      "code": 1,
+      "command": "mcp",
+      "id": "mcp.setup-unsafe",
+      "meaning": "a setup ownership, content or lifetime check refused the operation",
+      "trigger": "team mcp setup worker"
+    },
+    {
+      "code": 1,
+      "command": "mcp",
+      "id": "mcp.setup-write",
+      "meaning": "the scoped project publication refused; a bounded partial pair and restoration record may remain",
+      "trigger": "team mcp setup worker"
+    },
+    {
       "code": 2,
       "command": "mcp",
       "id": "mcp.invocation",
@@ -3108,6 +3227,13 @@
       "id": "mcp.serve-refused",
       "meaning": "the inbox server can't start: the invocation, the team placement or its inbox folder can't be read",
       "trigger": "team mcp serve"
+    },
+    {
+      "code": 2,
+      "command": "mcp",
+      "id": "mcp.setup-invocation",
+      "meaning": "the setup arguments are invalid",
+      "trigger": "team mcp setup worker"
     },
     {
       "code": 0,
