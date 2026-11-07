@@ -56,7 +56,10 @@ export const VERB_OPS: Readonly<Record<string, Readonly<Record<string, GeneralOp
   seat: { add: 'add', remove: 'remove', restart: 'restart', rename: 'rename' },
 };
 export const GENERAL_GRANT_ID = /^gg_[0-9a-f]{24}$/;
-const MAX_CHAIN = 4;
+/** A grant may name this many ancestors. The grant itself is not an ancestor. */
+export const MAX_CHAIN = 4;
+/** Said when issuing would write a grant past `MAX_CHAIN`, before any signature or file. */
+export const CHAIN_LIMIT_REASON = `a general grant may name at most ${MAX_CHAIN} ancestors`;
 
 export type GeneralGrant = {
   grant_id: string;
@@ -162,10 +165,32 @@ export function issueOwnerGeneralGrant(home: string, input: IssueInput, now: Dat
   return out.ok ? { ok: true, grant: g, path: out.path } : out;
 }
 
+/** How many ancestors `grant` names. A root names none. A chain that cannot be read, or that
+ *  repeats, answers the reason instead of a count. */
+function ancestorCount(home: string, grant: GeneralGrant, now: Date): R<{ count: number }> {
+  let count = 0;
+  let cursor = grant;
+  const seen = new Set<string>();
+  while (cursor.parent !== null) {
+    if (seen.has(cursor.grant_id)) return { ok: false, why: 'the grant chain repeats' };
+    seen.add(cursor.grant_id);
+    count += 1;
+    const parent = readGeneralGrant(home, generalGrantPath(home, cursor.parent), now);
+    if (!parent.ok) return parent;
+    cursor = parent.grant;
+  }
+  return { ok: true, count };
+}
+
 /** A holder's issue to another principal, within its own scope, signed by the holder's client key. */
 export function issueHeldGeneralGrant(home: string, parentPath: string, holderKeyPath: string, input: IssueInput, now: Date = new Date()): R<{ grant: GeneralGrant; path: string }> {
   const parent = readGeneralGrant(home, parentPath, now);
   if (!parent.ok) return parent;
+  // The child would stand one step past the parent. A parent already at the limit would make a
+  // grant the reader refuses, so the file is never signed and never written.
+  const ancestors = ancestorCount(home, parent.grant, now);
+  if (!ancestors.ok) return ancestors;
+  if (ancestors.count >= MAX_CHAIN) return { ok: false, why: CHAIN_LIMIT_REASON };
   const held = readClientPrivateKey(home, holderKeyPath);
   if (!held.ok) return held;
   if (held.publicKey !== parent.grant.public_key) return { ok: false, why: 'the key does not match the parent grant' };
@@ -370,4 +395,43 @@ export function widenedGrantNote(widened: WidenedGrant): string {
 /** What `team check` and `team doctor` print: one note per widened grant, in grant-id order. */
 export function widenedGrantNotes(home: string, now: Date = new Date()): string[] {
   return wildcardGrantsWidened(home, now).map(widenedGrantNote);
+}
+
+/** `<id> <- <parent> <- ... <- <root>`, then whether this grant is a wildcard, whether it may
+ *  issue, and its expiry. The root is the id alone. */
+function grantChainLine(home: string, grant: GeneralGrant, now: Date): string {
+  const ids = [grant.grant_id];
+  let parentId = grant.parent;
+  const seen = new Set<string>(ids);
+  while (parentId !== null && !seen.has(parentId) && ids.length <= MAX_CHAIN + 1) {
+    seen.add(parentId);
+    ids.push(parentId);
+    const parent = readGeneralGrant(home, generalGrantPath(home, parentId), now);
+    if (!parent.ok) break;
+    parentId = parent.grant.parent;
+  }
+  const kind = grant.ops.includes(ALL_OPS) ? 'wildcard' : 'not a wildcard';
+  const issue = grant.may_issue ? 'may issue' : 'may not issue';
+  return `${ids.join(' <- ')}; ${kind}; ${issue}; expires ${grant.expires}`;
+}
+
+/** One line per verified general grant, in grant-id order. A file that does not verify is skipped. */
+export function generalGrantChainNotes(home: string, now: Date = new Date()): string[] {
+  const folder = generalGrantsFolder(home);
+  let names: string[];
+  try {
+    names = readdirSync(folder).sort();
+  } catch {
+    return [];
+  }
+  const lines: string[] = [];
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    const id = name.slice(0, -'.json'.length);
+    if (!GENERAL_GRANT_ID.test(id)) continue;
+    const read = readGeneralGrant(home, join(folder, name), now);
+    if (!read.ok) continue;
+    lines.push(grantChainLine(home, read.grant, now));
+  }
+  return lines;
 }
