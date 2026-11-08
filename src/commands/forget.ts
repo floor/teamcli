@@ -55,10 +55,12 @@ export async function runForget(argv: string[], io: Io, sources: ForgetSources =
   let seatApproved = false;
   let seatRefused = false;
   // Every key is resolved before the charter is asked, so the gate judges the teams being
-  // forgotten and one bad word removes nothing.
+  // forgotten and one bad word removes nothing. A missing id is said only to the owner.
+  // Anyone else gets the owner answers and learns nothing about whether the record is there.
   const resolved = resolveKeys(home, keys);
-  if (!resolved.ok) return resolved.missing ? missing(io, json, resolved.key) : refused(io, json, `${resolved.why}; nothing was forgotten`);
-  const targets = resolved.teams.map((team) => team.root);
+  const hiddenMiss = !resolved.ok && resolved.missing === true && !isOwner(caller);
+  if (!resolved.ok && !hiddenMiss) return resolved.missing ? missing(io, json, resolved.key) : refused(io, json, `${resolved.why}; nothing was forgotten`);
+  const targets = resolved.ok ? resolved.teams.map((team) => team.root) : [];
   const seat = ownerSeatStep('forget', 'team-forget', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.values.approval !== undefined, json, reason: args.values.reason }, io, seatSources, targets);
   if (seat.kind === 'requested') {
     // exit: forget.approval-requested
@@ -83,6 +85,7 @@ export async function runForget(argv: string[], io: Io, sources: ForgetSources =
     // exit: forget.approval-refused
     return 1;
   }
+  if (!resolved.ok) return refused(io, json, `only the owner forgets a team record, from a terminal outside herdr; this call is ${describeCaller(caller)}`);
   const forgot: { id: string; project: string }[] = [];
   for (const team of resolved.teams) {
     let removed;
