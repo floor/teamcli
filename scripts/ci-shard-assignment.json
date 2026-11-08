@@ -687,6 +687,7 @@
     "test/lead-default-approval.test.ts": 1,
     "test/lead-default.test.ts": 2,
     "test/lead-gates.test.ts": 3,
+    "test/leads-authority.test.ts": 3,
     "test/lead-pin-independent.test.ts": 1,
     "test/lead-swap-boundaries.test.ts": 2,
     "test/lead-word-independent.test.ts": 5,
