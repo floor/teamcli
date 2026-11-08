@@ -7,7 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
-import { callerLabel, callerOf, isOwner, type Caller } from '../caller.ts';
+import { callerLabel, callerOf, isOwner, standingOf, type Caller } from '../caller.ts';
 import { syncChildTimeout } from '../child.ts';
 import { charterGate } from '../charter/check.ts';
 import { isSameOrInside } from '../grant.ts';
@@ -17,6 +17,7 @@ import { findRoot } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { ownerSubjectProof } from '../dev_mode.ts';
+import { leadsCommandExcluded, leadsOwnTeamAdmits, leadsOwnTeamAtCwd } from '../leads-authority.ts';
 import { readTeams } from '../registry/teams.ts';
 import type { Io } from '../io.ts';
 import { refuse } from '../output/index.ts';
@@ -68,6 +69,44 @@ export function charterTargetOf(cwd: string, file?: string): string {
   return findRoot(aimed) ?? findRoot(dirname(aimed)) ?? (file === undefined ? resolve(cwd) : dirname(aimed));
 }
 
+function leadsAdmissionAt(
+  io: Io,
+  home: string,
+  command: string,
+  sources: OwnerSeatSources,
+  targets: readonly string[],
+  now: Date,
+) {
+  const aimed = sources.root ?? targets[0];
+  if (aimed === undefined) return leadsOwnTeamAtCwd(io, { command, home, now });
+  let loaded: ReturnType<typeof readTeamConfig>;
+  try {
+    loaded = readTeamConfig(aimed, { home });
+  } catch {
+    return null;
+  }
+  if (!loaded.ok) return null;
+  // Every folder this run changes has to sit in the one team the caller is placed on.
+  // A later folder outside that root is another team's, and the first folder does not admit it.
+  const root = resolve(loaded.root);
+  for (const target of targets) {
+    if (!isSameOrInside(root, resolve(target))) return null;
+  }
+  const dir = dirname(loaded.path);
+  const caller = callerOf(io, loaded.team.session);
+  return leadsOwnTeamAdmits({
+    caller,
+    team: loaded.team,
+    teamFile: loaded.team,
+    at: standingOf(dir, loaded.team.session, caller),
+    home,
+    root: loaded.root,
+    command,
+    now,
+    dir,
+  });
+}
+
 /** `--request` and `--approval <id>` for one command. `none` when neither was passed.
  *  `targets` are the folders the command will change. The charter is asked for every one of
  *  them; an empty list is no charter admission and never falls back to the caller's cwd.
@@ -82,26 +121,34 @@ export function ownerSeatStep(
   targets: readonly string[] = [],
 ): OwnerSeatStep {
   const home = sources.home ?? homedir();
-  // The owner at a terminal is admitted by being the owner. The charter only widens what a
-  // caller who is not the owner may do, and it never refuses the owner. It admits a routine
-  // operation only when every folder that operation changes sits under it. Development mode is
-  // the machine's, so only the owner's own answer admits it. A grant has no one folder: an empty
-  // target list never admits it. No target is not the caller's cwd.
+  const now = sources.now?.() ?? new Date();
+  // A charter the owner wrote is a deny, and it is asked before the default rule. A block
+  // refuses a placed lead. Absent is not a deny. The owner at a terminal is admitted by being
+  // the owner on this door; a command whose scene refuses the owner asks the charter itself.
+  // Development mode is the machine's, so only the owner's own answer admits it. An empty
+  // target list is no charter admission and is never the caller's cwd.
+  let charterSigner: string | null = null;
   if (!isOwner(callerOf(io)) && command !== 'development-mode' && targets.length > 0) {
-    let signer: string | null = null;
     for (const target of targets) {
       const gate = charterGate(home, { operation: command === 'client' ? 'grant' : command, cwd: io.cwd, path: target }, sources.ownerSeatStore);
       if (gate.kind === 'block') {
         refuse(io, ask.json, command, { id: `${command}.approval-refused`, message: gate.message, repair: null });
         return { kind: 'refused' };
       }
-      if (gate.kind === 'admit') signer = gate.signer;
+      if (gate.kind === 'admit') charterSigner = gate.signer;
     }
-    // A caller who asked for the card gets the card. The charter may admit a run that did not.
-    if (signer !== null && !ask.request) return { kind: 'admitted', admission: { ok: true, via: 'charter', signer } };
   }
+  // An excluded command stays on the path this door had before the default rule. Forget is
+  // one of them: the charter above already judged the named targets, and the rule must not
+  // look a team up for it. `--request` records the card and writes nothing, even when the
+  // default rule would have admitted the run.
+  const leads = ask.request || leadsCommandExcluded(command) ? null : leadsAdmissionAt(io, home, command, sources, targets, now);
+  if (leads !== null) {
+    return { kind: 'admitted', admission: { ok: true, via: 'leads', signer: leads.role } };
+  }
+  // A caller who asked for the card gets the card. The charter may admit a run that did not.
+  if (charterSigner !== null && !ask.request) return { kind: 'admitted', admission: { ok: true, via: 'charter', signer: charterSigner } };
   if (!ask.request && ask.approval === undefined) return { kind: 'none' };
-  const now = sources.now?.() ?? new Date();
   const refused = (message: string): OwnerSeatStep => {
     refuse(io, ask.json, command, { id: `${command}.approval-refused`, message, repair: null });
     return { kind: 'refused' };
@@ -295,4 +342,3 @@ export function ownerAdmitsRecord(action: OwnerAction, io: Io, targets: readonly
     return { ok: false, kind: 'caller', caller };
   }
 }
-

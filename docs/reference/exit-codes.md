@@ -26,6 +26,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.ceilings` | `add` | 1 | a record that does not verify is not in force | `team add worker` |
 | `add.changed` | `add` | 1 | the file changed while add was checking | `team add worker` |
 | `add.client-refused` | `add` | 1 | the owner-signed manager grant, or the client add it admits, did not verify, or the seat is a lead seat | `team add Desk --like worker --client grant.json --key client.key --team docs` |
+| `add.coordinator` | `add` | 1 | only the owner changes the orchestrator's seat | `team add lead` |
 | `add.cwd` | `add` | 1 | the seat's cwd is outside the project and matches no trust path | `team add worker` |
 | `add.default-session` | `add` | 1 | the session can't be "default" | `team add worker --session default` |
 | `add.delegate` | `add` | 1 | the caller is not the approved delegate | `team add worker` |
@@ -257,6 +258,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `config.name-taken` | `config` | 1 | a nickname the change sets is already held by another team's seat; nothing was written | `team config set seats.worker.label "Cicero · implementer"` |
 | `config.no-value` | `config` | 1 | the path holds nothing in the record | `team config get watch.missing` |
 | `config.not-owner` | `config` | 1 | an edit was run by a caller that is not the owner | `team config set watch.unread_after 5m` |
+| `config.orchestrator` | `config` | 1 | a caller other than the owner changed the orchestrator's seat | `team config set coordinator ops` |
 | `config.path` | `config` | 1 | the path cannot be set (a value on the way, or no such list item); nothing was written | `team config set seats.ghost.cli claude` |
 | `config.plan-invalid` | `config` | 1 | internal config preflight found an invalid proposed configuration and wrote nothing | `team mcp setup worker --dry-run` |
 | `config.editor` | `config` | 2 | the editor exited non-zero; nothing was written | `team config edit` |
@@ -729,7 +731,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `restart.client-refused` | `restart` | 1 | the owner-signed manager grant, or the client restart it admits, did not verify | `team restart worker --client grant.json --key client.key` |
 | `restart.detached` | `restart` | 1 | a run with no terminal | `team restart worker` |
 | `restart.herdr` | `restart` | 1 | herdr doesn't answer | `team restart worker` |
-| `restart.lead` | `restart` | 1 | a seat caller passed --abandon for the orchestrator's or the operator's seat | `team restart lead --abandon` |
+| `restart.lead` | `restart` | 1 | a seat caller passed --abandon for the orchestrator's seat | `team restart lead --abandon` |
 | `restart.no-session` | `restart` | 1 | the herdr session is not running | `team restart worker` |
 | `restart.not-ready` | `restart` | 1 | preflight or launch did not produce a ready seat | `team restart worker` |
 | `restart.replaced` | `restart` | 1 | the old pane holds a process that is not the seat's CLI | `team restart worker` |

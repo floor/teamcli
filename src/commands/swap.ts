@@ -5,6 +5,7 @@ import {
   describeCaller,
   detachedRefusal,
   fileOwnerRefusal,
+  callerOf,
   isOwner,
   judgeCallerIn,
   mayChangeTeamVerdict,
@@ -15,6 +16,7 @@ import {
   type CallerVerdict,
 } from '../caller.ts';
 import { charterTargetOf } from '../client/owner-action-step.ts';
+import { leadsOwnTeamAdmits } from '../leads-authority.ts';
 import { charterGate } from '../charter/check.ts';
 import type { DelegateSources } from '../delegate.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
@@ -294,15 +296,44 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
 
   const walked = walkCaller(rawIo);
   const gate = charterGate(home, { operation: 'swap', cwd: rawIo.cwd, path: charterTargetOf(rawIo.cwd, args.values.file) }, options.ownerSeatStore);
+  const peeked = !isOwner(walked) && sub === 'now' ? currentTeam(rawIo.cwd, undefined, now, home, false) : null;
+  const placedCaller = peeked?.ok === true ? callerOf(rawIo, peeked.team.session) : null;
+  // The orchestrator seat is refused, so that refusal must not leave an admission line.
+  // The line is written only once the run is actually admitted.
+  const wouldAdmit = placedCaller !== null && peeked?.ok === true && leadsOwnTeamAdmits({
+    caller: placedCaller,
+    team: peeked.team,
+    teamFile: peeked.team,
+    at: standingOf(peeked.dir, peeked.team.session, placedCaller),
+    home,
+    root: peeked.root,
+    command: 'swap',
+    now,
+  }) !== null;
+  const leadNow = wouldAdmit && peeked?.ok === true && seatName !== peeked.team.orchestrator;
+  if (leadNow && placedCaller !== null && peeked?.ok === true) {
+    leadsOwnTeamAdmits({
+      caller: placedCaller,
+      team: peeked.team,
+      teamFile: peeked.team,
+      at: standingOf(peeked.dir, peeked.team.session, placedCaller),
+      home,
+      root: peeked.root,
+      command: 'swap',
+      now,
+      dir: peeked.dir,
+    });
+  }
+  // A charter block is a deny the owner wrote. It wins over the default rule.
   if (gate.kind === 'block' && !isOwner(walked)) {
     refuse(rawIo, io, json, 'swap.caller', plainText(gate.message), `the owner widens the charter with team setup --edit`, undefined, 'owner-or-leads');
     return 'caller';
   }
   const covered = gate.kind === 'admit' && !isOwner(walked);
-  const owner = isOwner(walked) || covered;
+  const owner = isOwner(walked) || covered || leadNow;
 
-  if (sub === 'now' && !covered) {
-    // `team swap now` is the owner's alone: forcing the swap is the owner's word.
+  if (sub === 'now' && !covered && !leadNow) {
+    // Forcing a swap of the orchestrator seat stays the owner's. Any other seat is the lead's.
     const detached = detachedRefusal(walked, { who: 'the owner', where: 'a terminal outside herdr or its own seat' });
     if (detached !== undefined) {
       refuse(rawIo, io, json, 'swap.detached', plainText(detached), null, undefined, 'owner-only');
@@ -314,7 +345,9 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
         io,
         json,
         'swap.caller',
-        `only the owner forces a swap; this call is ${describeCaller(walked)}`,
+        peeked?.ok === true && wouldAdmit && seatName === peeked.team.orchestrator
+          ? `only the owner changes the orchestrator's seat; this call is ${describeCaller(walked)}`
+          : `only the owner forces a swap; this call is ${describeCaller(walked)}`,
         null,
         undefined,
         'owner-only',

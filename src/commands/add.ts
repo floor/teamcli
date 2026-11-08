@@ -1,12 +1,12 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { auditClientRefusal, authorizeClientRun, clientFormProblem, clientRosterText, verifyClientForm, type ClientRun } from '../client/client-form.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { approvedFingerprints, budgetsInForceOf, ceilingsOf, notInForce, recordSeatDigestOf } from '../approve/approval.ts';
 import { fingerprints } from '../approve/fingerprint.ts';
 import { readArgs } from '../args.ts';
-import { describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
+import { callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from '../commands/doctor.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
@@ -15,6 +15,8 @@ import { ADD_DELEGATE_EDIT, delegateGate, logDelegated } from '../delegate.ts';
 import { devModeExpiryNote, devModeFileApproval, devModeMark, devModeOwnerLift, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import type { ActingCommand } from '../delegate-types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
+import { pathInsideRoot } from '../charter/body.ts';
+import { leadsOwnTeamAdmits, orchestratorSeatStaysOwner } from '../leads-authority.ts';
 import { maybeAutoOrder, realAutoOrderSources } from '../launch/auto-order.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { removeRulesFile, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
@@ -200,6 +202,63 @@ type BuildRefusal = { error: string; id: string; repair?: string };
 export const add: Command = (argv, io) => runAdd(argv, io, realSources);
 export default add;
 
+function resolvedPath(path: string): string | null {
+  try {
+    return realpathSync(path);
+  } catch {
+    return null;
+  }
+}
+
+/** The flagged file's real path. A file that is not there yet uses its parent's real path plus
+ *  its own name. A symlink is followed. Null when the path cannot be resolved. */
+function flaggedFileReal(cwd: string, file: string): string | null {
+  const aimed = resolve(cwd, file);
+  const own = resolvedPath(aimed);
+  if (own !== null) return own;
+  const parent = resolvedPath(dirname(aimed));
+  if (parent === null) return null;
+  return join(parent, basename(aimed));
+}
+
+/** The placed lead or operator of the team at `cwd`, and whether these flags stay inside it.
+ *  The flagged file is not read. Null when this caller is not that lead or operator.
+ *  The caller is placed in the team's own session: `walkCaller` answers unplaced for every
+ *  real seat, so it cannot be the admission. The standing is the pane that session records. */
+function ownTeamFlagBounds(
+  io: Io,
+  sources: AddSources,
+  file: string | undefined,
+  session: string | undefined,
+): { fileInside: boolean; sessionOwn: boolean } | null {
+  const named = readTeamConfig(io.cwd, { home: sources.home });
+  if (!named.ok) return null;
+  const dir = dirname(named.path);
+  const caller = callerOf(io, named.team.session);
+  if (leadsOwnTeamAdmits({
+    caller,
+    team: named.team,
+    teamFile: named.team,
+    at: standingOf(dir, named.team.session, caller),
+    home: sources.home,
+    root: named.root,
+    command: 'add',
+    now: sources.now(),
+    dir,
+  }) === null) return null;
+  let rootReal: string;
+  try {
+    rootReal = realpathSync(named.root);
+  } catch {
+    return { fileInside: false, sessionOwn: false };
+  }
+  const real = file === undefined ? null : flaggedFileReal(io.cwd, file);
+  return {
+    fileInside: file === undefined || (real !== null && pathInsideRoot(rootReal, real)),
+    sessionOwn: session === undefined || session === named.team.session,
+  };
+}
+
 export async function runAdd(argv: string[], io: Io, sources: AddSources = realSources): Promise<number> {
   // `--json` is read off the raw argv before the parser: an invocation the parser refuses still
   // owes the `team.error` document rather than the plain usage line.
@@ -309,16 +368,33 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // its `last_valid` in that project's state. The one place every command whose `--file` is the owner's
   // decides it is `fileOwnerRefusal` (caller.ts).
   //
+  // A placed lead or operator of this team is the exception, and only for a path that stays
+  // inside this team's own root, or a `--session` that names this team's own session. An outside
+  // path, a symlink that leaves the root, or a path that cannot be resolved is still the owner's
+  // sentence, and it is decided before the flagged file is read. Any other session is another team.
+  //
   // A `delegates` section hands these owner-only flags to the gate as well: a non-owner aiming
   // either is still refused before the flagged file or the flag's session is read — never the
   // walk's sentence but the gate's verdict, which names the flag for the approved delegate and
   // the caller for anyone else. The eligibility that asks is the default live file's alone, so
   // the flagged file is not read at all; with no `delegates` section there, today's refusal
   // stands, byte for byte.
-  const walked = args.values.session !== undefined ? walkCaller(io) : undefined;
-  const fileFlag = fileOwnerRefusal(io, args.values.file);
-  const flagRefusal = fileFlag
-    ?? (walked !== undefined && !isOwner(walked) ? sessionOwnerRefusal(walked) : undefined);
+  const walkedForSession = args.values.session !== undefined ? walkCaller(io) : undefined;
+  let fileFlag = fileOwnerRefusal(io, args.values.file);
+  let sessionFlag = walkedForSession !== undefined && !isOwner(walkedForSession) ? sessionOwnerRefusal(walkedForSession) : undefined;
+  if (fileFlag !== undefined || sessionFlag !== undefined) {
+    const bounds = ownTeamFlagBounds(io, sources, args.values.file, args.values.session);
+    if (bounds !== null) {
+      const fileOutside = args.values.file !== undefined && !bounds.fileInside;
+      if (fileOutside) sessionFlag = undefined;
+      else if (args.values.session !== undefined && !bounds.sessionOwn) fileFlag = undefined;
+      else {
+        fileFlag = undefined;
+        sessionFlag = undefined;
+      }
+    }
+  }
+  const flagRefusal = fileFlag ?? sessionFlag;
   if (flagRefusal !== undefined) {
     const named = readTeamConfig(io.cwd, { home: sources.home });
     if (named.ok && named.team.delegates) {
@@ -537,6 +613,30 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       // exit: add.caller
       return 1;
     }
+  }
+  // The orchestrator seat stays the owner's only when the default rule is what admitted the run.
+  // A passed delegate, a grant, a client run and the owner keep the start they had before this limit.
+  const admittedByLeads = seatStep.kind === 'admitted' && seatStep.admission.via === 'leads';
+  const byDefaultRule = delegatePane === null && clientRun === null && !isOwner(caller)
+    && !(createGranted && !admittedByLeads)
+    && leadsOwnTeamAdmits({
+      caller,
+      team,
+      teamFile: team,
+      at: standingOf(dir, session, caller),
+      home: sources.home,
+      root,
+      command: 'add',
+      now: sources.now(),
+    }) !== null;
+  if (!temporary && orchestratorSeatStaysOwner(team, args.rest[0] ?? '') && byDefaultRule) {
+    refuse(io, json, 'add', {
+      id: 'add.coordinator',
+      message: `only the owner changes the orchestrator's seat; this call is ${describeCaller(caller)}`,
+      repair: null,
+    });
+    // exit: add.coordinator
+    return 1;
   }
   if (session === 'default') {
     refuse(io, json, 'add', { id: 'add.default-session', message: 'session can\'t be "default", herdr\'s own session', repair: null });

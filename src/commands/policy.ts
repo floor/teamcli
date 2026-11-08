@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { ownerSeatHelperPath, readOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
@@ -6,6 +7,7 @@ import { readArgs } from '../args.ts';
 import { describeCaller, fileOwnerRefusal, isOwner, logTag, walkCaller } from '../caller.ts';
 import type { DelegateSources } from '../delegate.ts';
 import { devModeOwnerLiftAtCwd, type DevModeOwnerLift } from '../dev_mode.ts';
+import { leadsOwnTeamAtCwd, policyNeedsOwner, policyWriteOwnTeam, type LeadsAdmission } from '../leads-authority.ts';
 import { currentTeam } from '../file/current.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
@@ -65,6 +67,46 @@ export type PolicyCommandOptions = {
 function resolveNow(now: Date | (() => Date) | undefined): Date {
   if (typeof now === 'function') return now();
   return now ?? new Date();
+}
+
+/** The two roots name one checkout. A path that cannot be resolved is not that checkout. */
+function sameRecordRoot(a: string, b: string): boolean {
+  try {
+    return realpathSync(a) === realpathSync(b);
+  } catch {
+    return false;
+  }
+}
+
+/** A placed lead or operator sets a key that does not change who may act, at team level or for a
+ *  seat this team declares. A needs-owner key stays the owner's. Entity and project stay on the
+ *  owner's path: the dev-mode lift or the owner, the same as before the default rule.
+ *  `--file` is admitted only when it is this team's own record: the write and the admission
+ *  judge that same root. A file outside it gets no default-rule admission. */
+function leadPolicyRun(
+  io: Io,
+  options: PolicyCommandOptions,
+  rawLevel: string,
+  key: string,
+  seatFlag: string | undefined,
+  file: string | undefined,
+): LeadsAdmission | null {
+  if (policyNeedsOwner(normalizePolicyName(key))) return null;
+  const home = options.home ?? homedir();
+  let team: TeamFile | null = null;
+  try {
+    const loaded = readTeamConfig(io.cwd, { home });
+    if (loaded.ok) team = loaded.team;
+    if (file !== undefined) {
+      const flagged = readTeamConfig(io.cwd, { home, file });
+      if (!loaded.ok || !flagged.ok || !sameRecordRoot(loaded.root, flagged.root)) return null;
+      team = flagged.team;
+    }
+  } catch {
+    return null;
+  }
+  if (!policyWriteOwnTeam(rawLevel, seatFlag, team)) return null;
+  return leadsOwnTeamAtCwd(io, { command: 'policy', home, now: resolveNow(options.now) });
 }
 
 export const policy: Command = (argv, io) => runPolicy(argv, io);
@@ -631,8 +673,10 @@ function executePolicySet(
 
   const caller = walkCaller(rawIo);
   let lifted: DevModeOwnerLift | null = null;
+  const leadSet = rest[1] !== undefined ? leadPolicyRun(rawIo, options, rest[0] ?? '', rest[1], values.seat, values.file) : null;
+  if (leadSet !== null) io.stderr(`team policy: ${leadSet.warning}\n`);
   // A dry run prints the plan and writes nothing, so it never asks for Touch ID.
-  if (!flags.has('dry-run') && !isOwner(caller)) {
+  if (!flags.has('dry-run') && !isOwner(caller) && leadSet === null) {
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
     // The owner's dev-mode admission for exactly this gate.
     const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'policy', refusal: msg, home: options.home ?? homedir(), admitsOperator: true });
@@ -868,8 +912,10 @@ function executePolicyUnset(
 
   const caller = walkCaller(rawIo);
   let lifted: DevModeOwnerLift | null = null;
+  const leadUnset = rest[1] !== undefined ? leadPolicyRun(rawIo, options, rest[0] ?? '', rest[1], values.seat, values.file) : null;
+  if (leadUnset !== null) io.stderr(`team policy: ${leadUnset.warning}\n`);
   // A dry run prints the plan and writes nothing, so it never asks for Touch ID.
-  if (!flags.has('dry-run') && !isOwner(caller)) {
+  if (!flags.has('dry-run') && !isOwner(caller) && leadUnset === null) {
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
     // The owner's dev-mode admission for exactly this gate.
     const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'policy', refusal: msg, home: options.home ?? homedir(), admitsOperator: true });

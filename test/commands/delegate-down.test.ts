@@ -13,6 +13,7 @@ import type { DelegateVerdict } from '../../src/delegate.ts';
 import { approvalOf } from '../../src/approve/approval.ts';
 import { currentTeam } from '../../src/file/current.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
+import { writePolicySet } from '../../src/policy/index.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
 import { emptySession, updateState } from '../../src/state.ts';
@@ -199,6 +200,9 @@ describe('a file with no delegate', () => {
     writeFileSync(file, teamFile(delegate(['up', 'down']))
       .replace(/^operator: .*$/m, 'operator: codex-acme')
       .replace(/^    parked: true\s*$/m, ''));
+    // The map still refuses the operator. `owner-asks` keeps that refusal; the default admits the seat.
+    const asked = writePolicySet(home, { level: 'team', target: root, teamRoot: root, name: 'leads.authority', value: 'owner-asks' }, { now: NOW });
+    if (!asked.ok) throw new Error(asked.why);
     const OPERATOR: Caller = { kind: 'seat', name: 'codex-acme', pane: 'w2:p1', session: 'acme-web' };
     recordStanding('w2:p1', 'acme-web', OPERATOR.name);
     const r = rig({}, OPERATOR);

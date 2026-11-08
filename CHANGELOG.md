@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A team's lead and operator now run every command for their own team without the owner, except grant, delegate, revoke, the owner's identity and keys, recording a served project (`also_in`), and migrate, which writes a team's first authority record. The owner can restore the old gates with leads.authority: owner-asks.
+
 - The owner-reserved scope now names major releases; minor and patch releases are the leads' within their gates.
 
 - `team mcp setup <seat>` prepares a hand-started Claude seat’s scoped inbox channel, launch flag and calling-pane record, with a zero-write dry run and scoped removal.

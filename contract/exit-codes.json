@@ -144,6 +144,13 @@
     {
       "code": 1,
       "command": "add",
+      "id": "add.coordinator",
+      "meaning": "only the owner changes the orchestrator's seat",
+      "trigger": "team add lead"
+    },
+    {
+      "code": 1,
+      "command": "add",
       "id": "add.cwd",
       "meaning": "the seat's cwd is outside the project and matches no trust path",
       "trigger": "team add worker"
@@ -1757,6 +1764,13 @@
       "id": "config.not-owner",
       "meaning": "an edit was run by a caller that is not the owner",
       "trigger": "team config set watch.unread_after 5m"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.orchestrator",
+      "meaning": "a caller other than the owner changed the orchestrator's seat",
+      "trigger": "team config set coordinator ops"
     },
     {
       "code": 1,
@@ -5066,7 +5080,7 @@
       "code": 1,
       "command": "restart",
       "id": "restart.lead",
-      "meaning": "a seat caller passed --abandon for the orchestrator's or the operator's seat",
+      "meaning": "a seat caller passed --abandon for the orchestrator's seat",
       "trigger": "team restart lead --abandon"
     },
     {
