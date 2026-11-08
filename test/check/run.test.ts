@@ -425,7 +425,7 @@ describe('the command', () => {
         `${hash.clean2.slice(0, 10)}  ok      feat: clean two\n` +
         `${hash.clean1.slice(0, 10)}  ok      feat: clean one\n` +
         `team commits check: 2 commits checked, 17 skipped (since ${hash.spaces.slice(0, 10)}): ok\n`,
-      stderr: '',
+      stderr: "team commits check: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read\n",
     });
     expect((await run([hash.unsigned, '--since', hash.old], 'file')).code).toBe(1);
 
