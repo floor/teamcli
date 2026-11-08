@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { runSwap, type SwapCommandOptions } from '../src/commands/swap.ts';
 import type { PerformInput } from '../src/commands/restart.ts';
@@ -237,6 +237,44 @@ test('a refused restart preserves a reused worktree and peer slots', async () =>
   w.options.presetRestart = async () => ({ kind: 'busy', message: 'synthetic busy turn' });
   expect((await w.run(['worker', 'grok-preset'])).code).toBe(1);
   expect(snapshot(w.base)).toEqual(before);
+});
+
+test('a branch that moves after its worktree is removed clears the recorded slot', async () => {
+  const w = world();
+  const bin = join(w.base, 'bin');
+  mkdirSync(bin);
+  const real = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+  writeFileSync(join(bin, 'git'), `#!/bin/sh
+real=${JSON.stringify(real)}
+if [ "$1" = worktree ] && [ "$2" = remove ]; then
+  "$real" "$@"
+  status=$?
+  if [ "$status" -ne 0 ]; then exit "$status"; fi
+  tree=$("$real" rev-parse 'HEAD^{tree}')
+  moved=$("$real" commit-tree "$tree" -m moved)
+  "$real" update-ref refs/heads/swap/swap-worker "$moved"
+  exit 0
+fi
+exec "$real" "$@"
+`);
+  chmodSync(join(bin, 'git'), 0o755);
+  const saved = process.env.PATH;
+  process.env.PATH = `${bin}${saved === undefined ? '' : `:${saved}`}`;
+  try {
+    w.options.presetRestart = async () => ({ kind: 'not-ready', message: 'synthetic preflight refusal' });
+    const ran = await w.run(['worker', 'grok-preset']);
+    expect(ran.code).toBe(1);
+    expect(ran.err).toContain('synthetic preflight refusal');
+    expect(ran.err).toContain('the worktree record was cleared');
+    expect(readState(w.dir).sessions['example-session']!.worktrees['swap-worker']).toBeUndefined();
+    expect(existsSync(join(w.base, 'trees/swap-worker'))).toBe(false);
+    expect(execFileSync(real, ['show-ref', '--verify', 'refs/heads/swap/swap-worker'], { cwd: w.root, encoding: 'utf8' })).toContain('refs/heads/swap/swap-worker');
+    const again = await w.run(['worker', 'grok-preset']);
+    expect(again.err).not.toContain('already recorded');
+  } finally {
+    if (saved === undefined) delete process.env.PATH;
+    else process.env.PATH = saved;
+  }
 });
 
 test('a worktree changed during the refusal is preserved rather than forced away', async () => {

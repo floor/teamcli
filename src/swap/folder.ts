@@ -73,9 +73,12 @@ export function createPresetFolder(input: FolderInput, plan: SwapFolder): Preset
 }
 
 /** Undo only this invocation's clean allocation when restart refused before its declaration.
- * A changed record, dirty worktree or moved branch is kept, never forced away. */
+ * A changed record, dirty worktree or moved branch is kept, never forced away. A branch that
+ * moves after the worktree folder is already gone still drops the slot record: the folder is
+ * not there, and a later swap must not stay stuck on that task. */
 export function rollbackPresetFolder(input: FolderInput, allocation: PresetAllocation | undefined): void {
   if (allocation === undefined) return;
+  let branchMoved = false;
   updateState(input.dir, state => {
     const session = state.sessions[input.team.session];
     const held = session?.worktrees[allocation.task];
@@ -86,15 +89,18 @@ export function rollbackPresetFolder(input: FolderInput, allocation: PresetAlloc
     // No --force: even unexpected untracked work is a reason to preserve the allocation.
     git(input.root, ['worktree', 'remove', resolve(input.root, held.path)]);
     // Compare-and-delete preserves a branch moved concurrently after the check above.
+    // The folder is already gone, so the slot is cleared either way. Leaving the record
+    // would make the next swap refuse a task whose path is missing.
     const removed = spawnSync('git', ['update-ref', '-d', ref, allocation.head], {
       cwd: input.root, encoding: 'utf8', timeout: syncChildTimeout(2_000),
     });
-    if (removed.status !== 0) throw new Error('the allocated branch moved during rollback; its record was kept');
     delete session!.worktrees[allocation.task];
     for (const parent of allocation.parents) {
       try { rmdirSync(parent); } catch { /* Only empty parents created by this invocation are removed. */ }
     }
+    branchMoved = removed.status !== 0;
   }, { waitMs: 500 });
+  if (branchMoved) throw new Error('the allocated branch moved during rollback; the worktree record was cleared');
 }
 
 function git(root: string, args: string[]): string {
