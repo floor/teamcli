@@ -35,6 +35,16 @@ import { deliveryOrder } from '../settings/resolve.ts';
  */
 export type DeliveryChain = Partial<Record<SettingLevel, readonly OrderWord[] | undefined>>;
 
+/** Chains whose deciding word began with the retired inbox name. The chain object carries only
+ *  live legs; this map is the only place that fact survives the drop. */
+const inboxLedChains = new WeakMap<DeliveryChain, true>();
+
+/** Whether the word that decides this chain began with `mcp-inbox`. A host-supplied chain is
+ *  unmarked: a caller that left the alias on the words reads it there. */
+export function deliveryInboxLed(chain: DeliveryChain): boolean {
+  return inboxLedChains.has(chain);
+}
+
 /** One level's word with the retired alias names dropped. A word that is only the retired name
  *  is `drop`, so the level is a mailbox and not an absent word the shape would replace with a
  *  typed wake. `undefined` when the word is absent. */
@@ -43,6 +53,37 @@ function liveWordOf(words: readonly OrderWord[] | null | undefined): readonly De
   const legs = liveOrderWords(words);
   if (legs.length > 0) return legs;
   return words.length > 0 ? ['drop'] : undefined;
+}
+
+/** True when a raw delivery word's first name is the retired inbox alias. */
+function rawInboxLed(words: readonly string[] | null | undefined): boolean {
+  return rawInboxLedValue(words);
+}
+
+/** True when a stored policy value's first name is the retired inbox alias. */
+function rawInboxLedValue(raw: unknown): boolean {
+  if (typeof raw === 'string') return raw.split(',')[0]?.trim() === 'mcp-inbox';
+  return Array.isArray(raw) && raw.length > 0 && raw[0] === 'mcp-inbox';
+}
+
+/** Whether the signed delivery-order word in force began with the retired inbox name. A silent
+ *  or absent record is false: the legacy word, when it still applies, is judged on its own. */
+function signedRawInboxLed(source: PolicySourceRead | null, now: Date): boolean {
+  if (source === null || !source.ok) return false;
+  const spec = getPolicySpec('delivery-order');
+  let led = false;
+  let saw = false;
+  for (const policy of source.policies) {
+    if (normalizePolicyName(policy.name) !== 'delivery-order') continue;
+    if (!isSignedPolicy(policy)) continue;
+    if (expiredPolicy(policy, now)) continue;
+    const parsed = spec?.parseValue(policy.value) as readonly DeliveryLeg[] | null | undefined;
+    if ((parsed && parsed.length > 0) || (Array.isArray(parsed) && parsed.length === 0)) {
+      saw = true;
+      led = rawInboxLedValue(policy.value);
+    }
+  }
+  return saw && led;
 }
 
 /**
@@ -105,14 +146,19 @@ export function deliveryChainOf(input: {
       // A file that cannot even be read declares nothing, as one that does not validate does.
     }
   }
-  const entity = signedOrderOf(readEntityPolicySource(input.home, file?.entity ?? null), now) ?? undefined;
+  const entitySource = readEntityPolicySource(input.home, file?.entity ?? null);
+  const entityPolicy = signedOrderOf(entitySource, now);
+  const entity = entityPolicy ?? undefined;
+  const entityInbox = entity !== undefined && signedRawInboxLed(entitySource, now);
   // The project's word keeps any retired name it still carries; the resolver drops it.
   let project: readonly OrderWord[] | undefined;
+  let projectInbox = false;
   let projectId: string | null = null;
   try {
     const record = input.projectOfTeam(teamIdOf(input.root));
     projectId = record?.id ?? null;
     project = liveWordOf(record?.deliveryOrder);
+    projectInbox = project !== undefined && rawInboxLed(record?.deliveryOrder);
   } catch (error) {
     // The project's word can only narrow. A registry that cannot name the team's project — an
     // unreadable or corrupt file, or a team two projects name — leaves a bound this reader
@@ -129,20 +175,42 @@ export function deliveryChainOf(input: {
     throw new DeliveryChainUnreadable(`the project's delivery-order record cannot be read: ${projectSource.why}`);
   }
   const projectPolicy = signedOrderOf(projectSource, now);
-  if (projectPolicy !== undefined) project = projectPolicy ?? undefined;
+  if (projectPolicy !== undefined) {
+    project = projectPolicy ?? undefined;
+    projectInbox = project !== undefined && signedRawInboxLed(projectSource, now);
+  }
   // The team source carries the file's legacy word itself when no signed record is held; the
   // fallback covers a source that cannot be read, where the validated file's word still stands.
-  const teamPolicy = file ? signedOrderOf(readTeamPolicySource(input.home, input.root, file), now) : undefined;
+  const teamSource = file ? readTeamPolicySource(input.home, input.root, file) : null;
+  const teamPolicy = file ? signedOrderOf(teamSource, now) : undefined;
   const team = teamPolicy !== undefined ? (teamPolicy ?? undefined) : liveWordOf(file?.deliveryOrder);
+  const teamInbox = teamPolicy !== undefined
+    ? team !== undefined && signedRawInboxLed(teamSource, now)
+    : team !== undefined && rawInboxLed(file?.deliveryOrder);
   const found: Seat | undefined = file?.seats.find((one) => one.name === input.seat);
   const wider: DeliveryChain = {
     ...(entity !== undefined ? { entity } : {}),
     ...(project !== undefined ? { project } : {}),
     ...(team !== undefined ? { team } : {}),
   };
-  const seatWord = liveWordOf(input.overrides?.deliveryOrder) ?? liveWordOf(found?.deliveryOrder);
+  const overrideWords = input.overrides?.deliveryOrder;
+  const fileWords = found?.deliveryOrder;
+  const overrideLive = liveWordOf(overrideWords);
+  const seatWord = overrideLive ?? liveWordOf(fileWords);
+  const seatRaw = overrideLive !== undefined ? overrideWords : fileWords;
   const seat = seatWord ?? seatDefault(found, wider);
-  return { ...wider, ...(seat !== undefined ? { seat } : {}) };
+  // The innermost word that actually decides the order. A shape-supplied seat word is not one:
+  // the wider level's raw word is what the seat declared.
+  const inboxLed = seatWord !== undefined
+    ? rawInboxLed(seatRaw)
+    : team !== undefined
+      ? teamInbox
+      : project !== undefined
+        ? projectInbox
+        : entityInbox;
+  const chain: DeliveryChain = { ...wider, ...(seat !== undefined ? { seat } : {}) };
+  if (inboxLed) inboxLedChains.set(chain, true);
+  return chain;
 }
 
 /**

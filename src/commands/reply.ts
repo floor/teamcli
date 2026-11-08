@@ -251,13 +251,26 @@ function seatNamesOf(root: string, session: string): string[] {
  *  `stat` per seat folder — the session's folder lists its seats, not its records — so an id
  *  costs a couple of dozen file tests whatever the tree holds, never a walk of it. */
 export function recordHits(root: string, session: string, id: string): { seat: string; path: string }[] {
-  if (!NAME.test(id) || isRecordSidecarName(id) || id.startsWith('work-')) return [];
+  // A channel handoff marker is not a record. Naming it points at the signed record beside it,
+  // which still has to verify; the marker itself is never read as one. Any other sidecar is
+  // not a lookup.
+  const emittedSuffix = '.channel-emitted';
+  const emitted = id.endsWith(emittedSuffix);
+  const looked = emitted ? id.slice(0, -emittedSuffix.length) : id;
+  if (!NAME.test(looked) || looked.startsWith('work-')) return [];
+  if (!emitted && isRecordSidecarName(id)) return [];
+  if (emitted && !NAME.test(id)) return [];
   const hits: { seat: string; path: string }[] = [];
   for (const seat of seatNamesOf(root, session)) {
-    const path = join(root, '.agents', 'send-drops', session, seat, id);
+    const path = join(root, '.agents', 'send-drops', session, seat, looked);
+    if (emitted) {
+      const marker = join(root, '.agents', 'send-drops', session, seat, id);
+      if (isFile(marker) && isFile(path)) hits.push({ seat, path });
+      continue;
+    }
     if (isFile(path)) hits.push({ seat, path });
   }
-  if (hits.length > 0 || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return hits;
+  if (emitted || hits.length > 0 || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(looked)) return hits;
   return candidatesOf(root, session).filter((candidate) => basename(candidate.path).startsWith(id));
 }
 

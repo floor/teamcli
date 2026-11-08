@@ -51,7 +51,7 @@ import { createSession, originRepoOf, type SessionCliSpec } from '../send/sessio
 import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { verifiedPayloadOf } from '../send/wake.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
-import { deliveryChainOf, DeliveryChainUnreadable, type DeliveryChain } from '../send/delivery.ts';
+import { deliveryChainOf, deliveryInboxLed, DeliveryChainUnreadable, type DeliveryChain } from '../send/delivery.ts';
 import { messagingStoreChainOf, StoreChainUnreadable } from '../send/store.ts';
 import { cascadeOrder, cascadeWalk, legClassOf, type WalkLeg } from '../send/walk-cascade.ts';
 import { webhookRefusal } from '../send/webhook.ts';
@@ -976,6 +976,19 @@ type WalkOrderInput = {
   build?: () => BuildIdentity;
 };
 
+/** Whether the deciding word of this chain began with the retired inbox name. A chain this
+ *  reader built records that on the chain; a host-supplied chain still carries the alias when
+ *  the test left it as the first name of the innermost word. */
+function chainNamesInboxFirst(chain: DeliveryChain): boolean {
+  if (deliveryInboxLed(chain)) return true;
+  for (const level of ['seat', 'team', 'project', 'entity'] as const) {
+    const words = chain[level];
+    if (words === undefined || words.length === 0) continue;
+    return words[0] === 'mcp-inbox';
+  }
+  return false;
+}
+
 function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   const order = deliveryOrder(input.rawChain);
   // The line the receiving seat actually ran, read from its own runtime record first: the
@@ -1099,6 +1112,23 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   if (declaredOrder && sessionCli !== null && !human && declaredWithWake.includes('typed')
     && !declaredWithWake.includes('session')) {
     declaredWithWake.splice(declaredWithWake.indexOf('typed'), 0, 'session');
+  }
+  // A seat whose channel is on — the launch loads this team's channel server, or the deciding
+  // word begins with the retired inbox name — is delivered on that channel while the server is
+  // connected, and the socket is not also dialed. The socket remains only as a fallback when
+  // that server is not connected and the live order itself names it. An order that does not
+  // name it never grows one here, including the socket the typed wake would otherwise stand in.
+  // A seat with neither word keeps the walk above, socket included.
+  const inboxFirst = input.cli === 'claude-code' && chainNamesInboxFirst(input.rawChain);
+  if ((channelProbe !== null || inboxFirst) && !human) {
+    const probe = channelProbe ?? inboxLive(dropDir, input.root, input.session, input.seat, input.build?.());
+    const connected = probe.live === true && probe.listener.channel === true;
+    if (connected || !order.includes('socket')) {
+      for (let i = declaredWithWake.length - 1; i >= 0; i -= 1) {
+        if (declaredWithWake[i] === 'socket') declaredWithWake.splice(i, 1);
+      }
+    }
+    if (connected && !declaredWithWake.includes('channel')) declaredWithWake.unshift('channel');
   }
   const ordered: readonly DeliveryLeg[] = declaredWithWake;
   // No pane messaging (src/send/no-pane-messaging.ts): the typed and native legs are never walked,
