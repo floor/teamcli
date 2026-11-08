@@ -7,6 +7,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, readdirSy
 import { join, relative } from 'node:path';
 import { runMcp, realSources as mcpSources } from '../src/commands/mcp.ts';
 import type { RegisterSources } from '../src/commands/register.ts';
+import { writeDevelopmentMode } from '../src/development_mode.ts';
 import { setHerdrRun } from '../src/herdr.ts';
 import { prepareChannelConfig } from '../src/mcp/launch-config.ts';
 import { placementAtStart } from '../src/mcp/serve.ts';
@@ -18,7 +19,7 @@ import { cliWordListOf } from '../src/launch/cli-scope.ts';
 import { MCP_SETUP_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { currentBriefClaim } from '../src/launch/general-brief.ts';
 import { forgetTeam, getTeam, upsertTeam, teamIdOf } from '../src/registry/teams.ts';
-import { readState } from '../src/state.ts';
+import { emptySession, readState, updateState } from '../src/state.ts';
 import { installKey } from '../src/store/keys.ts';
 import { CLAUDE_IDLE, fixtureBase, testIo } from './helpers.ts';
 
@@ -180,14 +181,93 @@ for (const [label, change] of [
   expect(snapshot(w.base)).toEqual(before);
   expect(r.out + r.err).not.toContain('fixture-only-do-not-print');
 });
-test('own-seat setup still needs the existing config gate and another seat cannot set it up', async () => {
-  const w = world(); const before = snapshot(w.base);
-  const own = await setup(w, ['--json'], { kind: 'seat', name: 'alpha', pane: PANE, session: SESSION });
-  expect(own.code).toBe(1); expect(JSON.parse(own.out).error.id).toBe('mcp.setup-config');
+function place(root: string, name: string, pane: string) {
+  updateState(join(root, '.agents'), (state) => {
+    const session = (state.sessions[SESSION] ??= emptySession());
+    session.seats[name] = { stage: 'ready', pane };
+  });
+}
+function crew() {
+  const w = world();
+  writeFileSync(w.file, `format: 1
+project: sample
+session: ${SESSION}
+operator: ops
+workspace:
+  mode: shared
+seats:
+  - name: lead
+    role: coordinator
+    leads: true
+    cli: claude-code
+    vendor: synthetic
+    model: Test
+    version: "1"
+    launch: claude --model fixture
+  - name: ops
+    role: builder
+    cli: claude-code
+    vendor: synthetic
+    model: Test
+    version: "1"
+    launch: claude --model fixture
+  - name: worker
+    role: builder
+    cli: claude-code
+    vendor: synthetic
+    model: Test
+    version: "1"
+    launch: claude --model fixture
+`);
+  upsertTeam(w.home, teamIdOf(w.root), { root: w.root, project: 'sample', session: SESSION, roster: [
+    { agent: 'agt_000000000001', seat: 'lead', role: 'coordinator' },
+    { agent: 'agt_000000000002', seat: 'ops', role: 'operator' },
+    { agent: 'agt_000000000003', seat: 'worker', role: 'builder' },
+  ] });
+  return w;
+}
+async function ask(w: ReturnType<typeof world>, seat: string, args: string[], caller: Io['caller']) {
+  const io = testIo(w.cwd, caller); io.env.HERDR_PANE_ID = PANE;
+  const code = await runMcp(['setup', seat, ...args], io, w.sources);
+  return { code, out: io.out, err: io.err };
+}
+test('a placed seat is refused by the config editor on a dry run and a real run, and another seat is refused', async () => {
+  const w = world(); place(w.root, 'alpha', PANE); const before = snapshot(w.base);
+  const own = await setup(w, ['--dry-run', '--json'], { kind: 'seat', name: 'alpha', pane: PANE, session: SESSION });
+  expect(own.code, own.err + own.out).toBe(1); expect(JSON.parse(own.out).error.id).toBe('mcp.setup-config');
+  const off = await setup(w, ['--off', '--dry-run', '--json'], { kind: 'seat', name: 'alpha', pane: PANE, session: SESSION });
+  expect(off.code, off.err + off.out).toBe(1); expect(JSON.parse(off.out).error.id).toBe('mcp.setup-config');
+  const real = await setup(w, ['--json'], { kind: 'seat', name: 'alpha', pane: PANE, session: SESSION });
+  expect(real.code, real.err + real.out).toBe(1); expect(JSON.parse(real.out).error.id).toBe('mcp.setup-config');
   expect(snapshot(w.base)).toEqual(before);
-  const other = await setup(w, ['--json'], { kind: 'seat', name: 'beta', pane: PANE, session: SESSION });
-  expect(other.code).toBe(1); expect(JSON.parse(other.out).error.id).toBe('mcp.setup-caller');
+  const other = await setup(w, ['--dry-run', '--json'], { kind: 'seat', name: 'beta', pane: PANE, session: SESSION });
+  expect(other.code, other.err + other.out).toBe(1); expect(JSON.parse(other.out).error.id).toBe('mcp.setup-caller');
   expect(snapshot(w.base)).toEqual(before);
+});
+test('a placed lead under dev mode is admitted, and another team or a renamed pane is refused', async () => {
+  const lead = crew(); place(lead.root, 'lead', 'pane-lead');
+  const dev = writeDevelopmentMode({ home: lead.home, mode: 'local-fast', now: NOW, caller: 'synthetic-fixture' });
+  if (!dev.ok) throw new Error(dev.why);
+  const asLead = await ask(lead, 'worker', ['--dry-run', '--json'], { kind: 'seat', name: 'lead', pane: 'pane-lead', session: SESSION });
+  expect(asLead.code, asLead.err + asLead.out).toBe(0);
+  const asLeadReal = await ask(lead, 'worker', ['--json'], { kind: 'seat', name: 'lead', pane: 'pane-lead', session: SESSION });
+  expect(asLeadReal.code, asLeadReal.err + asLeadReal.out).toBe(0);
+  const ops = crew(); place(ops.root, 'ops', 'pane-ops'); const opsBefore = snapshot(ops.base);
+  const asOps = await ask(ops, 'worker', ['--dry-run', '--json'], { kind: 'seat', name: 'ops', pane: 'pane-ops', session: SESSION });
+  expect(asOps.code, asOps.err + asOps.out).toBe(1); expect(JSON.parse(asOps.out).error.id).toBe('mcp.setup-config');
+  const asOpsReal = await ask(ops, 'worker', ['--json'], { kind: 'seat', name: 'ops', pane: 'pane-ops', session: SESSION });
+  expect(asOpsReal.code, asOpsReal.err + asOpsReal.out).toBe(1); expect(JSON.parse(asOpsReal.out).error.id).toBe('mcp.setup-config');
+  expect(snapshot(ops.base)).toEqual(opsBefore);
+  const stranger = crew(); const before = snapshot(stranger.base);
+  const otherTeam = await ask(stranger, 'worker', ['--dry-run', '--json'], { kind: 'seat', name: 'worker', pane: PANE, session: 'other-team' });
+  expect(otherTeam.code, otherTeam.err + otherTeam.out).toBe(1); expect(JSON.parse(otherTeam.out).error.id).toBe('mcp.setup-caller');
+  expect(snapshot(stranger.base)).toEqual(before);
+  const renamed = world(); place(renamed.root, 'alpha', PANE);
+  const renamedRun = await setup(renamed, ['--dry-run', '--json'], { kind: 'seat', name: 'alpha', pane: 'renamed-pane', session: SESSION });
+  expect(renamedRun.code, renamedRun.err + renamedRun.out).toBe(1); expect(JSON.parse(renamedRun.out).error.id).toBe('mcp.setup-caller');
+  const owner = crew();
+  const asOwner = await ask(owner, 'worker', ['--dry-run', '--json'], { kind: 'owner' });
+  expect(asOwner.code, asOwner.err + asOwner.out).toBe(0);
 });
 test('a changed setup-owned entry is refused on off and leaves every fixture byte alone', async () => {
   const w = world(); expect(await setup(w)).toMatchObject({ code: 0 });

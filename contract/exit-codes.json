@@ -3134,7 +3134,7 @@
       "code": 1,
       "command": "mcp",
       "id": "mcp.setup-caller",
-      "meaning": "the caller is neither the owner nor the named seat itself",
+      "meaning": "the caller is not the owner, the named seat on its recorded pane, or that team's placed lead or operator",
       "trigger": "team mcp setup worker"
     },
     {

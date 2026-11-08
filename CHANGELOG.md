@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `team mcp setup <seat>` prepares a hand-started Claude seat’s scoped inbox channel, launch flag and calling-pane record, with a zero-write dry run and scoped removal.
 
+- `team mcp setup` admits the owner, the seat on its recorded pane, and that team's placed lead or operator, with no owner card. A seat of another team, or a pane that is not the recorded one, stays refused.
+
 ### Fixed
 
 - Rewriting a marked sidebar table changes only the rows line, and the row gap only when `workspace.sidebar.row_gap` is set. Every other key in that table stays.

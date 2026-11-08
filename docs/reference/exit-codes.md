@@ -453,7 +453,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `mcp.down` | `mcp` | 1 | at least one leg is down or unknown | `team mcp status` |
 | `mcp.missing` | `mcp` | 1 | doctor found something missing | `team mcp doctor` |
 | `mcp.not-set-up` | `mcp` | 1 | no bridge configuration exists in the lobby folder | `team mcp status` |
-| `mcp.setup-caller` | `mcp` | 1 | the caller is neither the owner nor the named seat itself | `team mcp setup worker` |
+| `mcp.setup-caller` | `mcp` | 1 | the caller is not the owner, the named seat on its recorded pane, or that team's placed lead or operator | `team mcp setup worker` |
 | `mcp.setup-changed` | `mcp` | 1 | the setup-owned launch line changed after setup | `team mcp setup worker` |
 | `mcp.setup-config-preflight` | `mcp` | 1 | the existing config gate or validation refuses the launch change before any setup write | `team mcp setup worker` |
 | `mcp.setup-config-write` | `mcp` | 1 | the config editor refuses the actual launch write before project or placement writes | `team mcp setup worker` |

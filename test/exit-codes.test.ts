@@ -6864,6 +6864,12 @@ seats:
   try { return await body(w); }
   finally { setHerdrRun(null); rmSync(base, { recursive: true, force: true }); }
 }
+function recordSetupPane(root: string) {
+  updateState(join(root, '.agents'), (state) => {
+    const session = (state.sessions[SETUP_SESSION] ??= emptySession());
+    session.seats.alpha = { stage: 'ready', pane: SETUP_PANE };
+  });
+}
 function setupError(ran: Ran, id: string, needle: string): Ran {
   expect(ran.err).toBe(''); expect(JSON.parse(ran.out).error.id).toBe(id);
   return show(ran, needle);
@@ -6890,13 +6896,13 @@ scene('mcp.setup-seat', async () => setupScene(async (w) => {
   return setupError(ran, 'mcp.setup-seat', 'requires a declared, running Claude seat');
 }), false);
 scene('mcp.setup-caller', async () => setupScene(async (w) => {
-  const before = setupSnapshot(w.base);
+  recordSetupPane(w.root); const before = setupSnapshot(w.base);
   const ran = await w.run(undefined, { kind: 'seat', name: 'other', pane: SETUP_PANE, session: SETUP_SESSION });
   expect(setupSnapshot(w.base)).toEqual(before);
-  return setupError(ran, 'mcp.setup-caller', 'only the owner or this seat itself');
+  return setupError(ran, 'mcp.setup-caller', 'placed lead or operator');
 }), false);
 scene('mcp.setup-config-preflight', async () => setupScene(async (w) => {
-  const before = setupSnapshot(w.base);
+  recordSetupPane(w.root); const before = setupSnapshot(w.base);
   const ran = await w.run(undefined, { kind: 'seat', name: 'alpha', pane: SETUP_PANE, session: SETUP_SESSION });
   expect(setupSnapshot(w.base)).toEqual(before);
   return setupError(ran, 'mcp.setup-config', 'the existing config editor refused');

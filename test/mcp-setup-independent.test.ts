@@ -287,13 +287,13 @@ refuses('an unowned entry writes nothing', (scene) => {
   plant(scene, '{"mcpServers":{"team-inbox":{"command":"foreign"}}}\n', '{}\n');
 });
 
-test('another seat is refused and the named seat does not gain a new admission', async () => {
+test('a seat with no recorded pane is refused, and another seat cannot set it up', async () => {
   const scene = world();
   try {
     const before = snapshot(scene.base);
     const own = await setup(scene, ['--json'], { kind: 'seat', name: SEAT, pane: PANE, session: SESSION });
     expect(own.code).not.toBe(0);
-    expect(JSON.parse(own.out).error.id).toBe('mcp.setup-config');
+    expect(JSON.parse(own.out).error.id).toBe('mcp.setup-caller');
     expect(snapshot(scene.base)).toEqual(before);
     const other = await setup(scene, ['--json'], { kind: 'seat', name: 'scout', pane: PANE, session: SESSION });
     expect(other.code).toBe(1);

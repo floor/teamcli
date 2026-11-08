@@ -2,7 +2,7 @@
 import { lstatSync, rmdirSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { readArgs } from '../args.ts';
-import { walkCaller } from '../caller.ts';
+import { callerOf, callerVerdict, logTag, standingOf } from '../caller.ts';
 import { runConfig, type ConfigSources } from '../commands/config.ts';
 import { runRegister, realSources as registerSources, type RegisterSources } from '../commands/register.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -12,6 +12,7 @@ import { currentBriefClaim } from '../launch/general-brief.ts';
 import { cliBodyOn, cliWordListOf, plainBodyOf, placedOnLaunchLine } from '../launch/cli-scope.ts';
 import { shellWords } from '../launch/shell-words.ts';
 import { plainLine } from '../launch/plain.ts';
+import { logLine } from '../log.ts';
 import { refuse, writeJson } from '../output/index.ts';
 import { readTeams, teamIdOf } from '../registry/teams.ts';
 import { readState } from '../state.ts';
@@ -149,9 +150,22 @@ export async function runMcpSetup(args: ReturnType<typeof readArgs>, json: boole
       fail('mcp.setup-seat', 'setup requires a declared, running Claude seat');
       return 1; // exit: mcp.setup-seat
     }
-    const caller = walkCaller(io);
-    if (caller.kind !== 'owner' && !(caller.kind === 'seat' && caller.name === name && (caller.session === undefined || caller.session === team.session))) {
-      fail('mcp.setup-caller', 'only the owner or this seat itself sets up its channel');
+    const caller = callerOf(io, team.session);
+    const stateDirForCaller = dirname(loaded.path);
+    // The standing is the caller's own recorded pane. A renamed shell carries the seat's name
+    // on a pane the state does not record, and that verdict is never an admission.
+    const placed = (seatName: string) => caller.kind === 'seat' && callerVerdict(caller, seatName, standingOf(stateDirForCaller, team.session, caller)).kind === 'ok';
+    const admitted = caller.kind === 'owner'
+      ? 'owner'
+      : placed(name)
+        ? 'seat'
+        : placed(team.orchestrator)
+          ? 'lead'
+          : team.operator !== team.orchestrator && placed(team.operator)
+            ? 'operator'
+            : null;
+    if (admitted === null) {
+      fail('mcp.setup-caller', 'only the owner, this seat itself, or its team\'s placed lead or operator sets up its channel');
       return 1; // exit: mcp.setup-caller
     }
     const scope = { root, cwd, seat: name, session: team.session };
@@ -162,7 +176,19 @@ export async function runMcpSetup(args: ReturnType<typeof readArgs>, json: boole
     }
     const launch = off ? journal?.launchBefore ?? seat.launch : enable(seat.launch);
     let configOutput = '';
-    const internalIo: Io = { ...io, cwd: root, stdout: (text) => { configOutput += text; }, stderr: (text) => { configOutput += text; } };
+    // The setup gate already admitted this caller. The config edit is judged as that same
+    // caller, dry run and real run alike: the editor's own rules admit a placed lead under
+    // dev mode and refuse a plain seat. Nothing here stands in as the owner.
+    const internalIo: Io = {
+      ...io,
+      cwd: root,
+      stdout: (text) => { configOutput += text; },
+      stderr: (text) => { configOutput += text; },
+    };
+    const noteAdmission = () => {
+      if (admitted === 'owner' || dry) return;
+      logLine(stateDirForCaller, 'mcp setup', logTag(caller), `admitted as ${admitted}`, sources.config?.now?.() ?? new Date());
+    };
     const configArgs = ['set', `seats.${name}.launch`, JSON.stringify(launch), '--json'];
     const config = { ...sources.config, home };
     const configReason = () => {
@@ -182,6 +208,7 @@ export async function runMcpSetup(args: ReturnType<typeof readArgs>, json: boole
     if (off && journal === null) {
       if (json) writeJson(io, 'team.mcp-setup', { format: 1, seat: name, session: team.session, cwd, dry_run: dry, status: 'unchanged', changes: [] });
       else io.stdout(`team mcp setup ${plainLine(name)}: nothing owned by setup in this folder\n`);
+      noteAdmission();
       return 0; // exit: mcp.setup-unchanged
     }
     const stateDir = dirname(loaded.path);
@@ -190,9 +217,13 @@ export async function runMcpSetup(args: ReturnType<typeof readArgs>, json: boole
     const plan = planChannelPair({ ...scope, epoch: currentBriefClaim(claim())?.epoch }, false);
     // Validate restoration before any config or placement write, too.
     const restored = journal === null ? null : offDocuments(plan, journal);
-    const pane = caller.kind === 'seat' ? caller.pane : io.env.HERDR_PANE_ID;
+    // The owner and the seat itself record the pane they stand in. A lead or operator is
+    // admitted to prepare this seat's channel, and that pane is already their own record:
+    // registering the target there is the pane another seat holds, so placement stays as it is.
+    const recordsCallerPane = admitted === 'owner' || admitted === 'seat';
+    const pane = recordsCallerPane ? (caller.kind === 'seat' ? caller.pane : io.env.HERDR_PANE_ID) : undefined;
     const register = { ...registerSources, ...sources.register, home };
-    if (!off) {
+    if (recordsCallerPane && !off) {
       if (pane === undefined || pane === '') {
         fail('mcp.setup-placement', 'run setup from the pane this seat starts in');
         return 1; // exit: mcp.setup-pane-required
@@ -206,7 +237,7 @@ export async function runMcpSetup(args: ReturnType<typeof readArgs>, json: boole
     const changes = [
       { kind: 'project-config', action: off ? 'restore' : 'prepare', paths: ['.mcp.json', '.claude/settings.local.json'] },
       { kind: 'launch', action: off ? 'restore' : 'enable', path: `seats.${name}.launch` },
-      { kind: 'placement', action: off ? 'keep' : 'record', pane: pane ?? null },
+      { kind: 'placement', action: recordsCallerPane && !off ? 'record' : 'keep', pane: pane ?? null },
     ];
     const report = () => {
       if (json) writeJson(io, 'team.mcp-setup', { format: 1, seat: name, session: team.session, cwd, dry_run: dry, status: off ? 'off' : 'setup', changes });
@@ -221,7 +252,7 @@ export async function runMcpSetup(args: ReturnType<typeof readArgs>, json: boole
       fail('mcp.setup-config', `the config editor refused the launch-line change${configReason()}; no setup files or placement were written`);
       return 1; // exit: mcp.setup-config-write
     }
-    if (!off) {
+    if (recordsCallerPane && !off) {
       // Registration owns attribution and may create a brief claim. Bind the project pair to
       // that resulting lifetime, never to the pre-registration epoch. Keep the original file
       // snapshots so a concurrent project edit cannot be adopted silently by the second plan.
@@ -261,6 +292,7 @@ export async function runMcpSetup(args: ReturnType<typeof readArgs>, json: boole
       // Remove only the empty owned directory setup created; unrelated files keep it alive.
       try { channelDirectory(join(cwd, '.claude'), false); rmdirSync(join(cwd, '.claude')); } catch { /* not empty or no longer ours */ }
     }
+    noteAdmission();
     report(); return 0; // exit: mcp.setup-written
   } catch (error) {
     fail('mcp.setup-unsafe', errorText(error));
