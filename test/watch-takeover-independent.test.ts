@@ -7,11 +7,11 @@
 // Homes and pane names are synthetic. No signal is sent and no CLI is started.
 import { afterEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
-import { runWatch, type WatchSources } from '../src/commands/watch.ts';
+import { activateDeadPaneWatch, runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { emptySession, LOG_FILE, readState, updateState } from '../src/state.ts';
@@ -221,4 +221,108 @@ test('a seat that is not the lead is refused on a dead record', async () => {
   expect(io.err + io.out).not.toContain('watch record taken over');
   expect(recordText(scene.dir)).toBe(before);
   expect(readState(scene.dir).sessions.acme?.watchdog?.pane).toBe(OLD_PANE);
+});
+
+const REAL_NOW = new Date('2026-11-08T14:55:00Z');
+const EPOCH = 'watch_0123456789abcdef0123456789abcdef';
+
+type CapturedWatch = {
+  watchdog: { file: string };
+  watch: { pane: string; heartbeat: string; workspace: string };
+};
+
+/** The five captured teams, plus the sanitized session's own watch. `<root>` is this scene's checkout. */
+function capturedWatches(root: string): CapturedWatch[] {
+  const records = readFileSync(new URL('./fixtures/watch-real-state/real-watch-records.json', import.meta.url), 'utf8').replaceAll('<root>', root);
+  const shape = readFileSync(new URL('./fixtures/watch-real-state/real-session-shape.json', import.meta.url), 'utf8').replaceAll('<root>', root);
+  const listed = Object.values(JSON.parse(records) as Record<string, CapturedWatch>);
+  const session = JSON.parse(shape) as { sessions: { acme: { watch: CapturedWatch['watch'] } } };
+  return [
+    ...listed,
+    { watchdog: { file: join(root, '.agents', 'team.yaml') }, watch: session.sessions.acme.watch },
+  ];
+}
+
+function plantCaptured(dir: string, record: CapturedWatch, patch?: { heartbeat?: string; pid?: number; epoch?: string }): void {
+  updateState(dir, (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.watchdog = { file: record.watchdog.file };
+    session.watch = {
+      pane: record.watch.pane,
+      heartbeat: patch?.heartbeat ?? record.watch.heartbeat,
+      workspace: record.watch.workspace,
+      ...(patch?.pid === undefined ? {} : { pid: patch.pid }),
+      ...(patch?.epoch === undefined ? {} : { epoch: patch.epoch }),
+    };
+  });
+}
+
+function daemonSources(
+  scene: { home: string; root: string },
+  options: { verdict: 'gone' | 'shell'; pidLive?: boolean },
+): WatchSources {
+  return {
+    ...sources(scene, { pane: 'gone', pidLive: false }),
+    now: () => REAL_NOW,
+    paneVerdict: () => options.verdict,
+    watchPidLive: (pid) => options.pidLive === true && pid === OLD_PID,
+    alive: (pid) => options.pidLive === true && pid === OLD_PID,
+  };
+}
+
+test('a daemon hosted watch takes over a stale record instead of standing by', () => {
+  const scene = open({ pane: 'gone', pidLive: false });
+  for (const record of capturedWatches(scene.root)) {
+    for (const verdict of ['shell', 'gone'] as const) {
+      plantCaptured(scene.dir, record);
+      const seats = JSON.stringify(readState(scene.dir).sessions.acme?.seats);
+      rmSync(join(scene.dir, LOG_FILE), { force: true });
+      const took = activateDeadPaneWatch(scene.root, 'acme', daemonSources(scene, { verdict }));
+      const reason = verdict === 'gone' ? 'gone' : 'shell';
+      expect(took).toBe(true);
+      const after = readState(scene.dir).sessions.acme;
+      expect(after?.watch).toBeUndefined();
+      expect(after?.watchdog).toEqual({ file: record.watchdog.file });
+      expect(JSON.stringify(after?.seats)).toBe(seats);
+      const log = readFileSync(join(scene.dir, LOG_FILE), 'utf8');
+      expect(log).toContain(`pane watch ${record.watch.pane} not alive: ${reason}; the daemon's watch is active`);
+    }
+  }
+});
+
+test('a fresh hand-over ten seconds old stays on standby', () => {
+  const scene = open({ pane: 'gone', pidLive: false });
+  const record = capturedWatches(scene.root)[0];
+  if (record === undefined) throw new Error('the captured records are empty');
+  plantCaptured(scene.dir, record, { heartbeat: new Date(REAL_NOW.getTime() - 10_000).toISOString() });
+  const before = recordText(scene.dir);
+  const took = activateDeadPaneWatch(scene.root, 'acme', daemonSources(scene, { verdict: 'shell' }));
+  expect(took).toBe(false);
+  expect(recordText(scene.dir)).toBe(before);
+  expect(existsSync(join(scene.dir, LOG_FILE))).toBe(false);
+});
+
+test('a live watch pid stays on standby', () => {
+  const scene = open({ pane: 'gone', pidLive: false });
+  const record = capturedWatches(scene.root)[0];
+  if (record === undefined) throw new Error('the captured records are empty');
+  plantCaptured(scene.dir, record, { pid: OLD_PID });
+  const before = recordText(scene.dir);
+  const took = activateDeadPaneWatch(scene.root, 'acme', daemonSources(scene, { verdict: 'shell', pidLive: true }));
+  expect(took).toBe(false);
+  expect(recordText(scene.dir)).toBe(before);
+  expect(existsSync(join(scene.dir, LOG_FILE))).toBe(false);
+});
+
+test('a dead pane watch fenced by a real epoch stays recorded', () => {
+  const scene = open({ pane: 'gone', pidLive: false });
+  const record = capturedWatches(scene.root)[0];
+  if (record === undefined) throw new Error('the captured records are empty');
+  plantCaptured(scene.dir, record, { epoch: EPOCH });
+  const before = recordText(scene.dir);
+  expect(readState(scene.dir).sessions.acme?.watch?.epoch).toBe(EPOCH);
+  const took = activateDeadPaneWatch(scene.root, 'acme', daemonSources(scene, { verdict: 'shell' }));
+  expect(took).toBe(false);
+  expect(recordText(scene.dir)).toBe(before);
+  expect(readState(scene.dir).sessions.acme?.watch?.epoch).toBe(EPOCH);
 });
