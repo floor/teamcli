@@ -54,11 +54,13 @@ export async function runForget(argv: string[], io: Io, sources: ForgetSources =
   const caller = callerOf(io);
   let seatApproved = false;
   let seatRefused = false;
-  // Every key is resolved before the charter is asked, so the gate judges the teams being
-  // forgotten and one bad word removes nothing. A missing id is said only to the owner.
-  // Anyone else gets the owner answers and learns nothing about whether the record is there.
+  // Every key is resolved before the charter is asked, and before a request is recorded,
+  // so one bad word removes nothing and the owner is never sent a card for a team that is
+  // not there. A missing id on a real forget is said only to the owner. Anyone else gets
+  // the owner answers and learns nothing about whether the record is there. A --request
+  // is not that hide: the ask itself refuses, and nothing is recorded.
   const resolved = resolveKeys(home, keys);
-  const hiddenMiss = !resolved.ok && resolved.missing === true && !isOwner(caller);
+  const hiddenMiss = !args.flags.has('request') && !resolved.ok && resolved.missing === true && !isOwner(caller);
   if (!resolved.ok && !hiddenMiss) return resolved.missing ? missing(io, json, resolved.key) : refused(io, json, `${resolved.why}; nothing was forgotten`);
   const targets = resolved.ok ? resolved.teams.map((team) => team.root) : [];
   const seat = ownerSeatStep('forget', 'team-forget', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.values.approval !== undefined, json, reason: args.values.reason }, io, seatSources, targets);
