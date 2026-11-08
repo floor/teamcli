@@ -50,6 +50,7 @@ import { findRecipe, listModelRuleBreaches, type ModelRecipe, type RuleDonor, ty
 import { runDueSwaps, runOneSwap, type SwapRunOptions, type SwapRunResult } from '../swap/run.ts';
 import { planVendorSwap, vendorTargetOf } from '../swap/vendor.ts';
 import { realSources, type RestartSources } from './restart.ts';
+import { runPresetSwap } from '../swap/preset.ts';
 
 // `team swap` is the command family for the entity's model rule and the queued swap
 // (Policies rules 10 and 11). The rule is read
@@ -59,7 +60,8 @@ import { realSources, type RestartSources } from './restart.ts';
 // out at the seat's boundary. This command owns the queue and the listing; the run is the
 // watch's, or `team swap --run` for a team whose watch is not running.
 
-export const USAGE = `Usage: team swap [--file <path>] [--json]
+export const USAGE = `Usage: team swap <seat> <preset> [--dry-run] [--file <path>] [--json]
+       team swap [--file <path>] [--json]
        team swap --rule [--file <path>] [--json]
        team swap queue <seat> [--to <target>] [--file <path>] [--json]
        team swap now <seat> [--file <path>] [--json]
@@ -73,6 +75,8 @@ Exits 0 when the queue or the listing is shown, or a swap is queued, forced, run
 `;
 
 export type SwapCommandOptions = {
+  /** The shared restart sequence, injectable for command-level synthetic tests. */
+  presetRestart?: typeof import('./restart.ts').performRestart;
   home?: string;
   now?: Date | (() => Date);
   sources?: RestartSources;
@@ -148,6 +152,10 @@ type RunPlan = {
 };
 
 export async function runSwap(argv: string[], rawIo: Io, options: SwapCommandOptions = {}): Promise<number> {
+  const direct = readArgs(argv, ['file', 'to'], ['json', 'dry-run', 'rule', 'run']);
+  if (direct.rest.length >= 2 && !['queue', 'now', 'cancel'].includes(direct.rest[0] ?? '')) {
+    return runPresetSwap(argv, rawIo, options);
+  }
   const executed = execute(argv, rawIo, options);
   const outcome = typeof executed === 'string' ? executed : await performRun(executed);
   if (outcome === 'invocation') {

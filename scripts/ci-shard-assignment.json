@@ -1163,6 +1163,7 @@
     "test/stuck-episode-report.test.ts": 5,
     "test/substitution-delimiter-independent.test.ts": 4,
     "test/swap-command.test.ts": 1,
+    "test/swap-preset.test.ts": 2,
     "test/sync-child-timeouts-independent.test.ts": 4,
     "test/taken-confirm.test.ts": 1,
     "test/tasks-hint-rows-independent.test.ts": 4,
