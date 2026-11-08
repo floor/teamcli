@@ -6,7 +6,7 @@ import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { approvedFingerprints, budgetsInForceOf, ceilingsOf, notInForce, recordSeatDigestOf } from '../approve/approval.ts';
 import { fingerprints } from '../approve/fingerprint.ts';
 import { readArgs } from '../args.ts';
-import { describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
+import { callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from '../commands/doctor.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
@@ -221,7 +221,9 @@ function flaggedFileReal(cwd: string, file: string): string | null {
 }
 
 /** The placed lead or operator of the team at `cwd`, and whether these flags stay inside it.
- *  The flagged file is not read. Null when this caller is not that lead or operator. */
+ *  The flagged file is not read. Null when this caller is not that lead or operator.
+ *  The caller is placed in the team's own session: `walkCaller` answers unplaced for every
+ *  real seat, so it cannot be the admission. The standing is the pane that session records. */
 function ownTeamFlagBounds(
   io: Io,
   sources: AddSources,
@@ -231,7 +233,7 @@ function ownTeamFlagBounds(
   const named = readTeamConfig(io.cwd, { home: sources.home });
   if (!named.ok) return null;
   const dir = dirname(named.path);
-  const caller = walkCaller(io);
+  const caller = callerOf(io, named.team.session);
   if (leadsOwnTeamAdmits({
     caller,
     team: named.team,

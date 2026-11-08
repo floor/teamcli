@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { ownerSeatHelperPath, readOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
@@ -68,15 +69,27 @@ function resolveNow(now: Date | (() => Date) | undefined): Date {
   return now ?? new Date();
 }
 
+/** The two roots name one checkout. A path that cannot be resolved is not that checkout. */
+function sameRecordRoot(a: string, b: string): boolean {
+  try {
+    return realpathSync(a) === realpathSync(b);
+  } catch {
+    return false;
+  }
+}
+
 /** A placed lead or operator sets a key that does not change who may act, at team level or for a
  *  seat this team declares. A needs-owner key stays the owner's. Entity and project stay on the
- *  owner's path: the dev-mode lift or the owner, the same as before the default rule. */
+ *  owner's path: the dev-mode lift or the owner, the same as before the default rule.
+ *  `--file` is admitted only when it is this team's own record: the write and the admission
+ *  judge that same root. A file outside it gets no default-rule admission. */
 function leadPolicyRun(
   io: Io,
   options: PolicyCommandOptions,
   rawLevel: string,
   key: string,
   seatFlag: string | undefined,
+  file: string | undefined,
 ): LeadsAdmission | null {
   if (policyNeedsOwner(normalizePolicyName(key))) return null;
   const home = options.home ?? homedir();
@@ -84,8 +97,13 @@ function leadPolicyRun(
   try {
     const loaded = readTeamConfig(io.cwd, { home });
     if (loaded.ok) team = loaded.team;
+    if (file !== undefined) {
+      const flagged = readTeamConfig(io.cwd, { home, file });
+      if (!loaded.ok || !flagged.ok || !sameRecordRoot(loaded.root, flagged.root)) return null;
+      team = flagged.team;
+    }
   } catch {
-    team = null;
+    return null;
   }
   if (!policyWriteOwnTeam(rawLevel, seatFlag, team)) return null;
   return leadsOwnTeamAtCwd(io, { command: 'policy', home, now: resolveNow(options.now) });
@@ -655,7 +673,7 @@ function executePolicySet(
 
   const caller = walkCaller(rawIo);
   let lifted: DevModeOwnerLift | null = null;
-  const leadSet = rest[1] !== undefined ? leadPolicyRun(rawIo, options, rest[0] ?? '', rest[1], values.seat) : null;
+  const leadSet = rest[1] !== undefined ? leadPolicyRun(rawIo, options, rest[0] ?? '', rest[1], values.seat, values.file) : null;
   if (leadSet !== null) io.stderr(`team policy: ${leadSet.warning}\n`);
   // A dry run prints the plan and writes nothing, so it never asks for Touch ID.
   if (!flags.has('dry-run') && !isOwner(caller) && leadSet === null) {
@@ -894,7 +912,7 @@ function executePolicyUnset(
 
   const caller = walkCaller(rawIo);
   let lifted: DevModeOwnerLift | null = null;
-  const leadUnset = rest[1] !== undefined ? leadPolicyRun(rawIo, options, rest[0] ?? '', rest[1], values.seat) : null;
+  const leadUnset = rest[1] !== undefined ? leadPolicyRun(rawIo, options, rest[0] ?? '', rest[1], values.seat, values.file) : null;
   if (leadUnset !== null) io.stderr(`team policy: ${leadUnset.warning}\n`);
   // A dry run prints the plan and writes nothing, so it never asks for Touch ID.
   if (!flags.has('dry-run') && !isOwner(caller) && leadUnset === null) {

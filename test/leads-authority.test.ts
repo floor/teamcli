@@ -438,6 +438,25 @@ test('flag gate: add --file through a symlink that leaves the root stays the own
   expect(io.err).toContain("--file is the owner's");
 });
 
+test('flag gate: a lead placed through caller sources may aim --file inside this team', async () => {
+  const { home, root } = repo();
+  writeFlagTeam(root);
+  placeLead(root);
+  const io = testIo(root);
+  io.env = { HERDR_PANE_ID: 'pane-lead' };
+  io.callerSources = () => ({
+    ancestors: () => [{ pid: 200, name: 'claude' }, { pid: 100, name: 'herdr' }],
+    agents: () => [{ name: 'lead', agent: 'claude-code', pane: 'pane-lead', workspace: 'ws-lead', status: 'idle', cwd: root }],
+    paneRootPid: (pane) => (pane === 'pane-lead' ? 200 : null),
+    env: { HERDR_PANE_ID: 'pane-lead' },
+    stdinIsTTY: false,
+  });
+  const code = await runAdd(['lead', '--file', join(root, '.agents', 'team.yaml')], io, addSources(home));
+  expect(code).toBe(1);
+  expect(io.err).toContain("only the owner changes the orchestrator's seat");
+  expect(io.err.includes("--file is the owner's")).toBe(false);
+});
+
 test('flag gate: add --session of this team is the placed lead\'s', async () => {
   const { home, root } = repo();
   writeFlagTeam(root);
@@ -652,6 +671,23 @@ test('a placed lead\'s entity-level policy set is not a default-rule admission',
   expect(code).toBe(1);
   expect(io.err).toContain('only the owner');
   expect(io.err.includes('admitted as lead')).toBe(false);
+});
+
+test('a placed lead\'s policy --file of another team is not a default-rule admission', async () => {
+  const { home, root } = repo();
+  writeFlagTeam(root);
+  placeLead(root);
+  const otherRoot = join(home, 'other');
+  mkdirSync(join(otherRoot, '.agents'), { recursive: true });
+  const otherFile = join(otherRoot, '.agents', 'team.yaml');
+  writeFileSync(otherFile, readFileSync(join(root, '.agents', 'team.yaml'), 'utf8').replace('project: acme', 'project: other'));
+  const before = readFileSync(otherFile, 'utf8');
+  const io = testIo(root, seat('lead'));
+  const code = await runPolicy(['set', 'team', 'vault-root', '/synthetic/vault', '--file', otherFile], io, { home, now: () => NOW });
+  expect(code).toBe(1);
+  expect(io.err).toContain('only the owner');
+  expect(io.err.includes('admitted as')).toBe(false);
+  expect(readFileSync(otherFile, 'utf8')).toBe(before);
 });
 
 test('a placed lead\'s project-level policy set is not a default-rule admission', async () => {
