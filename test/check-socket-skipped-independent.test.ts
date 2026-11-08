@@ -25,7 +25,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { declaredInboundOf, heldSocketPath, recordHeldSocket } from '../src/send/inbound.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { approvalStanding } from '../src/store/store.ts';
-import { deliverBriefs, duringAddressWrite, testIo } from './helpers.ts';
+import { deliverBriefs, duringAddressWrite, fixtureLaunchPlace, testIo } from './helpers.ts';
 import { NOW, fake, owner, world, type ExtraSeat, type World } from './send-native-fixtures.ts';
 
 // Pids no real session holds: the socket folder walked is the fixture's own temp folder.
@@ -34,7 +34,9 @@ const SESSION_PID = 990121;
 const paneOf = (name: string): string => `fixture-pane-${name}`;
 
 let restored: Array<() => void> = [];
+const wrapBases: string[] = [];
 afterEach(() => {
+  wrapBases.length = 0;
   for (const undo of restored.reverse()) undo();
   restored = [];
 });
@@ -60,6 +62,7 @@ function placeSocket(made: World, pid = SESSION_PID): string {
  *  is the launch's, and it is not the one this build attests (`generated` is absent). */
 function wrapper(word: string): string {
   const base = mkdtempSync(join(tmpdir(), 'team-check-wrap-'));
+  wrapBases.push(base);
   restored.push(() => rmSync(base, { recursive: true, force: true }));
   const fakeCli = join(base, 'fake-cli');
   writeFileSync(fakeCli, '#!/bin/sh\nexit 0\n');
@@ -177,6 +180,7 @@ function check(made: World, names: readonly string[]): { code: number; out: stri
     now: () => NOW,
     home: made.home,
     sockets: socketsDir(made),
+    launchPlace: fixtureLaunchPlace(dirname(made.root), ...wrapBases),
   });
   return { code, out: `${io.out}${io.err}` };
 }
@@ -424,6 +428,7 @@ test('a retained pane whose CLI ended is named once, by its pane reading', async
     now: () => NOW,
     home: made.home,
     sockets: socketsDir(made),
+    launchPlace: fixtureLaunchPlace(dirname(made.root), ...wrapBases),
   });
   const out = `${io.out}${io.err}`;
   expect(out).toContain('difference: lead: its pane runs no CLI and its process was never recorded');

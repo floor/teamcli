@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Launcher declarations live in the launcher home. A declaration names secrets by reference, and compiling one produces the launch line with no script path. A lead's built-in Claude Code line carries the model, the recorded conversation, inbound accept, and the channel flag when setup is on. `team check` names a launch line that runs a script from a repository or a temp folder and points at `team launchers migrate`.
+
 - The owner-reserved scope now names major releases; minor and patch releases are the leads' within their gates.
 
 - `team mcp setup <seat>` prepares a hand-started Claude seat’s scoped inbox channel, launch flag and calling-pane record, with a zero-write dry run and scoped removal.

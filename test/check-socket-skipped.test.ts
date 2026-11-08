@@ -26,7 +26,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { declaredInboundOf, heldSocketPath, recordHeldSocket } from '../src/send/inbound.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, fixtureLaunchPlace, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
 // Neutral fixture ids: the host's pane shape is never written into a test, built or literal.
@@ -277,6 +277,7 @@ function check(w: World, live: Live): { code: number; out: string } {
     now: () => NOW,
     home: w.home,
     sockets: w.sockets,
+    launchPlace: fixtureLaunchPlace(w.base),
   });
   return { code, out: `${io.out}${io.err}` };
 }
