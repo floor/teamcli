@@ -22,7 +22,7 @@ import { markStopped, seatIsStopped } from '../src/file/lines.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { readTeamText, writeTeamText } from '../src/file/team-text.ts';
 import { RESTART_OUTPUT_SCHEMA } from '../src/output/schema.ts';
-import { findAgent, readAgents, recordAgentSession, registerAgent, updateAgent } from '../src/registry/agents.ts';
+import { agentsDir, findAgent, readAgents, recordAgentSession, registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { recordedSeatSession } from '../src/registry/resume.ts';
 import { setRoster, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { registerLaunch } from '../src/registry/sync.ts';
@@ -31,7 +31,7 @@ import { unverifiedRecordSentence } from '../src/approve/unverified-record.ts';
 import { recordedGeneration } from '../src/store/keys.ts';
 import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import { gateVerdict } from '../src/permissions/who.ts';
-import { emptySession, readState, updateState } from '../src/state.ts';
+import { emptySession, LOG_FILE, readState, updateState } from '../src/state.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, shortSocketBase, testIo } from './helpers.ts';
 import { intoRegistry, storedTeam, underRegistry, unreadableRegistryFolder } from './helpers/registry-team.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
@@ -3666,6 +3666,66 @@ describe('independent checks: restart --fresh', () => {
     expect(minted).not.toBe('ses_keep');
     expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.reach.agent_session).toBe(minted);
     expect(io.out).toContain('started fresh by the caller');
+  });
+
+  test('--fresh as the placed lead clears a pinned resume from the agent record and starts without it', async () => {
+    const fixture = makeFixture();
+    const pin = 'ses_pin';
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+      session.seats.worker = {
+        stage: 'ready',
+        pane: 'pane-old',
+        workspace: 'ws-old',
+        id: 'seat_0123456789ab',
+        agent_session: pin,
+      };
+    });
+    const recorded = registerAgent(fixture.home, {
+      name: 'worker',
+      signing: { model: 'Claude Opus', version: '5.5', role: 'implementer' },
+      lab: 'anthropic',
+      cli: 'claude-code',
+      launcher: null,
+      launch: `claude --model claude-opus-5-5 -r ${pin}`,
+      reach: {
+        team: teamIdOf(fixture.root),
+        seat: 'worker',
+        session: 'acme',
+        pane: 'pane-old',
+        address: null,
+        agent_session: pin,
+      },
+      seat_handle: 'seat_0123456789ab',
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      settings: { voice: { tone: 'quiet' } },
+      by: 'team up',
+    });
+    const agentPath = join(agentsDir(fixture.home), `${recorded.id}.yaml`);
+    const before = readFileSync(agentPath, 'utf8');
+    const signingOf = (text: string) => text.slice(text.indexOf('signing:\n'), text.indexOf('lab:'));
+    const settingsOf = (text: string) => text.slice(text.indexOf('settings:\n'));
+    const { sources, did } = makeHarness(fixture, { workerSession: pin });
+    sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    const agents = sources.upLaunch.agents;
+    sources.upLaunch.agents = (session) => (agents(session) ?? []).map((agent) => (
+      agent.pane.startsWith('pane-new') ? { ...agent, agent: 'claude-code', session: 'ses_minted' } : agent
+    ));
+    const io = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+    expect(await runRestart(['worker', '--fresh'], io, sources)).toBe(0);
+    const ran = did.runs.join('\n');
+    expect(ran).toContain('claude --model claude-opus-5-5');
+    expect(ran).not.toContain(pin);
+    expect(ran).not.toMatch(/(?:^|\s)-r(?:\s|$)/);
+    const after = readFileSync(agentPath, 'utf8');
+    expect(after).not.toContain(pin);
+    expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.reach.agent_session).not.toBe(pin);
+    expect(readFileSync(join(fixture.dir, LOG_FILE), 'utf8')).toContain('[lead]');
+    expect(signingOf(after)).toBe(signingOf(before));
+    expect(settingsOf(after)).toBe(settingsOf(before));
   });
 
   test('--fresh revives a signed-off seat the way a plain restart does', async () => {
