@@ -305,6 +305,29 @@ export function rewriteSeatModel(text: string, name: string, fields: SeatModelFi
   return replaceLines(ready.text, ready.block.start, ready.block.end, lines);
 }
 
+/** A preset changes its start folder and launcher in the same validated write as its model. */
+export function rewriteSeatPreset(text: string, name: string, fields: SeatModelFields & {
+  cwd: string; mode: string; launcher?: string;
+}): string {
+  let next = rewriteSeatModel(text, name, fields);
+  for (const [key, value] of [['cwd', fields.cwd], ['mode', fields.mode], ['launcher', fields.launcher]] as const) {
+    const ready = prepared(next, name);
+    if (!ready) return next;
+    const lines = body(ready.text, ready.block);
+    const at = lines.findIndex(line => new RegExp(`^\\s*(?:-\\s+)?${key}:`).test(line));
+    if (value === undefined) {
+      if (at >= 0) lines.splice(at, 1);
+    } else if (at >= 0) lines[at] = setValue(lines[at] ?? '', value);
+    else {
+      const nested = lines.find(line => /^\s+[A-Za-z0-9_-]+:/.test(line));
+      const pad = ' '.repeat(nested ? indent(nested) : indent(lines[0] ?? '') + 2);
+      lines.splice(fieldEnd(lines), 0, `${pad}${key}: ${yamlWord(value)}`);
+    }
+    next = replaceLines(ready.text, ready.block.start, ready.block.end, lines);
+  }
+  return next;
+}
+
 /** Leaves `name` in the file with `stopped: true`. A counted entry is split first. */
 export function markStopped(text: string, name: string): string {
   const ready = prepared(text, name);
