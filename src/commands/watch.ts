@@ -7,6 +7,8 @@ import { callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner } 
 import { loadReadings, overlayReadings, saveSpendReadings, updateReadings, type Seen, type SpendReading } from '../budgets/readings.ts';
 import { runChecksOf, runChecksOfAsync, type CheckOutcome } from '../budgets/run.ts';
 import type { ChildOptions } from '../child.ts';
+import { daemonHealth } from '../daemon/health.ts';
+import { canonicalRoot } from '../daemon/routes.ts';
 import { currentTeam, rememberCurrent } from '../file/current.ts';
 import { isParseError, launchTeamFile, loadTeamFile } from '../file/load.ts';
 import { saveMachineReadings } from '../information/machine-readings.ts';
@@ -14,7 +16,7 @@ import type { Seat, TeamFile } from '../file/types.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { agentStatus, foregroundArgv0, PANE_WINDOW, paneForeground, paneProcessInfoAsync, paneProcesses, paneProcessesOf, paneRead, paneReadAsync, paneRun, reportDisplayAgent, SIDEBAR_TTL_CAP_MS, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { agentStatus, foregroundArgv0, PANE_WINDOW, paneForeground, paneProcessInfoAsync, paneProcesses, paneProcessesOf, paneRead, paneReadAsync, reportDisplayAgent, SIDEBAR_TTL_CAP_MS, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import { sidebarPolicy } from '../settings/sidebar-policy.ts';
 import type { Command, Io } from '../io.ts';
 import { isShellName } from '../launch/cli-scope.ts';
@@ -29,9 +31,9 @@ import { readMachine, readMachineAsync, readingsText, unreadMachine } from '../w
 import type { Machine } from '../watch/machine.ts';
 import { processCommOf } from '../watch/process-adapter.ts';
 import { watchReadLimits, type ReadLimits } from '../watch/read-limits.ts';
-import { beatWatch, ownWatchPane, placedWatch, watchLabel, watchRunning } from '../watch/pane.ts';
+import { beatWatch, ownWatchPane, placedWatch, watchRunning } from '../watch/pane.ts';
 import { watchPushWork } from '../watch/direct-send.ts';
-import { watchCommand, watchWouldRead } from './up.ts';
+import { watchCommand } from './up.ts';
 import { realHost, redeliverChannelOnSocket } from './send.ts';
 import { notify } from '../watch/notify.ts';
 import { dropMessage, readTriggerLine, triggerLine } from '../send/native.ts';
@@ -199,6 +201,8 @@ export type WatchSources = {
   reportDisplayAgent?(session: string, pane: string, text: string, ttlMs?: number): boolean;
   /** The home whose store holds the override file. Absent in a test that does not set one. */
   home?: string;
+  /** The daemon health a pane's `team watch` reads. Absent, a pane still writes nothing. */
+  daemonHealth?: (home: string) => Promise<{ roots: readonly { root: string; watch?: { session: string; phase: string } }[] }>;
   /** The unacked-record read this pass rings and reports from: a scan of every drop and legacy
    *  record. Read before the fold, never inside it — the scan is unbounded, and the fold holds
    *  the state lock. Absent, the shipped reader. `mail` is the pass's shared reading: the same
@@ -208,8 +212,8 @@ export type WatchSources = {
    *  watch queues the rule's breaches but carries no swap out (a test without a faked launch). */
   swapSources?: RestartSources;
   /**
-   * The watch's own workspace: `up`'s two steps, run by a hand start. Absent, no workspace can
-   * be made here: the watch runs in this process, as one started by hand always did.
+   * A hand-run `team watch` does not call this. No path starts a pane watch; the daemon's
+   * hosted loop is the only watch this command runs.
    */
   createWorkspace?(session: string, cwd: string, label: string): { pane: string; workspace: string } | null;
   /** Types the watch's command into its pane. False when herdr refused. */
@@ -437,9 +441,6 @@ export const realWatchSources: WatchSources = {
   renameWorkspace: (session, workspace, label) => workspaceRename(workspace, label, session === 'default' ? undefined : session),
   reportDisplayAgent: (session, pane, text, ttlMs = SIDEBAR_TTL_CAP_MS) =>
     reportDisplayAgent(pane, text, session === 'default' ? undefined : session, ttlMs),
-  createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, session === 'default' ? undefined : session),
-  paneRun: (session, pane, command) => paneRun(pane, command, session === 'default' ? undefined : session),
-  closeWorkspace: (session, workspace) => workspaceClose(workspace, session === 'default' ? undefined : session),
   watchCommand,
   // The bus identity of the owner's delivery path (§4.5): the watch reads what the policy routes
   // to `owner` and what the raising side addresses to `owner`. It is never a seat name.
@@ -451,6 +452,7 @@ export const realWatchSources: WatchSources = {
   // hosted watch wires its own verified sender over `sendWatchDirect`; an infrastructure pane is
   // never used as the sender, and no placement, grant or registration stands in for the watch.
   pushWork: watchPushWork(null),
+  daemonHealth: (home) => daemonHealth(home),
 };
 
 /**
@@ -791,6 +793,13 @@ async function admittedWatchdog(
 // 720 a day saying what one every ten minutes says.
 const READINGS_EVERY = 600;
 
+/** A hand-run `team watch` (no hosted loop). A boolean, not a type predicate, so the hosted
+ *  loop below stays typed for both callers: the return that follows is what keeps a hand run
+ *  out of it. */
+function handRunWatch(hosted: HostedLoop | undefined): boolean {
+  return hosted === undefined;
+}
+
 export async function runWatch(argv: string[], io: Io, sources: WatchSources): Promise<number> {
   // Raw argv, before the parser: `--json` is not a flag this daemon takes, and its refusal
   // must still answer with the structured error document when the flag is present.
@@ -831,6 +840,38 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     return 1;
   }
   const caller = callerOf(io, args.values.session);
+  // No path starts a pane watch. A hand-run `team watch` — the owner, a seat, a pane, or a
+  // pane the walk cannot place — only prints the daemon's watch and writes nothing. The hosted
+  // loop below is the daemon's own watch; it is the one caller that still runs.
+  if (handRunWatch(hosted)) {
+    const named = caller.kind === 'pane' ? (caller.session ?? args.values.session) : args.values.session;
+    let sessionName = named;
+    if (sessionName === undefined) {
+      const looked = currentTeam(io.cwd, args.values.file, sources.now(), sources.home, false);
+      if (looked.ok) sessionName = looked.team.session;
+    }
+    const home = sources.home;
+    let line = 'team watch: the daemon does not host this session\n';
+    if (sessionName !== undefined && home !== undefined && sources.daemonHealth !== undefined) {
+      const health = await sources.daemonHealth(home);
+      const canonical = canonicalRoot(io.cwd);
+      const entry = canonical === null ? undefined : health.roots.find((item) => item.root === canonical);
+      const phase = entry?.watch?.phase;
+      const runs = entry?.watch !== undefined
+        && entry.watch.session === sessionName
+        && phase !== 'standby'
+        && phase !== 'stopped'
+        && phase !== 'failed';
+      line = runs
+        ? `team watch: running in the daemon for session ${sessionName}\n`
+        : `team watch: the daemon does not host session ${sessionName}\n`;
+    } else if (sessionName !== undefined) {
+      line = `team watch: the daemon does not host session ${sessionName}\n`;
+    }
+    io.stdout(line);
+    // exit: watch.started
+    return 0;
+  }
   // A hosted watch takes no grant and no `--file`: it reads the team of the route it was built
   // for, and the watchdog file is the hand-over a pane makes, which a daemon pass never makes.
   const grant = args.values.file || hosted !== undefined
@@ -948,53 +989,6 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     return 1;
   }
   if (first.path !== undefined) rememberCurrent(first.dir, first.path, sources.now());
-
-  // Started alone, from the owner's terminal outside herdr: the watch runs in its own workspace
-  // of the team's session — `up`'s own two steps — so the one watch `team status` and the checks
-  // look for is the one running, and not a process this terminal owns. The file the pane would
-  // not resolve for itself is recorded for that pane before its command runs, and the pane
-  // itself once the command has started: a run whose typing failed leaves no watch in the state.
-  // An owner who asked to watch without nudges or notices keeps this terminal — those flags are
-  // the owner's, and the pane's own `team watch` cannot carry them — and so does a build with no
-  // workspace to make (a test's own sources), which runs the watch here as one always did.
-  // The hand-over is the file's own session only: a lone run aimed at another session (anyone
-  // may watch one) would otherwise make the workspace in that session and write this team's
-  // state before the foreign-session reading is even said. It reads and reports here instead.
-  if (hosted === undefined && isOwner(placed) && session === first.team.session && !args.flags.has('no-nudge') && !args.flags.has('no-notify')
-    && sources.createWorkspace && sources.paneRun) {
-    const label = watchLabel(first.team.project);
-    const made = sources.createWorkspace(session, first.root, label);
-    if (made) {
-      const file = first.path !== undefined && !watchWouldRead(first.root, first.path, sources.home) ? first.path : undefined;
-      if (file !== undefined) {
-        updateState(dir, (state) => {
-          const current = (state.sessions[session] ??= emptySession());
-          current.watchdog = { file, pane: made.pane };
-        });
-      }
-      if (sources.paneRun(session, made.pane, (sources.watchCommand ?? watchCommand)(session))) {
-        updateState(dir, (state) => {
-          const current = (state.sessions[session] ??= emptySession());
-          current.watch = { pane: made.pane, workspace: made.workspace, heartbeat: sources.now().toISOString() };
-        });
-        io.stdout(`team watch: the watch runs in its own workspace (${label}, pane ${made.pane})\n`);
-        // exit: watch.started
-        return 0;
-      }
-      // The workspace was made and the typing refused: nothing runs in it. Close it and unset
-      // the file's record, so the state says what is true — no workspace and no watch.
-      sources.closeWorkspace?.(session, made.workspace);
-      if (file !== undefined) {
-        updateState(dir, (state) => {
-          const current = state.sessions[session];
-          if (current) delete current.watchdog;
-        });
-      }
-    }
-    refuse('watch.workspace', 'the watch did not start in its workspace');
-    // exit: watch.workspace
-    return 1;
-  }
 
   // The log line is written for every report. `--no-notify` never removes it, and it never
   // removes a desktop notice addressed to the owner. It does silence every other notice.

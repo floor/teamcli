@@ -6796,7 +6796,7 @@
       "code": 0,
       "command": "watch",
       "id": "watch.started",
-      "meaning": "the watch started in its own workspace",
+      "meaning": "the daemon's watch was printed",
       "trigger": "team watch"
     },
     {
@@ -6847,13 +6847,6 @@
       "id": "watch.watchdog",
       "meaning": "only the recorded watch may read the file up recorded",
       "trigger": "team watch --session acme"
-    },
-    {
-      "code": 1,
-      "command": "watch",
-      "id": "watch.workspace",
-      "meaning": "the watch did not start in its workspace",
-      "trigger": "team watch"
     },
     {
       "code": 2,
