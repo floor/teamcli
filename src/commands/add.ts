@@ -1677,6 +1677,8 @@ function hostOf(input: {
         status: () => launch.agentStatus?.(session, pane) ?? null,
         type: (value) => launch.typeText?.(session, pane, value) ?? false,
         enter: () => launch.pressEnter?.(session, pane) ?? false,
+        leadPane: (input.team.orchestrator !== '' && file.seat === input.team.orchestrator)
+          || (input.team.operator !== '' && file.seat === input.team.operator),
         ...(launch.sendKey
           ? { key: (name: string) => launch.sendKey!(session, pane, name) }
           : {}),

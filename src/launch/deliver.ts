@@ -45,6 +45,8 @@ export type Refusal = {
    *  `stayed`: the key was sent and the screen did not come back idle. */
   cleared?: 'yes' | 'undelivered' | 'stayed';
   detail?: 'not-written' | 'changed' | { at: 'folder' | 'place'; what: string };
+  /** The seat is the team's lead. The report tells nobody to type in that pane. */
+  leadPane?: boolean;
 };
 
 export interface Delivery {
@@ -66,6 +68,8 @@ export interface Delivery {
    *  typed line, then every Enter — for the caller that needs it (`answer`): a refusal sends
    *  nothing, and the caller says why in its own words. */
   beforeInput?(action: 'type' | 'enter'): boolean;
+  /** The seat is the team's lead. A stopped delivery's report does not tell the owner to type there. */
+  leadPane?: boolean;
   /** Why a delivery stopped, when the caller wants the detail for its report. */
   report?(why: Refusal): void;
 }
@@ -303,8 +307,11 @@ function clearAdvice(why: Refusal, box = 'its box'): string {
   return why.clearKey ? `clear ${box} (${keyName(why.clearKey)})` : `clear ${box}`;
 }
 
-/** What the owner does next, per reading. */
+/** What the owner does next, per reading. A lead's pane is never that: the lead asks its parent. */
+const LEAD_ASKS = 'the lead asks its parent orchestrator (team send)';
+
 function nextStep(why: Refusal): string {
+  if (why.leadPane === true) return LEAD_ASKS;
   switch (why.stop) {
     case 'leftover':
       return `press Enter in its pane to send what is there, or ${clearAdvice(why)}, then run up again`;
@@ -363,7 +370,9 @@ export function refusalReport(why: Refusal): string {
         + `check the seat's launch line — the wrapper it starts through, or the command itself — then run up again`;
     case 'working':
       return why.typed
-        ? `rules typed, not sent: the seat was busy with a turn until the deadline; the line sits in its box, unsent: run up again when it is idle (up sends the line it finds there), or press Enter in its pane once the turn ends`
+        ? why.leadPane === true
+          ? `rules typed, not sent: the seat was busy with a turn until the deadline; the line sits in its box, unsent: ${LEAD_ASKS}`
+          : `rules typed, not sent: the seat was busy with a turn until the deadline; the line sits in its box, unsent: run up again when it is idle (up sends the line it finds there), or press Enter in its pane once the turn ends`
         : `rules not confirmed: the seat is working; run up again when it is idle`;
     case 'screen':
       return `rules not typed: ${reading(why, 0)}; ${nextStep(why)}`;
@@ -433,7 +442,10 @@ export async function deliverRules(cli: string, line: string, seconds: number, i
     return herdrUnreliable(cli) && (status === null || status === 'unknown');
   };
   const free = () => ['idle', 'done'].includes(io.status() ?? '') || wordless();
-  const report = (why: Refusal): false => { io.report?.(why); return false; };
+  const report = (why: Refusal): false => {
+    io.report?.(io.leadPane === true ? { ...why, leadPane: true } : why);
+    return false;
+  };
   // No pane messaging: the rules line is never typed; the rules file is written and the seat
   // reads it through its event adapter (src/send/no-pane-messaging.ts).
   if (NO_PANE_MESSAGING.length > 0) return report({ stop: 'typing', typed: false, sent: false, kind: 'unknown', row: NO_PANE_MESSAGING });

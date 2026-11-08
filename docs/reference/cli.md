@@ -3774,12 +3774,11 @@ Hidden: no
 
 Usage:
 
-    team swap [--file <path>] [--json]
-    team swap --rule [--file <path>] [--json]
+    team swap <seat> <preset> [--dry-run] [--file <path>] [--json]
+    team swap [--rule | --run] [--file <path>] [--json]
     team swap queue <seat> [--to <target>] [--file <path>] [--json]
     team swap now <seat> [--file <path>] [--json]
     team swap cancel <seat> [--file <path>] [--json]
-    team swap --run [--file <path>] [--json]
 
 ### Who may run it
 
@@ -3789,6 +3788,7 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
@@ -3800,7 +3800,10 @@ Usage:
 
 ### Positionals
 
-None.
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | yes | no |
+| `preset` | yes | no |
 
 ### `cancel`
 

@@ -58,6 +58,7 @@ type SeatSpec = {
   launch: string;
   inbound?: 'accept' | 'hold' | 'refuse';
   leads?: boolean;
+  deliveryOrder?: readonly string[];
 };
 
 type World = { base: string; root: string; dir: string; home: string; sockets: string };
@@ -72,7 +73,7 @@ function seatBlock(seat: SeatSpec): string {
     model: ${model}
     version: ${JSON.stringify(version)}
     launch: ${seat.launch}
-${seat.inbound === undefined ? '' : `    inbound: ${seat.inbound}\n`}${seat.leads === true ? '    leads: true\n' : ''}`;
+${seat.deliveryOrder === undefined ? '' : `    delivery_order: [${seat.deliveryOrder.join(', ')}]\n`}${seat.inbound === undefined ? '' : `    inbound: ${seat.inbound}\n`}${seat.leads === true ? '    leads: true\n' : ''}`;
 }
 
 function teamText(seats: readonly SeatSpec[], order?: readonly string[]): string {
@@ -504,12 +505,20 @@ describe('team check names a live seat whose socket a send would skip', () => {
   });
 
   test('a declared order that leaves the socket out is a choice, not a skipped socket', () => {
-    const w = world([{ name: 'bydrop', role: 'orchestrator', launch: 'claude', leads: true }], ['drop']);
+    // The drop-only order is the worker's. The lead keeps an order that can wake it, and a
+    // live socket, so the check stays on the worker's choice.
+    const w = world([
+      { name: 'lead', role: 'orchestrator', launch: 'claude', inbound: 'accept', leads: true, deliveryOrder: ['socket'] },
+      { name: 'bydrop', role: 'implementer', launch: 'claude', deliveryOrder: ['drop'] },
+    ]);
     const line = wrapperLine(w, 'bydrop');
     setLaunch(w, 'bydrop', line);
-    const seat = { name: 'bydrop', pane: PANE_ONE, launch: line, pid: SESSION_PID };
-    ready(w, [seat]);
-    const { code, out } = check(w, liveOn([seat]));
+    const lead = { name: 'lead', pane: PANE_ONE, launch: 'claude --model claude-opus-5-5', pid: SESSION_PID };
+    const worker = { name: 'bydrop', pane: PANE_TWO, launch: line, pid: OTHER_PID };
+    declare(w, 'lead');
+    writeSocket(w, lead);
+    ready(w, [lead, worker]);
+    const { code, out } = check(w, liveOn([lead, worker]));
     expect(out).not.toContain(NOT_SOCKET);
     expect(out).not.toContain(NO_SOCKET);
     expect(code).toBe(0);

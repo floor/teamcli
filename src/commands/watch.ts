@@ -1446,6 +1446,13 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         const mailbox = !foreign && sources.home
           ? (sources.readMailbox ?? mailboxWaiting)(root, dir, team, live, sources.home, new Date(now), mail)
           : [];
+        const queued = new Set<string>();
+        if (mail !== undefined) {
+          for (const seat of team.seats) {
+            if (mail.unread(seat.name).length > 0) queued.add(seat.name);
+          }
+        }
+        const unsentNotes = new Map<string, number | null>();
         const run = (stored: readonly Seen[]) => pass({
           machineAccounts,
           signing,
@@ -1478,6 +1485,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           // A record is bound to the file's session. A watch of another session neither rings
           // nor raises the owner line; the file's own watch still does both.
           mailbox,
+          queued,
+          onUnsent: (name, since) => { unsentNotes.set(name, since); },
         });
         // The pass computes on a snapshot read before the lock and returns its result outside
         // it: a long pass never keeps another command out of the state. Only the merge of its
@@ -1488,6 +1497,28 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         const snapshot = loadReadings(dir);
         await yieldBeat();
         const computed = run(snapshot);
+        if (!foreign && unsentNotes.size > 0) {
+          updateState(dir, (file) => {
+            let changed = false;
+            for (const [name, since] of unsentNotes) {
+              const seat = file.sessions[session]?.seats[name];
+              if (seat === undefined) continue;
+              if (since === null) {
+                if (seat.unsent_since !== undefined) {
+                  delete seat.unsent_since;
+                  changed = true;
+                }
+              } else {
+                const iso = new Date(since).toISOString();
+                if (seat.unsent_since !== iso) {
+                  seat.unsent_since = iso;
+                  changed = true;
+                }
+              }
+            }
+            return changed;
+          }, { writeWhen: (changed) => changed });
+        }
         const result = foreign
           ? computed
           : updateReadings(dir, now, (stored) => ({
@@ -1742,6 +1773,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           const declaredUnread = declaredUnreadAfter(inForce, watchPace);
           const unreadWindows = new Map<string, number>();
           const unreadWindowOf = (seat: Seat): number => {
+            if ((team.orchestrator !== '' && seat.name === team.orchestrator)
+              || (team.operator !== '' && seat.name === team.operator)) return inForce.leadUnreadAfter;
             const known = unreadWindows.get(seat.name);
             if (known !== undefined) return known;
             const seconds = unreadWindowSeconds(declaredUnread, seatDeliveryClass({

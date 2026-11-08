@@ -2005,6 +2005,8 @@ function hostOf(input: {
         report: (why) => {
           stopped.why = why;
         },
+        leadPane: (input.team.orchestrator !== '' && file.seat === input.team.orchestrator)
+          || (input.team.operator !== '' && file.seat === input.team.operator),
         now: () => input.now().getTime(),
         sleep: launch.sleep,
       });

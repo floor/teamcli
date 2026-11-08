@@ -354,6 +354,9 @@ export type TeamFile = {
     /** How long a delivered message may go without the seat's signed read receipt before the
      *  watch retries it once; the report follows at twice this window. */
     unreadAfter: number;
+    /** How long a lead's unread drop waits before the lead itself is woken. Three minutes
+     *  when the file omits it. A tempo scales it with the other waits. */
+    leadUnreadAfter: number;
     /** How long a proven "working" presence may stand, with unread mail waiting, before the
      *  seat reads as stuck and the lead is told; 15 minutes when the file omits it. */
     stuckAfter: number;
