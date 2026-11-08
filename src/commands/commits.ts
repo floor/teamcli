@@ -179,6 +179,7 @@ export async function runCommits(io: Io, load: LoadConfig, options: CommitsRun):
         notice: null,
       });
     } else {
+      for (const warning of loaded.warnings) io.stderr(`team commits check: ${place(warning)}\n`);
       io.stdout(formatReport(report));
     }
     // exit: commits.passed
