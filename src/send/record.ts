@@ -326,7 +326,7 @@ function nonEmpty(value: unknown): value is string {
 /** A file name's own bound: one directory entry, not a path. */
 const RECORD_NAME_MAX = 255;
 
-const RECORD_SIDECAR_SUFFIXES = ['.pending', '.taken', '.read', '.wake', '.woken', '.reported', '.json', '.new'];
+const RECORD_SIDECAR_SUFFIXES = ['.pending', '.taken', '.read', '.wake', '.woken', '.reported', '.json', '.new', '.channel-emitted', '.channel-abort'];
 
 /** Watcher, receipt and private publication sidecars are never message candidates. */
 export function isRecordSidecarName(name: string): boolean {
