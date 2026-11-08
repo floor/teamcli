@@ -1239,7 +1239,7 @@ function seatPlan(
         ...planned,
         stage: 'ready',
         ...(listed ? { pane: listed.pane, workspace: listed.workspace } : {}),
-        ...restartNote(team, seat.name, recorded, home, root, session),
+        ...restartNote(team, seat, recorded, home, root, session),
       };
     }
     return planned;
@@ -1278,21 +1278,29 @@ function restoredDetail(
 
 function restartNote(
   team: Pick<TeamFile, 'orchestrator' | 'operator' | 'entity' | 'lobby'>,
-  name: string,
+  seat: Pick<Seat, 'name' | 'cwd'>,
   recorded: SeatState,
   home: string,
   root: string,
   session: string,
 ): { restartNote: string } | Record<string, never> {
-  const fix = relaunchRepair(team, name, 'plain');
+  const fix = relaunchRepair(team, seat.name, 'plain');
   // The identity a launch predating the record could not write is `team register`'s to write:
   // the seat is ready on its pane, and recording it is one per-seat command — never a
   // whole-team restart for one seat's bookkeeping, and a lead runs it for its own seat too.
-  if (!recorded.launched) return { restartNote: `its process was never recorded: run team register ${name} to record it, nothing relaunched` };
+  if (!recorded.launched) return { restartNote: `its process was never recorded: run team register ${seat.name} to record it, nothing relaunched` };
+  if (!recorded.start_cwd) return {};
+  // A seat with its own folder is not waiting in the lobby. A relaunch stays there when the
+  // record already names it, and otherwise moves to that folder, not into the lobby.
+  if (seat.cwd !== '.') {
+    const own = resolve(root, seat.cwd);
+    if (recorded.start_cwd === own) return {};
+    return { restartNote: `a relaunch moves it to its own folder: ${fix}` };
+  }
   // A running lead is at home in the lobby or in the project. Either recording is left as it
   // is. Every other seat still outside the lobby is told how to move.
-  if (recorded.start_cwd && recorded.start_cwd !== lobbyOf(home, root, { ...team, session })) {
-    if (isLeadSeat(team, name) && recorded.start_cwd === root) return {};
+  if (recorded.start_cwd !== lobbyOf(home, root, { ...team, session })) {
+    if (isLeadSeat(team, seat.name) && recorded.start_cwd === root) return {};
     return { restartNote: `a relaunch moves it into the lobby: ${fix}` };
   }
   return {};

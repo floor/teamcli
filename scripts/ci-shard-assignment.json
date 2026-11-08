@@ -1012,6 +1012,7 @@
     "test/seat-reach.test.ts": 0,
     "test/seat-reload-boundaries.test.ts": 5,
     "test/seat-state.test.ts": 1,
+    "test/seat-start-cwd.test.ts": 0,
     "test/seat-usage.test.ts": 0,
     "test/seat.test.ts": 1,
     "test/seats-devmode.test.ts": 0,

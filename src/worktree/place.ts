@@ -145,10 +145,11 @@ export function ownStartFolderProblem(input: OwnStartFolderInput): string | null
 /** Where a seat starts: the folder it waits in, or why it can't start. */
 export type SeatStart = { cwd: string; lobby?: true } | { problem: string; once?: true };
 
-// Where a seat starts. In a migrated file, the orchestrator and the operator start in the
-// project root, and every other seat (shared and worktree-mode alike) starts in the resolved
-// lobby. In a legacy file, a shared seat starts in its cwd, and a worktree seat starts in the
-// old derived lobby.
+// Where a seat starts. In a migrated file, a seat whose cwd is not `.` starts in that folder,
+// resolved against the project root, once it is outside every protected checkout. `.` keeps the
+// lead in the project root and every other seat in the resolved lobby. A Claude channel seat
+// stays in its lobby folder, and Cursor and Grok keep the branch above. In a legacy file, a
+// shared seat starts in its cwd, and a worktree seat starts in the old derived lobby.
 export function seatStart(
   team: Pick<TeamFile, 'project' | 'session' | 'workspace' | 'trust' | 'seats' | 'entity' | 'lobby' | 'orchestrator' | 'operator'>, seat: Seat, root: string, home: string = homedir(), verifiedLobby?: string, worktree?: string, recorded?: Pick<SessionState, 'seats' | 'worktrees'>,
 ): SeatStart {
@@ -244,6 +245,9 @@ export function seatStart(
         };
       }
     }
+    // An explicit folder is where this seat starts. `.` falls through: a lead starts in the
+    // project, and every other seat waits in the lobby.
+    if (seat.cwd !== '.') return { cwd: realLanding(root, seat.cwd).logical };
     // `.` is this project, which is where a lead starts. The check is whether that root
     // physically lands inside some other protected checkout.
     if (isLeadSeat(team, seat.name)) {
