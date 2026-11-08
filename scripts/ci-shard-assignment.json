@@ -1169,6 +1169,7 @@
     "test/taken-confirm.test.ts": 1,
     "test/tasks-hint-rows-independent.test.ts": 4,
     "test/tasks-hint-rows.test.ts": 5,
+    "test/team-binding.test.ts": 0,
     "test/team-config-store-own-keys.test.ts": 0,
     "test/team-file-secret-framing-independent.test.ts": 2,
     "test/team-name-independent.test.ts": 0,

@@ -28,6 +28,7 @@ import { copySeat, hasSeat, seatIsStopped } from '../file/lines.ts';
 import { setSeatStopped } from '../file/stopped-mark.ts';
 import { findRoot, launchTeamFile, placedProblems } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
+import { teamBinding } from '../registry/binding.ts';
 import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { derivedTrust, migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
@@ -342,7 +343,11 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     return 1;
   }
 
-  const launched = args.values.file || clientRun !== null ? undefined : launchedTeamFile(io, sources.home);
+  const bindingHome = sources.home ?? homedir();
+  // A `--file` names its file. Otherwise the cwd's longest registered root is the only team,
+  // and a shared seat name outside every root is refused rather than picked.
+  const binding = args.values.file !== undefined || clientRun !== null ? { kind: 'unbound' as const } : teamBinding(bindingHome, io.cwd, args.rest[0] ?? '', io);
+  const launched = args.values.file !== undefined || clientRun !== null || binding.kind === 'bound' ? undefined : launchedTeamFile(io, sources.home);
   const readOptions = {
     home: sources.home,
     // The session this run addresses: the placement check reads that session's recorded lobby.
@@ -351,12 +356,16 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // A launched pointer names where this session was launched from, not a copy to read: the team
   // is read where the edits write it, so a seat `team rename` wrote into the registry's record is
   // started under the name the record gives it, never missed over the file the session launched
-  // from. A `--file` names its file, and is read as that file.
-  const loaded = args.values.file
-    ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })
-    : launched !== undefined
-      ? readLaunchedTeam(launched, readOptions)
-      : readTeamConfig(io.cwd, readOptions);
+  // from. A cwd inside a registered root does not consult that pointer.
+  const loaded = binding.kind === 'unreadable' || binding.kind === 'ambiguous'
+    ? { ok: false as const, errors: [{ line: 0, message: binding.message }] }
+    : args.values.file !== undefined
+      ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })
+      : binding.kind === 'bound'
+        ? readTeamConfig(binding.team.root, readOptions)
+        : launched !== undefined
+          ? readLaunchedTeam(launched, readOptions)
+          : readTeamConfig(io.cwd, readOptions);
   if (!loaded.ok) {
     if (json) {
       const id = loaded.errors.some((problem) => problem.message.startsWith('not inside a git repository'))

@@ -100,6 +100,7 @@ import { refreshAgentAddress } from '../send/address.ts';
 import { bannerModel, modelDiffers, seatModel, wrapperSeat } from '../status/statusline.ts';
 import { approvalStanding, findStore, readApproval, type Ceilings, type Standing } from '../store/store.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
+import { teamBinding, teamHoldsSeat } from '../registry/binding.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { watchLabel } from '../watch/pane.ts';
@@ -243,7 +244,7 @@ function registryDeclaredTeam(
   } catch {
     return undefined;
   }
-  const holders = Object.values(records).filter((record) => record.roster.some((line) => line.seat === name));
+  const holders = Object.values(records).filter((record) => teamHoldsSeat(record, name));
   // A named session is the narrowing itself: the record must carry that session, and two records
   // carrying it stay unproven without reading either — the seat is refused as today rather than
   // one file being picked over the other.
@@ -340,7 +341,14 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   if (flagRefusal !== undefined) return callerRefused(out, json, flagRefusal, undefined, 'owner-only');
 
   const home = sources.home ?? homedir();
-  const launched = args.values.file ? undefined : launchedTeamFile(io, sources.home);
+  // The folder binds the team before a launched pointer or a shared seat name can. A `--file`
+  // still names its file. Nested roots take the longest one that holds this cwd.
+  const binding = args.values.file === undefined ? teamBinding(home, io.cwd, name, io) : { kind: 'unbound' as const };
+  if (binding.kind === 'unreadable' || binding.kind === 'ambiguous') return configuration(out, json, binding.message);
+  // A place that holds the cwd is the team. The caller's own placement is not: the launched
+  // pointer is still read, and a seat it does not declare falls through to that placed team.
+  const placed = binding.kind === 'bound' && binding.by === 'place' ? binding : undefined;
+  const launched = args.values.file !== undefined || placed !== undefined ? undefined : launchedTeamFile(io, sources.home);
   const readOptions = {
     home: sources.home,
     // The session this run addresses: the placement check reads that session's recorded lobby.
@@ -348,12 +356,15 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   };
   // A launched pointer names where this session was launched from, not a copy to read: a team
   // the registry holds is read there, so a sign-off an edit wrote is never missed over the file
-  // `up` launched from. A `--file` names its file, and is read as that file.
-  const namedFile = args.values.file === undefined
-    ? launched !== undefined
-      ? readLaunchedTeam(launched, readOptions)
-      : readTeamConfig(io.cwd, readOptions)
-    : readTeamConfig(io.cwd, { ...readOptions, file: args.values.file });
+  // `up` launched from. A `--file` names its file, and is read as that file. A cwd inside a
+  // registered root does not consult the pointer: the seat is read only in that team.
+  const namedFile = args.values.file !== undefined
+    ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })
+    : placed !== undefined
+      ? readTeamConfig(placed.team.root, readOptions)
+      : launched !== undefined
+        ? readLaunchedTeam(launched, readOptions)
+        : readTeamConfig(io.cwd, readOptions);
   // The pointer names a place, not a frozen definition: a file retired when the team moved on
   // (or an older copy left behind) must not undeclare a seat the team's current record holds. A
   // declaration is proven by any of three authorities, in order — the team this run named, the
@@ -364,7 +375,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     read.ok && read.team.seats.some((seat) => seat.name === name);
   let loaded = namedFile;
   let declaredBy: { where: 'folder' | 'registry'; session?: string } | undefined;
-  if (args.values.file === undefined && launched !== undefined && namedFile.ok && !declares(namedFile)) {
+  if (placed === undefined && args.values.file === undefined && launched !== undefined && namedFile.ok && !declares(namedFile)) {
     const folder = readTeamConfig(io.cwd, readOptions);
     if (declares(folder)) {
       loaded = folder;

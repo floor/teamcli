@@ -34,6 +34,7 @@ import { credentialProbeFor, type CredentialProbe } from '../profiles/credential
 import { profileFor } from '../profiles/index.ts';
 import type { Profile } from '../profiles/profile.ts';
 import { mayReadTeam } from '../read-gate.ts';
+import { teamBinding } from '../registry/binding.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { readState, type QueuedSwap } from '../state.ts';
 import { WAIT_FOR, waitSecondsFor } from '../swap/auto.ts';
@@ -289,7 +290,13 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
     }
   }
 
-  const current = currentTeam(rawIo.cwd, owner ? args.values.file : undefined, now, home, owner);
+  const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : teamBinding(home, rawIo.cwd, seatName, rawIo);
+  if (binding.kind === 'ambiguous' || binding.kind === 'unreadable') {
+    if (json) writeJsonError(rawIo, 'swap.file', binding.message, null);
+    else io.stderr(`team swap: ${binding.message}\n`);
+    return 'file';
+  }
+  const current = currentTeam(binding.kind === 'bound' ? binding.team.root : rawIo.cwd, owner ? args.values.file : undefined, now, home, owner);
   if (!current.ok) {
     if (!owner) {
       // The same one sentence every read refusal prints: an unapproved caller learns no detail.
