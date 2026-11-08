@@ -60,10 +60,12 @@ export function presetRecipe(name: string, team: TeamFile, root: string, cwd: st
 export async function runPresetSwap(argv: string[], io: Io, options: SwapCommandOptions): Promise<number> {
   const args = readArgs(argv, ['file'], ['dry-run', 'json']);
   const json = hasJsonFlag(argv);
-  const fail = (id: string, why: string, code = 1): number => {
+  const fail = (id: string, why: string, code: 1 | 2 = 1): number => {
     if (json) writeJsonError(io, id, plainText(why), null, code);
     else io.stderr(`team swap: ${plainText(why)}\n`);
-    return code;
+    // exit: swap.preset-refused
+    // exit: swap.preset-unreadable
+    return code === 2 ? 2 : 1;
   };
   if (args.error || args.rest.length !== 2) return fail('swap.invocation', args.error ?? 'expected <seat> <preset>', 2);
   const [name, preset] = args.rest as [string, string];
@@ -128,7 +130,7 @@ export async function runPresetSwap(argv: string[], io: Io, options: SwapCommand
     if (json) writeJson(io, 'team.swap', { format: 1, dry_run: true, project: team.project, session: team.session, seat: name, preset,
       status: 'planned', action_summary: `swap: ${name} to ${preset}`, changes, worktree: folder.create ?? null, fresh: true });
     else io.stdout(`swap ${name} to ${preset} (dry run)\n${JSON.stringify(changes, null, 2)}\n${folder.create ? `create worktree ${folder.cwd}\n` : ''}restart fresh\n`);
-    return 0;
+    return 0; // exit: swap.preset-planned
   }
   const sources = options.sources ?? realSources;
   const agents = sources.agents(team.session);
@@ -170,5 +172,5 @@ export async function runPresetSwap(argv: string[], io: Io, options: SwapCommand
   if (json) writeJson(io, 'team.swap', { format: 1, dry_run: false, project: team.project, session: team.session, seat: name, preset,
     status: 'swapped', action_summary: `swap: ${name} to ${preset}`, changes, fresh: true, pane: result.pane, notes });
   else io.stdout(`swapped: ${name} to ${preset} in ${result.pane} (fresh conversation)\n`);
-  return 0;
+  return 0; // exit: swap.preset-swapped
 }

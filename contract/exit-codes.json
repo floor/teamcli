@@ -6045,6 +6045,20 @@
     {
       "code": 0,
       "command": "swap",
+      "id": "swap.preset-planned",
+      "meaning": "a preset swap was planned and nothing was written",
+      "trigger": "team swap worker lead --dry-run"
+    },
+    {
+      "code": 0,
+      "command": "swap",
+      "id": "swap.preset-swapped",
+      "meaning": "the seat was swapped onto the preset and started fresh",
+      "trigger": "team swap worker lead"
+    },
+    {
+      "code": 0,
+      "command": "swap",
       "id": "swap.queued",
       "meaning": "a model swap was queued for the seat's boundary",
       "trigger": "team swap queue builder-1"
@@ -6094,6 +6108,13 @@
     {
       "code": 1,
       "command": "swap",
+      "id": "swap.preset-refused",
+      "meaning": "a preset swap was refused",
+      "trigger": "team swap nobody lead"
+    },
+    {
+      "code": 1,
+      "command": "swap",
       "id": "swap.rule",
       "meaning": "the entity's model rule can't be read or none is declared",
       "trigger": "team swap queue builder-1"
@@ -6139,6 +6160,13 @@
       "id": "swap.invocation",
       "meaning": "the invocation can't be read",
       "trigger": "team swap queue"
+    },
+    {
+      "code": 2,
+      "command": "swap",
+      "id": "swap.preset-unreadable",
+      "meaning": "a preset swap's invocation or team file can't be read",
+      "trigger": "team swap worker lead extra"
     },
     {
       "code": 0,

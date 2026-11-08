@@ -100,7 +100,7 @@ import { runSettings, type SettingsCommandOptions } from '../src/commands/settin
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import { runStart, type StartSources } from '../src/commands/start.ts';
-import { runSwap } from '../src/commands/swap.ts';
+import { runSwap, type SwapCommandOptions } from '../src/commands/swap.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { runUsage } from '../src/commands/usage.ts';
 import { runWaits } from '../src/commands/waits.ts';
@@ -8221,6 +8221,7 @@ seats:
     argv: readonly string[],
     caller: Caller = owner,
     over: Partial<RestartSources> = {},
+    presetRestart?: SwapCommandOptions['presetRestart'],
   ): Promise<Ran> {
     const io = testIo(place.root, caller);
     return {
@@ -8228,6 +8229,7 @@ seats:
         home: place.home,
         now: () => NOW,
         sources: restartSources(place, over),
+        ...(presetRestart ? { presetRestart } : {}),
       }),
       out: io.out,
       err: io.err,
@@ -8371,6 +8373,24 @@ seats:
       await swapped(place, ['--run'], owner, { agents: () => [] }),
       'is no longer declared in the team file; its queued swap was removed',
     );
+  });
+  scene('swap.preset-planned', async (place) => {
+    write(place, SWAP_TEAM);
+    return show(await swapped(place, ['worker', 'lead', '--dry-run']), 'swap worker to lead (dry run)');
+  });
+  scene('swap.preset-swapped', async (place) => {
+    write(place, SWAP_TEAM);
+    return show(await swapped(place, ['worker', 'lead'], owner, {}, async () => ({
+      kind: 'ready', oldPane: 'pane-swap-old', pane: 'pane-swap-new', readBack: { kind: 'unread' },
+    })), 'swapped: worker to lead in pane-swap-new (fresh conversation)');
+  });
+  scene('swap.preset-refused', async (place) => {
+    write(place, SWAP_TEAM);
+    return show(await swapped(place, ['nobody', 'lead']), 'the target must be a declared, active agent seat');
+  });
+  scene('swap.preset-unreadable', async (place) => {
+    write(place, SWAP_TEAM);
+    return show(await swapped(place, ['worker', 'lead', 'extra']), 'expected <seat> <preset>');
   });
 }
 
