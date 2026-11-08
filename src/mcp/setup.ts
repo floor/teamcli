@@ -217,11 +217,19 @@ export async function runMcpSetup(args: ReturnType<typeof readArgs>, json: boole
     const plan = planChannelPair({ ...scope, epoch: currentBriefClaim(claim())?.epoch }, false);
     // Validate restoration before any config or placement write, too.
     const restored = journal === null ? null : offDocuments(plan, journal);
-    // The owner and the seat itself record the pane they stand in. A lead or operator is
-    // admitted to prepare this seat's channel, and that pane is already their own record:
-    // registering the target there is the pane another seat holds, so placement stays as it is.
-    const recordsCallerPane = admitted === 'owner' || admitted === 'seat';
-    const pane = recordsCallerPane ? (caller.kind === 'seat' ? caller.pane : io.env.HERDR_PANE_ID) : undefined;
+    // The owner records the pane they stand in. A lead or operator is admitted to prepare this
+    // seat's channel, and that pane is already their own record: registering the target there
+    // is the pane another seat holds, so placement stays as it is. The seat itself is admitted
+    // only on the pane its record already holds, in this session: recording that pane again is
+    // what is already there, so placement stays and register is not asked.
+    const recordedPane = caller.kind === 'seat' ? standingOf(stateDirForCaller, team.session, caller).recordedPane : undefined;
+    const placementKept = admitted === 'seat'
+      && caller.kind === 'seat'
+      && caller.session === team.session
+      && recordedPane !== undefined
+      && recordedPane === caller.pane;
+    const recordsCallerPane = (admitted === 'owner' || admitted === 'seat') && !placementKept;
+    const pane = recordsCallerPane || placementKept ? (caller.kind === 'seat' ? caller.pane : io.env.HERDR_PANE_ID) : undefined;
     const register = { ...registerSources, ...sources.register, home };
     if (recordsCallerPane && !off) {
       if (pane === undefined || pane === '') {

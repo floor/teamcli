@@ -244,6 +244,33 @@ test('a placed seat is refused by the config editor on a dry run and a real run,
   expect(other.code, other.err + other.out).toBe(1); expect(JSON.parse(other.out).error.id).toBe('mcp.setup-caller');
   expect(snapshot(w.base)).toEqual(before);
 });
+test('a seat whose record already holds the calling pane keeps placement and does not register', async () => {
+  const kept = crew();
+  place(kept.root, 'lead', 'pane-lead');
+  const dev = writeDevelopmentMode({ home: kept.home, mode: 'local-fast', now: NOW, caller: 'synthetic-fixture' });
+  if (!dev.ok) throw new Error(dev.why);
+  kept.sources.setup.register.processInfo = () => null;
+  const caller = { kind: 'seat' as const, name: 'lead', pane: 'pane-lead', session: SESSION };
+  const dry = await ask(kept, 'lead', ['--dry-run', '--json'], caller);
+  expect(dry.code, dry.err + dry.out).toBe(0);
+  expect(JSON.parse(dry.out).changes.find((change: { kind: string }) => change.kind === 'placement')).toEqual({ kind: 'placement', action: 'keep', pane: 'pane-lead' });
+  const real = await ask(kept, 'lead', ['--json'], caller);
+  expect(real.code, real.err + real.out).toBe(0);
+  expect(JSON.parse(real.out).changes.find((change: { kind: string }) => change.kind === 'placement')).toEqual({ kind: 'placement', action: 'keep', pane: 'pane-lead' });
+  expect(readState(join(kept.root, '.agents')).sessions[SESSION]?.seats.lead?.pane).toBe('pane-lead');
+});
+test('a different pane still goes through register, and a renamed shell is refused at the caller check', async () => {
+  const moved = world();
+  place(moved.root, 'alpha', 'pane-other');
+  const refused = await setup(moved, ['--dry-run', '--json']);
+  expect(refused.code, refused.err + refused.out).toBe(1);
+  expect(JSON.parse(refused.out).error.id).toBe('mcp.setup-placement');
+  const renamed = world();
+  place(renamed.root, 'alpha', PANE);
+  const renamedRun = await setup(renamed, ['--dry-run', '--json'], { kind: 'seat', name: 'alpha', pane: 'renamed-pane', session: SESSION });
+  expect(renamedRun.code, renamedRun.err + renamedRun.out).toBe(1);
+  expect(JSON.parse(renamedRun.out).error.id).toBe('mcp.setup-caller');
+});
 test('a placed lead under dev mode is admitted, and another team or a renamed pane is refused', async () => {
   const lead = crew(); place(lead.root, 'lead', 'pane-lead');
   const dev = writeDevelopmentMode({ home: lead.home, mode: 'local-fast', now: NOW, caller: 'synthetic-fixture' });
