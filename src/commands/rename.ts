@@ -931,7 +931,7 @@ async function executeTeamRename(
 
   const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : teamBinding(home, io.cwd, undefined, io);
   const launched = args.values.file !== undefined || binding.kind === 'bound' ? undefined : launchedTeamFile(io, home);
-  const loaded = binding.kind === 'unreadable'
+  const loaded = binding.kind === 'unreadable' || binding.kind === 'ambiguous'
     ? { ok: false as const, errors: [{ line: 0, message: binding.message }] }
     : args.values.file !== undefined
       ? readTeamConfig(io.cwd, { file: args.values.file, home })

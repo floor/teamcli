@@ -47,7 +47,7 @@ function setupRoot(home: string, cwd: string, io?: Io): string | null {
     }
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   const binding = teamBinding(home, cwd, undefined, io);
-  if (binding.kind === 'unreadable') throw new ConfigRefusal(binding.message);
+  if (binding.kind === 'unreadable' || binding.kind === 'ambiguous') throw new ConfigRefusal(binding.message);
   return binding.kind === 'bound' ? resolve(binding.team.root) : null;
 }
 function enable(launch: string): string {

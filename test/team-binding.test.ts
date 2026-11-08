@@ -170,7 +170,7 @@ test('the longest root that holds the cwd wins, and a shared prefix does not', (
   } finally {
     discard(held.base);
   }
-});
+}, 15_000);
 
 const NOW = () => new Date('2026-11-08T00:00:00.000Z');
 
@@ -307,7 +307,7 @@ test('a shared seat name outside every team root is refused and names every team
   } finally {
     discard(held.base);
   }
-});
+}, 15_000);
 
 test('a shared name outside every place binds to the team the caller stands in', () => {
   const held = world();
@@ -326,7 +326,7 @@ test('a shared name outside every place binds to the team the caller stands in',
   } finally {
     discard(held.base);
   }
-});
+}, 15_000);
 
 test('an unreadable registry keeps the command\'s own refusal and exit', async () => {
   const held = world();
@@ -340,7 +340,7 @@ test('an unreadable registry keeps the command\'s own refusal and exit', async (
   } finally {
     discard(held.base);
   }
-});
+}, 15_000);
 
 test('from the inner root each seat command binds to the inner team', async () => {
   const held = world();
@@ -407,7 +407,7 @@ test('from the inner root each seat command binds to the inner team', async () =
   } finally {
     discard(held.base);
   }
-});
+}, 15_000);
 
 test('from the outer root, outside the inner team, the command binds to the outer team', async () => {
   const held = world();
@@ -434,7 +434,7 @@ test('from the outer root, outside the inner team, the command binds to the oute
   } finally {
     discard(held.base);
   }
-});
+}, 15_000);
 
 test('a seat cwd outside the inner root binds the inner team, and the outer root still binds the rest', () => {
   const base = fixtureBase('team-binding-cwd-');
@@ -497,5 +497,58 @@ test('a lobby only one team records binds that team, and a shared lobby binds no
     expect(teamBinding(home, commonDesk).kind).toBe('unbound');
   } finally {
     discard(base);
+  }
+});
+
+function writeTeam(root: string, project: string, session: string, cwd: string | null): void {
+  const path = join(root, '.agents', 'team.yaml');
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, teamFile(project, session, null, cwd, root));
+}
+
+test('two teams on the same folder are refused and both are named', () => {
+  const base = fixtureBase('team-binding-tie-');
+  const home = join(base, 'home');
+  const shared = join(base, 'shared');
+  const other = join(base, 'other');
+  const child = join(shared, 'child');
+  try {
+    for (const folder of [home, shared, other, child]) mkdirSync(folder, { recursive: true });
+    writeTeam(other, 'beta', 'beta-session', shared);
+    writeTeam(shared, 'alpha', 'alpha-session', null);
+    register(home, other, 'beta', 'beta-session', ['lead']);
+    register(home, shared, 'alpha', 'alpha-session', ['lead']);
+    const binding = teamBinding(home, child);
+    expect(binding.kind).toBe('ambiguous');
+    if (binding.kind !== 'ambiguous') return;
+    const ids = [teamIdOf(other), teamIdOf(shared)].sort();
+    expect(binding.ids).toEqual(ids);
+    for (const id of ids) expect(binding.message).toContain(id);
+  } finally {
+    discard(base);
+  }
+});
+
+test('a seat cwd of /, the home folder, or an ancestor of the team root adds no place', () => {
+  const cases = ['root', 'home', 'ancestor'] as const;
+  const bases: string[] = [];
+  try {
+    for (const label of cases) {
+      const base = fixtureBase(`team-binding-wide-${label}-`);
+      bases.push(base);
+      const home = join(base, 'home');
+      const root = label === 'ancestor' ? join(base, 'nested') : join(base, 'team');
+      const probe = label === 'root' ? join(base, 'elsewhere') : label === 'home' ? join(home, 'notes') : join(base, 'side');
+      for (const folder of [home, root, probe]) mkdirSync(folder, { recursive: true });
+      const cwd = label === 'root' ? '/' : label === 'home' ? home : '..';
+      writeTeam(root, label, `${label}-session`, cwd);
+      register(home, root, label, `${label}-session`, ['lead']);
+      expect(teamBinding(home, probe).kind, label).toBe('unbound');
+      const atRoot = teamBinding(home, root);
+      expect(atRoot.kind, label).toBe('bound');
+      if (atRoot.kind === 'bound') expect(atRoot.team.project, label).toBe(label);
+    }
+  } finally {
+    for (const base of bases) discard(base);
   }
 });

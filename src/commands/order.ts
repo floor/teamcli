@@ -123,7 +123,7 @@ export async function runOrder(argv: string[], io: Io, sources: OrderSources = r
     home: sources.home,
     ...(args.values.session !== undefined ? { session: args.values.session } : {}),
   };
-  const loaded = binding.kind === 'unreadable'
+  const loaded = binding.kind === 'unreadable' || binding.kind === 'ambiguous'
     ? { ok: false as const, errors: [{ line: 0, message: binding.message }] }
     : args.values.file !== undefined
       ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })

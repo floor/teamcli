@@ -884,7 +884,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // One clock reading serves the run's own file and the policy chain read beside it; the
   // remembering below keeps its own, later reading.
   const loadedAt = liveCurrent === undefined ? sources.now() : undefined;
-  const current: Current = liveCurrent ?? (binding.kind === 'unreadable'
+  const current: Current = liveCurrent ?? (binding.kind === 'unreadable' || binding.kind === 'ambiguous'
     ? { ok: false, errors: [{ line: 0, message: binding.message }] }
     : binding.kind === 'bound'
       ? currentTeam(binding.team.root, undefined, loadedAt!, sources.home, false)

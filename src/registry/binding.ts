@@ -48,6 +48,15 @@ function lobbyPaths(team: TeamRecord): string[] {
   return [...new Set(values.filter((value) => value !== ''))];
 }
 
+/** A seat cwd that must not become a place: `/`, the home folder, or any ancestor of the
+ *  team's own root. Each one would claim every folder under it. `.` is already the root. */
+function addsNoPlace(home: string, root: string, cwd: string): boolean {
+  const path = realPath(cwd);
+  if (path === realPath('/')) return true;
+  if (path === realPath(home)) return true;
+  return path !== realPath(root) && rootHolds(path, root);
+}
+
 /** Seat `cwd` values from the team file at `root`, resolved against that root. A missing or
  *  unreadable file contributes none: the root itself is still a place. `.` is the root. */
 function configuredCwds(root: string): string[] {
@@ -97,7 +106,9 @@ function boundPlaces(home: string, teams: readonly TeamRecord[]): Place[] {
   const places: Place[] = [];
   for (const team of teams) {
     places.push({ team, path: team.root });
-    for (const cwd of configuredCwds(team.root)) places.push({ team, path: cwd });
+    for (const cwd of configuredCwds(team.root)) {
+      if (!addsNoPlace(home, team.root, cwd)) places.push({ team, path: cwd });
+    }
   }
   for (const [path, team] of lobbyOwners) {
     if (!sharedLobbies.has(path)) places.push({ team, path });
@@ -159,6 +170,9 @@ function callerStandsIn(io: BindingIo, team: TeamRecord): boolean {
  * bound place that holds the cwd wins: the team's registered root, a seat's configured cwd
  * resolved against that root, or the team's own lobby when no other team records that path.
  *
+ * Two teams whose longest place is the same folder are refused by id. A seat cwd of `/`, the
+ * home folder, or an ancestor of that team's root is not a place.
+ *
  * When no place holds the cwd, the caller's own placement decides: the one team whose state
  * records the caller on its pane. A shared seat name is refused only after that, and only when
  * the caller stands in none of the teams. A seat is held by the registry roster or by the
@@ -175,11 +189,20 @@ export function teamBinding(home: string, cwd: string, seat?: string, io?: Bindi
     return { kind: 'unbound' };
   }
   const listed = Object.values(teams);
-  const ranked = boundPlaces(home, listed)
-    .filter((place) => rootHolds(place.path, cwd))
-    .sort((a, b) => realPath(b.path).length - realPath(a.path).length || realPath(a.path).localeCompare(realPath(b.path)));
-  const bound = ranked[0]?.team;
-  if (bound !== undefined) return { kind: 'bound', team: bound, by: 'place' };
+  const holding = boundPlaces(home, listed).filter((place) => rootHolds(place.path, cwd));
+  if (holding.length > 0) {
+    const longest = Math.max(...holding.map((place) => realPath(place.path).length));
+    const top = holding.filter((place) => realPath(place.path).length === longest);
+    const ids = [...new Set(top.map((place) => place.team.id ?? teamIdOf(place.team.root)))].sort();
+    if (ids.length > 1) {
+      return {
+        kind: 'ambiguous',
+        ids,
+        message: `this folder is a place of more than one team (${ids.join(', ')}); name the team by its id`,
+      };
+    }
+    return { kind: 'bound', team: top[0]!.team, by: 'place' };
+  }
   const named = seat !== undefined && seat !== '';
   const holders = named ? listed.filter((team) => teamHoldsSeat(team, seat)) : listed;
   if (io !== undefined) {
