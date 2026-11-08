@@ -63,13 +63,13 @@ import { runPresetSwap } from '../swap/preset.ts';
 // watch's, or `team swap --run` for a team whose watch is not running.
 
 export const USAGE = `Usage: team swap <seat> <preset> [--dry-run] [--file <path>] [--json]
-       team swap [--file <path>] [--json]
-       team swap --rule [--file <path>] [--json]
+       team swap [--rule | --run] [--file <path>] [--json]
        team swap queue <seat> [--to <target>] [--file <path>] [--json]
        team swap now <seat> [--file <path>] [--json]
        team swap cancel <seat> [--file <path>] [--json]
-       team swap --run [--file <path>] [--json]
 
+<seat> <preset> installs that recipe and starts the seat fresh; --dry-run plans it and writes nothing.
+With no subcommand the command lists the queue. --rule reads the entity rule and takes no seat. --run drains the queue and takes no seat.
 A <target> is <cli>:<model>, and the recipe is copied from a seat of the entity that already runs it.
 A <vendor>:<model> target moves the seat between vendors of its own CLI through the profile's vendor
 table, with no donor and no launcher script; the vendor's credential item must be on this machine.
@@ -153,9 +153,46 @@ type RunPlan = {
   rulesOrigin?: RulesOrigin;
 };
 
+const SWITCHES = new Set(['json', 'dry-run', 'rule', 'run']);
+const VALUED = new Set(['file', 'to']);
+
+/** Positionals only, so the form is chosen before a parser that refuses another form's flag.
+ *  A value flag consumes its argument. An unknown flag stops the scan, as readArgs does, so
+ *  words after it are not a second form. */
+function positionalsOf(argv: readonly string[]): string[] {
+  const rest: string[] = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i] as string;
+    if (!arg.startsWith('--')) {
+      rest.push(arg);
+      continue;
+    }
+    const [name, inline] = arg.slice(2).split(/=(.*)/s) as [string, string | undefined];
+    if (SWITCHES.has(name) && inline === undefined) continue;
+    if (VALUED.has(name)) {
+      if (inline === undefined) i += 1;
+      continue;
+    }
+    break;
+  }
+  return rest;
+}
+
+/** A flag the chosen form does not read, said the way that form already refuses it. `--to` on
+ *  anything but queue, and `--rule` or `--run` on queue, never become an unknown-option line. */
+function formError(queue: boolean, argv: readonly string[], error: string): string {
+  if (queue && error === 'unknown option --rule' && argv.includes('--rule')) return '--rule takes no subcommand';
+  if (queue && error === 'unknown option --run' && argv.includes('--run')) return '--run takes no subcommand and no seat';
+  if (!queue && error === 'unknown option --to') return '--to belongs to `team swap queue <seat>`';
+  return error;
+}
+
 export async function runSwap(argv: string[], rawIo: Io, options: SwapCommandOptions = {}): Promise<number> {
-  const direct = readArgs(argv, ['file', 'to'], ['json', 'dry-run', 'rule', 'run']);
-  if (direct.rest.length >= 2 && !['queue', 'now', 'cancel'].includes(direct.rest[0] ?? '')) {
+  const words = positionalsOf(argv);
+  if (words.length >= 2 && !['queue', 'now', 'cancel'].includes(words[0] ?? '')) {
+    // The preset form reads only the flags it takes. runPresetSwap parses this same list and
+    // is what reports a flag the form does not take.
+    readArgs(argv, ['file'], ['dry-run', 'json']);
     return runPresetSwap(argv, rawIo, options);
   }
   const executed = execute(argv, rawIo, options);
@@ -216,11 +253,16 @@ type Sub = 'view' | 'rule' | 'queue' | 'now' | 'cancel' | 'run';
 function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcome | RunPlan {
   const io = cleanedIo(rawIo);
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['to', 'file'], ['rule', 'json', 'run']);
+  const words = positionalsOf(argv);
+  // queue is the only form that reads --to. --rule and --run are the bare form. now and cancel
+  // share that bare list: a flag they do not take is still the refusal the bare form names.
+  const args = words[0] === 'queue'
+    ? readArgs(argv, ['to', 'file'], ['json'])
+    : readArgs(argv, ['file'], ['rule', 'json', 'run']);
   const home = options.home ?? homedir();
   const now = resolveNow(options.now);
 
-  if (args.error !== undefined) return invocation(rawIo, io, json, plainText(args.error));
+  if (args.error !== undefined) return invocation(rawIo, io, json, plainText(formError(words[0] === 'queue', argv, args.error)));
   const name = args.rest[0];
   const ruleView = args.flags.has('rule');
   const runFlag = args.flags.has('run');
