@@ -89,9 +89,10 @@ import { captureDraft, pasteDraftBack, type DeliverHost } from '../send/deliver.
 import { sidebarPolicy } from '../settings/sidebar-policy.ts';
 import { dropMessage } from '../send/native.ts';
 import { nativePushBindingFor } from '../send/push.ts';
-import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
+import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote, withoutResume } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, worktreeOf, type SeatState, type SessionState } from '../state.ts';
+import { updateAgent } from '../registry/agents.ts';
 import { pinnedSeatSession, recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
 import { latestCheckpoint } from '../checkpoint/checkpoint.ts';
 import { ensureSeatLine, registerEnd, registerLaunch } from '../registry/sync.ts';
@@ -545,6 +546,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   // the close repeats the reason this run already gave, so it never reads as a resume that
   // quietly became a fresh start. Set where each decision is made, never inferred from the line.
   let resumeNote: string | undefined;
+  // The agent record's launch line after `--fresh` strips a pinned resume. The run that follows
+  // starts from this line, not from the line that still named the conversation.
+  let clearedLaunch: string | undefined;
   // The pane's continuity is proven by the session the registry binds to the seat, whatever
   // resume form the new launch line can carry: a CLI with none has no resume id, and its
   // state copy may predate the id a restore kept. The live agent's session must still be the
@@ -610,12 +614,27 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     const listed = recordedPane === undefined
       ? undefined
       : agents.find((agent) => agent.name === name && agent.pane === recordedPane);
-    // The recorded launcher's own selection, read before anything is stopped: `--abandon` and
-    // `--fresh` are the caller's fresh start, and a line that itself names a conversation — the
-    // recorded id or any other — cannot be run fresh. It is never rewritten, so the flag is
-    // refused here rather than pretending the line it would run is a fresh one.
+    // The recorded launcher's own selection, read before anything is stopped. `--fresh` clears a
+    // resume this version can strip from the agent record's launch line, and clears the pinned
+    // conversation with it, in one write. `--abandon` does not rewrite that line. A resume this
+    // version cannot strip is still refused: nothing pretends the line it would run is fresh.
     const pinned = namedResumeTarget(declared.cli, resumeCandidate.launch) !== null;
-    if (pinned && (abandon || fresh)) {
+    if (pinned && fresh) {
+      const stripped = withoutResume(declared.cli, resumeCandidate.launch);
+      const agentId = ownSession.kind === 'bound'
+        ? ownSession.recorded.agentId
+        : boundSession.kind === 'bound'
+          ? boundSession.recorded.agentId
+          : '';
+      if (stripped !== null && agentId !== '') {
+        if (!dry) {
+          updateAgent(home, agentId, { launch: stripped, reach: { agent_session: null } });
+          logLine(dir, 'restart', describeCaller(caller), `${name}: cleared the pinned conversation from its agent record`, sources.now());
+        }
+        clearedLaunch = stripped;
+      }
+    }
+    if (pinned && (abandon || fresh) && clearedLaunch === undefined) {
       return notReadyRefused(
         out,
         json,
@@ -710,7 +729,11 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     ...(declared.stopped
       ? { declare: () => declareRevived(path, name, home), restore: () => declareStopped(path, name, home) }
       : {}),
-    ...(boundSession.kind === 'bound' && boundSession.recorded.launch ? { registryLaunch: boundSession.recorded.launch } : {}),
+    ...(clearedLaunch !== undefined
+      ? { registryLaunch: clearedLaunch }
+      : boundSession.kind === 'bound' && boundSession.recorded.launch
+        ? { registryLaunch: boundSession.recorded.launch }
+        : {}),
     ...(args.flags.has('resolve-launch') ? { resolveLaunch: true } : {}),
     now: sources.now,
     sources,
