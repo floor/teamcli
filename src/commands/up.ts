@@ -2212,8 +2212,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   const createGranted = entityGrantAdmits(root, io, { home: sources.home, now: sources.now?.(), cwd: io.cwd });
   // The map's admission, the trusted owner token, the granted seat, a passed delegation, a pane
   // the live file names for `up`, or the seat whose own registry record an active entity
-  // create-grant names. A grant is not a constraint on an admitted run: it was never asked, and
-  // its audit line is never written.
+  // create-grant names. A grant is a second door, read only where the map refused. Under
+  // own-team it neither adds nor removes an admission the default rule already gave.
   const named =
     ordinaryAdmitted ||
     ownerToken ||

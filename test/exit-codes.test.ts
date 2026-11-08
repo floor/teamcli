@@ -653,7 +653,20 @@ async function runCompared(place: Place, argv: string[], go: (args: string[]) =>
   const args = dryArgv(argv);
   const before = compareDry ? projectBytes(place) : null;
   const code = await go(args);
-  if (before) expect(projectBytes(place)).toEqual(before);
+  if (before) {
+    const after = projectBytes(place);
+    expect(after.state).toEqual(before.state);
+    // A dry run and the real run write the same admission line when the default rule admits
+    // the caller. The state stays as it was. That line is the only change a dry run may make.
+    const prior = before.log ?? '';
+    const next = after.log ?? '';
+    if (next !== prior) {
+      expect(next.startsWith(prior)).toBe(true);
+      const extra = next.slice(prior.length).split('\n').filter((line) => line !== '');
+      expect(extra.length).toBeGreaterThan(0);
+      for (const line of extra) expect(line).toContain('warning: owner gate; admitted as ');
+    }
+  }
   return { code, out: io.out, err: io.err };
 }
 
@@ -986,6 +999,15 @@ scene('add.override-owner', async (place) => {
   return show(await added(place, ['lead', '--model', 'claude-sonnet-5-5'], addRemoveCaller, addSources(place, {
     delegateGate: () => ({ kind: 'passed' as const, pane: 'main/w1:p1' }),
   })), "--model and --effort on a declared seat are the owner's");
+});
+scene('add.coordinator', async (place) => {
+  // `--file` is this team's own file, inside the checkout. The placed lead is admitted past
+  // that flag and stops on the orchestrator seat, which stays the owner's.
+  approve(place, TWO);
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w1:p1' };
+  });
+  return show(await added(place, ['lead', '--file', place.file], leadSeat, addSources(place)), "only the owner changes the orchestrator's seat");
 });
 scene('add.model', async (place) => {
   approve(place, TWO);
@@ -2305,14 +2327,14 @@ scene('remove.abandon', async (place) => {
   updateState(join(place.root, '.agents'), (state) => {
     (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w1:p1' };
   });
-  return show(await removed(place, ['worker', '--abandon'], leadSeat, downSources({ home: place.home })), 'only the owner abandons');
+  return show(await removed(place, ['lead', '--abandon'], leadSeat, downSources({ home: place.home })), 'only the owner abandons');
 });
 scene('remove.coordinator', async (place) => {
   write(place, TWO);
   updateState(join(place.root, '.agents'), (state) => {
     (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w1:p1' };
   });
-  return show(await removed(place, ['lead'], leadSeat, downSources({ home: place.home })), 'only the owner removes the orchestrator');
+  return show(await removed(place, ['lead'], leadSeat, downSources({ home: place.home })), 'only the owner changes the orchestrator');
 });
 // A lead's `--keep` is a swap. The seat never swaps itself; another lead swaps it only
 // under a grant that lists `swap`; the owner's swap stops it and leaves the file as it was.
@@ -2324,11 +2346,13 @@ scene('remove.swap-self', async (place) => {
   return show(await removed(place, ['lead', '--keep'], leadSeat, downSources({ home: place.home })), "can't swap its own seat");
 });
 scene('remove.swap-grant', async (place) => {
+  // The orchestrator seat stays the owner's. The placed operator is the caller, and the needle
+  // stays the swap refusal. The operator's own seat is the lead's, so it is not this scene.
   write(place, TWO.replace('operator: lead', 'operator: worker').replace('    stopped: true\n', ''));
   updateState(join(place.root, '.agents'), (state) => {
-    (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w1:p1' };
+    (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-worker' };
   });
-  return show(await removed(place, ['worker', '--keep'], leadSeat, downSources({ home: place.home })), 'swaps the orchestrator');
+  return show(await removed(place, ['lead', '--keep'], { kind: 'seat', name: 'worker', pane: 'pane-worker', session: 'acme' }, downSources({ home: place.home })), 'swaps the orchestrator');
 });
 scene('remove.no-seat', async (place) => {
   write(place, TWO);
@@ -3324,6 +3348,10 @@ scene('up.grant-scope', async (place) => {
   approve(place, GRANT_DOWN);
   recordLead(place, 'w1:p1');
   unlisted(place);
+  // A grant adds rights. Under own-team it does not refuse this lead, so the scene restores
+  // the owner gates and the grant scope is what denies.
+  const asked = writePolicySet(place.home, { level: 'team', target: place.root, teamRoot: place.root, name: 'leads.authority', value: 'owner-asks' }, { now: NOW });
+  expect(asked.ok).toBe(true);
   return show(await up(place, [], leadSeat, upSources(place)), 'deny');
 });
 scene('up.grant-flag', async (place) => {
@@ -7716,11 +7744,13 @@ scene('restart.unknown', async (place) => {
   return show(await restarted(place, ['missing']), 'not a signed declared seat');
 });
 scene('restart.lead', async (place) => {
-  // The map admits the lead for `restart`; the seat caller is the lead, standing on its own
-  // recorded pane, and the target the file's operator. The abandon rule refuses it there.
+  // The placed operator is admitted to restart. Abandon of the orchestrator's seat stays the owner's.
   write(place, ACTIVE_TWO.replace('operator: lead', 'operator: worker'));
-  recordLead(place, leadSeat.pane);
-  return show(await restarted(place, ['worker', '--abandon'], leadSeat), 'does not abandon the orchestrator');
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-worker' };
+  });
+  const ops = { kind: 'seat' as const, name: 'worker', pane: 'pane-worker', session: 'acme' };
+  return show(await restarted(place, ['lead', '--abandon'], ops), 'does not abandon the orchestrator');
 });
 scene('restart.signed-off', async (place) => {
   write(place, TWO);

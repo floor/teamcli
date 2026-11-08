@@ -299,7 +299,8 @@ export async function runTeamImport(
   // A dry run only reads. A blocking charter stops a real migrate before any card is written.
   if (mode === 'migrate' && !dryRun) {
     const gate = charterGate(home, { operation: 'migrate', cwd: io.cwd, path: charterTargetOf(io.cwd) }, sources.ownerSeatStore);
-    if (gate.kind === 'block' && !isOwner(caller)) {
+    // A charter block binds the owner too, until they widen it with team setup --edit.
+    if (gate.kind === 'block') {
       refuse(io, json, mode, { id: `${mode}.not-owner`, message: gate.message, repair: null });
       return 'not-owner';
     }

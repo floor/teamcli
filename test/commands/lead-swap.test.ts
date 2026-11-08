@@ -16,6 +16,7 @@ import { loadTeamFile } from '../../src/file/load.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
 import { LOG_FILE, emptySession, readState, updateState } from '../../src/state.ts';
+import { writePolicySet } from '../../src/policy/index.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
 import type { Screen } from '../../src/watch/screen.ts';
 import { claudeBox, testIo } from '../helpers.ts';
@@ -118,6 +119,12 @@ beforeEach(() => {
   approve(BASE);
 });
 
+/** Keeps a scene on the grant and the owner wall. The default admits the operator seat. */
+function ownerAsks(): void {
+  const asked = writePolicySet(home, { level: 'team', target: dir, teamRoot: dir, name: 'leads.authority', value: 'owner-asks' }, { now: new Date(0) });
+  if (!asked.ok) throw new Error(asked.why);
+}
+
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe('swapping a lead seat', () => {
@@ -180,6 +187,8 @@ describe('swapping a lead seat', () => {
 
   test('the orchestrator swaps the operator under a grant that lists swap, and the grant line is logged', async () => {
     approve(GRANTED);
+    ownerAsks();
+    const signed = readFileSync(file, 'utf8');
     record('lead', 'w0:p1', 'w0');
     record('op', 'w5:p1', 'w5');
     const made = world();
@@ -187,7 +196,7 @@ describe('swapping a lead seat', () => {
     const io = testIo(dir, lead);
     expect(await runRemove(['op', '--keep'], io, made.sources)).toBe(0);
     expect(made.closed).toEqual(['w5']);
-    expect(readFileSync(file, 'utf8')).toBe(GRANTED);
+    expect(readFileSync(file, 'utf8')).toBe(signed);
     expect(readState(join(dir, '.agents')).sessions.acme?.swapping?.op?.by).toBe('lead');
     const log = readFileSync(join(dir, '.agents', LOG_FILE), 'utf8');
     expect(log).toContain('[grant] lead swap: op');
@@ -195,6 +204,7 @@ describe('swapping a lead seat', () => {
   });
 
   test('without a grant that lists swap, a lead seat may not swap the other', async () => {
+    ownerAsks();
     record('lead', 'w0:p1', 'w0');
     record('op', 'w5:p1', 'w5');
     const made = world();
@@ -207,6 +217,7 @@ describe('swapping a lead seat', () => {
 
   test('a grant without swap does not admit it', async () => {
     approve(GRANTED.replace('scope: [swap]', 'scope: [up, down]'));
+    ownerAsks();
     record('lead', 'w0:p1', 'w0');
     record('op', 'w5:p1', 'w5');
     const made = world();
@@ -219,6 +230,7 @@ describe('swapping a lead seat', () => {
 
   test('taking a lead out of the file stays the owner\'s, whatever the grant says', async () => {
     approve(GRANTED);
+    ownerAsks();
     record('lead', 'w0:p1', 'w0');
     const made = world();
     listed(made, 'op', 'w5:p1', 'w5');

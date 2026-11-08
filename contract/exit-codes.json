@@ -144,6 +144,13 @@
     {
       "code": 1,
       "command": "add",
+      "id": "add.coordinator",
+      "meaning": "only the owner changes the orchestrator's seat",
+      "trigger": "team add lead"
+    },
+    {
+      "code": 1,
+      "command": "add",
       "id": "add.default-session",
       "meaning": "the session can't be \"default\"",
       "trigger": "team add worker --session default"

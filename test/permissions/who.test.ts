@@ -17,6 +17,7 @@ import { writeGrant } from '../../src/permissions/grants.ts';
 import { COMMAND_GATES } from '../../src/permissions/map.ts';
 import { callerRecordOf, gateVerdict, resolveCaller, rosterOf, type BridgeTeam } from '../../src/permissions/who.ts';
 import { teamIdOf, upsertTeam } from '../../src/registry/teams.ts';
+import { writePolicySet } from '../../src/policy/index.ts';
 
 const AGENT = 'agt_0123456789ab';
 const NOW = new Date('2026-10-17T12:00:00.000Z');
@@ -290,6 +291,34 @@ describe('each mapped row pins the module function its kind names', () => {
   test('every `team-pause` row is `mayPauseTeamVerdict`, for every placement', () => {
     const { root, home, id } = world();
     const team = fileTeam(id);
+    // This scene pins the map function. `owner-asks` keeps that pin; the default admits the operator.
+    mkdirSync(join(root, '.agents'), { recursive: true });
+    writeFileSync(join(root, '.agents', 'team.yaml'), `format: 1
+project: acme
+entity: acme
+session: acme
+coordinator: lead
+operator: operator
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: lead
+    cli: claude-code
+    vendor: anthropic
+    model: m
+    version: "1"
+    launch: claude
+  - role: implementer
+    name: operator
+    cli: claude-code
+    vendor: anthropic
+    model: m
+    version: "1"
+    launch: claude
+`);
+    const asked = writePolicySet(home, { level: 'team', target: root, teamRoot: root, name: 'leads.authority', value: 'owner-asks' }, { now: NOW });
+    if (!asked.ok) throw new Error(asked.why);
     const rows = Object.entries(COMMAND_GATES).filter(([, gate]) => gate.kind === 'team-pause');
     expect(rows.map(([command]) => command).sort()).toEqual(['pause', 'resume']);
     for (const [command, gate] of rows) {
@@ -310,13 +339,14 @@ describe('each mapped row pins the module function its kind names', () => {
     }
   });
 
-  test("the operator's seat is not admitted to `team-pause`", () => {
+  test("the map still refuses the operator for `team-pause`, and the gate admits the placed operator", () => {
     const { root, home, id } = world();
     const team = fileTeam(id);
     const decision = resolveCaller(seatCaller('operator'), team, root, home, 'pause', placement(), NOW);
     expect(decision).toMatchObject({ effect: 'deny', rule: 'team-pause' });
     expect(decision.why).toContain("neither the owner nor the orchestrator's seat");
-    expect(gateVerdict(seatCaller('operator'), team, root, home, 'resume', placement(), () => NOW)).toEqual({ kind: 'refused' });
+    // The map row still denies the operator. The default rule admits the placed operator at the gate.
+    expect(gateVerdict(seatCaller('operator'), team, root, home, 'resume', placement(), () => NOW)).toEqual({ kind: 'ok' });
   });
 
   test('every row carrying a terminal requirement refuses exactly what `detachedRefusal` refuses', () => {

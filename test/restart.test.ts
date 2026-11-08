@@ -1161,14 +1161,14 @@ describe('team restart <seat>', () => {
     expect(checkIo.out).not.toContain('team add');
 
     // The gate behind the printed command, in the registry-listed shape: the roster's `leads`
-    // mark admits the lead, the map refuses a plain seat, and `team add` stays the owner's.
+    // mark admits the lead, and the default rule also admits the placed operator and `team add`.
     const loaded = loadTeamFile(fixture.root, { home: fixture.home });
     if (!loaded.ok) throw new Error('fixture team does not validate');
     const standingOfLead = standingOf(fixture.dir, 'acme', leadCaller);
     const standingOfOps = standingOf(fixture.dir, 'acme', opsCaller);
     expect(gateVerdict(leadCaller, loaded.team, fixture.root, fixture.home, 'restart', standingOfLead, () => NOW)).toEqual({ kind: 'ok' });
-    expect(gateVerdict(opsCaller, loaded.team, fixture.root, fixture.home, 'restart', standingOfOps, () => NOW)).toEqual({ kind: 'refused' });
-    expect(gateVerdict(leadCaller, loaded.team, fixture.root, fixture.home, 'add', standingOfLead, () => NOW)).toEqual({ kind: 'refused' });
+    expect(gateVerdict(opsCaller, loaded.team, fixture.root, fixture.home, 'restart', standingOfOps, () => NOW)).toEqual({ kind: 'ok' });
+    expect(gateVerdict(leadCaller, loaded.team, fixture.root, fixture.home, 'add', standingOfLead, () => NOW)).toEqual({ kind: 'ok' });
     expect(gateVerdict({ kind: 'owner' }, loaded.team, fixture.root, fixture.home, 'add', { session: 'acme' }, () => NOW)).toEqual({ kind: 'ok' });
 
     // And the lead runs the line as printed: the seat starts where nothing was closed.
@@ -1195,7 +1195,7 @@ describe('team restart <seat>', () => {
     expect(did.created).toBe(0);
   });
 
-  test('a lead --abandon closes a blocked non-lead seat, but refuses a working seat or a lead seat; a plain seat is refused by the map', async () => {
+  test('a lead --abandon closes a blocked non-lead seat, refuses a working seat and the orchestrator, and the operator may restart', async () => {
     const fixture = makeFixture();
     updateState(fixture.dir, (state) => {
       const session = (state.sessions.acme ??= emptySession());
@@ -1205,12 +1205,11 @@ describe('team restart <seat>', () => {
     });
     const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
 
-    // 1. Refuses --abandon on the operator's seat: the map admits the lead, and the abandon rule
-    //    keeps a seat caller off the orchestrator's and the operator's seat.
+    // 1. Refuses --abandon on the orchestrator's seat. The operator seat is the lead's.
     const leadRun = makeHarness(fixture, { workerScreen: 'permission' });
-    const ioLead = testIo(fixture.root, leadCaller);
-    expect(await runRestart(['ops', '--abandon'], ioLead, leadRun.sources)).toBe(1);
-    expect(ioLead.err).toContain("does not abandon the orchestrator's or the operator's seat");
+    const ioOpsOnLead = testIo(fixture.root, { kind: 'seat', name: 'ops', pane: 'pane-ops', session: 'acme' });
+    expect(await runRestart(['lead', '--abandon'], ioOpsOnLead, leadRun.sources)).toBe(1);
+    expect(ioOpsOnLead.err).toContain("does not abandon the orchestrator's seat");
 
     // 2. Refuses --abandon on a working seat from a lead caller
     const workingRun = makeHarness(fixture, { workerScreen: 'working', workerStatus: 'working' });
@@ -1227,13 +1226,12 @@ describe('team restart <seat>', () => {
     expect(blockedRun.did.closed).toEqual(['ws-old']);
     expect(ioBlocked.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
 
-    // 4. A plain seat of the team is refused by the map's `restart` row before any of that: it
-    //    admits the owner and the team's `leads`, and `ops` holds no `leads`.
+    // 4. The placed operator is admitted to restart another seat. The map row still names `leads`;
+    //    the default rule admits the operator at the gate.
     const opsRun = makeHarness(fixture);
     const ioOps = testIo(fixture.root, { kind: 'seat', name: 'ops', pane: 'pane-ops', session: 'acme' });
-    expect(await runRestart(['worker'], ioOps, opsRun.sources)).toBe(1);
-    expect(ioOps.err).toBe('team restart: only the owner or `leads` restarts a seat; this call is ops\n');
-    expect(opsRun.did.closed).toEqual([]);
+    expect(await runRestart(['worker'], ioOps, opsRun.sources)).toBe(0);
+    expect(ioOps.out).toContain('team restart: restarted worker');
   });
 
   test('a seat holding unsent text is restarted: the text is copied, the pane closed without typing, and the text pasted back', async () => {
@@ -1760,7 +1758,7 @@ describe('team restart <seat>', () => {
     expect(readState(fixture.dir).sessions.acme?.seats['parked-seat']?.stage).toBe('ready');
   });
 
-  test("the entity's main orchestrator is still refused --abandon on the orchestrator, operator, or a working seat", async () => {
+  test("the entity's main orchestrator is still refused --abandon on the orchestrator or a working seat", async () => {
     const fixture = makeFixture(crossTeamTargetYaml('floor'));
     updateState(fixture.dir, (state) => {
       const held = (state.sessions.acme ??= emptySession());
@@ -1773,15 +1771,21 @@ describe('team restart <seat>', () => {
     upsertTeam(fixture.home, teamIdOf(fixture.root), { project: 'acme', entity: 'floor', session: 'acme', root: fixture.root, at: NOW.toISOString() });
     upsertTeam(fixture.home, teamIdOf(head.root), { project: 'floor', entity: 'floor', session: head.session, root: head.root, at: NOW.toISOString() });
 
-    for (const leadTarget of ['orchestrator', 'ops']) {
-      const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
-      const io = testIo(fixture.root);
-      io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
-      expect(await runRestart([leadTarget, '--abandon'], io, sources), leadTarget).toBe(1);
-      expect(io.err, leadTarget).toBe('team restart: a seat caller does not abandon the orchestrator\'s or the operator\'s seat; this call is orchestrator\n');
-      expect(did.closed, leadTarget).toEqual([]);
-      expect(did.created, leadTarget).toBe(0);
-    }
+    const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
+    const io = testIo(fixture.root);
+    io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    expect(await runRestart(['orchestrator', '--abandon'], io, sources)).toBe(1);
+    expect(io.err).toBe('team restart: a seat caller does not abandon the orchestrator\'s seat; this call is orchestrator\n');
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+
+    // The operator seat is past the owner wall. This fixture then stops on two agents of that name.
+    const opsHarness = makeHarness(fixture, { workerName: 'ops' });
+    const opsIo = testIo(fixture.root);
+    opsIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    expect(await runRestart(['ops', '--abandon'], opsIo, opsHarness.sources)).toBe(1);
+    expect(opsIo.err).toBe('team restart: ops: herdr lists more than one agent of this name; left as it is\n');
+    expect(opsHarness.did.closed).toEqual([]);
 
     // `--abandon` on a `working` worker seat is also refused to the main orchestrator.
     const workingHarness = makeHarness(fixture, { workerScreen: 'working', workerStatus: 'working' });

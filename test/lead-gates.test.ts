@@ -108,6 +108,12 @@ ${seat('ops')}${seat('helper')}`);
   return { root, home, file };
 }
 
+/** These scenes pin `lead-gates`. `owner-asks` keeps that pin; the default admits the operator on its own. */
+function ownerAsks(home: string, root: string): void {
+  const asked = writePolicySet(home, { level: 'team', target: root, teamRoot: root, name: 'leads.authority', value: 'owner-asks' }, { now: NOW });
+  if (!asked.ok) throw new Error(asked.why);
+}
+
 function logOf(root: string): string {
   const path = join(root, '.agents', 'team.log');
   return existsSync(path) ? readFileSync(path, 'utf8') : '';
@@ -177,6 +183,7 @@ describe('the five gates', () => {
   test('the default admits no operator: policy set and grant both refuse, and nothing is logged', async () => {
     const { root, home, file } = repo();
     devModeOn(home, root);
+    ownerAsks(home, root);
     const before = readFileSync(file, 'utf8');
     const policyIo = testIo(root, OPS);
     expect(await runPolicy(['set', 'team', 'lead-gates', 'lead'], policyIo, { home })).toBe(1);
@@ -193,6 +200,7 @@ describe('the five gates', () => {
     const { root, home, file } = repo();
     devModeOn(home, root);
     leadGates(home, root, 'lead+operator');
+    ownerAsks(home, root);
     const io = testIo(root, OPS);
     expect(await runPolicy(['set', 'team', 'lead-gates', 'lead'], io, { home })).toBe(0);
     expect(io.err).toContain(`warning: ${OWNER_GRANT}; this call is ops; dev mode continues (dev-mode on at team level)`);
@@ -208,6 +216,7 @@ describe('the five gates', () => {
     const { root, home } = repo();
     devModeOn(home, root);
     leadGates(home, root, 'lead+operator');
+    ownerAsks(home, root);
     const io = testIo(root, OPS);
     expect(await runPolicy(['unset', 'team', 'lead-gates'], io, { home })).toBe(0);
     expect(io.err).toContain('dev mode continues (dev-mode on at team level)');
@@ -251,6 +260,7 @@ describe('the five gates', () => {
     const { root, home } = repo();
     machineFast(home);
     leadGates(home, root, 'lead+operator');
+    ownerAsks(home, root);
     const io = testIo(root, OPS);
     expect(await runPolicy(['set', 'team', 'lead-gates', 'lead'], io, { home })).toBe(0);
     expect(io.err).toContain('dev mode continues (dev-mode on at machine level)');
@@ -261,6 +271,7 @@ describe('the five gates', () => {
     const { root, home, file } = repo();
     devModeOn(home, root);
     leadGates(home, root, 'lead+operator');
+    ownerAsks(home, root);
     const loaded = loadTeamFile(root, { home });
     if (!loaded.ok) throw new Error(loaded.errors.map((error) => error.message).join('; '));
     writeApproval(
@@ -453,6 +464,7 @@ describe('independent adversarial checks: five command gates, tighten-only chain
     const { root, home } = repo();
     devModeOn(home, root);
     leadGates(home, root, 'lead+operator');
+    ownerAsks(home, root);
 
     // 1. `team check --repair`
     const checkSources: CheckSources = {
@@ -542,6 +554,7 @@ describe('independent adversarial checks: five command gates, tighten-only chain
     const { root, home } = repo();
     // `lead-gates: lead+operator` is set, but `dev-mode` is off.
     leadGates(home, root, 'lead+operator');
+    ownerAsks(home, root);
 
     const policyIo = testIo(root, OPS);
     expect(await runPolicy(['set', 'team', 'lead-gates', 'lead'], policyIo, { home })).toBe(1);

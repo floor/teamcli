@@ -543,7 +543,7 @@ export type OwnerActionAsk = {
   claim: boolean;
 };
 
-export type OwnerActionAdmission = { ok: true; via: 'owner-seat' | 'rule' | 'charter'; requestId?: string; ruleId?: string; signer: string } | { ok: false; why: string };
+export type OwnerActionAdmission = { ok: true; via: 'owner-seat' | 'rule' | 'charter' | 'leads'; requestId?: string; ruleId?: string; signer: string } | { ok: false; why: string };
 
 /**
  * Admits one action run under request `id`: the request is whole, unexpired, names this action,

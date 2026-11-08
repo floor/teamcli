@@ -26,6 +26,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.ceilings` | `add` | 1 | a record that does not verify is not in force | `team add worker` |
 | `add.changed` | `add` | 1 | the file changed while add was checking | `team add worker` |
 | `add.client-refused` | `add` | 1 | the owner-signed manager grant, or the client add it admits, did not verify, or the seat is a lead seat | `team add Desk --like worker --client grant.json --key client.key --team docs` |
+| `add.coordinator` | `add` | 1 | only the owner changes the orchestrator's seat | `team add lead` |
 | `add.default-session` | `add` | 1 | the session can't be "default" | `team add worker --session default` |
 | `add.delegate` | `add` | 1 | the caller is not the approved delegate | `team add worker` |
 | `add.delegate-approval` | `add` | 1 | delegation needs a verified approval | `team add worker` |

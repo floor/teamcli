@@ -12,6 +12,7 @@ import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { devModeCallerGate, devModeExpiryNote, devModeFileApproval, devModeOwnerLift, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
+import { leadsOwnTeamAdmits } from '../leads-authority.ts';
 import { plainLine } from '../launch/plain.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -216,7 +217,8 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // `test/owner-no-tty-boundaries.test.ts` throws at every read past a refusal and pins that
   // order.
   const charter = clientRun !== null ? { kind: 'absent' as const } : charterGate(sources.home ?? homedir(), { operation: 'remove', cwd: io.cwd }, sources.ownerSeatStore);
-  if (charter.kind === 'block' && !isOwner(walkCaller(io))) {
+  // A charter block binds the owner too, until they widen it with team setup --edit.
+  if (charter.kind === 'block') {
     refuse(io, json, 'remove', { id: 'remove.charter', message: charter.message, repair: null });
     // exit: remove.charter
     return 1;
@@ -430,7 +432,19 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     return 1;
   }
   const abandon = args.flags.has('abandon');
-  if (abandon && !ownerRun) {
+  // `dir` writes the admission line when the default rule admits this abandon. The map already
+  // admits the placed lead, so this is the run's first line, ahead of the stop and the file edit.
+  if (abandon && !ownerRun && (name === team.orchestrator || leadsOwnTeamAdmits({
+    caller,
+    team,
+    at: standingOf(dir, session, caller),
+    home: sources.home ?? homedir(),
+    root,
+    command: 'remove',
+    now: sources.now(),
+    dir,
+    teamFile: team,
+  }) === null)) {
     // The owner's dev-mode admission for exactly this gate: a placed lead or
     // orchestrator continues with the warning; every other caller keeps the refusal.
     const lift = devModeOwnerLift(io, {
@@ -456,11 +470,35 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // `swap` (the gate above already required it). Never the seat's own: closing its pane would end
   // this very call before anything starts the replacement, and leave the team without its lead.
   let grantSeat: string | null = null;
-  if (lead && !ownerRun) {
+  const operatorAdmitted = lead && !ownerRun && name === team.operator && name !== team.orchestrator && leadsOwnTeamAdmits({
+    caller,
+    team,
+    at: standingOf(dir, session, caller),
+    home: sources.home ?? homedir(),
+    root,
+    command: 'remove',
+    now: sources.now(),
+    dir,
+    teamFile: team,
+  }) !== null;
+  // The new sentence is the default rule's limit. A delegate, a grant and a client keep the base sentence.
+  const orchestratorByDefault = name === team.orchestrator && delegatePane === null && clientRun === null && leadsOwnTeamAdmits({
+    caller,
+    team,
+    at: standingOf(dir, session, caller),
+    home: sources.home ?? homedir(),
+    root,
+    command: 'remove',
+    now: sources.now(),
+    teamFile: team,
+  }) !== null;
+  if (lead && !ownerRun && !operatorAdmitted) {
     if (!swap) {
       refuse(io, json, 'remove', {
         id: 'remove.coordinator',
-        message: `only the owner removes the orchestrator's or the operator's seat; this call is ${whoText}`,
+        message: orchestratorByDefault
+          ? `only the owner changes the orchestrator's seat; this call is ${whoText}`
+          : `only the owner removes the orchestrator's or the operator's seat; this call is ${whoText}`,
         repair: null,
       });
       // exit: remove.coordinator
@@ -601,9 +639,10 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   const human = copySeat?.human === true;
   if (agent && human) leave = true;
   // A caller other than the owner, on a seat herdr reports idle or done that this flow cannot ask
-  // to leave: `--abandon`'s kind of power scoped to a caller who may not run it — the seat is
-  // taken out of the team, the pane is left as it is (nothing typed, nothing closed, and the agent
-  // renamed out of the seat's name below), where no state ever frees it otherwise.
+  // to leave, and who is not abandoning: the seat is taken out of the team, the pane is left as
+  // it is (nothing typed, nothing closed, and the agent renamed out of the seat's name below),
+  // where no state ever frees it otherwise. An admitted `--abandon` is not this path. It closes
+  // the workspace, exactly as the owner's `--abandon` does.
   //
   // herdr's own status is the gate, not the screen: idle or done says the seat is not mid-turn,
   // and that signal still reads where a profile cannot — an unrecognised screen, an unreadable
@@ -638,7 +677,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       && boxHoldsText(cli, profile.exit, sources.screenText(session, agent.pane, cli), { cwd: liveCwd ?? undefined, home: sources.home });
     const clearable = holdsExit && profile?.exitClear !== null;
     // A lead is never left running under another name: its swap stops a free seat or nothing.
-    leave = !lead && !ownerRun && where !== 'free' && where !== 'exited' && where !== 'working' && !clearable
+    leave = !abandon && !lead && !ownerRun && where !== 'free' && where !== 'exited' && where !== 'working' && !clearable
       && (agent.status === 'idle' || agent.status === 'done');
     if (where !== 'free' && where !== 'exited' && !abandon && !clearable && !leave) {
       // A refusal here is the kept safety: herdr reports the seat working, its screen shows a

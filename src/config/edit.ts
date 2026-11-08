@@ -189,7 +189,8 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     seatApproved = true;
   }
   const gate = charterGate(home, { operation: 'config', cwd: io.cwd, path: root }, sources.ownerSeatStore);
-  if (gate.kind === 'block' && !seatApproved && !isOwner(callerOf(rawIo))) {
+  // A charter block binds the owner too, until they widen it with team setup --edit.
+  if (gate.kind === 'block' && !seatApproved) {
     refuse(io, json, 'config', { id: 'config.charter', message: gate.message, repair: 'team setup --edit' });
     // exit: config.charter
     return 1;

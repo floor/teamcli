@@ -501,7 +501,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   if (!declared) {
     return unknownRefused(out, json, name);
   }
-  if (abandon && caller.kind !== 'owner' && (name === team.orchestrator || name === team.operator)) {
+  if (abandon && caller.kind !== 'owner' && name === team.orchestrator) {
     return leadRefused(out, json, describeCaller(caller));
   }
   // A stopped seat is its own team's sign-off to lift: the owner, a seat this team's map admits
@@ -2393,7 +2393,7 @@ function unknownRefused(out: Io, json: boolean, name: string): number {
 function leadRefused(out: Io, json: boolean, callerText: string): number {
   refuse(out, json, 'restart', {
     id: 'restart.lead',
-    message: `a seat caller does not abandon the orchestrator's or the operator's seat; this call is ${callerText}`,
+    message: `a seat caller does not abandon the orchestrator's seat; this call is ${callerText}`,
     repair: null,
   });
   // exit: restart.lead
