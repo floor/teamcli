@@ -823,8 +823,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
   const cwdRefusal = seatCwdRefusal(built.seat, recorded.worktrees, root);
   if (cwdRefusal !== null) {
-    refuse(io, json, 'add', { id: 'add.start', message: cwdRefusal, repair: null });
-    // exit: add.start
+    refuse(io, json, 'add', { id: 'add.cwd', message: cwdRefusal, repair: null });
+    // exit: add.cwd
     return 1;
   }
   const recordedTree = worktreeOf(recorded, built.name);

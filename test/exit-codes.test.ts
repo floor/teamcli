@@ -943,6 +943,10 @@ scene('add.lobby', async (place) => {
   };
   return show(await added(place, ['worker', '--file', place.file], owner, addSources(place, { fs })), 'failed to create');
 });
+scene('add.cwd', async (place) => {
+  approve(place, TWO.replace('    stopped: true\n', '    cwd: ../other\n'));
+  return show(await added(place, ['worker', '--file', place.file], owner, addSources(place)), 'matches no trust path');
+});
 scene('add.start', async (place) => {
   approve(place, narrow(place));
   return show(await added(place, ['worker', '--file', place.file], owner, addSources(place)), 'inside the protected checkout');
