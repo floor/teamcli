@@ -50,6 +50,7 @@ export function hostedWatchSources(
     ...base,
     pid: pid ?? base.pid,
     hosted: loop,
+    startedBy: 'daemon',
     ownPane: undefined,
     typeText: () => false,
     pressEnter: () => false,
