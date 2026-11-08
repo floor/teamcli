@@ -447,10 +447,12 @@ function formSignature(flags: readonly { name: string; takesValue: boolean }[]):
 }
 
 /** A command that parses more than one branch: its calls and its own usage lines must declare the
- *  same forms, both ways. A parser shape no line declares, a line no call parses, or two calls or
- *  two lines with the same shape (which call a run takes would be unstated) is an error — the
- *  multiple-call error is never swallowed without the forms themselves matching. */
-function checkOptionForms(sets: OptionSet[], ownLines: ParsedLine[], rel: string): void {
+ *  same forms, both ways. A subcommand line may be the form a branch parses — `team swap queue`
+ *  is the call that reads `--to` — and two subcommands may share one flag set, so a subcommand
+ *  line is a form a call may match and is not required to be the only line of that shape. A
+ *  parser shape no line declares, an own line no call parses, or two calls or two own lines with
+ *  the same shape (which call a run takes would be unstated) is an error. */
+function checkOptionForms(sets: OptionSet[], ownLines: ParsedLine[], subLines: ParsedLine[], rel: string): void {
   if (sets.length < 2) return;
   const fromUsage = new Map<string, string>();
   for (const line of ownLines) {
@@ -459,6 +461,13 @@ function checkOptionForms(sets: OptionSet[], ownLines: ParsedLine[], rel: string
     if (prior !== undefined) throw new Error(`${rel}: usage lines "${prior}" and "${line.line}" declare the same form`);
     fromUsage.set(signature, line.line);
   }
+  const fromSub = new Map<string, string>();
+  for (const line of subLines) {
+    const signature = formSignature(line.flags);
+    if (fromUsage.has(signature) || fromSub.has(signature)) continue;
+    fromSub.set(signature, line.line);
+  }
+  const accepted = new Set<string>([...fromUsage.keys(), ...fromSub.keys()]);
   const fromParser = new Set<string>();
   for (const set of sets) {
     const signature = formSignature([
@@ -467,7 +476,7 @@ function checkOptionForms(sets: OptionSet[], ownLines: ParsedLine[], rel: string
     ]);
     if (fromParser.has(signature)) throw new Error(`${rel}: two readArgs calls declare the same form: ${signature || 'no options'}`);
     fromParser.add(signature);
-    if (!fromUsage.has(signature)) throw new Error(`${rel}: a readArgs call (${signature || 'no options'}) has no usage line declaring that form`);
+    if (!accepted.has(signature)) throw new Error(`${rel}: a readArgs call (${signature || 'no options'}) has no usage line declaring that form`);
   }
   for (const [signature, line] of fromUsage) {
     if (!fromParser.has(signature)) throw new Error(`${rel}: usage line "${line}" declares a form no readArgs call parses (${signature || 'no options'})`);
@@ -551,7 +560,7 @@ function commandNode(
   const texts = usage === null ? [] : [usage, programUsage];
   const extra = [...hiddenFlags, ...helpFlags(help, texts)];
   const ownLines = lines.filter((line) => line.subcommand === null);
-  checkOptionForms(lists, ownLines, rel);
+  checkOptionForms(lists, ownLines, lines.filter((line) => line.subcommand !== null), rel);
   const subcommands = [...fromSource].sort(cmp).map((sub): Node => {
     const subLines = lines.filter((line) => line.subcommand === sub);
     return withWho(
