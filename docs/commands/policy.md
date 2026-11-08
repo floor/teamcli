@@ -250,7 +250,8 @@ four default words are the floor and stay in force even when a set value leaves 
 The view (`team policy`) may be run by the owner, a seat of the team, or an approved delegate pane
 that may read the team. A placed lead and a placed operator of the team set and unset a key for
 their own team. A key marked needs-owner stays the owner's: `leads.authority`, `owner-signers`,
-`owner-signer-mode`, `grant-emission` and `owner.reserved-scope`. `leads.authority` is `own-team`
+`owner-signer-mode`, `grant-emission`, `owner.reserved-scope`, `development-mode`, `daemon.broker`,
+`daemon.chores` and `daemon.heartbeat`. `leads.authority` is `own-team`
 by default and `owner-asks` restores the owner gates; it is set at entity, project or team.
 `team policy set` and `team policy unset` of a needs-owner key are the owner's, from a terminal
 outside herdr, signed under `team-policy-v1\n`, and logged to `.agents/team.log`. `--dry-run`

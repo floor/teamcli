@@ -48,19 +48,30 @@ export const LEADS_AUTHORITY_EXCLUDED: ReadonlySet<string> = new Set([
   // The first admission of an account has no team to be the lead of.
   'start',
   // Migrate writes a team's first authority record, the same class as start.
+  // The owner-seat door says `import` for this act. Both names stay excluded.
   'migrate',
   // Recording a served project (`also_in`) is not a command. `noteTeam` publishes those
   // memberships only when the run is the owner's: a seat's sync names them and they stay.
 ]);
 
+/** The owner-seat door's name for an act the map already excludes. The two spellings are one
+ *  act: a door name that is not excluded admits what the map keeps the owner's. */
+export const LEADS_DOOR_COMMANDS: Readonly<Record<string, string>> = {
+  approvals: 'approvals:revoke',
+  import: 'migrate',
+};
+
 export function leadsCommandExcluded(command: string): boolean {
-  return LEADS_AUTHORITY_EXCLUDED.has(command);
+  if (LEADS_AUTHORITY_EXCLUDED.has(command)) return true;
+  const gate = LEADS_DOOR_COMMANDS[command];
+  return gate !== undefined && LEADS_AUTHORITY_EXCLUDED.has(gate);
 }
 
 /** Whether setting this policy key changes who may act, so only the owner may set it.
  *  The catalogue marks the authority keys, and also the keys that open the owner's machine:
  *  `dev-mode` and `development-mode` (the switch and its scope, aliases included), and
- *  `daemon.broker` (the broker reads the credential store). */
+ *  `daemon.broker` (the broker reads the credential store), `daemon.chores` and
+ *  `daemon.heartbeat` (both reach the one machine daemon every team shares). */
 export function policyNeedsOwner(name: string): boolean {
   return getPolicySpec(name)?.needsOwner === true;
 }

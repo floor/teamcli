@@ -94,7 +94,7 @@ team. The run is the second door past the placement and who-may-run-it gates, ne
 | --- | --- |
 | the owner | run it, from a terminal outside herdr; `--session` and `--file` are the owner's own |
 | a run with no terminal | nothing: ``team restart: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane`` |
-| the orchestrator's seat — and any seat the record marks a lead: the map's `leads` | restart another declared seat; never its own recorded pane, never `--abandon` on the orchestrator's or the operator's seat, and never `--abandon` on a `working` seat |
+| the orchestrator's seat — and any seat the record marks a lead: the map's `leads` | restart another declared seat; never its own recorded pane, never `--abandon` on the orchestrator's seat, and never `--abandon` on a `working` seat |
 | the entity's main orchestrator: the lead seat of the team whose project is the entity itself | restart any declared seat of the entity's teams, as that team's own lead does — the proof is its head team's record, live file and recorded pane, never its seat name; it still never restarts a seat on the pane this call stands on |
 
 A seat the record stops (`stopped: true`, as `team remove --keep` leaves one) is signed off: `team up` keeps

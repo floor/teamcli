@@ -15,7 +15,7 @@ source: src/permissions/map.ts
 
 The Since column records presence at a pinned revision, not an audited first-introduction release. Planned rows confer no implementation or authority.
 
-A placed lead and a placed operator of a team run every command for that team without the owner, except grant, delegate, revoke, the owner's identity and keys, recording a served project (`also_in`), and migrate, which writes a team's first authority record. The orchestrator seat itself stays the owner's. `team forget` of the lead's own team stays the owner's. `down --abandon` of the orchestrator seat stays the owner's; an ordinary seat and the operator seat are admitted. The owner restores the old gates with `leads.authority: owner-asks`. Registering a pane root stays the owner's.
+A placed lead and a placed operator of a team run every command for that team without the owner, except grant, delegate, revoke, the owner's identity and keys, the machine daemon and its broker, forget, start, recording a served project (`also_in`), and migrate, which writes a team's first authority record. The orchestrator seat itself stays the owner's. `team forget` of the lead's own team stays the owner's. `down --abandon` of the orchestrator seat stays the owner's; an ordinary seat and the operator seat are admitted. The owner restores the old gates with `leads.authority: owner-asks`. Registering a pane root stays the owner's.
 
 | Entry | Meaning | Since | Source at the tag | Note |
 |---|---|---|---|---|

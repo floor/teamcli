@@ -1930,6 +1930,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     levels: ['entity', 'project', 'team'],
     defaultValue: DAEMON_HEARTBEAT_SECONDS.release,
     gateLifting: false,
+    needsOwner: true,
     parseValue: parseHeartbeatSeconds,
     valueProblem: (raw: unknown) => heartbeatSecondsProblem('daemon.heartbeat', raw),
     // A shorter or equal beat is tighter, the same direction as every interval policy.
@@ -1953,6 +1954,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     levels: ['entity', 'project', 'team'],
     defaultValue: DAEMON_CHORES_DEFAULTS.mode,
     gateLifting: false,
+    needsOwner: true,
     parseValue: parseChoreMode,
     valueProblem: (raw: unknown) => choreModeProblem('daemon.chores', raw),
     isWithin: (lower: DaemonChoresMode, higher: DaemonChoresMode) => CHORE_MODE_RANK[lower] <= CHORE_MODE_RANK[higher],

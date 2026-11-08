@@ -1761,6 +1761,13 @@
     {
       "code": 1,
       "command": "config",
+      "id": "config.orchestrator",
+      "meaning": "a caller other than the owner changed the orchestrator's seat",
+      "trigger": "team config set coordinator ops"
+    },
+    {
+      "code": 1,
+      "command": "config",
       "id": "config.path",
       "meaning": "the path cannot be set (a value on the way, or no such list item); nothing was written",
       "trigger": "team config set seats.ghost.cli claude"
@@ -5066,7 +5073,7 @@
       "code": 1,
       "command": "restart",
       "id": "restart.lead",
-      "meaning": "a seat caller passed --abandon for the orchestrator's or the operator's seat",
+      "meaning": "a seat caller passed --abandon for the orchestrator's seat",
       "trigger": "team restart lead --abandon"
     },
     {

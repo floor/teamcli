@@ -434,6 +434,8 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   const abandon = args.flags.has('abandon');
   // `dir` writes the admission line when the default rule admits this abandon. The map already
   // admits the placed lead, so this is the run's first line, ahead of the stop and the file edit.
+  // The operator's own line is written below, so this check does not write a second one.
+  const abandonLogs = !(name === team.operator && name !== team.orchestrator);
   if (abandon && !ownerRun && (name === team.orchestrator || leadsOwnTeamAdmits({
     caller,
     team,
@@ -442,7 +444,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     root,
     command: 'remove',
     now: sources.now(),
-    dir,
+    ...(abandonLogs ? { dir } : {}),
     teamFile: team,
   }) === null)) {
     // The owner's dev-mode admission for exactly this gate: a placed lead or

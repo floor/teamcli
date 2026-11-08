@@ -246,18 +246,33 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
   const walked = walkCaller(rawIo);
   const gate = charterGate(home, { operation: 'swap', cwd: rawIo.cwd, path: charterTargetOf(rawIo.cwd, args.values.file) }, options.ownerSeatStore);
   const peeked = !isOwner(walked) && sub === 'now' ? currentTeam(rawIo.cwd, undefined, now, home, false) : null;
-  const defaultNow = peeked?.ok === true && leadsOwnTeamAdmits({
-    caller: callerOf(rawIo, peeked.team.session),
+  const placedCaller = peeked?.ok === true ? callerOf(rawIo, peeked.team.session) : null;
+  // The orchestrator seat is refused, so that refusal must not leave an admission line.
+  // The line is written only once the run is actually admitted.
+  const wouldAdmit = placedCaller !== null && peeked?.ok === true && leadsOwnTeamAdmits({
+    caller: placedCaller,
     team: peeked.team,
     teamFile: peeked.team,
-    at: standingOf(peeked.dir, peeked.team.session, callerOf(rawIo, peeked.team.session)),
+    at: standingOf(peeked.dir, peeked.team.session, placedCaller),
     home,
     root: peeked.root,
     command: 'swap',
     now,
-    dir: peeked.dir,
   }) !== null;
-  const leadNow = peeked?.ok === true && defaultNow && seatName !== peeked.team.orchestrator;
+  const leadNow = wouldAdmit && peeked?.ok === true && seatName !== peeked.team.orchestrator;
+  if (leadNow && placedCaller !== null && peeked?.ok === true) {
+    leadsOwnTeamAdmits({
+      caller: placedCaller,
+      team: peeked.team,
+      teamFile: peeked.team,
+      at: standingOf(peeked.dir, peeked.team.session, placedCaller),
+      home,
+      root: peeked.root,
+      command: 'swap',
+      now,
+      dir: peeked.dir,
+    });
+  }
   // A charter block is a deny the owner wrote. It wins over the default rule.
   if (gate.kind === 'block' && !isOwner(walked)) {
     refuse(rawIo, io, json, 'swap.caller', plainText(gate.message), `the owner widens the charter with team setup --edit`, undefined, 'owner-or-leads');
@@ -279,7 +294,7 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
         io,
         json,
         'swap.caller',
-        peeked?.ok === true && defaultNow && seatName === peeked.team.orchestrator
+        peeked?.ok === true && wouldAdmit && seatName === peeked.team.orchestrator
           ? `only the owner changes the orchestrator's seat; this call is ${describeCaller(walked)}`
           : `only the owner forces a swap; this call is ${describeCaller(walked)}`,
         null,

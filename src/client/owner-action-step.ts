@@ -78,29 +78,33 @@ function leadsAdmissionAt(
   now: Date,
 ) {
   const aimed = sources.root ?? targets[0];
-  if (aimed !== undefined) {
-    try {
-      const loaded = readTeamConfig(aimed, { home });
-      if (loaded.ok) {
-        const dir = dirname(loaded.path);
-        const caller = callerOf(io, loaded.team.session);
-        return leadsOwnTeamAdmits({
-          caller,
-          team: loaded.team,
-          teamFile: loaded.team,
-          at: standingOf(dir, loaded.team.session, caller),
-          home,
-          root: loaded.root,
-          command,
-          now,
-          dir,
-        });
-      }
-    } catch {
-      // The target names no team. The caller's own checkout may.
-    }
+  if (aimed === undefined) return leadsOwnTeamAtCwd(io, { command, home, now });
+  let loaded: ReturnType<typeof readTeamConfig>;
+  try {
+    loaded = readTeamConfig(aimed, { home });
+  } catch {
+    return null;
   }
-  return leadsOwnTeamAtCwd(io, { command, home, now });
+  if (!loaded.ok) return null;
+  // Every folder this run changes has to sit in the one team the caller is placed on.
+  // A later folder outside that root is another team's, and the first folder does not admit it.
+  const root = resolve(loaded.root);
+  for (const target of targets) {
+    if (!isSameOrInside(root, resolve(target))) return null;
+  }
+  const dir = dirname(loaded.path);
+  const caller = callerOf(io, loaded.team.session);
+  return leadsOwnTeamAdmits({
+    caller,
+    team: loaded.team,
+    teamFile: loaded.team,
+    at: standingOf(dir, loaded.team.session, caller),
+    home,
+    root: loaded.root,
+    command,
+    now,
+    dir,
+  });
 }
 
 /** `--request` and `--approval <id>` for one command. `none` when neither was passed.
@@ -136,8 +140,9 @@ export function ownerSeatStep(
   }
   // An excluded command stays on the path this door had before the default rule. Forget is
   // one of them: the charter above already judged the named targets, and the rule must not
-  // look a team up for it.
-  const leads = leadsCommandExcluded(command) ? null : leadsAdmissionAt(io, home, command, sources, targets, now);
+  // look a team up for it. `--request` records the card and writes nothing, even when the
+  // default rule would have admitted the run.
+  const leads = ask.request || leadsCommandExcluded(command) ? null : leadsAdmissionAt(io, home, command, sources, targets, now);
   if (leads !== null) {
     return { kind: 'admitted', admission: { ok: true, via: 'leads', signer: leads.role } };
   }
@@ -337,4 +342,3 @@ export function ownerAdmitsRecord(action: OwnerAction, io: Io, targets: readonly
     return { ok: false, kind: 'caller', caller };
   }
 }
-

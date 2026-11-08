@@ -347,10 +347,11 @@ function publish(home: string, record: OwnerActionRecord, now: Date, open: ((url
 }
 
 /**
- * Records one request and drops its confirmation in the owner seat inbox. Refused with no owner seat.
- * Two callers that overlap on the lock share one card and one signature. Two calls in sequence stay
- * two requests: a join is taken only when the card's epoch is newer than the epoch this call read
- * before it waited.
+ * Records one request and, when an owner seat is registered, drops its confirmation in that
+ * inbox. A missing seat does not refuse the card: `--request` records and returns, and the
+ * inbox drop waits until a seat exists. Two callers that overlap on the lock share one card
+ * and one signature. Two calls in sequence stay two requests: a join is taken only when the
+ * card's epoch is newer than the epoch this call read before it waited.
  */
 export function createOwnerActionRequest(
   home: string,
@@ -358,7 +359,6 @@ export function createOwnerActionRequest(
   now: Date = new Date(),
   open?: (url: string) => void,
 ): { ok: true; record: OwnerActionRecord; inbox: string | null; text: string; page: 'live' | 'closed' } | { ok: false; why: string } {
-  if (readOwnerSeat(home) === null) return { ok: false, why: 'no owner seat is registered, so no owner-seat approval is possible; the owner registers one on the owner page (team owner-seat serve)' };
   const actions = [...new Set(input.actions)];
   if (actions.length === 0 || actions.some((action) => !(OWNER_ACTIONS as readonly string[]).includes(action))) return { ok: false, why: `an owner-seat request names one or more of ${OWNER_ACTIONS.join(', ')}` };
   const mine: OwnerActionRequestInput = { ...input, actions };
