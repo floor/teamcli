@@ -113,6 +113,7 @@ import { beginSession } from '../sessions/registry.ts';
 import { findAgent } from '../registry/agents.ts';
 import { continuityIdOf, continuityIdsOf, recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
+import { enterRunMemo, leaveRunMemo } from '../run-memo.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { nativePushBindingFor } from '../send/push.ts';
 import { defaultSocketsDirs, refreshAgentAddressFrom } from '../send/address.ts';
@@ -1853,6 +1854,18 @@ async function runUpAll(
 }
 
 export async function runUp(argv: string[], io: Io, sources: UpSources, internal?: UpInternal): Promise<number> {
+  // The run reads the owner's entities and projects files once and composes every seat's rules
+  // from that one read. The scope is entered here and discarded in `finally`, so nothing crosses
+  // a run boundary.
+  enterRunMemo();
+  try {
+    return await runUpInMemo(argv, io, sources, internal);
+  } finally {
+    leaveRunMemo();
+  }
+}
+
+async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?: UpInternal): Promise<number> {
   // Every line this run writes goes through the cleaned writers from here; the raw pair stays
   // reachable for the progress writer alone, which draws its own `\r\x1b[K` on a TTY.
   const out = cleanedIo(io);

@@ -230,7 +230,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `commits.since-missing` | `commits` | 2 | since doesn't name a commit | `team commits check HEAD --since missing` |
 | `commits.since-unreachable` | `commits` | 2 | since is not reachable from the ref | `team commits check HEAD --since topic` |
 | `config.approval-requested` | `config` | 0 | an owner-seat request for this set or unset was recorded and sent to the owner seat; nothing was written | `team config set <path> <value> --request` |
-| `config.entity.composed-value` | `config` | 0 | the team file's composed rules are printed | `team config get composed.rules` |
+| `config.entity.composed-value` | `config` | 0 | the team file's composed rules are printed | `team config get @composed.rules` |
 | `config.entity.unchanged` | `config` | 0 | the entity already writes that value; nothing was written | `team config set <entity>.names.unique off` |
 | `config.entity.value` | `config` | 0 | the entity's value is printed | `team config get <entity>.names.unique` |
 | `config.entity.written` | `config` | 0 | the entity's value was written | `team config set <entity>.names.unique off` |

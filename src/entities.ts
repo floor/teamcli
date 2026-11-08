@@ -18,6 +18,7 @@ import {
 import { dirname, join } from 'node:path';
 import { editedRecordText, getAt, withValue } from './config/team-record.ts';
 import { leadWordProblem } from './lead.ts';
+import { cloneRulesMap, currentRunMemo } from './run-memo.ts';
 import { parseYaml, toValue, type YamlEntry, type YamlNode, type YamlValue } from './yaml.ts';
 import { livenessMap } from './settings/declared.ts';
 import type { StateThresholds } from './settings/inherit.ts';
@@ -64,6 +65,9 @@ export function lockedEntities<T>(home: string, work: () => T): T {
     }
   }
   try {
+    // The writer re-reads the file under this lock, so whatever the run memoised before the
+    // write is stale from here on, for this home: drop it before the work runs.
+    currentRunMemo()?.entityRules.delete(home);
     return work();
   } finally {
     try {
@@ -259,9 +263,13 @@ function readClients(node: YamlNode): DeclaredClients {
 
 /**
  * Each entity's declared standing rules (`<entity>.rules`), in the order the file lists them.
- * Rules are text: non-empty string scalars under `rules:`.
+ * Rules are text: non-empty string scalars under `rules:`. Read once per run: the per-run memo
+ * holds the file's words for the life of the run, and a writer under this home drops them.
  */
 export function declaredEntityRules(home: string): Map<string, string[]> {
+  const memo = currentRunMemo();
+  const held = memo?.entityRules.get(home);
+  if (held !== undefined) return cloneRulesMap(held);
   const out = new Map<string, string[]>();
   for (const entry of entityEntries(home)) {
     if (entry.value.kind !== 'map') continue;
@@ -275,6 +283,7 @@ export function declaredEntityRules(home: string): Map<string, string[]> {
     }
     if (list.length > 0) out.set(entry.key, list);
   }
+  memo?.entityRules.set(home, cloneRulesMap(out));
   return out;
 }
 
