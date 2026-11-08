@@ -869,6 +869,8 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `swap.cancelled` | `swap` | 0 | the queued swap was taken out of the queue | `team swap cancel builder-1` |
 | `swap.forced` | `swap` | 0 | the owner forced the queued swap to run at once | `team swap now builder-1` |
 | `swap.listed` | `swap` | 0 | the queue or the entity's rule listing was shown | `team swap` |
+| `swap.preset-planned` | `swap` | 0 | a preset swap was planned and nothing was written | `team swap worker lead --dry-run` |
+| `swap.preset-swapped` | `swap` | 0 | the seat was swapped onto the preset and started fresh | `team swap worker lead` |
 | `swap.queued` | `swap` | 0 | a model swap was queued for the seat's boundary | `team swap queue builder-1` |
 | `swap.ran` | `swap` | 0 | the queued swaps due now were carried out, or none was due | `team swap --run` |
 | `swap.caller` | `swap` | 1 | not the owner, the orchestrator or the operator, or not a seat of the team for the view | `team swap queue builder-1` |
@@ -876,6 +878,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `swap.herdr` | `swap` | 1 | herdr cannot be read, so no swap can be run | `team swap --run` |
 | `swap.io` | `swap` | 1 | the state can't be read or written | `team swap queue builder-1` |
 | `swap.not-queued` | `swap` | 1 | no swap waits for the seat | `team swap cancel builder-1` |
+| `swap.preset-refused` | `swap` | 1 | a preset swap was refused | `team swap nobody lead` |
 | `swap.rule` | `swap` | 1 | the entity's model rule can't be read or none is declared | `team swap queue builder-1` |
 | `swap.run-failed` | `swap` | 1 | a due swap did not run: a preflight refusal, a read-back mismatch, or the seat is signed off or no longer declared | `team swap --run` |
 | `swap.seat` | `swap` | 1 | no such seat in the team | `team swap queue nobody` |
@@ -883,6 +886,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `swap.unchanged` | `swap` | 1 | the seat already declares a model the rule allows | `team swap queue builder-1` |
 | `swap.file` | `swap` | 2 | the team file or a --file path can't be read | `team swap --rule` |
 | `swap.invocation` | `swap` | 2 | the invocation can't be read | `team swap queue` |
+| `swap.preset-unreadable` | `swap` | 2 | a preset swap's invocation or team file can't be read | `team swap worker lead extra` |
 | `team.command-help` | `team` | 0 | a command's help was printed | `team status --help` |
 | `team.help` | `team` | 0 | help was printed | `team --help` |
 | `team.mcp-serve-handed-over` | `team` | 0 | a stale inbox server started its fresh replacement on the same stdio and left | `team mcp serve` |
