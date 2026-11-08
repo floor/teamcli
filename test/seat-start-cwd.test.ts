@@ -7,7 +7,9 @@ import { dirname, join, resolve } from 'node:path';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { realSources as restartSources, runRestart } from '../src/commands/restart.ts';
 import { runUp, type Launch } from '../src/commands/up.ts';
+import { readTeamConfig } from '../src/file/team-config.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
+import { seatStart } from '../src/worktree/place.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, updateState, type SeatState } from '../src/state.ts';
@@ -284,6 +286,79 @@ test('a cwd inside a protected checkout is still refused', async () => {
     const restarted = await plan(held, 'restart');
     expect(restarted.code, restarted.err + restarted.out).not.toBe(0);
     expect(restarted.out + restarted.err).toContain('protected checkout');
+  } finally {
+    discard(held.base);
+  }
+});
+
+/** A ready seat whose recorded start is exactly where `seatStart` would put it. */
+async function noted(
+  held: { home: string; root: string; dir: string; own: string },
+  worktree?: string,
+): Promise<{ code: number; out: string; err: string }> {
+  const back = process.cwd();
+  process.chdir(held.root);
+  try {
+    const loaded = readTeamConfig(held.root, { home: held.home });
+    if (!loaded.ok) throw new Error(loaded.errors.map((problem) => problem.message).join('; '));
+    const worker = loaded.team.seats.find((seat) => seat.name === 'worker');
+    if (worker === undefined) throw new Error('no worker');
+    const start = seatStart(loaded.team, worker, held.root, held.home, undefined, worktree);
+    if ('problem' in start) throw new Error(start.problem);
+    updateState(held.dir, (state) => {
+      const session = (state.sessions.seatcwd ??= emptySession());
+      session.seats.worker = {
+        stage: 'ready',
+        pane: 'pane-seat',
+        workspace: 'w1',
+        launched: { shell: 1, cli: [2] },
+        start_cwd: start.cwd,
+        id: HANDLE,
+      };
+      if (worktree !== undefined) session.worktrees.worker = { path: worktree, branch: 'main', setup: 'ok', seat: 'worker' };
+    });
+    const io = ownerIo(held.root);
+    const code = await runUp(['--dry-run'], io, {
+      home: held.home,
+      sessionRunning: () => true,
+      agents: () => [{ name: 'worker', agent: 'claude', pane: 'pane-seat', workspace: 'w1', status: 'idle', cwd: null }],
+      now: () => NOW,
+      alive: () => false,
+      doctor: doctorOf(held.home),
+      hostSessions: () => [],
+      sidebarConfigText: () => '',
+    });
+    return { code, out: io.out, err: io.err };
+  } finally {
+    process.chdir(back);
+  }
+}
+
+test('a channel seat recorded in its channel folder draws no own-folder relaunch note', async () => {
+  const claude = PROFILES[1]!;
+  const profile = { ...claude, launch: `${claude.launch} --dangerously-load-development-channels server:team-inbox` };
+  const held = scene(profile, '../own');
+  try {
+    const run = await noted(held);
+    const text = run.err + run.out;
+    expect(run.code, text).toBe(0);
+    expect(text).toContain('already ready');
+    expect(text).not.toContain('own folder');
+  } finally {
+    discard(held.base);
+  }
+});
+
+test('a grok seat with "." and a recorded worktree draws no lobby relaunch note', async () => {
+  const profile = PROFILES.find((one) => one.cli === 'grok');
+  if (profile === undefined) throw new Error('no grok profile');
+  const held = scene(profile, null);
+  try {
+    const run = await noted(held, held.own);
+    const text = run.err + run.out;
+    expect(run.code, text).toBe(0);
+    expect(text).toContain('already ready');
+    expect(text).not.toContain('into the lobby');
   } finally {
     discard(held.base);
   }
