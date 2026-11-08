@@ -137,6 +137,7 @@ function observation(over: Partial<SeatObservation>): SeatObservation {
     model: null,
     history: { lastWorking: undefined, idleSince: undefined },
     liveness: { idle_lead_seconds: 300, idle_owner_seconds: 1800, blind_after_seconds: 600 },
+    queued: false,
     ...over,
   };
 }
