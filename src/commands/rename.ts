@@ -22,6 +22,7 @@ import {
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
+import { teamBinding } from '../registry/binding.ts';
 import { renameSeat, renameTeamIdentity } from '../file/lines.ts';
 import { findRoot } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -513,16 +514,22 @@ async function executeRename(argv: string[], io: Io, sources: RenameSources): Pr
     return 'refused';
   }
 
-  const launched = args.values.file ? undefined : launchedTeamFile(io, home);
+  const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : teamBinding(home, io.cwd, renumber ? undefined : args.rest[0], io);
+  const launched = args.values.file !== undefined || binding.kind === 'bound' ? undefined : launchedTeamFile(io, home);
   // A launched pointer names where this session was launched from, not a copy to read: the team
   // is read where the edits write it, so a seat `team add` put into the registry's record is
   // found by the name the record gives it, never missed over the file the session launched from.
-  // A `--file` names its file, and is read as that file.
-  const loaded = args.values.file
-    ? readTeamConfig(io.cwd, { file: args.values.file, home })
-    : launched !== undefined
-      ? readLaunchedTeam(launched, { home })
-      : readTeamConfig(io.cwd, { home });
+  // A `--file` names its file, and is read as that file. A cwd inside a registered root does
+  // not consult the pointer.
+  const loaded = binding.kind === 'unreadable' || binding.kind === 'ambiguous'
+    ? { ok: false as const, errors: [{ line: 0, message: binding.message }] }
+    : args.values.file !== undefined
+      ? readTeamConfig(io.cwd, { file: args.values.file, home })
+      : binding.kind === 'bound'
+        ? readTeamConfig(binding.team.root, { home })
+        : launched !== undefined
+          ? readLaunchedTeam(launched, { home })
+          : readTeamConfig(io.cwd, { home });
   if (!loaded.ok) {
     for (const problem of loaded.errors) {
       io.stderr(`team rename: ${problem.line ? `line ${problem.line}: ` : ''}${problem.message}\n`);
@@ -922,12 +929,17 @@ async function executeTeamRename(
     return 'refused';
   }
 
-  const launched = args.values.file ? undefined : launchedTeamFile(io, home);
-  const loaded = args.values.file
-    ? readTeamConfig(io.cwd, { file: args.values.file, home })
-    : launched !== undefined
-      ? readLaunchedTeam(launched, { home })
-      : readTeamConfig(io.cwd, { home });
+  const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : teamBinding(home, io.cwd, undefined, io);
+  const launched = args.values.file !== undefined || binding.kind === 'bound' ? undefined : launchedTeamFile(io, home);
+  const loaded = binding.kind === 'unreadable'
+    ? { ok: false as const, errors: [{ line: 0, message: binding.message }] }
+    : args.values.file !== undefined
+      ? readTeamConfig(io.cwd, { file: args.values.file, home })
+      : binding.kind === 'bound'
+        ? readTeamConfig(binding.team.root, { home })
+        : launched !== undefined
+          ? readLaunchedTeam(launched, { home })
+          : readTeamConfig(io.cwd, { home });
   if (!loaded.ok) {
     for (const problem of loaded.errors) {
       io.stderr(`team rename: ${problem.line ? `line ${problem.line}: ` : ''}${problem.message}\n`);

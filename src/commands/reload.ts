@@ -14,6 +14,7 @@ import {
 } from '../caller.ts';
 import { launchTeamFile, TEAM_FILE } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
+import { teamBinding } from '../registry/binding.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Seat } from '../file/types.ts';
@@ -262,10 +263,13 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     }
   }
 
-  const loaded = readTeamConfig(io.cwd, {
-    ...(owner && flagged ? { file: flagged } : {}),
-    ...(sources.home ? { home: sources.home } : {}),
-  });
+  const binding = flagged !== undefined ? { kind: 'unbound' as const } : teamBinding(sources.home ?? homedir(), io.cwd, name, io);
+  const loaded = binding.kind === 'unreadable' || binding.kind === 'ambiguous'
+    ? { ok: false as const, errors: [{ line: 0, message: binding.message }] }
+    : readTeamConfig(binding.kind === 'bound' ? binding.team.root : io.cwd, {
+        ...(owner && flagged ? { file: flagged } : {}),
+        ...(sources.home ? { home: sources.home } : {}),
+      });
   if (!loaded.ok) {
     const said = loaded.errors.map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${problem.message}`);
     if (json) refuse(io, json, 'reload', { id: 'reload.file', message: said.join('; '), repair: null });

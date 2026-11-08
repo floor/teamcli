@@ -12,6 +12,7 @@ import { readArgs } from '../args.ts';
 import { ownerSeatStep } from '../client/owner-action-step.ts';
 import { admitGeneral } from '../client/general-grant.ts';
 import { readTeamConfig } from '../file/team-config.ts';
+import { teamBinding } from '../registry/binding.ts';
 import {
   callerOf,
   describeCaller,
@@ -66,6 +67,11 @@ function usageRefused(io: Io, json: boolean, message: string, usage: string): nu
   return 2; // exit: config.usage
 }
 
+function refuseUnreadable(io: Io, json: boolean, message: string): number {
+  refuse(io, json, 'config', { id: 'config.unreadable', message, repair: 'team import' });
+  return 2; // exit: config.unreadable
+}
+
 function runEditor(path: string, env: Record<string, string | undefined>): number {
   const editor = env.VISUAL || env.EDITOR || 'vi';
   const ran = spawnSync('/bin/sh', ['-c', `${editor} "$1"`, 'sh', path], { stdio: 'inherit' });
@@ -94,15 +100,16 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   if (why !== null || typeof path === 'string') return usageRefused(io, json, why ?? 'invalid path', usage);
   const home = sources.home ?? homedir();
   const env = sources.env ?? process.env;
-  const root = realRoot(io.cwd);
+  const seat = path[0] === 'seats' && path[1] !== undefined && !/^\d+$/.test(path[1]) ? path[1] : undefined;
+  const binding = teamBinding(home, io.cwd, seat, io);
+  if (binding.kind === 'ambiguous' || binding.kind === 'unreadable') return refuseUnreadable(io, json, binding.message);
+  const root = binding.kind === 'bound' ? binding.team.root : realRoot(io.cwd);
   const file = join(root, TEAM_FILE);
   let target: ReturnType<typeof teamTextTarget>;
   try {
     target = teamTextTarget(file, { home, env });
   } catch (error) {
-    refuse(io, json, 'config', { id: 'config.unreadable', message: `the registry's record of this team cannot be read: ${error instanceof Error ? error.message : String(error)}`, repair: 'team import' });
-    // exit: config.unreadable
-    return 2;
+    return refuseUnreadable(io, json, `the registry's record of this team cannot be read: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (target.kind === 'file' && !existsSync(file)) {
     const held = readStoredTeamConfig(home, teamIdOf(root)) !== null;
@@ -188,7 +195,13 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     if (!json) io.stderr(`team config: admitted by general grant ${admitted.grant.grant_id} (${admitted.grant.client_id})\n`);
     seatApproved = true;
   }
-  const gate = charterGate(home, { operation: 'config', cwd: io.cwd, path: root }, sources.ownerSeatStore);
+  const gate = charterGate(
+    home,
+    binding.kind === 'bound'
+      ? { operation: 'config', cwd: root, path: file }
+      : { operation: 'config', cwd: io.cwd, path: root },
+    sources.ownerSeatStore,
+  );
   if (gate.kind === 'block' && !seatApproved && !isOwner(callerOf(rawIo))) {
     refuse(io, json, 'config', { id: 'config.charter', message: gate.message, repair: 'team setup --edit' });
     // exit: config.charter

@@ -19,6 +19,7 @@ import { currentLaunchedTeam, currentTeam, rememberCurrent, type Current } from 
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
+import { teamBinding } from '../registry/binding.ts';
 import { getTeam, noteTeam, teamIdOf } from '../registry/teams.ts';
 import { registerEnd, registerSessionEnd } from '../registry/sync.ts';
 import {
@@ -859,8 +860,12 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // A launched pointer names where this session was launched from, not a copy to read: the run
   // reads the team where the edits write it, so the session it stops and the seats it knows are
   // the registry's record, never missed over the file the session launched from. A `--file`
-  // names its file, and is read as that file.
-  const pointer = branching() ? undefined : launched;
+  // names its file, and is read as that file. A cwd inside a registered root binds to that
+  // team instead, the longest root when they nest.
+  const binding = args.values.file !== undefined || clientDown !== null || branching()
+    ? { kind: 'unbound' as const }
+    : teamBinding(sources.home ?? homedir(), io.cwd, undefined, io);
+  const pointer = branching() || binding.kind === 'bound' ? undefined : launched;
   const file = branching() ? undefined : args.values.file;
   const sessionFlag = branching() ? undefined : args.values.session;
 
@@ -879,9 +884,13 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // One clock reading serves the run's own file and the policy chain read beside it; the
   // remembering below keeps its own, later reading.
   const loadedAt = liveCurrent === undefined ? sources.now() : undefined;
-  const current: Current = liveCurrent ?? (pointer !== undefined
-    ? currentLaunchedTeam(pointer, loadedAt!, sources.home, false)
-    : currentTeam(io.cwd, file, loadedAt!, sources.home, false));
+  const current: Current = liveCurrent ?? (binding.kind === 'unreadable'
+    ? { ok: false, errors: [{ line: 0, message: binding.message }] }
+    : binding.kind === 'bound'
+      ? currentTeam(binding.team.root, undefined, loadedAt!, sources.home, false)
+      : pointer !== undefined
+        ? currentLaunchedTeam(pointer, loadedAt!, sources.home, false)
+        : currentTeam(io.cwd, file, loadedAt!, sources.home, false));
   if (!current.ok) {
     const said = current.errors.map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${problem.message}`);
     const id = current.errors.some((problem) => problem.message.startsWith('not inside a git repository'))

@@ -9,6 +9,7 @@ import { readTeamConfig } from '../file/team-config.ts';
 import { agentList } from '../herdr.ts';
 import type { Io } from '../io.ts';
 import { AGENT_ID_PATTERN, findAgent, getAgent, type Agent } from '../registry/agents.ts';
+import { teamBinding } from '../registry/binding.ts';
 import { findTeams, findTeamsByPreviousName, readTeams, teamIdOf, type RosterEntry, type TeamRecord } from '../registry/teams.ts';
 import { resolveSeatSettings } from '../config/apply.ts';
 import { agentIdOf } from '../config/read.ts';
@@ -155,7 +156,11 @@ export function resolveTarget(
     return lookupInTeam(home, spec, found[0] as TeamRecord, parsed.target, live, true);
   }
   if (parsed.kind === 'nickname') return fromNickname(home, spec, parsed.nickname, io, live);
-  const loaded = readTeamConfig(io.cwd, { home });
+  // A plain seat is the team whose root holds the cwd. The longest nested root wins, and a
+  // name that several teams carry, when the cwd sits in none of them, is not picked.
+  const binding = teamBinding(home, io.cwd, parsed.seat, io);
+  if (binding.kind === 'ambiguous' || binding.kind === 'unreadable') return { error: binding.message, kind: 'ambiguous' };
+  const loaded = readTeamConfig(binding.kind === 'bound' ? binding.team.root : io.cwd, { home });
   if (!loaded.ok) return { error: `${spec}: the team of the caller's folder cannot be read (${io.cwd})` };
   const team = recordOfFolder(home, spec, loaded);
   if (team === null) return { error: `${spec}: this team has no registry record yet` };

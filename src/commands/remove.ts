@@ -15,6 +15,7 @@ import { isLeadSeat } from '../file/sections/lead.ts';
 import { plainLine } from '../launch/plain.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
 import { readTeamConfig } from '../file/team-config.ts';
+import { teamBinding } from '../registry/binding.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { markStopped, takeOut } from '../file/lines.ts';
 import type { Problem, Seat } from '../file/types.ts';
@@ -266,17 +267,24 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     // exit: remove.session-owner
     return 1;
   }
-  const launched = args.values.file || clientRun !== null ? undefined : launchedTeamFile(io, sources.home);
+  const bindingHome = sources.home ?? homedir();
+  const binding = args.values.file !== undefined || clientRun !== null ? { kind: 'unbound' as const } : teamBinding(bindingHome, io.cwd, name, io);
+  const launched = args.values.file !== undefined || clientRun !== null || binding.kind === 'bound' ? undefined : launchedTeamFile(io, sources.home);
   const readOptions = { ...(sources.home ? { home: sources.home } : {}) };
   // A launched pointer names where this session was launched from, not a copy to read: the team
   // is read where the edits write it, so a seat `team add` put into the registry's record is
   // removed from that record, never missed over the file the session launched from. A `--file`
-  // names its file, and is read as that file.
-  const loaded = args.values.file
-    ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })
-    : launched !== undefined
-      ? readLaunchedTeam(launched, readOptions)
-      : readTeamConfig(io.cwd, readOptions);
+  // names its file, and is read as that file. A cwd inside a registered root does not consult
+  // the pointer, and the seat is looked up only in that team.
+  const loaded = binding.kind === 'unreadable' || binding.kind === 'ambiguous'
+    ? { ok: false as const, errors: [{ line: 0, message: binding.message }] }
+    : args.values.file !== undefined
+      ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })
+      : binding.kind === 'bound'
+        ? readTeamConfig(binding.team.root, readOptions)
+        : launched !== undefined
+          ? readLaunchedTeam(launched, readOptions)
+          : readTeamConfig(io.cwd, readOptions);
   if (!loaded.ok) {
     const said = loaded.errors.map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${problem.message}`);
     refuse(io, json, 'remove', {
