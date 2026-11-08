@@ -271,6 +271,33 @@ test('a different pane still goes through register, and a renamed shell is refus
   expect(renamedRun.code, renamedRun.err + renamedRun.out).toBe(1);
   expect(JSON.parse(renamedRun.out).error.id).toBe('mcp.setup-caller');
 });
+async function setupPlain(w: ReturnType<typeof world>, args: string[] = [], caller: Io['caller'] = { kind: 'owner' }) {
+  const io = testIo(w.cwd, caller);
+  const code = await runMcp(['setup', 'alpha', ...args], io, w.sources);
+  return { code, out: io.out, err: io.err };
+}
+test('the owner with no pane keeps the pane the seat record holds', async () => {
+  const w = world();
+  place(w.root, 'alpha', PANE);
+  w.sources.setup.register.processInfo = () => null;
+  const dry = await setupPlain(w, ['--dry-run', '--json']);
+  expect(dry.code, dry.err + dry.out).toBe(0);
+  expect(JSON.parse(dry.out).changes.find((change: { kind: string }) => change.kind === 'placement')).toEqual({ kind: 'placement', action: 'keep', pane: PANE });
+  const real = await setupPlain(w, ['--json']);
+  expect(real.code, real.err + real.out).toBe(0);
+  expect(JSON.parse(real.out).changes.find((change: { kind: string }) => change.kind === 'placement')).toEqual({ kind: 'placement', action: 'keep', pane: PANE });
+  expect(readState(join(w.root, '.agents')).sessions[SESSION]?.seats.alpha?.pane).toBe(PANE);
+});
+test('the owner with no pane and no recorded pane is refused, and a non-owner with no pane is refused', async () => {
+  const w = world();
+  const missing = await setupPlain(w, ['--dry-run', '--json']);
+  expect(missing.code, missing.err + missing.out).toBe(1);
+  expect(JSON.parse(missing.out).error.id).toBe('mcp.setup-placement');
+  expect(missing.out).toContain('run setup from the pane');
+  const seat = await setupPlain(w, ['--dry-run', '--json'], { kind: 'seat', name: 'alpha', pane: '', session: SESSION });
+  expect(seat.code, seat.err + seat.out).toBe(1);
+  expect(JSON.parse(seat.out).error.id).toBe('mcp.setup-caller');
+});
 test('a placed lead under dev mode is admitted, and another team or a renamed pane is refused', async () => {
   const lead = crew(); place(lead.root, 'lead', 'pane-lead');
   const dev = writeDevelopmentMode({ home: lead.home, mode: 'local-fast', now: NOW, caller: 'synthetic-fixture' });
