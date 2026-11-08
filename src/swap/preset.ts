@@ -6,7 +6,7 @@ import { readArgs } from '../args.ts';
 import { ceilingsOf } from '../approve/approval.ts';
 import { describeCaller, fileOwnerRefusal, isOwner, judgeCallerOf, mayChangeTeamVerdict, standingOf, walkCaller } from '../caller.ts';
 import type { SwapCommandOptions } from '../commands/swap.ts';
-import { performRestart, realSources } from '../commands/restart.ts';
+import { performRestart, realSources, type PerformResult } from '../commands/restart.ts';
 import { hasSeat, rewriteSeatPreset, type SeatModelFields } from '../file/lines.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { readTeamText, writeTeamText } from '../file/team-text.ts';
@@ -26,7 +26,7 @@ import { profileFor, shellQuote, namedResumeTarget } from '../profiles/profile.t
 import { rosterOf } from '../permissions/who.ts';
 import { readState } from '../state.ts';
 import { approvalStanding } from '../store/store.ts';
-import { createPresetFolder, presetFolder } from './folder.ts';
+import { createPresetFolder, presetFolder, rollbackPresetFolder, type PresetAllocation } from './folder.ts';
 
 type Recipe = SeatModelFields & { launcher?: string };
 const NO_DEV = { on: false, by: null, governed: false, ignored: false, expired: null, refusals: [] };
@@ -133,22 +133,38 @@ export async function runPresetSwap(argv: string[], io: Io, options: SwapCommand
   const sources = options.sources ?? realSources;
   const agents = sources.agents(team.session);
   if (agents === null) return fail('swap.herdr', 'the terminal host cannot be read');
-  try { createPresetFolder(folderInput, folder); }
+  const old = agents.find(agent => agent.name === name);
+  const screen = old === undefined ? undefined : sources.screen(team.session, old.pane, declared.cli,
+    sources.foregroundCwd?.(team.session, old.pane) ?? null);
+  const broken = screen?.kind === 'rate limit' || screen?.kind === 'provider error';
+  let allocation: PresetAllocation | undefined;
+  try { allocation = createPresetFolder(folderInput, folder); }
   catch (error) { return fail('swap.io', String(error)); }
   const notes: string[] = [];
-  const result = await (options.presetRestart ?? performRestart)({ out: io, json, notes, dir, root, home, path, team,
+  let declarationWritten = false;
+  const rollback = (): string => {
+    try { rollbackPresetFolder(folderInput, allocation); return ''; }
+    catch (error) { return `; allocation retained: ${String(error)}`; }
+  };
+  let result: PerformResult;
+  try {
+    result = await (options.presetRestart ?? performRestart)({ out: io, json, notes, dir, root, home, path, team,
     session: team.session, name, declared, next, recorded: readState(dir).sessions[team.session]?.seats[name], agents,
-    abandon: false, owner, callerText: describeCaller(judged.caller), standing: approvalStanding(root, home), ceilings: ceilingsOf(team),
+    abandon: false, broken, owner, callerText: describeCaller(judged.caller), standing: approvalStanding(root, home), ceilings: ceilingsOf(team),
     dev: NO_DEV, devFolded: false, command: 'swap', endReason: 'swap', dry: false, now: () => now, sources,
     resumeNote: 'preset swap starts a fresh conversation',
     declare: () => {
       const live = readTeamText(path, { home, command: 'swap' });
       if (live !== before || !hasSeat(live, name)) return { ok: false, why: 'the team changed while swap was preparing; run it again' };
       const written = writeTeamText(path, text, { home, command: 'swap' });
+      declarationWritten = written.ok;
       return written.ok ? { ok: true } : { ok: false, why: written.errors.map(p => p.message).join('; ') };
     },
-  });
-  if (result.kind !== 'ready') return fail('swap.run-failed', 'message' in result ? result.message : `restart ${result.kind}`);
+    });
+  } catch (error) {
+    return fail('swap.run-failed', String(error) + (declarationWritten ? '' : rollback()));
+  }
+  if (result.kind !== 'ready') return fail('swap.run-failed', ('message' in result ? result.message : `restart ${result.kind}`) + (declarationWritten ? '' : rollback()));
   if (result.readBack.kind === 'mismatch') return fail('swap.run-failed', 'the new screen does not match the preset model');
   logLine(dir, 'swap', describeCaller(judged.caller), `${name}: preset ${preset}; fresh conversation`, now);
   if (json) writeJson(io, 'team.swap', { format: 1, dry_run: false, project: team.project, session: team.session, seat: name, preset,

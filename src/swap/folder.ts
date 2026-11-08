@@ -1,7 +1,7 @@
 // The own folder a direct preset swap needs. Planning is read-only; creation records the
 // worktree under the state lock. No fetch, setup command, branch deletion or shared checkout reset.
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, rmdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { syncChildTimeout } from '../child.ts';
 import { insideTrust } from '../file/paths.ts';
@@ -12,6 +12,7 @@ import { fillPattern, ownStartFolderProblem, placedStartFolders, protectedLandin
 
 export type SwapFolder = { cwd: string; mode: Seat['mode']; create?: { task: string; record: WorktreeState; base: string } };
 export type FolderInput = { team: TeamFile; seat: Seat; cli: string; root: string; dir: string; home: string };
+export type PresetAllocation = { task: string; record: WorktreeState; head: string; parents: string[] };
 
 export function presetFolder(input: FolderInput): SwapFolder | { why: string } {
   const { team, seat, cli, root, dir, home } = input;
@@ -48,21 +49,56 @@ export function presetFolder(input: FolderInput): SwapFolder | { why: string } {
     record: { path, branch, seat: seat.name, own_commits: false, setup: 'ok' } } };
 }
 
-export function createPresetFolder(input: FolderInput, plan: SwapFolder): void {
+export function createPresetFolder(input: FolderInput, plan: SwapFolder): PresetAllocation | undefined {
   if (plan.create === undefined) return;
   const { create } = plan;
-  updateState(input.dir, state => {
+  return updateState(input.dir, state => {
     const session = state.sessions[input.team.session] ??= emptySession();
     const rows = Object.values(state.sessions).flatMap(s => Object.entries(s.worktrees));
     if (rows.some(([key]) => key === create.task) || rows.length >= input.team.workspace.limit) throw new Error('the worktree slots changed; run swap again');
     const fresh = presetFolder(input);
     if ('why' in fresh || fresh.cwd !== plan.cwd || fresh.create?.record.branch !== create.record.branch) throw new Error('the worktree plan changed; run swap again');
     const folder = resolve(input.root, create.record.path);
+    const parents: string[] = [];
+    for (let parent = dirname(folder); !existsSync(parent); parent = dirname(parent)) parents.push(parent);
     mkdirSync(dirname(folder), { recursive: true });
     const ran = spawnSync('git', ['worktree', 'add', '-q', '-b', create.record.branch, folder, create.base], {
       cwd: input.root, encoding: 'utf8', timeout: syncChildTimeout(8_000),
     });
     if (ran.status !== 0) throw new Error(`the worktree was not created: ${(ran.stderr || ran.error?.message || 'git refused').split('\n')[0]}`);
+    const head = git(input.root, ['rev-parse', `refs/heads/${create.record.branch}`]);
     session.worktrees[create.task] = create.record;
+    return { task: create.task, record: create.record, head, parents };
   }, { waitMs: 500 });
+}
+
+/** Undo only this invocation's clean allocation when restart refused before its declaration.
+ * A changed record, dirty worktree or moved branch is kept, never forced away. */
+export function rollbackPresetFolder(input: FolderInput, allocation: PresetAllocation | undefined): void {
+  if (allocation === undefined) return;
+  updateState(input.dir, state => {
+    const session = state.sessions[input.team.session];
+    const held = session?.worktrees[allocation.task];
+    if (!held || held.seat !== input.seat.name || held.path !== allocation.record.path ||
+        held.branch !== allocation.record.branch || held.own_commits === true) throw new Error('the allocated worktree record changed; kept for inspection');
+    const ref = `refs/heads/${held.branch}`;
+    if (git(input.root, ['rev-parse', ref]) !== allocation.head) throw new Error('the allocated branch changed; kept for inspection');
+    // No --force: even unexpected untracked work is a reason to preserve the allocation.
+    git(input.root, ['worktree', 'remove', resolve(input.root, held.path)]);
+    // Compare-and-delete preserves a branch moved concurrently after the check above.
+    const removed = spawnSync('git', ['update-ref', '-d', ref, allocation.head], {
+      cwd: input.root, encoding: 'utf8', timeout: syncChildTimeout(2_000),
+    });
+    if (removed.status !== 0) throw new Error('the allocated branch moved during rollback; its record was kept');
+    delete session!.worktrees[allocation.task];
+    for (const parent of allocation.parents) {
+      try { rmdirSync(parent); } catch { /* Only empty parents created by this invocation are removed. */ }
+    }
+  }, { waitMs: 500 });
+}
+
+function git(root: string, args: string[]): string {
+  const ran = spawnSync('git', args, { cwd: root, encoding: 'utf8', timeout: syncChildTimeout(2_000) });
+  if (ran.status !== 0) throw new Error((ran.stderr || ran.error?.message || 'git refused').split('\n')[0]);
+  return ran.stdout.trim();
 }

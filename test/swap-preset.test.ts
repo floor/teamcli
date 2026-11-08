@@ -14,7 +14,7 @@ import { assertMatchesOutputSchema } from './helpers/output.ts';
 import { SWAP_OUTPUT_SCHEMA } from '../src/output/index.ts';
 
 const bases: string[] = [];
-afterEach(() => { const paths = bases.splice(0); discardFixtures(paths, { roots: paths.map(dirname) }); });
+afterEach(() => { const paths = bases.splice(0); discardFixtures(paths, { roots: paths.map(dirname) }); }, 20_000);
 const NOW = new Date('2026-11-08T09:00:00Z');
 function world() {
   const base = fixtureBase('swap-preset-'); bases.push(base);
@@ -94,7 +94,7 @@ seat: {vendor: xai, model: Grok, version: '4.7', display: Grok 4.7}
   expect(readTeamConfig(root, { home })).toMatchObject({ ok: true });
   const calls: PerformInput[] = [];
   const options: SwapCommandOptions = { home, now: NOW,
-    sources: { agents: () => [] } as unknown as NonNullable<SwapCommandOptions['sources']>,
+    sources: { agents: () => [], screen: () => ({ kind: 'idle' }) } as unknown as NonNullable<SwapCommandOptions['sources']>,
     presetRestart: async input => {
       calls.push(input); expect(input.resume).toBeUndefined();
       const declared = input.declare?.(); expect(declared).toEqual({ ok: true });
@@ -105,7 +105,7 @@ seat: {vendor: xai, model: Grok, version: '4.7', display: Grok 4.7}
     const io = testIo(root, owner ? { kind: 'owner' } : { kind: 'seat', name: 'operator', pane: 'pane-operator', session: 'example-session' });
     const code = await runSwap(argv, io, options);return { code, out: io.out, err: io.err };
   };
-  return { base, root, home, dir, path, calls, run };
+  return { base, root, home, dir, path, calls, run, options };
 }
 
 function snapshot(folder: string): Record<string, string> {
@@ -203,4 +203,50 @@ test('an unreadable launcher catalogue refuses before all effects', async () => 
   const w = world(); writeFileSync(join(w.dir, 'launchers/broken.yaml'), 'format: 99\n');
   const before = snapshot(w.base); expect((await w.run(['worker', 'glm-preset'])).code).toBe(1);
   expect(snapshot(w.base)).toEqual(before); expect(w.calls).toHaveLength(0);
+});
+
+for (const kind of ['rate limit', 'provider error'] as const) {
+  test(`a ${kind} pane is handed to restart as broken, without a resume`, async () => {
+    const w = world();
+    w.options.sources!.agents = () => [{ name: 'worker', pane: 'pane-worker', workspace: 'ws-worker', agent: 'codex', status: 'idle', cwd: w.root }];
+    w.options.sources!.screen = () => kind === 'rate limit' ? { kind, reset: null } : { kind };
+    const restart = w.options.presetRestart!;
+    w.options.presetRestart = async input => {
+      expect(input.broken).toBe(true); expect(input.abandon).toBe(false); expect(input.resume).toBeUndefined();
+      return restart(input);
+    };
+    expect((await w.run(['worker', 'grok-preset'])).code).toBe(0);
+  });
+}
+
+test('a refused restart rolls back only the clean worktree and slot this swap allocated', async () => {
+  const w = world(), before = snapshot(w.base);
+  w.options.presetRestart = async () => ({ kind: 'not-ready', message: 'synthetic preflight refusal' });
+  const ran = await w.run(['worker', 'grok-preset']);
+  expect(ran.code).toBe(1); expect(ran.err).toContain('synthetic preflight refusal');
+  expect(snapshot(w.base)).toEqual(before);
+  expect(readState(w.dir).sessions['example-session']!.worktrees).toEqual({});
+  expect(existsSync(join(w.base, 'trees/swap-worker'))).toBe(false);
+  expect(() => execFileSync('git', ['show-ref', '--verify', 'refs/heads/swap/swap-worker'], { cwd: w.root, stdio: 'ignore' })).toThrow();
+});
+
+test('a refused restart preserves a reused worktree and peer slots', async () => {
+  const w = world(); expect((await w.run(['worker', 'grok-preset'])).code).toBe(0);
+  updateState(w.dir, state => { state.sessions['example-session']!.worktrees.peer = { path: '../trees/peer', branch: 'task/peer', seat: 'peer', setup: 'ok' }; });
+  const before = snapshot(w.base);
+  w.options.presetRestart = async () => ({ kind: 'busy', message: 'synthetic busy turn' });
+  expect((await w.run(['worker', 'grok-preset'])).code).toBe(1);
+  expect(snapshot(w.base)).toEqual(before);
+});
+
+test('a worktree changed during the refusal is preserved rather than forced away', async () => {
+  const w = world();
+  w.options.presetRestart = async () => {
+    writeFileSync(join(w.base, 'trees/swap-worker/held.txt'), 'unexpected work must survive\n');
+    return { kind: 'not-ready', message: 'synthetic preflight refusal' };
+  };
+  const ran = await w.run(['worker', 'grok-preset']);
+  expect(ran.code).toBe(1); expect(ran.err).toContain('allocation retained');
+  expect(readFileSync(join(w.base, 'trees/swap-worker/held.txt'), 'utf8')).toBe('unexpected work must survive\n');
+  expect(readState(w.dir).sessions['example-session']!.worktrees['swap-worker']?.seat).toBe('worker');
 });
