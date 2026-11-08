@@ -4,7 +4,7 @@
 
 import { afterAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../../src/caller.ts';
@@ -292,6 +292,29 @@ describe('team migrate through the owner seat', () => {
     expect(await runMigrate([], again, { home: gone.home, now: () => NOW }), again.err).toBe(0);
     expect(again.out).toContain('already holds');
     expect(existsSync(actionRequestsFolder(gone.home))).toBe(false);
+  });
+
+  test('a migrate request refuses an unparseable file and writes nothing, and a valid file records one request', async () => {
+    const bad = place('format: 1\nnot a team file\n');
+    const badStore = seatOwner(bad.home);
+    const refused = ioOf(bad.root, agent);
+    expect(await runMigrate(['--request'], refused, { home: bad.home, now: () => NOW, ownerSeatStore: badStore }), refused.err).toBe(2);
+    expect(refused.err).toContain(`${bad.file}: line 2: expected "key: value"`);
+    expect(existsSync(actionRequestsFolder(bad.home))).toBe(false);
+    expect(ownerSeatMessages(bad.home)).toHaveLength(0);
+    expect(existsSync(teamConfigDir(bad.home))).toBe(false);
+
+    const good = place();
+    const goodStore = seatOwner(good.home);
+    const asked = ioOf(good.root, agent);
+    expect(await runMigrate(['--request'], asked, { home: good.home, now: () => NOW, ownerSeatStore: goodStore }), asked.err).toBe(0);
+    const id = requestId(asked.out);
+    expect(id).not.toBe('');
+    const records = readdirSync(actionRequestsFolder(good.home)).filter((name) => /^oa_[0-9a-f]{24}\.json$/.test(name));
+    expect(records).toEqual([`${id}.json`]);
+    expect(ownerSeatMessages(good.home)).toHaveLength(1);
+    expect(existsSync(teamConfigDir(good.home))).toBe(false);
+    expect(existsSync(good.file)).toBe(true);
   });
 
   test('--request records a card and does not import; a bad approval writes nothing', async () => {

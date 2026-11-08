@@ -2788,6 +2788,10 @@ scene('seats.not-yours', async (place) => {
     write(place, TEAM);
     return show(await recordRun(place, ['set', 'project', 'other'], other), "only the owner edits the team's record");
   });
+  scene('config.orchestrator', async (place) => {
+    write(place, TEAM);
+    return show(await recordRun(place, ['set', 'coordinator', 'ops'], other), "only the owner changes the orchestrator's seat");
+  });
   scene('config.approval-requested', async (place) => {
     write(place, TEAM);
     seatOwner(place.home);
@@ -7356,6 +7360,7 @@ scene('forget.forgotten', async (place) => {
 scene('forget.refused', async (place) => show(await forgetRun(place, ['abc123abc123'], detachedCaller), 'only the owner runs this'));
 scene('forget.approval-requested', async (place) => {
   seatOwner(place.home);
+  upsertTeam(place.home, 'abc123abc123', { project: 'acme', session: 'acme', root: place.root, by: 'test' });
   return show(await forgetRun(place, ['abc123abc123', '--request'], detachedCaller), 'owner-seat request');
 });
 scene('forget.approval-refused', async (place) =>
