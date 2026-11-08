@@ -2,7 +2,7 @@
 import { lstatSync, rmdirSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { readArgs } from '../args.ts';
-import { walkCaller } from '../caller.ts';
+import { callerOf } from '../caller.ts';
 import { runConfig, type ConfigSources } from '../commands/config.ts';
 import { runRegister, realSources as registerSources, type RegisterSources } from '../commands/register.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -148,7 +148,7 @@ export async function runMcpSetup(args: ReturnType<typeof readArgs>, json: boole
       fail('mcp.setup-seat', 'setup requires a declared, running Claude seat');
       return 1; // exit: mcp.setup-seat
     }
-    const caller = walkCaller(io);
+    const caller = callerOf(io, team.session);
     if (caller.kind !== 'owner' && !(caller.kind === 'seat' && caller.name === name && (caller.session === undefined || caller.session === team.session))) {
       fail('mcp.setup-caller', 'only the owner or this seat itself sets up its channel');
       return 1; // exit: mcp.setup-caller
