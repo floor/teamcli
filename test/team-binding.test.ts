@@ -529,6 +529,26 @@ test('two teams on the same folder are refused and both are named', () => {
   }
 });
 
+test('a seat cwd of the shared lobby binds nothing there', () => {
+  const base = fixtureBase('team-binding-shared-lobby-cwd-');
+  const home = join(base, 'home');
+  const root = join(base, 'team');
+  const lobby = lobbyDir(home);
+  const desk = join(lobby, 'desk');
+  try {
+    for (const folder of [home, root, desk]) mkdirSync(folder, { recursive: true });
+    writeTeam(root, 'shared-lobby', 'shared-lobby-session', lobby);
+    register(home, root, 'shared-lobby', 'shared-lobby-session', ['lead']);
+    expect(teamBinding(home, lobby).kind).toBe('unbound');
+    expect(teamBinding(home, desk).kind).toBe('unbound');
+    const atRoot = teamBinding(home, root);
+    expect(atRoot.kind).toBe('bound');
+    if (atRoot.kind === 'bound') expect(atRoot.team.project).toBe('shared-lobby');
+  } finally {
+    discard(base);
+  }
+});
+
 test('a seat cwd of /, the home folder, or an ancestor of the team root adds no place', () => {
   const cases = ['root', 'home', 'ancestor'] as const;
   const bases: string[] = [];

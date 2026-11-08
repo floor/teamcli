@@ -48,12 +48,14 @@ function lobbyPaths(team: TeamRecord): string[] {
   return [...new Set(values.filter((value) => value !== ''))];
 }
 
-/** A seat cwd that must not become a place: `/`, the home folder, or any ancestor of the
- *  team's own root. Each one would claim every folder under it. `.` is already the root. */
+/** A seat cwd that must not become a place: `/`, the home folder, the shared default lobby,
+ *  or any ancestor of the team's own root. Each wide folder would claim every folder under
+ *  it, and the shared lobby is a place for no team. `.` is already the root. */
 function addsNoPlace(home: string, root: string, cwd: string): boolean {
   const path = realPath(cwd);
   if (path === realPath('/')) return true;
   if (path === realPath(home)) return true;
+  if (path === realPath(lobbyDir(home))) return true;
   return path !== realPath(root) && rootHolds(path, root);
 }
 
