@@ -8,11 +8,13 @@
 // push, no ack. Fixtures only: synthetic folders, a synthetic home, and a launch line this test
 // writes; no live session is touched.
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { listenerPath, receiptPath } from '../src/mcp/inbox.ts';
-import { CHANNEL_CONFIRM_MS, CHANNEL_UNCONFIRMED, channelPushPath } from '../src/mcp/channel.ts';
+import { CHANNEL_CONFIRM_MS, CHANNEL_UNCONFIRMED, channelCommitLockPath, channelPushPath } from '../src/mcp/channel.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { runReply } from '../src/commands/reply.ts';
@@ -22,13 +24,14 @@ import { markPending, readPending } from '../src/send/pending.ts';
 import { signRecord, verifyReceipt, type RecordPayload, type SignedReceipt } from '../src/send/record.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import { retryHeldDrops, type RetryScene } from '../src/watch/retry.ts';
-import { testIo } from './helpers.ts';
+import { paneShell, testIo } from './helpers.ts';
 
 const SESSION = 'acme';
 const FLAG = '--dangerously-load-development-channels server:team-inbox';
 const PUSHED_ID = 'aaaaaaaa-0000-4000-8000-000000000101';
 const ACKED_ID = 'bbbbbbbb-0000-4000-8000-000000000102';
 const UNKNOWN_ID = 'cccccccc-0000-4000-8000-000000000103';
+const IDLE_ID = 'dddddddd-0000-4000-8000-000000000104';
 
 function teamText(launch: string): string {
   return `format: 1
@@ -619,4 +622,165 @@ describe('the push', () => {
       at.cleanup();
     }
   });
+});
+
+describe('an idle channel server', () => {
+  /** 7,500 drop names and 7,500 receipt names. A pass that parses every drop on each tick
+   *  spends seconds of CPU here; a pass that only lists names does not. */
+  function fillInbox(dropDir: string): void {
+    mkdirSync(dropDir, { recursive: true, mode: 0o700 });
+    for (let n = 0; n < 7_500; n += 1) {
+      const name = `bbbbbbbb-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+      writeFileSync(join(dropDir, name), '{}\n');
+      writeFileSync(join(dropDir, `${name}.read.json`), '{}\n');
+    }
+  }
+
+  function runner(at: Place, fallbackMs?: number): { child: ChildProcess; out: () => string; err: () => string; cpuPath: string; ready: string } {
+    const shell = paneShell({
+      bin: join(at.home, 'bin'),
+      dir: join(at.root, '.agents'),
+      session: SESSION,
+      seat: 'lead',
+      pane: 'pane-lead',
+      home: at.home,
+    });
+    const file = join(at.root, 'idle-serve.ts');
+    const cpuPath = join(at.root, 'idle-cpu.json');
+    const ready = join(at.root, 'idle-ready');
+    const serve = fileURLToPath(new URL('../src/mcp/serve.ts', import.meta.url));
+    writeFileSync(file, `import { existsSync, writeFileSync } from 'node:fs';
+import { runMcpServe } from ${JSON.stringify(serve)};
+const listener = process.env.LISTENER_PATH ?? '';
+const cpuPath = process.env.CPU_PATH ?? '';
+const ready = process.env.READY_PATH ?? '';
+let base: NodeJS.CpuUsage | null = null;
+let from = 0;
+const arm = setInterval(() => {
+  if (from !== 0 || !existsSync(listener)) return;
+  from = Date.now();
+  base = process.cpuUsage();
+  writeFileSync(ready, 'ready\\n');
+}, 50);
+process.on('SIGTERM', () => {
+  clearInterval(arm);
+  const used = base === null ? process.cpuUsage() : process.cpuUsage(base);
+  writeFileSync(cpuPath, JSON.stringify({ user: used.user, system: used.system, wall: from === 0 ? 0 : Date.now() - from }));
+  process.exit(0);
+});
+const fallback = process.env.FALLBACK_MS;
+await runMcpServe({
+  seat: 'lead',
+  session: process.env.TEAM_SESSION,
+  file: process.env.TEAM_FILE,
+  ...(fallback === undefined || fallback === '' ? {} : { fallbackMs: Number(fallback) }),
+}, {
+  stdout() {},
+  stderr(text) { process.stderr.write(text); },
+  cwd: process.cwd(),
+  env: process.env,
+  stdinIsTTY: false,
+});
+`);
+    let out = '';
+    let err = '';
+    const child = spawn(process.execPath, [file], {
+      cwd: at.root,
+      env: {
+        ...shell.env,
+        TEAM_SESSION: SESSION,
+        TEAM_FILE: join(at.root, '.agents', 'team.yaml'),
+        LISTENER_PATH: listenerPath(at.dropDir),
+        CPU_PATH: cpuPath,
+        READY_PATH: ready,
+        ...(fallbackMs === undefined ? {} : { FALLBACK_MS: String(fallbackMs) }),
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    child.stdout?.on('data', (chunk: Buffer) => { out += chunk.toString('utf8'); });
+    child.stderr?.on('data', (chunk: Buffer) => { err += chunk.toString('utf8'); });
+    return { child, out: () => out, err: () => err, cpuPath, ready };
+  }
+
+  async function stop(child: ChildProcess): Promise<void> {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exited = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('the server did not exit after kill')), 5_000);
+      child.once('exit', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    child.kill();
+    await exited;
+  }
+
+  test('a large inbox stays under the CPU bound for 10s, and a new drop arrives through the folder watch', async () => {
+    const at = place();
+    let running: ChildProcess | undefined;
+    try {
+      fillInbox(at.dropDir);
+      const cpu = runner(at);
+      running = cpu.child;
+      await until(() => existsSync(cpu.ready) || cpu.child.exitCode !== null, 2_000);
+      expect(cpu.child.exitCode).toBeNull();
+      const idleFrom = Date.now();
+      const remain = async (): Promise<void> => {
+        const left = 10_000 - (Date.now() - idleFrom);
+        if (left > 0) await new Promise((resolve) => setTimeout(resolve, left));
+      };
+      await remain();
+      await stop(cpu.child);
+      running = undefined;
+      const sample = JSON.parse(readFileSync(cpu.cpuPath, 'utf8')) as { user: number; system: number; wall: number };
+      expect(sample.wall).toBeGreaterThanOrEqual(9_000);
+      // Re-reading every file on the short tick of this folder stays above two seconds.
+      // Listing names and parsing only a new one stays under it.
+      expect(sample.user + sample.system).toBeLessThan(2_000_000);
+
+      const late = runner(at, 30_000);
+      running = late.child;
+      await until(() => late.err().includes('channel primed') || late.child.exitCode !== null, 2_000);
+      expect(late.child.exitCode).toBeNull();
+      const sentAt = Date.now();
+      signed(at, IDLE_ID, 'from a worker — admitted by: the owner\n\nwhile idle');
+      await until(() => late.out().includes(IDLE_ID) || late.child.exitCode !== null, 400);
+      expect(Date.now() - sentAt).toBeLessThan(1_500);
+      expect(late.out()).toContain(IDLE_ID);
+      await stop(late.child);
+      running = undefined;
+    } finally {
+      if (running !== undefined && running.exitCode === null && running.signalCode === null) running.kill();
+      at.cleanup();
+    }
+  }, 60_000);
+
+  test('a foreign lock is left unseen at the give-up and delivered on the next pass once it is gone', async () => {
+    const at = place();
+    const id = 'eeeeeeee-0000-4000-8000-000000000105';
+    const holder = spawn('/bin/sleep', ['30'], { stdio: 'ignore' });
+    if (holder.pid === undefined) throw new Error('the foreign holder has no pid');
+    let running: ChildProcess | undefined;
+    try {
+      mkdirSync(at.dropDir, { recursive: true, mode: 0o700 });
+      writeFileSync(channelCommitLockPath(at.dropDir, id), `${String(holder.pid)}\n`, { mode: 0o600 });
+      const child = runner(at, 30_000);
+      running = child.child;
+      await until(() => child.err().includes('channel primed') || child.child.exitCode !== null, 2_000);
+      expect(child.child.exitCode).toBeNull();
+      signed(at, id, 'from a worker — admitted by: the owner\n\nforeign lock');
+      await until(() => child.err().includes('stayed busy') || child.child.exitCode !== null, 1_000);
+      expect(child.err()).toContain('stayed busy');
+      expect(child.out().includes(id)).toBe(false);
+      unlinkSync(channelCommitLockPath(at.dropDir, id));
+      await until(() => child.out().includes(id) || child.child.exitCode !== null, 400);
+      expect(child.out()).toContain(id);
+      await stop(child.child);
+      running = undefined;
+    } finally {
+      holder.kill();
+      if (running !== undefined && running.exitCode === null && running.signalCode === null) running.kill();
+      at.cleanup();
+    }
+  }, 20_000);
 });
