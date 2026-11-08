@@ -3510,6 +3510,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
           file: () => rulesFileHolds(file.path, rulesFileHash(file.text)),
           foreground: () => launch.foreground(session, pane),
           report: (why) => { stopped.why = why; },
+          leadPane: (team.orchestrator !== '' && file.seat === team.orchestrator)
+            || (team.operator !== '' && file.seat === team.operator),
           now: () => now().getTime(),
           sleep: sharedSleep,
         });

@@ -714,6 +714,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // A team file left beside a registry team that says something else: never silent.
     ...leftoverDifferences(current.leftover),
     ...deliveryOrderDifferences(team, root, sources.home),
+    ...leadWakeOrderDifferences(team, root, sources.home, sources.now()),
     ...socketSkipped.differences,
     // The daemon's watch for this checkout: not running when the route carries one, or running
     // with its outbound gate closed, is a difference — the watch is not enforcing anything.
@@ -2436,6 +2437,53 @@ function wrapperLaunch(cli: string, launch: string): boolean {
   if (words[at] === 'exec' || words[at] === 'command') at += 1;
   const program = words[at];
   return program !== undefined && (program.split('/').pop() ?? program) !== binary;
+}
+
+/** Legs of a delivery order that start a turn. `drop` leaves the message in the folder. */
+const WAKING_ORDER_LEGS = new Set<DeliveryLeg>(['socket', 'native', 'typed', 'session']);
+
+/** A lead whose order cannot start a turn: drop only, or no waking leg. The repair names
+ *  the route to add. The watch still wakes that lead from unread mail. */
+function leadWakeOrderDifferences(
+  team: TeamFile,
+  root: string,
+  home: string | undefined,
+  now: Date,
+): Difference[] {
+  const out: Difference[] = [];
+  for (const seat of team.seats) {
+    if (seat.human === true) continue;
+    const lead = (team.orchestrator !== '' && seat.name === team.orchestrator)
+      || (team.operator !== '' && seat.name === team.operator);
+    if (!lead) continue;
+    let order: readonly DeliveryLeg[];
+    try {
+      if (home === undefined) {
+        order = deliveryOrder({
+          ...(team.deliveryOrder !== null ? { team: team.deliveryOrder } : {}),
+          ...(seat.deliveryOrder !== undefined ? { seat: seat.deliveryOrder } : {}),
+        });
+      } else {
+        order = deliveryOrder(deliveryChainOf({
+          root,
+          seat: seat.name,
+          home,
+          file: team,
+          projectOfTeam: (id) => ofTeam(home, id),
+          now,
+        }));
+      }
+    } catch {
+      continue;
+    }
+    if (order.some((leg) => WAKING_ORDER_LEGS.has(leg))) continue;
+    const shown = order.length === 0 ? 'empty' : order.join(', ');
+    out.push({
+      what: `${seat.name}: a lead's delivery order cannot wake it (${shown})`,
+      repair: `add socket or typed to delivery_order for ${seat.name}`,
+    });
+  }
+  return out;
 }
 
 /**

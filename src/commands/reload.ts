@@ -846,6 +846,8 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
             report: (why) => {
               stopped.why = why;
             },
+            leadPane: (team.orchestrator !== '' && file.seat === team.orchestrator)
+              || (team.operator !== '' && file.seat === team.operator),
             now: () => now().getTime(),
             sleep: launch.sleep,
           });

@@ -15,9 +15,10 @@
 // line, and the profile's `working` rule is the acknowledgement.
 import { agentPromptAsync, paneReadAsync, pressEnterAsync, sendKeyAsync, typeTextAsync } from '../herdr.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
+import { captureDraft, dropPathOf, keepDraft, keepSeatDraft } from './deliver.ts';
 import { profileFor, WAKE_IDLE_SETTLE_FLOOR_MS, WAKE_IDLE_SETTLE_MS } from '../profiles/profile.ts';
 import { MESSAGE_LINE_MAX } from '../settings/message-display.ts';
-import { readScreen, screenData } from '../watch/screen.ts';
+import { classifyComposer, readScreen, screenData } from '../watch/screen.ts';
 import { POLL_MS } from './native.ts';
 
 /** The wake keeps the eight-row cluster. A close, relaunch, or skip reads a working phrase anywhere. */
@@ -115,6 +116,14 @@ export type TypedWakeOptions = {
   /** The clock the two marks are taken with, in epoch milliseconds. The real walk uses
    *  `Date.now`; a scene hands in its own so the marks are exact. */
   now?: () => number;
+  /** The drop a kept draft is written beside when the box is not empty. Absent: the wake
+   *  line is read for the path. */
+  dropPath?: string;
+  /** The seat directory a draft is kept under when it is not pasted. The file does not need a
+   *  drop: `<seat dir>/drafts/<iso time>.txt`. */
+  seatDir?: string;
+  /** Records a draft that was kept instead of pasted. */
+  log?: (line: string) => void;
 };
 
 /** The two marks one walk observed, filled in as its reads show them. */
@@ -238,6 +247,121 @@ async function submitByAgentPrompt(
     return { delivered: false, typed: true, tries, reason: 'the working screen showed with the line still in the box after the agent prompt; the line was not submitted' };
   }
   return { delivered: false, typed: true, tries, reason: 'no working screen showed after the agent prompt' };
+}
+
+/** Puts a copied draft back with a bracketed paste and reads the box once. True when the box
+ *  holds that same text. */
+async function pasteDraft(host: TypedWakeHost, pane: string, cli: string, text: string): Promise<boolean> {
+  if (!(await host.type(pane, `\x1b[200~${text}\x1b[201~`))) return false;
+  const screen = await host.read(pane);
+  return screen !== null && boxHoldsText(cli, text, screen);
+}
+
+/** An empty composer is an empty box, including one drawn under a working turn. A dialog, a
+ *  box that still holds text, and a screen that cannot be read are not. */
+function emptyBox(cli: string, screen: string | null): boolean {
+  if (screen === null) return false;
+  const kind = readScreen(cli, screen).kind;
+  if (kind === 'idle') return true;
+  if (kind !== 'working') return false;
+  return classifyComposer(cli, screen.split('\n')).kind === 'idle';
+}
+
+/** Writes the draft where it does not depend on a drop file, and also beside the drop when this
+ *  delivery has one. The note names the path the text was kept at. */
+function keepUnpasted(line: string, draft: string, options: TypedWakeOptions): string {
+  const drop = options.dropPath ?? dropPathOf(line);
+  const seatDir = options.seatDir ?? null;
+  const owned = seatDir === null
+    ? { why: 'the delivery names no seat directory to keep the draft' }
+    : keepSeatDraft(seatDir, draft, new Date(options.now?.() ?? Date.now()));
+  const beside = keepDraft(drop, draft);
+  if ('copy' in owned) {
+    const also = 'copy' in beside ? `; a copy also sits beside the drop at ${beside.copy}` : '';
+    return `the draft was kept at ${owned.copy}${also}`;
+  }
+  if ('copy' in beside) return `the draft was kept beside the drop at ${beside.copy}`;
+  return `the draft was not pasted back (${owned.why})`;
+}
+
+/** Pastes the draft back only into an empty box. Otherwise the text is kept, the note says
+ *  where, and nothing is typed into the pane. */
+async function restoreDraft(
+  host: TypedWakeHost,
+  pane: string,
+  cli: string,
+  line: string,
+  draft: string,
+  options: TypedWakeOptions,
+): Promise<{ pasted: boolean; note: string | null }> {
+  const screen = await host.read(pane);
+  if (emptyBox(cli, screen)) {
+    const pasted = await pasteDraft(host, pane, cli, draft);
+    if (pasted) return { pasted: true, note: null };
+    const note = `the draft did not read back; ${keepUnpasted(line, draft, options)}`;
+    options.log?.(note);
+    return { pasted: false, note };
+  }
+  const note = keepUnpasted(line, draft, options);
+  options.log?.(note);
+  return { pasted: false, note };
+}
+
+/**
+ * The lead's typed wake. An empty idle box takes the profile's ordinary wake. A box that already
+ * holds other text is cleared with the profile's idle clear keys and that text is pasted back
+ * after the wake when the composer is empty, including while the turn still reads working.
+ * A dialog, a box that still holds text, or a screen that cannot be read keeps the draft in
+ * the seat directory. A box that cannot be copied is left as it was and the wake line is not typed.
+ */
+export async function deliverLeadTypedWake(
+  host: TypedWakeHost,
+  pane: string,
+  line: string,
+  cli: string,
+  options: TypedWakeOptions = {},
+): Promise<TypedWakeResult> {
+  const screen = await host.read(pane);
+  const kind = screen === null ? 'unreadable' : readScreen(cli, screen).kind;
+  const holdsLine = screen !== null && boxHoldsText(cli, line, screen);
+  let draft: string | null = null;
+  if (kind === 'unsent' && !holdsLine) {
+    const captured = screen === null ? { why: 'the screen could not be read' } : captureDraft(cli, screen);
+    if (!('text' in captured)) {
+      return { delivered: false, typed: false, tries: 0, reason: `the box holds text that cannot be copied (${captured.why}); nothing was typed` };
+    }
+    const clear = profileFor(cli)?.input?.clear;
+    if (clear === undefined || clear.length === 0 || host.key === undefined) {
+      return { delivered: false, typed: false, tries: 0, reason: 'the box holds text and this profile has no clear key; nothing was typed' };
+    }
+    draft = captured.text;
+    for (const key of clear) {
+      if (!(await host.key(pane, key))) {
+        const restored = await restoreDraft(host, pane, cli, line, draft, options);
+        const note = restored.note ?? 'the draft was left';
+        return { delivered: false, typed: false, tries: 0, reason: `the pane did not take the clear key; the wake line was not typed; ${note}` };
+      }
+    }
+    const cleared = await host.read(pane);
+    const clearedKind = cleared === null ? 'unreadable' : readScreen(cli, cleared).kind;
+    if (clearedKind !== 'idle') {
+      const restored = await restoreDraft(host, pane, cli, line, draft, options);
+      const note = restored.note ?? 'the draft was left';
+      return { delivered: false, typed: false, tries: 0, reason: `the box did not empty; ${note}; the wake line was not typed` };
+    }
+  }
+  const result = await deliverTypedWake(host, pane, line, cli, options);
+  if (draft !== null) {
+    const restored = await restoreDraft(host, pane, cli, line, draft, options);
+    if (restored.note !== null) {
+      return {
+        ...result,
+        ...(restored.note?.startsWith('the draft did not read back') === true ? { delivered: false } : {}),
+        reason: `${result.reason}; ${restored.note}`,
+      };
+    }
+  }
+  return result;
 }
 
 export async function deliverTypedWake(

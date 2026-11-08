@@ -16,6 +16,9 @@ export const unsent: SeatCheck = {
     }
     since[seat.name] ??= ctx.now;
     if (ctx.now - (since[seat.name] as number) < ctx.watch.unsentAfter * 1000) return [];
+    if (seat.queued) {
+      return reported(ctx.once(`unsent:${seat.name}`, `${seat.name}: blocked: unsent input`));
+    }
     return reported(ctx.once(`unsent:${seat.name}`, `${seat.name}: its input box reads as holding text; nothing is typed there`));
   },
 };

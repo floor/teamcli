@@ -26,6 +26,7 @@ import { daemonDifferences, daemonNotes, daemonReading } from '../daemon/health_
 import { hostedWatchNotes } from '../daemon/watch_display.ts';
 import { pendingGreenSlices } from '../tasks/green-slices.ts';
 import { idleWorkReport } from '../watch/idle-work.ts';
+import { MailPass } from '../watch/mail-pass.ts';
 import { busStatusNotes } from '../bus/notes.ts';
 import { currentTeam } from '../file/current.ts';
 import { leftoverDifferences, leftoverNote } from '../file/team-config.ts';
@@ -122,6 +123,29 @@ export type StatusSources = {
   /** The owner-seat credential store that confirms the security profile's signer; the system helper by default. */
   ownerSeatStore?: OwnerSeatKeyStore;
 };
+
+/** Seats with a drop still unread. Status names `blocked: unsent input` only for one of these
+ *  whose box has held text past `unsent_after`. No home, or a folder that cannot be read, is
+ *  no list: the row keeps its ordinary word. */
+function queuedDropsOf(
+  dir: string,
+  root: string,
+  session: string,
+  home: string | undefined,
+  team: TeamFile,
+): ReadonlySet<string> | undefined {
+  if (home === undefined) return undefined;
+  try {
+    const mail = new MailPass({ dir, root, session, home, lead: team.orchestrator });
+    const names = new Set<string>();
+    for (const seat of team.seats) {
+      if (mail.unread(seat.name).length > 0) names.add(seat.name);
+    }
+    return names;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * The standing source against a home that is not the owner's real one — the
@@ -630,6 +654,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     // and relative launch paths under the root.
     { dir, root, home },
     watchDaemon,
+    queuedDropsOf(dir, root, session, home, team),
   );
   const queues = readQueueDepths(team, root, sources.home, Object.keys(state.seats).filter((name) => state.seats[name]?.temporary));
   const backlog = queues ? readBacklogDepth(team, root, sources.home) : null;
