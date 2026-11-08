@@ -320,7 +320,7 @@ user, with no symbolic link on the way, and the lobby itself has mode exactly `0
 ancestor's mode is not tested; only the lobby's is. The seat's
 CLI trust record is written in the lobby before the seat's workspace exists, so the launch meets
 no folder-trust dialog there. A lobby the gate refuses ends the launch for every seat with
-`up.lobby`.
+`up.lobby`. A Claude channel seat starts in its own folder under the lobby; Cursor and Grok start in the seat's configured cwd (a recorded worktree when that cwd is `.`); any other seat whose cwd is not `.` starts in that folder, resolved against the project root, once it is outside every protected checkout; a lead whose cwd is `.` starts in the project root; every other seat whose cwd is `.` starts in the lobby.
 
 *Source:* `src/file/sections/lobby.ts` (the `lobby:` entry), `src/lobby/recorded.ts` (the recorded
 map), `src/lobby/gate.ts` (the gate), `src/launch/pretrust.ts` (the trust record written first).

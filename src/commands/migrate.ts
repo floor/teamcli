@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { findRoot, loadTeamText, TEAM_FILE } from '../file/load.ts';
 import { charterGate } from '../charter/check.ts';
 import { admitOwnerAction, createOwnerActionRequest, OWNER_ACTION_TTL_MS } from '../client/owner-action.ts';
-import { headOf, ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
+import { charterTargetOf, headOf, ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
 import { systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { actionRequestsFolder } from '../client/team-create.ts';
 import { retireTeamFile, type Retired } from '../file/retire.ts';
@@ -287,7 +287,7 @@ export async function runTeamImport(
   // The owner-seat door, for `import` (src/client/owner-action-step.ts): `--request` asks the owner
   // seat; `--approval <id>` runs the import the owner seat signed for, with no owner terminal.
   const seat = mode === 'import'
-    ? ownerSeatStep('import', 'team-import', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, sources)
+    ? ownerSeatStep('import', 'team-import', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, sources, [charterTargetOf(io.cwd)])
     : { kind: 'none' as const };
   if (seat.kind === 'requested') return 'approval-requested';
   if (seat.kind === 'refused') return 'approval-refused';
@@ -298,12 +298,12 @@ export async function runTeamImport(
   let charterAdmitted = false;
   // A dry run only reads. A blocking charter stops a real migrate before any card is written.
   if (mode === 'migrate' && !dryRun) {
-    const gate = charterGate(home, { operation: 'migrate', cwd: io.cwd }, sources.ownerSeatStore);
-    if (gate.kind === 'block') {
+    const gate = charterGate(home, { operation: 'migrate', cwd: io.cwd, path: charterTargetOf(io.cwd) }, sources.ownerSeatStore);
+    if (gate.kind === 'block' && !isOwner(caller)) {
       refuse(io, json, mode, { id: `${mode}.not-owner`, message: gate.message, repair: null });
       return 'not-owner';
     }
-    charterAdmitted = gate.kind === 'admit';
+    charterAdmitted = gate.kind === 'admit' && !isOwner(caller);
   }
   const ownerTerminal = isOwner(caller);
   let doorAdmitted = false;

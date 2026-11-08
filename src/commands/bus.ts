@@ -10,7 +10,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { startBus } from '../bus/server.ts';
-import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
+import { charterTargetOf, ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, isOwner, noPaneRefusal, standingOf } from '../caller.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
@@ -67,7 +67,7 @@ export async function runBus(argv: string[], io: Io, sources: BusCommandSources 
   // and is not an owner-seat request.
   let seatApproved = false;
   if (args.values.inherited === undefined) {
-    const seat = ownerSeatStep('bus', 'team-bus', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json: false, reason: args.values.reason }, io, seatSources);
+    const seat = ownerSeatStep('bus', 'team-bus', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json: false, reason: args.values.reason }, io, seatSources, [charterTargetOf(io.cwd)]);
     if (seat.kind === 'requested') {
       // exit: bus.approval-requested
       return 0;

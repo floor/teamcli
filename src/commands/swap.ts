@@ -14,6 +14,7 @@ import {
   type Caller,
   type CallerVerdict,
 } from '../caller.ts';
+import { charterTargetOf } from '../client/owner-action-step.ts';
 import { charterGate } from '../charter/check.ts';
 import type { DelegateSources } from '../delegate.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
@@ -241,12 +242,12 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
   if (extra !== undefined) return invocation(rawIo, io, json, `unexpected "${plainLine(extra)}"`);
 
   const walked = walkCaller(rawIo);
-  const gate = charterGate(home, { operation: 'swap', cwd: rawIo.cwd }, options.ownerSeatStore);
-  if (gate.kind === 'block') {
+  const gate = charterGate(home, { operation: 'swap', cwd: rawIo.cwd, path: charterTargetOf(rawIo.cwd, args.values.file) }, options.ownerSeatStore);
+  if (gate.kind === 'block' && !isOwner(walked)) {
     refuse(rawIo, io, json, 'swap.caller', plainText(gate.message), `the owner widens the charter with team setup --edit`, undefined, 'owner-or-leads');
     return 'caller';
   }
-  const covered = gate.kind === 'admit';
+  const covered = gate.kind === 'admit' && !isOwner(walked);
   const owner = isOwner(walked) || covered;
 
   if (sub === 'now' && !covered) {

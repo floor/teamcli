@@ -7,7 +7,7 @@ import { KEY_ISOLATION_LINE, activeClientUpGrant, withClientGrantLock, type Clie
 import { verifyClientUp } from '../client/up-grant.ts';
 import { admitGeneral } from '../client/general-grant.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
-import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
+import { charterTargetOf, ownerSeatRuleAdmits, ownerSeatRuleCovers, ownerSeatStep } from '../client/owner-action-step.ts';
 import { spawnInheritedBus } from '../bus/supervise.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { readArgs, type Args } from '../args.ts';
@@ -75,7 +75,7 @@ import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBin
 import { executePlan, launchKind, restoreSummaryOf, type Report, type RestoreSweepSummary } from '../launch/execute.ts';
 import { launcherCoverRefusal } from '../launch/launcher-cover.ts';
 import { loadTeamLaunchers, rawAgentSession } from '../launch/resolve-flag.ts';
-import { channelLobbyFolder } from '../mcp/launch-config.ts';
+import { channelLobbyFolder, claudeChannelSeat } from '../mcp/launch-config.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
 import { isSocketFile, launchCodexEndpoint, processStartOf, recordedEndpointState, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { bindCodexSeatThread } from '../launch/codex-thread-binding.ts';
@@ -695,6 +695,8 @@ function seatPlan(
    *  own launch line would start one now: the pane must be relaunched in place for it, never
    *  adopted on the endpoint it lost. */
   endpointRelaunch: (seat: Seat, recorded: SeatState, launch: string) => boolean = () => false,
+  /** The seat's recorded worktree, when one is recorded. Cursor and Grok start there when their cwd is `.`. */
+  worktree?: string,
 ): UpSeat {
   // After `team down` the seat has no state record, only what down retained. That is still the
   // state's half of the resume binding: without it the registry's recorded conversation was
@@ -1239,7 +1241,7 @@ function seatPlan(
         ...planned,
         stage: 'ready',
         ...(listed ? { pane: listed.pane, workspace: listed.workspace } : {}),
-        ...restartNote(team, seat.name, recorded, home, root, session),
+        ...restartNote(team, seat, recorded, home, root, session, worktree),
       };
     }
     return planned;
@@ -1277,22 +1279,44 @@ function restoredDetail(
 }
 
 function restartNote(
-  team: Pick<TeamFile, 'orchestrator' | 'operator' | 'entity' | 'lobby'>,
-  name: string,
+  team: TeamFile,
+  seat: Seat,
   recorded: SeatState,
   home: string,
   root: string,
   session: string,
+  worktree?: string,
 ): { restartNote: string } | Record<string, never> {
-  const fix = relaunchRepair(team, name, 'plain');
+  const fix = relaunchRepair(team, seat.name, 'plain');
   // The identity a launch predating the record could not write is `team register`'s to write:
   // the seat is ready on its pane, and recording it is one per-seat command — never a
   // whole-team restart for one seat's bookkeeping, and a lead runs it for its own seat too.
-  if (!recorded.launched) return { restartNote: `its process was never recorded: run team register ${name} to record it, nothing relaunched` };
+  if (!recorded.launched) return { restartNote: `its process was never recorded: run team register ${seat.name} to record it, nothing relaunched` };
+  if (!recorded.start_cwd) return {};
+  // A Claude channel seat starts in its lobby folder. The cwd on the seat is not that folder,
+  // so the note follows the start, not the cwd.
+  if (claudeChannelSeat(seat)) {
+    const start = seatStart({ ...team, session }, seat, root, home);
+    if ('problem' in start || recorded.start_cwd === start.cwd) return {};
+    return { restartNote: `a relaunch moves it into the lobby: ${fix}` };
+  }
+  // Cursor and Grok with "." start in the recorded worktree. A record that already names it
+  // needs no note, and a record that names the lobby is moved to that folder, not into the lobby.
+  if ((seat.cli === 'grok' || seat.cli === 'cursor') && seat.cwd === '.' && worktree !== undefined) {
+    if (recorded.start_cwd === worktree) return {};
+    return { restartNote: `a relaunch moves it to its own folder: ${fix}` };
+  }
+  // A seat with its own folder is not waiting in the lobby. A relaunch stays there when the
+  // record already names it, and otherwise moves to that folder, not into the lobby.
+  if (seat.cwd !== '.') {
+    const own = resolve(root, seat.cwd);
+    if (recorded.start_cwd === own) return {};
+    return { restartNote: `a relaunch moves it to its own folder: ${fix}` };
+  }
   // A running lead is at home in the lobby or in the project. Either recording is left as it
   // is. Every other seat still outside the lobby is told how to move.
-  if (recorded.start_cwd && recorded.start_cwd !== lobbyOf(home, root, { ...team, session })) {
-    if (isLeadSeat(team, name) && recorded.start_cwd === root) return {};
+  if (recorded.start_cwd !== lobbyOf(home, root, { ...team, session })) {
+    if (isLeadSeat(team, seat.name) && recorded.start_cwd === root) return {};
     return { restartNote: `a relaunch moves it into the lobby: ${fix}` };
   }
   return {};
@@ -1926,7 +1950,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     ? { kind: 'admitted' as const }
     : clientUp !== null && (args.flags.has('request') || args.values.approval !== undefined)
     ? (refuse(io, json, 'up', { id: 'up.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
-    : ownerSeatStep('up', 'team-up', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason }, io, sources);
+    : ownerSeatStep('up', 'team-up', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason }, io, sources, [charterTargetOf(io.cwd, args.values.file)]);
   if (badInvocation || allCode === 2) {
     if (badInvocation) {
       refuse(io, json, 'up', {
@@ -1985,7 +2009,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // `--session`, continues below.
   const otherFile = args.values.file !== undefined && resolve(io.cwd, args.values.file) !== resolve(io.cwd, TEAM_FILE);
   const aimed = otherFile || args.values.session !== undefined;
-  if (detached !== undefined && aimed) {
+  if (detached !== undefined && aimed && !(ownerSeatRuleCovers(io.cwd, [charterTargetOf(io.cwd, args.values.file)]) && ownerSeatRuleAdmits('team-up', io.cwd, dry, io, sources))) {
     refuse(io, json, 'up', { id: 'up.detached', message: detached, repair: null });
     // exit: up.detached
     return 1;
@@ -2207,7 +2231,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // other door refused.
   const ownerSeat = seatApproved || (
     detached === undefined && clientUp === null && !ordinaryAdmitted && !ownerToken && verdict === null && grantedSeat === null &&
-    ownerSeatRuleAdmits('team-up', io.cwd, dry, io, sources));
+    ownerSeatRuleCovers(io.cwd, [root]) && ownerSeatRuleAdmits('team-up', io.cwd, dry, io, sources));
 
   const createGranted = entityGrantAdmits(root, io, { home: sources.home, now: sources.now?.(), cwd: io.cwd });
   // The map's admission, the trusted owner token, the granted seat, a passed delegation, a pane
@@ -2520,6 +2544,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       recorded?.seats[seat.name] === undefined ? recorded?.retained_seats?.[seat.name] : undefined,
       (pane) => sources.launch?.foreground(session, pane) ?? null,
       endpointRelaunch,
+      worktreeOf(recorded, seat.name)?.path,
     );
     // The granted seat's own pane is not relaunched and not closed. The skip is the whole of
     // that seat's plan, including a repair the owner's `up` would have performed.
