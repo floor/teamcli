@@ -10,15 +10,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import type { Caller } from '../src/caller.ts';
+import { ownerSeatStep } from '../src/client/owner-action-step.ts';
 import { runAdd, type AddSources } from '../src/commands/add.ts';
+import { runApprovals } from '../src/commands/approvals.ts';
 import { runPolicy } from '../src/commands/policy.ts';
 import { runConfig } from '../src/commands/config.ts';
+import { runImport } from '../src/commands/import.ts';
 import { runForget } from '../src/commands/forget.ts';
 import { runMigrate } from '../src/commands/migrate.ts';
 import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
 import { runUp, type Launch } from '../src/commands/up.ts';
 import { loadTeamFile } from '../src/file/load.ts';
-import { LEADS_AUTHORITY_EXCLUDED, orchestratorSeatStaysOwner, policyNeedsOwner } from '../src/leads-authority.ts';
+import { LEADS_AUTHORITY_EXCLUDED, LEADS_DOOR_COMMANDS, leadsCommandExcluded, orchestratorSeatStaysOwner, policyNeedsOwner } from '../src/leads-authority.ts';
 import { COMMAND_GATES } from '../src/permissions/map.ts';
 import { gateVerdict } from '../src/permissions/who.ts';
 import { writePolicySet } from '../src/policy/index.ts';
@@ -60,7 +63,7 @@ test('the placed lead and the placed operator are admitted to every command outs
   for (const command of Object.keys(COMMAND_GATES)) {
     for (const caller of [seat('lead'), seat('ops')]) {
       const verdict = gateVerdict(caller, TEAM, root, home, command, AT);
-      const excluded = LEADS_AUTHORITY_EXCLUDED.has(command);
+      const excluded = leadsCommandExcluded(command);
       const ownerOnly = COMMAND_GATES[command]?.kind === 'owner-only';
       if (!excluded && verdict.kind !== 'ok') refused.push(`${command} as ${caller.kind === 'seat' ? caller.name : caller.kind}`);
       if (excluded && ownerOnly && verdict.kind !== 'refused') refused.push(`${command} was admitted`);
@@ -659,6 +662,8 @@ test('the orchestrator seat stays the owner\'s, and a needs-owner key is marked'
   expect(policyNeedsOwner('development_mode')).toBe(true);
   expect(policyNeedsOwner('daemon.broker')).toBe(true);
   expect(policyNeedsOwner('daemon_broker')).toBe(true);
+  expect(policyNeedsOwner('daemon.chores')).toBe(true);
+  expect(policyNeedsOwner('daemon.heartbeat')).toBe(true);
   expect(policyNeedsOwner('message-display')).toBe(false);
 });
 
@@ -699,6 +704,93 @@ test('a placed lead\'s project-level policy set is not a default-rule admission'
   expect(code).toBe(1);
   expect(io.err).toContain('only the owner');
   expect(io.err.includes('admitted as lead')).toBe(false);
+});
+
+test('the owner-seat door and the exclusion list name the same acts', () => {
+  expect(Object.keys(LEADS_DOOR_COMMANDS).sort()).toEqual(['approvals', 'import']);
+  for (const [door, gate] of Object.entries(LEADS_DOOR_COMMANDS)) {
+    expect(LEADS_AUTHORITY_EXCLUDED.has(gate)).toBe(true);
+    expect(leadsCommandExcluded(door)).toBe(true);
+    expect(leadsCommandExcluded(gate)).toBe(true);
+  }
+});
+
+test('a placed lead\'s config --request writes nothing', async () => {
+  const { home, root } = repo();
+  writeFlagTeam(root);
+  placeLead(root);
+  const file = join(root, '.agents', 'team.yaml');
+  const before = readFileSync(file, 'utf8');
+  const io = testIo(root, seat('lead'));
+  const code = await runConfig(['set', 'project', 'evil', '--request'], io, { home, now: () => NOW });
+  expect(code).toBe(0);
+  expect(io.out).toContain('owner-seat request');
+  expect(readFileSync(file, 'utf8')).toBe(before);
+});
+
+test('a placed operator\'s config --request cannot move the orchestrator seat', async () => {
+  const { home, root } = repo();
+  writeFlagTeam(root);
+  const file = join(root, '.agents', 'team.yaml');
+  writeFileSync(file, readFileSync(file, 'utf8').replace('operator: lead', 'operator: ops'));
+  updateState(join(root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats.ops = { stage: 'ready', pane: 'pane-ops' };
+  });
+  const before = readFileSync(file, 'utf8');
+  const io = testIo(root, seat('ops', 'pane-ops'));
+  const code = await runConfig(['set', 'coordinator', 'ops', '--request'], io, { home, now: () => NOW });
+  expect(code).toBe(1);
+  expect(io.err).toContain("only the owner changes the orchestrator's seat");
+  expect(readFileSync(file, 'utf8')).toBe(before);
+});
+
+test('a placed lead is not admitted to approvals revoke, including a folder outside the team', () => {
+  const { home, root } = repo();
+  writeFlagTeam(root);
+  placeLead(root);
+  const io = testIo(root, seat('lead'));
+  const ask = { request: false, approval: undefined, dry: false, json: false };
+  const own = ownerSeatStep('approvals', 'team-revoke-approval', ['revoke', 'oa_0123456789abcdef01234567'], ask, io, { home, root }, [root]);
+  expect(own.kind).not.toBe('admitted');
+  const other = join(home, 'other');
+  mkdirSync(other);
+  const mixed = ownerSeatStep('approvals', 'team-revoke-approval', ['revoke', 'oa_0123456789abcdef01234567'], ask, io, { home, root }, [root, other]);
+  expect(mixed.kind).not.toBe('admitted');
+});
+
+test('a placed lead\'s approvals revoke of an own-team rule writes nothing', async () => {
+  const { home, root } = repo();
+  writeFlagTeam(root);
+  placeLead(root);
+  const io = testIo(root, seat('lead'));
+  const code = await runApprovals(['revoke', 'oa_0123456789abcdef01234567'], io, { home, now: () => NOW });
+  expect(code).toBe(1);
+  expect(io.out.includes('revoked')).toBe(false);
+});
+
+test('a placed lead\'s approvals --request records the card and revokes nothing', async () => {
+  const { home, root } = repo();
+  writeFlagTeam(root);
+  placeLead(root);
+  const io = testIo(root, seat('lead'));
+  const code = await runApprovals(['revoke', 'oa_0123456789abcdef01234567', '--request'], io, { home, now: () => NOW });
+  expect(code).toBe(0);
+  expect(io.out).toContain('owner-seat request');
+  expect(io.out.includes('revoked')).toBe(false);
+});
+
+test('a placed lead\'s import --request writes nothing', async () => {
+  const { home, root } = repo();
+  writeFlagTeam(root);
+  placeLead(root);
+  const file = join(root, '.agents', 'team.yaml');
+  const before = readFileSync(file, 'utf8');
+  const io = testIo(root, seat('lead'));
+  const code = await runImport(['--request'], io, { home, now: () => NOW });
+  expect(code).toBe(0);
+  expect(io.out).toContain('owner-seat request');
+  expect(readFileSync(file, 'utf8')).toBe(before);
 });
 
 test('a placed lead can\'t turn dev mode on through policy', async () => {
