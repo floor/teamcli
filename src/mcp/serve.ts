@@ -17,7 +17,7 @@
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { realpathSync } from 'node:fs';
+import { lstatSync, readdirSync, realpathSync, watch, type FSWatcher } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -45,6 +45,7 @@ import {
   CHANNEL_METHOD,
   CHANNEL_PUSH_STATUS,
   CHANNEL_READ_BY,
+  CHANNEL_IDLE_MS,
   CHANNEL_SAFETY_MS,
   CHANNEL_TICK_MS,
   channelAborted,
@@ -61,7 +62,10 @@ import {
   ensureInboxFolder,
   inboxFolderHeld,
   legacyDropAt,
+  claimBindingIn,
   listUnread,
+  messageNameOk,
+  receiptHeld,
   readMessage,
   removeListener,
   writeListener,
@@ -85,7 +89,15 @@ export type ServeStreams = {
   close?(): void;
 };
 
-export type ServeOptions = { seat: string | undefined; session: string | undefined; file?: string; epoch?: string };
+export type ServeOptions = {
+  seat: string | undefined;
+  session: string | undefined;
+  file?: string;
+  epoch?: string;
+  /** The no-bus inbox pass interval. The command leaves it unset. A scene sets it longer than
+   *  its own stretch, so only the folder watch can deliver inside that stretch. */
+  fallbackMs?: number;
+};
 
 /** Where the server reads the message key, and the build it stamps on its listener marker. The
  *  launch uses the process's home; a test pins its own, so no read can reach the home of the
@@ -394,11 +406,30 @@ function watchChannel(
   let primed = false;
   let stopped = false;
   let timer: ReturnType<typeof setInterval> | null = null;
+  let namesTimer: ReturnType<typeof setInterval> | null = null;
+  let pulse: ReturnType<typeof setTimeout> | null = null;
+  let drainTimer: ReturnType<typeof setTimeout> | null = null;
+  let folder: FSWatcher | null = null;
   let subscription: BusFollow | null = null;
+  /** Busy commits retried off the main wait. Five tries, then one logged give-up. The id stays
+   *  unseen, so a later names pass tries it again once the lock is gone. */
+  const retryCount = new Map<string, number>();
+  const retryTimer = new Map<string, ReturnType<typeof setTimeout>>();
+  const gaveUp = new Set<string>();
   const stop = (): void => {
     stopped = true;
     if (timer !== null) clearInterval(timer);
     timer = null;
+    if (namesTimer !== null) clearInterval(namesTimer);
+    namesTimer = null;
+    if (pulse !== null) clearTimeout(pulse);
+    pulse = null;
+    if (drainTimer !== null) clearTimeout(drainTimer);
+    drainTimer = null;
+    for (const pending of retryTimer.values()) clearTimeout(pending);
+    retryTimer.clear();
+    folder?.close();
+    folder = null;
     subscription?.close();
     subscription = null;
   };
@@ -410,24 +441,52 @@ function watchChannel(
     }
     return false;
   };
+  /** A busy lock is tried again on a timer, five times, then logged once. The id is not marked
+   *  seen. The timer is the retry: the main thread does not wait. */
+  const scheduleRetry = (id: string): void => {
+    if (gaveUp.has(id) || retryTimer.has(id)) return;
+    const n = (retryCount.get(id) ?? 0) + 1;
+    retryCount.set(id, n);
+    if (n > 5) {
+      retryCount.delete(id);
+      gaveUp.add(id);
+      console.error(`team mcp serve: channel commit for ${id} stayed busy`);
+      return;
+    }
+    const pending = setTimeout(() => {
+      retryTimer.delete(id);
+      if (stopped) return;
+      pushOne(id);
+    }, 20 * 2 ** (n - 1));
+    retryTimer.set(id, pending);
+  };
   /** One id, verified on its own: the signed record is read and checked, and pushed once. An id
-   *  the server may no longer serve is left unseen, so a transient reading is retried on the next
-   *  tick and a server that lost its seat never pushes again. */
-  const pushOne = (id: string): void => {
-    if (seen.has(id)) return;
-    const stale = serving.alive?.();
-    if (stale !== undefined && stale !== null) return;
+   *  the server may no longer serve is remembered: the commit returns skip and this returns done,
+   *  so it is not retried. `retry` means the commit lock was
+   *  busy: the name stays unseen and the caller must not remember this mtime. `rejected` means
+   *  the body is not a channel record: remember the name and mtime, and do not read it again. */
+  const pushOne = (id: string): 'done' | 'retry' | 'rejected' => {
+    if (seen.has(id)) return 'done';
     seen.add(id);
-    if (legacyDropAt(join(serving.dropDir, id))) return;
+    if (legacyDropAt(join(serving.dropDir, id))) return 'done';
     // An earlier server may have pushed this id before this one started, and a sender whose own
     // walk takes the message leaves a held marker at the same name: either marker says this id
     // is not to be pushed, and a second notification is a duplicate wake.
-    if (channelPushHeld(serving.dropDir, id) || channelNotified(serving.dropDir, id) || channelAborted(serving.dropDir, id)) return;
+    if (channelPushHeld(serving.dropDir, id) || channelNotified(serving.dropDir, id) || channelAborted(serving.dropDir, id)) return 'done';
+    // A record the seat already read, or already replied to, is not a channel message again.
+    if (receiptHeld(
+      serving.dropDir,
+      id,
+      { to: serving.seat, root: serving.root, session: serving.session },
+      serving.home,
+      claimBindingIn(serving.root, serving.session, serving.seat, id),
+    )) return 'done';
     const push = channelPushOf(serving, id);
     if (push === null) {
-      // Not this seat's signed record yet (or never): a later read may still find it.
+      // Not this seat's signed record. Remember the name and mtime once; a later write changes
+      // the mtime and is read again. A busy lock is the case that must not be remembered.
       seen.delete(id);
-      return;
+      return 'rejected';
     }
     // The abort check, the reservation, the handoff marker, the notification write, and the
     // completion flag share one lock with the sender's fallback. The handoff marker is written
@@ -438,8 +497,10 @@ function watchChannel(
       if (channelAborted(serving.dropDir, id) || channelNotified(serving.dropDir, id) || channelPushHeld(serving.dropDir, id)) {
         return 'skip' as const;
       }
-      const beforeMarker = serving.alive?.();
-      if (beforeMarker !== undefined && beforeMarker !== null) return 'skip' as const;
+      // The seat can stop while the record is open. One re-check here, before the marker and
+      // the notification. The record was already read above; this does not open it again.
+      const staleNow = serving.alive?.();
+      if (staleNow !== undefined && staleNow !== null) return 'skip' as const;
       const reserved = recordChannelPush(serving.dropDir, {
         v: 1,
         kind: 'channel-push',
@@ -453,8 +514,6 @@ function watchChannel(
         status: CHANNEL_PUSH_STATUS,
       });
       if (!reserved || channelAborted(serving.dropDir, id)) return 'skip' as const;
-      const beforeWrite = serving.alive?.();
-      if (beforeWrite !== undefined && beforeWrite !== null) return 'skip' as const;
       if (!recordChannelEmitted(serving.dropDir, id, new Date().toISOString())) return 'skip' as const;
       write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: push }));
       const marked = serving.channelMark
@@ -465,34 +524,233 @@ function watchChannel(
     });
     if (committed === 'busy') {
       seen.delete(id);
+      scheduleRetry(id);
+      return 'retry';
     }
+    gaveUp.delete(id);
+    const pending = retryTimer.get(id);
+    if (pending !== undefined) {
+      clearTimeout(pending);
+      retryTimer.delete(id);
+    }
+    retryCount.delete(id);
+    return 'done';
   };
-  /** The whole inbox, read and verified: the startup prime, the fallback poll without a bus, and
-   *  the slow safety pass beside a live one. */
+  /** Names already listed, with the mtime they had when they were first seen. A later pass
+   *  lists the folder and stats each name; it parses only a name that is new or whose mtime
+   *  changed. A seen file is never read again. A busy commit is not entered here. */
+  const known = new Map<string, number>();
+  /** An id-named file whose body is not a channel record, remembered with the mtime that was
+   *  rejected. That pair is not read or verified again until the mtime changes. */
+  const rejected = new Map<string, number>();
+  /** Names waiting for one read. The value is the mtime, or -1 when this pass has not stated it.
+   *  One name is read per turn so a flood of bad files cannot hold the loop. */
+  const waiting = new Map<string, number>();
+  /** Watch names that arrived while the prime listing was still running. They are parsed once
+   *  the prime has finished, not folded into the names the prime already found. */
+  const queued: string[] = [];
+  const remember = (name: string, mtime: number, outcome: 'done' | 'retry' | 'rejected'): void => {
+    if (outcome === 'rejected') rejected.set(name, mtime);
+    if (outcome === 'done' || outcome === 'rejected') known.set(name, mtime);
+  };
+  const scheduleDrain = (): void => {
+    if (drainTimer !== null || stopped || waiting.size === 0) return;
+    drainTimer = setTimeout(() => {
+      drainTimer = null;
+      if (stopped || halted()) return;
+      const next = waiting.entries().next();
+      if (next.done) return;
+      const [name, listed] = next.value;
+      waiting.delete(name);
+      let mtime = listed;
+      if (mtime < 0) {
+        try {
+          const stat = lstatSync(join(serving.dropDir, name));
+          if (!stat.isFile()) {
+            if (waiting.size > 0) scheduleDrain();
+            return;
+          }
+          mtime = stat.mtimeMs;
+        } catch {
+          if (waiting.size > 0) scheduleDrain();
+          return;
+        }
+      }
+      if (known.get(name) !== mtime && rejected.get(name) !== mtime) {
+        try {
+          remember(name, mtime, pushOne(name));
+        } catch {
+          // A bad body that throws is still one rejection. It is not read again at this mtime.
+          remember(name, mtime, 'rejected');
+        }
+      }
+      if (waiting.size > 0) scheduleDrain();
+    }, 0);
+  };
+  /** The whole inbox, by name: the startup prime remembers what is already there and pushes
+   *  nothing, and every later pass parses only names that were not in that memory. */
   const tick = (): void => {
     if (halted()) return;
-    const unread = listUnread(
-      serving.dropDir,
-      { to: serving.seat, root: serving.root, session: serving.session, lead: serving.team.orchestrator },
-      serving.home,
-    );
+    let names: string[] = [];
+    try {
+      names = readdirSync(serving.dropDir);
+    } catch {
+      names = [];
+    }
+    const present = new Set<string>();
+    const changed: { name: string; mtime: number }[] = [];
+    for (const name of names) {
+      present.add(name);
+      let mtime = 0;
+      try {
+        const stat = lstatSync(join(serving.dropDir, name));
+        if (!stat.isFile()) continue;
+        mtime = stat.mtimeMs;
+      } catch {
+        continue;
+      }
+      const prior = known.get(name);
+      if (prior === mtime) continue;
+      // The prime remembers every name and pushes nothing. After that, a message is remembered
+      // only once its push has settled, so a busy lock is tried again. Anything else is remembered
+      // now and not parsed.
+      if (!primed || !messageNameOk(name)) {
+        known.set(name, mtime);
+        continue;
+      }
+      changed.push({ name, mtime });
+    }
+    for (const name of known.keys()) {
+      if (!present.has(name)) {
+        known.delete(name);
+        rejected.delete(name);
+        waiting.delete(name);
+      }
+    }
     if (!primed) {
-      for (const message of unread) seen.add(message.id);
       primed = true;
+      armFolder();
       return;
     }
-    for (const message of unread) pushOne(message.id);
+    armFolder();
+    for (const item of changed) {
+      if (rejected.get(item.name) === item.mtime) {
+        known.set(item.name, item.mtime);
+        continue;
+      }
+      waiting.set(item.name, item.mtime);
+    }
+    scheduleDrain();
+  };
+  /** One named file from the folder watch. It is parsed only when it is new or its mtime
+   *  changed. A rejected name and mtime is not read again. The rest of the inbox is not listed. */
+  const noteFile = (name: string): void => {
+    if (halted() || !messageNameOk(name)) return;
+    let mtime = 0;
+    try {
+      const stat = lstatSync(join(serving.dropDir, name));
+      if (!stat.isFile()) return;
+      mtime = stat.mtimeMs;
+    } catch {
+      return;
+    }
+    if (known.get(name) === mtime || rejected.get(name) === mtime || waiting.get(name) === mtime) return;
+    if (!primed) {
+      if (!queued.includes(name)) queued.push(name);
+      return;
+    }
+    // A named event is queued for one read. It does not wait for the idle pass, and it does
+    // not read the body on this turn.
+    waiting.set(name, mtime);
+    scheduleDrain();
+  };
+  /** Names only: a readdir, and a queue of each message name not already known or rejected.
+   *  Seen names are not stated and not parsed. The reads happen one per turn. */
+  const namesPass = (): void => {
+    if (halted() || !primed) return;
+    let names: string[] = [];
+    try {
+      names = readdirSync(serving.dropDir);
+    } catch {
+      names = [];
+    }
+    for (const name of names) {
+      if (known.has(name) || waiting.has(name)) continue;
+      if (!messageNameOk(name)) {
+        known.set(name, 0);
+        continue;
+      }
+      waiting.set(name, -1);
+    }
+    scheduleDrain();
+  };
+  /** One burst may list the folder once. The watcher stays open, so an event that names a file
+   *  still parses that file and does not wait for the listing. */
+  const listBurst = (): void => {
+    if (stopped || pulse !== null) return;
+    pulse = setTimeout(() => {
+      pulse = null;
+      if (stopped) return;
+      namesPass();
+    }, 50);
+  };
+  /** One watch on the drop folder. An event that names a file parses that file at once. An event
+   *  with no name lists the folder once, and the watch stays open. A watch that cannot start, or
+   *  that later errors, does that same one listing and then arms again. */
+  const armFolder = (): void => {
+    if (stopped || folder !== null) return;
+    try {
+      folder = watch(serving.dropDir, (_event, filename) => {
+        if (stopped) return;
+        const name = typeof filename === 'string' ? filename : '';
+        if (name === '') {
+          listBurst();
+          return;
+        }
+        if (pulse !== null) {
+          clearTimeout(pulse);
+          pulse = null;
+        }
+        noteFile(name);
+      });
+      folder.on('error', () => {
+        const current = folder;
+        folder = null;
+        try {
+          current?.close();
+        } catch {
+          // The watch is already closed.
+        }
+        listBurst();
+      });
+    } catch {
+      folder = null;
+    }
   };
   const every = (ms: number): void => {
     if (stopped) return;
     if (timer !== null) clearInterval(timer);
     timer = setInterval(tick, ms);
   };
+  const namesEvery = (): void => {
+    if (stopped) return;
+    if (namesTimer !== null) clearInterval(namesTimer);
+    namesTimer = setInterval(namesPass, CHANNEL_TICK_MS);
+  };
+  // The watch is open before the prime, so a file that lands during the listing is queued and
+  // parsed once the prime finishes. The prime itself pushes nothing that was already there.
+  armFolder();
   tick();
-  // Without a bus the inbox is polled on the short tick, as before. With one, each
-  // `message.arrived` routed to this seat pushes its one record at once, and the inbox is read
-  // whole only on the slow safety pass, for a sender that could not reach the bus.
-  every(options.fallbackMs ?? CHANNEL_TICK_MS);
+  const arrived = queued.splice(0);
+  for (const name of arrived) noteFile(name);
+  console.error('team mcp serve: channel primed');
+  // Without a bus the folder watch pushes the file the event names as it lands. A names-only
+  // listing on the short cadence parses only a name not seen before, so a drop the watcher did
+  // not name is still delivered then. The whole folder, including mtime changes, is the slower pass.
+  // With a bus, each `message.arrived` routed to this seat pushes its one record at once, and
+  // the inbox is read whole only on the slow safety pass, for a sender that could not reach the bus.
+  namesEvery();
+  every(options.fallbackMs ?? CHANNEL_IDLE_MS);
   // A dropped or absent bus is dialled again with a doubling wait, so a seat that fell back to
   // its poll returns to events when the bus comes back, without a server restart.
   subscription = followBusRetrying(serving.root, { seat: serving.seat, kinds: ['message.arrived'], skipBacklog: true }, {
@@ -508,7 +766,7 @@ function watchChannel(
       if (!MESSAGE_ID.test(payload.record_id)) return;
       pushOne(payload.record_id);
     },
-    onDown: () => every(options.fallbackMs ?? CHANNEL_TICK_MS),
+    onDown: () => every(options.fallbackMs ?? CHANNEL_IDLE_MS),
   }, {
     ...(options.follow === undefined ? {} : { follow: options.follow }),
     ...(options.retryMinMs === undefined ? {} : { minMs: options.retryMinMs }),
@@ -999,7 +1257,6 @@ export async function runMcpServe(
     ...(channel ? { channel: true as const } : {}),
     ...(boundEpoch === undefined ? {} : { epoch: boundEpoch }),
   };
-  if (!writeListener(dropDir, listener)) return refuse('the inbox listener marker could not be written');
   // A server keeps the code it started with, and an install neither reloads it nor ends it. The
   // installed identity is read from disk while this one serves: when it differs from the identity
   // in this process, the channel stops pushing and the process is replaced by one started from
@@ -1068,7 +1325,18 @@ export async function runMcpServe(
       return declarationRefusal(file.team, team.session, seat.name);
     },
   };
-  const stopChannel = channel ? watchChannel(serving, streams.write, notice) : null;
+  const stopChannel = channel
+    ? watchChannel(serving, streams.write, notice, {
+      ...(options.fallbackMs === undefined ? {} : { fallbackMs: options.fallbackMs }),
+    })
+    : null;
+  // The listener is published after the folder watch is armed, so a drop written when the
+  // listener appears is a named event and is pushed at once. It does not land during the prime
+  // and wait out the idle pass.
+  if (!writeListener(dropDir, listener)) {
+    stopChannel?.();
+    return refuse('the inbox listener marker could not be written');
+  }
   try {
     for await (const line of streams.lines) {
       const reply = handleLine(line, serving);
