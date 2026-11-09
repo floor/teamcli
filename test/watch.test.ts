@@ -697,7 +697,11 @@ describe('a pass of the watch', () => {
     expect(at({ 'w3:p1': { shell: 400, foreground: [500] } })).toEqual([restored, launcher]);
     // The same reading again: the condition still holds, and it stands reported once.
     expect(at({ 'w3:p1': { shell: 400, foreground: [500] } })).toEqual([]);
-    // The pane back at its own shell: the same condition, no second report. A shell is not the launcher line.
+    // The pane back at its own shell: one can't-work report, naming the restart the record
+    // still allows. A shell is not the launcher line, and the restored line already stands.
+    const noCli = 'deepseek-acme: can\'t work: no CLI — restart deepseek-acme from its record, resumed';
+    expect(at({ 'w3:p1': { shell: 400, foreground: [400] } })).toEqual([noCli]);
+    // The same shell again: once per change, not repeated.
     expect(at({ 'w3:p1': { shell: 400, foreground: [400] } })).toEqual([]);
     // The recorded process in front again: the condition cleared, and one clear pass is a flicker.
     expect(at({ 'w3:p1': { shell: 400, foreground: [401] } })).toEqual([]);
@@ -716,12 +720,12 @@ describe('a pass of the watch', () => {
     const memory = newMemory();
     const at = (processes: Record<string, { shell: number; foreground: number[] }>) =>
       pass({ team: team(), watch: team().watch, state, live: seen, machine: fine, now: 0, memory, processes }).reports.map((report) => report.text);
-    const restored = 'deepseek-acme is no longer the process team launched (its session was restored, or its CLI was restarted)';
     const launcher = 'deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched — team restart deepseek-acme';
-    // The stored session is on the pane: the generic line stays quiet, and the launcher is still said.
+    // The stored session is on the pane, and a CLI is in front: the generic line stays quiet, and
+    // the launcher is still said. The foreground is a CLI, so this is not a can't-work report.
     expect(at({ 'w3:p1': { shell: 500, foreground: [501] } })).toEqual([launcher]);
-    // A pane back at its shell is the generic line only.
-    expect(at({ 'w3:p1': { shell: 400, foreground: [400] } })).toEqual([restored]);
+    // The recorded CLI is in front: the seat is the seat. No restored line, and no can't-work report.
+    expect(at({ 'w3:p1': { shell: 400, foreground: [400, 401] } })).toEqual([]);
   });
 
   test('a restored agent session is recognized while its observed model drift is still reported', () => {
@@ -773,17 +777,18 @@ describe('a pass of the watch', () => {
       pass({ team: team(), watch: team().watch, state, live: live(), machine: fine, now: 0, memory, processes }).reports.map((report) => report.text);
     const restored = 'deepseek-acme is no longer the process team launched (its session was restored, or its CLI was restarted)';
     const launcher = 'deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched — team restart deepseek-acme';
-    // same, replaced, replaced, same, gone, unknown, gone: reported at the 2nd and 5th readings
-    // only. `unknown` is herdr failing to read, not the condition clearing: were it to clear the
-    // mark, the `gone` after it would report a second time what the `gone` before it reported.
-    // The launcher line rides the replaced readings and stays quiet once the pane is a shell.
+    // same, replaced, replaced, same, replaced, unknown, replaced: reported at the 2nd and 5th
+    // readings only. Every readable pane has a CLI in front, so no can't-work report fires.
+    // `unknown` is herdr failing to read, not the condition clearing: were it to clear the
+    // mark, the replaced reading after it would report a second time what the one before it
+    // reported. An unreadable reading produces no report at all.
     expect(at({ 'w3:p1': { shell: 400, foreground: [400, 401] } })).toEqual([]);
     expect(at({ 'w3:p1': { shell: 400, foreground: [500] } })).toEqual([restored, launcher]);
     expect(at({ 'w3:p1': { shell: 400, foreground: [500] } })).toEqual([]);
     expect(at({ 'w3:p1': { shell: 400, foreground: [400, 401] } })).toEqual([]);
-    expect(at({ 'w3:p1': { shell: 400, foreground: [400] } })).toEqual([restored]);
+    expect(at({ 'w3:p1': { shell: 400, foreground: [500] } })).toEqual([restored, launcher]);
     expect(at({ 'w3:p1': null })).toEqual([]);
-    expect(at({ 'w3:p1': { shell: 400, foreground: [400] } })).toEqual([]);
+    expect(at({ 'w3:p1': { shell: 400, foreground: [500] } })).toEqual([]);
   });
 
   test('herdr can\'t tell, or the seat has no record: the pane reads as today', () => {

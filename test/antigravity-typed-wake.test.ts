@@ -244,7 +244,7 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
   test('a working pane is never typed into', async () => {
     const pane = wakeFake(() => WORKING);
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
-    expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed working, not an empty idle prompt; nothing was typed' });
+    expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the screen stayed working until the bound; nothing was typed' });
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
   });
@@ -263,7 +263,7 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
     expect(readScreen('antigravity', interrupt).kind).toBe('working');
     const livePane = wakeFake(() => interrupt);
     const refused = await deliverTypedWake(livePane.host, 'pane-1', LINE, 'antigravity', FAST);
-    expect(refused).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed working, not an empty idle prompt; nothing was typed' });
+    expect(refused).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the screen stayed working until the bound; nothing was typed' });
     expect(livePane.prompts).toEqual([]);
     expect(livePane.typed).toEqual([]);
     expect(livePane.enters).toBe(0);
@@ -273,7 +273,7 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
   test('the exit-completion frame refuses before a key: its box holds /exit', async () => {
     const pane = wakeFake(() => EXIT_UNSENT);
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
-    expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed' });
+    expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the box held a draft; it was kept in a file and no Enter was pressed' });
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
   });
@@ -394,7 +394,7 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
 
     const beforeKey = wakeFake(() => holding(prefix));
     const outBefore = await deliverTypedWake(beforeKey.host, 'pane-1', LINE, 'antigravity', FAST);
-    expect(outBefore).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed' });
+    expect(outBefore).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the box held a draft; it was kept in a file and no Enter was pressed' });
     expect(beforeKey.typed).toEqual([]);
     expect(beforeKey.enters).toBe(0);
 
@@ -586,7 +586,7 @@ describe('team send: the antigravity typed wake', () => {
     const io = owner(made.root);
     expect(await runSend(['agy', 'hello'], io, host)).toBe(0);
     expect(io.out).toContain('agy: queued, not woken');
-    expect(io.out).toContain('the typed wake failed (the first read showed unsent, not an empty idle prompt; nothing was typed)');
+    expect(io.out).toContain('the typed wake failed (the box held a draft; it was kept in a file and no Enter was pressed)');
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
     const history = readHistory('acme', made.root, host.home);
@@ -597,7 +597,7 @@ describe('team send: the antigravity typed wake', () => {
       // The declared `mcp-inbox` word is skipped, not a failure; the typed leg is the one that
       // refused, and the drop leg then took the send.
       expect(history.entries[0]?.failed).toEqual([
-        'typed: the first read showed unsent, not an empty idle prompt; nothing was typed',
+        'typed: the box held a draft; it was kept in a file and no Enter was pressed',
       ]);
     }
   });
@@ -688,8 +688,8 @@ describe('team send: the antigravity typed wake', () => {
       typedWake: () => pane.host,
     });
     const io = owner(made.root);
-    expect(await runSend(['agy', 'check held'], io, host)).toBe(0);
-    expect(io.out).toContain('agy: queued, not woken (drop, 0 ms); queued; the typed wake failed (the working screen showed with the line still in the box after the agent prompt; the line was not submitted)');
+    expect(await runSend(['agy', 'check held'], io, host), io.err + io.out).toBe(1);
+    expect(io.err + io.out).toContain('agy: not delivered: wake not taken');
     expect(pane.prompts).toHaveLength(1);
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
@@ -749,5 +749,24 @@ describe('team send: the antigravity typed wake', () => {
       expect(partialMidPoll.typed).toEqual([]);
       expect(partialMidPoll.enters).toBe(0);
     }
+  });
+
+  test('messaging.store none is not kept and nothing is written', async () => {
+    const made = world(['socket'], [{ name: 'agy', role: 'implementer', cli: 'antigravity', launch: 'agy' }]);
+    cleanups.push(made.cleanup);
+    const pane = wakeFake(() => IDLE);
+    const host = fake(made, {
+      store: 'none',
+      agents: () => [{ name: 'agy', pane: 'pane-1' }],
+      processInfo: () => ({ shell: 111, foreground: [111] }),
+      typedWake: () => pane.host,
+    });
+    const io = owner(made.root);
+    expect(await runSend(['agy', 'hello'], io, host), io.err + io.out).toBe(1);
+    expect(io.err + io.out).toContain('agy: not delivered: no CLI; not kept (store none)');
+    expect(pane.prompts).toEqual([]);
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
+    expect(existsSync(join(made.dir, 'send-drops', 'acme', 'agy'))).toBe(false);
   });
 });

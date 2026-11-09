@@ -6389,6 +6389,16 @@ scene('send.brief-memory', async (place) => {
   expect(wrote.ok).toBe(true);
   return show(await sent(place, ['lead', '--brief', path], owner, sendHost(place)), 'brief-transport is memory');
 });
+scene('send.not-delivered', async (place) => {
+  write(place, TEAM);
+  const host = sendHost(place);
+  host.tokens = () => ({ reason: 'out of tokens' });
+  const plain = await sent(place, ['lead', 'hello'], owner, host);
+  const structured = await sent(place, ['lead', 'hello', '--json'], owner, host);
+  expect(structured.code).toBe(1);
+  expect((JSON.parse(structured.out) as { error: { id: string } }).error.id).toBe('send.not-delivered');
+  return show(plain, 'not delivered: out of tokens');
+});
 scene('send.stopped', async (place) => {
   write(place, TWO);
   // The dry run reports the real run's refusal: the file marks the seat stopped, and no leg is

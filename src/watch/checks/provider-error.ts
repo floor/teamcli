@@ -2,10 +2,11 @@ import { reported, type SeatCheck, type SeatObservation } from '../check.ts';
 import type { Reset, Screen } from '../screen.ts';
 
 // A seat stopped on its CLI's provider error or usage limit. herdr calls that seat done, and the
-// pane is back at its prompt, so without this reading it looks idle. Reported once, to the
-// operator and to the owner, and cleared when the seat leaves the state: a pass that stops
-// calling `once` drops the key. A seat that is working is not this report, even while the
-// sentence is still in the window: the key clears, and a later stop is reported again. Nothing
+// pane is back at its prompt, so without this reading it looks idle. A provider error is one
+// line per pass per episode, addressed to the owner, with the operator on that same event.
+// A rate limit is reported to each of them. Either clears when the seat leaves the state: a
+// pass that stops calling `once` drops the key. A seat that is working is not this report, even
+// while the sentence is still in the window: the key clears, and a later stop is reported again. Nothing
 // is typed. The report names a retry only when a capture has shown one. None has. A usage limit
 // is reported as quota out, naming the account the seat spends — its pool — and the reset
 // exactly as the screen words it (a clock after `at`, a span after `in`), or saying plainly that
@@ -42,7 +43,10 @@ export const providerError: SeatCheck = {
     // The two states are different events — a prompt (the owner waits on a reset) and a blocked
     // seat — so each has its own key. The bus mapping reads the key, never the prose.
     const key = state.kind === 'rate limit' ? `rate-limit:${seat.name}` : `provider-error:${seat.name}`;
-    // `to` names one recipient. The operator and the owner each get the line.
+    // A provider error is one episode and one line. The report is addressed to the owner, and
+    // the blocked-seat routing still carries the operator, so both see that one event.
+    if (state.kind === 'provider error') return reported(ctx.once(key, text, 'owner'));
+    // `to` names one recipient. A rate limit still reaches the operator and the owner.
     return [
       ...reported(ctx.once(key, text)),
       ...reported(ctx.once(`${key}:owner`, text, 'owner')),

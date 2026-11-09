@@ -815,6 +815,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.detached` | `send` | 1 | a run with no terminal | `team send --list` |
 | `send.grant-invalid` | `send` | 1 | a send grant names this pair but is not signed by the owner (it is unsigned, or its signature does not verify); nothing was sent, and the refusal prints the record's name and the exact team grant --send line that recreates it signed | `team send native@other hello` |
 | `send.held` | `send` | 1 | the message is on disk and the pane was left untouched | `team send worker hello` |
+| `send.not-delivered` | `send` | 1 | the seat cannot take the send, or a typed wake was not taken | `team send lead hello` |
 | `send.not-submitted` | `send` | 1 | the trigger was typed and the seat never took it | `team send worker hello` |
 | `send.refused` | `send` | 1 | nothing was sent, on purpose | `team send missing hello` |
 | `send.stopped` | `send` | 1 | the seat is stopped in the team file | `team send worker hello` |

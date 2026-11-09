@@ -68,6 +68,7 @@ export function hostedWatchSources(
     stopSeat: undefined,
     removeWorktree: undefined,
     swapSources: undefined,
+    restartSeat: undefined,
     busSubscribe: undefined,
     busPublish: undefined,
     onBusEvent: undefined,
