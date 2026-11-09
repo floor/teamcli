@@ -1,9 +1,11 @@
 // A seat whose live tail is an out-of-tokens screen is that state, never idle or done. One
-// message goes to its lead. Send skips it and says so. A weekly figure under the warning tells
+// message goes to its lead. Send keeps the note without waking it. A weekly figure under the warning tells
 // the lead, and exactly the threshold does not. The mark is cleared once the screen leaves.
 import { afterEach, expect, test } from 'bun:test';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { readMessage } from '../src/mcp/inbox.ts';
+import { readHistory } from '../src/send/history.ts';
 import { runSend } from '../src/commands/send.ts';
 import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
 import {
@@ -37,6 +39,24 @@ afterEach(() => {
 function keep(made: World): World {
   owned.push(dirname(made.root));
   return made;
+}
+
+function expectQueuedMessage(w: { root: string; dir: string; home: string }, body: string): void {
+  const drops = join(w.dir, 'send-drops', 'acme', 'lead');
+  expect(existsSync(drops)).toBe(true);
+  const ids = readdirSync(drops).filter((id) => !id.includes('.'));
+  expect(ids).toHaveLength(1);
+  const id = ids[0]!;
+  expect(existsSync(join(drops, `${id}.read.json`))).toBe(false);
+  const history = readHistory('acme', w.root, w.home);
+  expect(history.ok).toBe(true);
+  if (history.ok) {
+    expect(history.entries).toHaveLength(1);
+    expect(history.entries[0]).toMatchObject({ to: 'lead', outcome: 'queued, not woken', via: 'drop' });
+  }
+  const read = readMessage({ root: w.root, dropDir: drops, session: 'acme', seat: 'lead' }, id, w.home);
+  expect(read.ok).toBe(true);
+  expect(JSON.stringify(read)).toContain(body);
 }
 
 function entityFile(made: World): void {
@@ -161,7 +181,7 @@ test('the lead hears one message naming the seat, the vendor, and the work it wa
   expect(tokenUnavailable(made.dir, 'pebble')).toBe(TOKEN_SKIP);
 });
 
-test('a send skips a seat whose screen is out of tokens and sends nothing', async () => {
+test('a send keeps the note for an out-of-tokens seat without waking it', async () => {
   const made = keep(world(null));
   entityFile(made);
   const pane = quietNative();
@@ -173,10 +193,12 @@ test('a send skips a seat whose screen is out of tokens and sends nothing', asyn
   const io = owner(made.root);
   expect(await runSend(['lead', 'a note'], io, host)).toBe(1);
   expect(host.frames).toEqual([]);
-  expect(io.err).toContain(`lead: ${TOKEN_SKIP}`);
+  expect(io.err).toContain('lead: not delivered: out of tokens');
+  expect(io.err).toContain("kept in lead's inbox");
+  expectQueuedMessage(made, 'a note');
 });
 
-test('a marked seat is skipped when its pane cannot be read', async () => {
+test('a marked seat keeps its note without a wake when its pane cannot be read', async () => {
   const made = keep(world(null));
   entityFile(made);
   recordTokenMark(made.dir, 'lead', { vendor: 'kimi', held: 'task', at: NOW.getTime() });
@@ -186,7 +208,9 @@ test('a marked seat is skipped when its pane cannot be read', async () => {
   const io = owner(made.root);
   expect(await runSend(['lead', 'a note'], io, host)).toBe(1);
   expect(host.frames).toEqual([]);
-  expect(io.err).toContain(`lead: ${TOKEN_SKIP}`);
+  expect(io.err).toContain('lead: not delivered: out of tokens');
+  expect(io.err).toContain("kept in lead's inbox");
+  expectQueuedMessage(made, 'a note');
 });
 
 test('a weekly figure under the warning tells the lead, and the threshold itself does not', () => {

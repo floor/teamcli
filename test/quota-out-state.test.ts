@@ -1,15 +1,17 @@
 // Quota-out: the CLI's own usage wall as its own state. The reset is printed exactly as the
 // screen words it (`at` a clock, `in` a span), the classifier reads the wall only where the CLI
 // draws it (the block directly above the composer, per the captures and the reported frames),
-// and a send refuses a walled seat before a drop file, a socket frame or a typed key exists.
+// and a send keeps its signed note for a walled seat without a socket frame or a typed key.
 // Frames: the retained captures for Claude Code and Gemini, a synthetic one derived from a
 // reported Antigravity screen (no capture exists), and synthetic Codex frames built from the
 // wording in Codex's own upstream source at the tested tags. No provider turn, no real pane.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readMessage } from '../src/mcp/inbox.ts';
+import { readHistory } from '../src/send/history.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { TeamFile } from '../src/file/types.ts';
@@ -286,8 +288,26 @@ function paneHost(w: { sockets: string; home: string }): PaneHost {
 
 const owner = (root: string) => testIo(root, { kind: 'owner' });
 
-describe('a walled seat takes no send effect', () => {
-  test('a send is refused before any drop, socket frame or typed key, and names the reset', async () => {
+function expectQueuedMessage(w: { root: string; dir: string; home: string }, body: string): void {
+  const drops = join(w.dir, 'send-drops', 'acme', 'lead');
+  expect(existsSync(drops)).toBe(true);
+  const ids = readdirSync(drops).filter((id) => !id.includes('.'));
+  expect(ids).toHaveLength(1);
+  const id = ids[0]!;
+  expect(existsSync(join(drops, `${id}.read.json`))).toBe(false);
+  const history = readHistory('acme', w.root, w.home);
+  expect(history.ok).toBe(true);
+  if (history.ok) {
+    expect(history.entries).toHaveLength(1);
+    expect(history.entries[0]).toMatchObject({ to: 'lead', outcome: 'queued, not woken', via: 'drop' });
+  }
+  const read = readMessage({ root: w.root, dropDir: drops, session: 'acme', seat: 'lead' }, id, w.home);
+  expect(read.ok).toBe(true);
+  expect(JSON.stringify(read)).toContain(body);
+}
+
+describe('a walled seat keeps the note without a wake', () => {
+  test('a send keeps a signed note without a socket frame or typed key', async () => {
     const w = world();
     const host = paneHost(w);
     host.show(WALL);
@@ -296,12 +316,14 @@ describe('a walled seat takes no send effect', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(1);
-    expect(io.err).toBe('team send: refused: lead: quota out on deepseek, resets at 11:00; nothing was sent\n');
+    expect(io.err).toContain('lead: not delivered: out of tokens');
+    expect(io.err).toContain("kept in lead's inbox");
     expect(io.out).toBe('');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
     expect(host.dials()).toBe(0);
-    expect(existsSync(join(w.root, '.agents', 'send-drops', 'acme', 'lead'))).toBe(false);
+    expect(existsSync(join(w.root, '.agents', 'send-drops', 'acme', 'lead'))).toBe(true);
+    expectQueuedMessage(w, 'hello');
   });
 
   test('a host that still says working does not cancel the wall the screen proves', async () => {
@@ -314,7 +336,9 @@ describe('a walled seat takes no send effect', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(1);
-    expect(io.err).toContain('quota out on deepseek, resets at 11:00; nothing was sent');
+    expect(io.err).toContain('lead: not delivered: out of tokens');
+    expect(io.err).toContain("kept in lead's inbox");
+    expectQueuedMessage(w, 'hello');
     expect(host.typed).toEqual([]);
     expect(host.dials()).toBe(0);
   });
