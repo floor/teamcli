@@ -383,8 +383,8 @@ describe('the reply arms carry the same fence', () => {
 const CLIENT_NOW = new Date('2026-11-09T22:00:00Z');
 
 const CLIENT_TEAM = `format: 1
-project: floor
-entity: floor
+project: acme-entity
+entity: acme-entity
 coordinator: orchestrator
 operator: orchestrator
 session: acme
@@ -411,13 +411,15 @@ const clientId = () => `${String(++clientIds).padStart(8, '0')}-1111-4111-8111-1
 function clientWorld() {
   const base = fixtureBase('.sender-client-');
   owned.push(base);
-  const root = join(base, 'floor');
+  const root = join(base, 'acme-entity');
   const home = join(base, 'home');
   mkdirSync(join(root, '.agents'), { recursive: true });
   mkdirSync(home, { recursive: true });
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root, env: gitEnv(), stdio: 'ignore' });
   writeFileSync(join(root, '.agents', 'team.yaml'), CLIENT_TEAM);
   const ownerKey = keyOf(home);
+  mkdirSync(join(home, '.config', 'team'), { recursive: true });
+  writeFileSync(join(home, '.config', 'team', 'entities.yaml'), 'acme-entity:\n  clients:\n    acme-bot:\n      seats: [orchestrator]\n');
   const teamId = teamIdOf(root);
   const orch = registerAgent(home, {
     name: 'orchestrator',
@@ -433,7 +435,7 @@ function clientWorld() {
     by: 'test',
   });
   upsertTeam(home, teamId, {
-    project: 'floor', entity: 'floor', session: 'acme', root, lobby: join(base, 'lobby'),
+    project: 'acme-entity', entity: 'acme-entity', session: 'acme', root, lobby: join(base, 'lobby'),
     roster: [{ agent: orch.id, seat: 'orchestrator', role: 'orchestrator', leads: true }],
     lifecycle: 'running',
   });
@@ -441,10 +443,10 @@ function clientWorld() {
     state.sessions.acme = { seats: { orchestrator: { stage: 'ready' as const, pane: 'fixture:lead' } } } as never;
   });
   const pair = newClientKeyPair();
-  const keyDir = clientKeyDir(home, 'grok-bot');
+  const keyDir = clientKeyDir(home, 'acme-bot');
   const keys = writeClientKeyFiles(keyDir, pair);
   if (!keys.ok) throw new Error(keys.why);
-  const grant = writeClientGrant(home, { clientId: 'grok-bot', entity: 'floor', publicKey: pair.publicKey, keyId: pair.keyId, keyDir, inbox: true }, { now: CLIENT_NOW, key: ownerKey });
+  const grant = writeClientGrant(home, { clientId: 'acme-bot', entity: 'acme-entity', publicKey: pair.publicKey, keyId: pair.keyId, keyDir, inbox: true }, { now: CLIENT_NOW, key: ownerKey });
   if (!grant.ok) throw new Error(grant.why);
   return { base, root, home, grantPath: grant.path, keyPath: join(keyDir, 'client.key') };
 }
@@ -453,7 +455,7 @@ async function clientSend(w: { root: string; home: string; grantPath: string; ke
   const io = testIo(w.root, { kind: 'owner' });
   const id = clientId();
   const host = { home: w.home, now: () => CLIENT_NOW, sendId: () => id } as unknown as SendHost;
-  const code = await runSend(['--client', w.grantPath, '--key', w.keyPath, 'orchestrator@floor', text], io, host);
+  const code = await runSend(['--client', w.grantPath, '--key', w.keyPath, 'orchestrator@acme-entity', text], io, host);
   if (code !== 0) throw new Error(`client send failed: ${io.out}${io.err}`);
   return id;
 }
@@ -474,7 +476,7 @@ describe('a seat answering an external client thread', () => {
     expect(code).toBe(1);
     expect(io.out + io.err).toContain(MISMATCH.replace('%s', 'fixture:lead').replaceAll('%s', 'orchestrator'));
     expect(io.out + io.err).toContain('nothing was written');
-    const inbox = clientInboxFolder(w.root, 'acme', 'grok-bot');
+    const inbox = clientInboxFolder(w.root, 'acme', 'acme-bot');
     const published = existsSync(inbox) ? readdirSync(inbox).filter((name) => !name.startsWith('.')) : [];
     expect(published).toEqual([]);
     expect(io.out).not.toContain('must not reach the client');
@@ -491,7 +493,7 @@ describe('a seat answering an external client thread', () => {
 
     expect(code).toBe(0);
     expect(replyId).not.toBe('');
-    expect(readdirSync(clientInboxFolder(w.root, 'acme', 'grok-bot'))).toContain(replyId);
+    expect(readdirSync(clientInboxFolder(w.root, 'acme', 'acme-bot'))).toContain(replyId);
   });
 });
 

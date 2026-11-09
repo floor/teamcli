@@ -139,10 +139,10 @@ function world(): {
     sessionUp: () => session === 'running',
     createWorkspace(_session, cwd, label) {
       n++;
-      const pane = `w${n}:p1`;
+      const pane = `synthetic-ws-${n}:p1`;
       panes.set(pane, { text: IDLE, agent: false });
       creates.push({ label, cwd });
-      return { pane, workspace: `w${n}` };
+      return { pane, workspace: `synthetic-ws-${n}` };
     },
     paneRun(_session, pane, command) {
       runs.push({ pane, command });
@@ -373,10 +373,10 @@ describe('a folder with no git repository', () => {
     writeFileSync(join(root, '.agents', 'team.yaml'), teamText(root));
     updateState(join(root, '.agents'), (state) => {
       const session = (state.sessions[SESSION] ??= emptySession());
-      session.seats['claude-coordinator-acme'] = { stage: 'ready', pane: 'w1:p1', workspace: 'w1' };
+      session.seats['claude-coordinator-acme'] = { stage: 'ready', pane: 'synthetic-ws-1:p1', workspace: 'synthetic-ws-1' };
     });
     const before = readFileSync(join(root, '.agents', 'team.state.json'), 'utf8');
-    const io = testIo(root, { kind: 'seat', name: 'claude-coordinator-acme', pane: 'w1:p1', session: SESSION });
+    const io = testIo(root, { kind: 'seat', name: 'claude-coordinator-acme', pane: 'synthetic-ws-1:p1', session: SESSION });
     const code = await runStatus([], io, statusSources(home));
     expect(code).not.toBe(2);
     expect(io.err).not.toContain('not inside a git repository');
@@ -390,7 +390,7 @@ describe('a folder with no git repository', () => {
     const root = join(base, 'acme');
     mkdirSync(join(root, '.agents'), { recursive: true });
     writeFileSync(join(root, '.agents', 'team.yaml'), teamText(root));
-    const io = testIo(root, { kind: 'seat', name: 'claude-coordinator-acme', pane: 'w1:p1', session: SESSION });
+    const io = testIo(root, { kind: 'seat', name: 'claude-coordinator-acme', pane: 'synthetic-ws-1:p1', session: SESSION });
     const code = await runStatus([], io, statusSources(home));
     expect(code).toBe(2);
     expect(io.err).toBe('team status: this team is not yours to read\n');
@@ -404,13 +404,13 @@ describe('a folder with no git repository', () => {
     mkdirSync(join(root, '.agents'), { recursive: true });
     writeFileSync(join(root, '.agents', 'team.yaml'), teamText(root));
 
-    const seat = testIo(root, { kind: 'seat', name: 'other-seat', pane: 'w9:p1', session: 'elsewhere' });
+    const seat = testIo(root, { kind: 'seat', name: 'other-seat', pane: 'synthetic-ws-9:p1', session: 'elsewhere' });
     const refused = await runAdd(['claude-coordinator-acme'], seat, addSources(home));
     expect(refused).toBe(1);
     expect(seat.err).toContain('only the owner or a standing grant (delegate)');
     expect(readdirSync(join(root, '.agents')).sort()).toEqual(['team.yaml']);
 
-    const doctorIo = testIo(root, { kind: 'seat', name: 'other-seat', pane: 'w9:p1' });
+    const doctorIo = testIo(root, { kind: 'seat', name: 'other-seat', pane: 'synthetic-ws-9:p1' });
     await runDoctor([], doctorIo, doctor(home));
     expect(doctorIo.err).not.toContain('not inside a git repository');
     expect(readdirSync(join(root, '.agents')).sort()).toEqual(['team.yaml']);
@@ -464,13 +464,13 @@ describe('a file the watch would not read', () => {
     const statePath = join(customDir, 'team.state.json');
     const before = readFileSync(statePath, 'utf8');
 
-    const other = testIo(customDir, { kind: 'pane', pane: 'w9:p1' });
+    const other = testIo(customDir, { kind: 'pane', pane: 'synthetic-ws-9:p1' });
     const reported = await runWatch(['--session', SESSION], other, watchSources(home));
     expect(reported).toBe(0);
     expect(other.out).toContain(`the daemon does not host session ${SESSION}`);
     expect(readState(customDir).sessions[SESSION]?.watch?.pane).toBeUndefined();
 
-    const watching = testIo(customDir, { kind: 'pane', pane: 'w1:p1' });
+    const watching = testIo(customDir, { kind: 'pane', pane: 'synthetic-ws-1:p1' });
     const watched = await runWatch(['--session', SESSION], watching, watchSources(home));
     expect(watched, watching.out + watching.err).toBe(0);
     expect(watching.out).toContain(`the daemon does not host session ${SESSION}`);
@@ -570,7 +570,7 @@ function quietHosts(home: string): StatusSources {
 }
 
 const NOT_YOURS = 'team status: this team is not yours to read\n';
-const LINK_SEAT = { kind: 'seat' as const, name: 'claude-coordinator-acme', pane: 'w1:p1', session: SESSION };
+const LINK_SEAT = { kind: 'seat' as const, name: 'claude-coordinator-acme', pane: 'synthetic-ws-1:p1', session: SESSION };
 
 function expectUnfollowed(cwd: string, home: string): void {
   const loaded = loadTeamFile(cwd, { home });
@@ -607,7 +607,7 @@ async function bothRefuse(cwd: string, home: string): Promise<void> {
   expect(loaded.errors[0]?.message).toBe(LINK_NOT_FOLLOWED);
   for (const caller of [
     { kind: 'owner' as const },
-    { kind: 'seat' as const, name: 'claude-coordinator-acme', pane: 'w1:p1', session: SESSION },
+    { kind: 'seat' as const, name: 'claude-coordinator-acme', pane: 'synthetic-ws-1:p1', session: SESSION },
   ]) {
     const io = testIo(cwd, caller);
     const code = await runStatus([], io, quietHosts(home));

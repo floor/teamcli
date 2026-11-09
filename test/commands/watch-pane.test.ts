@@ -79,7 +79,7 @@ describe('the watch and its pane', () => {
     let seen = 0;
     const io = testIo(root, { kind: 'owner' });
     const code = await runWatch(FILE, io, watchSources(3, {
-      ownPane: () => (++seen === 1 ? { pane: 'w9:p1', workspace: 'w9' } : 'gone'),
+      ownPane: () => (++seen === 1 ? { pane: 'synthetic-ws-9:p1', workspace: 'synthetic-ws-9' } : 'gone'),
     }));
     expect(code).toBe(0);
     expect(seen).toBe(3);
@@ -95,7 +95,7 @@ describe('the watch and its pane', () => {
     let seen = 0;
     const io = testIo(root, { kind: 'owner' });
     const code = await runWatch(FILE, io, watchSources(3, {
-      ownPane: () => (++seen === 2 ? 'gone' : { pane: 'w9:p1', workspace: 'w9' }),
+      ownPane: () => (++seen === 2 ? 'gone' : { pane: 'synthetic-ws-9:p1', workspace: 'synthetic-ws-9' }),
     }));
     expect(code).toBe(0);
     expect(seen).toBe(3);
@@ -116,7 +116,7 @@ describe('the watch and its pane', () => {
   test('legacy pane helpers retain placement and distinguish a missing pane from an unreadable one', () => {
     const dir = join(root, '.agents');
     const session = 'acme-web';
-    const place = { pane: 'w9:p1', workspace: 'w9' };
+    const place = { pane: 'synthetic-ws-9:p1', workspace: 'synthetic-ws-9' };
     expect(placedWatch(dir, session, process.pid, () => 'gone')).toBe('keep');
     beatWatch(dir, session, process.pid, NOW.toISOString(), place);
     const recorded = readState(dir).sessions[session]?.watch;
@@ -133,22 +133,22 @@ describe('the watch and its pane', () => {
   test('own pane is the one whose shell is this process\'s parent', () => {
     setHerdrRun((args) => {
       if (args[0] === 'workspace' && args[1] === 'list') {
-        return { workspaces: [capturedWorkspaceEntry('w9', 'Watch · acme-web'), capturedWorkspaceEntry('w1', 'seat')] };
+        return { workspaces: [capturedWorkspaceEntry('synthetic-ws-9', 'Watch · acme-web'), capturedWorkspaceEntry('synthetic-ws-1', 'seat')] };
       }
-      if (args[0] === 'pane' && args[1] === 'list' && args[3] === 'w9') {
-        return { panes: [capturedPaneEntry('w9:p1', 'w9')] };
+      if (args[0] === 'pane' && args[1] === 'list' && args[3] === 'synthetic-ws-9') {
+        return { panes: [capturedPaneEntry('synthetic-ws-9:p1', 'synthetic-ws-9')] };
       }
-      if (args[0] === 'pane' && args[1] === 'list') return { panes: [capturedPaneEntry('w1:p1', 'w1')] };
-      if (args[0] === 'pane' && args[1] === 'process-info' && args[3] === 'w9:p1') {
-        return { process_info: capturedProcessInfo('w9:p1', process.ppid, process.pid) };
+      if (args[0] === 'pane' && args[1] === 'list') return { panes: [capturedPaneEntry('synthetic-ws-1:p1', 'synthetic-ws-1')] };
+      if (args[0] === 'pane' && args[1] === 'process-info' && args[3] === 'synthetic-ws-9:p1') {
+        return { process_info: capturedProcessInfo('synthetic-ws-9:p1', process.ppid, process.pid) };
       }
-      return { process_info: capturedProcessInfo('w1:p1', 1) };
+      return { process_info: capturedProcessInfo('synthetic-ws-1:p1', 1) };
     });
-    expect(ownWatchPane('acme-web', process.pid)).toEqual({ pane: 'w9:p1', workspace: 'w9' });
+    expect(ownWatchPane('acme-web', process.pid)).toEqual({ pane: 'synthetic-ws-9:p1', workspace: 'synthetic-ws-9' });
     setHerdrRun((args) => {
-      if (args[0] === 'workspace') return { workspaces: [capturedWorkspaceEntry('w1', 'seat')] };
-      if (args[0] === 'pane' && args[1] === 'list') return { panes: [capturedPaneEntry('w1:p1', 'w1')] };
-      return { process_info: capturedProcessInfo('w1:p1', 1) };
+      if (args[0] === 'workspace') return { workspaces: [capturedWorkspaceEntry('synthetic-ws-1', 'seat')] };
+      if (args[0] === 'pane' && args[1] === 'list') return { panes: [capturedPaneEntry('synthetic-ws-1:p1', 'synthetic-ws-1')] };
+      return { process_info: capturedProcessInfo('synthetic-ws-1:p1', 1) };
     });
     expect(ownWatchPane('acme-web', process.pid)).toBe('gone');
   });
@@ -200,7 +200,7 @@ describe('the watch and its pane', () => {
         },
         alive: () => false,
         pid: process.pid,
-        ownPane: () => ({ pane: 'w9:p1', workspace: 'w9' }),
+        ownPane: () => ({ pane: 'synthetic-ws-9:p1', workspace: 'synthetic-ws-9' }),
         home,
       });
       writeFileSync(outPath, JSON.stringify({ code, out, err }));
@@ -257,7 +257,7 @@ describe('remove --keep', () => {
       typeText: (_session, _pane, text) => { box = claudeBox(text); return true; },
       sendKey: () => { box = claudeBox(''); return true; },
       pressEnter: () => { sent = true; return true; },
-      agentPanes: () => ['w1:p1'],
+      agentPanes: () => ['synthetic-ws-1:p1'],
       closeWorkspace: (_session, workspace) => { closed.push(workspace); return true; },
       stopSession: () => false,
       deleteSession: () => false,
@@ -268,7 +268,7 @@ describe('remove --keep', () => {
     const sources: RemoveSources = {
       home,
       sessionRunning: () => true,
-      agents: () => [{ name: 'worker', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null }],
+      agents: () => [{ name: 'worker', agent: 'claude', pane: 'synthetic-ws-1:p1', workspace: 'synthetic-ws-1', status: 'idle', cwd: null }],
       alive: () => false,
       screen: () => ({ kind: 'idle' }),
       screenText: () => box,
@@ -280,14 +280,14 @@ describe('remove --keep', () => {
     };
     updateState(join(dir, '.agents'), (state) => {
       (state.sessions.acme ??= emptySession()).watch = {
-        pid: process.pid, heartbeat: NOW.toISOString(), pane: 'w9:p1', workspace: 'w9',
+        pid: process.pid, heartbeat: NOW.toISOString(), pane: 'synthetic-ws-9:p1', workspace: 'synthetic-ws-9',
       };
     });
     const removed = testIo(dir, { kind: 'owner' });
     const removedCode = await runRemove(['worker', '--keep', '--file', join(dir, '.agents/team.yaml')], removed, sources);
     expect({ code: removedCode, err: removed.err, out: removed.out }).toMatchObject({ code: 0 });
-    expect(closed).toEqual(['w1']);
-    expect(readState(join(dir, '.agents')).sessions.acme?.watch).toMatchObject({ pane: 'w9:p1', workspace: 'w9' });
+    expect(closed).toEqual(['synthetic-ws-1']);
+    expect(readState(join(dir, '.agents')).sessions.acme?.watch).toMatchObject({ pane: 'synthetic-ws-9:p1', workspace: 'synthetic-ws-9' });
   });
 });
 
