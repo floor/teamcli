@@ -173,9 +173,8 @@ describe('a wrapped CLI line that sets its own safety flags is never widened', (
     const argv = cliArgv(command, { binary: 'codex' });
     expect(argv).not.toContain('danger-full-access');
     expect(argv).not.toContain('never');
-    // The profile pins its feature set on every Codex launch: the line's own safety words and
-    // the pin are the words the CLI reads, inside the script where the launch puts them.
-    expect(argv).toEqual(['--sandbox', 'read-only', '--ask-for-approval', 'on-request', '--no-alt-screen', '-c', 'features.mcp_oauth_refresh_coordination=false']);
+    // FLO-1368 adds no fixed false pair; every other CLI safety word keeps its exact place.
+    expect(argv).toEqual(['--sandbox', 'read-only', '--ask-for-approval', 'on-request', '--no-alt-screen']);
   });
 
   test('the short attached forms inside the script suppress the defaults just the same', () => {
@@ -183,7 +182,7 @@ describe('a wrapped CLI line that sets its own safety flags is never widened', (
     const argv = cliArgv(command, { binary: 'codex' });
     expect(argv).not.toContain('danger-full-access');
     expect(argv).not.toContain('never');
-    expect(argv).toEqual(['-s', 'read-only', '-aon-request', '--no-alt-screen', '-c', 'features.mcp_oauth_refresh_coordination=false']);
+    expect(argv).toEqual(['-s', 'read-only', '-aon-request', '--no-alt-screen']);
   });
 });
 
@@ -217,8 +216,9 @@ describe("a delimiter inside a quoted script is the CLI's, not the outer shell's
       expect(argv.slice(at)).toEqual(['--', 'prompt', RULES_LINE]);
       const options = argv.slice(0, at);
       expect(options).toContain('--no-alt-screen');
-      expect(options).toContain('-c');
-      expect(options).toContain('features.mcp_oauth_refresh_coordination=false');
+      // FLO-1368 adds no feature override before the delimiter.
+      expect(options).not.toContain('-c');
+      expect(options).not.toContain('features.mcp_oauth_refresh_coordination=false');
       expect(options).toContain('-a');
       expect(options).toContain('never');
       expect(options).toContain('-s');
@@ -1088,13 +1088,13 @@ describe('the words a launch line hides from a plain text scan are read as the C
   test("an escaped newline inside the script does not hide the line's own sandbox and approval", () => {
     const line = '/bin/sh -c "codex --sand\\\nbox read-only --ask-for-approval on-request"';
     const argv = cliArgv(launchCommand(codex, line, RULES), { binary: 'codex' });
-    expect(argv).toEqual(['--sandbox', 'read-only', '--ask-for-approval', 'on-request', '--no-alt-screen', '-c', 'features.mcp_oauth_refresh_coordination=false']);
+    expect(argv).toEqual(['--sandbox', 'read-only', '--ask-for-approval', 'on-request', '--no-alt-screen']);
   });
 
   test('a quoted flag name is still the flag the CLI reads', () => {
     const line = `/bin/sh -c 'codex "--sandbox" read-only "--ask-for-approval" on-request'`;
     const argv = cliArgv(launchCommand(codex, line, RULES), { binary: 'codex' });
-    expect(argv).toEqual(['--sandbox', 'read-only', '--ask-for-approval', 'on-request', '--no-alt-screen', '-c', 'features.mcp_oauth_refresh_coordination=false']);
+    expect(argv).toEqual(['--sandbox', 'read-only', '--ask-for-approval', 'on-request', '--no-alt-screen']);
   });
 });
 
