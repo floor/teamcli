@@ -1180,6 +1180,7 @@
     "test/status-spool-sweep-fairness-independent.test.ts": 5,
     "test/status-wake.test.ts": 3,
     "test/status.test.ts": 1,
+    "test/stopped-team-running.test.ts": 4,
     "test/store-by-current-project-boundaries.test.ts": 3,
     "test/store-ladder-race.test.ts": 3,
     "test/store/evidence.test.ts": 4,
