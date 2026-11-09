@@ -7,7 +7,7 @@ import { verifiedOf } from '../../src/approve/approval.ts';
 import { approvalOf } from '../../src/approve/approval.ts';
 import { runRemove, type RemoveSources } from '../../src/commands/remove.ts';
 import { runWatch, type WatchSources } from '../../src/commands/watch.ts';
-import { ownWatchPane } from '../../src/watch/pane.ts';
+import { beatWatch, ownWatchPane, placedWatch } from '../../src/watch/pane.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import { setHerdrRun } from '../../src/herdr.ts';
 import type { DownLaunch } from '../../src/commands/down.ts';
@@ -15,6 +15,7 @@ import { emptySession, readState, updateState } from '../../src/state.ts';
 import { writeApproval, storePath } from '../../src/store/store.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
 import type { Machine } from '../../src/watch/machine.ts';
+import { hostedLoop } from '../helpers/hosted-watch.ts';
 import { capturedPaneEntry, capturedProcessInfo, capturedWorkspaceEntry, claudeBox, testIo } from '../helpers.ts';
 
 const EXAMPLE = readFileSync(join(import.meta.dir, '../fixtures/example.yaml'), 'utf8');
@@ -72,7 +73,7 @@ afterEach(() => {
 });
 
 describe('the watch and its pane', () => {
-  test('a watch that recorded its pane ends when that pane is gone', async () => {
+  test('a hosted watch completes its passes when an observed pane goes away', async () => {
     execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
     writeFileSync(join(root, '.agents/team.yaml'), EXAMPLE);
     let seen = 0;
@@ -82,7 +83,8 @@ describe('the watch and its pane', () => {
     }));
     expect(code).toBe(0);
     expect(seen).toBe(3);
-    expect(io.out).toContain('the watch\'s pane is gone; the watch ends with it');
+    // Daemon-only watch never closes seat workspaces; cleanup is explicit.
+    expect(io.out).not.toContain('the watch\'s pane is gone; the watch ends with it');
     expect(io.out).toContain('the watch of "acme-web" stopped');
     expect(readState(join(root, '.agents')).sessions['acme-web']?.watch).toBeUndefined();
   });
@@ -111,6 +113,23 @@ describe('the watch and its pane', () => {
     expect(io.out).toContain('the watch of "acme-web" stopped');
   });
 
+  test('legacy pane helpers retain placement and distinguish a missing pane from an unreadable one', () => {
+    const dir = join(root, '.agents');
+    const session = 'acme-web';
+    const place = { pane: 'w9:p1', workspace: 'w9' };
+    expect(placedWatch(dir, session, process.pid, () => 'gone')).toBe('keep');
+    beatWatch(dir, session, process.pid, NOW.toISOString(), place);
+    const recorded = readState(dir).sessions[session]?.watch;
+    expect(recorded?.pid).toBe(process.pid);
+    expect(recorded).toMatchObject(place);
+    expect(placedWatch(dir, session, process.pid, () => 'gone')).toBe('end');
+    expect(placedWatch(dir, session, process.pid, () => 'gone')).toBe('end');
+    expect(placedWatch(dir, session, process.pid, () => null)).toBe('keep');
+    expect(placedWatch(dir, session, process.pid, () => place)).toEqual(place);
+    beatWatch(dir, session, process.pid, NOW.toISOString(), 'keep');
+    expect(readState(dir).sessions[session]?.watch).toMatchObject(place);
+  });
+
   test('own pane is the one whose shell is this process\'s parent', () => {
     setHerdrRun((args) => {
       if (args[0] === 'workspace' && args[1] === 'list') {
@@ -134,17 +153,19 @@ describe('the watch and its pane', () => {
     expect(ownWatchPane('acme-web', process.pid)).toBe('gone');
   });
 
-  test('a hangup during the wait clears the watch record', async () => {
+  test('a hangup stops the hosted wait without creating a pane record', async () => {
     execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
     writeFileSync(join(root, '.agents/team.yaml'), REMOVE_FILE);
     const ready = join(base, 'ready');
     const outPath = join(base, 'out.json');
     const watchModule = new URL('../../src/commands/watch.ts', import.meta.url).pathname;
     const waitModule = new URL('../../src/wait.ts', import.meta.url).pathname;
+    const hostedModule = new URL('../helpers/hosted-watch.ts', import.meta.url).pathname;
     const program = `
       import { writeFileSync } from 'node:fs';
       import { runWatch } from ${JSON.stringify(watchModule)};
       import { waitOrStop } from ${JSON.stringify(waitModule)};
+      import { hostedLoop } from ${JSON.stringify(hostedModule)};
       const root = ${JSON.stringify(root)};
       const home = ${JSON.stringify(home)};
       const ready = ${JSON.stringify(ready)};
@@ -159,6 +180,7 @@ describe('the watch and its pane', () => {
         stdinIsTTY: false,
         caller: { kind: 'owner' },
       }, {
+        hosted: hostedLoop(),
         live: () => ({ running: true, agents: [], workspaces: [], screens: {} }),
         machine: () => (${JSON.stringify(fine)}),
         standing: () => ({ kind: 'none' }),
@@ -204,8 +226,7 @@ describe('the watch and its pane', () => {
       await Bun.sleep(20);
     }
     const recorded = readState(join(root, '.agents')).sessions.acme?.watch;
-    expect(recorded?.pid).toBe(child.pid);
-    expect(recorded).toMatchObject({ pane: 'w9:p1', workspace: 'w9' });
+    expect(recorded).toBeUndefined();
     process.kill(child.pid, 'SIGHUP');
     const code = await child.exited;
     expect(code).toBe(0);
@@ -275,6 +296,9 @@ function watchSources(passes: number, over: Partial<WatchSources>): WatchSources
   let clock = NOW.getTime();
   const file = join(root, '.agents/team.yaml');
   return {
+    // Daemon-only watch never closes seat workspaces; cleanup is explicit.
+    hosted: hostedLoop(),
+    home,
     live: () => ({ running: true, agents: [], workspaces: [], screens: {} }),
     machine: () => fine,
     standing: (project) => {

@@ -257,7 +257,8 @@ describe('the daemon restore sweep for one route', () => {
     const result = await runRestoreSweepForRoute({ home, root, teamFile, sources: listener });
     expect(result.kind).toBe('ran');
     if (result.kind !== 'ran') return;
-    expect(result.summary.line).toBe('0 seats repaired, 0 skipped (working), 0 refused');
+    // The summary includes the route's daemon watch and bus availability.
+    expect(result.summary.line).toBe("0 seats repaired, 0 skipped (working), 0 refused; watch: the daemon does not host this session's watch; bus: the daemon does not host this session's bus root");
     expect(result.failed).toBe(false);
     expect(made.lockDuring).not.toBeNull();
     expect(made.lockDuring !== null && 'held' in made.lockDuring ? made.lockDuring.held : null).toBe(process.pid);
@@ -284,7 +285,8 @@ describe('the daemon restore sweep for one route', () => {
     const result = await runRestoreSweepForRoute({ home, root, teamFile, sources: sources(made) });
     expect(result.kind).toBe('ran');
     if (result.kind !== 'ran') return;
-    expect(result.summary.line).toBe('0 seats repaired, 0 skipped (working), 0 refused');
+    // The summary includes the route's daemon watch and bus availability.
+    expect(result.summary.line).toBe("0 seats repaired, 0 skipped (working), 0 refused; watch: the daemon does not host this session's watch; bus: the daemon does not host this session's bus root");
     expect(readFileSync(settings, 'utf8')).toBe('{"hooks":{},"crossSessionInbound":"accept"}\n');
     expect(statSync(settings).mtimeMs).toBe(before);
   });
@@ -319,8 +321,8 @@ describe('the daemon restore sweep for one route', () => {
       { seat: 'worker', reason: expect.stringContaining('left 5%') },
     ]);
     expect(result.failed).toBe(true);
-    // Only the watch workspace is made: the refused seat starts nowhere.
-    expect(made.creates).toEqual(['Watch · sweep']);
+    // The daemon hosts watch; a refused seat creates no workspace.
+    expect(made.creates).toEqual([]);
     expect(made.closes).toEqual([]);
     // The refusal is the run's, not the record's: the state is left exactly as it was found.
     const state = JSON.parse(readFileSync(join(stateDir, 'team.state.json'), 'utf8')) as {
@@ -457,7 +459,8 @@ describe('a route whose team lives in the registry', () => {
     });
     expect(result.kind).toBe('ran');
     if (result.kind !== 'ran') return;
-    expect(result.summary.line).toBe('0 seats repaired, 0 skipped (working), 0 refused');
+    // The summary includes the route's daemon watch and bus availability.
+    expect(result.summary.line).toBe("0 seats repaired, 0 skipped (working), 0 refused; watch: the daemon does not host this session's watch; bus: the daemon does not host this session's bus root");
     expect(result.failed).toBe(false);
     expect(made.starts).toBe(0);
     expect(made.closes).toEqual([]);

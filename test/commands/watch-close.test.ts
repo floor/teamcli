@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { verifiedOf } from '../../src/approve/approval.ts';
+import { runRemove } from '../../src/commands/remove.ts';
+import { runWorktree } from '../../src/commands/worktree.ts';
+import { judgeTemporary, judgeWorktree } from '../../src/watch/close.ts';
+import { hostedLoop } from '../helpers/hosted-watch.ts';
 import { runWatch, type WatchSources } from '../../src/commands/watch.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
@@ -62,6 +67,8 @@ function scene(extra: HerdrAgent[] = []): Live {
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'team-watch-close-'));
   mkdirSync(join(dir, '.agents'));
+  mkdirSync(join(dir, 'home'));
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: dir, stdio: 'ignore' });
   file = join(dir, '.agents', 'team.yaml');
   writeFileSync(file, FILE);
 });
@@ -81,6 +88,9 @@ function approved(): WatchSources['standing'] {
 
 function sources(over: Partial<WatchSources> = {}): WatchSources {
   return {
+    // Daemon-only watch never closes seat workspaces; cleanup is explicit.
+    hosted: hostedLoop(),
+    home: join(dir, 'home'),
     live: () => scene(),
     machine: () => fine,
     standing: approved(),
@@ -100,7 +110,7 @@ function sources(over: Partial<WatchSources> = {}): WatchSources {
   };
 }
 
-describe('the watch closes what its authority allows', () => {
+describe('hosted watch leaves cleanup to explicit commands', () => {
   test('a temporary seat whose result exists, and that has worked and is free, is left', async () => {
     writeFileSync(join(dir, 'done.md'), 'done\n');
     updateState(join(dir, '.agents'), (state) => {
@@ -117,7 +127,15 @@ describe('the watch closes what its authority allows', () => {
       stopSeat: async (_session, seat) => { stopped.push(seat.name); return true; },
     }));
     expect(stopped).toEqual([]);
-    expect(io.out).toContain('worker-tmp-1: its record is not an approved seat; left as it is (the owner cleans it: team remove worker-tmp-1 --abandon)');
+    const cleanup = testIo(dir, { kind: 'owner' });
+    expect(await runRemove(['worker-tmp-1', '--file', file], cleanup, {
+      home: join(dir, 'home'), now: () => new Date('2026-10-03T14:00:00Z'),
+      sessionRunning: () => true, agents: () => [tmp], alive: () => false,
+      screen: () => ({ kind: 'idle' }), screenText: () => idle, status: () => 'idle', foreground: () => ['claude'],
+      standing: approved(),
+    })).toBe(1);
+    expect(cleanup.err).toContain('worker-tmp-1: its record is not a declared seat; left as it is (the owner cleans it: team remove worker-tmp-1 --abandon)');
+    expect(readState(join(dir, '.agents')).sessions.acme?.seats['worker-tmp-1']).toBeDefined();
     expect(readFileSync(file, 'utf8')).not.toContain('tmp');
   });
 
@@ -142,26 +160,43 @@ describe('the watch closes what its authority allows', () => {
         : { kind: 'merged', verdict: 'unproven', detail: 'the fetch failed; nothing is removed', ownNow: 0 },
     }));
     expect(stopped).toEqual([]);
-    expect(io.out).toContain('fetch failed');
+    // Keep the end-proof rules covered even though a hosted pass never acts on them.
+    expect(judgeTemporary({ worked: false, free: true, ownBefore: false,
+      end: { kind: 'result', exists: true } }).close).toBe(false);
+    const unproved = judgeTemporary({ worked: true, free: true, ownBefore: true,
+      end: { kind: 'merged', verdict: 'unproven', detail: 'the fetch failed; nothing is removed', ownNow: 0 } });
+    expect(unproved.close).toBe(false);
+    expect(unproved.report).toContain('fetch failed');
     expect(readState(join(dir, '.agents')).sessions.acme?.seats['worker-tmp-1']).toBeDefined();
   });
 
-  test('a merged worktree is removed only when an earlier pass saw commits of its own', async () => {
+  test('merge proof distinguishes an old branch; only explicit cleanup removes its worktree', async () => {
     updateState(join(dir, '.agents'), (state) => {
       const session = (state.sessions.acme ??= emptySession());
       session.worktrees.fresh = { path: 'work/fresh', branch: 'fix/fresh', own_commits: false, setup: 'ok' };
       session.worktrees.done = { path: 'work/done', branch: 'fix/done', own_commits: true, setup: 'ok' };
     });
-    const removed: string[] = [];
+    const automatic: string[] = [];
     await runWatch(['--file', file, '--no-nudge'], testIo(dir, { kind: 'owner' }), sources({
       readEnd: () => ({ kind: 'merged', verdict: 'merged', detail: 'its own commits are in the base', ownNow: 0 }),
-      removeWorktree: (task) => { removed.push(task); return 0; },
+      removeWorktree: (task) => { automatic.push(task); return 0; },
     }));
+    expect(automatic).toEqual([]);
+    const before = readState(join(dir, '.agents')).sessions.acme!.worktrees;
+    expect(Object.keys(before).sort()).toEqual(['done', 'fresh']);
+    const end = { kind: 'merged' as const, verdict: 'merged' as const, detail: 'its own commits are in the base', ownNow: 0 };
+    expect(judgeWorktree({ policy: 'on-merge', occupied: false, ownBefore: false, end }).close).toBe(false);
+    expect(judgeWorktree({ policy: 'on-merge', occupied: false, ownBefore: true, end }).close).toBe(true);
+    expect(await runWorktree(['remove', 'done', '--file', file], testIo(dir, { kind: 'owner' }), {
+      home: join(dir, 'home'), now: () => new Date('2026-10-03T14:00:00Z'), standing: approved(),
+    })).toBe(0);
+    const after = readState(join(dir, '.agents')).sessions.acme!.worktrees;
+    const removed = Object.keys(before).filter((task) => after[task] === undefined);
     expect(removed).toEqual(['done']);
+    expect(after.fresh).toBeDefined();
   });
 
-  // The real removal, not a stand-in. A stand-in never reaches the call, so it hid a close
-  // that named `io` without having it: the watch threw before the record could be dropped.
+  // Exercise the real explicit cleanup, including the already-gone folder path.
   test('a merged worktree whose folder is already gone is removed by the real worktree removal', async () => {
     updateState(join(dir, '.agents'), (state) => {
       const session = (state.sessions.acme ??= emptySession());
@@ -171,6 +206,10 @@ describe('the watch closes what its authority allows', () => {
     await runWatch(['--file', file, '--no-nudge'], io, sources({
       readEnd: () => ({ kind: 'merged', verdict: 'merged', detail: 'its own commits are in the base', ownNow: 0 }),
     }));
+    expect(readState(join(dir, '.agents')).sessions.acme?.worktrees.done).toBeDefined();
+    expect(await runWorktree(['remove', 'done', '--file', file], io, {
+      home: join(dir, 'home'), now: () => new Date('2026-10-03T14:00:00Z'), standing: approved(),
+    })).toBe(0);
     expect(readState(join(dir, '.agents')).sessions.acme?.worktrees.done).toBeUndefined();
     expect(io.out).toContain('removed the record of done; its folder was already gone');
     expect(io.out).not.toContain('worktree done was not removed');

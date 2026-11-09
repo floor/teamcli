@@ -1,3 +1,4 @@
+import { hostedLoop } from './helpers/hosted-watch.ts';
 // Acceptance: an idle worker past its threshold is given queued work by the watch itself. The
 // watch does not impersonate the worker and never calls the claim path: it pushes a signed
 // `team next` request to the worker through the production direct-only send (`sendDirect`), which
@@ -436,6 +437,8 @@ function watchSources(options: {
     },
   };
   const sources: WatchSources = {
+    // Hand-run watch reports status; dispatch and signed presence run in the hosted pass.
+    hosted: hostedLoop(),
     live: () => options.live?.() ?? scene(options.workerStatus),
     machine: () => fine,
     standing: () => verifiedOf(teamOf(options.teamText ?? TEAM), options.teamText ?? TEAM, root),
