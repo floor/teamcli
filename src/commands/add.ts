@@ -348,6 +348,21 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // the caller for anyone else. The eligibility that asks is the default live file's alone, so
   // the flagged file is not read at all; with no `delegates` section there, today's refusal
   // stands, byte for byte.
+  const ownerFlagRefused = (file: boolean, message: string): number => {
+    refuse(io, json, 'add', { id: file ? 'add.file-owner' : 'add.session-owner', message, repair: null });
+    // exit: add.file-owner
+    // exit: add.session-owner
+    return 1;
+  };
+  const overrideOwnerRefused = (): number => {
+    refuse(io, json, 'add', {
+      id: 'add.override-owner',
+      message: "--model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat",
+      repair: null,
+    });
+    // exit: add.override-owner
+    return 1;
+  };
   const flagWalk = args.values.file !== undefined || args.values.session !== undefined ? walkCaller(io) : undefined;
   // A no-terminal owner keeps the detached sentence, which is asked after the owner-seat door.
   // Every other non-owner is the owner-only sentence, decided before that door places anyone.
@@ -381,27 +396,14 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       });
       if (flagged.kind === 'refused') return delegateRefused(io, json, flagged);
     }
-    refuse(io, json, 'add', {
-      id: fileFlag !== undefined ? 'add.file-owner' : 'add.session-owner',
-      message: flagRefusal,
-      repair: null,
-    });
-    // exit: add.file-owner
-    // exit: add.session-owner
-    return 1;
+    return ownerFlagRefused(fileFlag !== undefined, flagRefusal);
   }
   // `--model` and `--effort` on a declared seat are the owner's too. A request still carries them
   // to the owner seat; every other non-owner is refused before that door can admit the run.
   if (!temporary && clientRun === null && !args.flags.has('request') && (args.values.model !== undefined || args.values.effort !== undefined)) {
     const walked = flagWalk ?? walkCaller(io);
     if (!isOwner(walked) && detachedRefusal(walked) === undefined) {
-      refuse(io, json, 'add', {
-        id: 'add.override-owner',
-        message: "--model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat",
-        repair: null,
-      });
-      // exit: add.override-owner
-      return 1;
+      return overrideOwnerRefused();
     }
   }
 
@@ -444,12 +446,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     const detachedSessionFlag = args.values.session !== undefined ? sessionOwnerRefusal(flagWalk) : undefined;
     const detachedFlagRefusal = detachedFileFlag ?? detachedSessionFlag;
     if (detachedFlagRefusal !== undefined) {
-      refuse(io, json, 'add', {
-        id: detachedFileFlag !== undefined ? 'add.file-owner' : 'add.session-owner',
-        message: detachedFlagRefusal,
-        repair: null,
-      });
-      return 1;
+      return ownerFlagRefused(detachedFileFlag !== undefined, detachedFlagRefusal);
     }
   }
 
@@ -874,13 +871,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     return 1;
   }
   if (!temporary && (args.values.model !== undefined || args.values.effort !== undefined) && !ownerRun && !seatApproved && !requesting) {
-    refuse(io, json, 'add', {
-      id: 'add.override-owner',
-      message: "--model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat",
-      repair: null,
-    });
-    // exit: add.override-owner
-    return 1;
+    return overrideOwnerRefused();
   }
   const resolvedModel = args.values.model !== undefined
     ? resolveModelOverride(profile, args.values.model, built.seat.version)
