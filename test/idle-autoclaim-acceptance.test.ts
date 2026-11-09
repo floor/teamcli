@@ -46,6 +46,7 @@ import { messageKeyState } from '../src/store/keys.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import type { StatusSource, StatusWaitResult } from '../src/watch/status-events.ts';
 import { testIo } from './helpers.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 
 const SEAT = 'deepseek-acme';
 const PANE = 'first:pane';
@@ -472,7 +473,8 @@ function watchSources(options: {
   if (options.presenceChannelHealthy !== undefined) {
     sources.presenceChannelHealthy = options.presenceChannelHealthy;
   }
-  return { sources, typed, paneRuns };
+  // Automatic pickup runs in the daemon's hosted loop; the hand-run command reports status.
+  return { sources: withHostedLoop(sources), typed, paneRuns };
 }
 
 /** Writes one native projection through the real ingester and then records the canonical fence

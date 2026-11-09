@@ -26,6 +26,7 @@ import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { claudeBox, dropNames, recordBody, testIo } from './helpers.ts';
 import { withoutSendId } from './helpers/output.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 
 const NOW = new Date('2026-10-17T05:00:00.000Z');
 const RULE = '─'.repeat(30);
@@ -233,22 +234,24 @@ describe('the sending paths never dial while the socket is off', () => {
 });
 
 describe('the watch types no automatic work', () => {
-  test('an idle seat with a takeable queue and no direct route is typed nothing, and no drop is written', async () => {
+  test('an idle seat with a takeable queue and a refused direct route is typed nothing, and no drop is written', async () => {
     base = realpathSync(mkdtempSync(join(tmpdir(), 'team-no-dial-watch-')));
     const dir = join(base, 'acme-web');
     mkdirSync(join(dir, '.agents'), { recursive: true });
     execFileSync('git', ['init', '-q'], { cwd: dir, stdio: 'ignore' });
     const raw = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
-    writeFileSync(join(dir, '.agents', 'team.yaml'), raw.replace('watch:\n', `watch:\n  nudge: ${PROMPT}\n`));
+    // The example declares a tracker. This scene's takeable work is the local file below.
+    writeFileSync(join(dir, '.agents', 'team.yaml'), `${raw.replace('watch:\n', `watch:\n  nudge: ${PROMPT}\n`)}\ntasks:\n  source: file\n  path: .agents/queue.yaml\n`);
     writeFileSync(join(dir, '.agents', 'queue.yaml'), '- id: t1\n  title: "First"\n');
     // Truthful idle clocks: the reading would offer both workers the task if a route were wired.
     // Their launch records name the development-channel launch, so an idle wake reaches them
-    // and the missing route is the one failure the scene reports.
+    // and the refused route is the one failure the scene reports.
     updateState(join(dir, '.agents'), (state) => {
       const seats = (state.sessions['acme-web'] ??= emptySession()).seats;
-      for (const seat of ['deepseek-acme', 'deepseek-acme-2']) {
+      for (const [seat, pane] of [['deepseek-acme', 'first:pane'], ['deepseek-acme-2', 'second:pane']] as const) {
         seats[seat] = {
           stage: 'ready',
+          pane,
           last_active: '2026-10-03T13:00:00.000Z',
           cli: 'claude-code',
           launch_line: 'claude --dangerously-load-development-channels server:team-inbox',
@@ -282,14 +285,20 @@ describe('the watch types no automatic work', () => {
     };
     const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
 
-    // The sources a watch runs on: a pane this test scripts, and no socket anywhere — the type
-    // the watch takes admits none. Two passes, the second one a nudge cadence on. `first:pane`
-    // is this watch's own, so the one work drop the cadence finds is `second:pane`'s.
+    // The sources a hosted watch runs on: scripted panes and a route that always refuses.
+    // Two passes keep the refused episode from retrying, without opening any socket.
     const typed: string[] = [];
+    const pushed: string[] = [];
     let screenNow = IDLE;
     let clock = Date.parse('2026-10-03T14:00:00Z');
     let passes = 2;
     const sources: WatchSources = {
+      // Hosted watches with no sender hold before dispatch. An admitted but refused route
+      // exercises the dispatcher's announcement while keeping every delivery path closed.
+      pushWork: async (request) => {
+        pushed.push(request.seat);
+        return { ok: false, refused: 'no direct work route is wired' };
+      },
       live: () => live,
       machine: () => fine,
       standing: () => ({ kind: 'none' }),
@@ -322,15 +331,17 @@ describe('the watch types no automatic work', () => {
     };
 
     const io = testIo(dir, { kind: 'owner' });
-    const code = await runWatch(['--file', join(dir, '.agents', 'team.yaml')], io, sources);
+    // The daemon hosts this refusal pass; a hand-run watch only reports its status.
+    const code = await runWatch(['--file', join(dir, '.agents', 'team.yaml')], io, withHostedLoop(sources));
 
     expect(code).toBe(0);
-    // The one thing the retired path would have done is type a work drop at the second pane;
-    // the dispatcher has no route to attempt, so nothing is typed and no drop exists.
+    expect(pushed).toEqual(['deepseek-acme', 'deepseek-acme-2']);
+    // The retired path would have typed work into a pane. The direct route refuses, so
+    // nothing is typed and no drop exists; the refusal still reaches the lead's mailbox.
     expect(typed).toEqual([]);
     expect(existsSync(join(dir, '.agents', 'send-drops'))).toBe(false);
     // The refused route is announced where the watch reports, as a signed mailbox record, not as
     // a keystroke.
-    expect(existsSync(join(dir, '.agents', 'messages'))).toBe(true);
+    expect(existsSync(join(dir, '.agents', 'messages')), `${io.out}${io.err}`).toBe(true);
   });
 });

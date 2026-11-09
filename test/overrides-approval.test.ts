@@ -11,6 +11,7 @@ import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { overridesInForce, overridesPath, quotaWith } from '../src/profiles/overrides.ts';
 import { approvalStanding, readApproval, storePath } from '../src/store/store.ts';
 import { testIo } from './helpers.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 
 const EXAMPLE = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
 const FILE = ['--file', '.agents/team.yaml'];
@@ -186,7 +187,8 @@ describe('an override is the owner\'s, by approval', () => {
     expect(`${status.out}${status.err}`).toContain(message);
 
     const watch = testIo(root, OWNER);
-    const watchCode = await runWatch(FILE, watch, {
+    // Override validation belongs to the hosted pass; hand-run watch reports daemon status.
+    const watchCode = await runWatch(FILE, watch, withHostedLoop({
       live: () => null,
       machine: () => { throw new Error('not read'); },
       standing: standingSource(home),
@@ -203,7 +205,7 @@ describe('an override is the owner\'s, by approval', () => {
       alive: () => false,
       pid: 1,
       home,
-    } satisfies WatchSources);
+    } satisfies WatchSources));
     expect(watchCode).toBe(0);
     expect(watch.out).toContain(message);
 
