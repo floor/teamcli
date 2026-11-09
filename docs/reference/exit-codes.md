@@ -361,10 +361,17 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `down.herdr` | `down` | 2 | herdr doesn't answer | `team down` |
 | `down.invocation` | `down` | 2 | the invocation can't be read | `team down extra` |
 | `down.not-a-repo` | `down` | 2 | not inside a git repository | `team down` |
+| `drops.archive.ok` | `drops` | 0 | the inbox archive and migration finished | `team drops archive` |
 | `drops.ok` | `drops` | 0 | the caller's unread drops were listed, or followed until it stopped | `team drops` |
+| `drops.archive.file` | `drops` | 1 | the team file can't be read | `team drops archive` |
+| `drops.archive.key` | `drops` | 1 | no message key stands, so nothing was archived | `team drops archive` |
+| `drops.archive.migration` | `drops` | 1 | an archive move or a migration mark could not be finished | `team drops archive` |
+| `drops.archive.refused` | `drops` | 1 | archive is not the owner, a lead, or the seat itself | `team drops archive` |
 | `drops.file` | `drops` | 1 | the team file can't be read | `team drops` |
 | `drops.refused` | `drops` | 1 | the caller is not a placed seat of this team | `team drops` |
 | `drops.unreadable` | `drops` | 1 | the drop folder can't be read | `team drops` |
+| `drops.archive.invocation` | `drops` | 2 | archive was given an option it does not take | `team drops archive --follow` |
+| `drops.archive.not-a-repo` | `drops` | 2 | not inside a git repository | `team drops archive` |
 | `drops.invocation` | `drops` | 2 | the invocation can't be read | `team drops extra` |
 | `drops.not-a-repo` | `drops` | 2 | not inside a git repository | `team drops` |
 | `fallback.plan` | `fallback` | 0 | the dry run found no finished episode to retire | `team fallback prune` |

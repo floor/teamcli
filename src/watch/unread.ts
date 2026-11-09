@@ -76,7 +76,7 @@ import {
   type WakeMark,
 } from '../send/wake-marker.ts';
 import { pendingDropPath } from '../send/pending.ts';
-import { isRead, readRecord, signRecord, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
+import { isRead, readRecord, recordFile, signRecord, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
 import { markTaken } from '../send/taken.ts';
 import { legClassOf, type WalkLeg } from '../send/walk-cascade.ts';
 import { wakeTrigger, wakeWordsFor, type WakeWords } from '../send/wake.ts';
@@ -185,7 +185,7 @@ function watchRetryOf(seat: Seat): { tries: number } | null {
 function payloadOf(dropDir: string, id: string, home: string): RecordPayload | null {
   const key = messageKeyState(home);
   if (key.kind !== 'key') return null;
-  const looked = readRecord(join(dropDir, id), id);
+  const looked = readRecord(recordFile(dropDir, id), id);
   if (!looked.ok || looked.record === null) return null;
   if (!verifyRecord(looked.record, key.key)) return null;
   return looked.record.payload;

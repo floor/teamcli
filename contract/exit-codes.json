@@ -2489,9 +2489,44 @@
     {
       "code": 0,
       "command": "drops",
+      "id": "drops.archive.ok",
+      "meaning": "the inbox archive and migration finished",
+      "trigger": "team drops archive"
+    },
+    {
+      "code": 0,
+      "command": "drops",
       "id": "drops.ok",
       "meaning": "the caller's unread drops were listed, or followed until it stopped",
       "trigger": "team drops"
+    },
+    {
+      "code": 1,
+      "command": "drops",
+      "id": "drops.archive.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team drops archive"
+    },
+    {
+      "code": 1,
+      "command": "drops",
+      "id": "drops.archive.key",
+      "meaning": "no message key stands, so nothing was archived",
+      "trigger": "team drops archive"
+    },
+    {
+      "code": 1,
+      "command": "drops",
+      "id": "drops.archive.migration",
+      "meaning": "an archive move or a migration mark could not be finished",
+      "trigger": "team drops archive"
+    },
+    {
+      "code": 1,
+      "command": "drops",
+      "id": "drops.archive.refused",
+      "meaning": "archive is not the owner, a lead, or the seat itself",
+      "trigger": "team drops archive"
     },
     {
       "code": 1,
@@ -2513,6 +2548,20 @@
       "id": "drops.unreadable",
       "meaning": "the drop folder can't be read",
       "trigger": "team drops"
+    },
+    {
+      "code": 2,
+      "command": "drops",
+      "id": "drops.archive.invocation",
+      "meaning": "archive was given an option it does not take",
+      "trigger": "team drops archive --follow"
+    },
+    {
+      "code": 2,
+      "command": "drops",
+      "id": "drops.archive.not-a-repo",
+      "meaning": "not inside a git repository",
+      "trigger": "team drops archive"
     },
     {
       "code": 2,

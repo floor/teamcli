@@ -37,7 +37,7 @@
 import { randomUUID, type KeyObject } from 'node:crypto';
 import { readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, relative, sep } from 'node:path';
 import { readArgs } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { ensureClientInbox, scanClientInbox, writeClientInboxFile } from '../client/inbox.ts';
@@ -65,6 +65,7 @@ import {
   closeFile,
   readClose,
   readRecord,
+  recordFile,
   recordAuthOfSealed,
   recordNameOk,
   isRecordSidecarName,
@@ -154,6 +155,23 @@ export function samePath(a: string, b: string): boolean {
   } catch {
     return a === b;
   }
+}
+
+/** The live seat folder, or `archive/<YYYY-MM>` directly under it. A link that resolves outside
+ *  that seat, or any other subfolder, is not this mailbox. */
+function inOwnMailbox(seatDir: string, folder: string): boolean {
+  let live: string;
+  let held: string;
+  try {
+    live = realpathSync(seatDir);
+    held = realpathSync(folder);
+  } catch {
+    return false;
+  }
+  if (held === live) return true;
+  const tail = relative(live, held);
+  const parts = tail.split(sep);
+  return parts.length === 2 && parts[0] === 'archive' && /^\d{4}-\d{2}$/.test(parts[1] ?? '');
 }
 
 /**
@@ -262,9 +280,10 @@ export function recordHits(root: string, session: string, id: string): { seat: s
   if (emitted && !NAME.test(id)) return [];
   const hits: { seat: string; path: string }[] = [];
   for (const seat of seatNamesOf(root, session)) {
-    const path = join(root, '.agents', 'send-drops', session, seat, looked);
+    const seatDir = join(root, '.agents', 'send-drops', session, seat);
+    const path = recordFile(seatDir, looked);
     if (emitted) {
-      const marker = join(root, '.agents', 'send-drops', session, seat, id);
+      const marker = join(dirname(path), id);
       if (isFile(marker) && isFile(path)) hits.push({ seat, path });
       continue;
     }
@@ -310,7 +329,7 @@ export function findRecord(hits: { seat: string; path: string }[], root: string,
   if (mine.length === 0) {
     return { kind: 'refused', why: `record ${verified[0]?.record.payload.id ?? id} is addressed to ${verified[0]?.record.payload.to ?? 'nobody'}, not to ${me}` };
   }
-  const seated = mine.filter((found) => samePath(recordDir(root, session, me), dirname(found.path)));
+  const seated = mine.filter((found) => inOwnMailbox(recordDir(root, session, me), dirname(found.path)));
   if (seated.length === 0) {
     return { kind: 'refused', why: `record ${mine[0]?.record.payload.id ?? id} is addressed to ${me}, and it waits in another seat's folder` };
   }
