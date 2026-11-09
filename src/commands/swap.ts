@@ -1,10 +1,12 @@
 import { homedir, userInfo } from 'node:os';
+import { join } from 'node:path';
 import { readArgs } from '../args.ts';
 import {
   anotherPaneRefusal,
   describeCaller,
   detachedRefusal,
   fileOwnerRefusal,
+  callerLabel,
   callerOf,
   isOwner,
   judgeCallerIn,
@@ -17,7 +19,7 @@ import {
 } from '../caller.ts';
 import { charterTargetOf } from '../client/owner-action-step.ts';
 import { leadsOwnTeamAdmits } from '../leads-authority.ts';
-import { charterGate } from '../charter/check.ts';
+import { charterGate, passCharterOwner } from '../charter/check.ts';
 import type { DelegateSources } from '../delegate.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { currentTeam } from '../file/current.ts';
@@ -295,7 +297,8 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
   if (extra !== undefined) return invocation(rawIo, io, json, `unexpected "${plainLine(extra)}"`);
 
   const walked = walkCaller(rawIo);
-  const gate = charterGate(home, { operation: 'swap', cwd: rawIo.cwd, path: charterTargetOf(rawIo.cwd, args.values.file) }, options.ownerSeatStore);
+  const charterPath = charterTargetOf(rawIo.cwd, args.values.file);
+  const gate = charterGate(home, { operation: 'swap', cwd: rawIo.cwd, path: charterPath }, options.ownerSeatStore);
   const peeked = !isOwner(walked) && sub === 'now' ? currentTeam(rawIo.cwd, undefined, now, home, false) : null;
   const placedCaller = peeked?.ok === true ? callerOf(rawIo, peeked.team.session) : null;
   // The orchestrator seat is refused, so that refusal must not leave an admission line.
@@ -324,10 +327,14 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
       dir: peeked.dir,
     });
   }
-  // A charter block is a deny the owner wrote. It wins over the default rule.
+  // A charter block refuses a seat. It wins over the default rule. The owner goes through
+  // with one warning and an audit line.
   if (gate.kind === 'block' && !isOwner(walked)) {
     refuse(rawIo, io, json, 'swap.caller', plainText(gate.message), `the owner widens the charter with team setup --edit`, undefined, 'owner-or-leads');
     return 'caller';
+  }
+  if (gate.kind === 'block') {
+    passCharterOwner(io, gate.message, { dir: join(charterPath, '.agents'), command: 'swap', caller: callerLabel(walked), now });
   }
   const covered = gate.kind === 'admit' && !isOwner(walked);
   const owner = isOwner(walked) || covered || leadNow;

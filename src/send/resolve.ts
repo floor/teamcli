@@ -9,7 +9,7 @@ import { readTeamConfig } from '../file/team-config.ts';
 import { agentList } from '../herdr.ts';
 import type { Io } from '../io.ts';
 import { AGENT_ID_PATTERN, findAgent, getAgent, type Agent } from '../registry/agents.ts';
-import { teamBinding } from '../registry/binding.ts';
+import { placedCallerTeam, teamBinding } from '../registry/binding.ts';
 import { findTeams, findTeamsByPreviousName, readTeams, teamIdOf, type RosterEntry, type TeamRecord } from '../registry/teams.ts';
 import { resolveSeatSettings } from '../config/apply.ts';
 import { agentIdOf } from '../config/read.ts';
@@ -114,16 +114,19 @@ function recordOfFolder(
   return found[0] as TeamRecord;
 }
 
+type ResolveIo = Pick<Io, 'cwd'> & Partial<Pick<Io, 'stderr' | 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>>;
+
 /**
  * The team a spec names, as a person wrote it: the agent id's own `reach.team`, the scope after
- * the `@`, the caller's own team for a `@<nickname>`, or — for a plain seat — the team file at
- * the caller's cwd, matched by the id the registry keys teams on, then by the name or session
+ * the `@`, the caller's own team for a `@<nickname>`, or — for a plain seat — the placed
+ * caller's own team when the pane proof places one, and otherwise the team file at the
+ * caller's cwd, matched by the id the registry keys teams on, then by the name or session
  * it may also be written as.
  */
 export function resolveTarget(
   home: string,
   spec: string,
-  io: Pick<Io, 'cwd'> & Partial<Pick<Io, 'stderr' | 'env'>>,
+  io: ResolveIo,
   live: LiveRead = liveFromHerdr,
 ): Target | ResolveProblem {
   const parsed = parseSpec(spec);
@@ -156,8 +159,11 @@ export function resolveTarget(
     return lookupInTeam(home, spec, found[0] as TeamRecord, parsed.target, live, true);
   }
   if (parsed.kind === 'nickname') return fromNickname(home, spec, parsed.nickname, io, live);
-  // A plain seat is the team whose root holds the cwd. The longest nested root wins, and a
+  // A placed caller keeps their own team. The folder's binding chooses the target only when
+  // the pane proof placed nobody. The longest nested root still wins on that path, and a
   // name that several teams carry, when the cwd sits in none of them, is not picked.
+  const placed = placedCallerTeam(home, io);
+  if (placed !== null) return lookupInTeam(home, spec, placed, parsed.seat, live, false);
   const binding = teamBinding(home, io.cwd, parsed.seat, io);
   if (binding.kind === 'ambiguous' || binding.kind === 'unreadable') return { error: binding.message, kind: 'ambiguous' };
   const loaded = readTeamConfig(binding.kind === 'bound' ? binding.team.root : io.cwd, { home });
@@ -234,30 +240,33 @@ function nicknameSeatsOf(home: string, team: TeamRecord, nickname: string): { se
 }
 
 /**
- * The seat a `@<nickname>` names: the caller's team first — the team file at its cwd and the
- * registry record keyed on it — then the other teams of that team's entity, each asked for a
- * roster line carrying the nickname. A caller outside any team's folder has neither, so every
- * team record is asked. Exactly one answer sends; several are refused, each named by the
+ * The seat a `@<nickname>` names: the caller's team first — the pane's team when that proof
+ * places one, otherwise the team file at the cwd and the registry record keyed on it — then
+ * the other teams of that team's entity, each asked for a roster line carrying the nickname.
+ * A caller outside any team's folder, and not placed by a pane, has neither, so every team
+ * record is asked. Exactly one answer sends; several are refused, each named by the
  * `<nickname>@<team>` spelling that picks it; none is refused, pointing at `team send --list`.
  */
 function fromNickname(
   home: string,
   spec: string,
   nickname: string,
-  io: Pick<Io, 'cwd'>,
+  io: ResolveIo,
   live: LiveRead,
 ): Target | ResolveProblem {
-  // The caller's own team: the file at its cwd names the registry record (by the id the registry
-  // keys on, then the name or session it may also be written as), and the file's `entity`
-  // stands in when that record carries none.
-  let self: TeamRecord | null = null;
-  let entity: string | null = null;
-  const loaded = readTeamConfig(io.cwd, { home });
-  if (loaded.ok) {
-    const record = recordOfFolder(home, spec, loaded);
-    if (record !== null && 'error' in record) return record;
-    self = record;
-    entity = self?.entity ?? loaded.team.entity ?? null;
+  // The caller's own team is the pane's team when the pane proof places one. Otherwise the
+  // file at the cwd names the registry record, and the file's `entity` stands in when that
+  // record carries none.
+  let self: TeamRecord | null = placedCallerTeam(home, io);
+  let entity: string | null = self?.entity ?? null;
+  if (self === null) {
+    const loaded = readTeamConfig(io.cwd, { home });
+    if (loaded.ok) {
+      const record = recordOfFolder(home, spec, loaded);
+      if (record !== null && 'error' in record) return record;
+      self = record;
+      entity = self?.entity ?? loaded.team.entity ?? null;
+    }
   }
   if (self !== null) {
     const own = nicknameSeatsOf(home, self, nickname);

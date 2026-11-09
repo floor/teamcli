@@ -665,20 +665,23 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         // the caller's `--abandon` or `--fresh`, which both start a new conversation.
         if (!abandon && !fresh) resume = resumeCandidate.id;
         else resumeNote = abandon ? 'abandoned by the caller' : 'started fresh by the caller';
-      } else if (pinned) {
+      } else if (pinned && !(fresh && clearedLaunch !== undefined)) {
         // The recorded launcher names another conversation, or resumes without naming one:
         // stopping the seat and running that line would resume something nothing proved. Nothing
         // is stopped, and the fresh start is not the caller's `--abandon` either: that line would
-        // run the same selection.
+        // run the same selection. `--fresh` is past this once the pin was stripped above: that
+        // write cleared the selection, and the launch runs the stripped line.
         return notReadyRefused(
           out,
           json,
           `${name}: its recorded launcher does not select the recorded conversation; left as it is (its launch line names a conversation of its own: clear that selection from its launch line for a fresh start)`,
         );
       } else if (abandon || fresh) {
-        // The caller's fresh start: the id the records bind is not put on the line. The line
-        // names no conversation of its own here, so running it as it is starts one.
-        if (carried.kind === 'refuse') noResume(carried.why);
+        // The caller's fresh start: the id the records bind is not put on the line. A `--fresh`
+        // whose pin was stripped starts from that line. Otherwise the line names no conversation
+        // of its own, so running it as it is starts one.
+        if (fresh && clearedLaunch !== undefined) resumeNote = 'started fresh by the caller';
+        else if (carried.kind === 'refuse') noResume(carried.why);
       } else {
         // No measured resume form on this CLI: stopping the seat would destroy a conversation
         // nothing could put back. The fresh start is the caller's explicit choice.

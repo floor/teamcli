@@ -328,6 +328,10 @@ export function compare(
   route?: ReachRoute,
   daemon?: WatchDaemonReading,
   queuedDrops?: ReadonlySet<string>,
+  /** The daemon health reading says this session's hosted watch is running: the same phase the
+   *  status note `watch: running in the daemon` reports. A session with no pane-watch record is
+   *  not missing a watch while that is true. */
+  hostedWatchRunning = false,
 ): Comparison {
   const rows: Row[] = [];
   const differences: Difference[] = [];
@@ -755,13 +759,21 @@ export function compare(
 
   if (live.running && anyRunning) {
     const beat = state.watch ? Date.parse(state.watch.heartbeat) : NaN;
-    if (!state.watch) {
-      differences.push({ what: 'no watch has run for this session', repair: `team watch --session ${session}` });
-    } else if (!(now.getTime() - beat <= 2 * watch.interval * 1000)) {
+    // A pane-watch record is one watch. The daemon's hosted watch for this session is the
+    // other, and `up` writes no pane record once the daemon carries it. The gap is real only
+    // when neither is running. The repair is the daemon's, not a pane `team watch`.
+    if (!state.watch && !hostedWatchRunning) {
+      differences.push({
+        what: 'no watch has run for this session',
+        repair: 'team daemon status, or the lead runs team daemon install',
+        who: "the team's lead",
+      });
+    } else if (state.watch && !(now.getTime() - beat <= 2 * watch.interval * 1000)) {
       const minutes = Number.isFinite(beat) ? Math.round((now.getTime() - beat) / 60_000) : null;
       differences.push({
         what: `the watch's last pass was ${minutes === null ? 'never recorded' : `${pluralCount(minutes, 'minute')} ago`}`,
-        repair: `team watch --session ${session}`,
+        repair: 'team daemon status, or the lead runs team daemon install',
+        who: "the team's lead",
       });
     }
   }

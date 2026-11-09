@@ -28,6 +28,7 @@ import { approvalOf } from '../src/approve/approval.ts';
 import { runStatus } from '../src/commands/status.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
+import type { DaemonHealth } from '../src/daemon/health.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { registerAgent } from '../src/registry/agents.ts';
@@ -49,6 +50,8 @@ const RECORD = { stage: 'ready' as const, pane: PANE, workspace: WORKSPACE, laun
 // The pids the pane holds now: the host restored the process, so they are not the launched ones.
 const RESTORED = { shell: 101, foreground: [201] };
 const RESTORED_LINE = 'restored; left as it is';
+const DAEMON_PID = 7;
+const EPOCH = `watch_${'cd'.repeat(16)}`;
 
 let base: string;
 let root: string;
@@ -206,6 +209,52 @@ function sources(
   };
 }
 
+/** The daemon hosts this session's watch: running, no pane of its own. Status reads that
+ *  record instead of reporting that no watch has run. */
+function hostedWatch(): DaemonHealth {
+  const startedAt = NOW.toISOString();
+  return {
+    daemon: 'teamcli',
+    socket: 'socket-acme',
+    state: 'running',
+    running: true,
+    pid: DAEMON_PID,
+    uid: null,
+    since: startedAt,
+    startedBy: 'manual',
+    version: '1',
+    gitHead: null,
+    heartbeatAt: startedAt,
+    heartbeatSeconds: 1,
+    features: null,
+    stuck: [],
+    roots: [{
+      root,
+      team: 'acme',
+      send: 'serving',
+      bus: 'serving',
+      why: null,
+      watch: {
+        routeId: 'route-acme',
+        root,
+        team: 'acme',
+        session: SESSION,
+        phase: 'running',
+        startedAt,
+        lastCycleAt: startedAt,
+        lastCycleOutcome: 'pass',
+        cycles: 1,
+        failures: 0,
+        effects: 'open',
+        required: true,
+        why: null,
+      },
+    }],
+    probe: { state: 'answered', at: startedAt },
+    why: null,
+  };
+}
+
 /** The world `team status` reads after the run: the same pane, process and conversation. */
 function liveWorld(live: string | undefined): Live {
   return {
@@ -296,6 +345,15 @@ test('the strong proof still adopts a seat whose conversation ties, and status r
   expect(seatState()?.launched).toEqual({ shell: RESTORED.shell, cli: RESTORED.foreground });
   expect(seatState()?.agent_session).toBe(SESSION_ID);
 
+  updateState(dir, (state) => {
+    const session = (state.sessions[SESSION] ??= emptySession());
+    session.watch = {
+      pid: DAEMON_PID,
+      epoch: EPOCH,
+      heartbeat: NOW.toISOString(),
+      started_at: NOW.toISOString(),
+    };
+  });
   const statusIo = testIo(root, { kind: 'owner' });
   const code = await runStatus(['--json'], statusIo, {
     live: () => liveWorld(SESSION_ID),
@@ -303,10 +361,16 @@ test('the strong proof still adopts a seat whose conversation ties, and status r
     standing: () => ({ kind: 'none' } as const),
     now: () => NOW,
     home,
+    alive: (pid: number) => pid === DAEMON_PID,
+    daemonHealth: async () => hostedWatch(),
   });
-  const doc = JSON.parse(statusIo.out) as { rows: { name: string; state: string; model: string }[] };
+  const doc = JSON.parse(statusIo.out) as {
+    rows: { name: string; state: string; model: string }[];
+    notes: string[];
+  };
   const row = doc.rows.find((entry) => entry.name === SEAT);
-  expect(code).toBe(0);
+  expect(code, statusIo.out).toBe(0);
+  expect(doc.notes.some((line) => line.includes('running in the daemon'))).toBe(true);
   expect(row?.state).toBe('idle');
   expect(row?.model.toLowerCase()).toBe('grok 4.7');
 });
