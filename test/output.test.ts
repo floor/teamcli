@@ -1013,6 +1013,18 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           issues: [{ id: 'issue-1', title: 'merge the contract branches', state: 'open', assignee: 'lead' }],
         }),
       ],
+      // The census includes team mcp setup, so the walk has a payload that matches its schema.
+      'team.mcp-setup': [
+        jsonEnvelope('team.mcp-setup', {
+          format: 1 as const,
+          seat: 'lead',
+          session: 'acme',
+          cwd: '/work/acme',
+          dry_run: false,
+          status: 'setup' as const,
+          changes: [{ kind: 'project-config' as const, action: 'prepare' as const }],
+        }),
+      ],
       'team.mcp': [
         jsonEnvelope('team.mcp', {
           format: 1 as const,
