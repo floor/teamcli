@@ -13,12 +13,14 @@
 // is refused rather than weakened into a guess.
 import type { Seat } from '../file/types.ts';
 import type { HerdrAgent, PaneProcesses } from '../herdr.ts';
+import { channelLaunchEnabled } from '../mcp/channel.ts';
 import type { SeatState } from '../state.ts';
 import { profileFor } from '../profiles/index.ts';
 import { readScreen } from '../watch/screen.ts';
 import { reportedAgentIsCli, reportedLiveAgent } from './agent.ts';
 import { seatProcessVerdict } from './identity.ts';
 import { usesLauncher } from './line.ts';
+import { featureDialog } from './reboot.ts';
 
 export type RestoreProof =
   /** The pane runs the conversation the launch recorded: the strongest proof there is. */
@@ -161,4 +163,65 @@ export function relaunchWithOwnLine(
     launch: seat.launch,
     ...(seat.modelFrom === undefined ? {} : { modelFrom: seat.modelFrom }),
   });
+}
+
+/** How long a restore waits for the seat's channel to answer before the quiet counts as a mismatch. */
+export const CHANNEL_RESTORE_WINDOW_MS = 2000;
+
+/** The step of that wait. The bound is the count of steps, so a clock that does not move still ends. */
+export const CHANNEL_RESTORE_STEP_MS = 200;
+
+const RESTORE_DIALOGS = new Set([
+  'permission',
+  'plan approval',
+  'confirmation',
+  'question',
+  'trust',
+  'login',
+  'exit question',
+]);
+
+/** A restored pane that must not be exited: a running turn, unsent text, or a dialog. */
+export function restorePaneBusy(cli: string, screen: string | null, status: string | undefined): boolean {
+  if (status === 'working') return true;
+  if (screen == null || screen === '') return false;
+  if (featureDialog(screen)) return true;
+  const kind = readScreen(cli, screen).kind;
+  return kind === 'working' || kind === 'unsent' || RESTORE_DIALOGS.has(kind);
+}
+
+export type RestoreRelaunch = 'launcher' | 'model' | 'channel';
+
+/**
+ * Why a proven restored seat is launched again from its recorded line. A launcher or a model
+ * that is not the record's is a mismatch even when the pane is busy: the caller holds it and
+ * types nothing. A channel the record declares, with no live answer, is a mismatch only while
+ * the pane is idle; a busy pane stays and the one step is logged.
+ */
+export function restoreRelaunch(input: {
+  seat: Pick<Seat, 'cli'> & { launch?: string; modelFrom?: Seat['modelFrom'] };
+  proof: RestoreProof;
+  screen: string | null;
+  status: string | undefined;
+  modelDiffers: boolean;
+  /** The record declares the channel and no live channel answered inside the restore window. */
+  channelQuiet: boolean;
+  /** The seat state's own launch line, when it is the line that declares the channel. */
+  recordedLaunch?: string;
+}): RestoreRelaunch | 'busy-line' | null {
+  if (input.proof.kind === 'none') return null;
+  const launch = input.seat.launch;
+  const launcher = launch !== undefined && usesLauncher({
+    cli: input.seat.cli,
+    launch,
+    ...(input.seat.modelFrom === undefined ? {} : { modelFrom: input.seat.modelFrom }),
+  });
+  const channel = input.channelQuiet && (channelLaunchEnabled(launch) || channelLaunchEnabled(input.recordedLaunch));
+  if (!launcher && !input.modelDiffers && !channel) return null;
+  if (restorePaneBusy(input.seat.cli, input.screen, input.status)) {
+    return launcher || input.modelDiffers ? 'busy-line' : null;
+  }
+  if (launcher) return 'launcher';
+  if (input.modelDiffers) return 'model';
+  return 'channel';
 }

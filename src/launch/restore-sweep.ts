@@ -163,6 +163,7 @@ export async function runRestoreSweepForRoute(input: RestoreSweepInput): Promise
       caller: OWNER,
       lockHeld: true,
       nonInteractive: true,
+      restore: true,
       ...(input.isClosing ? { isClosing: input.isClosing } : {}),
       onReport: (next) => {
         seen.report = next;
@@ -172,7 +173,10 @@ export async function runRestoreSweepForRoute(input: RestoreSweepInput): Promise
       const said = lastSaid(err, out);
       return { kind: 'refused', exit, ...(said === undefined ? {} : { detail: said }) };
     }
-    return { kind: 'ran', summary: restoreSummaryOf(seen.report.restoreBuckets), failed: exit !== 0 };
+    const summary = restoreSummaryOf(seen.report.restoreBuckets);
+    const note = seen.report.daemonHostNote;
+    if (note !== undefined && note !== '') summary.line = `${summary.line}; ${note}`;
+    return { kind: 'ran', summary, failed: exit !== 0 };
   } finally {
     lock.release();
   }

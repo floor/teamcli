@@ -10,7 +10,7 @@ import { sidebarRowsWord } from '../policy/types.ts';
 import type { SidebarIndicator } from '../settings/sidebar-policy.ts';
 import { profileFor } from '../profiles/index.ts';
 import type { Discovery, ResolveContext } from '../launchers/resolve.ts';
-import { cliWordList, launchCommandOrRefusal, pinnedRecordLine, resumeCarry, shellQuote } from '../profiles/profile.ts';
+import { cliWordList, launchCommandOrRefusal, namedResumeTarget, pinnedRecordLine, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import { resolvedCommand } from './resolve-flag.ts';
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
@@ -21,6 +21,7 @@ import { grokCommandDenyLine, grokCommandDenyPolicy } from './grok-command-deny.
 import { getRelativeDirOps } from '../send/drop-retention.ts';
 import type { GrokCommandDeny } from '../settings/grok-command-deny.ts';
 import { launchedCliBinary } from './line.ts';
+import { channelRestoreStep } from './reboot.ts';
 import type { WaitingRecord } from '../state.ts';
 import type { TeamFile } from '../file/types.ts';
 
@@ -217,6 +218,11 @@ export type Op =
        * holds unsent text. `detail` is the audit line's difference.
        */
       reload?: { detail: string };
+      /** Codex is on its feature-settings dialog. The close sends no key and chooses no
+       *  option; the steps after it launch the seat with the profile's pinned features.
+       *  `session` is the conversation that close re-proves on the pane. */
+      dialog?: true;
+      session?: string;
     }
   /** A seat relaunched in a fresh workspace had a recorded pane the host did not restore. Its
    *  recorded workspace is closed only here, after the seat is ready on its replacement, and only
@@ -478,6 +484,11 @@ export interface UpSeat {
      *  The step re-proves the pane (strongly, or weakly for a dead endpoint), then exits the CLI
      *  in place; the seat is launched through its own line in that same pane, never adopted. */
     ownLine?: { session?: string; endpoint?: true };
+    /** Codex is sitting on its feature-settings dialog. The workspace is closed with no key
+     *  and no menu choice, and the seat is launched again with the profile's pinned features.
+     *  `session` is the conversation the close re-proves immediately before it. */
+    dialog?: true;
+    session?: string;
     /**
      * The pane is back at its shell and still the seat's own: the launch runs in it, and nothing
      * is created or closed. The live run re-reads the pane and its workspace immediately before
@@ -646,6 +657,9 @@ export interface UpInput {
   /** The daemon health cannot say whether a hosted watch owns the route. No pane watch is
    *  started, and the plan says why rather than leaving the reader to guess. */
   watchUnknown?: boolean;
+  /** After a restore: the daemon's reading for this session. The plan opens no Watch pane.
+   *  It names a watch or a bus root the daemon is not hosting. */
+  restoreDaemon?: { watch: boolean; bus: boolean };
   /** When false, no watch is started: a flagless watch started in `root` would
    *  not read the file this plan was built from. Absent means start one, as before. */
   startWatch?: boolean;
@@ -1106,20 +1120,29 @@ export function upPlan(input: UpInput): Step[] {
       });
       // The plan's own line. It carries no `do`: the re-tie is the run step above, so a walk
       // that stops before it leaves the seat exactly as the host restored it.
-      steps.push({ kind: 'skip', text: `${seat.name}: restored and re-tied: ${seat.adopted.sentence}; left as it is` });
+      repaint(seat, seat.adopted.pane, seat.adopted.workspace);
+      const channel = channelRestoreStep(seat.launch);
+      steps.push({
+        kind: 'skip',
+        text: `${seat.name}: restored and re-tied: ${seat.adopted.sentence}; left as it is${channel === null ? '' : `; ${channel}`}`,
+      });
       continue;
     }
     if (seat.restored) {
       // The seat keeps its pane; its sidebar is painted from the record like a ready seat's.
+      // A channel launch that did not come back names the seat and the one step, the same
+      // sentence an adopted channel seat gets.
       repaint(seat, seat.restored.pane ?? seat.pane, seat.restored.workspace ?? seat.workspace);
+      const channel = channelRestoreStep(seat.launch);
+      const channelText = channel === null ? '' : `; ${channel}`;
       steps.push({
         kind: 'skip',
-        text: `${seat.name}: ${seat.restored.detail}`,
+        text: `${seat.name}: ${seat.restored.detail}${channelText}`,
         do: {
           do: 'record',
           seat: seat.name,
           record: { kind: 'ready' },
-          detail: `  ${seat.restored.detail}\n`,
+          detail: `  ${seat.restored.detail}\n${channel === null ? '' : `${seat.name}: ${channel}\n`}`,
           launched: seat.restored.launched,
           ...(seat.restored.pane === undefined ? {} : { pane: seat.restored.pane }),
           ...(seat.restored.workspace === undefined ? {} : { workspace: seat.restored.workspace }),
@@ -1530,11 +1553,13 @@ export function upPlan(input: UpInput): Step[] {
           steps.push({
             kind: 'run',
             argv: herdr(session, 'workspace', 'close', repair.workspace),
-            note: reload
-              ? 'closed without input, at an idle prompt: its declared model, effort or rules differ from the launch'
-              : drift
-                ? 'closed without input: its model drifted from the file'
-                : 'closed without input: its pane no longer holds the process team launched',
+            note: repair.dialog
+              ? 'closed without choosing a dialog option; launched again with the coordination flag'
+              : reload
+                ? 'closed without input, at an idle prompt: its declared model, effort or rules differ from the launch'
+                : drift
+                  ? 'closed without input: its model drifted from the file'
+                  : 'closed without input: its pane no longer holds the process team launched',
             do: {
               do: 'repair',
               seat: seat.name,
@@ -1544,6 +1569,8 @@ export function upPlan(input: UpInput): Step[] {
               launched: repair.launched,
               ...(drift ? { drift } : {}),
               ...(reload ? { reload } : {}),
+              ...(repair.dialog ? { dialog: true as const } : {}),
+              ...(repair.session === undefined ? {} : { session: repair.session }),
             },
           });
         }
@@ -1572,8 +1599,12 @@ export function upPlan(input: UpInput): Step[] {
     // What the seat's record keeps as its launch line when this run records it. A resolved
     // launch records the line the plan built, so check and restart compare that command.
     // Every other launch keeps the base recipe, with the profile's pins placed where the
-    // launch puts them, never the expanded command.
-    const recordLine = fromResolver ? command : denyRecordLine ?? pinnedRecordLine(profile.cli, seat.launch, profile.features);
+    // launch puts them, never the expanded command. A resume id this run appended rides the
+    // command only: the record keeps the recipe, so a later fresh start is not blocked by it.
+    const pinned = denyRecordLine ?? pinnedRecordLine(profile.cli, seat.launch, profile.features);
+    const addedResume = namedResumeTarget(profile.cli, command) !== null
+      && namedResumeTarget(profile.cli, seat.launch) === null;
+    const recordLine = addedResume ? pinned : (fromResolver ? command : pinned);
     // A managed Codex seat's endpoint, decided from the same signed policy that shaped the line:
     // the launch must be the Codex binary itself (a wrapper's own endpoint is not ours to bind),
     // and a `--remote` or `--no-daemon` the file already names is a collision, refused rather
@@ -1807,6 +1838,15 @@ export function upPlan(input: UpInput): Step[] {
         });
       }
     }
+  }
+  if (input.restoreDaemon !== undefined) {
+    if (!input.restoreDaemon.watch) {
+      steps.push({ kind: 'skip', text: "watch: the daemon does not host this session's watch" });
+    }
+    if (!input.restoreDaemon.bus) {
+      steps.push({ kind: 'skip', text: "bus: the daemon does not host this session's bus root" });
+    }
+    return steps;
   }
   if (input.watchAlive || input.startWatch === false) return steps;
   if (input.watchUnknown) {

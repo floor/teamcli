@@ -75,6 +75,8 @@ import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBin
 import { executePlan, launchKind, restoreSummaryOf, type Report, type RestoreSweepSummary } from '../launch/execute.ts';
 import { launcherCoverRefusal } from '../launch/launcher-cover.ts';
 import { loadTeamLaunchers, rawAgentSession } from '../launch/resolve-flag.ts';
+import { channelLaunchEnabled } from '../mcp/channel.ts';
+import { inboxLive } from '../mcp/inbox.ts';
 import { channelLobbyFolder, claudeChannelSeat } from '../mcp/launch-config.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
 import { isSocketFile, launchCodexEndpoint, processStartOf, recordedEndpointState, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
@@ -83,7 +85,8 @@ import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../daemon/p
 import { inspectRecordedCodexEndpoint, readRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
 import { currentBriefClaim, currentBriefEpochs, deliverBriefForAttribution, GENERAL_BRIEF_SHA256, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { launchedIdentity, paneHoldsOnlyShell, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
-import { restoreProof, relaunchWithOwnLine } from '../launch/restore-proof.ts';
+import { CHANNEL_RESTORE_STEP_MS, CHANNEL_RESTORE_WINDOW_MS, restorePaneBusy, restoreProof, restoreRelaunch } from '../launch/restore-proof.ts';
+import { featureDialogClose, restoredPaneByConversation } from '../launch/reboot.ts';
 import { launchLineFinding, launchedCliBinary } from '../launch/line.ts';
 import { launchRefusal, readEntityModelRule, type EntityModelRule } from '../launch/model-guard.ts';
 import { charterGate } from '../charter/check.ts';
@@ -105,7 +108,7 @@ import { lobbyOf } from '../lobby/recorded.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 import { codexDaemonForSeat } from '../policy/codex-daemon.ts';
-import { conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
+import { conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote, statusOnLine } from '../profiles/profile.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { ensureSeatLine, registerRun } from '../registry/sync.ts';
@@ -124,11 +127,11 @@ import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
 import { leftoverName } from './remove.ts';
 import { launchConcurrency, launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
-import { canShowModel, modelDiffers, recordSignedModel, seatModel } from '../status/statusline.ts';
-import { watchSitting } from '../watch/liveness.ts';
+import { bannerModel, canShowModel, modelDiffers, recordSignedModel, seatModel, wrapperSeat } from '../status/statusline.ts';
+import { daemonRouteGaps, daemonRouteHost, watchSitting } from '../watch/liveness.ts';
 import { busLabel, watchIdentity, watchLabel } from '../watch/pane.ts';
 import { busAnswers } from '../bus/follow.ts';
-import { readScreen } from '../watch/screen.ts';
+import { readScreen, statusRow } from '../watch/screen.ts';
 import { placedStartFolders, seatCwdRefusal, seatStart } from '../worktree/place.ts';
 import { registerInbox, type InboxRegistration } from '../mcp/register.ts';
 import { expiryPhrase } from '../client/duration-policy.ts';
@@ -663,6 +666,52 @@ function vacatedWorkspace(
   return { workspace: left, pane, replaced: true };
 }
 
+/** True when the record declares the channel and no live listener answers inside the restore window. */
+async function channelRestoreQuiet(
+  root: string,
+  session: string,
+  seat: string,
+  sources: { sleep?: (ms: number) => Promise<void> },
+): Promise<boolean> {
+  const drop = join(root, '.agents', 'send-drops', session, seat);
+  let waited = 0;
+  for (;;) {
+    if (inboxLive(drop, root, session, seat).live) return false;
+    if (waited >= CHANNEL_RESTORE_WINDOW_MS) return true;
+    const step = Math.min(CHANNEL_RESTORE_STEP_MS, CHANNEL_RESTORE_WINDOW_MS - waited);
+    if (sources.sleep) await sources.sleep(step);
+    waited += step;
+    if (!sources.sleep) return true;
+  }
+}
+
+/** A restored pane whose model row the record cannot accept. A bare Claude seat's status line
+ *  names Claude's families only, so a provider banner that names another model — or a status
+ *  row of the model shape that names none — differs when the record names a model. A wrapper
+ *  is read by `seatModel`. A pane with no such row stays unread. */
+function restoredModelUnread(
+  seat: Seat,
+  screen: string | null | undefined,
+  declared: { model: string; version: string },
+): boolean {
+  if (screen == null || screen === '') return false;
+  const row = statusRow(seat.cli, screen);
+  if (row !== null) {
+    const hit = statusOnLine(seat.cli, row);
+    if (hit === 'unreadable') return true;
+    if (hit === null && /API Usage Billing/.test(row)) return true;
+  }
+  if (wrapperSeat(seat)) return false;
+  const banner = bannerModel(screen);
+  if (banner === null) return false;
+  const words = `${declared.model} ${declared.version}`
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length >= 3 && /[a-z]/.test(word));
+  const id = banner.toLowerCase();
+  return !words.some((word) => id.includes(word));
+}
+
 function seatPlan(
   standing: Standing,
   team: TeamFile,
@@ -697,6 +746,10 @@ function seatPlan(
   endpointRelaunch: (seat: Seat, recorded: SeatState, launch: string) => boolean = () => false,
   /** The seat's recorded worktree, when one is recorded. Cursor and Grok start there when their cwd is `.`. */
   worktree?: string,
+  /** A pane the record does not name, read when a restore may have minted a new id. */
+  processOf: (pane: string) => PaneProcesses | null = () => null,
+  /** The record declares the channel and no live channel answered inside the restore window. */
+  channelQuiet = false,
 ): UpSeat {
   // After `team down` the seat has no state record, only what down retained. That is still the
   // state's half of the resume binding: without it the registry's recorded conversation was
@@ -971,6 +1024,29 @@ function seatPlan(
         };
       }
       if (drift.kind === 'hold') return { ...planned, stage: 'ready', driftHold: drift.detail };
+      // The record declares the channel and nothing is answering. An idle pane is exited in
+      // place and launched again from that line; a working, unsent, or dialog pane stays.
+      if (
+        channelQuiet
+        && recorded.pane
+        && !restorePaneBusy(seat.cli, screenOf(recorded.pane), onRecordedPane?.status)
+      ) {
+        const resumeHold = uncarryableResume(planned, restoredSession);
+        if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+        return {
+          ...planned,
+          pane: recorded.pane,
+          workspace: recorded.workspace,
+          repair: {
+            pane: recorded.pane,
+            workspace: recorded.workspace,
+            launched: recorded.launched,
+            cli: seat.cli,
+            ownLine: { session: restoredSession },
+          },
+          resume: restoredSession,
+        };
+      }
       // The recorded managed endpoint died, or the seat is live with no usable record: the
       // pane's CLI is not the seat's running form any more. It is exited in place and the seat
       // is launched again there through its own line — the launch starts a fresh endpoint and
@@ -1023,6 +1099,107 @@ function seatPlan(
   // so the drift reading (which decides closes) is not consulted here; the next `up` reads the
   // seat as the record's own and handles a drift the way it always does.
   let restoreRefusal: string | undefined;
+  const dialogClose = (pane: string, paneProcesses: PaneProcesses | null): boolean => {
+    const entry = agents?.find((agent) => agent.pane === pane);
+    return featureDialogClose({
+      screen: screenOf(pane),
+      cli: seat.cli,
+      launched: recorded?.launched,
+      processes: paneProcesses,
+      foreground: foregroundOf(pane),
+      liveSession: entry?.session,
+      recordedSession: continuitySession ?? undefined,
+      status: entry?.status,
+    });
+  };
+  if (recorded.pane && recorded.workspace && recorded.launched && seat.cli === 'codex' && dialogClose(recorded.pane, processes[seat.name] ?? null)) {
+    const resumeHold = continuitySession === null ? undefined : uncarryableResume(planned, continuitySession);
+    if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+    return {
+      ...planned,
+      stage: undefined,
+      pane: undefined,
+      workspace: undefined,
+      repair: {
+        pane: recorded.pane,
+        workspace: recorded.workspace,
+        launched: recorded.launched,
+        cli: seat.cli,
+        dialog: true,
+        ...(continuitySession === null ? {} : { session: continuitySession }),
+      },
+      ...(continuitySession === null ? {} : { resume: continuitySession }),
+    };
+  }
+  if (
+    recorded.pane && recorded.workspace && recorded.launched && continuitySession !== null
+    && agents !== null && !agents.some((agent) => agent.pane === recorded.pane)
+  ) {
+    const match = restoredPaneByConversation({
+      home,
+      session,
+      seat: seat.name,
+      cli: seat.cli,
+      recordedPane: recorded.pane,
+      recordedSession: continuitySession,
+      agents,
+      foreground: foregroundOf,
+      processes: processOf,
+    });
+    if (match && seat.cli === 'codex' && dialogClose(match.pane, processOf(match.pane))) {
+      const resumeHold = uncarryableResume(planned, continuitySession);
+      if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+      return {
+        ...planned,
+        stage: undefined,
+        pane: undefined,
+        workspace: undefined,
+        repair: {
+          pane: match.pane,
+          workspace: match.workspace,
+          launched: recorded.launched,
+          cli: seat.cli,
+          dialog: true,
+          session: continuitySession,
+        },
+        resume: continuitySession,
+      };
+    }
+    const next = match === null ? null : launchedIdentity(processOf(match.pane));
+    const matchedStatus = match === null ? undefined : agents.find((agent) => agent.pane === match.pane)?.status;
+    if (match && next && channelQuiet && !restorePaneBusy(seat.cli, screenOf(match.pane), matchedStatus)) {
+      const resumeHold = uncarryableResume(planned, continuitySession);
+      if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+      return {
+        ...planned,
+        pane: match.pane,
+        workspace: match.workspace,
+        repair: {
+          pane: match.pane,
+          workspace: match.workspace,
+          launched: recorded.launched,
+          cli: seat.cli,
+          ownLine: { session: continuitySession },
+        },
+        resume: continuitySession,
+      };
+    }
+    if (match && next) {
+      return {
+        ...planned,
+        stage: 'ready',
+        adopted: {
+          pane: match.pane,
+          workspace: match.workspace,
+          recordedLaunched: recorded.launched,
+          launched: next,
+          via: 'session',
+          sentence: 'its conversation is the one the record names',
+          session: continuitySession,
+        },
+      };
+    }
+  }
   if (verdict === 'replaced' && recorded.pane && recorded.workspace && recorded.launched) {
     const proof = restoreProof({
       seat,
@@ -1033,31 +1210,54 @@ function seatPlan(
       recordedSession: continuitySession ?? undefined,
       screen: screenOf(recorded.pane),
     });
+    const live = effectiveSeatOf(seat, planned);
+    const paneStatus = known.find((agent) => agent.pane === recorded.pane)?.status;
+    const text = screenOf(recorded.pane);
+    const shown = text != null && text !== '' && canShowModel(live) && live.version
+      ? seatModel(live, text)
+      : null;
+    const declared = live.version ? { model: live.model, version: live.version } : null;
+    const differs = declared !== null && (
+      (shown !== null && modelDiffers(shown, declared))
+      || restoredModelUnread(live, text, declared)
+    );
+    const why = proof.kind === 'none' ? null : restoreRelaunch({
+      seat: live,
+      proof,
+      screen: text,
+      status: paneStatus,
+      modelDiffers: differs,
+      channelQuiet,
+      ...(recorded.launch_line === undefined ? {} : { recordedLaunch: recorded.launch_line }),
+    });
     if (proof.kind === 'none') {
       restoreRefusal = proof.why;
-    } else if (proof.kind === 'session' && continuitySession !== null
-      && relaunchWithOwnLine(effectiveSeatOf(seat, planned), recorded, proof)) {
-      // A seat whose own launch line carries what the bare restored CLI does not (a wrapper's
-      // alternate endpoint) is never adopted in place: the bare CLI would fail every turn. The
-      // bare CLI is exited in its recorded pane and the seat is launched again there through
-      // its own line plus `--resume <the proven conversation>`. The plan reads the pane here,
-      // so a dry run and a live run hold a working or unsent pane the same way: nothing is
-      // typed into it. The line checked is the one the relaunch would run — the record's
-      // launch, not the file's — and a conversation that line cannot carry stops the relaunch
-      // before any key is typed.
-      const held = replacedScreenRefusal(seat, recorded.pane, screenOf, known.find((agent) => agent.pane === recorded.pane)?.status);
-      if (held) {
-        return {
-          ...planned,
-          stage: 'ready',
-          sessionDoubt: held.why,
-          ...(held.working ? { doubtWorking: true } : {}),
-        };
-      }
-      const resumeHold = uncarryableResume(planned, continuitySession);
-      if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+    } else if (why === 'busy-line') {
+      // A launcher or a model that is not the record's, on a pane that is working, unsent, or
+      // in a dialog: nothing is typed. The working and unsent sentences stay the ones the close
+      // used to give.
+      const held = replacedScreenRefusal(seat, recorded.pane, screenOf, paneStatus);
       return {
         ...planned,
+        stage: 'ready',
+        sessionDoubt: held?.why ?? 'its pane holds a dialog; nothing closed',
+        ...(held?.working ? { doubtWorking: true } : {}),
+      };
+    } else if (why !== null) {
+      // The bare CLI, another model, or a channel the record declares and nothing is answering:
+      // exit in place and launch the recorded line again. The resume id rides that command. It
+      // is not written into the stored launch line. A conversation that line cannot carry stops
+      // the relaunch before any key is typed.
+      const proven = proof.kind === 'session' && continuitySession !== null ? continuitySession : null;
+      const resumeHold = proven === null ? undefined : uncarryableResume(planned, proven);
+      if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+      const recordedLine = recorded.launch_line;
+      const launch = why === 'channel' && recordedLine !== undefined && !channelLaunchEnabled(planned.launch) && channelLaunchEnabled(recordedLine)
+        ? recordedLine
+        : planned.launch;
+      return {
+        ...planned,
+        launch,
         pane: recorded.pane,
         workspace: recorded.workspace,
         repair: {
@@ -1065,9 +1265,9 @@ function seatPlan(
           workspace: recorded.workspace,
           launched: recorded.launched,
           cli: seat.cli,
-          ownLine: { session: continuitySession },
+          ownLine: proven === null ? {} : { session: proven },
         },
-        resume: continuitySession,
+        ...(proven === null ? {} : { resume: proven }),
       };
     } else if ((proof.kind === 'session' || proof.kind === 'cli') && endpointRelaunch(seat, recorded, planned.launch)) {
       // A Codex seat whose recorded managed endpoint died, or that is live with no usable
@@ -1433,6 +1633,9 @@ export type UpInternal = {
    *  owner, neither prompted nor closed. The daemon's restore sweep runs detached and passes
    *  this. */
   nonInteractive?: boolean;
+  /** This run is a restore pass. It checks the daemon's watch and bus root and opens no
+   *  Watch pane, including when every seat was already in place. */
+  restore?: boolean;
 };
 
 type UpAllTeamEntry = {
@@ -1709,6 +1912,7 @@ async function runUpAll(
         caller: { kind: 'owner' },
         lockHeld: !dry,
         nonInteractive: true,
+        restore: true,
         onReport: (next) => {
           seen.report = next;
         },
@@ -2364,6 +2568,28 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       const launchRecords = Object.entries(recorded)
         .filter(([name, seat]) => seat.stage === 'ready' && seat.pane !== undefined && seat.workspace !== undefined && seat.launched !== undefined && seat.waiting === undefined && seatOfFile(name, seat, declared));
       const restorePanes = new Set(launchRecords.map(([, seat]) => seat.pane).filter((pane) => pane !== undefined));
+      // A restored pane can come back under an id the record has never stored. It is this
+      // state's when the running CLI and the conversation id match the agent record. The title
+      // is not read. A pane that does not match still refuses below.
+      const conversationPanes = new Set<string>();
+      if (sources.launch?.foreground && sources.launch.processInfo) {
+        for (const [name, held] of launchRecords) {
+          const declaredSeat = team.seats.find((item) => item.name === name);
+          if (!declaredSeat || held.pane === undefined || held.agent_session === undefined) continue;
+          const match = restoredPaneByConversation({
+            home: sources.home,
+            session,
+            seat: name,
+            cli: declaredSeat.cli,
+            recordedPane: held.pane,
+            recordedSession: held.agent_session,
+            agents,
+            foreground: (pane) => sources.launch?.foreground(session, pane) ?? null,
+            processes: (pane) => sources.launch?.processInfo?.(session, pane) ?? null,
+          });
+          if (match) conversationPanes.add(match.pane);
+        }
+      }
       // The workspace is part of the same reading: a restore can leave a second pane beside the
       // seat's own in it, and the weak proof is the reading that refuses that seat when the
       // second pane leaves no way to tell which is the seat. The pane itself is never touched.
@@ -2386,6 +2612,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
           !waitingPanes.has(agent.pane) &&
           !launchedPanes.has(agent.pane) &&
           !restorePanes.has(agent.pane) &&
+          !conversationPanes.has(agent.pane) &&
           !restoreWorkspaces.has(agent.workspace),
       );
       if (unknown.length) {
@@ -2519,6 +2746,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   let launchRule: EntityModelRule | null = null;
   const ruleOf = (): EntityModelRule => (launchRule ??= readEntityModelRule(sources.home, team));
   for (const seat of team.seats) {
+    const held = recorded?.seats[seat.name];
+    const declaresChannel = channelLaunchEnabled(held?.launch_line) || channelLaunchEnabled(seat.launch);
+    const restoring = held?.launched !== undefined
+      && seatProcessVerdict(held.launched, processes[seat.name] ?? null) === 'replaced';
+    const quiet = held?.pane !== undefined && restoring && declaresChannel
+      ? await channelRestoreQuiet(root, session, seat.name, sources)
+      : false;
     const planned = seatPlan(
       standing,
       team,
@@ -2545,6 +2779,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       (pane) => sources.launch?.foreground(session, pane) ?? null,
       endpointRelaunch,
       worktreeOf(recorded, seat.name)?.path,
+      (pane) => sources.launch?.processInfo?.(session, pane) ?? null,
+      quiet,
     );
     // The granted seat's own pane is not relaunched and not closed. The skip is the whole of
     // that seat's plan, including a repair the owner's `up` would have performed.
@@ -2864,6 +3100,14 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       if (raw !== undefined) seat.resolveSession = raw;
     }
   }
+  // A restore, including one that only repairs a feature-settings dialog, never opens a
+  // Watch pane. The same reading says whether the daemon carries this session's watch and
+  // this checkout's bus, and the plan names whichever is missing.
+  const routeHost = internal?.restore === true
+    || seats.some((seat) => seat.restored !== undefined || seat.adopted !== undefined || seat.repair?.dialog === true)
+    ? daemonRouteHost(daemon, root, session)
+    : undefined;
+  const daemonLine = routeHost === undefined ? '' : daemonRouteGaps(routeHost).join('; ');
   const buildPlan = () => upPlan({
     root,
     session,
@@ -2877,6 +3121,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     ...(watchPid !== null ? { watchPid } : {}),
     ...(watchHold !== null ? { watchHold } : {}),
     ...(watchUnknown ? { watchUnknown: true } : {}),
+    ...(routeHost === undefined ? {} : { restoreDaemon: routeHost }),
     watchLine: (sources.watchCommand ?? watchCommand)(session),
     ...(watchFile ? { watchFile } : {}),
     ...(startBus
@@ -3877,7 +4122,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       restoreSeats: seats,
       ...(internal?.isClosing ? { isClosing: internal.isClosing } : {}),
     });
-    internal?.onReport?.(report);
+    internal?.onReport?.(daemonLine === '' ? report : { ...report, daemonHostNote: daemonLine });
     // A fresh install minted a binding for every seat this run planned to launch. A seat whose
     // line ran keeps the successor `sessionStarted` wrote back. A seat whose line never ran —
     // refused before it, or its step left out — never loaded the settings file that names the
@@ -4032,7 +4277,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     const pullOnlyLine = pullOnly
       .map((one) => `pull-only: ${plainText(one.seat)} (${plainText(one.why)})`)
       .join('; ');
-    const summaryLine = plainText(restoreSummary.line) + (pullOnlyLine === '' ? '' : `; ${pullOnlyLine}`);
+    const summaryLine = [plainText(restoreSummary.line), pullOnlyLine, daemonLine].filter((part) => part !== '').join('; ');
     const cleanedRestoreSummary: RestoreSweepSummary = {
       ...restoreSummary,
       refused_seats: restoreSummary.refused_seats.map((entry) => ({
