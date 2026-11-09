@@ -21,9 +21,9 @@ import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval, type Standing } from '../src/store/store.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
-import { watchLabel } from '../src/watch/pane.ts';
 import { newMemory, NUDGE_TEXT, pass } from '../src/watch/pass.ts';
 import { CLAUDE_IDLE, testIo, recordRenames } from './helpers.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 
 // The example with an operator seat of its own, so the leads are two named seats and the workers
 // stand apart: the file's `operator` names the operator, not the coordinator.
@@ -362,7 +362,7 @@ function watchSources(home: string, over: Partial<WatchSources> = {}): WatchSour
 }
 
 describe('the watch `up` starts', () => {
-  test('its own workspace, the folder it runs in, file and pane recorded in the state', async () => {
+  test('opens the seats and no watch pane', async () => {
     const { home } = fresh();
     const root = join(base, 'acme');
     mkdirSync(root);
@@ -377,26 +377,15 @@ describe('the watch `up` starts', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(['--file', custom], io, upSources(home, made));
     expect(code, io.out + io.err).toBe(0);
-    // Three workspaces: the two seats' and the watch's own, started in the folder the watch reads.
-    expect(made.creates.map((one) => one.label)).toEqual(['coordinator', 'operator', watchLabel('acme')]);
-    expect(made.creates[2]?.cwd).toBe(customDir);
-    // Found by the exact command `up` runs, never a substring: a seat's launch line carries
-    // its rules, which may themselves contain the word watcher.
-    const run = made.runs.find((one) => one.command === watchCommand(SESSION));
-    expect(run?.command).toContain(' watch');
-    expect(run?.command).toContain(`--session ${SESSION}`);
-    expect(run?.command).not.toContain('--file');
-    expect(run?.pane).toBe('w3:p1');
-    expect(io.err).toContain('watch: started\n');
+    expect(made.creates.map((one) => one.label)).toEqual(['coordinator', 'operator']);
+    expect(made.runs.some((one) => one.command === watchCommand(SESSION))).toBe(false);
+    expect(io.err).not.toContain('watch: started');
     const state = readState(customDir).sessions[SESSION];
-    expect(state?.watchdog).toEqual({ file: custom, pane: 'w3:p1' });
-    expect(state?.watch?.pane).toBe('w3:p1');
-    expect(state?.watch?.workspace).toBe('w3');
-    expect(state?.watch?.heartbeat).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-    expect(state?.watch?.pid).toBeUndefined();
+    expect(state?.watch).toBeUndefined();
+    expect(state?.watchdog).toBeUndefined();
   });
 
-  test('a file in the `.agents` subfolder is read through the record, from the start folder above it', async () => {
+  test('a hosted loop given the team file writes no pane record', async () => {
     const { home } = fresh();
     const root = join(base, 'acme');
     mkdirSync(root);
@@ -411,36 +400,21 @@ describe('the watch `up` starts', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(['--file', custom], io, upSources(home, made));
     expect(code, io.out + io.err).toBe(0);
-    expect(made.creates[2]?.cwd).toBe(root);
-    expect(readState(join(root, '.agents')).sessions[SESSION]?.watchdog).toEqual({ file: custom, pane: 'w3:p1' });
-    expect(readState(root).sessions[SESSION]?.watchdog).toBeUndefined();
+    expect(made.creates.map((one) => one.label)).toEqual(['coordinator', 'operator']);
+    expect(made.runs.some((one) => one.command === watchCommand(SESSION))).toBe(false);
+    expect(io.err).not.toContain('watch: started');
+    expect(readState(join(root, '.agents')).sessions[SESSION]?.watch).toBeUndefined();
 
-    // The recorded pane's own call starts in `root` — a different folder from the team file's —
-    // and finds the file the record names. Only that file can load: no `team.yaml` is in
-    // `.agents`, so a run reading `root` alone would stop at "no team file here".
-    // What `up` recorded for the pane whose call this is: the pass keeps its pane and workspace.
-    const handOver = readState(join(root, '.agents')).sessions[SESSION]?.watch;
-    let held: { pid?: number; heartbeat?: string; pane?: string; workspace?: string; started_at?: string } | undefined;
-    const pane = testIo(root, { kind: 'pane', pane: 'w3:p1' });
-    const ran = await runWatch(['--session', SESSION], pane, watchSources(home, {
-      ownPane: () => ({ pane: 'w3:p1', workspace: 'w3' }),
-      wait: async () => {
-        held = readState(join(root, '.agents')).sessions[SESSION]?.watch;
-        return false;
-      },
-    }));
+    // The file is not the default name beside the checkout. The hosted loop is given it and
+    // writes no pane record of its own.
+    const pane = testIo(root, { kind: 'owner' });
+    const ran = await runWatch(['--session', SESSION, '--file', custom], pane, withHostedLoop(watchSources(home, {
+      wait: async () => false,
+    })));
     expect(ran, pane.err + pane.out).toBe(0);
     expect(pane.err).toBe('');
-    // Its pass writes where `up` wrote: the team file's folder, and the pane and workspace the
-    // hand-over recorded. The first beat also carries the instant this watch reached its loop,
-    // kept for as long as that pid owns the record.
-    expect(held).toEqual({
-      pid: 4242,
-      heartbeat: NOW.toISOString(),
-      pane: handOver?.pane,
-      workspace: handOver?.workspace,
-      started_at: NOW.toISOString(),
-    });
+    expect(pane.out).toContain(`watching the session "${SESSION}"`);
+    expect(readState(join(root, '.agents')).sessions[SESSION]?.watch).toBeUndefined();
   });
 
   test('a watch whose pid is alive is never started over', async () => {
@@ -485,24 +459,26 @@ describe('a second watch', () => {
       session.watch = { pid: 99, heartbeat: '2026-10-03T14:01:00Z' };
     });
 
-    // A second watch — a process with no pane and not the recorded pid — types nothing and reads
-    // nothing: a run outside herdr with no terminal is the owner's to make, and this one is not.
+    // A hand-run with no terminal only prints the daemon view. It does not enter the loop.
+    const absent = `team watch: the daemon does not host session ${SESSION}\n`;
+    const before = readFileSync(join(customDir, 'team.state.json'), 'utf8');
     const second = testIo(customDir, { kind: 'owner-no-tty' });
     const refused = await runWatch(['--session', SESSION], second, watchSources(home, { alive: () => true }));
-    expect(refused).toBe(1);
-    expect(second.err).toContain('only the owner or a placed seat runs this, from a terminal outside herdr or its own pane');
+    expect(refused).toBe(0);
+    expect(second.out).toBe(absent);
+    expect(second.err).toBe('');
+    expect(readFileSync(join(customDir, 'team.state.json'), 'utf8')).toBe(before);
 
-    // The recorded pid itself, run with no terminal: the watch lives in a pane of its own now, so
-    // a process outside a terminal is nobody's watch — the same refusal, for the pid too, and the
-    // file stays unread.
     updateState(customDir, (state) => {
       const session = state.sessions[SESSION];
       if (session?.watch) session.watch.pid = process.pid;
     });
+    const afterPid = readFileSync(join(customDir, 'team.state.json'), 'utf8');
     const own = testIo(customDir, { kind: 'owner-no-tty' });
     const ran = await runWatch(['--session', SESSION], own, watchSources(home, { alive: () => true, pid: process.pid }));
-    expect(ran).toBe(1);
-    expect(own.err).toContain('only the owner or a placed seat runs this, from a terminal outside herdr or its own pane');
-    expect(readState(customDir).sessions[SESSION]?.watchdog).toEqual({ file: custom });
+    expect(ran).toBe(0);
+    expect(own.out).toBe(absent);
+    expect(own.err).toBe('');
+    expect(readFileSync(join(customDir, 'team.state.json'), 'utf8')).toBe(afterPid);
   });
 });

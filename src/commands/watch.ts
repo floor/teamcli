@@ -3,20 +3,24 @@ import { machineAccountsOf } from '../information/machine-accounts.ts';
 import { randomUUID } from 'node:crypto';
 import { readArgs } from '../args.ts';
 import { budgetsInForceOf } from '../approve/approval.ts';
-import { callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner } from '../caller.ts';
+import { callerOf, describeCaller, fileOwnerRefusal, isOwner } from '../caller.ts';
 import { loadReadings, overlayReadings, saveSpendReadings, updateReadings, type Seen, type SpendReading } from '../budgets/readings.ts';
 import { runChecksOf, runChecksOfAsync, type CheckOutcome } from '../budgets/run.ts';
 import type { ChildOptions } from '../child.ts';
+import { daemonHealth } from '../daemon/health.ts';
+import { canonicalRoot } from '../daemon/routes.ts';
 import { currentTeam, rememberCurrent } from '../file/current.ts';
-import { isParseError, launchTeamFile } from '../file/load.ts';
+import { isParseError, launchTeamFile, loadTeamFile } from '../file/load.ts';
 import { saveMachineReadings } from '../information/machine-readings.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { agentStatus, foregroundArgv0, PANE_WINDOW, paneForeground, paneProcessInfoAsync, paneProcesses, paneProcessesOf, paneRead, paneReadAsync, paneRun, reportDisplayAgent, SIDEBAR_TTL_CAP_MS, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { agentStatus, foregroundArgv0, PANE_WINDOW, paneForeground, paneProcessInfoAsync, paneProcesses, paneProcessesOf, paneRead, paneReadAsync, reportDisplayAgent, SIDEBAR_TTL_CAP_MS, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import { sidebarPolicy } from '../settings/sidebar-policy.ts';
 import type { Command, Io } from '../io.ts';
+import { isShellName } from '../launch/cli-scope.ts';
+import { paneHoldsOnlyShell } from '../launch/identity.ts';
 import { logLine } from '../log.ts';
 import { readBacklogDepth, readQueueDepths } from '../queues.ts';
 import { hasJsonFlag, writeJsonError } from '../output/index.ts';
@@ -25,10 +29,11 @@ import { waitOrStop } from '../wait.ts';
 import type { Live } from '../status/compare.ts';
 import { readMachine, readMachineAsync, readingsText, unreadMachine } from '../watch/machine.ts';
 import type { Machine } from '../watch/machine.ts';
+import { processCommOf } from '../watch/process-adapter.ts';
 import { watchReadLimits, type ReadLimits } from '../watch/read-limits.ts';
-import { beatWatch, ownWatchPane, placedWatch, watchLabel, watchRunning } from '../watch/pane.ts';
+import { beatWatch, ownWatchPane, placedWatch, watchRunning } from '../watch/pane.ts';
 import { watchPushWork } from '../watch/direct-send.ts';
-import { watchCommand, watchWouldRead } from './up.ts';
+import { watchCommand } from './up.ts';
 import { realHost, redeliverChannelOnSocket } from './send.ts';
 import { notify } from '../watch/notify.ts';
 import { dropMessage, readTriggerLine, triggerLine } from '../send/native.ts';
@@ -196,6 +201,8 @@ export type WatchSources = {
   reportDisplayAgent?(session: string, pane: string, text: string, ttlMs?: number): boolean;
   /** The home whose store holds the override file. Absent in a test that does not set one. */
   home?: string;
+  /** The daemon health a pane's `team watch` reads. Absent, a pane still writes nothing. */
+  daemonHealth?: (home: string) => Promise<{ roots: readonly { root: string; watch?: { session: string; phase: string } }[] }>;
   /** The unacked-record read this pass rings and reports from: a scan of every drop and legacy
    *  record. Read before the fold, never inside it — the scan is unbounded, and the fold holds
    *  the state lock. Absent, the shipped reader. `mail` is the pass's shared reading: the same
@@ -205,8 +212,8 @@ export type WatchSources = {
    *  watch queues the rule's breaches but carries no swap out (a test without a faked launch). */
   swapSources?: RestartSources;
   /**
-   * The watch's own workspace: `up`'s two steps, run by a hand start. Absent, no workspace can
-   * be made here: the watch runs in this process, as one started by hand always did.
+   * A hand-run `team watch` does not call this. No path starts a pane watch; the daemon's
+   * hosted loop is the only watch this command runs.
    */
   createWorkspace?(session: string, cwd: string, label: string): { pane: string; workspace: string } | null;
   /** Types the watch's command into its pane. False when herdr refused. */
@@ -242,6 +249,23 @@ export type WatchSources = {
    * receives it only from the daemon's own source set.
    */
   hosted?: HostedLoop;
+  /**
+   * Set when `up` or the daemon starts this watch. A placed lead needs neither. Never settable
+   * from a command line: `runWatch` receives it only from those two starters.
+   */
+  startedBy?: 'up' | 'daemon';
+  /**
+   * Whether `pid` is a live team watch. Absent, a pid `alive` reports that is not a shell.
+   * A test supplies this and never signals a process.
+   */
+  watchPidLive?(pid: number): boolean;
+  /**
+   * What the recorded pane is running. `gone` is a pane that is no longer there. Absent, the
+   * pane's process list: a missing pane is `gone`, a bare shell is `shell`, a team watch is
+   * `watch`, and anything else is `other`. `unread` is a pane this pass could not judge, and a
+   * record is not taken over on it.
+   */
+  paneVerdict?(session: string, pane: string): 'gone' | 'shell' | 'other' | 'watch' | 'unread';
   /**
    * Whether the caller can prove that one seat's native presence channel is healthy right now,
    * keyed by declared seat name. Only the machine daemon that owns the route can answer, from
@@ -417,9 +441,6 @@ export const realWatchSources: WatchSources = {
   renameWorkspace: (session, workspace, label) => workspaceRename(workspace, label, session === 'default' ? undefined : session),
   reportDisplayAgent: (session, pane, text, ttlMs = SIDEBAR_TTL_CAP_MS) =>
     reportDisplayAgent(pane, text, session === 'default' ? undefined : session, ttlMs),
-  createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, session === 'default' ? undefined : session),
-  paneRun: (session, pane, command) => paneRun(pane, command, session === 'default' ? undefined : session),
-  closeWorkspace: (session, workspace) => workspaceClose(workspace, session === 'default' ? undefined : session),
   watchCommand,
   // The bus identity of the owner's delivery path (§4.5): the watch reads what the policy routes
   // to `owner` and what the raising side addresses to `owner`. It is never a seat name.
@@ -431,6 +452,7 @@ export const realWatchSources: WatchSources = {
   // hosted watch wires its own verified sender over `sendWatchDirect`; an infrastructure pane is
   // never used as the sender, and no placement, grant or registration stands in for the watch.
   pushWork: watchPushWork(null),
+  daemonHealth: (home) => daemonHealth(home),
 };
 
 /**
@@ -457,15 +479,16 @@ the invocation or team file can't be read.
 /** The file `up` recorded for this session's watch, or a refusal for any other non-owner.
  *  Absent when neither folder a team file can sit in records one: a flagless watch then reads
  *  what it always did. `'wait'` is a file recorded and a pid not written yet: the process `up`
- *  spawned. */
+ *  spawned. A record whose pane is gone or is not running `team watch`, and whose pid is not a
+ *  live team watch, is dead: the owner, the daemon, `up`, or the team's placed lead rewrites it
+ *  to this call and the watch starts. A live record still refuses every other caller. */
 function watchdogGrant(
-  cwd: string, session: string | undefined, caller: ReturnType<typeof callerOf>,
+  cwd: string, session: string | undefined, caller: ReturnType<typeof callerOf>, sources: WatchSources,
 ): { file: string } | { refuse: string } | { wait: true } | undefined {
   const name = session ?? 'default';
   const recorded = recordedWatchdog(cwd, name);
   if (!recorded) return undefined;
   if (recorded.pane && caller.kind === 'pane' && caller.pane === recorded.pane) return { file: recorded.file };
-  if (isOwner(caller)) return undefined;
   // The pid that owns the record is read from the record's own state: the team file's folder,
   // never this process's start folder when the two differ.
   const watchPid = readState(recorded.dir).sessions[name]?.watch?.pid;
@@ -478,9 +501,255 @@ function watchdogGrant(
   const elsewhere = caller.kind === 'owner' || caller.kind === 'owner-no-tty' || caller.kind === 'seat'
     || (caller.kind === 'pane' && caller.pane !== recorded.pane);
   if (watchPid === undefined && recorded.pane && !elsewhere) return { file: recorded.file };
+  const taken = takeOverDeadWatch(cwd, session, caller, sources);
+  if (taken) return taken;
+  if (isOwner(caller)) return undefined;
   return {
     refuse: `only the watch this session records may read the file up recorded; this call is ${describeCaller(caller)}`,
   };
+}
+
+/** A dead recorded watch, rewritten to this call. Absent when the record is live, unreadable,
+ *  or this caller may not take it. The old pane is left as it is: nothing is signalled and
+ *  nothing is closed. */
+function takeOverDeadWatch(
+  cwd: string, session: string | undefined, caller: ReturnType<typeof callerOf>, sources: WatchSources,
+): { file: string } | undefined {
+  const name = session ?? 'default';
+  const recorded = recordedWatchdog(cwd, name);
+  if (!recorded) return undefined;
+  const watchPid = readState(recorded.dir).sessions[name]?.watch?.pid;
+  const reason = deadWatchReason(recorded, watchPid, name, sources);
+  if (reason === undefined) return undefined;
+  const loaded = loadTeamFile(cwd, { file: recorded.file, home: sources.home });
+  if (!mayTakeOverDeadWatch(caller, sources, loaded.ok ? loaded.team : undefined)) return undefined;
+  const own = caller.kind === 'seat' || caller.kind === 'pane' ? caller.pane : undefined;
+  updateState(recorded.dir, (state) => {
+    const current = (state.sessions[name] ??= emptySession());
+    current.watchdog = own === undefined ? { file: recorded.file } : { file: recorded.file, pane: own };
+  });
+  logLine(recorded.dir, 'watch', 'watch', `watch record taken over from ${recorded.pane ?? 'none'}: ${reason}`, sources.now());
+  return { file: recorded.file };
+}
+
+function mayTakeOverDeadWatch(caller: ReturnType<typeof callerOf>, sources: WatchSources, team: TeamFile | undefined): boolean {
+  if (isOwner(caller)) return true;
+  if (caller.kind === 'daemon') return true;
+  if (sources.hosted !== undefined) return true;
+  if (sources.startedBy === 'up' || sources.startedBy === 'daemon') return true;
+  return caller.kind === 'seat' && team !== undefined && (caller.name === team.orchestrator || caller.name === team.operator);
+}
+
+/** `gone` or `no watch running` when the recorded pane is not a team watch and its pid is not a
+ *  live team watch. A pane this pass cannot read stays recorded: an unreadable pane is not a
+ *  dead one. */
+function deadWatchReason(
+  recorded: { pane?: string }, watchPid: number | undefined, session: string, sources: WatchSources,
+): 'gone' | 'no watch running' | undefined {
+  // A record with no pane is the daemon's own binding, or a hand-over that has not named a pane.
+  // Neither is a dead pane watch, and neither is rewritten.
+  if (recorded.pane === undefined) return undefined;
+  const word = paneWord(sources, session, recorded.pane);
+  if (word === 'watch' || word === 'unread') return undefined;
+  if (watchPidIsLive(watchPid, sources)) return undefined;
+  return word === 'gone' ? 'gone' : 'no watch running';
+}
+
+function paneClass(
+  names: string[] | null,
+  info: PaneProcesses | null,
+): 'gone' | 'shell' | 'other' | 'watch' | 'unread' {
+  const base = (name: string): string => name.split('/').pop() ?? name;
+  if (names?.some((name) => base(name) === 'team')) return 'watch';
+  if (info !== null && paneHoldsOnlyShell(info)) return 'shell';
+  if (names !== null && names.length > 0 && names.every((name) => isShellName(base(name)))) return 'shell';
+  if ((names === null || names.length === 0) && info === null) return 'gone';
+  return 'other';
+}
+
+function paneWord(sources: WatchSources, session: string, pane: string): 'gone' | 'shell' | 'other' | 'watch' | 'unread' {
+  if (sources.paneVerdict) return sources.paneVerdict(session, pane);
+  let names: string[] | null;
+  try {
+    names = sources.foreground(pane, session);
+  } catch {
+    return 'unread';
+  }
+  const info = sources.processes?.(pane, session) ?? null;
+  return paneClass(names, info);
+}
+
+/** The same pane word, read off the awaited sources. A loop that supplies `processesAsync`
+ *  uses that read and does not call the synchronous process reader: that read would hold the beat.
+ *  No screen is read here. */
+async function paneWordAwaited(
+  sources: WatchSources, session: string, pane: string,
+): Promise<'gone' | 'shell' | 'other' | 'watch' | 'unread'> {
+  if (sources.paneVerdict) return sources.paneVerdict(session, pane);
+  const call = { timeoutMs: 10_000 };
+  let names: string[] | null;
+  try {
+    names = sources.foregroundAsync !== undefined
+      ? await sources.foregroundAsync(pane, session, call)
+      : sources.foreground(pane, session);
+  } catch {
+    return 'unread';
+  }
+  const info = await paneProcessesOnce(sources, pane, session, call);
+  return paneClass(names, info);
+}
+
+/** One pane's process read, shared by every ask on this beat. A second ask while the read is
+ *  pending, and one that arrives after it has settled but before the next beat, receives that
+ *  same result. The next beat drops a settled read so a later proof can look again. */
+const paneReads = new Map<string, { promise: Promise<PaneProcesses | null>; settled: boolean }>();
+
+export function paneProcessesOnce(
+  sources: Pick<WatchSources, 'processes' | 'processesAsync'>,
+  pane: string,
+  session: string,
+  options: ChildOptions,
+): Promise<PaneProcesses | null> {
+  const key = `${session}\0${pane}`;
+  const flight = paneReads.get(key);
+  if (flight) return flight.promise;
+  const promise = sources.processesAsync !== undefined
+    ? sources.processesAsync(pane, session, options)
+    : Promise.resolve(sources.processes?.(pane, session) ?? null);
+  const flightNext = { promise, settled: false };
+  paneReads.set(key, flightNext);
+  promise.then(
+    () => { flightNext.settled = true; },
+    () => { flightNext.settled = true; },
+  );
+  return promise;
+}
+
+/** Drops process reads that have already settled, so the next beat can prove the pane again.
+ *  A read that is still pending stays, and the beat reuses it. */
+export function releaseSettledPaneReads(): void {
+  for (const [key, flight] of paneReads) {
+    if (flight.settled) paneReads.delete(key);
+  }
+}
+
+/** A live team watch. A pid `alive` reports as gone is not one, and no process table is read
+ *  for it. A live shell is not a team watch. A live pid whose command cannot be read is left
+ *  recorded, so a watch this pass cannot name is not taken. */
+function watchPidIsLive(pid: number | undefined, sources: WatchSources): boolean {
+  if (pid === undefined || !Number.isInteger(pid) || pid <= 0) return false;
+  if (sources.watchPidLive) return sources.watchPidLive(pid);
+  if (!sources.alive(pid)) return false;
+  const comm = processCommOf(pid);
+  if (comm === null) return true;
+  const name = comm.split('/').pop() ?? comm;
+  return !isShellName(name);
+}
+
+/** Whether the daemon's hosted watch would become the active watch for this session. Reads the
+ *  state and the pane, and writes nothing. `take` is true only when the recorded pane watch is
+ *  not alive: its pane is gone, a shell, or something other than `team watch`, its heartbeat is
+ *  older than three watch intervals, and it has no live pid. A live pane watch stays the holder. */
+export type WatchTakeoverVerdict = { take: boolean; reason: string; who: string };
+
+const DEAD_HEARTBEAT_INTERVALS = 3;
+
+function takeoverFrom(
+  root: string,
+  session: string,
+  sources: WatchSources,
+  word: 'gone' | 'shell' | 'other' | 'watch' | 'unread',
+  found: NonNullable<ReturnType<typeof recordedSession>>,
+): WatchTakeoverVerdict {
+  if (word === 'unread') return { take: false, reason: 'unread', who: 'pane' };
+  if (word === 'watch' || watchPidIsLive(found.watch?.pid, sources)) return { take: false, reason: 'live', who: 'pane' };
+  const intervalMs = daemonIntervalMs(root, found.watchdog?.file, sources);
+  const beat = found.watch?.heartbeat === undefined ? Number.NaN : Date.parse(found.watch.heartbeat);
+  const age = sources.now().getTime() - beat;
+  if (!Number.isFinite(age) || age <= DEAD_HEARTBEAT_INTERVALS * intervalMs) {
+    return { take: false, reason: 'fresh', who: 'pane' };
+  }
+  const reason = word === 'gone' ? 'gone' : word === 'shell' ? 'shell' : 'no watch running';
+  return { take: true, reason, who: 'daemon' };
+}
+
+export function watchTakeoverVerdict(root: string, session: string, sources: WatchSources): WatchTakeoverVerdict {
+  const found = recordedSession(root, session);
+  const pane = found?.watch?.pane;
+  if (found === undefined || pane === undefined) return { take: false, reason: 'no pane watch recorded', who: 'none' };
+  return takeoverFrom(root, session, sources, paneWord(sources, session, pane), found);
+}
+
+/** The loop's verdict. The pane word is awaited, so a slow process read does not hold the beat. */
+export async function watchTakeoverVerdictAsync(
+  root: string, session: string, sources: WatchSources,
+): Promise<WatchTakeoverVerdict> {
+  const found = recordedSession(root, session);
+  const pane = found?.watch?.pane;
+  if (found === undefined || pane === undefined) return { take: false, reason: 'no pane watch recorded', who: 'none' };
+  return takeoverFrom(root, session, sources, await paneWordAwaited(sources, session, pane), found);
+}
+
+/** The daemon becomes the active watch for a dead pane record. The audit line is written and the
+ *  dead pane record is dropped so the authority store can acquire. No pane is started and nothing
+ *  is signalled. A live or fresh record is left as it stands. */
+export function activateDeadPaneWatch(root: string, session: string, sources: WatchSources): boolean {
+  const verdict = watchTakeoverVerdict(root, session, sources);
+  if (!verdict.take) return false;
+  return dropDeadPaneWatch(root, session, sources, verdict);
+}
+
+/** The loop's activation. It awaits the pane read and then applies the same drop. */
+export async function activateDeadPaneWatchAsync(
+  root: string, session: string, sources: WatchSources,
+): Promise<boolean> {
+  const verdict = await watchTakeoverVerdictAsync(root, session, sources);
+  if (!verdict.take) return false;
+  return dropDeadPaneWatch(root, session, sources, verdict);
+}
+
+function dropDeadPaneWatch(
+  root: string, session: string, sources: WatchSources, verdict: WatchTakeoverVerdict,
+): boolean {
+  const found = recordedSession(root, session);
+  if (found === undefined) return false;
+  const pane = found.watch?.pane ?? 'none';
+  const dropped = updateState(found.dir, (state) => {
+    const current = state.sessions[session];
+    const held = current?.watch;
+    if (current === undefined || held === undefined || held.epoch !== undefined) return false;
+    if (watchPidIsLive(held.pid, sources)) return false;
+    delete current.watch;
+    return true;
+  }, { writeWhen: (dropped) => dropped });
+  if (!dropped) return false;
+  logLine(
+    found.dir,
+    'watch',
+    'daemon',
+    `pane watch ${pane} not alive: ${verdict.reason}; the daemon's watch is active`,
+    sources.now(),
+  );
+  return true;
+}
+
+function recordedSession(
+  root: string, session: string,
+): { dir: string; watchdog?: { file: string; pane?: string }; watch?: { pid?: number; pane?: string; heartbeat?: string; epoch?: string } } | undefined {
+  for (const dir of stateDirsOf(root)) {
+    const current = readState(dir).sessions[session];
+    if (current?.watchdog !== undefined || current?.watch !== undefined) {
+      return { dir, watchdog: current.watchdog, watch: current.watch };
+    }
+  }
+  return undefined;
+}
+
+function daemonIntervalMs(root: string, file: string | undefined, sources: WatchSources): number {
+  if (file === undefined) return 120_000;
+  const loaded = loadTeamFile(root, { file, home: sources.home });
+  const seconds = loaded.ok ? loaded.team.watch.interval : 120;
+  return (Number.isFinite(seconds) && seconds > 0 ? seconds : 120) * 1000;
 }
 
 /** The folders a team file can sit in, seen from the folder the watch starts in: this one (a
@@ -504,11 +773,11 @@ function recordedWatchdog(
 
 /** The grant, waiting out the moment between spawn and the pid landing in the state. */
 async function admittedWatchdog(
-  cwd: string, session: string | undefined, caller: ReturnType<typeof callerOf>,
+  cwd: string, session: string | undefined, caller: ReturnType<typeof callerOf>, sources: WatchSources,
 ): Promise<{ file: string } | { refuse: string } | undefined> {
   const deadline = Date.now() + 2000;
   for (;;) {
-    const grant = watchdogGrant(cwd, session, caller);
+    const grant = watchdogGrant(cwd, session, caller, sources);
     if (!grant || !('wait' in grant)) return grant;
     if (Date.now() >= deadline) {
       return {
@@ -523,6 +792,13 @@ async function admittedWatchdog(
 // the default pass is 120s and the machine moves on an hourly scale, so a line per pass would be
 // 720 a day saying what one every ten minutes says.
 const READINGS_EVERY = 600;
+
+/** A hand-run `team watch` (no hosted loop). A boolean, not a type predicate, so the hosted
+ *  loop below stays typed for both callers: the return that follows is what keeps a hand run
+ *  out of it. */
+function handRunWatch(hosted: HostedLoop | undefined): boolean {
+  return hosted === undefined;
+}
 
 export async function runWatch(argv: string[], io: Io, sources: WatchSources): Promise<number> {
   // Raw argv, before the parser: `--json` is not a flag this daemon takes, and its refusal
@@ -547,9 +823,6 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     else io.stderr(`team watch: ${why}\n`);
   };
   const hosted = sources.hosted;
-  const detached = hosted === undefined
-    ? detachedRefusal(callerOf(io), { who: 'the owner or a placed seat', where: 'a terminal outside herdr or its own pane' })
-    : undefined;
   // The `--file` check is the walk's too, and it runs before `currentTeam` reads that file or
   // writes beside it: a non-owner aiming `--file` must not make this command read and validate
   // another project's team file, nor leave its `last_valid`, its log line or its heartbeat in
@@ -564,23 +837,43 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     return 1;
   }
   const caller = callerOf(io, args.values.session);
+  // No path starts a pane watch. A hand-run `team watch` — the owner, a seat, a pane, or a
+  // pane the walk cannot place — only prints the daemon's watch and writes nothing. The hosted
+  // loop below is the daemon's own watch; it is the one caller that still runs.
+  if (handRunWatch(hosted)) {
+    const named = caller.kind === 'pane' ? (caller.session ?? args.values.session) : args.values.session;
+    let sessionName = named;
+    if (sessionName === undefined) {
+      const looked = currentTeam(io.cwd, args.values.file, sources.now(), sources.home, false);
+      if (looked.ok) sessionName = looked.team.session;
+    }
+    const home = sources.home;
+    let line = 'team watch: the daemon does not host this session\n';
+    if (sessionName !== undefined && home !== undefined && sources.daemonHealth !== undefined) {
+      const health = await sources.daemonHealth(home);
+      const canonical = canonicalRoot(io.cwd);
+      const entry = canonical === null ? undefined : health.roots.find((item) => item.root === canonical);
+      const phase = entry?.watch?.phase;
+      const runs = entry?.watch !== undefined
+        && entry.watch.session === sessionName
+        && phase !== 'standby'
+        && phase !== 'stopped'
+        && phase !== 'failed';
+      line = runs
+        ? `team watch: running in the daemon for session ${sessionName}\n`
+        : `team watch: the daemon does not host session ${sessionName}\n`;
+    } else if (sessionName !== undefined) {
+      line = `team watch: the daemon does not host session ${sessionName}\n`;
+    }
+    io.stdout(line);
+    // exit: watch.started
+    return 0;
+  }
   // A hosted watch takes no grant and no `--file`: it reads the team of the route it was built
   // for, and the watchdog file is the hand-over a pane makes, which a daemon pass never makes.
   const grant = args.values.file || hosted !== undefined
     ? undefined
-    : await admittedWatchdog(io.cwd, args.values.session, caller);
-  // A run with no terminal is refused: the watch lives in a pane of its own now, so no process
-  // outside a terminal is ever the watch and none has to be admitted to the file.
-  if (detached !== undefined) {
-    refuse('watch.caller', detached);
-    // exit: watch.caller
-    return 1;
-  }
-  if (grant && 'refuse' in grant) {
-    refuse('watch.watchdog', grant.refuse);
-    // exit: watch.watchdog
-    return 1;
-  }
+    : await admittedWatchdog(io.cwd, args.values.session, caller, sources);
   // The instant this process reached its loop, recorded once on the first beat the record takes:
   // `down` stops a pane-less watch only when the live process's command line and start instant
   // prove it is this watch. Captured once the run is admitted and before the first pass reads, so
@@ -609,6 +902,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   const { dir } = first;
 
   const placed = callerOf(io, session);
+  // A hosted loop never asks `watchdogGrant`: the front refusals do not apply to it. A dead
+  // record is still rewritten once, here, before the loop, and a live one is left as it is.
+  if (hosted !== undefined) takeOverDeadWatch(io.cwd, session, placed, sources);
 
   // Owner delivery (§4.5) is the owner's own path. This process is that path when the owner
   // check that admits owner-only actions admits it, when it runs in an agentless pane — the
@@ -673,58 +969,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       // exit: watch.standby
       return 0;
     }
-    refuse('watch.already', `a watch already runs for the session "${session}" (${where})`);
-    // exit: watch.already
-    return 1;
   }
   if (first.path !== undefined) rememberCurrent(first.dir, first.path, sources.now());
-
-  // Started alone, from the owner's terminal outside herdr: the watch runs in its own workspace
-  // of the team's session — `up`'s own two steps — so the one watch `team status` and the checks
-  // look for is the one running, and not a process this terminal owns. The file the pane would
-  // not resolve for itself is recorded for that pane before its command runs, and the pane
-  // itself once the command has started: a run whose typing failed leaves no watch in the state.
-  // An owner who asked to watch without nudges or notices keeps this terminal — those flags are
-  // the owner's, and the pane's own `team watch` cannot carry them — and so does a build with no
-  // workspace to make (a test's own sources), which runs the watch here as one always did.
-  // The hand-over is the file's own session only: a lone run aimed at another session (anyone
-  // may watch one) would otherwise make the workspace in that session and write this team's
-  // state before the foreign-session reading is even said. It reads and reports here instead.
-  if (hosted === undefined && isOwner(placed) && session === first.team.session && !args.flags.has('no-nudge') && !args.flags.has('no-notify')
-    && sources.createWorkspace && sources.paneRun) {
-    const label = watchLabel(first.team.project);
-    const made = sources.createWorkspace(session, first.root, label);
-    if (made) {
-      const file = first.path !== undefined && !watchWouldRead(first.root, first.path, sources.home) ? first.path : undefined;
-      if (file !== undefined) {
-        updateState(dir, (state) => {
-          const current = (state.sessions[session] ??= emptySession());
-          current.watchdog = { file, pane: made.pane };
-        });
-      }
-      if (sources.paneRun(session, made.pane, (sources.watchCommand ?? watchCommand)(session))) {
-        updateState(dir, (state) => {
-          const current = (state.sessions[session] ??= emptySession());
-          current.watch = { pane: made.pane, workspace: made.workspace, heartbeat: sources.now().toISOString() };
-        });
-        io.stdout(`team watch: the watch runs in its own workspace (${label}, pane ${made.pane})\n`);
-        // exit: watch.started
-        return 0;
-      }
-      // The workspace was made and the typing refused: nothing runs in it. Close it and unset
-      // the file's record, so the state says what is true — no workspace and no watch.
-      sources.closeWorkspace?.(session, made.workspace);
-      if (file !== undefined) {
-        updateState(dir, (state) => {
-          const current = state.sessions[session];
-          if (current) delete current.watchdog;
-        });
-      }
-    }
-    refuse('watch.workspace', 'the watch did not start in its workspace');
-    // exit: watch.workspace
-    return 1;
-  }
 
   // The log line is written for every report. `--no-notify` never removes it, and it never
   // removes a desktop notice addressed to the owner. It does silence every other notice.

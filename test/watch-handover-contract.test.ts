@@ -1,11 +1,10 @@
-// S0 handover acceptance, authored from the contract and not from the implementation's plan steps.
-// A pane watch recorded with an old heartbeat and a live process is stale: `up` may replace it only
-// after the old process is proven gone, and it must never signal a pid it cannot prove is the
-// watch. These scenes drive the real `runUp` over a scratch root, a controlled clock and a fake
-// terminal host that only records what was asked of it: no pane, service, owner home or live
-// watch is touched.
+// A pane watch recorded with an old heartbeat is not replaced by another pane. The daemon's
+// hosted watch is the watch: `up` opens no watch pane and never signals a pid it cannot prove
+// is the watch. A dead pane record is cleared once the daemon hosts this session. These scenes
+// drive the real `runUp` over a scratch root, a controlled clock and a fake terminal host that
+// only records what was asked of it: no pane, service, owner home or live watch is touched.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { verifiedOf } from '../src/approve/approval.ts';
@@ -13,7 +12,8 @@ import { type Launch, runUp, type UpSources } from '../src/commands/up.ts';
 import type { DaemonHealth } from '../src/daemon/health.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { PaneProcesses } from '../src/herdr.ts';
-import { emptySession, updateState } from '../src/state.ts';
+import { emptySession, readState, updateState } from '../src/state.ts';
+import type { HostedWatchState } from '../src/watch/hosted.ts';
 import { testIo } from './helpers.ts';
 
 const SESSION = 'handover';
@@ -101,7 +101,36 @@ function health(over: Partial<DaemonHealth>): DaemonHealth {
   };
 }
 
-const runningDaemon = async () => health({});
+function hostedWatch(): HostedWatchState {
+  const canonical = realpathSync(root);
+  return {
+    routeId: 'route-handover',
+    root: canonical,
+    team: 'handover-lab',
+    session: SESSION,
+    phase: 'running',
+    startedAt: '2026-10-14T08:00:00Z',
+    lastCycleAt: '2026-10-14T09:29:00Z',
+    lastCycleOutcome: 'pass',
+    cycles: 4,
+    failures: 0,
+    effects: 'open',
+    required: true,
+    why: null,
+  };
+}
+
+/** The daemon hosts this session's watch. `up` reads this and opens no pane watch beside it. */
+const hostedDaemon = async () => health({
+  roots: [{
+    root: realpathSync(root),
+    team: 'handover-lab',
+    send: 'serving',
+    bus: 'serving',
+    why: null,
+    watch: hostedWatch(),
+  }],
+});
 const unknownDaemon = async () =>
   health({
     state: 'unknown',
@@ -233,47 +262,73 @@ function fresh(made: Host): void {
 const watchRuns = (made: Host) => made.runs.filter((one) => one.command === WATCH_COMMAND);
 const watchWorkspaces = (made: Host) => made.creates.filter((label) => label === WATCH_LABEL);
 
-describe('a stale pane watch is replaced only after it is confirmed gone', () => {
-  test('a refused termination starts no replacement', async () => {
+function watchRecord(): { pane?: string; pid?: number; heartbeat?: string } | undefined {
+  return readState(join(root, '.agents')).sessions[SESSION]?.watch;
+}
+
+function teamLog(): string {
+  try {
+    return readFileSync(join(root, '.agents/team.log'), 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+describe('a stale pane watch is not replaced by another pane', () => {
+  test('a live record is left in place and no watch pane is opened', async () => {
     recorded({ pid: STALE_PID, heartbeat: OLD_BEAT, pane: STALE_PANE, workspace: STALE_WORKSPACE });
     const made = world({ accepted: false });
-    const first = await up(made, runningDaemon);
+    const reading = await hostedDaemon();
+    expect(reading.roots[0]?.watch).toMatchObject({ session: SESSION, phase: 'running' });
+    const first = await up(made, async () => reading);
 
-    expect(made.kills).toEqual([STALE_PID]);
-    // The run reports that a step was held rather than claiming the handover succeeded.
-    expect(first.code).toBe(1);
+    expect(first.code).toBe(0);
+    expect(made.kills).toEqual([]);
     expect(watchRuns(made)).toEqual([]);
+    expect(watchWorkspaces(made)).toEqual([]);
     expect(first.out).not.toContain('watch: started');
+    expect(watchRecord()).toMatchObject({ pid: STALE_PID, pane: STALE_PANE });
   });
 
-  test('an accepted signal leaves the old watch holding until its exit is observed', async () => {
+  test('a live process is left until it is gone, and the daemon then keeps the watch', async () => {
     recorded({ pid: STALE_PID, heartbeat: OLD_BEAT, pane: STALE_PANE, workspace: STALE_WORKSPACE });
     const made = world({ accepted: true });
-    const first = await up(made, runningDaemon);
+    const first = await up(made, hostedDaemon);
 
-    expect(made.kills).toEqual([STALE_PID]);
+    expect(first.code).toBe(0);
+    expect(made.kills).toEqual([]);
     expect(watchRuns(made)).toEqual([]);
-    expect(first.out).not.toContain('watch: started');
+    expect(watchWorkspaces(made)).toEqual([]);
+    expect(watchRecord()).toMatchObject({ pid: STALE_PID, pane: STALE_PANE });
 
-    // The process exits after the hold; the next run may hand over, and does so once.
+    // The process is gone. The next run clears the dead pane record and opens no replacement pane.
     made.gone = true;
     fresh(made);
-    const second = await up(made, runningDaemon);
+    const second = await up(made, hostedDaemon);
     expect(second.code).toBe(0);
     expect(made.kills).toEqual([]);
-    expect(watchRuns(made).map((one) => one.command)).toEqual([WATCH_COMMAND]);
-    expect(watchWorkspaces(made)).toEqual([WATCH_LABEL]);
+    expect(watchRuns(made)).toEqual([]);
+    expect(watchWorkspaces(made)).toEqual([]);
+    expect(second.out).not.toContain('watch: started');
+    expect(watchRecord()?.pane).toBeUndefined();
+    expect(watchRecord()?.pid).toBeUndefined();
+    expect(teamLog()).toContain(`cleared pane watch ${STALE_PANE}: the daemon hosts this session's watch`);
   });
 
-  test('a confirmed exit after the signal starts exactly one replacement', async () => {
+  test('a process that is already gone is cleared once and no replacement pane is started', async () => {
     recorded({ pid: STALE_PID, heartbeat: OLD_BEAT, pane: STALE_PANE, workspace: STALE_WORKSPACE });
-    const made = world({ accepted: true, aliveReadsAfterSignal: 2 });
-    const run = await up(made, runningDaemon);
+    const made = world({ accepted: true });
+    made.gone = true;
+    const run = await up(made, hostedDaemon);
 
-    expect(made.kills).toEqual([STALE_PID]);
-    expect(watchRuns(made).map((one) => one.command)).toEqual([WATCH_COMMAND]);
-    expect(watchWorkspaces(made)).toEqual([WATCH_LABEL]);
-    expect(run.out).toContain('watch: started');
+    expect(run.code).toBe(0);
+    expect(made.kills).toEqual([]);
+    expect(watchRuns(made)).toEqual([]);
+    expect(watchWorkspaces(made)).toEqual([]);
+    expect(run.out).not.toContain('watch: started');
+    expect(watchRecord()?.pane).toBeUndefined();
+    expect(watchRecord()?.pid).toBeUndefined();
+    expect(teamLog()).toContain(`cleared pane watch ${STALE_PANE}: the daemon hosts this session's watch`);
   });
 });
 
@@ -281,17 +336,21 @@ describe('a pid whose identity is not proven is never signaled', () => {
   test('a live pid that is not the pane\'s watch process is left alone', async () => {
     recorded({ pid: STALE_PID, heartbeat: OLD_BEAT, pane: STALE_PANE, workspace: STALE_WORKSPACE });
     const made = world({ identity: { shell: 9001, foreground: [1731] } });
-    await up(made, runningDaemon);
+    await up(made, hostedDaemon);
 
     expect(made.kills).toEqual([]);
+    expect(watchWorkspaces(made)).toEqual([]);
+    expect(watchRecord()).toMatchObject({ pid: STALE_PID, pane: STALE_PANE });
   });
 
   test('an unreadable pane identity is not signaled', async () => {
     recorded({ pid: STALE_PID, heartbeat: OLD_BEAT, pane: STALE_PANE, workspace: STALE_WORKSPACE });
     const made = world({ identity: null });
-    await up(made, runningDaemon);
+    await up(made, hostedDaemon);
 
     expect(made.kills).toEqual([]);
+    expect(watchWorkspaces(made)).toEqual([]);
+    expect(watchRecord()).toMatchObject({ pid: STALE_PID, pane: STALE_PANE });
   });
 });
 
@@ -303,5 +362,7 @@ describe('a daemon reading that cannot say holds the pane watch', () => {
 
     expect(made.kills).toEqual([]);
     expect(watchRuns(made)).toEqual([]);
+    expect(watchWorkspaces(made)).toEqual([]);
+    expect(watchRecord()).toMatchObject({ pid: STALE_PID, pane: STALE_PANE });
   });
 });

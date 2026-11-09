@@ -17,10 +17,13 @@ import { fixtureBase, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-11-01T18:00:00.000Z');
 const NAME = 'codex-daemon';
+const CHORES = 'daemon.chores';
+const CHORES_VALUE = 'inline';
 const SESSION = 'lantern';
 const LEAD = 'writer-seat';
 const CLIENT = 'fixture-client';
 const SEAT: Caller = { kind: 'seat', name: LEAD, pane: 'fixture-lead', session: SESSION };
+const WORKER: Caller = { kind: 'seat', name: 'observer', pane: 'fixture-worker', session: SESSION };
 const made: string[] = [];
 
 afterEach(() => {
@@ -82,17 +85,17 @@ function changes(at: Scene): string[] {
   return entries(at).filter((line) => line.includes(' policy [') && line.includes('level team ('));
 }
 
-function seed(at: Scene): void {
+function seed(at: Scene, name = NAME, value = 'off'): void {
   const written = writePolicySet(at.home, {
-    level: 'team', target: teamIdOf(at.root), teamRoot: at.root, name: NAME, value: 'off',
+    level: 'team', target: teamIdOf(at.root), teamRoot: at.root, name, value,
   }, { now: NOW });
   if (!written.ok) throw new Error(written.why);
 }
 
-function signedPolicy(at: Scene) {
+function signedPolicy(at: Scene, name = NAME) {
   const read = readTeamPolicySource(at.home, at.root);
   if (!read.ok) throw new Error(read.why);
-  return read.policies.find((policy) => policy.name === NAME);
+  return read.policies.find((policy) => policy.name === name);
 }
 
 function clientGrant(at: Scene, ops: ('policy' | 'status')[] = ['policy']) {
@@ -113,8 +116,17 @@ function ioFor(at: Scene, writer: Writer) {
   return io;
 }
 
-function args(action: Action): string[] {
-  return action === 'set' ? ['set', 'team', NAME, 'off'] : ['unset', 'team', NAME];
+function policyName(writer: Writer): string {
+  return writer === 'dev-seat' ? CHORES : NAME;
+}
+
+function policyValue(writer: Writer): string {
+  return writer === 'dev-seat' ? CHORES_VALUE : 'off';
+}
+
+function args(action: Action, writer: Writer = 'owner'): string[] {
+  const name = policyName(writer);
+  return action === 'set' ? ['set', 'team', name, policyValue(writer)] : ['unset', 'team', name];
 }
 
 async function writeAs(at: Scene, writer: Writer, argv: string[]) {
@@ -139,41 +151,54 @@ for (const writer of ['owner', 'client', 'dev-seat'] as const) {
   for (const action of ['set', 'unset'] as const) {
     test(`${writer} ${action}: the change log credits the writer while the signed setter stays owner`, async () => {
       const at = scene();
+      const name = policyName(writer);
+      const value = policyValue(writer);
       if (action === 'unset') {
-        seed(at);
-        expect(signedPolicy(at)?.setter).toBe('owner');
+        seed(at, name, value);
+        expect(signedPolicy(at, name)?.setter).toBe('owner');
       }
-      const result = await writeAs(at, writer, args(action));
+      const result = await writeAs(at, writer, args(action, writer));
       expect(result.code, result.raw.err).toBe(0);
       const rows = changes(at);
       expect(rows).toHaveLength(1);
       const tag = writer === 'client' ? `client:${CLIENT}` : writer === 'dev-seat' ? LEAD : 'owner';
       const said = writer === 'client' ? `client ${CLIENT}, grant ${result.grantId}` : writer === 'dev-seat' ? `${LEAD}, dev mode` : 'owner';
-      expect(rows[0]).toContain(`policy [${tag}] level team (${teamIdOf(at.root)}) ${NAME}: `);
-      expect(rows[0]).toContain(action === 'set' ? 'unset -> off' : 'off -> unset');
+      expect(rows[0]).toContain(`policy [${tag}] level team (${teamIdOf(at.root)}) ${name}: `);
+      expect(rows[0]).toContain(action === 'set' ? `unset -> ${value}` : `${value} -> unset`);
       expect(rows[0]).toEndWith(`(setter: ${said})`);
       if (action === 'set') {
-        const policy = signedPolicy(at);
+        const policy = signedPolicy(at, name);
         expect(policy?.setter).toBe('owner');
-        expect(policy?.value).toBe('off');
+        expect(policy?.value).toBe(value);
         expect(typeof policy?.signature).toBe('string');
       } else {
-        expect(signedPolicy(at)).toBeUndefined();
+        expect(signedPolicy(at, name)).toBeUndefined();
       }
       expect(entries(at).join('\n')).not.toMatch(/PRIVATE KEY|privatePem|private_key/);
     });
 
     test(`${writer} ${action} dry run writes neither a policy nor a change log`, async () => {
       const at = scene();
-      if (action === 'unset') seed(at);
+      if (action === 'unset') seed(at, policyName(writer), policyValue(writer));
       const before = readFileSync(at.file, 'utf8');
-      const result = await writeAs(at, writer, [...args(action), '--dry-run']);
+      const result = await writeAs(at, writer, [...args(action, writer), '--dry-run']);
       expect(result.code, result.raw.err).toBe(0);
       expect(readFileSync(at.file, 'utf8')).toBe(before);
       expect(changes(at)).toEqual([]);
     });
   }
 }
+
+test('the lead seat sets team policy and the log credits the lead', async () => {
+  const at = scene();
+  const raw = testIo(at.root, SEAT);
+  raw.env = { HOME: at.home };
+  expect(await runPolicy(args('set'), raw, { home: at.home, now: NOW }), raw.err).toBe(0);
+  const rows = changes(at);
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toEndWith('(setter: writer-seat, lead)');
+  expect(signedPolicy(at)?.setter).toBe('owner');
+});
 
 test('the door replaces claimed metadata with the client and grant IDs it actually verified', async () => {
   const at = scene();
@@ -223,7 +248,12 @@ for (const refusal of ['tampered', 'expired', 'wrong-key', 'wrong-op'] as const)
 
 test('a seat without dev-mode admission cannot write or be credited as owner', async () => {
   const at = scene();
-  const raw = ioFor(at, 'client');
+  updateState(at.dir, (state) => {
+    const session = state.sessions[SESSION] ??= emptySession();
+    session.seats.observer = { stage: 'ready', pane: 'fixture-worker', workspace: 'fixture-workspace' };
+  });
+  const raw = testIo(at.root, WORKER);
+  raw.env = { HOME: at.home };
   const before = readFileSync(at.file, 'utf8');
   expect(await runPolicy(args('set'), raw, { home: at.home, now: NOW })).toBe(1);
   expect(readFileSync(at.file, 'utf8')).toBe(before);
