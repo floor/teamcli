@@ -3793,6 +3793,105 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--general",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--key",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "launchers",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--dry-run",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "migrate",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team launchers migrate [--dry-run] [--json]"
+          ],
+          "who": {
+            "gate": "owner-or-leads",
+            "terminal": {
+              "where": "a terminal outside herdr or its own pane",
+              "who": "the owner or a lead of this team"
+            },
+            "why": "rewriting a team's launch lines off repo and temp scripts is the owner, or a lead of that team"
+          }
+        }
+      ],
+      "usage": [
+        "team launchers migrate [--dry-run] [--json]"
+      ],
+      "who": {
+        "gate": "owner-or-leads",
+        "terminal": {
+          "where": "a terminal outside herdr or its own pane",
+          "who": "the owner or a lead of this team"
+        },
+        "why": "rewriting a team's launch lines off repo and temp scripts is the owner, or a lead of that team"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--all",
           "repeatable": false,
           "takesValue": false

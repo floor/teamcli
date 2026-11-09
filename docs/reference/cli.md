@@ -1807,6 +1807,62 @@ Usage:
 
 None.
 
+## `launchers`
+
+Hidden: no
+
+Usage:
+
+    team launchers migrate [--dry-run] [--json]
+
+### Who may run it
+
+`owner-or-leads` — rewriting a team's launch lines off repo and temp scripts is the owner, or a lead of that team
+
+A run with no terminal is refused: only the owner or a lead of this team runs this, from a terminal outside herdr or its own pane
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `migrate`
+
+Hidden: no
+
+Usage:
+
+    team launchers migrate [--dry-run] [--json]
+
+#### Who may run it
+
+`owner-or-leads` — rewriting a team's launch lines off repo and temp scripts is the owner, or a lead of that team
+
+A run with no terminal is refused: only the owner or a lead of this team runs this, from a terminal outside herdr or its own pane
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
 ## `list`
 
 Hidden: no

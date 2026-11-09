@@ -113,6 +113,16 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-or-leads',
       why: 'the `start` row for a running seat, as `restart`: closing and relaunching one seat is the same act',
     },
+    launchers: {
+      kind: 'owner-or-leads',
+      why: 'rewriting a team\'s launch lines off repo and temp scripts is the owner, or a lead of that team',
+      terminal: { who: 'the owner or a lead of this team', where: 'a terminal outside herdr or its own pane' },
+    },
+    'launchers:migrate': {
+      kind: 'owner-or-leads',
+      why: 'rewriting a team\'s launch lines off repo and temp scripts is the owner, or a lead of that team',
+      terminal: { who: 'the owner or a lead of this team', where: 'a terminal outside herdr or its own pane' },
+    },
     order: {
       kind: 'owner-or-leads',
       why: 'the `restart` row per out-of-order seat: reordering the sidebar closes and relaunches seats, one `restart` each',
