@@ -1,8 +1,8 @@
 // Drop this file in as test/restore-after-reboot-independent.test.ts.
 // After a host restore, every seat is named again. A pane that kept its id is matched by the
 // record. A pane with a new id is matched by the running CLI and the recorded conversation, never
-// by the pane's title. A Codex seat sitting on the incompatible-feature dialog is relaunched
-// with the profile's coordination pin, and no dialog option is chosen. A channel seat is
+// by the pane's title. A worker on the incompatible-feature dialog is relaunched without
+// the retired false pin or a dialog choice; a lead stays open and status names it. A channel seat is
 // reconnected, or named with the one step that reconnects it. The session each scene starts
 // from is the captured one: seat and pane names are replaced where the scene needs its own,
 // and the rest of the record stays. A hosted watch that is already active is not given a pane.
@@ -13,6 +13,7 @@ import { dirname, join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { placeCaller, type CallerSources } from '../src/caller.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
+import { runStatus } from '../src/commands/status.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { workspaceLabel } from '../src/file/sections/seats.ts';
@@ -27,7 +28,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, LOG_FILE, readState, updateState } from '../src/state.ts';
 import type { DaemonHealth } from '../src/daemon/health.ts';
 import { canonicalRoot } from '../src/daemon/routes.ts';
-import { storePath, writeApproval } from '../src/store/store.ts';
+import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { CLAUDE_IDLE, fixtureBase, gitEnv, testIo } from './helpers.ts';
 
@@ -266,11 +267,11 @@ function scriptHost(conversation?: string): void {
   });
 }
 
-function approvedCobble(made: Restored): Date {
+function approvedCobble(made: Restored, worker = false): Date {
   const file = `format: 1
 project: crate
-coordinator: cobble
-operator: cobble
+coordinator: ${worker ? 'pebble' : 'cobble'}
+operator: ${worker ? 'pebble' : 'cobble'}
 session: crate
 workspace:
   mode: shared
@@ -278,7 +279,16 @@ trust:
   - ${JSON.stringify(lobbyDir(made.home))}
   - ${JSON.stringify(made.root)}
 seats:
-  - role: coordinator
+${worker ? `  - role: orchestrator
+    name: pebble
+    leads: true
+    cli: claude-code
+    vendor: test
+    model: Test
+    version: "1"
+    launch: claude
+    human: true
+` : ''}  - role: ${worker ? 'implementer' : 'coordinator'}
     name: cobble
     cli: codex
     vendor: test
@@ -385,7 +395,8 @@ test('a restored host names every seat again, including a pane whose id is new',
 
 test('a Codex seat on the incompatible-feature dialog is relaunched and no option is chosen', async () => {
   const made = restored();
-  const now = approvedCobble(made);
+  // FLO-1368 leaves lead panes alone; this positive dialog repair targets a worker.
+  const now = approvedCobble(made, true);
   const dialog = movedCodex();
   const dry = testIo(made.root, { kind: 'owner' });
   const planned = restoreHost(made, dialog, now, [], (_session, pane) => (
@@ -393,9 +404,10 @@ test('a Codex seat on the incompatible-feature dialog is relaunched and no optio
   ));
   expect(await runUp(['--dry-run'], dry, planned), `${dry.out}\n${dry.err}`).toBe(0);
   const pins = pinnedWords(profileFor('codex')?.features ?? []);
-  expect(pins.length).toBeGreaterThan(0);
+  // FLO-1368 relaunches without the retired fixed false pair.
+  expect(pins).toEqual([]);
   expect(dry.out).toContain('closed without choosing a dialog option; launched again with the coordination flag');
-  for (const word of pins) expect(dry.out).toContain(word);
+  expect(dry.out).not.toContain('features.mcp_oauth_refresh_coordination=false');
   expect(dry.out).not.toContain('send-keys');
   expect(dry.out).not.toContain('run without daemon');
 
@@ -407,6 +419,62 @@ test('a Codex seat on the incompatible-feature dialog is relaunched and no optio
   expect(renamed).toContainEqual({ pane: AFTER, name: 'cobble' });
   const placed = placeCaller(sources(made.home, moved, 'codex'), SESSION);
   expect(placed).toEqual({ kind: 'seat', name: 'cobble', pane: AFTER, session: SESSION });
+});
+
+test('a lead on the Codex settings dialog stays open and status names the dialog', async () => {
+  const made = restored();
+  const now = approvedCobble(made);
+  const dialog = movedCodex();
+  const host = restoreHost(made, dialog, now, [], (_session, pane) => (
+    pane === AFTER ? FEATURE_SCREEN : 'ready\n'
+  ));
+  if (!host.launch) throw new Error('the fixture holds no launch surface');
+  const closed: string[] = [];
+  const launched: string[] = [];
+  const inputs: string[] = [];
+  host.launch.closeWorkspace = (_session, workspace) => { closed.push(workspace); return true; };
+  host.launch.paneRun = (_session, _pane, command) => { launched.push(command); return true; };
+  host.launch.typeText = (_session, _pane, text) => { inputs.push(text); return true; };
+  host.launch.pressEnter = () => { inputs.push('enter'); return true; };
+  host.launch.sendKey = (_session, _pane, key) => { inputs.push(key); return true; };
+  scriptHost();
+  const io = testIo(made.root, { kind: 'owner' });
+  // FLO-1368 protects the lead from automatic dialog repair and leaves every input untouched.
+  expect(await runUp([], io, host), `${io.out}\n${io.err}`).toBe(0);
+  expect(closed).toEqual([]);
+  expect(launched).toEqual([]);
+  expect(inputs).toEqual([]);
+  expect(commands.some((args) => args.includes('send-keys'))).toBe(false);
+  expect(readState(made.dir).sessions[SESSION]?.seats.cobble?.pane).toBe(AFTER);
+
+  const status = testIo(made.root, { kind: 'owner' });
+  const noKeys = () => { throw new Error('this synthetic status scene uses no credential store'); };
+  expect(await runStatus(['--file', join(made.dir, 'team.yaml'), '--json'], status, {
+    home: made.home,
+    now: () => now,
+    branch: () => 'main',
+    standing: (root) => approvalStanding(root, made.home),
+    ownerSeatStore: {
+      name: 'synthetic', available: () => false,
+      create: noKeys, publicKey: noKeys, sign: noKeys, pinSet: noKeys, pinGet: noKeys,
+    },
+    live: () => ({
+      running: true,
+      agents: [{ ...dialog, name: 'cobble' }],
+      workspaces: [{ id: 'ws-cobble', label: 'cobble' }],
+      screens: { [AFTER]: FEATURE_SCREEN },
+      processes: { [AFTER]: { shell: 101, foreground: [201] } },
+      foreground: { [AFTER]: ['codex'] },
+    }),
+  }), `${status.out}\n${status.err}`).toBe(1);
+  const report = JSON.parse(status.out) as {
+    rows: { name: string; state: string; pane: string }[];
+    differences: { what: string; repair: string }[];
+  };
+  expect(report.rows.find((row) => row.name === 'cobble')).toMatchObject({
+    state: 'Codex settings dialog', pane: AFTER,
+  });
+  expect(report.differences.find((row) => row.what === 'cobble: Codex settings dialog')).toBeDefined();
 });
 
 test('a reboot leaves the daemon watch active and starts no watch pane, and the bus is back with its root', async () => {

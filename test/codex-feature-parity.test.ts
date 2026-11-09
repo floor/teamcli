@@ -1,10 +1,5 @@
-// Every Codex seat launches with one pinned feature set, and the seat's recorded
-// launch line carries it. Codex keeps one background server behind every seat; a second front end
-// whose feature settings differ is refused with "background server has incompatible feature
-// settings", and the seat that answers "Run without daemon" loses the route its drops arrive on.
-// The scenes drive the real plan and the two report commands: the pin rides the launch and the
-// record, `team doctor` and `team check` name a recorded line that lacks it (never a process's
-// command line), and a record with no line says unknown.
+// FLO-1368 retires the fixed false override: proven launch recipes shed it, true stays,
+// and a profile with no required feature pins emits no pin diagnostic.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -80,7 +75,7 @@ function place(): { root: string; home: string; dir: string } {
   return { root, home, dir };
 }
 
-/** The seat's record as a launch before the pin left it: a base recipe with no feature words. */
+/** A recorded recipe may predate the retired pin or omit the launch line entirely. */
 function seed(dir: string, held: Partial<SeatState>): void {
   updateState(dir, (state) => {
     state.sessions[SESSION] = {
@@ -116,13 +111,13 @@ function baseHost(records: { seat: string; patch: Record<string, unknown> }[]): 
   };
 }
 
-describe('the launch line carries the pin', () => {
-  test('the pin rides after the seat’s own words, including a resume, and before a rules line', () => {
+describe('the launch line removes only the obsolete false override', () => {
+  test('removing the false pair keeps the seat’s resume and trailing rules line', () => {
     const profile = profileFor('codex');
     if (!profile) throw new Error('codex profile must exist');
     const command = launchCommand(
       profile,
-      'zsh /w/as-floor.sh codex -m gpt-6.1-sol resume 01a1',
+      `zsh /w/as-floor.sh codex -m gpt-6.1-sol resume 01a1 -c ${PIN}`,
       'Rules.',
       undefined,
       undefined,
@@ -131,28 +126,29 @@ describe('the launch line carries the pin', () => {
       'Read /x/rules.md; reply ready.',
     );
     expect(command).toContain(`resume 01a1`);
-    expect(command).toContain(`-c ${PIN}`);
-    expect(command.indexOf(`-c ${PIN}`)).toBeGreaterThan(command.indexOf('resume 01a1'));
-    expect(command.indexOf(`-c ${PIN}`)).toBeLessThan(command.indexOf('Read /x/rules.md'));
+    // FLO-1368 removes the legacy false pair without changing resume or rules placement.
+    expect(command).not.toContain(PIN);
+    expect(command).toContain('Read /x/rules.md; reply ready.');
+    expect(command.indexOf('resume 01a1')).toBeLessThan(command.indexOf('Read /x/rules.md'));
   });
 
-  test('a line that sets the feature the other way is overridden by the trailing pin', () => {
+  test('a line that sets the feature true keeps it when the legacy false pair is removed', () => {
     const profile = profileFor('codex');
     if (!profile) throw new Error('codex profile must exist');
-    const command = launchCommand(profile, 'codex -m gpt-6.1-sol -c features.mcp_oauth_refresh_coordination=true', 'Rules.');
-    // The file's own word stays on the line; the pin is the last word for that key, and the last
-    // value is the one the CLI reads (measured on codex-cli 0.161.0 in a scratch CODEX_HOME).
+    const command = launchCommand(profile, `codex -m gpt-6.1-sol -c features.mcp_oauth_refresh_coordination=true -c ${PIN}`, 'Rules.');
+    // FLO-1368 removes false only; the caller's explicit true value remains the sole setting.
     expect(command).toContain('-c features.mcp_oauth_refresh_coordination=true');
-    expect(command.lastIndexOf('features.mcp_oauth_refresh_coordination')).toBe(command.indexOf(`-c ${PIN}`) + 3);
+    expect(command.lastIndexOf('features.mcp_oauth_refresh_coordination')).toBe(command.indexOf('features.mcp_oauth_refresh_coordination=true'));
+    expect(command).not.toContain(PIN);
   });
 
-  test('a positional delimiter keeps the pin an option, in every spelling', () => {
+  test('removing the false option preserves the positional delimiter in every spelling', () => {
     const profile = profileFor('codex');
     if (!profile) throw new Error('codex profile must exist');
     for (const delimiter of ['--', "'--'", '"--"']) {
       const command = launchCommand(
         profile,
-        `codex -m gpt-6.1-sol ${delimiter} 'an existing prompt'`,
+        `codex -m gpt-6.1-sol -c ${PIN} ${delimiter} 'an existing prompt'`,
         'Rules.',
         undefined,
         undefined,
@@ -160,23 +156,21 @@ describe('the launch line carries the pin', () => {
         undefined,
         'Read /x/rules.md; reply ready.',
       );
-      // The shell drops the quotes: the delimiter is the same word after parsing, and the pin
-      // must stand before it to stay a config option rather than prompt text. The existing
-      // prompt follows the delimiter; the rules line stays the last positional word.
-      expect(command.indexOf(`-c ${PIN}`)).toBeLessThan(command.indexOf('an existing prompt'));
+      // FLO-1368 removes the option before -- while preserving both positional words.
+      expect(command).not.toContain(PIN);
       expect(command.indexOf('an existing prompt')).toBeLessThan(command.indexOf('Read /x/rules.md'));
       expect(command).toContain('Read /x/rules.md; reply ready.');
     }
   });
 });
 
-describe('the plan and the record keep the pinned base recipe', () => {
+describe('the plan and the record keep the migrated base recipe', () => {
   function planned(): { steps: ReturnType<typeof upPlan>; launch: Extract<NonNullable<ReturnType<typeof upPlan>[number]['do']>, { do: 'launch' }> } {
     const steps = upPlan({
       root: '/tmp/acme', session: SESSION, sessionRunning: true, watchAlive: true, watchLabel: 'Watch · acme',
       stateDir: '/tmp/acme/.agents',
       seats: [{
-        name: SEAT, cli: 'codex', launch: CLI, cwd: '/tmp/acme', label: SEAT, stopped: false,
+        name: SEAT, cli: 'codex', launch: PINNED, cwd: '/tmp/acme', label: SEAT, stopped: false,
         rules: 'Rules.', repairLine: 'repair',
       }],
     });
@@ -185,15 +179,15 @@ describe('the plan and the record keep the pinned base recipe', () => {
     return { steps, launch };
   }
 
-  test('the launch op carries the pinned base line, never the expanded command', () => {
+  test('the launch op carries the migrated base line, never the expanded command', () => {
     const { launch } = planned();
-    expect(launch.recordLine).toBe(PINNED);
+    expect(launch.recordLine).toBe(CLI);
     expect(launch.recordLine).not.toContain('AGENT_UNATTENDED');
-    // The expanded command carries the same pin, last among the profile's words.
-    expect(launch.command.endsWith(`-c ${PIN}`)).toBe(true);
+    // FLO-1368 strips the false pair from the stored recipe and the expanded command.
+    expect(launch.command).not.toContain(PIN);
   });
 
-  test('the run records the pinned line for the seat it launched', async () => {
+  test('the run records the migrated line for the seat it launched', async () => {
     const { steps } = planned();
     const records: { seat: string; patch: Record<string, unknown> }[] = [];
     const upTo = steps.slice(0, steps.findIndex((step) => step.do?.do === 'launch') + 1);
@@ -202,7 +196,7 @@ describe('the plan and the record keep the pinned base recipe', () => {
     expect(lines.length).toBeGreaterThan(0);
     for (const entry of lines) {
       expect(entry.seat).toBe(SEAT);
-      expect(entry.patch.launch_line).toBe(PINNED);
+      expect(entry.patch.launch_line).toBe(CLI);
       expect(entry.patch.launch_line).not.toContain('AGENT_UNATTENDED');
     }
   });
@@ -226,7 +220,7 @@ describe('the plan and the record keep the pinned base recipe', () => {
   });
 });
 
-describe('team doctor names a recorded line that misses the pin', () => {
+describe('team doctor requires no retired feature pin', () => {
   function sources(home: string): DoctorSources {
     return {
       version: () => '2.1.288 (Claude Code)',
@@ -239,25 +233,27 @@ describe('team doctor names a recorded line that misses the pin', () => {
     };
   }
 
-  test('a recorded base line with no feature words is named with its relaunch', async () => {
+  test('a recorded base line with no feature words needs no feature relaunch', async () => {
     const { root, home, dir } = place();
     seed(dir, { launch_line: CLI });
     const io = testIo(root, { kind: 'owner' });
     await runDoctor(['--file', '.agents/team.yaml'], io, sources(home));
-    expect(io.out).toContain(`${SEAT}: its recorded launch line does not pin ${PIN}`);
-    expect(io.out).toContain(`run \`team restart ${SEAT}\``);
+    // FLO-1368 has no profile pin requirement, including for an older unpinned recipe.
+    expect(io.out).not.toContain(`${SEAT}: its recorded launch line`);
+    expect(io.out).not.toContain(`run \`team restart ${SEAT}\``);
   });
 
-  test('a record with no launch line says unknown, not a guess', async () => {
+  test('a record with no launch line does not invent a retired feature requirement', async () => {
     const { root, home, dir } = place();
     seed(dir, {});
     const io = testIo(root, { kind: 'owner' });
     await runDoctor(['--file', '.agents/team.yaml'], io, sources(home));
-    expect(io.out).toContain(`${SEAT}: its recorded launch line is unknown`);
-    expect(io.out).toContain(`run \`team restart ${SEAT}\``);
+    // With no required pin, an unknown recipe warrants no guessed feature repair.
+    expect(io.out).not.toContain(`${SEAT}: its recorded launch line is unknown`);
+    expect(io.out).not.toContain(`run \`team restart ${SEAT}\``);
   });
 
-  test('a recorded pinned line draws nothing', async () => {
+  test('a legacy false record draws no profile pin diagnostic', async () => {
     const { root, home, dir } = place();
     seed(dir, { launch_line: PINNED });
     const io = testIo(root, { kind: 'owner' });
@@ -275,7 +271,7 @@ describe('team doctor names a recorded line that misses the pin', () => {
   });
 });
 
-describe('team check names a recorded line that misses the pin', () => {
+describe('team check requires no retired feature pin', () => {
   function live(): Live {
     return {
       running: true,
@@ -300,23 +296,24 @@ describe('team check names a recorded line that misses the pin', () => {
     return { code, out: `${io.out}${io.err}` };
   }
 
-  test('the missing pin is a difference, repaired by the relaunch', () => {
+  test('the missing retired pin creates no feature difference or relaunch advice', () => {
     const { root, home, dir } = place();
     seed(dir, { launch_line: CLI });
     const { code, out } = check(root, home);
-    expect(out).toContain(`difference: ${SEAT}: its recorded launch line does not pin ${PIN}`);
-    expect(out).toContain(`  repair: team restart ${SEAT}`);
+    // FLO-1368 no longer requires the false pair; unrelated differences still determine exit1.
+    expect(out).not.toContain(`difference: ${SEAT}: its recorded launch line`);
+    expect(out).not.toContain(`  repair: team restart ${SEAT}`);
     expect(code).toBe(1);
   });
 
-  test('an unknown line is named as unknown', () => {
+  test('an unknown line creates no guessed retired feature difference', () => {
     const { root, home, dir } = place();
     seed(dir, {});
     const { out } = check(root, home);
-    expect(out).toContain(`difference: ${SEAT}: its recorded launch line is unknown`);
+    expect(out).not.toContain(`difference: ${SEAT}: its recorded launch line is unknown`);
   });
 
-  test('a pinned record is not a difference', () => {
+  test('a legacy false record is not a profile pin difference', () => {
     const { root, home, dir } = place();
     seed(dir, { launch_line: PINNED });
     const { out } = check(root, home);
