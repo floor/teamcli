@@ -248,6 +248,7 @@
     "test/commands/add-keeps-owner-sections.test.ts": 3,
     "test/commands/add.test.ts": 5,
     "test/commands/agents-prune.test.ts": 3,
+    "test/commands/aimed-preflight-independent.test.ts": 4,
     "test/commands/brief-prune-race.test.ts": 0,
     "test/commands/brief.test.ts": 3,
     "test/commands/check-watch-health.test.ts": 4,
