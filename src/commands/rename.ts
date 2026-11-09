@@ -22,7 +22,7 @@ import {
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
-import { teamBinding } from '../registry/binding.ts';
+import { addressedTeam } from '../registry/binding.ts';
 import { renameSeat, renameTeamIdentity } from '../file/lines.ts';
 import { findRoot } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -514,7 +514,7 @@ async function executeRename(argv: string[], io: Io, sources: RenameSources): Pr
     return 'refused';
   }
 
-  const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : teamBinding(home, io.cwd, renumber ? undefined : args.rest[0], io);
+  const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : addressedTeam(home, io.cwd, renumber ? undefined : args.rest[0], io);
   const launched = args.values.file !== undefined || binding.kind === 'bound' ? undefined : launchedTeamFile(io, home);
   // A launched pointer names where this session was launched from, not a copy to read: the team
   // is read where the edits write it, so a seat `team add` put into the registry's record is
@@ -929,7 +929,7 @@ async function executeTeamRename(
     return 'refused';
   }
 
-  const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : teamBinding(home, io.cwd, undefined, io);
+  const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : addressedTeam(home, io.cwd, undefined, io);
   const launched = args.values.file !== undefined || binding.kind === 'bound' ? undefined : launchedTeamFile(io, home);
   const loaded = binding.kind === 'unreadable' || binding.kind === 'ambiguous'
     ? { ok: false as const, errors: [{ line: 0, message: binding.message }] }

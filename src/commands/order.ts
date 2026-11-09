@@ -18,7 +18,7 @@ import {
 } from '../caller.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
-import { teamBinding } from '../registry/binding.ts';
+import { addressedTeam } from '../registry/binding.ts';
 import { readLaunchedTeam } from '../file/team-text.ts';
 import type { Problem } from '../file/types.ts';
 import { agentList, sessionState, workspaceList, type HerdrAgent } from '../herdr.ts';
@@ -117,7 +117,7 @@ export async function runOrder(argv: string[], io: Io, sources: OrderSources = r
     ?? (args.values.session !== undefined && !isOwner(walked) ? sessionOwnerRefusal(walked) : undefined);
   if (flagRefusal !== undefined) return callerRefused(out, flagRefusal);
 
-  const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : teamBinding(sources.home ?? homedir(), io.cwd, undefined, io);
+  const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : addressedTeam(sources.home ?? homedir(), io.cwd, undefined, io);
   const launched = args.values.file !== undefined || binding.kind === 'bound' ? undefined : launchedTeamFile(io, sources.home);
   const readOptions = {
     home: sources.home,

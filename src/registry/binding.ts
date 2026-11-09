@@ -156,7 +156,7 @@ export function teamHoldsSeat(team: TeamRecord, seat: string): boolean {
  * The one team whose state records this caller on its pane. The pane is asked
  * before any folder: herdr's name, that team's session, and the recorded pane.
  * None, or more than one, is no placement, and the folder decides. `teamBinding`
- * itself stays folder-then-caller; a send is what asks here first.
+ * itself stays folder-then-caller. A command asks here first through `addressedTeam`.
  */
 export function placedCallerTeam(home: string, io: BindingIo): TeamRecord | null {
   let teams: Record<string, TeamRecord>;
@@ -180,6 +180,19 @@ function callerStandsIn(io: BindingIo, team: TeamRecord): boolean {
   if (caller.kind !== 'seat' || caller.session !== team.session) return false;
   const at = standingOf(join(team.root, '.agents'), team.session, caller);
   return at.recordedPane !== undefined && at.recordedPane === caller.pane;
+}
+
+/**
+ * The team a command addresses when no flag names a file. The pane is asked
+ * first: one team whose state records this caller on its pane is that root
+ * and roster. None, or more than one, leaves `teamBinding` unchanged.
+ */
+export function addressedTeam(home: string, cwd: string, seat: string | undefined, io?: BindingIo): TeamBinding {
+  if (io !== undefined) {
+    const placed = placedCallerTeam(home, io);
+    if (placed !== null) return { kind: 'bound', team: placed, by: 'caller' };
+  }
+  return teamBinding(home, cwd, seat, io);
 }
 
 /**

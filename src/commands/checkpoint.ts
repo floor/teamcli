@@ -25,7 +25,7 @@ import { askCheckpoint } from '../checkpoint/checkpoint.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { readLaunchedTeam } from '../file/team-text.ts';
-import { teamBinding } from '../registry/binding.ts';
+import { addressedTeam } from '../registry/binding.ts';
 import type { Problem } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -103,7 +103,7 @@ export async function runCheckpoint(
   const home = sources.home ?? homedir();
   const nowFn = sources.now ?? realSources.now;
   const now = nowFn();
-  const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : teamBinding(home, io.cwd, name, io);
+  const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : addressedTeam(home, io.cwd, name, io);
   const launched = args.values.file !== undefined || binding.kind === 'bound' ? undefined : launchedTeamFile(io, home);
   const readOptions = {
     home,

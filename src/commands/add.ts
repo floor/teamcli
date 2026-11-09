@@ -30,7 +30,7 @@ import { copySeat, hasSeat, seatIsStopped } from '../file/lines.ts';
 import { setSeatStopped } from '../file/stopped-mark.ts';
 import { findRoot, launchTeamFile, placedProblems } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
-import { teamBinding } from '../registry/binding.ts';
+import { addressedTeam } from '../registry/binding.ts';
 import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { derivedTrust, migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
@@ -54,7 +54,7 @@ import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/id
 import { launchLineFinding } from '../launch/line.ts';
 import { launchRefusal, readEntityModelRule } from '../launch/model-guard.ts';
 import { lobbyPretrustLine, projectRootPretrust } from '../launch/pretrust.ts';
-import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
+import { charterTargetOf, ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { formatPlan, registryLaunches, upPlan, type UpSeat } from '../launch/plan.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -415,8 +415,30 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.approval-refused
     return 1;
   };
-  const seatRoot = findRoot(io.cwd) ?? resolve(io.cwd);
-  const seatStep = clientRun !== null && (args.flags.has('request') || args.values.approval !== undefined)
+  // Resolve the addressed team only after owner-only flag preflight, before any owner-seat door.
+  const bindingHome = sources.home ?? homedir();
+  const targetBinding = args.values.file !== undefined || clientRun !== null
+    ? { kind: 'unbound' as const }
+    : addressedTeam(bindingHome, io.cwd, args.rest[0] ?? '', io);
+  const launchedForTarget = args.values.file !== undefined || clientRun !== null || targetBinding.kind !== 'unbound'
+    ? undefined
+    : launchedTeamFile(io, sources.home);
+  const launchedRead = launchedForTarget === undefined
+    ? undefined
+    : readLaunchedTeam(launchedForTarget, { home: sources.home });
+  const targetKnown = targetBinding.kind !== 'ambiguous' && targetBinding.kind !== 'unreadable';
+  const seatRoot = clientRun !== null
+    ? io.cwd
+    : targetBinding.kind === 'bound'
+      ? targetBinding.team.root
+      : args.values.file !== undefined
+        ? charterTargetOf(io.cwd, args.values.file)
+        : launchedRead?.ok === true
+          ? launchedRead.root
+          : findRoot(io.cwd) ?? resolve(io.cwd);
+  const seatStep = !targetKnown
+    ? { kind: 'none' as const }
+    : clientRun !== null && (args.flags.has('request') || args.values.approval !== undefined)
     ? (refuse(io, json, 'add', { id: 'add.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
     : args.flags.has('request') && args.values.approval !== undefined
       ? (refuse(io, json, 'add', { id: 'add.approval-refused', message: '--request asks the owner seat and --approval runs an answered request: pass one', repair: null }), { kind: 'refused' as const })
@@ -448,11 +470,11 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     }
   }
 
-  const bindingHome = sources.home ?? homedir();
-  // A `--file` names its file. Otherwise the cwd's longest registered root is the only team,
-  // and a shared seat name outside every root is refused rather than picked.
-  const binding = args.values.file !== undefined || clientRun !== null ? { kind: 'unbound' as const } : teamBinding(bindingHome, io.cwd, args.rest[0] ?? '', io);
-  const launched = args.values.file !== undefined || clientRun !== null || binding.kind === 'bound' ? undefined : launchedTeamFile(io, sources.home);
+  // The same target the owner-seat door was asked for. A `--file` names its file. Otherwise
+  // the pane's team is that root and roster. None leaves the launched pointer, then the cwd's
+  // longest registered root, and a shared seat name outside every root is refused rather than picked.
+  const binding = targetBinding;
+  const launched = launchedForTarget;
   const readOptions = {
     home: sources.home,
     // The session this run addresses: the placement check reads that session's recorded lobby.
@@ -560,7 +582,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const createGranted = clientRun !== null || seatApproved || (mayChange.kind !== 'ok' && !leadSeat && ownerSeatRuleAdmits('team-add', root, dry, io, sources)) || (mayChange.kind !== 'ok'
     && !leadSeat
     && readEntityCreateGrants(sources.home).length > 0
-    && entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: io.cwd }));
+    && entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: root }));
   // The delegate branch, tried only when the ordinary rule just refused and the file names a
   // delegate at all: with no `delegates` section every refusal below stays exactly today's, and
   // the gate is never asked. A refused verdict takes the ordinary refusal's place; a passed one

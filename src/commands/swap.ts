@@ -38,7 +38,7 @@ import { credentialProbeFor, type CredentialProbe } from '../profiles/credential
 import { profileFor } from '../profiles/index.ts';
 import type { Profile } from '../profiles/profile.ts';
 import { mayReadTeam } from '../read-gate.ts';
-import { teamBinding } from '../registry/binding.ts';
+import { addressedTeam } from '../registry/binding.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { readState, type QueuedSwap } from '../state.ts';
 import { WAIT_FOR, waitSecondsFor } from '../swap/auto.ts';
@@ -297,9 +297,18 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
   if (extra !== undefined) return invocation(rawIo, io, json, `unexpected "${plainLine(extra)}"`);
 
   const walked = walkCaller(rawIo);
-  const charterPath = charterTargetOf(rawIo.cwd, args.values.file);
-  const gate = charterGate(home, { operation: 'swap', cwd: rawIo.cwd, path: charterPath }, options.ownerSeatStore);
-  const peeked = !isOwner(walked) && sub === 'now' ? currentTeam(rawIo.cwd, undefined, now, home, false) : null;
+  // The team this swap will change, before the charter and the leads door. A pane that
+  // records this caller is that root. A `--file` names its own folder and does not ask the pane.
+  const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : addressedTeam(home, rawIo.cwd, seatName, rawIo);
+  if (binding.kind === 'ambiguous' || binding.kind === 'unreadable') {
+    if (json) writeJsonError(rawIo, 'swap.file', binding.message, null);
+    else io.stderr(`team swap: ${binding.message}\n`);
+    return 'file';
+  }
+  const targetRoot = binding.kind === 'bound' ? binding.team.root : rawIo.cwd;
+  const charterPath = args.values.file !== undefined ? charterTargetOf(rawIo.cwd, args.values.file) : targetRoot;
+  const gate = charterGate(home, { operation: 'swap', cwd: targetRoot, path: charterPath }, options.ownerSeatStore);
+  const peeked = !isOwner(walked) && sub === 'now' ? currentTeam(targetRoot, undefined, now, home, false) : null;
   const placedCaller = peeked?.ok === true ? callerOf(rawIo, peeked.team.session) : null;
   // The orchestrator seat is refused, so that refusal must not leave an admission line.
   // The line is written only once the run is actually admitted.
@@ -380,13 +389,7 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
     }
   }
 
-  const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : teamBinding(home, rawIo.cwd, seatName, rawIo);
-  if (binding.kind === 'ambiguous' || binding.kind === 'unreadable') {
-    if (json) writeJsonError(rawIo, 'swap.file', binding.message, null);
-    else io.stderr(`team swap: ${binding.message}\n`);
-    return 'file';
-  }
-  const current = currentTeam(binding.kind === 'bound' ? binding.team.root : rawIo.cwd, owner ? args.values.file : undefined, now, home, owner);
+  const current = currentTeam(targetRoot, owner ? args.values.file : undefined, now, home, owner);
   if (!current.ok) {
     if (!owner) {
       // The same one sentence every read refusal prints: an unapproved caller learns no detail.

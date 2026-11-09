@@ -14,7 +14,7 @@ import {
 } from '../caller.ts';
 import { launchTeamFile, TEAM_FILE } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
-import { teamBinding } from '../registry/binding.ts';
+import { addressedTeam } from '../registry/binding.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Seat } from '../file/types.ts';
@@ -217,30 +217,42 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   const who = clientRun === null ? describeCaller(caller) : `client:${clientRun.grant.clientId}`;
   const flagged = args.values.file;
   const foreign = flagged !== undefined && resolve(io.cwd, flagged) !== resolve(io.cwd, TEAM_FILE);
-  // Dev mode, from this folder's own file: the caller's place, never a file the caller names.
-  // A `dev-mode` value anywhere in its chain governs, and `TEAMCLI_DEV_MODE` is then ignored;
-  // before any such value, the variable set to exactly `1` keeps its behaviour. The gate below
-  // is the caller gate dev mode folds: a grant the file omits and one naming another seat are
-  // that gate, while its placement (`no-pane`, `another-pane`), the approval, the scope, a file
-  // that will not load and the owner's `--file` stay refusals in every mode.
-  const policyLoad = readTeamConfig(io.cwd, { ...(sources.home ? { home: sources.home } : {}) });
+  // The team this reload will change, before dev mode and the grant door. A pane that records
+  // this caller is that team. A `--file` names its file and does not ask the pane.
+  const binding = flagged !== undefined ? { kind: 'unbound' as const } : addressedTeam(sources.home ?? homedir(), io.cwd, name, io);
+  const loaded = binding.kind === 'unreadable' || binding.kind === 'ambiguous'
+    ? { ok: false as const, errors: [{ line: 0, message: binding.message }] }
+    : readTeamConfig(binding.kind === 'bound' ? binding.team.root : io.cwd, {
+        ...(owner && flagged ? { file: flagged } : {}),
+        ...(sources.home ? { home: sources.home } : {}),
+      });
+  if (!loaded.ok) {
+    const said = loaded.errors.map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${problem.message}`);
+    if (json) refuse(io, json, 'reload', { id: 'reload.file', message: said.join('; '), repair: null });
+    else for (const line of said) out.stderr(`team reload: ${line}\n`);
+    // exit: reload.file
+    return 2;
+  }
+  const team = loaded.team;
+  const dir = dirname(loaded.path);
+  const root = loaded.root;
+  // Dev mode, from the target team's file. A `dev-mode` value anywhere in its chain governs,
+  // and `TEAMCLI_DEV_MODE` is then ignored; before any such value, the variable set to exactly
+  // `1` keeps its behaviour. The gate below is the caller gate dev mode folds.
   const dev = resolveDevMode('reload', io, {
     ...(sources.home ? { home: sources.home } : {}),
-    team: policyLoad.ok ? policyLoad.team : null,
-    root: policyLoad.ok ? policyLoad.root : null,
+    team,
+    root,
     now: sources.now ? sources.now() : new Date(),
   });
-  // The configuration lines the run owes once, written where the caller's place is known and
-  // before the grant gate — a gate that refuses must not swallow them: the variable ignored
-  // under a governing policy, an expiry, a source that could not be read. Nothing is written
-  // when the chain had nothing to say.
-  const placeDir = policyLoad.ok ? dirname(policyLoad.path) : dirname(join(io.cwd, TEAM_FILE));
-  logDevModeState(placeDir, 'reload', who, dev, sources.now ? sources.now() : new Date());
+  // The configuration lines the run owes once, written where the target team is known and
+  // before the grant gate — a gate that refuses must not swallow them.
+  logDevModeState(dir, 'reload', who, dev, sources.now ? sources.now() : new Date());
   let devWarning: string | null = null;
   let grantSeat: string | null = null;
   let said: GrantVerdict | null = null;
   if (!owner && clientRun === null) {
-    said = (sources.grantGate ?? grantGate)({ act: 'reload', io, home: sources.home, dev });
+    said = (sources.grantGate ?? grantGate)({ act: 'reload', io: { ...io, cwd: root }, home: sources.home, dev });
     // A grant that cannot be read is the refusal it was, before any other reading: the rest is
     // judged with the team file in hand, where the map's `reload` row admits a lead.
     if (said.kind === 'refused' && said.id === 'grant.file') {
@@ -263,24 +275,6 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     }
   }
 
-  const binding = flagged !== undefined ? { kind: 'unbound' as const } : teamBinding(sources.home ?? homedir(), io.cwd, name, io);
-  const loaded = binding.kind === 'unreadable' || binding.kind === 'ambiguous'
-    ? { ok: false as const, errors: [{ line: 0, message: binding.message }] }
-    : readTeamConfig(binding.kind === 'bound' ? binding.team.root : io.cwd, {
-        ...(owner && flagged ? { file: flagged } : {}),
-        ...(sources.home ? { home: sources.home } : {}),
-      });
-  if (!loaded.ok) {
-    const said = loaded.errors.map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${problem.message}`);
-    if (json) refuse(io, json, 'reload', { id: 'reload.file', message: said.join('; '), repair: null });
-    else for (const line of said) out.stderr(`team reload: ${line}\n`);
-    // exit: reload.file
-    return 2;
-  }
-
-  const team = loaded.team;
-  const dir = dirname(loaded.path);
-  const root = loaded.root;
   const home = sources.home;
   const standing = (sources.standing ?? approvalStanding)(root, home);
   const session = team.session;

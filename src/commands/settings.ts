@@ -23,7 +23,7 @@ import { agentIdOf, readSeatSettings } from '../config/read.ts';
 import { CONFIG_KEYS, getConfigSpec } from '../config/registry.ts';
 import type { ApplyKind, ConfigKey, ConfigValue } from '../config/registry.ts';
 import { planConfigSet, planConfigUnset, seatRecordForWrite, writeConfigSet, writeConfigUnset } from '../config/sources.ts';
-import { teamBinding } from '../registry/binding.ts';
+import { addressedTeam } from '../registry/binding.ts';
 import type { SignedConfigRecord } from '../config/record.ts';
 import type { PlannedConfigSetting } from '../config/sources.ts';
 import { sayApply, sayConfigOrigin, sayConfigValue } from '../config/text.ts';
@@ -121,7 +121,7 @@ function executeRead(
 
   const home = options.home ?? homedir();
   const now = options.now ?? new Date();
-  const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : teamBinding(home, io.cwd, seatName, io);
+  const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : addressedTeam(home, io.cwd, seatName, io);
   if (binding.kind === 'ambiguous' || binding.kind === 'unreadable') {
     return refuseFile(io, json, { ok: false, errors: [{ line: 0, message: binding.message }] });
   }
@@ -743,7 +743,7 @@ function executeWrite(
     if (refusal !== undefined) return fileOwnerExit(io, json, refusal);
   }
 
-  const binding = file !== undefined ? { kind: 'unbound' as const } : teamBinding(home, io.cwd, parsed.seat, io);
+  const binding = file !== undefined ? { kind: 'unbound' as const } : addressedTeam(home, io.cwd, parsed.seat, io);
   if (binding.kind === 'ambiguous' || binding.kind === 'unreadable') {
     return refuseFile(io, json, { ok: false, errors: [{ line: 0, message: binding.message }] });
   }
