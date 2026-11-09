@@ -323,14 +323,13 @@ describe('1. config set and add admitted for target lead and same-entity main or
     addIo.env = {};
     const addCode = await runAdd(['apprentice', '--like', 'builder'], addIo, makeAddSources(fx.home, launched));
     expect(addCode, addIo.out + addIo.err).toBe(0);
-    expect(addIo.err).toBe(
-      `team add: warning: ${ADD_REFUSAL_PREFIX} lead; dev mode continues (dev-mode on at machine level)\n`,
-    );
+    // f02bd84b3: own-team add writes the owner-gate admission audit, not the dev-lift warning.
+    expect(addIo.err).toBe('');
     expect(readFileSync(join(fx.acmeRoot, '.agents', 'team.yaml'), 'utf8')).toContain('    name: apprentice\n');
     expect(launched.creates).toEqual(['apprentice']);
-    expect(teamLog(fx.acmeRoot)).toContain(
-      `add [lead] warning: ${ADD_REFUSAL_PREFIX} lead; dev mode continues (dev-mode on at machine level); admitted as lead\n`,
-    );
+    const addAudit = teamLog(fx.acmeRoot).split('\n').filter((line) => line.includes('add [lead]')).join('\n');
+    expect(addAudit).toContain('add [lead] warning: owner gate; admitted as lead');
+    expect(addAudit).not.toContain('dev mode continues');
     expect(pendingCards(fx.home)).toEqual([]);
   });
 
